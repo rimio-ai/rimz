@@ -1,0 +1,89 @@
+# Security and trust
+
+> See [DESIGN.md](../../DESIGN.md) for the commitments this doc operationalizes.
+
+## Threat model
+
+A project workspace runs untrusted code. Hooks, postinstall scripts, generated binaries, test runners, and the agents themselves all execute as you. Same-UID isolation is therefore not a meaningful trust boundary inside a workspace. Trust must be explicit at two layers:
+
+1. **Project trust** — what Rimz reads from `.rimz/config.toml` and what it is allowed to execute on the project's behalf.
+2. **Resolver allowlist** — what is allowed to answer feed items on your behalf.
+
+These are the only two trust decisions Rimz asks you to make. Everything else flows from them.
+
+## Project trust
+
+Project config is read inertly until trusted.
+
+**Untrusted.**
+- Structural metadata only.
+- No project-declared commands run.
+- No project-declared hook installs proceed.
+- No project-launched resolver binaries start.
+
+**Trusted.**
+- Full project config applies.
+- The executable-surface hash matches the trusted hash.
+
+**Trust stale.**
+- Executable-surface hash changed since the last grant.
+- Command-running fields are disabled until trust is granted again.
+
+The **executable surface** is every field that can cause a process to run: agent launch commands, hook commands, PATH-affecting env overrides, layout-launched commands, tmux status `#(...)`, tmux popup `display-popup -E`, notification commands, and any future command string. A single hash over all of these is what `rimz trust grant` pins. Adding a new command-running field that isn't in the hash is a CI invariant violation.
+
+## Resolver trust
+
+Resolver trust is a per-machine allowlist. A same-UID process can write a heartbeat file, but only enrolled `resolver_id`s engage the bridge. Heartbeats from unknown resolver IDs are kept for diagnostics; `rimz doctor` reports them as `unauthorized resolver heartbeat seen`.
+
+Optional `--binary <path>` pins a resolver's executable path; Rimz then verifies the heartbeating process's executable matches before engaging the bridge. `rimz doctor` reports when platform support degrades that check.
+
+Project config that *launches* a resolver binary flows through the project trust gate first. The two gates layer: project trust controls whether project config can launch a resolver at all; the resolver allowlist controls whether a heartbeating resolver can answer once launched.
+
+Detail in [resolvers.md](../internals/resolvers.md).
+
+## Hook safety
+
+- Hook stdout is reserved for the agent's decision channel.
+- Logs go to stderr or Rimz state logs.
+- Notification helpers do not run inside the blocking hook process.
+- Hook child processes must not inherit stdout. CI grep enforces this.
+- Every neutral and decision payload is golden-tested.
+
+## Pane safety
+
+`rimz pane capture` returns untrusted terminal text. Rimz core does not parse it for correctness and does not auto-type. Resolvers that use pane primitives must pattern-match bounded prompt shapes and abstain when unsure. Captured text is data, never an instruction stream — feeding it into an LLM prompt as if it were a user message is the standard prompt-injection footgun.
+
+## State safety
+
+- State directories use `0700` permissions.
+- Feed resolution requires workspace ID, request ID, and nonce.
+- First valid CAS writer wins. Later writers are rejected, or recorded as `late audit` where the state machine allows.
+- PID identity is cleanup metadata only — never the basis for authorization.
+
+## Privacy
+
+Hook payloads can include prompts, tool inputs, file paths, command arguments, and errors. Project privacy config controls retention and payload fidelity:
+
+```toml
+[privacy]
+retention_days     = 14
+payload_mode       = "redacted"   # metadata | redacted | full
+max_payload_bytes  = 8192
+```
+
+- `metadata` — strips inputs, prompts, args, errors. Smallest footprint.
+- `redacted` — keeps bounded payloads with built-in redaction. Default.
+- `full` — keeps hook payloads as delivered. `rimz doctor` warns.
+
+`rimz state export --json` honours the active payload mode.
+
+## Version drift
+
+When an agent version is outside the tested range:
+
+- observability hooks may remain active,
+- the decision bridge disables by default,
+- blocking feed hooks pass through with neutral output (agent's native UI takes over),
+- `--unsafe-agent-version` can override per workspace; `rimz doctor` keeps warning.
+
+For the two unattended-run patterns (agent-native bypass vs permissive resolver) and their audit tradeoffs, see [product.md](./product.md).
