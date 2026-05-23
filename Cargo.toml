@@ -1,0 +1,69 @@
+[workspace]
+members = ["crates/rimz", "crates/rimz-sidebar", "xtask"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/rimz/rimz"
+version = "0.0.0"
+
+[workspace.lints.clippy]
+# Stdout is the protocol surface. Library code must use `tracing`; legal
+# stdout sites carry `#[expect(clippy::print_stdout, reason = "...")]`.
+print_stdout = "deny"
+# Same logic for stderr — diagnostics go through `tracing`, not `eprintln!`.
+print_stderr = "deny"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.dependencies]
+# Core runtime
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Identifiers and time
+uuid = { version = "1", features = ["v7", "serde"] }
+jiff = { version = "0.2", features = ["serde"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+
+# Filesystem and locking
+fs4 = { version = "1", features = ["sync"] }
+tempfile = "3"
+
+# Hashing
+sha2 = "0.11"
+hex = "0.4"
+
+# OS integration (cfg(unix))
+nix = { version = "0.31", features = ["fs", "socket", "user"] }
+
+# Process detection
+which = "8"
+
+# Sidebar terminal UI — `crossterm` is supplied transitively by ratatui's
+# `crossterm_0_29` feature; no direct dep needed.
+ratatui = "0.30"
+
+# Test-time
+insta = { version = "1", features = ["json", "yaml", "filters"] }
+proptest = "1"
+assert_cmd = "2"
+predicates = "3"
+vt100 = "0.16"
+pretty_assertions = "1"
+portable-pty = "0.9"
+regex = "1"

@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  RUST_BACKTRACE: 1
+
+jobs:
+  ci:
+    name: cargo xtask ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # `rust-toolchain.toml` pins the channel + components; this action
+      # respects it.
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rimz-ci
+
+      - name: Install cargo plugins
+        run: |
+          cargo install --locked cargo-nextest
+          cargo install --locked cargo-deny
+          cargo install --locked cargo-machete
+          cargo install --locked cargo-vet
+          cargo install --locked cargo-llvm-cov
+          cargo install --locked cargo-semver-checks
+
+      - name: cargo xtask ci
+        run: cargo xtask ci
+
+  mux-tests:
+    name: mux backends (zellij + tmux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    needs: ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rimz-mux
+
+      - name: Install tmux and Zellij
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux
+          curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz \
+            | sudo tar -xz -C /usr/local/bin
+
+      - name: cargo xtask test
+        run: cargo xtask test

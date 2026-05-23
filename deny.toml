@@ -1,0 +1,30 @@
+[graph]
+all-features = true
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = [
+    # Unmaintained / superseded — keep this list short and explained.
+    { name = "fs2", reason = "unmaintained; use fs4 instead" },
+]
+skip = [
+    { crate = "wit-bindgen@0.51.0", reason = "dev-only WASI split through getrandom/tempfile; revisit when uuid/proptest converge" },
+    { crate = "wit-bindgen@0.57.1", reason = "dev-only WASI split through getrandom/tempfile; revisit when uuid/proptest converge" },
+]
+
+[advisories]
+yanked = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

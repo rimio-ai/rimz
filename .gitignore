@@ -1,0 +1,37 @@
+# Rust build output
+/target/
+
+# Insta snapshot review files (pending acceptance, not golden)
+*.snap.new
+
+# Python bytecode cache (examples/resolvers/)
+__pycache__/
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS metadata
+.DS_Store
+
+# Windows artifacts
+Thumbs.db
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Profiling / coverage output
+perf.data
+perf.data.old
+flamegraph.svg
+coverage/
+lcov.info
+
+# Agent Harness
+plan.md
+status.md
