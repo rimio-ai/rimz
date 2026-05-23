@@ -1,0 +1,99 @@
+# Testing
+
+> See [DESIGN.md](../../DESIGN.md) for the commitments this doc operationalizes.
+
+The contract this suite enforces is in [DESIGN.md](../../DESIGN.md). Tests prove it before real agent integrations ship.
+
+Local runner: `cargo xtask test` (wraps `cargo nextest run`). Doctests run separately via `cargo test --workspace --doc --locked`. The full gate stack is in [rust-conventions.md](./rust-conventions.md).
+
+## M0 synthetic matrix
+
+**M0a** runs without Zellij or tmux:
+
+- project / worktree identity,
+- ledger writes and snapshot rebuild,
+- default-mode hook path (`native_ui`),
+- resolver-mode bridge path (`bridge`),
+- script-blocking path (`script` via `feed ask`),
+- CAS resolution,
+- nonce mismatch rejection,
+- timeout and late-answer behaviour,
+- torn event-log recovery,
+- lock recovery,
+- runtime path fallback (`/tmp/rimz-<uid>/` when `XDG_RUNTIME_DIR` is unset).
+
+**M0b** runs the same matrix under Zellij and adds:
+
+- WASM sidebar shell,
+- sidebar heartbeat socket,
+- broadcast `zellij pipe` fast path,
+- no lazy-load during normal hook wakeups,
+- minimum Zellij version detection.
+
+**M0c** runs the same matrix under tmux and adds:
+
+- managed sidebar pane,
+- explicit `RIMZ_*` env injection with `tmux -e`,
+- detach/reattach,
+- optional status-line integration trust prompt,
+- optional popup smoke test for tmux ≥ 3.2,
+- minimum tmux version detection.
+
+## Invariants — grep-style CI checks
+
+**Decision-channel integrity.**
+- No `Stdio::inherit` in hook subprocess paths.
+- Blocking decision hooks are never installed as async.
+
+**Sidebar / ledger separation.**
+- No sidebar code imports ledger writer APIs.
+
+**Trust-hash completeness.**
+- Every command-executing config field enters the executable-surface hash.
+
+**Pane primitive boundary.**
+- No Rimz core path automatically calls `pane capture` or `pane send`.
+
+**Removed dependencies.**
+- No `chrono::` imports in workspace crates (timestamps go through `jiff`).
+- No `bytes::` or `tokio_util::` imports in workspace crates.
+
+## Agent goldens
+
+For every supported agent event:
+
+- neutral timeout stdout,
+- allowed decision stdout,
+- denied decision stdout,
+- modified-input decision stdout where supported,
+- malformed payload handling,
+- unsupported version fallback.
+
+## Snapshot discipline
+
+All `insta` snapshots — CLI stdout, `--json` event payloads, hook stdout, sidebar render frames — share one set of rules.
+
+- **Redaction filter.** Every snapshot routes through `tests/common/redact.rs` before comparison. The filter strips UUIDs (`[0-9a-f]{8}-[0-9a-f]{4}-...`), Unix and RFC3339 timestamps, absolute paths under `$HOME` / `$XDG_RUNTIME_DIR` / `$XDG_STATE_HOME`, the workspace ID, and the multiplexer session name. Snapshots compare semantic shape, not transient identifiers. Snapshot churn from a transient ID is a redactor bug; fix the redactor.
+- **Failure-shape snapshots.** Error messages, `--json` error envelopes, and hook neutral payloads are snapshotted alongside success cases. Wire-shape error changes are reviewed events, not silent regressions.
+- **Sidebar render snapshots.** `crates/rimz-sidebar` snapshot tests render through a `vt100::Parser`-backed ratatui backend and assert on the parsed screen contents, never on widget internals. Resize the backend within the test to exercise wrapping and truncation.
+
+## Sidebar tests
+
+- `native_ui` items render focus/dismiss only (never approve/deny).
+- `script` items render declared options as answer buttons.
+- `bridge` items enter the resolver group after the threshold.
+- Worktree grouping is stable across reloads.
+- Pane focus refuses reused pane IDs (reconciles process start time).
+- Method labels render correctly for `hook_bridge`, `pane_send`, `cli`, and `sidebar`.
+
+## Resolver tests
+
+- Allowlist enrolment.
+- Unauthorized heartbeat diagnostics (`rimz doctor` surfaces; bridge does not engage).
+- Binary pinning where supported.
+- Explicit `feed abstain` advances the chain.
+- Budget elapse advances the chain.
+- Out-of-turn resolver answer rejected by CAS.
+- Human `--override-chain` accepted.
+- Chain exhaustion falls back to native prompt.
+- Stale heartbeat mid-chain is skipped.

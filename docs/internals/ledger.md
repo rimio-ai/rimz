@@ -1,0 +1,134 @@
+# Ledger and bridge
+
+> See [DESIGN.md](../../DESIGN.md) for the commitments this doc operationalizes.
+
+The ledger is the source of truth. The bridge is the optional blocking path that carries decisions back to a waiting hook or script. Correctness lives here; everything else (sidebar, notifications, agent UIs) reads through it.
+
+## The three paths at a glance
+
+```text
+Default path                Bridge path                 Script path
+(no fresh resolver)         (resolver enrolled)         (rimz feed ask)
+
+agent hook fires            agent hook fires            script calls feed ask
+        │                            │                            │
+        ▼                            ▼                            ▼
+write feed item             write feed item             write feed item
+surface = native_ui         surface = bridge            surface = script
+        │                            │                            │
+        ▼                            ▼                            ▼
+wake sidebars               bind per-request socket     bind per-request socket
+print neutral payload       wait up to hook cap         wait up to --timeout
+exit                                 │                            │
+        │                            ▼                            ▼
+        ▼                  resolver answers (CAS)      human/resolver answers
+agent's own UI asks         hook prints agent JSON     script unblocks
+human focuses pane          (or times out →            (or timeout → expires)
+                             native fallback)
+```
+
+The wire-level signal that distinguishes the three is the `surface` field on the feed item. Sidebar rendering, feed-verb gating, and resolver matching all read it.
+
+## Surfaces
+
+The `native_ui` / `bridge` / `script` vocabulary is defined in [DESIGN.md → The three operating paths](../../DESIGN.md#the-three-operating-paths). This doc describes how each path moves through the ledger; the table of which path holds the hook open and where the answer comes from lives there.
+
+`rimz feed resolve` is valid only for `bridge` and `script`. `rimz feed dismiss` is the local acknowledgement path for `native_ui` — it never reaches the agent.
+
+## Durable state
+
+Under `${XDG_STATE_HOME:-~/.local/state}/rimz/workspaces/<workspace_id>/`:
+
+```text
+events.log.jsonl
+snapshots/latest.json
+feed/<request_id>.json
+locks/workspace.lock
+```
+
+Rules:
+
+- Feed files are written temp-file + rename.
+- Resolutions take the workspace lock, then CAS on `status = pending`. First valid writer wins.
+- `events.log.jsonl` uses length-prefixed framing with `fsync` per record.
+- A torn trailing record at SIGKILL is skipped on rebuild and logged.
+- Event logs rotate on a size cap in addition to the `[privacy] retention_days` TTL.
+- Every feed file carries `workspace_id`, `request_id`, nonce, resolver id, and timestamps.
+- `snapshots/latest.json` is rebuilt from the event log and feed dir on every ledger mutation. Cost is O(events + items); event-log rotation and incremental snapshot maintenance ship together in M4.
+
+## Runtime state
+
+Under `${XDG_RUNTIME_DIR}/rimz/<workspace_id>/`, or `/tmp/rimz-<uid>/<workspace_id>/` at mode `0700` when `XDG_RUNTIME_DIR` is unset (common inside containers and on minimal hosts):
+
+```text
+sock/feed.<short_id>.sock           per-request decision socket; bound by the
+                                    waiting hook subprocess, torn down on exit
+sock/sidebar.<instance_id>.sock     per-instance wakeup socket; bound by each
+                                    live sidebar
+heartbeat/sidebar.<instance_id>.json
+heartbeat/resolver.<resolver_id>.json
+```
+
+Sockets and heartbeats are liveness hints, not durable state. They're split from the ledger directory because Linux's `AF_UNIX` path-length limit (108 bytes) makes deeply nested state paths fragile.
+
+## Default path
+
+No fresh enrolled resolver heartbeat at hook fire time:
+
+1. Hook reads agent payload from stdin.
+2. Hook writes a feed item with `surface = native_ui`.
+3. Hook wakes any live sidebars.
+4. Hook prints the event-specific neutral payload.
+5. Hook exits within milliseconds.
+6. Agent's own UI asks the human.
+
+No per-request socket is bound. The agent moves on through `PostToolUse` or `Stop`, and the item transitions to `resolved` in **Recently answered**.
+
+## Bridge path
+
+Fresh enrolled resolver heartbeat at hook fire time:
+
+1. Hook writes a feed item with `surface = bridge` and binds a per-request socket; the socket path is written into the feed file.
+2. Hook re-stats the resolver heartbeat directory (TOCTOU guard) — if the resolver died between the initial stat and the bind, the hook downgrades to `native_ui` and exits.
+3. Resolver calls `rimz feed resolve`.
+4. CAS validates `status = pending`, active chain step, `workspace_id`, `request_id`, and nonce.
+5. The waiting hook unblocks and prints exactly one agent-native decision JSON.
+
+On hook-cap timeout (Claude 120s, Codex shorter — see [agent.md](./agent.md) for the exact value each adapter ships), the hook prints the neutral payload, the feed item moves to `timed_out`, and the sidebar labels it **"Delegated to native prompt"** — the agent's own UI takes over, exactly as in the default path.
+
+## Script path
+
+`rimz feed ask` always blocks. Resolver presence is irrelevant — the script chose Rimz as its decision surface. The wait has no agent-imposed cap; the caller's `--timeout` is the only ceiling. Resolution can come from any shell (`rimz feed resolve`), the sidebar UI, or an enrolled resolver client.
+
+## Wakeups
+
+After every ledger write the CLI or hook subprocess:
+
+1. Walks fresh `heartbeat/sidebar.*.json` entries (TTL ~5s).
+2. Sends a small wakeup datagram (`{ "kind": "ledger_delta", "request_id": "...", "workspace_id": "...", "protocol_version": "rimz.plugin.v1" }`) to each `sock/sidebar.<instance_id>.sock`.
+3. **On the Zellij backend only**, additionally issues a broadcast `zellij --session <name> pipe --name rimz::feed -- <envelope>` as a latency optimization. Broadcast pipes reach only already-running plugins; lazy-load is impossible.
+
+The sidebar's response to a wakeup is always to refetch via `rimz sidebar snapshot`. A missed wakeup is closed by the next tick (~2s).
+
+## Late answers
+
+A `feed resolve` arriving after the item is `timed_out` is accepted by CAS and appended to `events.log.jsonl` as:
+
+```text
+effective = false
+late = true
+reason = "hook_already_returned_neutral"
+```
+
+It does not change agent behaviour, does not appear in **Recently answered**, and is never typed into a pane by Rimz core. The record exists for audit.
+
+## What survives what
+
+| Event | Ledger | Live sockets and heartbeats | Multiplexer session |
+| --- | --- | --- | --- |
+| Detach | yes | yes (mux server stays alive) | yes |
+| Sidebar reload | yes | sidebar socket rebound on attach | yes |
+| Multiplexer server crash | yes | no | no |
+| Host reboot | yes | no | no — needs host supervisor (tmux-resurrect, Zellij resurrect, systemd) |
+
+Rimz guarantees the ledger across all of these. The session and processes survive only what the host supervisor and the multiplexer server keep alive.
