@@ -1,0 +1,65 @@
+[package]
+name = "rimz"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "rimz"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rimz"
+path = "src/main.rs"
+
+# Test-only fixture: a `zellij`-shaped shim that records argv and exits 0.
+# Used by `tests/zellij_backend.rs` to verify the wakeup walk dispatches the
+# broadcast pipe without needing a live Zellij to receive it.
+[[bin]]
+name = "zellij-trace"
+path = "tests/fixtures/zellij-trace/main.rs"
+required-features = []
+test = false
+bench = false
+
+[lints]
+workspace = true
+
+[dependencies]
+clap.workspace = true
+fs4.workspace = true
+hex.workspace = true
+jiff.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+which.workspace = true
+
+# anyhow is the binary boundary; per rust-conventions.md it is permitted in
+# `crates/rimz/src/main.rs` and the private CLI module tree. Library modules
+# return their own typed Result.
+anyhow.workspace = true
+
+# Stderr logger is installed in main.rs only; the library re-uses the
+# global `tracing` subscriber.
+tracing-subscriber.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+insta.workspace = true
+portable-pty.workspace = true
+predicates.workspace = true
+pretty_assertions.workspace = true
+proptest.workspace = true
+regex.workspace = true
+tempfile.workspace = true
+tracing.workspace = true
