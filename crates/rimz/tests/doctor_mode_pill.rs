@@ -1,0 +1,189 @@
+//! `rimz doctor` agent rollup integration tests. Inject an `agent.lifecycle`
+//! event directly into the ledger, then run the binary and assert the
+//! rendered mode pill matches the closure of the unattended-runs audit story
+//! in `docs/guide/product.md`.
+
+use std::path::{Path, PathBuf};
+use std::process::Command as StdCommand;
+
+use assert_cmd::cargo::CommandCargoExt;
+use rimz::agents::AgentLifecycleObservation;
+use rimz::feed::{AgentMode, AgentStatus};
+use rimz::schema::event::EventEnvelope;
+use rimz::{Ledger, RuntimePaths, StatePaths, WorkspaceId};
+use tempfile::TempDir;
+
+struct Env {
+    home: TempDir,
+    workspace_id: WorkspaceId,
+}
+
+impl Env {
+    fn new() -> Self {
+        let home = TempDir::new().expect("tempdir");
+        let project_root = canonical(home.path());
+        let workspace_id = WorkspaceId::from_project_root(&project_root);
+        for d in ["state", "runtime", "config"] {
+            std::fs::create_dir_all(project_root.join(d)).expect("mkdir env root");
+        }
+        Self { home, workspace_id }
+    }
+
+    fn project_root(&self) -> PathBuf {
+        canonical(self.home.path())
+    }
+
+    fn rimz(&self) -> StdCommand {
+        let mut cmd = StdCommand::cargo_bin("rimz").expect("cargo-bin");
+        cmd.env("XDG_STATE_HOME", self.project_root().join("state"))
+            .env("XDG_RUNTIME_DIR", self.project_root().join("runtime"))
+            .env("XDG_CONFIG_HOME", self.project_root().join("config"))
+            .env("HOME", self.project_root())
+            .env_remove("RUST_LOG")
+            .current_dir(self.project_root())
+            .args(["--root", &self.project_root().display().to_string()]);
+        cmd
+    }
+
+    fn ledger(&self) -> Ledger {
+        let state = StatePaths::under(
+            self.workspace_id.clone(),
+            &self.project_root().join("state"),
+        )
+        .expect("state paths");
+        let rt = RuntimePaths::under(
+            self.workspace_id.clone(),
+            &self.project_root().join("runtime"),
+        )
+        .expect("runtime paths");
+        Ledger::open(state, rt).expect("open ledger")
+    }
+}
+
+fn canonical(p: &Path) -> PathBuf {
+    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+}
+
+fn inject_lifecycle(
+    env: &Env,
+    agent_kind: &str,
+    agent_id: &str,
+    status: AgentStatus,
+    mode: AgentMode,
+    branch: Option<&str>,
+) {
+    let obs = AgentLifecycleObservation {
+        agent_id: Some(agent_id.to_owned()),
+        status,
+        mode,
+        worktree_branch: branch.map(ToOwned::to_owned),
+    };
+    let envelope = EventEnvelope::agent_lifecycle(
+        env.workspace_id.clone(),
+        "test-session",
+        agent_kind,
+        "SessionStart",
+        &obs,
+    );
+    env.ledger().append_event(&envelope).expect("append");
+}
+
+#[test]
+fn doctor_reports_no_agents_when_none_observed() {
+    let env = Env::new();
+    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    assert!(
+        output.status.success(),
+        "doctor failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+    assert!(
+        stdout.contains("agents        : none observed"),
+        "missing 'none observed' row, got:\n{stdout}"
+    );
+}
+
+#[test]
+fn doctor_renders_mode_pill_per_agent() {
+    let env = Env::new();
+    inject_lifecycle(
+        &env,
+        "claude",
+        "claude-session-abc",
+        AgentStatus::Waiting,
+        AgentMode::Bypass,
+        Some("main"),
+    );
+    inject_lifecycle(
+        &env,
+        "codex",
+        "codex-session-xyz",
+        AgentStatus::Running,
+        AgentMode::Auto,
+        Some("feature-migration"),
+    );
+
+    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    assert!(
+        output.status.success(),
+        "doctor failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+
+    // Group headers — one per kind, sorted lexically.
+    assert!(
+        stdout.contains("agent (claude)"),
+        "missing claude group header in:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("agent (codex)"),
+        "missing codex group header in:\n{stdout}"
+    );
+
+    // Per-agent row: agent id + worktree + status + mode pill.
+    assert!(stdout.contains("claude-session-abc"));
+    assert!(stdout.contains("main"));
+    assert!(stdout.contains("waiting"));
+    assert!(stdout.contains("bypass"));
+
+    assert!(stdout.contains("codex-session-xyz"));
+    assert!(stdout.contains("feature-migration"));
+    assert!(stdout.contains("running"));
+    assert!(stdout.contains("auto"));
+}
+
+#[test]
+fn doctor_keeps_latest_mode_per_agent_id() {
+    let env = Env::new();
+    inject_lifecycle(
+        &env,
+        "claude",
+        "claude-session-abc",
+        AgentStatus::Idle,
+        AgentMode::Interactive,
+        Some("main"),
+    );
+    inject_lifecycle(
+        &env,
+        "claude",
+        "claude-session-abc",
+        AgentStatus::Waiting,
+        AgentMode::Bypass,
+        Some("main"),
+    );
+
+    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+
+    assert!(
+        stdout.contains("waiting") && stdout.contains("bypass"),
+        "rollup should reflect the latest observation, got:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("interactive"),
+        "old mode pill should be replaced, got:\n{stdout}"
+    );
+}
