@@ -1,0 +1,29 @@
+[package]
+name = "rimz-sidebar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "rimz-sidebar"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+jiff.workspace = true
+rimz = { path = "../rimz", version = "0.0.0" }
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+ratatui.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+vt100.workspace = true
