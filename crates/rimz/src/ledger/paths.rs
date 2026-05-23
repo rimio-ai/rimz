@@ -1,0 +1,193 @@
+//! Disk and runtime path resolution.
+//!
+//! State paths live under `$XDG_STATE_HOME/rimz/workspaces/<id>/`.
+//! Runtime paths live under `$XDG_RUNTIME_DIR/rimz/<id>/`, falling back to
+//! `/tmp/rimz-<uid>/<id>/` at mode `0700` per `docs/internals/ledger.md`.
+
+use std::env;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use crate::ids::WorkspaceId;
+
+#[derive(Debug, thiserror::Error)]
+pub enum PathErr {
+    #[error("io error preparing {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+}
+
+pub type Result<T> = std::result::Result<T, PathErr>;
+
+#[derive(Clone, Debug)]
+pub struct StatePaths {
+    pub workspace_id: WorkspaceId,
+    pub root: PathBuf,
+    pub events_log: PathBuf,
+    pub snapshots_dir: PathBuf,
+    pub latest_snapshot: PathBuf,
+    pub feed_dir: PathBuf,
+    pub locks_dir: PathBuf,
+    pub workspace_lock: PathBuf,
+}
+
+impl StatePaths {
+    pub fn for_workspace(workspace_id: WorkspaceId) -> Result<Self> {
+        Self::under(workspace_id, &state_home())
+    }
+
+    /// Build paths rooted at `state_root` instead of `state_home()`. Used by
+    /// tests so they don't need to mutate process env; production callers
+    /// take the XDG-based [`Self::for_workspace`].
+    pub fn under(workspace_id: WorkspaceId, state_root: &Path) -> Result<Self> {
+        let root = state_root
+            .join("rimz")
+            .join("workspaces")
+            .join(workspace_id.as_str());
+        let snapshots_dir = root.join("snapshots");
+        let feed_dir = root.join("feed");
+        let locks_dir = root.join("locks");
+        Ok(Self {
+            workspace_id,
+            events_log: root.join("events.log.jsonl"),
+            latest_snapshot: snapshots_dir.join("latest.json"),
+            snapshots_dir,
+            feed_dir,
+            workspace_lock: locks_dir.join("workspace.lock"),
+            locks_dir,
+            root,
+        })
+    }
+
+    pub fn ensure_dirs(&self) -> Result<()> {
+        mkdir_p(&self.snapshots_dir)?;
+        mkdir_p(&self.feed_dir)?;
+        mkdir_p(&self.locks_dir)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RuntimePaths {
+    pub workspace_id: WorkspaceId,
+    pub root: PathBuf,
+    pub sock_dir: PathBuf,
+    pub heartbeat_dir: PathBuf,
+}
+
+impl RuntimePaths {
+    pub fn for_workspace(workspace_id: WorkspaceId) -> Result<Self> {
+        Self::under(workspace_id, &runtime_home())
+    }
+
+    /// Build runtime paths rooted at `runtime_root`. Tests prefer this so they
+    /// don't need to set `XDG_RUNTIME_DIR`.
+    pub fn under(workspace_id: WorkspaceId, runtime_root: &Path) -> Result<Self> {
+        let root = runtime_root.join("rimz").join(workspace_id.as_str());
+        let sock_dir = root.join("sock");
+        let heartbeat_dir = root.join("heartbeat");
+        Ok(Self {
+            workspace_id,
+            root,
+            sock_dir,
+            heartbeat_dir,
+        })
+    }
+
+    pub fn ensure_dirs(&self) -> Result<()> {
+        mkdir_p(&self.sock_dir)?;
+        mkdir_p(&self.heartbeat_dir)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&self.root)
+                .map_err(|e| PathErr::Io {
+                    path: self.root.clone(),
+                    source: e,
+                })?
+                .permissions();
+            perms.set_mode(0o700);
+            fs::set_permissions(&self.root, perms).map_err(|e| PathErr::Io {
+                path: self.root.clone(),
+                source: e,
+            })?;
+        }
+        Ok(())
+    }
+}
+
+fn mkdir_p(path: &Path) -> Result<()> {
+    fs::create_dir_all(path).map_err(|e| PathErr::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })
+}
+
+pub fn state_home() -> PathBuf {
+    if let Some(value) = env_path("XDG_STATE_HOME") {
+        return value;
+    }
+    if let Some(home) = env_path("HOME") {
+        return home.join(".local/state");
+    }
+    env::temp_dir().join("rimz-state")
+}
+
+pub fn runtime_home() -> PathBuf {
+    if let Some(value) = env_path("XDG_RUNTIME_DIR") {
+        return value;
+    }
+    // Containers and minimal hosts often lack XDG_RUNTIME_DIR. Use a
+    // /tmp/rimz-<uid> namespace per the docs; the 0700 mode is applied to
+    // `RuntimePaths::root` after creation.
+    let uid = current_uid();
+    env::temp_dir().join(format!("rimz-{uid}"))
+}
+
+/// Per-user, per-machine config root. Hosts the resolver allowlist and any
+/// other configuration that survives reboots but is not per-workspace.
+pub fn config_home() -> PathBuf {
+    if let Some(value) = env_path("XDG_CONFIG_HOME") {
+        return value;
+    }
+    if let Some(home) = env_path("HOME") {
+        return home.join(".config");
+    }
+    env::temp_dir().join("rimz-config")
+}
+
+fn env_path(key: &str) -> Option<PathBuf> {
+    env::var_os(key)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
+#[cfg(unix)]
+fn current_uid() -> String {
+    nix::unistd::Uid::current().as_raw().to_string()
+}
+
+#[cfg(not(unix))]
+fn current_uid() -> String {
+    "unknown".to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ids::WorkspaceId;
+
+    #[test]
+    fn state_paths_resolve_under_state_home() {
+        let id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let paths = StatePaths::for_workspace(id.clone()).unwrap();
+        assert!(paths.root.ends_with(Path::new(id.as_str())));
+        assert_eq!(paths.events_log.file_name().unwrap(), "events.log.jsonl");
+        assert_eq!(paths.latest_snapshot.file_name().unwrap(), "latest.json");
+        assert_eq!(paths.workspace_lock.file_name().unwrap(), "workspace.lock");
+    }
+}
