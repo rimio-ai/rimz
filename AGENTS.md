@@ -1,0 +1,80 @@
+# AGENTS.md
+
+Working contract for humans and coding agents contributing to Rimz. Read on entry. Topic detail lives in the leaves linked from the [documentation map](#documentation-map); never duplicate it here.
+
+> **Invariant.** Rimz routes attention. By default, it does not answer for you. The agent's own UI stays the answer surface unless a resolver is explicitly enrolled.
+
+If a child `AGENTS.md` appears under a subtree, it extends this file with local-only constraints — it never restates parent rules.
+
+## Tone
+
+Declarative, present tense. State the contract; don't narrate history. Prefer imperatives (`Use Result.`, `Resolvers own pane I/O.`) over prohibitions where the meaning carries.
+
+## Engineering principles
+
+- **Explicit Rust.** Typed IDs, typed state machines, structured parsers, explicit errors. Domain errors return `Result`; `unwrap`, `expect`, and panics belong in tests, build scripts, and provably-impossible states (with a comment).
+- **Strong types** for workspace, request, resolver, and pane IDs, and for surfaces, statuses, and protocol versions.
+- **Structured parsers** for TOML, JSON, KDL, and agent payloads.
+- **Ledger durability.** File-state writes use temp-file plus rename. Event-log writes follow the durability contract in [docs/internals/ledger.md](./docs/internals/ledger.md).
+
+## Product invariants
+
+- **Ledger first.** Correctness lives in the ledger, CAS rules, nonces, and per-request sockets. Sidebar wakeups are latency, not truth.
+- **Hook stdout is the decision channel.** Logs go to stderr or Rimz state logs. Hook helper children get fresh stdio.
+- **Cross-backend parity.** Zellij and tmux are first-class. Core behaviour never depends on a backend-only feature.
+- **Resolvers own pane I/O.** `pane capture` and `pane send` are public resolver primitives; core treats panes as opaque.
+- **Sidebar is read-only on the ledger.** Sidebar code reads via `rimz sidebar snapshot`; ledger-write modules stay out of the sidebar's import graph.
+- **Trust is product behaviour.** Every command-executing config field is in the trust hash, with a test that proves it.
+- **Security surfaces stay visible.** Project trust, resolver allowlists, hook install diffs, and privacy settings are product behaviour, not implementation details.
+
+## Implementation rules
+
+- `AGENTS.md` and `CLAUDE.md` are the same file via symlink (`ln -s AGENTS.md CLAUDE.md`); edits to either land in both.
+- Rust unless the task targets docs, tests, scripts, examples, or build glue.
+- Root docs stay short and authoritative; detail lives in `docs/` and is linked.
+- Update [ARCHITECTURE.md](./ARCHITECTURE.md) when modules move. Update [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes.
+- Reuse the canonical example in docs: `~/code/billing-service` with `main` + `feature-migration` worktrees.
+- `cargo xtask ci` is the single contributor entry point for every quality gate; new automation lands as an `xtask` task, not a shell script. Gate stack lives in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
+
+## Testing requirements
+
+- Unit tests around state machines, schema rendering, and trust decisions.
+- Integration tests for ledger CAS, bridge timeouts, socket wakeups, and backend parity.
+- Golden tests for every agent hook stdout shape, including neutral timeout output.
+- Grep-style CI invariants reject:
+  - `Stdio::inherit` in hook subprocess paths,
+  - sidebar imports of ledger-write modules,
+  - core auto-use of `pane capture` or `pane send`,
+  - command-executing config fields missing from the trust hash.
+
+Full matrix in [docs/contributing/testing.md](./docs/contributing/testing.md).
+
+## Documentation map
+
+Every other document is a leaf from here. The `docs/` tree groups by audience: **guide** (use it), **reference** (look it up), **internals** (how it works), **contributing** (work on it).
+
+**Root**
+- [README.md](./README.md) — product entry point.
+- [DESIGN.md](./DESIGN.md) — invariant, three operating paths, commitments, non-goals.
+- [ARCHITECTURE.md](./ARCHITECTURE.md) — runtime shape, repository layout, module ownership.
+- [status.md](./status.md) — living milestone log; what's landed, what's next.
+
+**Guide** — `docs/guide/`
+- [product.md](./docs/guide/product.md) — five-minute tour, audiences, sidebar walk-through.
+- [security.md](./docs/guide/security.md) — threat model and guardrails.
+
+**Reference** — `docs/reference/`
+- [cli.md](./docs/reference/cli.md) — every command, grouped by intent.
+- [configuration.md](./docs/reference/configuration.md) — project/per-machine config, layout IR, privacy.
+
+**Internals** — `docs/internals/`
+- [ledger.md](./docs/internals/ledger.md) — durable state and the blocking decision bridge.
+- [multiplexers.md](./docs/internals/multiplexers.md) — Zellij and tmux backend contracts.
+- [sidebar.md](./docs/internals/sidebar.md) — sidebar model, groups, actions, notifications.
+- [resolvers.md](./docs/internals/resolvers.md) — resolver protocol, chain, pane primitives.
+- [agent.md](./docs/internals/agent.md) — hook model for Claude, Codex, and later agents.
+
+**Contributing** — `docs/contributing/`
+- [rust-conventions.md](./docs/contributing/rust-conventions.md) — Rust shape: CLI, errors, stdout discipline, actor pattern, test taxonomy, dependency snapshot, toolchain, quality gates.
+- [testing.md](./docs/contributing/testing.md) — required test matrix and invariants.
+- [roadmap.md](./docs/contributing/roadmap.md) — build order and current milestone.
