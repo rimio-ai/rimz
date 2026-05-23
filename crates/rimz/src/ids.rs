@@ -1,0 +1,489 @@
+//! Strongly-typed identifiers.
+//!
+//! Every ID that travels through the ledger, the wakeup socket, or the agent
+//! hook protocol is a newtype. Rimz-minted IDs (`RequestId`, `EventId`,
+//! `SidebarInstanceId`) use UUIDv7 so filenames named after the ID sort
+//! chronologically without an external index. IDs derived from external
+//! truth (`WorkspaceId`, `PaneId`) keep their natural shape.
+
+use std::fmt;
+use std::path::Path;
+use std::str::FromStr;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
+
+/// Multiplexer backend selector.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MuxName {
+    Zellij,
+    Tmux,
+}
+
+impl MuxName {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Zellij => "zellij",
+            Self::Tmux => "tmux",
+        }
+    }
+}
+
+impl fmt::Display for MuxName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("unknown multiplexer `{0}`; expected `zellij` or `tmux`")]
+pub struct UnknownMux(pub String);
+
+impl FromStr for MuxName {
+    type Err = UnknownMux;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "zellij" => Ok(Self::Zellij),
+            "tmux" => Ok(Self::Tmux),
+            other => Err(UnknownMux(other.to_owned())),
+        }
+    }
+}
+
+/// Whether a view is a Zellij tab or a tmux window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewKind {
+    Tab,
+    Window,
+}
+
+/// `ws_<24 hex chars>` — SHA-256-of-canonical-project-root.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct WorkspaceId(String);
+
+#[derive(Debug, thiserror::Error)]
+#[error("invalid workspace id `{0}`; expected `ws_` followed by 24 hex characters")]
+pub struct InvalidWorkspaceId(pub String);
+
+impl WorkspaceId {
+    pub fn from_project_root(project_root: &Path) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(project_root.to_string_lossy().as_bytes());
+        let hash = hex::encode(hasher.finalize());
+        Self(format!("ws_{}", &hash[..24]))
+    }
+
+    /// Parse a canonical workspace identifier.
+    ///
+    /// ```
+    /// use rimz::ids::WorkspaceId;
+    /// let id = WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
+    /// assert_eq!(id.as_str(), "ws_0123456789abcdef01234567");
+    /// assert!(WorkspaceId::parse("not-a-workspace-id").is_err());
+    /// ```
+    pub fn parse(value: &str) -> Result<Self, InvalidWorkspaceId> {
+        let Some(hex) = value.strip_prefix("ws_") else {
+            return Err(InvalidWorkspaceId(value.to_owned()));
+        };
+        if hex.len() != 24 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(InvalidWorkspaceId(value.to_owned()));
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for WorkspaceId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for WorkspaceId {
+    type Err = InvalidWorkspaceId;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
+/// Macro: define a UUIDv7-backed newtype with a fixed prefix.
+macro_rules! uuid_v7_id {
+    ($name:ident, $prefix:literal, $doc:literal) => {
+        #[doc = $doc]
+        #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+        pub struct $name(String);
+
+        impl $name {
+            pub fn new() -> Self {
+                Self(format!("{}_{}", $prefix, Uuid::now_v7().simple()))
+            }
+
+            pub fn parse(value: &str) -> Result<Self, InvalidUuidId> {
+                validate_uuid_id(value, $prefix, stringify!($name))?;
+                Ok(Self(value.to_owned()))
+            }
+
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+
+        impl FromStr for $name {
+            type Err = InvalidUuidId;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                Self::parse(s)
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                serializer.serialize_str(&self.0)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let raw = String::deserialize(deserializer)?;
+                Self::parse(&raw).map_err(serde::de::Error::custom)
+            }
+        }
+    };
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("invalid {kind} `{value}`; expected `{prefix}_` followed by 32 hex characters")]
+pub struct InvalidUuidId {
+    kind: &'static str,
+    prefix: &'static str,
+    value: String,
+}
+
+fn validate_uuid_id(
+    value: &str,
+    prefix: &'static str,
+    kind: &'static str,
+) -> Result<(), InvalidUuidId> {
+    let Some(rest) = value
+        .strip_prefix(prefix)
+        .and_then(|value| value.strip_prefix('_'))
+    else {
+        return Err(InvalidUuidId {
+            kind,
+            prefix,
+            value: value.to_owned(),
+        });
+    };
+    if rest.len() != 32
+        || !rest
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f'))
+    {
+        return Err(InvalidUuidId {
+            kind,
+            prefix,
+            value: value.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+uuid_v7_id!(RequestId, "req", "Per-feed-item request identifier.");
+uuid_v7_id!(EventId, "evt", "Per-event identifier in the event log.");
+
+impl RequestId {
+    /// First 12 hex chars of the UUID portion. Used to name per-request
+    /// sockets — the AF_UNIX path-length budget (108 bytes) is tight enough
+    /// that the full 32-char UUID is wasteful when collisions on 48 bits of
+    /// entropy across one workspace are effectively impossible.
+    ///
+    /// ```
+    /// use rimz::ids::RequestId;
+    /// let id = RequestId::new();
+    /// let short = id.short();
+    /// assert_eq!(short.len(), 12);
+    /// assert!(id.as_str().contains(short));
+    /// ```
+    pub fn short(&self) -> &str {
+        // Macro guarantees `req_<32 hex>`; the slice is always in-bounds.
+        &self.0[4..16]
+    }
+}
+uuid_v7_id!(
+    SidebarInstanceId,
+    "sb",
+    "Per-instance sidebar identifier; one per live sidebar process."
+);
+
+/// Resolver allowlist identifier. Caller-supplied but constrained: the
+/// allowlist key, the heartbeat filename, and the audit log all use this
+/// verbatim. Validation matches the allowlist schema: ASCII `[A-Za-z0-9_-]`
+/// only, length 1..=[`ResolverId::MAX_LEN`].
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(transparent)]
+pub struct ResolverId(String);
+
+#[derive(Debug, thiserror::Error)]
+pub enum InvalidResolverId {
+    #[error("resolver id is empty")]
+    Empty,
+    #[error("resolver id `{value}` exceeds max length {max}")]
+    TooLong { value: String, max: usize },
+    #[error(
+        "resolver id `{value}` contains invalid character `{ch}` (allowed: ASCII alphanumeric, `-`, `_`)"
+    )]
+    BadChar { value: String, ch: char },
+}
+
+impl ResolverId {
+    /// Allowlist schema cap (matches the per-machine `resolvers.toml`
+    /// key budget; long enough for `org.team.resolver-name`).
+    pub const MAX_LEN: usize = 64;
+
+    /// Mint a resolver id from a trusted internal source (placeholder
+    /// values in error reporting, fixture IDs in tests). Public callers
+    /// take the validated [`FromStr`] path.
+    pub fn new_unchecked(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn parse(value: &str) -> Result<Self, InvalidResolverId> {
+        if value.is_empty() {
+            return Err(InvalidResolverId::Empty);
+        }
+        if value.len() > Self::MAX_LEN {
+            return Err(InvalidResolverId::TooLong {
+                value: value.to_owned(),
+                max: Self::MAX_LEN,
+            });
+        }
+        if let Some(ch) = value
+            .chars()
+            .find(|c| !(c.is_ascii_alphanumeric() || *c == '-' || *c == '_'))
+        {
+            return Err(InvalidResolverId::BadChar {
+                value: value.to_owned(),
+                ch,
+            });
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ResolverId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for ResolverId {
+    type Err = InvalidResolverId;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for ResolverId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Normalized pane identifier: `<mux>:<raw_pane_id>` (e.g. `zellij:terminal_3`).
+///
+/// Raw pane IDs stay inside backend adapters. This type is what travels in
+/// feed items, env vars, and `rimz pane` CLI calls.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PaneId(String);
+
+#[derive(Debug, thiserror::Error)]
+#[error("invalid pane id `{0}`; expected `<mux>:<raw_pane_id>`")]
+pub struct InvalidPaneId(pub String);
+
+impl PaneId {
+    pub fn from_parts(mux: MuxName, raw: impl AsRef<str>) -> Self {
+        Self(format!("{}:{}", mux.as_str(), raw.as_ref()))
+    }
+
+    /// Parse a normalized pane identifier of the form `<mux>:<raw_pane_id>`.
+    ///
+    /// ```
+    /// use rimz::ids::{MuxName, PaneId};
+    /// let zellij: PaneId = "zellij:terminal_3".parse().unwrap();
+    /// assert_eq!(zellij.mux(), MuxName::Zellij);
+    /// assert_eq!(zellij.raw(), "terminal_3");
+    ///
+    /// let tmux: PaneId = "tmux:%3".parse().unwrap();
+    /// assert_eq!(tmux.mux(), MuxName::Tmux);
+    /// assert_eq!(tmux.raw(), "%3");
+    /// ```
+    pub fn parse(value: &str) -> Result<Self, InvalidPaneId> {
+        let (head, tail) = value
+            .split_once(':')
+            .ok_or_else(|| InvalidPaneId(value.to_owned()))?;
+        if head != MuxName::Zellij.as_str() && head != MuxName::Tmux.as_str() {
+            return Err(InvalidPaneId(value.to_owned()));
+        }
+        if tail.is_empty() {
+            return Err(InvalidPaneId(value.to_owned()));
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Multiplexer prefix this pane is scoped to.
+    pub fn mux(&self) -> MuxName {
+        // Constructed only via `from_parts`/`parse`, both of which guarantee a
+        // valid prefix — the unwrap below cannot fire on a well-formed value.
+        let (head, _) = self
+            .0
+            .split_once(':')
+            .expect("PaneId invariant: contains ':'");
+        head.parse()
+            .expect("PaneId invariant: prefix is a valid MuxName")
+    }
+
+    /// Mux-native pane id (e.g. `terminal_3` for Zellij, `%3` for tmux).
+    pub fn raw(&self) -> &str {
+        let (_, tail) = self
+            .0
+            .split_once(':')
+            .expect("PaneId invariant: contains ':'");
+        tail
+    }
+}
+
+impl fmt::Display for PaneId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for PaneId {
+    type Err = InvalidPaneId;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_id_is_stable_for_same_root() {
+        let a = WorkspaceId::from_project_root(Path::new("/tmp/repo"));
+        let b = WorkspaceId::from_project_root(Path::new("/tmp/repo"));
+        assert_eq!(a, b);
+        assert!(a.as_str().starts_with("ws_"));
+        assert_eq!(a.as_str().len(), 3 + 24);
+    }
+
+    #[test]
+    fn workspace_id_parser_accepts_only_canonical_shape() {
+        let id = WorkspaceId::parse("ws_0123456789abcdefABCDEF01").expect("valid");
+        assert_eq!(id.as_str(), "ws_0123456789abcdefABCDEF01");
+        assert!(WorkspaceId::parse("0123456789abcdefABCDEF01").is_err());
+        assert!(WorkspaceId::parse("ws_short").is_err());
+        assert!(WorkspaceId::parse("ws_0123456789abcdefABCDEFG").is_err());
+    }
+
+    #[test]
+    fn request_ids_are_unique_and_prefixed() {
+        let a = RequestId::new();
+        let b = RequestId::new();
+        assert_ne!(a, b);
+        assert!(a.as_str().starts_with("req_"));
+    }
+
+    #[test]
+    fn uuid_prefixed_ids_reject_non_canonical_input() {
+        assert!(RequestId::parse("req_0123456789abcdef0123456789abcdef").is_ok());
+        assert!(RequestId::parse("evt_0123456789abcdef0123456789abcdef").is_err());
+        assert!(RequestId::parse("req_short").is_err());
+        assert!(RequestId::parse("req_0123456789abcdef0123456789abcdeg").is_err());
+        assert!(RequestId::parse("req_0123456789abcdef0123456789ABCDEF").is_err());
+        assert!(EventId::parse("evt_0123456789abcdef0123456789abcdef").is_ok());
+        assert!(SidebarInstanceId::parse("sb_0123456789abcdef0123456789abcdef").is_ok());
+    }
+
+    #[test]
+    fn uuid_prefixed_ids_reject_bad_json_values() {
+        let parsed: Result<RequestId, _> =
+            serde_json::from_str("\"req_0123456789abcdef0123456789abcdef\"");
+        assert!(parsed.is_ok());
+
+        let parsed: Result<RequestId, _> = serde_json::from_str("\"not-a-request-id\"");
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn request_id_short_returns_12_hex_chars() {
+        let id = RequestId::new();
+        let short = id.short();
+        assert_eq!(short.len(), 12);
+        assert!(short.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(id.as_str().contains(short));
+    }
+
+    #[test]
+    fn pane_id_round_trips_parts() {
+        let id = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+        assert_eq!(id.as_str(), "zellij:terminal_3");
+        assert_eq!(id.mux(), MuxName::Zellij);
+        assert_eq!(id.raw(), "terminal_3");
+
+        let parsed: PaneId = "tmux:%5".parse().expect("valid pane id");
+        assert_eq!(parsed.mux(), MuxName::Tmux);
+        assert_eq!(parsed.raw(), "%5");
+    }
+
+    #[test]
+    fn pane_id_rejects_unknown_mux_prefix() {
+        assert!(PaneId::parse("kitty:1").is_err());
+        assert!(PaneId::parse("no-colon").is_err());
+        assert!(PaneId::parse("tmux:").is_err());
+        assert!(PaneId::parse("zellij:").is_err());
+    }
+}
