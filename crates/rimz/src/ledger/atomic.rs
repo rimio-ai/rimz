@@ -145,12 +145,17 @@ fn sync_parent_dir(path: &Path) -> Result<()> {
     let Some(parent) = path.parent() else {
         return Ok(());
     };
-    let dir = File::open(parent).map_err(|e| AtomicErr::Io {
-        path: parent.to_path_buf(),
+    sync_dir(parent)
+}
+
+/// fsync a directory so its rename/unlink operations are durable.
+pub fn sync_dir(dir: &Path) -> Result<()> {
+    let handle = File::open(dir).map_err(|e| AtomicErr::Io {
+        path: dir.to_path_buf(),
         source: e,
     })?;
-    dir.sync_all().map_err(|e| AtomicErr::Io {
-        path: parent.to_path_buf(),
+    handle.sync_all().map_err(|e| AtomicErr::Io {
+        path: dir.to_path_buf(),
         source: e,
     })?;
     Ok(())

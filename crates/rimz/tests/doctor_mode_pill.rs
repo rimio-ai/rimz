@@ -9,7 +9,9 @@ use std::process::Command as StdCommand;
 use assert_cmd::cargo::CommandCargoExt;
 use rimz::agents::AgentLifecycleObservation;
 use rimz::feed::{AgentMode, AgentStatus};
+use rimz::ids::{MuxName, ResolverId, SidebarInstanceId};
 use rimz::schema::event::EventEnvelope;
+use rimz::schema::heartbeat::{ResolverHeartbeat, SidebarHeartbeat};
 use rimz::{Ledger, RuntimePaths, StatePaths, WorkspaceId};
 use tempfile::TempDir;
 
@@ -57,6 +59,14 @@ impl Env {
         )
         .expect("runtime paths");
         Ledger::open(state, rt).expect("open ledger")
+    }
+
+    fn runtime_paths(&self) -> RuntimePaths {
+        RuntimePaths::under(
+            self.workspace_id.clone(),
+            &self.project_root().join("runtime"),
+        )
+        .expect("runtime paths")
     }
 }
 
@@ -186,4 +196,63 @@ fn doctor_keeps_latest_mode_per_agent_id() {
         !stdout.contains("interactive"),
         "old mode pill should be replaced, got:\n{stdout}"
     );
+}
+
+#[test]
+fn doctor_reports_protocol_version_mismatches() {
+    let env = Env::new();
+
+    let mut event = EventEnvelope::new(
+        env.workspace_id.clone(),
+        "test-session",
+        "rimz",
+        "cli",
+        "event.emit",
+        serde_json::json!({ "kind": "build.started" }),
+    );
+    event.schema_version = "rimz.event.v0".to_owned();
+    env.ledger().append_event(&event).expect("append old event");
+
+    let rt = env.runtime_paths();
+    rt.ensure_dirs().expect("runtime dirs");
+
+    let mut sidebar = SidebarHeartbeat::new(
+        env.workspace_id.clone(),
+        SidebarInstanceId::new(),
+        MuxName::Tmux,
+        "rimz-test",
+        rt.sock_dir.join("sidebar.old.sock"),
+    );
+    sidebar.protocol_version = "rimz.plugin.v0".to_owned();
+    rimz::ledger::atomic::write_temp_then_rename(
+        &rt.heartbeat_dir.join("sidebar.old.json"),
+        &sidebar,
+    )
+    .expect("write old sidebar heartbeat");
+
+    let resolver_id: ResolverId = "opus-policy".parse().expect("resolver id");
+    let mut resolver = ResolverHeartbeat::new(env.workspace_id.clone(), resolver_id);
+    resolver.protocol_version = "rimz.resolver.v0".to_owned();
+    rimz::ledger::atomic::write_temp_then_rename(
+        &rt.heartbeat_dir.join("resolver.opus-policy.json"),
+        &resolver,
+    )
+    .expect("write old resolver heartbeat");
+
+    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+
+    assert!(stdout.contains(
+        "protocols     : event rimz.event.v1; sidebar rimz.plugin.v1; resolver rimz.resolver.v1",
+    ));
+    assert!(stdout.contains(
+        "protocol warn : event log schema rimz.event.v0 seen 1 record (expected rimz.event.v1)",
+    ));
+    assert!(stdout.contains(
+        "protocol warn : sidebar heartbeat sidebar.old.json uses rimz.plugin.v0 (expected rimz.plugin.v1)",
+    ));
+    assert!(stdout.contains(
+        "protocol warn : resolver heartbeat resolver.opus-policy.json uses rimz.resolver.v0 (expected rimz.resolver.v1)",
+    ));
 }

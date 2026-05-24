@@ -12,6 +12,7 @@
 
 use std::env;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -30,6 +31,12 @@ const TELEMETRY_EVENTS: &[&str] = &["UserPromptSubmit", "PreToolUse", "PostToolU
 /// agent open while the bridge waits for a resolver answer. Installing a
 /// blocking event as async is a hard error per docs/internals/agent.md:42.
 const BLOCKING_EVENTS: &[&str] = &["PermissionRequest"];
+
+/// Codex's effective hook cap. Upstream's blocking-hook deadline is shorter
+/// than Claude's; this leaves a small safety margin so the bridge never holds
+/// the hook past the kill window. Verify against the active Codex hook docs
+/// before tightening.
+const CODEX_HOOK_CAP: Duration = Duration::from_secs(60);
 
 /// Top-level key under which Rimz writes its hook block. Sits next to any
 /// user-managed `[hooks.<other>]` table so a clean merge round-trip is
@@ -118,6 +125,10 @@ impl AgentIntegration for CodexIntegration {
     fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
         let path = codex_config_path()?;
         uninstall_from(&path)
+    }
+
+    fn hook_cap(&self) -> Duration {
+        CODEX_HOOK_CAP
     }
 }
 
@@ -570,6 +581,12 @@ mod tests {
         .unwrap();
         let err = install_into(&path, false).unwrap_err();
         assert!(matches!(err, AgentErr::Install { agent: "codex", .. }));
+    }
+
+    #[test]
+    fn codex_hook_cap_is_shorter_than_claude_default() {
+        use crate::agents::ClaudeIntegration;
+        assert!(CodexIntegration.hook_cap() < ClaudeIntegration.hook_cap());
     }
 
     #[test]

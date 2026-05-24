@@ -225,7 +225,7 @@ pub struct ResolverStep {
     pub resolver_id: ResolverId,
     pub display_name: Option<String>,
     pub order: i32,
-    pub budget_ms: i64,
+    pub budget_ms: u64,
     pub state: ResolverStepState,
     pub reason: Option<String>,
 }
@@ -389,8 +389,7 @@ impl FeedItem {
     fn active_chain_deadline(&self, now: Timestamp) -> Option<Timestamp> {
         let active = self.chain_active_resolver.as_ref()?;
         let step = self.chain.iter().find(|step| &step.resolver_id == active)?;
-        let budget_ms = u64::try_from(step.budget_ms).unwrap_or(0);
-        Some(now + std::time::Duration::from_millis(budget_ms))
+        Some(now + std::time::Duration::from_millis(step.budget_ms))
     }
 }
 

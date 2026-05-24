@@ -3,6 +3,9 @@
 //! event log this is derived from.
 
 use std::collections::BTreeMap;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -23,6 +26,18 @@ pub enum SnapshotErr {
     EventLog(#[from] EventLogErr),
     #[error(transparent)]
     Atomic(#[from] atomic::AtomicErr),
+    #[error("io error on {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("json parse error on {path}: {source}")]
+    Json {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, SnapshotErr>;
@@ -60,12 +75,25 @@ impl SidebarActivity {
 impl SidebarSnapshot {
     pub fn build(
         workspace_id: WorkspaceId,
+        items: Vec<FeedItem>,
+        events: Vec<EventEnvelope>,
+    ) -> Self {
+        Self::build_with_carryover(workspace_id, items, events, Vec::new())
+    }
+
+    /// Build a snapshot, folding `carryover_agents` into the agent rollup so
+    /// pre-rotation observations survive event-log archiving. Live events
+    /// with a newer `last_seen` override the carryover.
+    pub fn build_with_carryover(
+        workspace_id: WorkspaceId,
         mut items: Vec<FeedItem>,
         events: Vec<EventEnvelope>,
+        carryover_agents: Vec<AgentState>,
     ) -> Self {
         items.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
 
-        let agents = reduce_agent_states(&events);
+        let live = reduce_agent_states(&events);
+        let agents = merge_agent_rollups(&carryover_agents, &live);
 
         let mut needs_attention = Vec::new();
         let mut resolver_working = Vec::new();
@@ -105,6 +133,57 @@ impl SidebarSnapshot {
             agents,
         }
     }
+}
+
+/// Carryover state preserved across event-log rotation. Today this is the
+/// agent rollup; other reductions can join when they appear.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct EventCarryover {
+    #[serde(default)]
+    pub agents: Vec<AgentState>,
+}
+
+pub fn read_carryover(path: &Path) -> Result<EventCarryover> {
+    match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|source| SnapshotErr::Json {
+            path: path.to_path_buf(),
+            source,
+        }),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(EventCarryover::default()),
+        Err(source) => Err(SnapshotErr::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+#[must_use = "durability barrier; check the result"]
+pub fn write_carryover(path: &Path, carryover: &EventCarryover) -> Result<()> {
+    write_temp_then_rename(path, carryover)?;
+    Ok(())
+}
+
+/// Walk `events` and project the agent rollup that should outlive a
+/// rotation. Exposed so the ledger can capture state just before archiving.
+pub fn agent_rollup_for_events(events: &[EventEnvelope]) -> Vec<AgentState> {
+    reduce_agent_states(events)
+}
+
+/// Merge two agent rollups, preferring the newer `last_seen` per
+/// `(agent_kind, agent_id)` pair. `live` wins on ties so a same-second
+/// observation in the active log overrides carryover.
+pub fn merge_agent_rollups(base: &[AgentState], live: &[AgentState]) -> Vec<AgentState> {
+    let mut map: BTreeMap<(String, String), AgentState> = BTreeMap::new();
+    for entry in base.iter().chain(live.iter()) {
+        let key = (entry.kind.clone(), entry.agent_id.clone());
+        match map.get(&key) {
+            Some(existing) if existing.last_seen > entry.last_seen => {}
+            _ => {
+                map.insert(key, entry.clone());
+            }
+        }
+    }
+    map.into_values().collect()
 }
 
 /// Fold `agent.lifecycle` events into the latest [`AgentState`] per
@@ -154,13 +233,13 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
     map.into_values().collect()
 }
 
-/// Rebuild the snapshot from the feed dir and persist it atomically. The
-/// resulting JSON is what `rimz sidebar snapshot --json` reads on attach.
+/// Rebuild the snapshot from the active event log, the agent carryover, and
+/// the feed dir, then persist it atomically. The resulting JSON is what
+/// `rimz sidebar snapshot --json` reads on attach.
 ///
-/// Cost is O(events + items) per call because the reducer walks the entire
-/// event log and feed dir. Acceptable today because both are bounded by
-/// per-project session length; event-log rotation and incremental snapshot
-/// maintenance are paired work in M4.
+/// Cost is O(active-events + items) per call. Archived event logs are never
+/// rescanned; rotation pre-projects the agent rollup into
+/// `agents.carryover.json` so the reducer stays bounded.
 pub fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
     let snapshot = build_from(paths)?;
     write_temp_then_rename(&paths.latest_snapshot, &snapshot)?;
@@ -170,10 +249,12 @@ pub fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
 pub fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
     let items = feed_store::list(&paths.feed_dir)?;
     let events = event_log::read_all(&paths.events_log)?;
-    Ok(SidebarSnapshot::build(
+    let carryover = read_carryover(&paths.agents_carryover)?;
+    Ok(SidebarSnapshot::build_with_carryover(
         paths.workspace_id.clone(),
         items,
         events,
+        carryover.agents,
     ))
 }
 
@@ -253,5 +334,91 @@ mod tests {
             snap.recent_activity[0],
             SidebarActivity::Event { .. }
         ));
+    }
+
+    #[test]
+    fn merge_carryover_prefers_newer_observation() {
+        let mut older = AgentState {
+            agent_id: "agent-1".into(),
+            kind: "claude".into(),
+            status: AgentStatus::Idle,
+            mode: AgentMode::Interactive,
+            pane: None,
+            worktree_path: None,
+            worktree_branch: None,
+            last_seen: Timestamp::from_second(1_000).unwrap(),
+        };
+        older.worktree_branch = Some("main".into());
+        let newer = AgentState {
+            agent_id: "agent-1".into(),
+            kind: "claude".into(),
+            status: AgentStatus::Running,
+            mode: AgentMode::Auto,
+            pane: None,
+            worktree_path: None,
+            worktree_branch: Some("feature".into()),
+            last_seen: Timestamp::from_second(2_000).unwrap(),
+        };
+        let merged =
+            merge_agent_rollups(std::slice::from_ref(&older), std::slice::from_ref(&newer));
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].status, AgentStatus::Running);
+        assert_eq!(merged[0].worktree_branch.as_deref(), Some("feature"));
+    }
+
+    #[test]
+    fn merge_carryover_preserves_orphaned_entries() {
+        let only_in_carryover = AgentState {
+            agent_id: "agent-1".into(),
+            kind: "claude".into(),
+            status: AgentStatus::Idle,
+            mode: AgentMode::Interactive,
+            pane: None,
+            worktree_path: None,
+            worktree_branch: None,
+            last_seen: Timestamp::from_second(1_000).unwrap(),
+        };
+        let only_live = AgentState {
+            agent_id: "agent-2".into(),
+            kind: "codex".into(),
+            status: AgentStatus::Running,
+            mode: AgentMode::Plan,
+            pane: None,
+            worktree_path: None,
+            worktree_branch: None,
+            last_seen: Timestamp::from_second(2_000).unwrap(),
+        };
+        let merged = merge_agent_rollups(
+            std::slice::from_ref(&only_in_carryover),
+            std::slice::from_ref(&only_live),
+        );
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn carryover_round_trips_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agents.carryover.json");
+        assert_eq!(
+            read_carryover(&path).unwrap(),
+            EventCarryover::default(),
+            "missing file yields empty carryover"
+        );
+
+        let carryover = EventCarryover {
+            agents: vec![AgentState {
+                agent_id: "agent-1".into(),
+                kind: "claude".into(),
+                status: AgentStatus::Success,
+                mode: AgentMode::Interactive,
+                pane: None,
+                worktree_path: None,
+                worktree_branch: Some("main".into()),
+                last_seen: Timestamp::from_second(3_000).unwrap(),
+            }],
+        };
+        write_carryover(&path, &carryover).unwrap();
+        let loaded = read_carryover(&path).unwrap();
+        assert_eq!(loaded, carryover);
     }
 }

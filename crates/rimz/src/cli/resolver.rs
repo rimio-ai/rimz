@@ -106,25 +106,7 @@ pub fn run(args: ResolverArgs, _globals: &GlobalFlags) -> Result<()> {
 }
 
 fn parse_budget(raw: &str) -> std::result::Result<Duration, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err("budget is empty".to_owned());
-    }
-    // Lightweight `<n>(s|m|h)` parser — keeps a humantime dep out of the
-    // budget for one call site.
-    let (digits, unit) = trimmed
-        .split_at_checked(trimmed.len() - 1)
-        .ok_or_else(|| format!("unrecognised budget `{raw}`"))?;
-    let factor = match unit {
-        "s" => 1u64,
-        "m" => 60,
-        "h" => 3600,
-        other => return Err(format!("unknown budget unit `{other}`; use s, m, or h")),
-    };
-    let n: u64 = digits
-        .parse()
-        .map_err(|e| format!("budget `{raw}` is not an integer: {e}"))?;
-    Ok(Duration::from_secs(n.saturating_mul(factor)))
+    super::parse::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600)])
 }
 
 #[derive(Serialize)]

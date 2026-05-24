@@ -28,11 +28,14 @@ pub struct StatePaths {
     pub workspace_id: WorkspaceId,
     pub root: PathBuf,
     pub events_log: PathBuf,
+    pub events_archive_dir: PathBuf,
+    pub agents_carryover: PathBuf,
     pub snapshots_dir: PathBuf,
     pub latest_snapshot: PathBuf,
     pub feed_dir: PathBuf,
     pub locks_dir: PathBuf,
     pub workspace_lock: PathBuf,
+    pub workspace_record: PathBuf,
 }
 
 impl StatePaths {
@@ -54,10 +57,13 @@ impl StatePaths {
         Ok(Self {
             workspace_id,
             events_log: root.join("events.log.jsonl"),
+            events_archive_dir: root.join("events.log.archive"),
+            agents_carryover: root.join("agents.carryover.json"),
             latest_snapshot: snapshots_dir.join("latest.json"),
             snapshots_dir,
             feed_dir,
             workspace_lock: locks_dir.join("workspace.lock"),
+            workspace_record: root.join("workspace.json"),
             locks_dir,
             root,
         })
@@ -69,6 +75,14 @@ impl StatePaths {
         mkdir_p(&self.locks_dir)?;
         Ok(())
     }
+}
+
+pub fn workspaces_dir() -> PathBuf {
+    workspaces_dir_under(&state_home())
+}
+
+pub fn workspaces_dir_under(state_root: &Path) -> PathBuf {
+    state_root.join("rimz").join("workspaces")
 }
 
 #[derive(Clone, Debug)]
@@ -188,6 +202,10 @@ mod tests {
         assert!(paths.root.ends_with(Path::new(id.as_str())));
         assert_eq!(paths.events_log.file_name().unwrap(), "events.log.jsonl");
         assert_eq!(paths.latest_snapshot.file_name().unwrap(), "latest.json");
+        assert_eq!(
+            paths.workspace_record.file_name().unwrap(),
+            "workspace.json"
+        );
         assert_eq!(paths.workspace_lock.file_name().unwrap(), "workspace.lock");
     }
 }

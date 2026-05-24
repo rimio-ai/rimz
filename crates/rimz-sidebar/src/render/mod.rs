@@ -4,6 +4,11 @@
 //! offscreen variant used by the vt100-backed snapshot tests. Section
 //! composition lives in [`sections`]; vocabulary labels in [`labels`];
 //! pure formatting helpers in [`fmt`].
+//!
+//! Every entry point takes a [`FetchStatus`] alongside the snapshot. When
+//! degraded, a banner line surfaces the reason and the elapsed time since
+//! the loop went unhealthy. This is the reload-recovery contract documented
+//! in [`docs/internals/sidebar.md`](../../docs/internals/sidebar.md).
 
 mod fmt;
 mod labels;
@@ -11,20 +16,43 @@ mod sections;
 
 use std::io::{self, Write};
 
+use jiff::Timestamp;
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use rimz::SidebarSnapshot;
 
-use self::fmt::time_ago;
+use self::fmt::{elapsed_short, time_ago};
 use self::sections::{
     MAX_ROWS_PER_GROUP, SectionMode, activity_section, agent_line, feed_section, section_title,
 };
 
-pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot) {
+/// Health of the sidebar's refresh loop. `Ok` means the last snapshot and
+/// heartbeat round-trip succeeded; `Degraded` carries a short reason and
+/// the time the degraded state started so the banner can show `for Ns`.
+#[derive(Clone, Debug, Default)]
+pub enum FetchStatus {
+    #[default]
+    Ok,
+    Degraded {
+        reason: String,
+        since: Timestamp,
+    },
+}
+
+impl FetchStatus {
+    pub fn degraded(reason: impl Into<String>) -> Self {
+        Self::Degraded {
+            reason: reason.into(),
+            since: Timestamp::now(),
+        }
+    }
+}
+
+pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, status: &FetchStatus) {
     let area = frame.area();
     let title = format!(" Rimz | {} ", snapshot.workspace_id);
     let block = Block::default()
@@ -34,7 +62,7 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let lines = snapshot_lines(snapshot);
+    let lines = snapshot_lines(snapshot, status);
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true });
     frame.render_widget(paragraph, inner);
 }
@@ -42,13 +70,17 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot) {
 pub fn draw_to_terminal<B: Backend>(
     terminal: &mut Terminal<B>,
     snapshot: &SidebarSnapshot,
+    status: &FetchStatus,
 ) -> Result<(), B::Error> {
-    terminal.draw(|frame| draw(frame, snapshot)).map(|_| ())
+    terminal
+        .draw(|frame| draw(frame, snapshot, status))
+        .map(|_| ())
 }
 
 pub fn render_fixed<W: Write>(
     writer: W,
     snapshot: &SidebarSnapshot,
+    status: &FetchStatus,
     width: u16,
     height: u16,
 ) -> io::Result<()> {
@@ -56,12 +88,20 @@ pub fn render_fixed<W: Write>(
     let viewport = Viewport::Fixed(Rect::new(0, 0, width, height));
     let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport })?;
     terminal.clear()?;
-    draw_to_terminal(&mut terminal, snapshot)?;
+    draw_to_terminal(&mut terminal, snapshot, status)?;
     Ok(())
 }
 
-fn snapshot_lines(snapshot: &SidebarSnapshot) -> Vec<Line<'static>> {
+fn snapshot_lines(snapshot: &SidebarSnapshot, status: &FetchStatus) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
+    if let FetchStatus::Degraded { reason, since } = status {
+        let elapsed = elapsed_short(*since);
+        lines.push(Line::styled(
+            format!("! Sidebar degraded for {elapsed}: {reason}"),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ));
+        lines.push(Line::from(""));
+    }
     lines.push(Line::from(vec![
         Span::styled("Generated ", Style::default().fg(Color::DarkGray)),
         Span::raw(time_ago(snapshot.generated_at)),
@@ -125,21 +165,32 @@ mod tests {
     }
 
     fn snapshot_to_screen(snapshot: &SidebarSnapshot, width: u16, height: u16) -> String {
+        snapshot_to_screen_with_status(snapshot, &FetchStatus::Ok, width, height)
+    }
+
+    fn snapshot_to_screen_with_status(
+        snapshot: &SidebarSnapshot,
+        status: &FetchStatus,
+        width: u16,
+        height: u16,
+    ) -> String {
         let mut bytes = Vec::new();
-        render_fixed(&mut bytes, snapshot, width, height).unwrap();
+        render_fixed(&mut bytes, snapshot, status, width, height).unwrap();
         let mut parser = vt100::Parser::new(height, width, 0);
         parser.process(&bytes);
         parser.screen().contents()
     }
 
     fn assert_snapshot(name: &str, screen: String) {
-        // Two transients escape any `Timestamp::now()` call inside the
+        // Three transients escape any `Timestamp::now()` call inside the
         // renderer: the `Generated Ns ago` header and the per-event/answered
-        // timestamps. Both render as `\d+[smhd] ago`.
+        // timestamps (`\d+[smhd] ago`), plus the degraded banner's
+        // `for Ns` elapsed (`\d+[smhd]` without the `ago` suffix).
         insta::with_settings!({
             filters => vec![
                 (r"\d+[smhd] ago", "<elapsed> ago"),
                 (r"\bjust now\b", "<elapsed> ago"),
+                (r"degraded for \d+[smhd]", "degraded for <elapsed>"),
             ],
         }, {
             insta::assert_snapshot!(name, screen);
@@ -244,6 +295,46 @@ mod tests {
         };
 
         assert_snapshot("event_activity", snapshot_to_screen(&snapshot, 80, 18));
+    }
+
+    #[test]
+    fn render_degraded_status_shows_banner_above_snapshot() {
+        let snapshot = SidebarSnapshot {
+            workspace_id: fixed_workspace(),
+            generated_at: fixed_now(),
+            needs_attention: Vec::new(),
+            resolver_working: Vec::new(),
+            recently_answered: Vec::new(),
+            recent_activity: Vec::new(),
+            agents: Vec::new(),
+        };
+        let status = FetchStatus::Degraded {
+            reason: "snapshot failed: ledger not found".to_owned(),
+            since: fixed_now() - Duration::from_secs(8),
+        };
+
+        assert_snapshot(
+            "degraded_banner",
+            snapshot_to_screen_with_status(&snapshot, &status, 80, 18),
+        );
+    }
+
+    #[test]
+    fn render_ok_status_omits_banner() {
+        let snapshot = SidebarSnapshot {
+            workspace_id: fixed_workspace(),
+            generated_at: fixed_now(),
+            needs_attention: Vec::new(),
+            resolver_working: Vec::new(),
+            recently_answered: Vec::new(),
+            recent_activity: Vec::new(),
+            agents: Vec::new(),
+        };
+        let rendered = snapshot_to_screen_with_status(&snapshot, &FetchStatus::Ok, 80, 18);
+        assert!(
+            !rendered.contains("Sidebar degraded"),
+            "ok status must not render the banner:\n{rendered}"
+        );
     }
 
     #[test]

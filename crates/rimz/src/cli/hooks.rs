@@ -468,7 +468,7 @@ fn attach_resolver_chain(item: &mut FeedItem, fresh: &[AllowlistEntry]) {
             resolver_id: entry.id.clone(),
             display_name: entry.display_name.clone(),
             order: i32::try_from(entry.order).unwrap_or(i32::MAX),
-            budget_ms: i64::try_from(entry.budget_seconds.saturating_mul(1000)).unwrap_or(i64::MAX),
+            budget_ms: entry.budget_seconds.saturating_mul(1000),
             state: ResolverStepState::Queued,
             reason: None,
         })

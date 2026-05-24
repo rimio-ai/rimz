@@ -23,6 +23,7 @@ use crate::ids::{RequestId, ResolverId};
 use crate::ledger::RuntimePaths;
 use crate::resolver::Allowlist;
 use crate::resolver::allowlist::AllowlistEntry;
+use crate::schema::RESOLVER_PROTOCOL_VERSION;
 use crate::schema::heartbeat::ResolverHeartbeat;
 
 /// Maximum age of a resolver heartbeat. The doc-suggested cadence is 1s tick,
@@ -72,6 +73,14 @@ pub fn fresh_enrolled(rt: &RuntimePaths, allowlist: &Allowlist) -> Result<Vec<Al
             continue;
         };
         match read_resolver_heartbeat(&path) {
+            Ok(hb) if hb.protocol_version != RESOLVER_PROTOCOL_VERSION => {
+                debug!(
+                    ?path,
+                    protocol = hb.protocol_version,
+                    expected = RESOLVER_PROTOCOL_VERSION,
+                    "freshness: skipping resolver heartbeat with unsupported protocol version"
+                );
+            }
             Ok(hb) if is_fresh(&hb, now) => alive.push(entry.clone()),
             Ok(_) => {
                 debug!(?path, "freshness: skipping stale resolver heartbeat");
@@ -96,6 +105,7 @@ enum HealthVerdict {
     Fresh,
     NotAllowlisted,
     HeartbeatUnreadable,
+    ProtocolMismatch,
     HeartbeatStale,
     PinMismatch,
 }
@@ -115,6 +125,15 @@ fn check_health(rt: &RuntimePaths, allowlist: &Allowlist, id: &ResolverId) -> He
             return HealthVerdict::HeartbeatUnreadable;
         }
     };
+    if hb.protocol_version != RESOLVER_PROTOCOL_VERSION {
+        debug!(
+            resolver = id.as_str(),
+            protocol = hb.protocol_version,
+            expected = RESOLVER_PROTOCOL_VERSION,
+            "resolver heartbeat protocol mismatch"
+        );
+        return HealthVerdict::ProtocolMismatch;
+    }
     if !is_fresh(&hb, Timestamp::now()) {
         return HealthVerdict::HeartbeatStale;
     }
@@ -261,6 +280,22 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec(&hb).unwrap()).unwrap();
     }
 
+    fn write_heartbeat_with_protocol(
+        rt: &RuntimePaths,
+        id: &str,
+        last_seen: Timestamp,
+        protocol_version: &str,
+    ) {
+        rt.ensure_dirs().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/freshness-test"));
+        let resolver_id: ResolverId = id.parse().unwrap();
+        let mut hb = ResolverHeartbeat::new(workspace_id, resolver_id);
+        hb.protocol_version = protocol_version.to_owned();
+        hb.last_seen = last_seen;
+        let path = rt.heartbeat_dir.join(format!("resolver.{id}.json"));
+        std::fs::write(&path, serde_json::to_vec(&hb).unwrap()).unwrap();
+    }
+
     fn rt() -> (tempfile::TempDir, RuntimePaths) {
         let dir = tempdir().unwrap();
         let workspace_id = WorkspaceId::from_project_root(dir.path());
@@ -296,6 +331,19 @@ mod tests {
             Timestamp::now() - Duration::from_secs(60),
         );
         assert!(fresh_enrolled(&rt, &list).unwrap().is_empty());
+    }
+
+    #[test]
+    fn allowlisted_with_wrong_protocol_is_dropped() {
+        let (_d, rt) = rt();
+        let list = allowlist_with(&[("opus-policy", 10)]);
+        write_heartbeat_with_protocol(&rt, "opus-policy", Timestamp::now(), "rimz.resolver.v0");
+        assert!(fresh_enrolled(&rt, &list).unwrap().is_empty());
+
+        let request_id = RequestId::new();
+        let id: ResolverId = "opus-policy".parse().unwrap();
+        let err = restat(&rt, &list, &id, &request_id).unwrap_err();
+        assert!(matches!(err, BridgeErr::HeartbeatStale(_)));
     }
 
     #[test]

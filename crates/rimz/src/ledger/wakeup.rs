@@ -33,6 +33,7 @@ use crate::feed::FeedItem;
 use crate::ids::{EventId, MuxName, RequestId, WorkspaceId};
 use crate::ledger::RuntimePaths;
 use crate::mux::backend_for;
+use crate::schema::SIDEBAR_PROTOCOL_VERSION;
 use crate::schema::heartbeat::SidebarHeartbeat;
 
 /// Maximum age of a sidebar heartbeat before we treat it as dead and skip
@@ -149,6 +150,15 @@ fn wake_sidebars_inner(
                 continue;
             }
         };
+        if hb.protocol_version != SIDEBAR_PROTOCOL_VERSION {
+            debug!(
+                ?path,
+                protocol = hb.protocol_version,
+                expected = SIDEBAR_PROTOCOL_VERSION,
+                "wakeup: skipping sidebar heartbeat with unsupported protocol version"
+            );
+            continue;
+        }
         let age_seconds = now.duration_since(hb.last_seen).as_secs();
         if age_seconds.is_negative()
             || Duration::from_secs(age_seconds as u64) > SIDEBAR_HEARTBEAT_TTL

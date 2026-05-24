@@ -74,8 +74,14 @@ fn render_from_stdin(width: u16, height: u16) -> Result<()> {
         .read_to_string(&mut buf)
         .context("reading stdin")?;
     let snapshot = serde_json::from_str(&buf).context("parsing snapshot from stdin")?;
-    rimz_sidebar::render::render_fixed(io::stdout(), &snapshot, width, height)
-        .context("rendering snapshot")?;
+    rimz_sidebar::render::render_fixed(
+        io::stdout(),
+        &snapshot,
+        &rimz_sidebar::render::FetchStatus::Ok,
+        width,
+        height,
+    )
+    .context("rendering snapshot")?;
     Ok(())
 }
 

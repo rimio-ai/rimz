@@ -20,10 +20,10 @@ use serde_json::Value;
 
 use crate::feed::{AgentMode, AgentStatus, FeedItem, FeedKind, Resolution};
 
-/// Default hook cap used by the Claude and Codex adapters. Both upstreams
-/// effectively cap blocking hooks at ~5 minutes today. A per-adapter override
-/// is fine when the upstream protocol changes; the default keeps the bridge
-/// from ever blocking the agent indefinitely.
+/// Conservative fallback for adapters that don't override. Claude overrides
+/// to 120s (see `claude::CLAUDE_HOOK_CAP`); Codex overrides to its own cap
+/// (see `codex::CODEX_HOOK_CAP`). New adapters should set their own cap
+/// based on the upstream's published hook deadline.
 pub const DEFAULT_HOOK_CAP: Duration = Duration::from_secs(300);
 
 pub use claude::ClaudeIntegration;

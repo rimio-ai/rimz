@@ -686,25 +686,108 @@ mod tests {
                 .contains(&"PermissionRequest".to_owned())
         );
 
-        let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        let perm = &parsed["hooks"]["PermissionRequest"][0];
-        assert_eq!(perm["_rimz_managed"], true);
-        assert_eq!(perm["_rimz_sync"], true);
-        assert_eq!(perm["hooks"][0]["type"], "command");
-        assert!(
-            perm["hooks"][0]["command"]
-                .as_str()
-                .unwrap()
-                .contains("--source claude")
-        );
-
-        // Both PreToolUse blocking matchers are present and sync.
-        let pre_tool = parsed["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(pre_tool.len(), 2);
-        for entry in pre_tool {
-            assert_eq!(entry["_rimz_managed"], true);
-            assert_eq!(entry["_rimz_sync"], true);
+        // Lock the full on-disk shape: event set, matcher ordering, sync
+        // flags, command strings, and the 120 s blocking-hook timeout. The
+        // file is deterministic — fixed commands, constant timeout, no paths —
+        // so the whole settings.json snapshots cleanly.
+        let written = std::fs::read_to_string(&path).unwrap();
+        insta::assert_snapshot!(written, @r###"
+        {
+          "hooks": {
+            "Notification": [
+              {
+                "_rimz_managed": true,
+                "_rimz_sync": false,
+                "hooks": [
+                  {
+                    "command": "rimz hooks feed --source claude --event Notification",
+                    "timeout": 120,
+                    "type": "command"
+                  }
+                ]
+              }
+            ],
+            "PermissionRequest": [
+              {
+                "_rimz_managed": true,
+                "_rimz_sync": true,
+                "hooks": [
+                  {
+                    "command": "rimz hooks feed --source claude --event PermissionRequest",
+                    "timeout": 120,
+                    "type": "command"
+                  }
+                ]
+              }
+            ],
+            "PreToolUse": [
+              {
+                "_rimz_managed": true,
+                "_rimz_sync": true,
+                "hooks": [
+                  {
+                    "command": "rimz hooks feed --source claude --event PreToolUse",
+                    "timeout": 120,
+                    "type": "command"
+                  }
+                ],
+                "matcher": "ExitPlanMode"
+              },
+              {
+                "_rimz_managed": true,
+                "_rimz_sync": true,
+                "hooks": [
+                  {
+                    "command": "rimz hooks feed --source claude --event PreToolUse",
+                    "timeout": 120,
+                    "type": "command"
+                  }
+                ],
+                "matcher": "AskUserQuestion"
+              }
+            ],
+            "SessionEnd": [
+              {
+                "_rimz_managed": true,
+                "_rimz_sync": false,
+                "hooks": [
+                  {
+                    "command": "rimz hooks feed --source claude --event SessionEnd",
+                    "timeout": 120,
+                    "type": "command"
+                  }
+                ]
+              }
+            ],
+            "SessionStart": [
+              {
+                "_rimz_managed": true,
+                "_rimz_sync": false,
+                "hooks": [
+                  {
+                    "command": "rimz hooks feed --source claude --event SessionStart",
+                    "timeout": 120,
+                    "type": "command"
+                  }
+                ]
+              }
+            ],
+            "Stop": [
+              {
+                "_rimz_managed": true,
+                "_rimz_sync": false,
+                "hooks": [
+                  {
+                    "command": "rimz hooks feed --source claude --event Stop",
+                    "timeout": 120,
+                    "type": "command"
+                  }
+                ]
+              }
+            ]
+          }
         }
+        "###);
     }
 
     #[test]

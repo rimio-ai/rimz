@@ -16,6 +16,7 @@ pub mod ledger;
 pub mod mux;
 pub mod resolver;
 pub mod schema;
+pub mod trust;
 pub mod workspace;
 
 pub use crate::bridge::{BridgeErr, BridgeOutcome, ExpectedFrame};
@@ -26,6 +27,8 @@ pub use crate::feed::{
 pub use crate::ids::{
     EventId, MuxName, PaneId, RequestId, ResolverId, SidebarInstanceId, ViewKind, WorkspaceId,
 };
-pub use crate::ledger::{Ledger, RuntimePaths, SidebarActivity, SidebarSnapshot, StatePaths};
+pub use crate::ledger::{
+    Ledger, RuntimePaths, SidebarActivity, SidebarSnapshot, StatePaths, WorkspaceRecord,
+};
 pub use crate::schema::event::EventEnvelope;
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

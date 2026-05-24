@@ -22,13 +22,16 @@
 pub mod atomic;
 pub mod event_log;
 pub mod feed_store;
+pub mod gc;
 pub mod lock;
 pub mod paths;
 pub mod snapshot;
 pub mod wakeup;
+pub mod workspace_record;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use jiff::Timestamp;
 use serde_json::json;
@@ -39,10 +42,12 @@ use crate::feed::{
 };
 use crate::ids::{RequestId, ResolverId, WorkspaceId};
 use crate::schema::event::EventEnvelope;
+use crate::workspace::ResolvedWorkspace;
 
 pub use crate::ledger::feed_store::FeedStoreErr;
 pub use crate::ledger::paths::{RuntimePaths, StatePaths};
 pub use crate::ledger::snapshot::{SidebarActivity, SidebarSnapshot};
+pub use crate::ledger::workspace_record::WorkspaceRecord;
 
 /// High-level handle to a workspace's durable state. Cheap to clone — the
 /// inner state lives behind an `Arc`. Every public method takes the
@@ -73,6 +78,8 @@ pub enum LedgerErr {
     Snapshot(#[from] snapshot::SnapshotErr),
     #[error(transparent)]
     Wakeup(#[from] wakeup::WakeupErr),
+    #[error(transparent)]
+    WorkspaceRecord(#[from] workspace_record::WorkspaceRecordErr),
 }
 
 pub type Result<T> = std::result::Result<T, LedgerErr>;
@@ -103,6 +110,20 @@ pub struct ElapseOutcome {
     pub next_resolver: Option<ResolverId>,
 }
 
+#[derive(Clone, Debug)]
+pub struct WorkspaceRewriteOutcome {
+    pub workspace_id: WorkspaceId,
+    pub feed_items_rewritten: usize,
+    pub events_rewritten: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct EventLogRotationOutcome {
+    pub rotation: event_log::RotationOutcome,
+    pub pruned: event_log::PruneOutcome,
+    pub carryover_agents: usize,
+}
+
 impl Ledger {
     pub fn open(paths: StatePaths, runtime: RuntimePaths) -> Result<Self> {
         paths.ensure_dirs()?;
@@ -122,6 +143,58 @@ impl Ledger {
 
     pub fn workspace_lock_path(&self) -> &PathBuf {
         &self.inner.paths.workspace_lock
+    }
+
+    /// Persist the project-root index used by maintenance commands. This does
+    /// not change feed state and does not wake sidebars.
+    #[must_use = "durability barrier; check the result"]
+    pub fn record_workspace(&self, workspace: &ResolvedWorkspace) -> Result<()> {
+        let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+        let record = workspace_record::WorkspaceRecord::from_resolved(workspace);
+        workspace_record::write(&self.inner.paths, &record)?;
+        Ok(())
+    }
+
+    /// Rewrite durable workspace identity after a project root move.
+    ///
+    /// The caller has already moved the state directory to the new
+    /// `<workspace_id>` path. This method updates feed files, event envelopes,
+    /// the workspace metadata record, and the rebuilt snapshot under one
+    /// workspace lock.
+    #[must_use = "durability barrier; check the result"]
+    pub fn rewrite_workspace_identity(
+        &self,
+        workspace: &ResolvedWorkspace,
+    ) -> Result<WorkspaceRewriteOutcome> {
+        let (feed_items_rewritten, events_rewritten) = {
+            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+
+            let mut items = feed_store::list(&self.inner.paths.feed_dir)?;
+            let feed_items_rewritten = items.len();
+            for item in &mut items {
+                item.workspace_id = workspace.workspace_id.clone();
+                feed_store::write(&self.inner.paths.feed_dir, item)?;
+            }
+
+            let mut events = event_log::read_all(&self.inner.paths.events_log)?;
+            let events_rewritten = events.len();
+            for event in &mut events {
+                event.workspace_id = workspace.workspace_id.clone();
+            }
+            event_log::replace_all(&self.inner.paths.events_log, &events)?;
+
+            let record = workspace_record::WorkspaceRecord::from_resolved(workspace);
+            workspace_record::write(&self.inner.paths, &record)?;
+            snapshot::rebuild(&self.inner.paths)?;
+
+            (feed_items_rewritten, events_rewritten)
+        };
+
+        Ok(WorkspaceRewriteOutcome {
+            workspace_id: workspace.workspace_id.clone(),
+            feed_items_rewritten,
+            events_rewritten,
+        })
     }
 
     /// Append a freestanding event (no feed item write).
@@ -558,6 +631,68 @@ impl Ledger {
     /// Build a fresh snapshot in memory (no disk write).
     pub fn snapshot(&self) -> Result<SidebarSnapshot> {
         Ok(snapshot::build_from(&self.inner.paths)?)
+    }
+
+    /// Rotate the active event log when it exceeds `min_bytes`, preserving
+    /// the agent rollup across the archive boundary.
+    ///
+    /// Steps under the workspace lock:
+    /// 1. Project the current event log's agent rollup, merge it with the
+    ///    existing carryover, and persist before the rename so a rotation
+    ///    crash leaves both files coherent.
+    /// 2. Rename the active log into `events.log.archive/`. UUIDv7 filenames
+    ///    keep archives sorted chronologically without an external index.
+    /// 3. Rebuild the snapshot so the sidebar's `recent_activity` no longer
+    ///    references the rotated log.
+    /// 4. Prune archives older than `archive_older_than` when set.
+    #[must_use = "durability barrier; check the result"]
+    pub fn rotate_event_log(
+        &self,
+        min_bytes: u64,
+        archive_older_than: Option<Duration>,
+    ) -> Result<EventLogRotationOutcome> {
+        let outcome = {
+            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+
+            let events = event_log::read_all(&self.inner.paths.events_log)?;
+            let live = snapshot::agent_rollup_for_events(&events);
+            let existing = snapshot::read_carryover(&self.inner.paths.agents_carryover)?;
+            let merged = snapshot::merge_agent_rollups(&existing.agents, &live);
+
+            let rotation = event_log::rotate(
+                &self.inner.paths.events_log,
+                &self.inner.paths.events_archive_dir,
+                min_bytes,
+            )?;
+
+            if rotation.is_rotated() {
+                let carryover = snapshot::EventCarryover { agents: merged };
+                snapshot::write_carryover(&self.inner.paths.agents_carryover, &carryover)?;
+                snapshot::rebuild(&self.inner.paths)?;
+            }
+
+            let pruned = if let Some(older_than) = archive_older_than {
+                event_log::prune_archive(&self.inner.paths.events_archive_dir, older_than)?
+            } else {
+                event_log::PruneOutcome::default()
+            };
+
+            let carryover_agents = match &rotation {
+                event_log::RotationOutcome::Rotated { .. } => {
+                    snapshot::read_carryover(&self.inner.paths.agents_carryover)?
+                        .agents
+                        .len()
+                }
+                event_log::RotationOutcome::Skipped { .. } => existing.agents.len(),
+            };
+
+            EventLogRotationOutcome {
+                rotation,
+                pruned,
+                carryover_agents,
+            }
+        };
+        Ok(outcome)
     }
 
     /// Walk the event log, returning every parseable record and logging

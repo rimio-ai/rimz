@@ -144,7 +144,7 @@ async fn mismatched_nonce_is_dropped_real_resolve_wins() {
 }
 
 #[test]
-fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale() {
+fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protocol() {
     use std::os::unix::net::UnixDatagram;
 
     let h = common::Harness::new();
@@ -190,6 +190,28 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale() {
     )
     .expect("write stale hb");
 
+    let wrong_protocol_sock_path = h.runtime_paths.sock_dir.join("sidebar.wrong-protocol.sock");
+    let wrong_protocol_recv =
+        UnixDatagram::bind(&wrong_protocol_sock_path).expect("bind wrong protocol");
+    wrong_protocol_recv
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .expect("set read timeout wrong protocol");
+    let mut wrong_protocol_hb = SidebarHeartbeat::new(
+        h.workspace_id.clone(),
+        SidebarInstanceId::new(),
+        MuxName::Tmux,
+        "rimz-test-wrong-protocol",
+        wrong_protocol_sock_path,
+    );
+    wrong_protocol_hb.protocol_version = "rimz.plugin.v0".to_owned();
+    std::fs::write(
+        h.runtime_paths
+            .heartbeat_dir
+            .join("sidebar.wrong-protocol.json"),
+        serde_json::to_vec(&wrong_protocol_hb).expect("serialize wrong protocol hb"),
+    )
+    .expect("write wrong protocol hb");
+
     let item = FeedItem::new(
         h.workspace_id.clone(),
         Surface::NativeUi,
@@ -217,6 +239,12 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale() {
     assert!(
         stale_result.is_err(),
         "stale sidebar must not receive a wakeup (got: {stale_result:?})",
+    );
+
+    let wrong_protocol_result = wrong_protocol_recv.recv_from(&mut buf2);
+    assert!(
+        wrong_protocol_result.is_err(),
+        "wrong-protocol sidebar must not receive a wakeup (got: {wrong_protocol_result:?})",
     );
 }
 

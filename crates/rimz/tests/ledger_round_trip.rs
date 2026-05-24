@@ -10,7 +10,7 @@ use rimz::{
 };
 use serde_json::json;
 
-fn chain_step(id: &ResolverId, order: i32, budget_ms: i64) -> ResolverStep {
+fn chain_step(id: &ResolverId, order: i32, budget_ms: u64) -> ResolverStep {
     ResolverStep {
         resolver_id: id.clone(),
         display_name: None,

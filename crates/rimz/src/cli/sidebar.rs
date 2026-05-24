@@ -142,7 +142,11 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 Some(mux) => mux,
                 None => rimz::mux::auto_detect_backend(globals.mux)?,
             };
-            let status = Command::new("rimz-sidebar")
+            // Honour `RIMZ_SIDEBAR_BIN` so tests and tooling can point this at
+            // a built binary in target/ without installing it on PATH.
+            let program =
+                std::env::var("RIMZ_SIDEBAR_BIN").unwrap_or_else(|_| "rimz-sidebar".to_owned());
+            let status = Command::new(program)
                 .args([
                     "serve",
                     "--workspace-id",

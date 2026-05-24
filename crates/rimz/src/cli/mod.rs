@@ -4,10 +4,14 @@
 mod doctor;
 mod event;
 mod feed;
+mod gc;
 mod hooks;
+mod list;
 mod pane;
+mod parse;
 mod resolver;
 mod sidebar;
+mod trust;
 mod workspace;
 
 use std::path::PathBuf;
@@ -25,12 +29,15 @@ pub fn dispatch() -> Result<()> {
     let globals = cli.global;
     match cli.subcommand {
         Some(Subcmd::Workspace(args)) => workspace::run(args, &globals),
+        Some(Subcmd::List(args)) => list::run(args, &globals),
         Some(Subcmd::Event(args)) => event::run(args, &globals),
         Some(Subcmd::Feed(args)) => feed::run(args, &globals),
+        Some(Subcmd::Gc(args)) => gc::run(args, &globals),
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
         Some(Subcmd::Resolver(args)) => resolver::run(args, &globals),
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
+        Some(Subcmd::Trust(args)) => trust::run(args, &globals),
         Some(Subcmd::Doctor) => doctor::run(&globals),
         Some(Subcmd::Ping) => doctor::ping(),
         Some(Subcmd::Start(args)) => start(args, &globals),
@@ -86,10 +93,14 @@ enum Subcmd {
     },
     /// Workspace identity helpers.
     Workspace(workspace::WorkspaceArgs),
+    /// Show known workspaces and which mux is currently running them.
+    List(list::ListArgs),
     /// Emit generic events into the workspace ledger.
     Event(event::EventArgs),
     /// Feed primitives: ask, push, list, show, resolve, dismiss.
     Feed(feed::FeedArgs),
+    /// Remove stale runtime liveness hints.
+    Gc(gc::GcArgs),
     /// Pane primitives backed by the selected mux backend.
     Pane(pane::PaneArgs),
     /// Manage the per-machine resolver allowlist.
@@ -99,6 +110,8 @@ enum Subcmd {
     Sidebar(sidebar::SidebarArgs),
     /// Install/uninstall agent hooks. Internal hook entrypoints live here too.
     Hooks(hooks::HooksArgs),
+    /// Manage the project's executable-surface trust grant.
+    Trust(trust::TrustArgs),
     /// Environment + backend report.
     Doctor,
     /// Machine-readable liveness check (prints `ok`).
@@ -119,6 +132,7 @@ fn parse_mux(value: &str) -> std::result::Result<MuxName, String> {
 fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(&args.path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", args.path.display()))?;
+    record_workspace(&workspace)?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
     backend.ensure_session(&workspace.session_name)?;
@@ -135,12 +149,37 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn attach(workspace_name: Option<String>, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
-    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
-    let session = workspace_name.unwrap_or(workspace.session_name);
+    let session = match workspace_name {
+        Some(name) => name,
+        None => WorkspaceResolver::resolve(".", globals.root.clone())?.session_name,
+    };
+    let mux = pick_mux_for_session(&session, globals.mux)?;
     let spec = rimz::mux::backend_for(mux).attach_command(&session);
     print_attach_command(&spec);
     Ok(())
+}
+
+/// Prefer the mux currently hosting `session`. Falls back to auto-detect when
+/// the session isn't on any backend; warns to stderr so reattach failures are
+/// visible before the user runs the emitted command.
+fn pick_mux_for_session(session: &str, explicit: Option<MuxName>) -> Result<MuxName> {
+    if let Some(mux) = explicit {
+        return Ok(mux);
+    }
+    for candidate in [MuxName::Zellij, MuxName::Tmux] {
+        match rimz::mux::backend_for(candidate).list_sessions() {
+            Ok(sessions) if sessions.iter().any(|s| s == session) => return Ok(candidate),
+            Ok(_) => {}
+            Err(err) => tracing::warn!(mux = %candidate, error = %err, "list_sessions failed"),
+        }
+    }
+    let detected = rimz::mux::auto_detect_backend(None)?;
+    tracing::warn!(
+        session = %session,
+        mux = %detected,
+        "no live session matches; emitting attach command for auto-detected mux",
+    );
+    Ok(detected)
 }
 
 fn print_attach_command(spec: &rimz::mux::CommandSpec) {
@@ -156,5 +195,20 @@ pub(crate) fn open_ledger(workspace: &rimz::ResolvedWorkspace) -> Result<Ledger>
         .context("preparing ledger paths")?;
     let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing runtime paths")?;
-    Ledger::open(paths, runtime).context("opening ledger")
+    let ledger = Ledger::open(paths, runtime).context("opening ledger")?;
+    ledger
+        .record_workspace(workspace)
+        .context("recording workspace metadata")?;
+    Ok(ledger)
+}
+
+pub(crate) fn record_workspace(workspace: &rimz::ResolvedWorkspace) -> Result<()> {
+    let paths = StatePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing ledger paths")?;
+    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing runtime paths")?;
+    let ledger = Ledger::open(paths, runtime).context("opening ledger")?;
+    ledger
+        .record_workspace(workspace)
+        .context("recording workspace metadata")
 }

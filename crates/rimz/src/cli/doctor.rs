@@ -1,4 +1,6 @@
+use std::collections::BTreeMap;
 use std::fs;
+use std::path::Path;
 
 use anyhow::Result;
 use jiff::Timestamp;
@@ -6,11 +8,14 @@ use jiff::Timestamp;
 use super::{GlobalFlags, open_ledger};
 use rimz::feed::AgentState;
 use rimz::ids::{MuxName, ResolverId};
+use rimz::ledger::event_log;
 use rimz::mux::{
     tmux::{self as tmux_mod, MIN_TMUX_VERSION},
     zellij::{self as zellij_mod, MIN_ZELLIJ_VERSION},
 };
 use rimz::resolver::Allowlist;
+use rimz::schema::{EVENT_SCHEMA_VERSION, RESOLVER_PROTOCOL_VERSION, SIDEBAR_PROTOCOL_VERSION};
+use rimz::trust::{self, TrustState};
 use rimz::workspace::WorkspaceResolver;
 use rimz::{RuntimePaths, StatePaths};
 
@@ -60,11 +65,123 @@ pub fn run(globals: &GlobalFlags) -> Result<()> {
         }
 
         if let Ok(ws) = &workspace {
+            report_protocol_versions(ws);
+            report_trust(ws);
             report_unauthorized_resolver_heartbeats(ws);
             report_agent_rollup(ws);
         }
     }
     Ok(())
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
+)]
+fn report_protocol_versions(ws: &rimz::ResolvedWorkspace) {
+    println!(
+        "  protocols     : event {EVENT_SCHEMA_VERSION}; sidebar {SIDEBAR_PROTOCOL_VERSION}; resolver {RESOLVER_PROTOCOL_VERSION}",
+    );
+    report_event_schema_versions(ws);
+    report_heartbeat_protocol_versions(ws);
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
+)]
+fn report_event_schema_versions(ws: &rimz::ResolvedWorkspace) {
+    let paths = match StatePaths::for_workspace(ws.workspace_id.clone()) {
+        Ok(paths) => paths,
+        Err(err) => {
+            println!("  protocol warn : event log unavailable ({err})");
+            return;
+        }
+    };
+    let events = match event_log::read_all(&paths.events_log) {
+        Ok(events) => events,
+        Err(err) => {
+            println!("  protocol warn : event log unavailable ({err})");
+            return;
+        }
+    };
+    let mut mismatches: BTreeMap<String, usize> = BTreeMap::new();
+    for event in events {
+        if event.schema_version != EVENT_SCHEMA_VERSION {
+            *mismatches.entry(event.schema_version).or_default() += 1;
+        }
+    }
+    for (version, count) in mismatches {
+        let noun = if count == 1 { "record" } else { "records" };
+        println!(
+            "  protocol warn : event log schema {version} seen {count} {noun} (expected {EVENT_SCHEMA_VERSION})",
+        );
+    }
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
+)]
+fn report_heartbeat_protocol_versions(ws: &rimz::ResolvedWorkspace) {
+    let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            println!("  protocol warn : heartbeat dir unavailable ({err})");
+            return;
+        }
+    };
+    let entries = match fs::read_dir(&runtime.heartbeat_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+        Err(err) => {
+            println!("  protocol warn : heartbeat dir unavailable ({err})");
+            return;
+        }
+    };
+    let mut checks = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Some((kind, expected)) = heartbeat_kind_and_protocol(name) else {
+            continue;
+        };
+        checks.push((name.to_owned(), kind, expected, path));
+    }
+    checks.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, kind, expected, path) in checks {
+        match heartbeat_protocol_version(&path) {
+            Ok(found) if found == expected => {}
+            Ok(found) => println!(
+                "  protocol warn : {kind} heartbeat {name} uses {found} (expected {expected})",
+            ),
+            Err(err) => {
+                println!("  protocol warn : {kind} heartbeat {name} unreadable ({err})");
+            }
+        }
+    }
+}
+
+fn heartbeat_kind_and_protocol(name: &str) -> Option<(&'static str, &'static str)> {
+    if name.starts_with("sidebar.") && name.ends_with(".json") {
+        Some(("sidebar", SIDEBAR_PROTOCOL_VERSION))
+    } else if name.starts_with("resolver.") && name.ends_with(".json") {
+        Some(("resolver", RESOLVER_PROTOCOL_VERSION))
+    } else {
+        None
+    }
+}
+
+fn heartbeat_protocol_version(path: &Path) -> std::result::Result<String, String> {
+    let bytes = fs::read(path).map_err(|err| err.to_string())?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|err| err.to_string())?;
+    Ok(value
+        .get("protocol_version")
+        .and_then(|value| value.as_str())
+        .unwrap_or("<missing>")
+        .to_owned())
 }
 
 /// Walk the snapshot's agent rollup and print one row per `(kind, agent_id)`
@@ -191,10 +308,9 @@ fn report_tmux_capabilities() {
     reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
 )]
 fn report_socket_headroom(ws: &rimz::ResolvedWorkspace) {
-    let Ok(state) = StatePaths::for_workspace(ws.workspace_id.clone()) else {
+    if StatePaths::for_workspace(ws.workspace_id.clone()).is_err() {
         return;
-    };
-    let _ = state;
+    }
     let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
         Ok(r) => r,
         Err(err) => {
@@ -213,6 +329,43 @@ fn report_socket_headroom(ws: &rimz::ResolvedWorkspace) {
         "  sock headroom : {status} ({total}/{AF_UNIX_PATH_LIMIT} bytes for {})",
         runtime.sock_dir.display(),
     );
+}
+
+/// Surface the project-trust state. Stale is the case worth seeing in
+/// `doctor`: the executable surface drifted since the last grant and
+/// command-running fields are inert until `rimz trust grant` runs again.
+#[expect(
+    clippy::print_stdout,
+    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
+)]
+fn report_trust(ws: &rimz::ResolvedWorkspace) {
+    let report = match trust::status(&ws.project_root) {
+        Ok(report) => report,
+        Err(err) => {
+            println!("  trust         : unavailable ({err})");
+            return;
+        }
+    };
+    match report.state {
+        TrustState::NoConfig => println!("  trust         : no project config"),
+        TrustState::Untrusted => {
+            println!(
+                "  trust         : untrusted (run `rimz trust grant` to enable command paths)"
+            );
+        }
+        TrustState::Trusted => {
+            let at = report
+                .granted_at
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| "<unknown>".to_owned());
+            println!("  trust         : trusted (granted {at})");
+        }
+        TrustState::Stale => {
+            println!(
+                "  trust         : stale (executable surface drifted; run `rimz trust grant` to refresh)",
+            );
+        }
+    }
 }
 
 /// Walk the workspace's heartbeat dir and warn for any resolver-shaped

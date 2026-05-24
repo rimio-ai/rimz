@@ -1,0 +1,23 @@
+---
+source: crates/rimz-sidebar/src/render/mod.rs
+assertion_line: 198
+expression: screen
+---
+┌ Rimz | ws_0123456789abcdef01234567 ──────────────────────────────────────────┐
+│! Sidebar degraded for <elapsed>: snapshot failed: ledger not found                  │
+│                                                                              │
+│Generated <elapsed> ago                                                            │
+│                                                                              │
+│Needs your attention                                                          │
+│-                                                                             │
+│                                                                              │
+│Resolver is working                                                           │
+│-                                                                             │
+│                                                                              │
+│Recently answered                                                             │
+│-                                                                             │
+│                                                                              │
+│Recent activity                                                               │
+│-                                                                             │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
