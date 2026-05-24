@@ -32,7 +32,7 @@ rimz resolver remove pagerduty
 
 `--binary <path>` is defence in depth: Rimz additionally verifies that the heartbeating process's executable matches the pinned path via `/proc/<pid>/exe` on Linux. Platforms without that verifier fail closed for pinned resolvers rather than engaging the bridge uncertainly.
 
-Heartbeats from non-allowlisted resolver IDs are kept for diagnostics (`rimz doctor` surfaces them as `unauthorized resolver heartbeat seen`) but they do not engage the bridge.
+Heartbeats from non-allowlisted resolver IDs are kept for diagnostics (`rimz doctor` surfaces them as `unauthorized resolver heartbeat seen`) but they do not engage the bridge. Heartbeats with an unsupported `protocol_version` also fail closed; `rimz doctor` reports the mismatch.
 
 ## Heartbeat
 
@@ -51,7 +51,7 @@ A resolver writes `heartbeat/resolver.<resolver_id>.json` under the workspace ru
 }
 ```
 
-`capabilities` is advisory in v0 — the bridge engages whenever any allowlisted resolver heartbeat is fresh, regardless of declared capability. A resolver that declines an item just doesn't call `feed resolve` (and should call `feed abstain` so the chain advances faster).
+`capabilities` is advisory in v0 — the bridge engages whenever any allowlisted resolver heartbeat is fresh and on the current protocol version, regardless of declared capability. A resolver that declines an item just doesn't call `feed resolve` (and should call `feed abstain` so the chain advances faster).
 
 ## Chain semantics
 

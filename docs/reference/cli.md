@@ -12,12 +12,13 @@ Commands are grouped below by intent. Each cluster opens with the most common fl
 rimz                              # open or reattach the project's room
 rimz attach billing-service       # reattach a specific workspace from anywhere
 rimz list [--json]                # show running and known workspaces
-rimz setup [--yes]                # dry-run plugin + hook install, prompt to apply
 rimz doctor                       # diagnose backend, hooks, trust, resolvers
 rimz trust [status|grant|revoke]  # manage the project's executable-surface trust
 ```
 
-`rimz` resolves the project root, picks the multiplexer backend, opens (or attaches to) the session, and lands you in a pane. First-run UX is non-invasive: nothing is written to your shell or the agent's config until you `rimz setup`.
+`rimz` resolves the project root, picks the multiplexer backend, opens (or attaches to) the session, and lands you in a pane. First-run UX is non-invasive: nothing is written to your shell or the agent's config until you run `rimz hooks <agent> install`.
+
+`rimz list` walks the workspace state directory and joins each known workspace against `zellij list-sessions` and `tmux list-sessions` so you can tell at a glance which mux is currently hosting a session and which sessions are dormant. Sort order puts running sessions first, then by most recent activity. `rimz attach <name>` checks both mux backends and prefers the one already running the session; when no session matches it warns to stderr and falls back to the auto-detected mux.
 
 ## Publish events and ask questions
 
@@ -48,14 +49,12 @@ rimz feed ask \
 | --- | --- | --- |
 | `feed resolve` | `bridge`, `script` | Deliver a decision through Rimz to a waiting hook or script. |
 | `feed dismiss` | `native_ui` | Local acknowledgement only. Does *not* answer the agent — focus the agent's pane and answer there. |
-| `feed annotate` | any | Append an audit note. No state-machine effect. |
 | `feed abstain` | `bridge`, `script` | Explicit chain handoff. The active resolver declines; the chain advances. |
 
 ```sh
 rimz feed resolve <request-id> --decision '{"choice":"yes"}' \
                   [--resolver-id <id>] [--method <method>] [--override-chain]
 rimz feed dismiss  <request-id> [--reason <text>]
-rimz feed annotate <request-id> --note <text>
 rimz feed abstain  <request-id> --resolver-id <id> [--reason <text>]
 ```
 
@@ -91,29 +90,22 @@ rimz resolver reorder  <id> [--before <other-id> | --after <other-id>]
 
 Resolvers form an ordered chain that ends with you. Each entry has its own `--budget` so a fast LLM resolver, a Slack-to-human bot, and a PagerDuty escalator can chain naturally. Full protocol in [resolvers.md](../internals/resolvers.md); trust model in [security.md](../guide/security.md).
 
-## Manage worktrees
-
-```sh
-rimz worktree list    [--json]                # branch, path, last activity, agent count
-rimz worktree suggest [--branch <name>] [--path <path>]   # prints a git worktree add command
-rimz worktree focus   <branch-or-path>        # switch the active view in the session
-```
-
-Worktree creation is a user gesture (`git worktree add`); `suggest` just prints the command, ready to copy.
-
 ## Operate and maintain
 
 ```sh
-rimz hooks setup            [--agent <name>] [--yes]
 rimz hooks <agent> install  [--yes] [--telemetry|--no-telemetry]
 rimz hooks <agent> uninstall
 
 rimz workspace migrate <old-root> <new-root>   # repo moved; rewire the ledger
 rimz workspace prune                           # drop ledgers whose roots are gone
-rimz state export [--json]                     # honors the active payload_mode
-rimz state wipe   <workspace>                  # destructive; prompts
+rimz workspace rotate-events                   # archive events.log.jsonl past a size cap
+                  [--max-bytes <size>]
+                  [--archive-older-than <duration>]
+rimz trust [status|grant|revoke] [--json]      # executable-surface trust
 rimz gc          [--older-than <duration>]
 ```
+
+`workspace migrate` moves the state directory from the workspace ID derived from `<old-root>` to the ID derived from `<new-root>`, then rewrites feed items, event envelopes, snapshots, and `workspace.json` to the new ID. `workspace prune` only removes ledgers with a `workspace.json` record whose project root no longer exists; ledgers without readable metadata are reported and kept. `workspace rotate-events` archives the active event log into `events.log.archive/` when it exceeds `--max-bytes` (default `64MiB`), folds the agent rollup into `agents.carryover.json` so it survives the rename, and removes archives older than `--archive-older-than` when provided. `trust status` re-hashes the project's executable surface on every call and reports `trusted`, `stale`, `untrusted`, or `no_config`; `trust grant` pins the current hash and `trust revoke` drops the record. Full contract in [trust.md](../internals/trust.md). `gc` removes stale runtime liveness hints only — stale resolver/sidebar heartbeats and stale sidebar wakeup sockets — and leaves per-request feed sockets intact.
 
 `--telemetry` is opt-in for every agent integration. It adds high-frequency hooks (prompt submit, pre/post tool) and is gated by `[privacy] payload_mode`. See [agent.md](../internals/agent.md).
 
@@ -122,7 +114,6 @@ rimz gc          [--older-than <duration>]
 These commands are called by hooks, the sidebar, or other Rimz processes. You generally don't run them by hand.
 
 ```sh
-rimz plugin install [--yes]
 rimz ping
 rimz sidebar snapshot --workspace-id <id> [--json]
 rimz sidebar heartbeat --workspace-id <id> --instance-id <id> \
@@ -132,9 +123,4 @@ rimz sidebar serve [--workspace-id <id>] [--mux <zellij|tmux>] \
                    [--session-name <name>] [--tick-seconds N]
 rimz hooks <agent> <subcommand>
 rimz hooks feed --source <agent> [--event <event>]
-rimz feed wait    <request-id> [--timeout <duration>]
-rimz feed claim   <request-id> --resolver-id <id> [--ttl <duration>]
-rimz feed unclaim <request-id> --resolver-id <id>
-rimz feed expire  <request-id>
-rimz wait agent-status <agent> <state> [--timeout <duration>]
 ```

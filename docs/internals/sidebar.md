@@ -56,6 +56,18 @@ The heartbeat binds `sock/sidebar.<instance_id>.sock` and writes:
 - last-seen timestamp.
 
 On wakeup, the sidebar refetches the snapshot. Missed wakeups are closed by polling (~2s tick).
+Ledger wakeups skip sidebar heartbeats whose `protocol_version` does not match the current sidebar protocol; `rimz doctor` reports the mismatch so reload issues are visible after upgrades.
+
+## Reload recovery
+
+The sidebar process keeps the last successful snapshot across iterations. When `rimz sidebar snapshot` or `rimz sidebar heartbeat` fails — the binary is missing, the ledger directory is gone, the JSON is mid-write — the loop:
+
+1. Reuses the last snapshot for the current draw, falling back to an empty placeholder when nothing has loaded yet (sidebar started cold after a workspace move).
+2. Promotes the fetch state to `Degraded` and pins the timestamp the loop went unhealthy.
+3. Renders a one-line banner at the top of the sidebar — `! Sidebar degraded for 8s: snapshot failed: ledger not found` — so the user sees *why* the UI isn't updating, instead of staring at a stale snapshot.
+4. Clears the banner the next iteration that succeeds.
+
+The decision logic is the pure function `app::compute_next_state`; the loop applies its `RenderState` verbatim.
 
 ## Information architecture
 

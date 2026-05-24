@@ -40,7 +40,10 @@ The `native_ui` / `bridge` / `script` vocabulary is defined in [DESIGN.md → Th
 Under `${XDG_STATE_HOME:-~/.local/state}/rimz/workspaces/<workspace_id>/`:
 
 ```text
+workspace.json
 events.log.jsonl
+events.log.archive/events.<uuidv7>.jsonl
+agents.carryover.json
 snapshots/latest.json
 feed/<request_id>.json
 locks/workspace.lock
@@ -48,13 +51,15 @@ locks/workspace.lock
 
 Rules:
 
+- `workspace.json` records the last known project root and session name for maintenance commands; feed files and the event log remain the request source of truth.
 - Feed files are written temp-file + rename.
 - Resolutions take the workspace lock, then CAS on `status = pending`. First valid writer wins.
 - `events.log.jsonl` uses length-prefixed framing with `fsync` per record.
 - A torn trailing record at SIGKILL is skipped on rebuild and logged.
-- Event logs rotate on a size cap in addition to the `[privacy] retention_days` TTL.
+- `rimz workspace rotate-events` archives the active log into `events.log.archive/events.<uuidv7>.jsonl` once it exceeds the operator-supplied byte threshold (default `64MiB`); UUIDv7 filenames sort chronologically. The same command prunes archives older than `--archive-older-than`.
+- Before rename, the agent rollup of the rotating log is merged into `agents.carryover.json`. The snapshot reducer loads carryover and lets newer in-log observations override; this keeps the sidebar's agent panel correct across rotations without rescanning archives.
 - Every feed file carries `workspace_id`, `request_id`, nonce, resolver id, and timestamps.
-- `snapshots/latest.json` is rebuilt from the event log and feed dir on every ledger mutation. Cost is O(events + items); event-log rotation and incremental snapshot maintenance ship together in M4.
+- `snapshots/latest.json` is rebuilt from the active event log, the agent carryover, and the feed dir on every ledger mutation. Cost is O(active-events + items); archives are read only at rotation time.
 
 ## Runtime state
 
@@ -70,6 +75,8 @@ heartbeat/resolver.<resolver_id>.json
 ```
 
 Sockets and heartbeats are liveness hints, not durable state. They're split from the ledger directory because Linux's `AF_UNIX` path-length limit (108 bytes) makes deeply nested state paths fragile.
+
+`rimz gc --older-than <duration>` removes stale resolver/sidebar heartbeat files and stale sidebar wakeup sockets named by those heartbeat files. It does not remove `feed.*.sock` files because a long-running `rimz feed ask` may still own one.
 
 ## Default path
 
@@ -104,7 +111,7 @@ On hook-cap timeout (Claude 120s, Codex shorter — see [agent.md](./agent.md) f
 
 After every ledger write the CLI or hook subprocess:
 
-1. Walks fresh `heartbeat/sidebar.*.json` entries (TTL ~5s).
+1. Walks fresh `heartbeat/sidebar.*.json` entries on the current sidebar protocol version (TTL ~5s).
 2. Sends a small wakeup datagram (`{ "kind": "ledger_delta", "request_id": "...", "workspace_id": "...", "protocol_version": "rimz.plugin.v1" }`) to each `sock/sidebar.<instance_id>.sock`.
 3. **On the Zellij backend only**, additionally issues a broadcast `zellij --session <name> pipe --name rimz::feed -- <envelope>` as a latency optimization. Broadcast pipes reach only already-running plugins; lazy-load is impossible.
 

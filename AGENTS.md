@@ -41,11 +41,14 @@ Declarative, present tense. State the contract; don't narrate history. Prefer im
 - Unit tests around state machines, schema rendering, and trust decisions.
 - Integration tests for ledger CAS, bridge timeouts, socket wakeups, and backend parity.
 - Golden tests for every agent hook stdout shape, including neutral timeout output.
+- Every command-executing config field projected into
+  `ExecutableSurface` (asserted by the
+  `hash_covers_every_documented_surface_field` unit test in
+  `crates/rimz/src/trust.rs`).
 - Grep-style CI invariants reject:
   - `Stdio::inherit` in hook subprocess paths,
   - sidebar imports of ledger-write modules,
-  - core auto-use of `pane capture` or `pane send`,
-  - command-executing config fields missing from the trust hash.
+  - core auto-use of `pane capture` or `pane send`.
 
 Full matrix in [docs/contributing/testing.md](./docs/contributing/testing.md).
 
@@ -57,7 +60,6 @@ Every other document is a leaf from here. The `docs/` tree groups by audience: *
 - [README.md](./README.md) — product entry point.
 - [DESIGN.md](./DESIGN.md) — invariant, three operating paths, commitments, non-goals.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — runtime shape, repository layout, module ownership.
-- [status.md](./status.md) — living milestone log; what's landed, what's next.
 
 **Guide** — `docs/guide/`
 - [product.md](./docs/guide/product.md) — five-minute tour, audiences, sidebar walk-through.
@@ -72,6 +74,7 @@ Every other document is a leaf from here. The `docs/` tree groups by audience: *
 - [multiplexers.md](./docs/internals/multiplexers.md) — Zellij and tmux backend contracts.
 - [sidebar.md](./docs/internals/sidebar.md) — sidebar model, groups, actions, notifications.
 - [resolvers.md](./docs/internals/resolvers.md) — resolver protocol, chain, pane primitives.
+- [trust.md](./docs/internals/trust.md) — executable-surface hash, trust states, auto-revoke.
 - [agent.md](./docs/internals/agent.md) — hook model for Claude, Codex, and later agents.
 
 **Contributing** — `docs/contributing/`

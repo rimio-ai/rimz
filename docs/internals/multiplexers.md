@@ -21,20 +21,18 @@ Both inputs are stable across worktrees: every worktree of one repo lands in the
 All multiplexer-specific operations live behind one trait. Everything correctness-critical — the ledger, the per-request decision sockets, the resolver heartbeat, the wakeup socket, the feed/event schemas, the trust gate, the agent hooks — sits above this trait, identical across backends.
 
 ```text
+name()
 ensure_session(name)
-attach(name)
+attach_command(name) -> CommandSpec
 detach(name)
 list_sessions()
 list_panes(session)
-new_view(session, opts)         Zellij tab / tmux window
 split_pane(args)
 focus_pane(pane_id)
-rename_pane(pane_id, title)
 capture_pane(pane_id, opts)     normalized output
 send_keys(pane_id, text)
 open_sidebar(session, launch)
 wake_sidebar(session, bytes)
-install_workspace_env(pane, env)
 version()
 ```
 
@@ -52,7 +50,7 @@ Normalized IDs travel through env vars (`RIMZ_PANE_ID`), feed items, snapshots, 
 
 The sidebar runs as a WASM plugin pinned to the workspace session. Rimz requests only the permissions it needs (application state, focus actions, helper commands, opening panes/plugins, CLI pipe events). Denied permissions degrade the sidebar but do not break feed resolution, because resolution goes through CLI and ledger paths.
 
-The Zellij-only fast path is `zellij pipe`: a broadcast pipe reaches every already-running plugin in milliseconds, eliminating the per-instance socket round-trip. Broadcast pipe (no `--plugin file:`) is what makes lazy-load impossible during normal hook delivery; targeted `--plugin file:` is reserved for `rimz setup` and `rimz doctor` self-tests where launching the plugin is the intent. The pipe is layered on top of the sidebar wakeup socket — it never replaces it.
+The Zellij-only fast path is `zellij pipe`: a broadcast pipe reaches every already-running plugin in milliseconds, eliminating the per-instance socket round-trip. Broadcast pipe (no `--plugin file:`) is what makes lazy-load impossible during normal hook delivery; targeted `--plugin file:` is reserved for `rimz doctor` self-tests where launching the plugin is the intent. The pipe is layered on top of the sidebar wakeup socket — it never replaces it.
 
 ### Zellij backend caveats
 

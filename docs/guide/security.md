@@ -28,8 +28,9 @@ Project config is read inertly until trusted.
 **Trust stale.**
 - Executable-surface hash changed since the last grant.
 - Command-running fields are disabled until trust is granted again.
+- Auto-revoke is implicit: every `rimz trust status` and `rimz doctor` re-hashes the live `.rimz/config.toml` and reports `stale` without a separate sweep.
 
-The **executable surface** is every field that can cause a process to run: agent launch commands, hook commands, PATH-affecting env overrides, layout-launched commands, tmux status `#(...)`, tmux popup `display-popup -E`, notification commands, and any future command string. A single hash over all of these is what `rimz trust grant` pins. Adding a new command-running field that isn't in the hash is a CI invariant violation.
+The **executable surface** is every field that can cause a process to run: agent launch commands, hook commands, PATH-affecting env overrides, layout-launched commands, tmux status `#(...)`, tmux popup `display-popup -E`, notification commands, and any future command string. A single hash over all of these is what `rimz trust grant` pins. Adding a new command-running field that isn't in the hash is a CI invariant violation. Implementation detail in [`docs/internals/trust.md`](../internals/trust.md).
 
 ## Resolver trust
 
@@ -74,8 +75,6 @@ max_payload_bytes  = 8192
 - `metadata` — strips inputs, prompts, args, errors. Smallest footprint.
 - `redacted` — keeps bounded payloads with built-in redaction. Default.
 - `full` — keeps hook payloads as delivered. `rimz doctor` warns.
-
-`rimz state export --json` honours the active payload mode.
 
 ## Version drift
 

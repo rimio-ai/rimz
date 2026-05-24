@@ -10,33 +10,22 @@ The CLI is parsed with `clap` derive at the top level. Shared option groups are 
 
 ```rust
 #[derive(Debug, clap::Parser)]
-#[clap(
+#[command(
     author, version,
     bin_name = "rimz",
+    about = "One room per project for agents, scripts, and humans.",
     subcommand_negates_reqs = true,
 )]
 struct Cli {
-    #[clap(flatten)] config_overrides: CliConfigOverrides,
     #[clap(flatten)] global: GlobalFlags,
-    #[clap(subcommand)] subcommand: Option<Subcommand>,
+    #[arg(value_name = "PATH")] path: Option<PathBuf>,
+    #[command(subcommand)] subcommand: Option<Subcmd>,
 }
 ```
 
 - `subcommand_negates_reqs = true` lets root-level required args become optional when a subcommand is given.
 - `bin_name = "rimz"` keeps help text stable when the executable is invoked via a platform-specific path.
-- Subcommands are a flat `enum Subcommand { ... }`. Use `#[clap(visible_alias = "<short>")]` for discoverable shorthand and `#[clap(hide = true)]` for hooks-only or internal subcommands.
-
-Ad-hoc TOML overrides via `-c key=value` are parsed by wrapping the right-hand side in a sentinel assignment so the user need not quote scalars:
-
-```rust
-fn parse_toml_value(raw: &str) -> Result<toml::Value, toml::de::Error> {
-    let wrapped = format!("_x_ = {raw}");
-    let table: toml::Table = toml::from_str(&wrapped)?;
-    table.get("_x_").cloned().ok_or_else(/* sentinel missing */)
-}
-```
-
-`-c model="claude-opus-4-7"` and `-c sidebar.width=30` and `-c features=["a","b"]` all work without further escaping.
+- Subcommands are a flat `enum Subcmd { ... }`. Use `#[clap(visible_alias = "<short>")]` for discoverable shorthand and `#[clap(hide = true)]` for hooks-only or internal subcommands.
 
 ## Stdout and tracing
 

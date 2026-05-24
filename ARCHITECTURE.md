@@ -87,17 +87,20 @@ General coding rules live in [AGENTS.md](./AGENTS.md); only crate-local constrai
 CLI binary, hook entrypoints, and the runtime/domain library. Start here for any non-sidebar behaviour.
 
 - `src/main.rs` — CLI bootstrap, top-level error reporting.
-- `src/cli/` — command parsing and per-subcommand handlers (`workspace`, `event`, `feed`, `pane`, `sidebar`, `hooks`, `doctor`).
+- `src/cli/` — command parsing and per-subcommand handlers (`workspace`, `list`, `event`, `feed`, `gc`, `pane`, `resolver`, `sidebar`, `hooks`, `trust`, `doctor`).
 - `src/workspace.rs` — project root, worktree root, workspace ID, session name.
+- `src/trust.rs` — executable-surface hash, per-machine grant record, trust state (no_config / untrusted / trusted / stale). `status` re-hashes every call so staleness is auto-detected.
 - `src/ids.rs` — typed identifier newtypes (workspace, request, event, resolver, sidebar instance, pane, mux).
 - `src/schema/` — event envelope, heartbeat, and protocol-version constants.
 - `src/feed.rs` — feed item lifecycle, surfaces, statuses, resolution methods.
 - `src/ledger/paths.rs` — XDG state/runtime paths and `/tmp/rimz-<uid>` fallback.
 - `src/ledger/atomic.rs` — temp+rename and length-framed append helpers.
 - `src/ledger/lock.rs` — workspace advisory locking.
-- `src/ledger/event_log.rs` — length-framed append log, fsync, torn-trailing-record recovery.
+- `src/ledger/event_log.rs` — length-framed append log, fsync, torn-trailing-record recovery, size-cap rotation, archive pruning.
 - `src/ledger/feed_store.rs` — atomic feed item writes and status CAS.
-- `src/ledger/snapshot.rs` — reduced workspace snapshot rebuild and latest snapshot write.
+- `src/ledger/gc.rs` — runtime garbage collection for stale liveness hints.
+- `src/ledger/snapshot.rs` — reduced workspace snapshot rebuild, latest snapshot write, agent-rollup carryover across event-log rotation.
+- `src/ledger/workspace_record.rs` — `workspace.json` maintenance index for migrate/prune.
 - `src/ledger/wakeup.rs` — best-effort per-request and sidebar wakeup datagrams.
 - `src/ledger/mod.rs` — `Ledger` handle (`Arc<LedgerInner>`); public methods take the workspace lock and drive `event_log`, `feed_store`, `snapshot` directly. No actor.
 - `src/bridge.rs` — per-request sockets, waiter polling fallback, nonce validation.
@@ -108,7 +111,9 @@ CLI binary, hook entrypoints, and the runtime/domain library. Start here for any
 - `src/agents/mod.rs` — `AgentIntegration` trait.
 - `src/agents/claude.rs` — Claude wrapper, hook installer, classification, rendering.
 - `src/agents/codex.rs` — Codex hook install merge, classification, rendering.
-- `src/agents/opencode.rs`, `src/agents/pi.rs` — later adapters when their APIs are verified.
+- Additional agent adapters (OpenCode, Pi, etc.) land per
+  [docs/contributing/roadmap.md](./docs/contributing/roadmap.md) once their hook surfaces
+  and decision shapes are verified.
 - `src/resolver/mod.rs` — re-exports for the resolver subsystem.
 - `src/resolver/allowlist.rs` — per-machine TOML allowlist with atomic writes.
 - `src/resolver/freshness.rs` — heartbeat TTL walk, single-resolver health check, TOCTOU `restat`.
@@ -127,7 +132,7 @@ Crate-local rules:
 
 Shared sidebar renderer, packaged for both backends.
 
-- `app.rs` — snapshot model, tick loop, wakeup handling.
+- `app.rs` — snapshot model, tick loop, wakeup handling, `FetchStatus`/`RenderState` recovery logic for snapshot or heartbeat failure.
 - `render/` — four display groups and the agent rollup.
 - `actions.rs` — focus, dismiss, annotate, resolve, and helper command calls.
 - `zellij/` — WASM plugin shell and pipe subscription.

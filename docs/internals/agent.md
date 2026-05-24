@@ -60,8 +60,6 @@ Telemetry adds prompt-submit, pre-tool, and post-tool hooks that fire on every t
 - `payload_mode = "redacted"` — keeps bounded payloads with built-in redaction. Default.
 - `payload_mode = "full"` — keeps hook payloads as delivered. `rimz doctor` warns.
 
-`rimz state export` honours the active payload mode.
-
 ## Later agents
 
 OpenCode, Pi, Cursor, Gemini, Copilot, Amp, Rovo, Hermes, Factory, Qoder, and similar agents land through the same trait once their hook surfaces and decision outputs are verified.

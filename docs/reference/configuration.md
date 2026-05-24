@@ -107,5 +107,3 @@ max_payload_bytes = 8192
 - `metadata` — strips tool inputs, prompts, command arguments, and error text.
 - `redacted` — keeps bounded payloads with built-in redaction. Default.
 - `full` — keeps hook payloads as delivered. `rimz doctor` warns.
-
-`rimz state export --json` honours the active payload mode.
