@@ -31,7 +31,7 @@ fn main() -> Result<()> {
         "test" => test(&root),
         "doctest" => run(&root, "cargo", ["test", "--workspace", "--doc", "--locked"]),
         "deny" => run(&root, "cargo", ["deny", "check", "-D", "warnings"]),
-        "deps" => run(&root, "cargo", ["machete"]),
+        "deps" => deps(&root),
         "vet" => run(&root, "cargo", ["vet"]),
         "coverage" => run(
             &root,
@@ -61,6 +61,20 @@ fn ci(root: &Path) -> Result<()> {
         run_self(root, task)?;
     }
     Ok(())
+}
+
+// cargo-machete decides "I'm running under cargo" with
+// `CARGO is set AND CARGO_PKG_NAME is unset`; since xtask is itself a cargo
+// crate, `CARGO_PKG_NAME=xtask` is inherited and machete treats argv[1]
+// ("machete") as a path. Clear it for the spawn.
+fn deps(root: &Path) -> Result<()> {
+    let status = Command::new("cargo")
+        .arg("machete")
+        .current_dir(root)
+        .env_remove("CARGO_PKG_NAME")
+        .status()
+        .context("running `cargo`")?;
+    ensure_success("cargo", &["machete"], status)
 }
 
 fn test(root: &Path) -> Result<()> {
