@@ -1,11 +1,9 @@
 //! Zellij `MuxBackend` implementation.
 //!
-//! Every action subcommand runs `zellij action <verb> ...` against the
-//! session inferred from the caller's `ZELLIJ_SESSION_NAME` env var (the
-//! standard Zellij convention). `wake_sidebar` is the one outlier: it can
-//! be invoked from a process that is not itself attached to Zellij — the
-//! ledger wakeup walk — so it carries the session name explicitly via the
-//! top-level `zellij --session <name>` flag.
+//! Interactive actions run `zellij action <verb> ...` against the session
+//! inferred from the caller's `ZELLIJ_SESSION_NAME` env var. Operations that
+//! may run before the user attaches, such as native sidebar launch and wakeup
+//! fanout, carry the session name explicitly via `zellij --session <name>`.
 //!
 //! Caveats live in `docs/internals/multiplexers.md` under
 //! "Zellij backend caveats" — namely that raw Zellij pane IDs are
@@ -13,53 +11,21 @@
 //! tab-level operations beyond what's needed to identify a pane.
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CommandSpec, MuxBackend, MuxErr, PaneCapture, PaneListOptions, Result, SplitPaneOptions,
-    ensure_pane_backend,
+    CommandSpec, MuxBackend, MuxErr, PaneCapture, PaneListOptions, Result, SessionOptions,
+    SidebarPaneOptions, SplitPaneOptions, ensure_pane_backend,
 };
 use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
 
-/// Minimum Zellij version that ships the pipe-broadcast semantics Rimz
-/// relies on (lazy-load suppression on `--name` without `--plugin`).
+/// Minimum Zellij version that ships the pipe-broadcast semantics Rimz uses
+/// as a best-effort wakeup optimization.
 pub const MIN_ZELLIJ_VERSION: (u32, u32, u32) = (0, 41, 0);
-
-/// Filename inside the XDG data directory where Rimz expects to find the
-/// sidebar plugin. `doctor` warns when the file is missing and
-/// `open_sidebar` returns `NotInstalled` so the user knows to install it.
-const SIDEBAR_PLUGIN_FILENAME: &str = "rimz/sidebar.wasm";
-
-/// Resolve the on-disk path Rimz looks at for the Zellij sidebar plugin.
-/// Uses `$XDG_DATA_HOME` when set; falls back to `$HOME/.local/share`.
-/// Mirrors the XDG resolution in [`crate::ledger::paths::state_home`].
-pub fn sidebar_plugin_path() -> PathBuf {
-    resolve_plugin_path(
-        env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()),
-        env::var_os("HOME").filter(|v| !v.is_empty()),
-    )
-}
-
-/// Pure path resolution split out for unit testing — `unsafe_code` is
-/// forbidden workspace-wide, so we can't mutate env to exercise
-/// [`sidebar_plugin_path`] directly.
-fn resolve_plugin_path(
-    xdg_data_home: Option<std::ffi::OsString>,
-    home: Option<std::ffi::OsString>,
-) -> PathBuf {
-    if let Some(value) = xdg_data_home {
-        return PathBuf::from(value).join(SIDEBAR_PLUGIN_FILENAME);
-    }
-    if let Some(home) = home {
-        return PathBuf::from(home)
-            .join(".local/share")
-            .join(SIDEBAR_PLUGIN_FILENAME);
-    }
-    PathBuf::from("/tmp").join(SIDEBAR_PLUGIN_FILENAME)
-}
 
 /// Bundle reported by `rimz doctor` when the active backend is Zellij.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -67,23 +33,16 @@ pub struct ZellijCapabilities {
     pub binary_version: String,
     pub parsed_version: Option<(u32, u32, u32)>,
     pub meets_min_version: bool,
-    pub plugin_path: PathBuf,
-    pub plugin_present: bool,
 }
 
-/// Probe the installed Zellij and the on-disk sidebar plugin. Cheap: one
-/// `zellij --version` call plus one `metadata` lookup.
+/// Probe the installed Zellij. Cheap: one `zellij --version` call.
 pub fn capabilities() -> Result<ZellijCapabilities> {
     let raw = ZellijBackend.version()?;
     let parsed = parse_version(&raw);
-    let plugin_path = sidebar_plugin_path();
-    let plugin_present = plugin_path.is_file();
     Ok(ZellijCapabilities {
         meets_min_version: parsed.is_some_and(|v| v >= MIN_ZELLIJ_VERSION),
         binary_version: raw,
         parsed_version: parsed,
-        plugin_path,
-        plugin_present,
     })
 }
 
@@ -126,9 +85,10 @@ impl MuxBackend for ZellijBackend {
         MuxName::Zellij
     }
 
-    fn ensure_session(&self, _name: &str) -> Result<()> {
-        // Zellij creates the session lazily on `attach --create`. Layout-driven
-        // precreate belongs behind the project trust gate.
+    fn ensure_session(&self, _opts: &SessionOptions) -> Result<()> {
+        // Zellij creates sessions lazily, and `open_sidebar` owns first birth
+        // by rendering the session from a layout (Zellij applies a layout only
+        // at session creation). There is nothing to pre-create here.
         Ok(())
     }
 
@@ -234,26 +194,19 @@ impl MuxBackend for ZellijBackend {
             .map(|_| ())
     }
 
-    fn open_sidebar(&self, session_name: &str, _width: u16) -> Result<()> {
-        let plugin = sidebar_plugin_path();
-        if !plugin.is_file() {
-            return Err(MuxErr::NotInstalled {
-                program: "rimz-sidebar.wasm".to_owned(),
-            });
+    fn open_sidebar(&self, opts: &SidebarPaneOptions) -> Result<()> {
+        // The session is born from a layout exactly once. If it already
+        // exists it already carries its sidebar — Zellij applies a layout
+        // only at session birth, so we never re-inject. Touch the layout
+        // once, at creation; the user owns every resize and split afterward.
+        if self
+            .list_sessions()?
+            .iter()
+            .any(|session| session == &opts.session_name)
+        {
+            return Ok(());
         }
-        let url = format!("file:{}", plugin.display());
-        CommandSpec::new("zellij")
-            .args([
-                "--session".to_owned(),
-                session_name.to_owned(),
-                "action".to_owned(),
-                "launch-or-focus-plugin".to_owned(),
-                "--floating".to_owned(),
-                "false".to_owned(),
-                url,
-            ])
-            .run()
-            .map(|_| ())
+        create_session_with_sidebar(opts)
     }
 
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()> {
@@ -262,7 +215,7 @@ impl MuxBackend for ZellijBackend {
         //
         // The ledger wakeup walk may set `RIMZ_ZELLIJ_BIN` to point at a test
         // shim binary (see `tests/fixtures/zellij-trace`); honor it so the
-        // wiring is testable end-to-end without a live Zellij plugin.
+        // wiring is testable end-to-end.
         let program = env::var("RIMZ_ZELLIJ_BIN").unwrap_or_else(|_| "zellij".to_owned());
         let payload = String::from_utf8_lossy(bytes).to_string();
         CommandSpec::new(program)
@@ -294,6 +247,79 @@ impl MuxBackend for ZellijBackend {
     }
 }
 
+fn terminal_pane_count(panes: &[RawPane]) -> usize {
+    panes
+        .iter()
+        .filter(|pane| !pane.is_plugin && !pane.is_suppressed)
+        .count()
+}
+
+/// Create the background session from a layout that puts the `rimz-sidebar`
+/// pane on the left and focuses the user's terminal on the right. The layout
+/// doubles as the default tab template, so new tabs are born with a sidebar
+/// too. The sidebar pane is `close_on_exit`, so when its own process exits the
+/// pane closes — see the self-close loop in `crates/rimz-sidebar`.
+///
+/// Zellij parses `--default-layout` asynchronously, after the
+/// `--create-background` client returns, so the temp layout file must outlive
+/// the call. We hold it through a bounded wait for the sidebar pane to appear,
+/// then let it drop.
+fn create_session_with_sidebar(opts: &SidebarPaneOptions) -> Result<()> {
+    let layout = TempLayoutFile::new(render_sidebar_layout(opts)?)?;
+    let spec = CommandSpec::new("zellij").args([
+        "attach".to_owned(),
+        "--create-background".to_owned(),
+        opts.session_name.clone(),
+        "options".to_owned(),
+        "--default-cwd".to_owned(),
+        opts.cwd.to_string_lossy().into_owned(),
+        "--default-layout".to_owned(),
+        layout.path().to_string_lossy().into_owned(),
+    ]);
+    let mut command = spec.to_command();
+    command.current_dir(&opts.cwd);
+    let output = command.output().map_err(|err| match err.kind() {
+        std::io::ErrorKind::NotFound => MuxErr::NotInstalled {
+            program: spec.program.clone(),
+        },
+        _ => MuxErr::Io(err),
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let lower = stderr.to_ascii_lowercase();
+        // A racing `rimz` may have created the session first; treat that as
+        // success rather than re-injecting.
+        if !(lower.contains("already exists")
+            || (lower.contains("session") && lower.contains("exists")))
+        {
+            return Err(MuxErr::Command {
+                program: spec.program,
+                args: spec.args.join(" "),
+                stderr,
+            });
+        }
+    }
+    wait_for_sidebar_layout(&opts.session_name);
+    drop(layout);
+    Ok(())
+}
+
+/// Block until Zellij has materialized the sidebar + terminal panes the layout
+/// describes, so the caller's temp layout file stays on disk long enough to be
+/// read. Bounded and best-effort: a slow or failed materialization just means
+/// an earlier drop of the file.
+fn wait_for_sidebar_layout(session_name: &str) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        if let Ok(panes) = ZellijBackend::list_panes_with_session(Some(session_name))
+            && terminal_pane_count(&panes) >= 2
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// Subset of fields `zellij action list-panes -j -a` emits. We deserialize
 /// only what we route into `PaneRef`; serde silently ignores everything else.
 #[derive(Debug, Deserialize)]
@@ -303,6 +329,66 @@ struct RawPane {
     #[serde(default)]
     is_suppressed: bool,
     tab_id: u64,
+}
+
+struct TempLayoutFile {
+    path: PathBuf,
+}
+
+impl TempLayoutFile {
+    fn new(contents: String) -> Result<Self> {
+        let path = std::env::temp_dir().join(format!(
+            "rimz-zellij-layout-{}-{}.kdl",
+            std::process::id(),
+            uuid::Uuid::now_v7().simple(),
+        ));
+        std::fs::write(&path, contents)?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempLayoutFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn render_sidebar_layout(opts: &SidebarPaneOptions) -> Result<String> {
+    let rimz_bin = kdl_string(&opts.rimz_bin.to_string_lossy())?;
+    let workspace_id = kdl_string(opts.workspace_id.as_str())?;
+    let session_name = kdl_string(&opts.session_name)?;
+    let size = kdl_string(&format!("{}%", opts.width_percent.clamp(10, 90)))?;
+    // The sidebar lives in the `default_tab_template`, so every tab — the
+    // explicit first one and any the user opens later — is born with it. The
+    // explicit first `tab` focuses the terminal child; the working cwd comes
+    // from the session's `--default-cwd`, so panes need no `cwd` of their own.
+    Ok(format!(
+        r#"layout {{
+    default_tab_template split_direction="vertical" {{
+        pane size={size} name="rimz-sidebar" {{
+            command {rimz_bin}
+            args "sidebar" "serve" "--mux" "zellij" "--workspace-id" {workspace_id} "--session-name" {session_name}
+            close_on_exit true
+        }}
+        children
+    }}
+    tab name="rimz" {{
+        pane focus=true
+    }}
+}}
+"#,
+    ))
+}
+
+fn kdl_string(value: &str) -> Result<String> {
+    serde_json::to_string(value).map_err(|err| MuxErr::Output {
+        program: "zellij".to_owned(),
+        reason: format!("escaping layout string: {err}"),
+    })
 }
 
 /// Defensive ANSI strip for `list-sessions` output. Zellij ships a colored
@@ -393,29 +479,5 @@ mod tests {
         let (raw, lines) = trim_capture("a\nb\nc\nd\n".to_owned(), Some(2));
         assert_eq!(lines, vec!["c", "d"]);
         assert_eq!(raw, "c\nd\n");
-    }
-
-    #[test]
-    fn resolve_plugin_path_prefers_xdg_data_home() {
-        assert_eq!(
-            resolve_plugin_path(Some("/tmp/xdg-data".into()), Some("/ignored".into())),
-            PathBuf::from("/tmp/xdg-data/rimz/sidebar.wasm"),
-        );
-    }
-
-    #[test]
-    fn resolve_plugin_path_falls_back_to_home() {
-        assert_eq!(
-            resolve_plugin_path(None, Some("/home/marv".into())),
-            PathBuf::from("/home/marv/.local/share/rimz/sidebar.wasm"),
-        );
-    }
-
-    #[test]
-    fn resolve_plugin_path_last_resort_is_tmp() {
-        assert_eq!(
-            resolve_plugin_path(None, None),
-            PathBuf::from("/tmp/rimz/sidebar.wasm"),
-        );
     }
 }
