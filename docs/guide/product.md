@@ -128,7 +128,7 @@ The two patterns compose: a permissive resolver for routine cases with the agent
 ## Product principles (recap)
 
 - **Observability is the default.** The agent's own prompt stays yours to answer in the agent's own tab.
-- **The ledger owns durability, and works headless.** Every feed item survives detach, plugin reload, and no-client mode.
+- **The ledger owns durability, and works headless.** Every feed item survives detach, sidebar reload, and no-client mode.
 - **Generic primitives, agent adapters on top.** Anything an agent integration can do, a shell script can do through the same CLI.
 - **The agent's native UI is the safety net.** Whatever else gets wired into Rimz later, the agent's own prompt always works as the answer surface of last resort.
 - **State comes from explicit events.** Transcripts and pane content enrich display only — they never drive blocking decisions, permissions, or correctness-critical state.

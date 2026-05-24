@@ -24,15 +24,15 @@ Local runner: `cargo xtask test` (wraps `cargo nextest run`). Doctests run separ
 
 **M0b** runs the same matrix under Zellij and adds:
 
-- WASM sidebar shell,
+- session birth from a layout via `attach --create-background ... --default-layout` (left 30% `rimz-sidebar` pane + focused terminal); a second launch on the existing session is a no-op,
+- self-close: a real `rimz-sidebar` whose tab's last terminal pane exits closes its own pane (non-plugin pane count drops to zero),
 - sidebar heartbeat socket,
 - broadcast `zellij pipe` fast path,
-- no lazy-load during normal hook wakeups,
 - minimum Zellij version detection.
 
 **M0c** runs the same matrix under tmux and adds:
 
-- managed sidebar pane,
+- native managed sidebar pane with workspace ID, cwd, and width-percentage passthrough,
 - explicit `RIMZ_*` env injection with `tmux -e`,
 - detach/reattach,
 - optional status-line integration trust prompt,
@@ -79,12 +79,20 @@ All `insta` snapshots — CLI stdout, `--json` event payloads, hook stdout, side
 
 ## Sidebar tests
 
+- `fresh_sidebar_present` ignores absent directories, stale mtimes, unreadable JSON, and old heartbeat protocols.
+- Start/attach orchestration skips launch on fresh heartbeat, opens once without a heartbeat, and treats `open_sidebar` errors as non-fatal.
 - `native_ui` items render focus/dismiss only (never approve/deny).
 - `script` items render declared options as answer buttons.
 - `bridge` items enter the resolver group after the threshold.
 - Worktree grouping is stable across reloads.
 - Pane focus refuses reused pane IDs (reconciles process start time).
 - Method labels render correctly for `hook_bridge`, `pane_send`, `cli`, and `sidebar`.
+
+## Attach tests
+
+- Auto mode execs the mux attach command only when stdin and stdout are TTYs and the caller is not already inside the selected mux.
+- Non-TTY callers print the attach command.
+- `--attach` forces exec; `--no-attach` and `--print` force print.
 
 ## Resolver tests
 

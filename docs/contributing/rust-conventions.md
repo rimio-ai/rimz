@@ -49,7 +49,7 @@ fn stderr_env_filter() -> tracing_subscriber::EnvFilter {
 }
 ```
 
-The default filter is silent at info level; `RUST_LOG` is the user's opt-in. Subscribers are installed once at the binary entry, never in library code. Span fields populated downstream are pre-allocated with `tracing::field::Empty`:
+The default filter is silent at info level; `RUST_LOG` is the user's opt-in. Terminal UI binaries use `off` by default so logs do not corrupt the pane; they still honor `RUST_LOG`. Subscribers are installed once at the binary entry, never in library code. Span fields populated downstream are pre-allocated with `tracing::field::Empty`:
 
 ```rust
 let span = tracing::info_span!(

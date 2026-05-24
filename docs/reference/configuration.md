@@ -13,7 +13,7 @@ mux = "auto"               # auto | zellij | tmux
 
 [layout]
 sidebar = true
-sidebar_width = 30
+sidebar_width = 30              # percent of terminal width
 
 [[layout.initial_panes]]
 name = "shell"
@@ -21,7 +21,7 @@ command = "$SHELL"
 cwd = "$RIMZ_PROJECT_ROOT"
 ```
 
-That's enough for `rimz` in this repo to open the right multiplexer, attach to the project's session, install the sidebar, and drop you in a shell.
+That's enough for `rimz` in this repo to open the right multiplexer, create or find the project's session, launch the native sidebar pane, and drop you in a shell when the caller is interactive.
 
 ## What to commit, what to keep local
 
@@ -72,12 +72,12 @@ The project layer sets the shared defaults every contributor sees. The per-machi
 
 ## Layout IR
 
-`[layout]` is multiplexer-neutral. Backend adapters compile it to Zellij KDL or tmux command sequences at session start. v0 supports the intersection: session, views (Zellij tabs / tmux windows), panes, split direction, pane size, cwd, command, env, pane/view naming.
+`[layout]` is multiplexer-neutral. Backend adapters compile it to Zellij or tmux command sequences at session start. v0 supports the intersection: session, views (Zellij tabs / tmux windows), panes, split direction, pane size, cwd, command, env, pane/view naming. The built-in sidebar is not a WASM/plugin install; it is a native pane launched by `rimz start` / `rimz attach` when no fresh sidebar heartbeat exists.
 
 ```toml
 [layout]
 sidebar = true
-sidebar_width = 30
+sidebar_width = 30              # percent of terminal width
 default_view = "main"
 
 [[layout.initial_panes]]

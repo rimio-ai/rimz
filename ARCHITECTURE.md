@@ -15,7 +15,7 @@ Product invariant and operating paths live in [DESIGN.md](./DESIGN.md); they are
 ```text
 terminal emulator
   mux session (Zellij or tmux)
-    sidebar pane/plugin
+    native sidebar pane
     shells, scripts, agents, CI helpers
                 │
                 │  per-instance sidebar socket  (wakeup of record)
@@ -105,8 +105,9 @@ CLI binary, hook entrypoints, and the runtime/domain library. Start here for any
 - `src/ledger/mod.rs` — `Ledger` handle (`Arc<LedgerInner>`); public methods take the workspace lock and drive `event_log`, `feed_store`, `snapshot` directly. No actor.
 - `src/bridge.rs` — per-request sockets, waiter polling fallback, nonce validation.
 - `src/mux/mod.rs` — `MuxBackend` trait and shared backend errors.
-- `src/mux/zellij.rs` — Zellij commands, layout/plugin shell, pipe fast path.
-- `src/mux/tmux.rs` — tmux commands, managed sidebar pane, popup/status integrations.
+- `src/sidebar.rs` — sidebar heartbeat freshness check used to avoid duplicate native panes.
+- `src/mux/zellij.rs` — Zellij commands, background session creation, native sidebar pane launch, pipe fast path.
+- `src/mux/tmux.rs` — tmux commands, native managed sidebar pane, popup/status integrations.
 - `src/mux/selection.rs` — backend selection precedence.
 - `src/agents/mod.rs` — `AgentIntegration` trait.
 - `src/agents/claude.rs` — Claude wrapper, hook installer, classification, rendering.
@@ -130,13 +131,10 @@ Crate-local rules:
 
 ### `crates/rimz-sidebar`
 
-Shared sidebar renderer, packaged for both backends.
+Shared native terminal sidebar renderer, packaged for both backends.
 
 - `app.rs` — snapshot model, tick loop, wakeup handling, `FetchStatus`/`RenderState` recovery logic for snapshot or heartbeat failure.
 - `render/` — four display groups and the agent rollup.
-- `actions.rs` — focus, dismiss, annotate, resolve, and helper command calls.
-- `zellij/` — WASM plugin shell and pipe subscription.
-- `tmux/` — native TUI process shell for the managed pane and popup.
 
 Crate-local rules:
 

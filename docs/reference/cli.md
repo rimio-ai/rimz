@@ -9,16 +9,19 @@ Commands are grouped below by intent. Each cluster opens with the most common fl
 ## Start a workspace
 
 ```sh
-rimz                              # open or reattach the project's room
-rimz attach billing-service       # reattach a specific workspace from anywhere
+rimz [--attach|--no-attach|--print] [PATH]
+rimz start [--attach|--no-attach|--print] [PATH]
+rimz attach [--attach|--no-attach|--print] [SESSION]
 rimz list [--json]                # show running and known workspaces
 rimz doctor                       # diagnose backend, hooks, trust, resolvers
 rimz trust [status|grant|revoke]  # manage the project's executable-surface trust
 ```
 
-`rimz` resolves the project root, picks the multiplexer backend, opens (or attaches to) the session, and lands you in a pane. First-run UX is non-invasive: nothing is written to your shell or the agent's config until you run `rimz hooks <agent> install`.
+`rimz` resolves the project root, records `workspace.json`, creates or finds the multiplexer session, opens one native sidebar pane when no fresh sidebar heartbeat exists, and then enters the mux session on an interactive TTY. In non-interactive contexts it prints the attach command instead. `--attach` forces entering the mux; `--no-attach` and `--print` force printing. First-run UX is non-invasive: nothing is written to your shell or the agent's config until you run `rimz hooks <agent> install`.
 
-`rimz list` walks the workspace state directory and joins each known workspace against `zellij list-sessions` and `tmux list-sessions` so you can tell at a glance which mux is currently hosting a session and which sessions are dormant. Sort order puts running sessions first, then by most recent activity. `rimz attach <name>` checks both mux backends and prefers the one already running the session; when no session matches it warns to stderr and falls back to the auto-detected mux.
+`rimz attach` without a session name resolves the cwd workspace and follows the same create/sidebar/attach flow. `rimz attach <session>` keeps exact session-name semantics: it prefers a mux already hosting that session, and when a matching `workspace.json` record exists it uses that record's workspace ID and cwd to ensure the session and relaunch the sidebar. Without a record, it warns and continues with the attach command only.
+
+`rimz list` walks the workspace state directory and joins each known workspace against `zellij list-sessions` and `tmux list-sessions` so you can tell at a glance which mux is currently hosting a session and which sessions are dormant. Sort order puts running sessions first, then by most recent activity.
 
 ## Publish events and ask questions
 
@@ -70,7 +73,7 @@ Resolution methods recorded in the ledger:
 ```sh
 rimz pane split --direction <left|right|up|down> [--cwd <path>] [--command <cmd>]
 rimz pane focus <pane-id>
-rimz pane list [--json]
+rimz pane list [--json] [--session-name <name>]
 rimz pane capture <pane-id> [--lines N] [--json] [--ansi]
 rimz pane send <pane-id> -- <keys-or-text>
 rimz pane rename <pane-id> <title>

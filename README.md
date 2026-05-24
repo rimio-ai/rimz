@@ -2,7 +2,7 @@
 
 Run one coding agent and you flip tabs. Run four and you lose them.
 
-Rimz pins every repo to one durable room — a Zellij or tmux session with a sidebar that tells you which pane needs you, and a ledger that survives detach, plugin reload, and reattach from anywhere. Humans, scripts, CI, and coding agents share the same feed through one CLI.
+Rimz pins every repo to one durable room — a Zellij or tmux session with a sidebar that tells you which pane needs you, and a ledger that survives detach, sidebar reload, and reattach from anywhere. Humans, scripts, CI, and coding agents share the same feed through one CLI.
 
 ```
   ┌─ billing-service ───────────────────────────────────┐
