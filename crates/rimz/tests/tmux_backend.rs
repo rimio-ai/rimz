@@ -8,14 +8,16 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use rimz::ids::MuxName;
+use rimz::ids::{MuxName, WorkspaceId};
 use rimz::mux::tmux::{self, MIN_TMUX_VERSION};
-use rimz::mux::{MuxBackend, PaneListOptions, SplitPaneOptions, TmuxBackend};
+use rimz::mux::{
+    MuxBackend, PaneListOptions, SessionOptions, SidebarPaneOptions, SplitPaneOptions, TmuxBackend,
+};
 use tempfile::TempDir;
 
 /// Skip the test (return) if the host has no `tmux` binary on PATH.
@@ -64,6 +66,27 @@ impl TmuxServer {
             .output()
             .expect("spawn tmux new-session");
     }
+
+    fn pane_current_path(&self, session: &str) -> String {
+        let output = Command::new("tmux")
+            .args([
+                "-S",
+                self.socket.to_str().expect("utf8 socket"),
+                "display-message",
+                "-p",
+                "-t",
+                session,
+                "#{pane_current_path}",
+            ])
+            .output()
+            .expect("spawn tmux display-message");
+        assert!(
+            output.status.success(),
+            "display-message failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
 }
 
 impl Drop for TmuxServer {
@@ -83,12 +106,23 @@ fn ensure_and_list_sessions_round_trip() {
     require_tmux!();
 
     let server = TmuxServer::new();
-    server.backend.ensure_session("rimz-test").expect("ensure");
+    let cwd = TempDir::new().expect("cwd tempdir");
+    server
+        .backend
+        .ensure_session(&SessionOptions {
+            session_name: "rimz-test".to_owned(),
+            cwd: cwd.path().to_path_buf(),
+        })
+        .expect("ensure");
 
     let listed = server.backend.list_sessions().expect("list_sessions");
     assert!(
         listed.iter().any(|s| s == "rimz-test"),
         "expected `rimz-test` in {listed:?}",
+    );
+    assert_eq!(
+        server.pane_current_path("rimz-test"),
+        cwd.path().display().to_string()
     );
 }
 
@@ -221,34 +255,55 @@ fn capture_and_send_keys_round_trip() {
     );
 }
 
-/// `open_sidebar` runs `split-window -d -h -l <width> -b` against the
-/// session. The inner `rimz sidebar serve` command may not yet exist (M1
-/// implements it); we only verify the tmux CLI surface succeeds and that
-/// a second pane was spawned.
+/// `open_sidebar` runs `split-window -d -h -l <width>% -b` against the
+/// session. We verify the tmux CLI surface succeeds and that a second pane
+/// was spawned.
 #[test]
 fn open_sidebar_split_window_succeeds() {
     require_tmux!();
 
     let server = TmuxServer::new();
     server.ensure_with_shell("sidebar");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-test"));
 
     server
         .backend
-        .open_sidebar("sidebar", 30)
+        .open_sidebar(&SidebarPaneOptions {
+            session_name: "sidebar".to_owned(),
+            workspace_id,
+            cwd: std::env::current_dir().expect("cwd"),
+            width_percent: 30,
+            rimz_bin: stub,
+            session_preexisting: true,
+        })
         .expect("open_sidebar");
 
-    // Inner command exits fast (binary not found); accept that. The split
-    // call itself must have returned 0, which is the spike's contract.
     let panes = server
         .backend
         .list_panes(PaneListOptions {
             session_name: Some("sidebar".to_owned()),
         })
         .expect("list_panes");
-    assert!(
-        !panes.is_empty(),
-        "session should still have at least the original pane: {panes:?}",
+    assert_eq!(
+        panes.len(),
+        2,
+        "sidebar split should keep a second pane: {panes:?}"
     );
+}
+
+fn sidebar_command_stub() -> (TempDir, PathBuf) {
+    let dir = TempDir::new().expect("stub dir");
+    let path = dir.path().join("rimz-stub");
+    std::fs::write(&path, "#!/bin/sh\nsleep 5\n").expect("write stub");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).expect("chmod");
+    }
+    (dir, path)
 }
 
 /// `detach` on a daemon session with no attached client is a benign no-op

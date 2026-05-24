@@ -16,6 +16,7 @@ pub mod ledger;
 pub mod mux;
 pub mod resolver;
 pub mod schema;
+pub mod sidebar;
 pub mod trust;
 pub mod workspace;
 

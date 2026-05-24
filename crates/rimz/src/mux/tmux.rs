@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CommandSpec, MuxBackend, MuxErr, PaneCapture, PaneListOptions, Result, SplitPaneOptions,
-    ensure_pane_backend,
+    CommandSpec, MuxBackend, MuxErr, PaneCapture, PaneListOptions, Result, SessionOptions,
+    SidebarPaneOptions, SplitPaneOptions, ensure_pane_backend,
 };
 use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
@@ -102,11 +102,19 @@ impl MuxBackend for TmuxBackend {
         MuxName::Tmux
     }
 
-    fn ensure_session(&self, name: &str) -> Result<()> {
+    fn ensure_session(&self, opts: &SessionOptions) -> Result<()> {
         // `-A` attaches if the session exists; `-d` keeps us from grabbing
         // the terminal in the background.
         self.cmd()
-            .args(["new-session", "-A", "-d", "-s", name])
+            .args([
+                "new-session".to_owned(),
+                "-A".to_owned(),
+                "-d".to_owned(),
+                "-s".to_owned(),
+                opts.session_name.clone(),
+                "-c".to_owned(),
+                opts.cwd.to_string_lossy().into_owned(),
+            ])
             .run()
             .map(|_| ())
     }
@@ -241,27 +249,36 @@ impl MuxBackend for TmuxBackend {
             .map(|_| ())
     }
 
-    fn open_sidebar(&self, session_name: &str, width: u16) -> Result<()> {
+    fn open_sidebar(&self, opts: &SidebarPaneOptions) -> Result<()> {
         // Managed sidebar pane per docs/internals/multiplexers.md:
-        //   tmux split-window -d -h -l <width> -b -t <session> 'rimz sidebar serve ...'
+        //   tmux split-window -d -h -l <width>% -b -t <session> 'rimz sidebar serve ...'
         // `-d` keeps the spawning client focused on its existing pane;
         // `-b` places the new pane before the target so the sidebar sits
-        // on the left. Workspace identity flows through env on the spawned
-        // pane. The split itself succeeds even when the inner command
-        // closes immediately, which is the mux-level testable surface.
-        let command = format!("rimz sidebar serve --mux tmux --session-name {session_name}");
+        // on the left. Workspace identity is passed directly to the spawned
+        // renderer command.
+        let command = vec![
+            opts.rimz_bin.to_string_lossy().into_owned(),
+            "sidebar".to_owned(),
+            "serve".to_owned(),
+            "--mux".to_owned(),
+            "tmux".to_owned(),
+            "--workspace-id".to_owned(),
+            opts.workspace_id.as_str().to_owned(),
+            "--session-name".to_owned(),
+            opts.session_name.clone(),
+        ];
         self.cmd()
             .args([
                 "split-window".to_owned(),
                 "-d".to_owned(),
                 "-h".to_owned(),
                 "-l".to_owned(),
-                width.to_string(),
+                format!("{}%", opts.width_percent),
                 "-b".to_owned(),
                 "-t".to_owned(),
-                session_name.to_owned(),
-                command,
+                opts.session_name.clone(),
             ])
+            .args(command)
             .run()
             .map(|_| ())
     }

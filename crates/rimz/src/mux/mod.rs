@@ -15,12 +15,13 @@ pub use zellij::ZellijBackend;
 
 use std::collections::BTreeMap;
 use std::io;
+use std::path::PathBuf;
 use std::process::{Command, Output};
 
 use serde::{Deserialize, Serialize};
 
 use crate::feed::PaneRef;
-use crate::ids::{MuxName, PaneId};
+use crate::ids::{MuxName, PaneId, WorkspaceId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MuxErr {
@@ -121,6 +122,22 @@ pub struct PaneListOptions {
     pub session_name: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct SessionOptions {
+    pub session_name: String,
+    pub cwd: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+pub struct SidebarPaneOptions {
+    pub session_name: String,
+    pub workspace_id: WorkspaceId,
+    pub cwd: PathBuf,
+    pub width_percent: u16,
+    pub rimz_bin: PathBuf,
+    pub session_preexisting: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct SplitPaneOptions {
     pub target_pane_id: Option<PaneId>,
@@ -133,7 +150,7 @@ pub struct SplitPaneOptions {
 /// one of these methods.
 pub trait MuxBackend: Send + Sync {
     fn name(&self) -> MuxName;
-    fn ensure_session(&self, name: &str) -> Result<()>;
+    fn ensure_session(&self, opts: &SessionOptions) -> Result<()>;
     fn attach_command(&self, name: &str) -> CommandSpec;
     fn detach(&self, name: &str) -> Result<()>;
     fn list_sessions(&self) -> Result<Vec<String>>;
@@ -142,7 +159,7 @@ pub trait MuxBackend: Send + Sync {
     fn focus_pane(&self, pane: &PaneId) -> Result<()>;
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture>;
     fn send_keys(&self, pane: &PaneId, text: &str) -> Result<()>;
-    fn open_sidebar(&self, session_name: &str, width: u16) -> Result<()>;
+    fn open_sidebar(&self, opts: &SidebarPaneOptions) -> Result<()>;
     /// Best-effort wakeup; sockets are the channel of record per the docs.
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()>;
     fn version(&self) -> Result<String>;
