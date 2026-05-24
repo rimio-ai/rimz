@@ -63,6 +63,7 @@ pub fn run(globals: &GlobalFlags) -> Result<()> {
             }
             Err(err) => println!("  multiplexer   : unavailable ({err})"),
         }
+        report_sidebar_renderer();
 
         if let Ok(ws) = &workspace {
             report_protocol_versions(ws);
@@ -264,18 +265,22 @@ fn report_zellij_capabilities() {
             };
             let (maj, min, patch) = MIN_ZELLIJ_VERSION;
             println!("  zellij floor  : {floor_status} (>= {maj}.{min}.{patch} required)");
-            let presence = if caps.plugin_present {
-                "present"
-            } else {
-                "missing"
-            };
-            println!(
-                "  sidebar plugin: {} {presence}",
-                caps.plugin_path.display(),
-            );
         }
         Err(err) => println!("  zellij floor  : unavailable ({err})"),
     }
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
+)]
+fn report_sidebar_renderer() {
+    let status = if super::sidebar::sidebar_renderer_present() {
+        "found"
+    } else {
+        "missing"
+    };
+    println!("  sidebar renderer: rimz-sidebar {status}");
 }
 
 #[expect(

@@ -142,11 +142,9 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 Some(mux) => mux,
                 None => rimz::mux::auto_detect_backend(globals.mux)?,
             };
-            // Honour `RIMZ_SIDEBAR_BIN` so tests and tooling can point this at
-            // a built binary in target/ without installing it on PATH.
-            let program =
-                std::env::var("RIMZ_SIDEBAR_BIN").unwrap_or_else(|_| "rimz-sidebar".to_owned());
-            let status = Command::new(program)
+            let program = sidebar_renderer_program();
+            let mut command = Command::new(&program);
+            command
                 .args([
                     "serve",
                     "--workspace-id",
@@ -158,8 +156,10 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     "--tick-seconds",
                     &tick_seconds.to_string(),
                 ])
+                .env("RIMZ_BIN", rimz_cli_program());
+            let status = command
                 .status()
-                .context("running `rimz-sidebar serve`")?;
+                .with_context(|| format!("running `{}` serve", program.to_string_lossy()))?;
             if !status.success() {
                 bail!("rimz-sidebar serve exited with {status}");
             }
@@ -172,4 +172,51 @@ fn open_ledger_by_workspace_id(workspace_id: WorkspaceId) -> Result<Ledger> {
     let paths = StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
     let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
     Ledger::open(paths, runtime).context("opening ledger")
+}
+
+pub(crate) fn sidebar_renderer_program() -> PathBuf {
+    if let Some(path) = env_path("RIMZ_SIDEBAR_BIN") {
+        return path;
+    }
+    if let Some(path) = sibling_renderer_bin().filter(|path| path.is_file()) {
+        return path;
+    }
+    if let Ok(path) = which::which(renderer_bin_name()) {
+        return path;
+    }
+    PathBuf::from(renderer_bin_name())
+}
+
+pub(crate) fn sidebar_renderer_present() -> bool {
+    if let Some(path) = env_path("RIMZ_SIDEBAR_BIN") {
+        return path.is_file();
+    }
+    sibling_renderer_bin().is_some_and(|path| path.is_file())
+        || which::which(renderer_bin_name()).is_ok()
+}
+
+fn sibling_renderer_bin() -> Option<PathBuf> {
+    let current = std::env::current_exe().ok()?;
+    let parent = current.parent()?;
+    Some(parent.join(renderer_bin_name()))
+}
+
+fn renderer_bin_name() -> String {
+    format!("rimz-sidebar{}", std::env::consts::EXE_SUFFIX)
+}
+
+fn env_path(key: &str) -> Option<PathBuf> {
+    std::env::var_os(key)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn rimz_cli_program() -> PathBuf {
+    env_path("RIMZ_BIN")
+        .or_else(|| std::env::current_exe().ok())
+        .unwrap_or_else(|| PathBuf::from(rimz_bin_name()))
+}
+
+fn rimz_bin_name() -> String {
+    format!("rimz{}", std::env::consts::EXE_SUFFIX)
 }

@@ -14,14 +14,20 @@ mod sidebar;
 mod trust;
 mod workspace;
 
-use std::path::PathBuf;
+use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 
 use rimz::ids::MuxName;
+use rimz::ledger::paths::workspaces_dir;
+use rimz::ledger::workspace_record;
+use rimz::mux::{MuxBackend, SessionOptions, SidebarPaneOptions};
 use rimz::workspace::WorkspaceResolver;
-use rimz::{Ledger, RuntimePaths, StatePaths};
+use rimz::{Ledger, RuntimePaths, StatePaths, WorkspaceRecord};
+
+const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
 
 /// Entry point used by `main.rs`.
 pub fn dispatch() -> Result<()> {
@@ -41,10 +47,11 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Doctor) => doctor::run(&globals),
         Some(Subcmd::Ping) => doctor::ping(),
         Some(Subcmd::Start(args)) => start(args, &globals),
-        Some(Subcmd::Attach { workspace }) => attach(workspace, &globals),
+        Some(Subcmd::Attach(args)) => attach(args, &globals),
         None => start(
             StartArgs {
                 path: cli.path.unwrap_or_else(|| PathBuf::from(".")),
+                attach: cli.attach,
             },
             &globals,
         ),
@@ -67,6 +74,9 @@ struct Cli {
     #[arg(value_name = "PATH")]
     path: Option<PathBuf>,
 
+    #[clap(flatten)]
+    attach: AttachFlags,
+
     #[command(subcommand)]
     subcommand: Option<Subcmd>,
 }
@@ -87,10 +97,7 @@ enum Subcmd {
     /// Start or attach to a workspace session (default action).
     Start(StartArgs),
     /// Attach to a workspace session by name.
-    Attach {
-        /// Workspace session name (omit to use the cwd's workspace).
-        workspace: Option<String>,
-    },
+    Attach(AttachArgs),
     /// Workspace identity helpers.
     Workspace(workspace::WorkspaceArgs),
     /// Show known workspaces and which mux is currently running them.
@@ -120,9 +127,65 @@ enum Subcmd {
 
 #[derive(Debug, Args)]
 pub struct StartArgs {
+    #[command(flatten)]
+    attach: AttachFlags,
     /// Path to use as the workspace cwd.
     #[arg(default_value = ".")]
     pub path: PathBuf,
+}
+
+#[derive(Debug, Args, Default)]
+#[group(required = false, multiple = false)]
+pub struct AttachFlags {
+    /// Attach to the mux session instead of printing the attach command.
+    #[arg(long)]
+    attach: bool,
+    /// Print the attach command instead of entering the mux session.
+    #[arg(long)]
+    no_attach: bool,
+    /// Alias for `--no-attach`.
+    #[arg(long)]
+    print: bool,
+}
+
+impl AttachFlags {
+    fn mode(&self) -> AttachMode {
+        if self.attach {
+            AttachMode::Attach
+        } else if self.no_attach || self.print {
+            AttachMode::Print
+        } else {
+            AttachMode::Auto
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct AttachArgs {
+    #[command(flatten)]
+    attach: AttachFlags,
+    /// Workspace session name (omit to use the cwd's workspace).
+    #[arg(value_name = "SESSION")]
+    workspace: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AttachMode {
+    Auto,
+    Attach,
+    Print,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AttachAction {
+    Exec,
+    Print,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MissingSessionReport {
+    Silent,
+    Warn,
 }
 
 fn parse_mux(value: &str) -> std::result::Result<MuxName, String> {
@@ -135,34 +198,107 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     record_workspace(&workspace)?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
-    backend.ensure_session(&workspace.session_name)?;
+    let session_preexisting = session_exists(backend.as_ref(), &workspace.session_name)?;
+    backend.ensure_session(&SessionOptions {
+        session_name: workspace.session_name.clone(),
+        cwd: workspace.worktree_root.clone(),
+    })?;
+    launch_sidebar_for_workspace(
+        backend.as_ref(),
+        &workspace.workspace_id,
+        &workspace.session_name,
+        &workspace.worktree_root,
+        session_preexisting,
+    );
     let spec = backend.attach_command(&workspace.session_name);
-    // Print the attach command so the caller can decide whether to exec it.
     tracing::info!(
         workspace = %workspace.workspace_id,
         session = %workspace.session_name,
         mux = %mux,
-        "workspace ready; run the attach command below to enter it",
+        "workspace ready",
     );
-    print_attach_command(&spec);
-    Ok(())
+    run_attach_action(&spec, args.attach.mode(), mux)
 }
 
-fn attach(workspace_name: Option<String>, globals: &GlobalFlags) -> Result<()> {
-    let session = match workspace_name {
-        Some(name) => name,
-        None => WorkspaceResolver::resolve(".", globals.root.clone())?.session_name,
+fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
+    let mode = args.attach.mode();
+    match args.workspace {
+        Some(session) => attach_named(&session, mode, globals),
+        None => attach_cwd(mode, globals),
+    }
+}
+
+fn attach_cwd(mode: AttachMode, globals: &GlobalFlags) -> Result<()> {
+    let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
+    record_workspace(&workspace)?;
+    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+    let backend = rimz::mux::backend_for(mux);
+    let session_preexisting = session_exists(backend.as_ref(), &workspace.session_name)?;
+    backend.ensure_session(&SessionOptions {
+        session_name: workspace.session_name.clone(),
+        cwd: workspace.worktree_root.clone(),
+    })?;
+    launch_sidebar_for_workspace(
+        backend.as_ref(),
+        &workspace.workspace_id,
+        &workspace.session_name,
+        &workspace.worktree_root,
+        session_preexisting,
+    );
+    let spec = backend.attach_command(&workspace.session_name);
+    run_attach_action(&spec, mode, mux)
+}
+
+fn attach_named(session: &str, mode: AttachMode, globals: &GlobalFlags) -> Result<()> {
+    let record = workspace_record_for_session(session);
+    let missing_report = if matches!(record, Ok(Some(_))) {
+        MissingSessionReport::Silent
+    } else {
+        MissingSessionReport::Warn
     };
-    let mux = pick_mux_for_session(&session, globals.mux)?;
-    let spec = rimz::mux::backend_for(mux).attach_command(&session);
-    print_attach_command(&spec);
-    Ok(())
+    let mux = pick_mux_for_session(session, globals.mux, missing_report)?;
+    let backend = rimz::mux::backend_for(mux);
+    match record {
+        Ok(Some(record)) => {
+            let session_preexisting = session_exists(backend.as_ref(), &record.session_name)?;
+            backend.ensure_session(&SessionOptions {
+                session_name: record.session_name.clone(),
+                cwd: record.project_root.clone(),
+            })?;
+            launch_sidebar_for_workspace(
+                backend.as_ref(),
+                &record.workspace_id,
+                &record.session_name,
+                &record.project_root,
+                session_preexisting,
+            );
+        }
+        Ok(None) => {
+            tracing::warn!(
+                session = %session,
+                "no workspace record matches session; emitting attach command only",
+            );
+        }
+        Err(err) => {
+            tracing::warn!(
+                session = %session,
+                error = %err,
+                "workspace record lookup failed; emitting attach command only",
+            );
+        }
+    }
+    let spec = backend.attach_command(session);
+    run_attach_action(&spec, mode, mux)
 }
 
 /// Prefer the mux currently hosting `session`. Falls back to auto-detect when
 /// the session isn't on any backend; warns to stderr so reattach failures are
 /// visible before the user runs the emitted command.
-fn pick_mux_for_session(session: &str, explicit: Option<MuxName>) -> Result<MuxName> {
+fn pick_mux_for_session(
+    session: &str,
+    explicit: Option<MuxName>,
+    missing_report: MissingSessionReport,
+) -> Result<MuxName> {
     if let Some(mux) = explicit {
         return Ok(mux);
     }
@@ -170,22 +306,177 @@ fn pick_mux_for_session(session: &str, explicit: Option<MuxName>) -> Result<MuxN
         match rimz::mux::backend_for(candidate).list_sessions() {
             Ok(sessions) if sessions.iter().any(|s| s == session) => return Ok(candidate),
             Ok(_) => {}
+            Err(rimz::mux::MuxErr::NotInstalled { .. }) => {}
             Err(err) => tracing::warn!(mux = %candidate, error = %err, "list_sessions failed"),
         }
     }
     let detected = rimz::mux::auto_detect_backend(None)?;
-    tracing::warn!(
-        session = %session,
-        mux = %detected,
-        "no live session matches; emitting attach command for auto-detected mux",
-    );
+    if missing_report == MissingSessionReport::Warn {
+        tracing::warn!(
+            session = %session,
+            mux = %detected,
+            "no live session matches; emitting attach command for auto-detected mux",
+        );
+    }
     Ok(detected)
+}
+
+fn workspace_record_for_session(session: &str) -> Result<Option<WorkspaceRecord>> {
+    let root = workspaces_dir();
+    let entries = match std::fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).with_context(|| format!("reading {}", root.display())),
+    };
+    let mut record_paths = Vec::new();
+    for entry in entries {
+        let entry = entry.with_context(|| format!("reading {}", root.display()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            record_paths.push(path.join("workspace.json"));
+        }
+    }
+    record_paths.sort();
+    for path in record_paths {
+        let record = match workspace_record::read(&path) {
+            Ok(record) => record,
+            Err(err) => {
+                tracing::warn!(path = %path.display(), error = %err, "skipping unreadable workspace record");
+                continue;
+            }
+        };
+        if record.session_name == session {
+            return Ok(Some(record));
+        }
+    }
+    Ok(None)
+}
+
+fn session_exists(backend: &dyn MuxBackend, session_name: &str) -> Result<bool> {
+    Ok(backend
+        .list_sessions()?
+        .iter()
+        .any(|session| session == session_name))
+}
+
+fn launch_sidebar_for_workspace(
+    backend: &dyn MuxBackend,
+    workspace_id: &rimz::WorkspaceId,
+    session_name: &str,
+    cwd: &Path,
+    session_preexisting: bool,
+) -> rimz::sidebar::SidebarLaunchOutcome {
+    let runtime = match RuntimePaths::for_workspace(workspace_id.clone()) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            tracing::warn!(
+                workspace = %workspace_id,
+                error = %err,
+                "sidebar launch skipped because runtime paths are unavailable",
+            );
+            return rimz::sidebar::SidebarLaunchOutcome::Failed;
+        }
+    };
+    let rimz_bin = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(err) => {
+            tracing::warn!(
+                workspace = %workspace_id,
+                error = %err,
+                "sidebar launch skipped because current executable is unavailable",
+            );
+            return rimz::sidebar::SidebarLaunchOutcome::Failed;
+        }
+    };
+    let opts = SidebarPaneOptions {
+        session_name: session_name.to_owned(),
+        workspace_id: workspace_id.clone(),
+        cwd: cwd.to_path_buf(),
+        width_percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
+        rimz_bin,
+        session_preexisting,
+    };
+    rimz::sidebar::launch_sidebar_if_needed(backend, &runtime, &opts)
+}
+
+fn run_attach_action(spec: &rimz::mux::CommandSpec, mode: AttachMode, mux: MuxName) -> Result<()> {
+    match attach_action(
+        mode,
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+        inside_selected_mux(mux),
+    ) {
+        AttachAction::Print => {
+            print_attach_command(spec);
+            Ok(())
+        }
+        AttachAction::Exec => exec_attach_command(spec),
+    }
+}
+
+fn attach_action(
+    mode: AttachMode,
+    stdin_is_tty: bool,
+    stdout_is_tty: bool,
+    inside_target_mux: bool,
+) -> AttachAction {
+    match mode {
+        AttachMode::Attach => AttachAction::Exec,
+        AttachMode::Print => AttachAction::Print,
+        AttachMode::Auto if stdin_is_tty && stdout_is_tty && !inside_target_mux => {
+            AttachAction::Exec
+        }
+        AttachMode::Auto => AttachAction::Print,
+    }
+}
+
+fn inside_selected_mux(mux: MuxName) -> bool {
+    match mux {
+        MuxName::Zellij => {
+            std::env::var_os("ZELLIJ").is_some() || std::env::var_os("ZELLIJ_PANE_ID").is_some()
+        }
+        MuxName::Tmux => {
+            std::env::var_os("TMUX").is_some() || std::env::var_os("TMUX_PANE").is_some()
+        }
+    }
+}
+
+#[cfg(unix)]
+fn exec_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = spec.to_command();
+    let err = command.exec();
+    Err::<(), _>(err).with_context(|| format!("execing `{}`", command_display(spec)))
+}
+
+#[cfg(not(unix))]
+fn exec_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
+    let status = spec
+        .to_command()
+        .status()
+        .with_context(|| format!("running `{}`", command_display(spec)))?;
+    if !status.success() {
+        anyhow::bail!(
+            "attach command `{}` exited with {status}",
+            command_display(spec)
+        );
+    }
+    Ok(())
 }
 
 fn print_attach_command(spec: &rimz::mux::CommandSpec) {
     #[expect(clippy::print_stdout, reason = "user-facing command suggestion")]
     {
-        println!("{} {}", spec.program, spec.args.join(" "));
+        println!("{}", command_display(spec));
+    }
+}
+
+fn command_display(spec: &rimz::mux::CommandSpec) -> String {
+    if spec.args.is_empty() {
+        spec.program.clone()
+    } else {
+        format!("{} {}", spec.program, spec.args.join(" "))
     }
 }
 
@@ -211,4 +502,37 @@ pub(crate) fn record_workspace(workspace: &rimz::ResolvedWorkspace) -> Result<()
     ledger
         .record_workspace(workspace)
         .context("recording workspace metadata")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attach_action_matrix() {
+        assert_eq!(
+            attach_action(AttachMode::Auto, true, true, false),
+            AttachAction::Exec,
+        );
+        assert_eq!(
+            attach_action(AttachMode::Auto, false, true, false),
+            AttachAction::Print,
+        );
+        assert_eq!(
+            attach_action(AttachMode::Auto, true, false, false),
+            AttachAction::Print,
+        );
+        assert_eq!(
+            attach_action(AttachMode::Auto, true, true, true),
+            AttachAction::Print,
+        );
+        assert_eq!(
+            attach_action(AttachMode::Attach, false, false, true),
+            AttachAction::Exec,
+        );
+        assert_eq!(
+            attach_action(AttachMode::Print, true, true, false),
+            AttachAction::Print,
+        );
+    }
 }
