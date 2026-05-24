@@ -9,9 +9,11 @@ use std::time::Duration;
 use jiff::Timestamp;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use rimz::feed::PaneRef;
+use rimz::ids::PaneId;
 use rimz::ledger::paths::PathErr;
 use rimz::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::render::{self, FetchStatus};
 
@@ -22,6 +24,7 @@ pub struct ServeConfig {
     pub session_name: String,
     pub instance_id: SidebarInstanceId,
     pub tick_seconds: u64,
+    pub rimz_bin: PathBuf,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -32,6 +35,12 @@ pub enum SidebarAppErr {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Paths(#[from] PathErr),
+    #[error("running `{program}`: {source}")]
+    CommandIo {
+        program: String,
+        #[source]
+        source: io::Error,
+    },
     #[error("snapshot command failed: {stderr}")]
     SnapshotCommand { stderr: String },
     #[error("heartbeat command failed: {stderr}")]
@@ -57,10 +66,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
 
     let mut last_snapshot: Option<SidebarSnapshot> = None;
     let mut status = FetchStatus::Ok;
+    let mut seen_sibling = false;
 
     loop {
         let heartbeat_outcome = write_heartbeat(&config, &socket_path);
-        let snapshot_outcome = fetch_snapshot(&config.workspace_id);
+        let snapshot_outcome = fetch_snapshot(&config.rimz_bin, &config.workspace_id);
 
         let state = compute_next_state(
             &config.workspace_id,
@@ -78,8 +88,80 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         last_snapshot = state.last_snapshot;
         status = state.status;
         render::draw_to_terminal(&mut terminal, &state.snapshot, &status)?;
+
+        if self_close_decision(&mut seen_sibling, own_view_sibling_count(&config)) {
+            debug!(
+                session = %config.session_name,
+                "sidebar tab emptied; exiting so the pane closes itself",
+            );
+            break;
+        }
         wait_for_wakeup(&socket)?;
     }
+    Ok(())
+}
+
+/// Decide whether the sidebar should exit so its own pane closes. The sidebar
+/// shares a tab/view with the user's working pane(s); when the last of them
+/// exits, the sidebar is alone and has no reason to stay. The `seen_sibling`
+/// latch prevents exiting during startup, before the terminal pane appears.
+///
+/// `sibling_count` is `None` when the count could not be determined (no mux
+/// pane env var, a failed `pane list`, or our own pane missing from the list);
+/// in that case we never close.
+fn self_close_decision(seen_sibling: &mut bool, sibling_count: Option<usize>) -> bool {
+    match sibling_count {
+        Some(0) => *seen_sibling,
+        Some(_) => {
+            *seen_sibling = true;
+            false
+        }
+        None => false,
+    }
+}
+
+/// Count the panes that share this sidebar's view (tab/window) but are not the
+/// sidebar itself. Best-effort and backend-agnostic: it shells out to the
+/// normalized `rimz pane list`, the same read-only discovery primitive a
+/// resolver uses. Returns `None` on any failure so the caller never
+/// self-closes on bad data.
+fn own_view_sibling_count(config: &ServeConfig) -> Option<usize> {
+    let own = own_pane_id(config.mux)?;
+    let output = Command::new(&config.rimz_bin)
+        .args(["pane", "list", "--json", "--session-name"])
+        .arg(&config.session_name)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        debug!(
+            stderr = %String::from_utf8_lossy(&output.stderr),
+            "sidebar pane-list probe failed; staying open",
+        );
+        return None;
+    }
+    let panes: Vec<PaneRef> = serde_json::from_slice(&output.stdout).ok()?;
+    let own_view = panes
+        .iter()
+        .find(|pane| pane.pane_id == own)?
+        .view_id
+        .clone();
+    Some(
+        panes
+            .iter()
+            .filter(|pane| pane.pane_id != own && pane.view_id == own_view)
+            .count(),
+    )
+}
+
+/// This process's normalized pane id, read from the multiplexer's per-pane env
+/// var. Zellij exposes a bare integer in `ZELLIJ_PANE_ID` (normalized as
+/// `terminal_<id>`); tmux exposes the full raw id in `TMUX_PANE`.
+fn own_pane_id(mux: MuxName) -> Option<PaneId> {
+    let raw = match mux {
+        MuxName::Zellij => format!("terminal_{}", std::env::var("ZELLIJ_PANE_ID").ok()?),
+        MuxName::Tmux => std::env::var("TMUX_PANE").ok()?,
+    };
+    Some(PaneId::from_parts(mux, raw))
 }
 
 /// Decide what to render next given the latest heartbeat + snapshot outcomes.
@@ -149,12 +231,16 @@ pub struct RenderState {
     pub last_snapshot: Option<SidebarSnapshot>,
 }
 
-fn fetch_snapshot(workspace_id: &WorkspaceId) -> Result<SidebarSnapshot> {
-    let output = Command::new("rimz")
+fn fetch_snapshot(rimz_bin: &Path, workspace_id: &WorkspaceId) -> Result<SidebarSnapshot> {
+    let output = Command::new(rimz_bin)
         .args(["sidebar", "snapshot", "--workspace-id"])
         .arg(workspace_id.as_str())
         .arg("--json")
-        .output()?;
+        .output()
+        .map_err(|source| SidebarAppErr::CommandIo {
+            program: rimz_bin.display().to_string(),
+            source,
+        })?;
     if !output.status.success() {
         return Err(SidebarAppErr::SnapshotCommand {
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
@@ -164,7 +250,7 @@ fn fetch_snapshot(workspace_id: &WorkspaceId) -> Result<SidebarSnapshot> {
 }
 
 fn write_heartbeat(config: &ServeConfig, socket_path: &Path) -> Result<()> {
-    let output = Command::new("rimz")
+    let output = Command::new(&config.rimz_bin)
         .args(["sidebar", "heartbeat", "--workspace-id"])
         .arg(config.workspace_id.as_str())
         .arg("--instance-id")
@@ -175,7 +261,11 @@ fn write_heartbeat(config: &ServeConfig, socket_path: &Path) -> Result<()> {
         .arg(&config.session_name)
         .arg("--wakeup-socket")
         .arg(socket_path)
-        .output()?;
+        .output()
+        .map_err(|source| SidebarAppErr::CommandIo {
+            program: config.rimz_bin.display().to_string(),
+            source,
+        })?;
     if !output.status.success() {
         return Err(SidebarAppErr::HeartbeatCommand {
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
@@ -354,5 +444,35 @@ mod tests {
     #[test]
     fn tick_for_clamps_zero_to_one() {
         assert_eq!(tick_for(0), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn self_close_waits_for_a_sibling_before_ever_closing() {
+        let mut seen = false;
+        // Startup: no sibling yet (terminal pane not materialized). Never close.
+        assert!(!self_close_decision(&mut seen, Some(0)));
+        assert!(!seen);
+    }
+
+    #[test]
+    fn self_close_latches_then_fires_when_alone() {
+        let mut seen = false;
+        assert!(!self_close_decision(&mut seen, Some(1)));
+        assert!(seen, "seeing a sibling must latch");
+        // Sibling went away: now alone, so close.
+        assert!(self_close_decision(&mut seen, Some(0)));
+    }
+
+    #[test]
+    fn self_close_holds_while_siblings_remain() {
+        let mut seen = true;
+        assert!(!self_close_decision(&mut seen, Some(2)));
+    }
+
+    #[test]
+    fn self_close_never_fires_on_unknown_count() {
+        let mut seen = true;
+        assert!(!self_close_decision(&mut seen, None));
+        assert!(seen, "an unknown count must not clear the latch");
     }
 }

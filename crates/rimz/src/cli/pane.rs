@@ -20,6 +20,9 @@ enum PaneSubcmd {
     List {
         #[arg(long)]
         json: bool,
+        /// Session to list. Defaults to the cwd's workspace session.
+        #[arg(long)]
+        session_name: Option<String>,
     },
     /// Capture a pane's visible text.
     Capture {
@@ -40,14 +43,17 @@ enum PaneSubcmd {
 }
 
 pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
 
     match args.command {
-        PaneSubcmd::List { json } => {
+        PaneSubcmd::List { json, session_name } => {
+            let session_name = match session_name {
+                Some(name) => name,
+                None => WorkspaceResolver::resolve(".", globals.root.clone())?.session_name,
+            };
             let panes = backend.list_panes(PaneListOptions {
-                session_name: Some(workspace.session_name.clone()),
+                session_name: Some(session_name),
             })?;
             if json {
                 let rendered = serde_json::to_string_pretty(&panes)?;
@@ -96,6 +102,7 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
             backend.focus_pane(&pane).map_err(Into::into)
         }
         PaneSubcmd::Split => {
+            let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
             let env = BTreeMap::from([
                 ("RIMZ".to_owned(), "1".to_owned()),
                 (
