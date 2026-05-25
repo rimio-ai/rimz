@@ -76,6 +76,7 @@ Every other document is a leaf from here. The `docs/` tree groups by audience: *
 - [resolvers.md](./docs/internals/resolvers.md) — resolver protocol, chain, pane primitives.
 - [trust.md](./docs/internals/trust.md) — executable-surface hash, trust states, auto-revoke.
 - [agent.md](./docs/internals/agent.md) — hook model for Claude, Codex, and later agents.
+- [web.md](./docs/internals/web.md) — Zellij-only browser access and session-route design.
 
 **Contributing** — `docs/contributing/`
 - [rust-conventions.md](./docs/contributing/rust-conventions.md) — Rust shape: CLI, errors, stdout discipline, actor pattern, test taxonomy, dependency snapshot, toolchain, quality gates.
