@@ -13,6 +13,8 @@ fn main() -> Result<()> {
     let task = args.next().unwrap_or_else(|| "ci".to_owned());
     let root = workspace_root()?;
     match task.as_str() {
+        "build" => build(&root),
+        "install" => install(&root),
         "fmt" => run(&root, "cargo", ["fmt", "--all", "--", "--check"]),
         "lint" => run(
             &root,
@@ -43,6 +45,30 @@ fn main() -> Result<()> {
         "ci" => ci(&root),
         other => bail!("unknown xtask `{other}`"),
     }
+}
+
+fn build(root: &Path) -> Result<()> {
+    run(
+        root,
+        "cargo",
+        ["build", "--workspace", "--all-features", "--locked"],
+    )
+}
+
+fn install(root: &Path) -> Result<()> {
+    for (path, bin) in [
+        ("crates/rimz", "rimz"),
+        ("crates/rimz-sidebar", "rimz-sidebar"),
+    ] {
+        run(
+            root,
+            "cargo",
+            [
+                "install", "--path", path, "--bin", bin, "--locked", "--force",
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 fn ci(root: &Path) -> Result<()> {
