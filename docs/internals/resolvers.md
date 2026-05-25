@@ -101,7 +101,7 @@ rimz feed resolve <request-id> \
   --decision '{"choice":"yes"}'
 ```
 
-The final `feed resolve` matters even though the answer landed via keystrokes: it keeps the sidebar, audit log, and **Recently answered** group consistent.
+The final `feed resolve` matters even though the answer landed via keystrokes: it clears the item from the sidebar and keeps the ledger and audit log (`rimz feed list`) consistent.
 
 Pane primitives belong to resolvers, not Rimz core. A resolver has just captured the screen and can verify its assumptions before typing; core can't, so core leaves the typing to the resolver. Pane IDs are normalized across multiplexers (`zellij:terminal_3`, `tmux:%3`), so a resolver written once works on both backends.
 

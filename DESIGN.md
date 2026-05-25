@@ -35,21 +35,38 @@ Each commitment is a decision a reader might challenge. The reason is on the sam
 
 ## Sidebar shape
 
-Four display groups: **Needs your attention** · **Resolver is working** · **Recently answered** · **Recent activity**.
+The sidebar is a **worktree-keyed attention and navigation map**, not a feed
+reader. Three laws govern it:
 
-Agent statuses (exactly five):
+- **Worktree-first.** A worktree is total isolation — only same-worktree agents
+  collaborate — so the sidebar groups by worktree before anything else.
+- **Notify, don't answer.** The sidebar routes you to the pane that needs you; it
+  never reproduces the agent's question. You read and answer in the agent's own
+  UI. (A script's `feed ask`, which chose Rimz as its surface, is the exception.)
+- **Attention only.** It shows what needs a decision or an action — nothing
+  resolved or historical. History lives in `rimz feed list`.
 
-```text
-running   waiting   idle   success   failed
-```
+Agent statuses (exactly five), highest attention first. Each maps to one glyph
+and color — the canonical vocabulary every renderer paints. The glyph carries the
+status by **shape** (so it survives `NO_COLOR`); color reinforces it.
 
-Agent modes (observed from the agent, not set by Rimz):
+| rank | status    | glyph | color       |
+|------|-----------|-------|-------------|
+| 1    | `waiting` | `◆`   | yellow bold |
+| 2    | `failed`  | `✗`   | red bold    |
+| 3    | `running` | `▸`   | green       |
+| 4    | `idle`    | `○`   | gray / dim  |
+| 5    | `success` | `✓`   | green dim   |
+
+Agent modes (observed from the agent, not set by Rimz) render as a dim pill;
+`interactive` and `unknown` are omitted, `bypass` is warn-colored:
 
 ```text
 interactive   plan   auto   bypass   unknown
 ```
 
-Renderer details and action rules live in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
+Renderer details — the two-line row anatomy, attention ranking, and the jump
+interaction — live in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
 
 ## Non-goals
 

@@ -134,7 +134,7 @@ Crate-local rules:
 Shared native terminal sidebar renderer, packaged for both backends.
 
 - `app.rs` — snapshot model, tick loop, wakeup handling, `FetchStatus`/`RenderState` recovery logic for snapshot or heartbeat failure.
-- `render/` — four display groups and the agent rollup.
+- `render/` — projects the snapshot view-model into worktree-grouped, attention-ranked agent rows.
 
 Crate-local rules:
 

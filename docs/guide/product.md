@@ -7,33 +7,33 @@ Rimz gives every project one room — a Zellij or tmux session with a sidebar �
 ## The sidebar
 
 ```
-┌─ billing-service ─────────────────────────────────────────┐
-│                                                           │
-│  Worktree: main                                           │
-│  Needs your attention                                     │
-│  ▶ claude    waiting · permission: psql DROP TABLE        │
-│                                                           │
-│  Worktree: feature-migration                              │
-│  Resolver is working                                      │
-│    ▸ opus-policy active · 18s left → slack-on-call (5m)   │
-│                                                           │
-│  Workspace                                                │
-│  Needs your attention                                     │
-│    deploy.sh · staging → prod ?                           │
-│                                                           │
-│  Recently answered                                        │
-│    codex     feature-migration · success            (hook)│
-│    build     ✓ tests pass                           (cli) │
-│                                                           │
-│  Recent activity                                          │
-│    SessionStart  claude   main              12s ago       │
-│    Stop          codex    feature-migration 48s ago       │
-└───────────────────────────────────────────────────────────┘
+┌ billing-service ───────────┐
+│ ◆2  ✗1                     │
+│                            │
+│ ▌main             2▸ 1◆    │
+│ ◆ claude  fix auth flow 12m│
+│   Opus · xhigh · plan      │
+│ ▸ claude  add tests     8s │
+│   Sonnet · high            │
+│ ▸ codex   refactor api 30s │
+│   GPT-5.5 · high           │
+│                            │
+│ ▌feature-migration 1✗ 1○   │
+│ ✗ claude  db migrate    4m │
+│   Opus · xhigh · bypass    │
+│ ○ codex   —             1h │
+│   GPT-5.5 · low            │
+│                            │
+│ ▌workspace         1◆      │
+│ ◆ deploy  promote?      5m │
+│                            │
+│ ↵ focus                    │
+└────────────────────────────┘
 ```
 
 > Product invariant lives in [DESIGN.md](../../DESIGN.md).
 
-The sidebar tells you which pane needs you. Approve, deny, or answer in the agent's own UI — that safety net never breaks. Resolvers can slot ahead of you when you want help; the chain ends with you.
+The sidebar is a worktree-keyed attention map: each agent shows its status (a colored glyph), the task it's on, and how long since it last moved — grouped by the worktree it lives in. It **routes you to the pane that needs you** — select a row to jump there — and you read the actual prompt and answer in the agent's own UI. That safety net never breaks. Resolvers can slot ahead of you when you want help; the chain ends with you.
 
 ## Three audiences, one room
 

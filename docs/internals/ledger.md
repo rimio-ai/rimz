@@ -89,7 +89,7 @@ No fresh enrolled resolver heartbeat at hook fire time:
 5. Hook exits within milliseconds.
 6. Agent's own UI asks the human.
 
-No per-request socket is bound. The agent moves on through `PostToolUse` or `Stop`, and the item transitions to `resolved` in **Recently answered**.
+No per-request socket is bound. The agent moves on through `PostToolUse` or `Stop`, and the item transitions to `resolved`; the sidebar clears it and the record stays in `rimz feed list`.
 
 ## Bridge path
 
@@ -127,7 +127,7 @@ late = true
 reason = "hook_already_returned_neutral"
 ```
 
-It does not change agent behaviour, does not appear in **Recently answered**, and is never typed into a pane by Rimz core. The record exists for audit.
+It does not change agent behaviour, never surfaces as a sidebar attention item, and is never typed into a pane by Rimz core. The record exists for audit.
 
 ## What survives what
 

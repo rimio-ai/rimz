@@ -5,23 +5,28 @@ Run one coding agent and you flip tabs. Run four and you lose them.
 Rimz pins every repo to one durable room — a Zellij or tmux session with a sidebar that tells you which pane needs you, and a ledger that survives detach, sidebar reload, and reattach from anywhere. Humans, scripts, CI, and coding agents share the same feed through one CLI.
 
 ```
-  ┌─ billing-service ───────────────────────────────────┐
-  │                                                     │
-  │  Needs your attention                               │
-  │  ▶ claude  · main          · waiting · permission   │
-  │    deploy  · deploy.sh     · staging → prod?        │
-  │                                                     │
-  │  Resolver is working                                │
-  │    ▸ opus-policy active · 18s left → slack-on-call  │
-  │                                                     │
-  │  Recently answered                                  │
-  │    codex   · feature-migration · success     (hook) │
-  │    build   · ✓ tests pass                    (cli)  │
-  │                                                     │
-  │  Recent activity                                    │
-  │    SessionStart   claude#1     12s ago              │
-  │    Stop           codex        48s ago              │
-  └─────────────────────────────────────────────────────┘
+  ┌ billing-service ───────────┐
+│ ◆2  ✗1                     │
+│                            │
+│ ▌main             2▸ 1◆    │
+│ ◆ claude  fix auth flow 12m│
+│   Opus · xhigh · plan      │
+│ ▸ claude  add tests     8s │
+│   Sonnet · high            │
+│ ▸ codex   refactor api 30s │
+│   GPT-5.5 · high           │
+│                            │
+│ ▌feature-migration 1✗ 1○   │
+│ ✗ claude  db migrate    4m │
+│   Opus · xhigh · bypass    │
+│ ○ codex   —             1h │
+│   GPT-5.5 · low            │
+│                            │
+│ ▌workspace         1◆      │
+│ ◆ deploy  promote?      5m │
+│                            │
+│ ↵ focus                    │
+└────────────────────────────┘
 ```
 
 > Product invariant lives in [DESIGN.md](./DESIGN.md). The short version: the agent's own UI stays the answer surface unless you explicitly enrol a resolver. Nothing in Rimz silently approves a tool call.

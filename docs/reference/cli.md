@@ -33,7 +33,7 @@ rimz feed list [--json]
 rimz feed show <request-id> [--json]
 ```
 
-`event emit` is fire-and-forget telemetry that lands in **Recent activity**. `feed push` posts a richer item to **Needs your attention** without blocking. `feed ask` blocks the script until somebody answers or the timeout fires; the question lands in the sidebar with declared options as answer buttons.
+`event emit` is fire-and-forget telemetry that lands in the ledger (read it back with `rimz feed list`). `feed push` posts a richer item that surfaces in the sidebar without blocking. `feed ask` blocks the script until somebody answers or the timeout fires; the question lands in the sidebar with declared options as answer buttons.
 
 Common flow — a deploy gate:
 

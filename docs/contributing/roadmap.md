@@ -16,7 +16,7 @@ M0 closes only when all three pass the same synthetic-hook matrix in [testing.md
 
 ## M1 — Useful without agents
 
-Workspace start/attach/list, setup and doctor, trust gate, `event emit`, `feed push/ask/wait`, `pane split/focus/list`, sidebar renderer groups, resolver allowlist commands, first-run setup status.
+Workspace start/attach/list, setup and doctor, trust gate, `event emit`, `feed push/ask/wait`, `pane split/focus/list`, the sidebar renderer (worktree-keyed attention map), resolver allowlist commands, first-run setup status.
 
 At M1, scripts and remote workflows work without any agent integrations.
 
@@ -43,6 +43,15 @@ Detach/reattach polish, sidebar reload recovery, protocol-version doctor checks,
 ## M5 — Attention polish
 
 OS notifications, sounds, user/project notification policy.
+
+## Follow-up — Sidebar attention redesign
+
+The approved design in [sidebar.md](../internals/sidebar.md) reflows the renderer for the narrow (30%) column and reframes it as a worktree-keyed attention map. The M1 renderer diverges from it; tracked work to converge:
+
+- Reflow `rimz-sidebar` to the spec — two-line agent cells, per-row activity age, attention-ranked sort, per-worktree cap, no "updated" footer — with narrow-width (24/28-col) snapshot fixtures replacing the 80/96-col ones.
+- Make rows jump targets: rail click/keys plus a native-pane key handler, both calling `focus_pane`.
+- Extend the snapshot — `AgentState.task`, `.model`, `.effort`, a last-activity timestamp, and (future) `.token_budget` — fed by the agent hooks.
+- Drop the `recently_answered` / `recent_activity` projection from the sidebar; history stays in `rimz feed list`.
 
 ## M6 — Sub-agent observability
 
