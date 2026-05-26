@@ -165,14 +165,14 @@ Resolvers treat pane text as untrusted data. Match bounded prompt shapes; abstai
 
 ### Tests
 
-Integration tests live under each crate's `tests/` directory; per-crate cargo `tests/common/` modules carry shared harness code.
+Integration tests live under each crate's `tests/` directory; `crates/rimz` collects its suites into a single `tests/integration/` binary whose `common/` module carries the shared harness.
 
-- `crates/rimz/tests/ledger_bridge.rs` — synthetic hook tests over the per-request bridge socket and sidebar wakeup walk.
-- `crates/rimz/tests/ledger_round_trip.rs` — push/resolve/dismiss/timeout round trips, CAS, snapshot rebuild.
-- `crates/rimz/tests/wakeup_pipe.rs` — Zellij pipe wakeup fast path.
-- `crates/rimz/tests/zellij_backend.rs` and `tmux_backend.rs` — backend parity, env injection, managed pane (self-skip when the mux binary is absent).
-- `crates/rimz/tests/chain_advance.rs` — chain advancement on budget-elapse, heartbeat-stale, and chain-exhausted.
-- `crates/rimz/tests/doctor_mode_pill.rs` — agent rollup rendering from `agent.lifecycle` events.
-- `crates/rimz/tests/examples_hook_bridge_resolver.rs` and `examples_pane_send_resolver.rs` — end-to-end coverage for the reference Python resolvers (self-skip when `python3` is absent).
+- `crates/rimz/tests/integration/ledger/bridge.rs` — synthetic hook tests over the per-request bridge socket and sidebar wakeup walk.
+- `crates/rimz/tests/integration/ledger/round_trip.rs` — push/resolve/dismiss/timeout round trips, CAS, snapshot rebuild.
+- `crates/rimz/tests/integration/wakeup_pipe.rs` — Zellij pipe wakeup fast path.
+- `crates/rimz/tests/integration/backend/{zellij,tmux}.rs` — backend parity, env injection, managed pane (self-skip when the mux binary is absent).
+- `crates/rimz/tests/integration/chain_advance.rs` — chain advancement on budget-elapse, heartbeat-stale, and chain-exhausted.
+- `crates/rimz/tests/integration/doctor.rs` — agent rollup rendering from `agent.lifecycle` events.
+- `crates/rimz/tests/integration/examples/{hook_bridge,pane_send}.rs` — end-to-end coverage for the reference Python resolvers (self-skip when `python3` is absent).
 - `crates/rimz/tests/fixtures/` — `zellij-trace` shim and stable payload fixtures.
 - `xtask/src/main.rs::invariants` — grep-style architectural rules (no `Stdio::inherit` in hook paths, no sidebar imports of ledger-write modules, no `chrono` / `bytes` / `tokio_util`).
