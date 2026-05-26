@@ -72,7 +72,7 @@ The project layer sets the shared defaults every contributor sees. The per-machi
 
 ## Layout IR
 
-`[layout]` is multiplexer-neutral. Backend adapters compile it to Zellij or tmux command sequences at session start. v0 supports the intersection: session, views (Zellij tabs / tmux windows), panes, split direction, pane size, cwd, command, env, pane/view naming. The built-in sidebar is not a WASM/plugin install; it is a native pane launched by `rimz start` / `rimz attach` when no fresh sidebar heartbeat exists.
+`[layout]` is multiplexer-neutral. Backend adapters compile it to Zellij or tmux command sequences at session start. v0 supports the intersection: session, views (Zellij tabs / tmux windows), panes, split direction, pane size, cwd, command, env, pane/view naming. By default the sidebar is a native pane — no plugin install — launched at session start on both backends. Zellij users can opt in to a docked plugin rail instead (`[layout.zellij]` below); the native pane stays the fallback.
 
 ```toml
 [layout]
@@ -87,6 +87,7 @@ cwd = "$RIMZ_PROJECT_ROOT"
 
 # Backend-only extras, ignored when the other backend is selected.
 [layout.zellij]
+sidebar_plugin = false   # opt in to the docked plugin rail instead of a native pane
 # Floating/pinned panes, KDL fragments, plugin panes other than the sidebar.
 
 [layout.tmux]

@@ -25,12 +25,13 @@ Each commitment is a decision a reader might challenge. The reason is on the sam
 - **One repo, one room.** A project repo maps to one workspace, one multiplexer session, one ledger, one sidebar. Worktrees of the repo group inside it. A repo with five branches and ten agents stays scannable as one room with internal subdivisions.
 - **The feed is the shared surface.** Agents, scripts, CI shims, and humans publish or resolve through `rimz event ...` and `rimz feed ...`. One concept to learn, three audiences to serve.
 - **The ledger owns durability.** Detach, sidebar reload, sidebar crash, or no-client mode never lose feed state. The sidebar is a renderer over the ledger; correctness lives one layer down.
+- **One feed, many renderers.** The `rimz sidebar snapshot` JSON is the shared view-model; every sidebar is a projection of it. The default renderer is the native binary in a pane, identical on Zellij and tmux and across detach/reattach. Zellij users may opt in to a docked plugin rail for nicer placement. Renderers are interchangeable presentation; none owns state and none gates correctness.
 - **Interactive attach is opportunistic.** `rimz` enters the selected mux only when stdin/stdout are TTYs and the caller is not already inside that mux. Non-interactive callers get a printed attach command; explicit flags override the default.
 - **Observe and route by default.** Without an enrolled resolver, Rimz never answers an agent prompt. It tells the human which pane needs attention and gets out of the way.
 - **Resolvers are explicit and per-machine.** A resolver engages the bridge only if it is on the local allowlist *and* it is heartbeating freshly. Same-UID file access is not the trust boundary.
 - **No transcript correctness.** Pane contents and transcripts may enrich display only. They never decide permissions, state transitions, or correctness. Core code never scrapes a pane.
 - **No core auto-type.** `pane capture` and `pane send` are public primitives for humans and resolvers. Rimz core does not type into panes on anyone's behalf.
-- **Both multiplexers are first-class.** Zellij and tmux run the same ledger, bridge, CLI, and sidebar model. Core behaviour cannot depend on a Zellij-only pipe or a tmux-only feature.
+- **Both multiplexers are first-class.** Zellij and tmux run the same ledger, bridge, CLI, and sidebar model. Core behaviour cannot depend on a Zellij-only pipe or a tmux-only feature. The optional Zellij plugin rail is an enhancement only; tmux reaches the same surface through the native pane.
 - **Headless works.** Hooks, the bridge, and `rimz feed ask` work with no sidebar and no attached client. The sidebar is a UI; the workspace runs without one.
 
 ## Sidebar shape

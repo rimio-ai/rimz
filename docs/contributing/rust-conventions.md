@@ -226,7 +226,7 @@ Every gate runs in CI with warnings treated as errors. Local equivalent is `carg
 
 ### Contributor command surface
 
-`cargo xtask <task>` is the entry point. Tasks: `fmt`, `lint`, `test`, `deps`, `deny`, `vet`, `coverage`, `ci`. Shell scripts are not added; new automation lands in `xtask/`.
+`cargo xtask <task>` is the entry point. Tasks: `build`, `install`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `invariants`, `ci`. Shell scripts are not added; new automation lands in `xtask/`.
 
 ## Reading order for new contributors
 

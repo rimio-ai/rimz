@@ -5,7 +5,7 @@ Run one coding agent and you flip tabs. Run four and you lose them.
 Rimz pins every repo to one durable room — a Zellij or tmux session with a sidebar that tells you which pane needs you, and a ledger that survives detach, sidebar reload, and reattach from anywhere. Humans, scripts, CI, and coding agents share the same feed through one CLI.
 
 ```
-  ┌ billing-service ───────────┐
+┌ billing-service ───────────┐
 │ ◆2  ✗1                     │
 │                            │
 │ ▌main             2▸ 1◆    │
@@ -39,10 +39,10 @@ rimz                                                # open or reattach the room
 
 rimz event emit --kind build.started --title "web"  # any script can post
 rimz feed ask --title "Promote staging → prod?" \
-              --options yes,no --timeout 1h         # block on a human or resolver
+              --options yes,no --timeout-seconds 3600
 
 ssh dev-box rimz attach billing-service             # reattach from anywhere
-rimz pane split --view new && claude                # start an agent in a new view
+rimz pane split && claude                           # start an agent in a new pane
 ```
 
 That's the whole loop. Everything else is variations on those five commands.
@@ -58,6 +58,29 @@ That's the whole loop. Everything else is variations on those five commands.
 One repo maps to one Rimz workspace and one multiplexer session. Git worktrees of that repo group inside it. Every event — agent hooks, script announcements, build results, blocking questions — writes through one CLI to a durable file-backed ledger. The sidebar is a renderer over that ledger; the ledger doesn't care whether anyone is watching.
 
 Design commitments and the three operating paths (`native_ui`, `bridge`, `script`) live in [DESIGN.md](./DESIGN.md). The wire-level state machine, surfaces, and CAS rules live in [docs/internals/ledger.md](./docs/internals/ledger.md).
+
+## Development
+
+The Rust toolchain is pinned by [rust-toolchain.toml](./rust-toolchain.toml). Zellij or tmux is needed to try the room and pane flows.
+
+```sh
+make build      # cargo xtask build
+make install    # install rimz and rimz-sidebar
+make test       # cargo xtask test
+make ci         # full quality gate
+```
+
+`make` is a thin wrapper around `cargo xtask <task>`; `xtask` is the source of truth for automation. `make install` writes binaries to `${CARGO_HOME:-$HOME/.cargo}/bin`, so that directory must be on `PATH`.
+
+After installing, smoke-test the CLI:
+
+```sh
+rimz ping
+rimz doctor
+rimz start --print .
+```
+
+Contributor rules, gate details, and task names live in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
 
 ## Status
 

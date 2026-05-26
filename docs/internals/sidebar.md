@@ -4,6 +4,24 @@
 
 The sidebar is the product surface. It's a UI client over the workspace ledger; it owns no durable state. Read the ledger through `rimz sidebar snapshot`, write liveness through `rimz sidebar heartbeat`, and never import a ledger-writer module.
 
+## Renderers
+
+The `rimz sidebar snapshot` JSON is the shared view-model. It carries the worktree-grouped agent roster, the attention items, per-agent statuses and capability, the ranking keys, and timestamps — every grouping and ordering decision is made once, here. A renderer is a projection: it maps the view-model's semantics to glyphs and paints them. It never re-derives which worktree an agent belongs to or how the rows rank.
+
+Three renderers project the same snapshot:
+
+- **Native pane (default).** The `rimz-sidebar` binary in an ordinary pane. Identical on Zellij and tmux, across detach/reattach. This is the default and the cross-backend fallback.
+- **Zellij plugin rail (optional upgrade).** A docked, persistent left rail for Zellij users who opt in — better placement, same view-model. Described below.
+- **CLI listings.** `rimz feed list` and friends, the same data as text.
+
+Because the view-model owns every decision, the per-renderer code is just painting — small enough to keep separate per surface. Visual parity across renderers is therefore a maintained discipline, not shared render code. The one rendering convention renderers share is the semantic→glyph mapping below; keep it aligned so the rail, the pane, and the CLI read the same.
+
+Semantic→glyph conventions:
+
+- agent status (`waiting`/`failed`/`running`/`idle`/`success`) and the mode pill (`interactive`/`plan`/`auto`/`bypass`/`unknown`) map to the canonical glyph + color table in [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape). The glyph carries the status by shape so it survives `NO_COLOR`; color reinforces it.
+- a resolver mid-flight renders in place of `◆ waiting` as `⟳ <resolver> <budget>` on the same row; full chain detail stays in `rimz feed list`.
+- a per-row, right-aligned age (`12m`) shows time since the agent's last activity on its task; there is no global "updated" timestamp.
+
 ## Launch model
 
 `rimz`, `rimz start`, and cwd-based `rimz attach` ensure the workspace session exists, then launch one sidebar pane best-effort before entering or printing the attach command. `rimz attach <session>` does the same only when a matching `workspace.json` record gives Rimz the workspace ID and cwd; otherwise it warns and leaves the exact session-name attach path alone.
@@ -18,6 +36,25 @@ Launch is idempotent by heartbeat. Before opening a pane, Rimz scans `runtime/he
 ### Self-close
 
 A sidebar shares its tab with the user's working pane(s) and has no reason to outlive them. Each tick the renderer lists its session's panes via `rimz pane list` (read-only discovery — never `pane capture`/`send`), identifies its own pane from the mux env var (`ZELLIJ_PANE_ID` / `TMUX_PANE`), and counts the other panes in its view. Once it has seen at least one sibling, a later drop to zero means the last working pane exited: the renderer exits, its `close_on_exit` pane closes, and the lone sidebar is gone. The startup latch keeps it from exiting before the terminal pane first appears. This is backend-agnostic — tmux self-closes through the same normalized `rimz pane list`.
+
+### Zellij plugin rail (optional upgrade)
+
+Zellij users can opt in to a wasm plugin that presents the same view-model as a docked, persistent left rail (`[layout.zellij]` in [configuration.md](../reference/configuration.md)). The native pane stays the default and the fallback; the rail only changes presentation, never correctness. It lays the view-model out to its own pane geometry, so there is no pre-rendered frame to ship and no resize protocol.
+
+**Reference.** Model the rail on Zellij's bundled `strider` plugin. Strider is a docked side pane that ingests host data asynchronously, keeps `State` separate from per-section view structs, scrolls a bounded list, and handles key + mouse — the same shape carries the worktree-grouped roster and its jump-on-select rows. Mirror its split: state in one module, a render fn per worktree group, pure layout helpers (`calculate_list_bounds`) shared.
+
+**Data ingestion is async through the host.** A wasm plugin cannot block on a subprocess, so it never runs `rimz` inline. It calls `run_command(&["rimz", "sidebar", "snapshot", "--json", "--workspace-id", <id>], ctx)` and receives the bytes back as `Event::RunCommandResult(exit, stdout, stderr, ctx)` — the host bridge strider uses for the filesystem and `about` uses for `xdg-open`. The `ctx` map tags each request so the handler matches its response. Parse stdout into the snapshot view-model; on non-zero exit, keep the last good snapshot and raise the same degraded banner as the native loop. This is still read-only on the ledger: the rail reaches state only through `rimz sidebar snapshot`, never a ledger-writer import.
+
+**Wakeups arrive as pipes; a timer backstops them.** `zellij pipe --name rimz::feed` lands in `fn pipe()`, which kicks a fresh snapshot `run_command`. A `set_timeout` keepalive tick re-fetches on the slow poll so a missed pipe never strands the rail. Subscribe to `RunCommandResult`, `Key`, `Mouse`, `Timer`, and `PermissionRequestResult` — `run_command` needs the one-time `RunCommands` grant.
+
+**Actions cross the CLI boundary, never an import.** Read-only-on-the-ledger constrains the import graph, not the process tree, so the rail acts by shelling out like every renderer:
+
+- jump (select any row) → `focus_pane_with_id(PaneId::Terminal(raw), …)` after stripping the `zellij:` prefix and reconciling `pane_process_start` (refuse a stale match).
+- answer a `script` item → `run_command(&["rimz", "feed", "resolve", <req>, "--decision", <json>, "--method", "sidebar"])`.
+
+**Rendering.** `print_text_with_coordinates` with `Text::color_range`/`.selected()` for the two-line agent rows; `print_nested_list_with_coordinates` for the worktree groups. The semantic→glyph mapping above stays the shared discipline — the rail paints the view-model, it never re-derives the grouping or ranking.
+
+**Lifecycle.** Workspace ID and the `rimz` binary path arrive in the `load()` `configuration` map, mirroring strider's `caller_cwd`. The rail writes no heartbeat: Zellij owns its liveness and an idempotent `launch-or-focus-plugin` dedupes by URL + config, so the heartbeat-scan idempotency above stays the native pane's concern. "Non-killable" is that docked pane plus `launch-or-focus-plugin` — it resists accidental loss and the next `rimz` / attach re-summons it. Left re-placement is the rail's reason to exist: `launch-or-focus-plugin` docks it left into a live session, which a CLI-launched pane cannot reach after birth.
 
 ## What it looks like
 
@@ -80,7 +117,7 @@ The heartbeat binds `sock/sidebar.<instance_id>.sock` and writes:
 - wakeup socket path,
 - last-seen timestamp.
 
-On wakeup, the sidebar refetches the snapshot. Missed wakeups are closed by polling (~2s tick).
+On wakeup, the sidebar refetches the snapshot. Missed wakeups are closed by polling (~2s tick). A terminal resize is also a wakeup: a watcher thread turns Zellij's resize (`SIGWINCH`) into a socket nudge so the loop repaints at the new size at once — without it the first usable frame on attach waits for the next tick, reading as a blank pane. The blocking wait treats a signal-interrupted receive as that same "redraw now", never an error.
 Ledger wakeups skip sidebar heartbeats whose `protocol_version` does not match the current sidebar protocol; `rimz doctor` reports the mismatch so reload issues are visible after upgrades.
 
 ## Reload recovery

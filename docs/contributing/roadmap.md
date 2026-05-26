@@ -60,3 +60,7 @@ Codex thread events, parent/child rendering, gated auto-open only when precondit
 ## M7 — Additional agents
 
 OpenCode, Pi, and other agents when their extension APIs and decision contracts are stable enough to test.
+
+## Optional — Zellij docked plugin rail
+
+A UX upgrade, not a milestone gate. A `wasm32-wasip1` plugin (`crates/rimz-sidebar-zellij`) that projects the snapshot view-model as a docked, persistent left rail for Zellij users who opt in (`[layout.zellij] sidebar_plugin`). In-sandbox snapshot-JSON ingress off the `zellij pipe --name rimz::feed` wakeup, idempotent `launch-or-focus-plugin`. The native pane stays the default and the fallback; the rail never gates correctness.

@@ -15,7 +15,7 @@ Product invariant and operating paths live in [DESIGN.md](./DESIGN.md); they are
 ```text
 terminal emulator
   mux session (Zellij or tmux)
-    native sidebar pane
+    sidebar renderer (native pane — default; optional Zellij plugin rail)
     shells, scripts, agents, CI helpers
                 │
                 │  per-instance sidebar socket  (wakeup of record)
@@ -70,13 +70,14 @@ Documentation-first today. Module paths are pinned so code can land without re-i
 |-- Cargo.toml
 |-- crates/
 |   |-- rimz/              CLI binary plus runtime/domain library
-|   `-- rimz-sidebar/      shared terminal sidebar renderer
+|   |-- rimz-sidebar/      native terminal sidebar renderer (default, both backends)
+|   `-- rimz-sidebar-zellij/  optional Zellij plugin rail (cdylib, wasm32-wasip1)
 |-- examples/resolvers/    reference resolver artifacts (Python, stdlib-only)
 |-- tests/                 integration tests live under each crate's `tests/`
 `-- xtask/                 contributor task runner; entry point for every quality gate
 ```
 
-Add a crate only when ownership, target type, or dependency profile justifies it. The two-crate shape is intentional: the CLI is one runtime artifact, the sidebar renderer is another.
+Add a crate only when ownership, target type, or dependency profile justifies it. The CLI is one runtime artifact and the native sidebar renderer is another; the optional Zellij plugin rail is a third because its target type differs (`wasm32-wasip1` `cdylib`). All renderers project the same `rimz sidebar snapshot` JSON view-model — there is no shared render crate.
 
 ## Implementation ownership
 
@@ -131,7 +132,7 @@ Crate-local rules:
 
 ### `crates/rimz-sidebar`
 
-Shared native terminal sidebar renderer, packaged for both backends.
+Native terminal sidebar renderer — the default on both backends.
 
 - `app.rs` — snapshot model, tick loop, wakeup handling, `FetchStatus`/`RenderState` recovery logic for snapshot or heartbeat failure.
 - `render/` — projects the snapshot view-model into worktree-grouped, attention-ranked agent rows.
@@ -141,6 +142,15 @@ Crate-local rules:
 - Read state through `rimz sidebar snapshot`. Never import ledger writer modules from `crates/rimz`.
 - Write liveness through `rimz sidebar heartbeat`.
 - Default-mode (`native_ui`) items show focus/dismiss, never approve/deny.
+
+### `crates/rimz-sidebar-zellij`
+
+Optional Zellij plugin rail (`cdylib`, `wasm32-wasip1`): the same view-model as a docked, persistent left rail. Not on the correctness path — the native pane is the fallback.
+
+Crate-local rules:
+
+- Project the `rimz sidebar snapshot --json` view-model; do not re-derive grouping. There is no shared render code with `crates/rimz-sidebar` — visual parity is a maintained discipline, aligned through the semantic→glyph conventions in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
+- Read state inside the wasm sandbox through the snapshot JSON only — no sockets, no ledger-writer imports. The `zellij pipe --name rimz::feed` wakeup plus a keepalive tick trigger refetches.
 
 ### `examples/resolvers`
 
