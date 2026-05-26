@@ -99,9 +99,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 session_name,
                 wakeup_socket,
             );
-            let path = runtime
-                .heartbeat_dir
-                .join(format!("sidebar.{}.json", instance_id.as_str()));
+            let path = runtime.sidebar_heartbeat_path(&instance_id);
             atomic::write_temp_then_rename(&path, &heartbeat)
                 .with_context(|| format!("writing sidebar heartbeat {}", path.display()))?;
             #[expect(clippy::print_stdout, reason = "stable interface for sidebar process")]

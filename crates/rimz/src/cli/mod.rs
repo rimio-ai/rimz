@@ -198,7 +198,6 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     record_workspace(&workspace)?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
-    let session_preexisting = session_exists(backend.as_ref(), &workspace.session_name)?;
     backend.ensure_session(&SessionOptions {
         session_name: workspace.session_name.clone(),
         cwd: workspace.worktree_root.clone(),
@@ -208,7 +207,6 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         &workspace.workspace_id,
         &workspace.session_name,
         &workspace.worktree_root,
-        session_preexisting,
     );
     let spec = backend.attach_command(&workspace.session_name);
     tracing::info!(
@@ -233,7 +231,6 @@ fn attach_cwd(mode: AttachMode, globals: &GlobalFlags) -> Result<()> {
     record_workspace(&workspace)?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
-    let session_preexisting = session_exists(backend.as_ref(), &workspace.session_name)?;
     backend.ensure_session(&SessionOptions {
         session_name: workspace.session_name.clone(),
         cwd: workspace.worktree_root.clone(),
@@ -243,7 +240,6 @@ fn attach_cwd(mode: AttachMode, globals: &GlobalFlags) -> Result<()> {
         &workspace.workspace_id,
         &workspace.session_name,
         &workspace.worktree_root,
-        session_preexisting,
     );
     let spec = backend.attach_command(&workspace.session_name);
     run_attach_action(&spec, mode, mux)
@@ -260,7 +256,6 @@ fn attach_named(session: &str, mode: AttachMode, globals: &GlobalFlags) -> Resul
     let backend = rimz::mux::backend_for(mux);
     match record {
         Ok(Some(record)) => {
-            let session_preexisting = session_exists(backend.as_ref(), &record.session_name)?;
             backend.ensure_session(&SessionOptions {
                 session_name: record.session_name.clone(),
                 cwd: record.project_root.clone(),
@@ -270,7 +265,6 @@ fn attach_named(session: &str, mode: AttachMode, globals: &GlobalFlags) -> Resul
                 &record.workspace_id,
                 &record.session_name,
                 &record.project_root,
-                session_preexisting,
             );
         }
         Ok(None) => {
@@ -352,19 +346,11 @@ fn workspace_record_for_session(session: &str) -> Result<Option<WorkspaceRecord>
     Ok(None)
 }
 
-fn session_exists(backend: &dyn MuxBackend, session_name: &str) -> Result<bool> {
-    Ok(backend
-        .list_sessions()?
-        .iter()
-        .any(|session| session == session_name))
-}
-
 fn launch_sidebar_for_workspace(
     backend: &dyn MuxBackend,
     workspace_id: &rimz::WorkspaceId,
     session_name: &str,
     cwd: &Path,
-    session_preexisting: bool,
 ) -> rimz::sidebar::SidebarLaunchOutcome {
     let runtime = match RuntimePaths::for_workspace(workspace_id.clone()) {
         Ok(runtime) => runtime,
@@ -394,7 +380,6 @@ fn launch_sidebar_for_workspace(
         cwd: cwd.to_path_buf(),
         width_percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
         rimz_bin,
-        session_preexisting,
     };
     rimz::sidebar::launch_sidebar_if_needed(backend, &runtime, &opts)
 }

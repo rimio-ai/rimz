@@ -27,3 +27,7 @@ ratatui.workspace = true
 [dev-dependencies]
 insta.workspace = true
 vt100.workspace = true
+# A PTY plus a real subprocess is the only faithful way to exercise the serve
+# loop's resize handling: the redraw-on-attach path depends on SIGWINCH.
+portable-pty.workspace = true
+tempfile.workspace = true

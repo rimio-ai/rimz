@@ -27,6 +27,11 @@ use crate::ids::{MuxName, PaneId, ViewKind};
 /// as a best-effort wakeup optimization.
 pub const MIN_ZELLIJ_VERSION: (u32, u32, u32) = (0, 41, 0);
 
+/// Pane name the sidebar layout assigns, and the title Zellij reports back for
+/// it. The sole source of truth for both rendering the layout and detecting
+/// whether a live session still carries its sidebar.
+const SIDEBAR_PANE_NAME: &str = "rimz-sidebar";
+
 /// Bundle reported by `rimz doctor` when the active backend is Zellij.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ZellijCapabilities {
@@ -77,6 +82,30 @@ impl ZellijBackend {
             program: "zellij".to_owned(),
             reason: format!("parsing list-panes JSON: {e}"),
         })
+    }
+
+    /// Whether `name`'s session currently carries a running `rimz-sidebar`
+    /// pane. A held sidebar is still broken: Zellij is waiting for the user to
+    /// approve the command, so the renderer is not producing heartbeats and
+    /// future tabs inherit the bad launch behavior.
+    ///
+    /// Best-effort: a failed listing reads as "unhealthy" so the caller heals
+    /// rather than trusts a session it cannot inspect.
+    fn session_has_healthy_sidebar(name: &str) -> bool {
+        Self::list_panes_with_session(Some(name))
+            .map(|panes| {
+                let mut found = false;
+                for pane in panes.iter().filter(|pane| {
+                    !pane.is_plugin && pane.title.as_deref() == Some(SIDEBAR_PANE_NAME)
+                }) {
+                    found = true;
+                    if pane.is_held {
+                        return false;
+                    }
+                }
+                found
+            })
+            .unwrap_or(false)
     }
 }
 
@@ -195,18 +224,29 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn open_sidebar(&self, opts: &SidebarPaneOptions) -> Result<()> {
-        // The session is born from a layout exactly once. If it already
-        // exists it already carries its sidebar — Zellij applies a layout
-        // only at session birth, so we never re-inject. Touch the layout
-        // once, at creation; the user owns every resize and split afterward.
-        if self
-            .list_sessions()?
-            .iter()
-            .any(|session| session == &opts.session_name)
-        {
-            return Ok(());
+        // Zellij places a left pane only at session birth, so the sidebar is
+        // injected only by (re)creating the session from a layout:
+        //   - Absent: first birth.
+        //   - Exited: `attach` would resurrect a stale serialized layout (wrong
+        //             geometry, suspended command panes), so delete and rebirth.
+        //   - Live + sidebar: healthy — it owns every resize the user has made
+        //             since, so never re-inject.
+        //   - Live, no sidebar: the renderer self-closed or crashed (or a launch
+        //             was skipped and the session was born by a plain `attach
+        //             --create`). A sidebar-less rimz session is non-functional
+        //             and cannot gain a left pane in place, so rebirth it.
+        match session_state(&opts.session_name) {
+            SessionState::Absent => create_session_with_sidebar(opts),
+            SessionState::Exited => {
+                delete_session(&opts.session_name)?;
+                create_session_with_sidebar(opts)
+            }
+            SessionState::Live if Self::session_has_healthy_sidebar(&opts.session_name) => Ok(()),
+            SessionState::Live => {
+                delete_session(&opts.session_name)?;
+                create_session_with_sidebar(opts)
+            }
         }
-        create_session_with_sidebar(opts)
     }
 
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()> {
@@ -252,6 +292,70 @@ fn terminal_pane_count(panes: &[RawPane]) -> usize {
         .iter()
         .filter(|pane| !pane.is_plugin && !pane.is_suppressed)
         .count()
+}
+
+/// Liveness of a Zellij session, as reported by `zellij list-sessions`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionState {
+    /// No session by that name.
+    Absent,
+    /// Running and attachable.
+    Live,
+    /// Present but exited — `attach` would resurrect a stale serialized layout.
+    Exited,
+}
+
+/// Classify `name`'s liveness from `zellij list-sessions`. A present session
+/// always lists with exit code 0; the command only fails ("No active zellij
+/// sessions found.", exit 1) when there are none, so any failure here means the
+/// session is absent and a fresh birth should proceed.
+fn session_state(name: &str) -> SessionState {
+    let Ok(output) = CommandSpec::new("zellij")
+        .args(["list-sessions", "--no-formatting"])
+        .run()
+    else {
+        return SessionState::Absent;
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| session_state_from_line(line, name))
+        .unwrap_or(SessionState::Absent)
+}
+
+/// Parse one `list-sessions` line for `name`. Lines look like
+/// `name [Created 6m ago]` (live) or
+/// `name [Created 6m ago] (EXITED - attach to resurrect)`. `strip_ansi` guards
+/// against a colorized line even though `--no-formatting` should preclude one.
+fn session_state_from_line(line: &str, name: &str) -> Option<SessionState> {
+    let clean = strip_ansi(line);
+    if clean.split_whitespace().next()? != name {
+        return None;
+    }
+    Some(if clean.contains("EXITED") {
+        SessionState::Exited
+    } else {
+        SessionState::Live
+    })
+}
+
+/// Force-delete a session (exited or live) so the next create births a clean
+/// one from the layout rather than resurrecting a stale serialized layout or
+/// attaching to a sidebar-less leftover. `--force` also kills a live session.
+/// A session that vanished between the liveness check and here is already in
+/// the state we want, so "not found" is success.
+fn delete_session(name: &str) -> Result<()> {
+    match CommandSpec::new("zellij")
+        .args(["delete-session", name, "--force"])
+        .run()
+    {
+        Ok(_) => Ok(()),
+        Err(MuxErr::Command { stderr, .. })
+            if stderr.to_ascii_lowercase().contains("not found") =>
+        {
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Create the background session from a layout that puts the `rimz-sidebar`
@@ -327,8 +431,12 @@ struct RawPane {
     id: u64,
     is_plugin: bool,
     #[serde(default)]
+    is_held: bool,
+    #[serde(default)]
     is_suppressed: bool,
     tab_id: u64,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 struct TempLayoutFile {
@@ -362,22 +470,39 @@ fn render_sidebar_layout(opts: &SidebarPaneOptions) -> Result<String> {
     let workspace_id = kdl_string(opts.workspace_id.as_str())?;
     let session_name = kdl_string(&opts.session_name)?;
     let size = kdl_string(&format!("{}%", opts.width_percent.clamp(10, 90)))?;
-    // The sidebar lives in the `default_tab_template`, so every tab — the
-    // explicit first one and any the user opens later — is born with it. The
-    // explicit first `tab` focuses the terminal child; the working cwd comes
-    // from the session's `--default-cwd`, so panes need no `cwd` of their own.
+    let pane_name = kdl_string(SIDEBAR_PANE_NAME)?;
+    // The whole layout is the `default_tab_template`, so every tab — the first
+    // one born with the session and any the user opens later — is identical:
+    // the sidebar on the left and a focused terminal on the right. The working
+    // cwd comes from the session's `--default-cwd`, so panes need no `cwd`.
+    //
+    // The terminal is an explicit `pane focus=true`, not Zellij's `children`
+    // placeholder. A nested `children` template has version-sensitive behavior:
+    // on Zellij 0.44.3 it creates the right terminal but leaves focus stranded
+    // on the sidebar in newly-created tabs. Spelling out the terminal makes the
+    // product contract explicit and pins focus on the user's working pane.
+    //
+    // Supplying a `default_tab_template` replaces Zellij's built-in one, which
+    // is what carries the bottom bar — so the template re-adds the compact-bar
+    // plugin itself, or tabs are born with no tab/status bar at all. The body
+    // (sidebar + terminal) is a nested vertical split above that one-row bar.
+    // The `plugin` pane must stay multi-line: Zellij's KDL parser rejects the
+    // single-line `pane { plugin ... }` form.
     Ok(format!(
         r#"layout {{
-    default_tab_template split_direction="vertical" {{
-        pane size={size} name="rimz-sidebar" {{
-            command {rimz_bin}
-            args "sidebar" "serve" "--mux" "zellij" "--workspace-id" {workspace_id} "--session-name" {session_name}
-            close_on_exit true
+    default_tab_template {{
+        pane split_direction="vertical" {{
+            pane size={size} name={pane_name} {{
+                command {rimz_bin}
+                args "sidebar" "serve" "--mux" "zellij" "--workspace-id" {workspace_id} "--session-name" {session_name}
+                start_suspended false
+                close_on_exit true
+            }}
+            pane focus=true
         }}
-        children
-    }}
-    tab name="rimz" {{
-        pane focus=true
+        pane size=1 borderless=true {{
+            plugin location="zellij:compact-bar"
+        }}
     }}
 }}
 "#,
@@ -479,5 +604,104 @@ mod tests {
         let (raw, lines) = trim_capture("a\nb\nc\nd\n".to_owned(), Some(2));
         assert_eq!(lines, vec!["c", "d"]);
         assert_eq!(raw, "c\nd\n");
+    }
+
+    #[test]
+    fn session_state_classifies_list_sessions_lines() {
+        assert_eq!(
+            session_state_from_line("rimz-billing [Created 6m ago]", "rimz-billing"),
+            Some(SessionState::Live),
+        );
+        assert_eq!(
+            session_state_from_line(
+                "rimz-billing [Created 6m ago] (EXITED - attach to resurrect)",
+                "rimz-billing",
+            ),
+            Some(SessionState::Exited),
+        );
+        // A colorized line (no `--no-formatting`) still parses via `strip_ansi`.
+        assert_eq!(
+            session_state_from_line(
+                "\x1b[32;1mrimz-billing\x1b[m [Created ago] (\x1b[31;1mEXITED\x1b[m - resurrect)",
+                "rimz-billing",
+            ),
+            Some(SessionState::Exited),
+        );
+        // A different session's line is not a match.
+        assert_eq!(
+            session_state_from_line("other [Created 6m ago]", "rimz-billing"),
+            None,
+        );
+    }
+
+    #[test]
+    fn sidebar_layout_carries_a_bottom_bar() {
+        use crate::ids::WorkspaceId;
+        let opts = SidebarPaneOptions {
+            session_name: "rimz-bar".to_owned(),
+            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bar")),
+            cwd: PathBuf::from("/tmp/rimz-bar"),
+            width_percent: 30,
+            rimz_bin: PathBuf::from("/usr/bin/rimz"),
+        };
+        let layout = render_sidebar_layout(&opts).expect("render layout");
+        assert!(
+            layout.contains("compact-bar"),
+            "the sidebar layout overrides Zellij's default tab template, so it must \
+             re-add a bottom bar plugin or the tab/status bar vanishes:\n{layout}",
+        );
+    }
+
+    #[test]
+    fn sidebar_layout_focuses_an_explicit_terminal_in_every_tab() {
+        use crate::ids::WorkspaceId;
+        let opts = SidebarPaneOptions {
+            session_name: "rimz-focus".to_owned(),
+            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-focus")),
+            cwd: PathBuf::from("/tmp/rimz-focus"),
+            width_percent: 30,
+            rimz_bin: PathBuf::from("/usr/bin/rimz"),
+        };
+        let layout = render_sidebar_layout(&opts).expect("render layout");
+        // The template must spell out the focused terminal instead of relying
+        // on a nested `children` placeholder: every template-born tab needs a
+        // right pane with focus, never a bare or focused sidebar.
+        assert!(
+            layout.contains("pane focus=true"),
+            "the layout must focus an explicit terminal pane:\n{layout}",
+        );
+        assert!(
+            !layout.contains("children"),
+            "the layout must not depend on `children`: placeholder semantics \
+             can misplace focus or omit the right terminal in template-born tabs:\n{layout}",
+        );
+        // One self-contained template, no separate `tab` node, so the initial
+        // tab and every later one are born identically.
+        assert!(
+            !layout.contains("tab "),
+            "every tab comes from the template; no explicit `tab` node:\n{layout}",
+        );
+    }
+
+    #[test]
+    fn sidebar_layout_starts_the_sidebar_without_a_run_prompt() {
+        use crate::ids::WorkspaceId;
+        let opts = SidebarPaneOptions {
+            session_name: "rimz-run".to_owned(),
+            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
+            cwd: PathBuf::from("/tmp/rimz-run"),
+            width_percent: 30,
+            rimz_bin: PathBuf::from("/usr/bin/rimz"),
+        };
+        let layout = render_sidebar_layout(&opts).expect("render layout");
+        assert!(
+            layout.contains("start_suspended false"),
+            "Zellij command panes default to a run prompt unless the layout \
+             starts them explicitly:\n{layout}",
+        );
+        assert!(
+            !layout.contains("start_suspended true"),
+            "the sidebar pane must never be born suspended:\n{layout}",
+        );
     }
 }

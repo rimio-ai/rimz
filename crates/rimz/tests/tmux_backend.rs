@@ -275,7 +275,6 @@ fn open_sidebar_split_window_succeeds() {
             cwd: std::env::current_dir().expect("cwd"),
             width_percent: 30,
             rimz_bin: stub,
-            session_preexisting: true,
         })
         .expect("open_sidebar");
 

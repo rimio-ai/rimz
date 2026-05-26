@@ -9,7 +9,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::ids::WorkspaceId;
+use crate::ids::{SidebarInstanceId, WorkspaceId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PathErr {
@@ -110,6 +110,15 @@ impl RuntimePaths {
             sock_dir,
             heartbeat_dir,
         })
+    }
+
+    /// Path of a sidebar instance's heartbeat file. The freshness scan in
+    /// [`crate::sidebar::fresh_sidebar_present`] keys on the `sidebar.*.json`
+    /// shape this produces; the sidebar process removes this file on exit so a
+    /// later launch sees an honest "no sidebar here".
+    pub fn sidebar_heartbeat_path(&self, instance_id: &SidebarInstanceId) -> PathBuf {
+        self.heartbeat_dir
+            .join(format!("sidebar.{}.json", instance_id.as_str()))
     }
 
     pub fn ensure_dirs(&self) -> Result<()> {

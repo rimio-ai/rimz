@@ -9,6 +9,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::crossterm::event::{self, Event};
 use rimz::feed::PaneRef;
 use rimz::ids::PaneId;
 use rimz::ledger::paths::PathErr;
@@ -54,11 +55,25 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     runtime.ensure_dirs()?;
     let socket_path = sidebar_socket_path(&runtime, &config.instance_id);
     let socket = bind_socket(&socket_path)?;
-    let _cleanup = SocketGuard {
+    let _socket_cleanup = RuntimeFileGuard {
         path: socket_path.clone(),
+    };
+    // Drop the heartbeat on exit too — including the self-close below. A
+    // lingering heartbeat stays mtime-fresh for `SIDEBAR_HEARTBEAT_TTL`, during
+    // which `rimz`'s freshness gate would skip relaunch and let a plain
+    // `attach` rebirth the session with no sidebar.
+    let _heartbeat_cleanup = RuntimeFileGuard {
+        path: runtime.sidebar_heartbeat_path(&config.instance_id),
     };
     let tick = tick_for(config.tick_seconds);
     socket.set_read_timeout(Some(tick))?;
+
+    // Redraw the instant the pane is resized — most importantly when a user
+    // attaches to a background session and Zellij sizes the pane for the first
+    // time. The watcher nudges this loop through the same wakeup socket the
+    // ledger uses, so a resize is just another wakeup; without it the first
+    // usable frame waits for the next `tick`, reading as a blank sidebar.
+    spawn_resize_waker(socket_path.clone());
 
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -66,7 +81,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
 
     let mut last_snapshot: Option<SidebarSnapshot> = None;
     let mut status = FetchStatus::Ok;
-    let mut seen_sibling = false;
+    let mut self_close = SelfCloseState::default();
 
     loop {
         let heartbeat_outcome = write_heartbeat(&config, &socket_path);
@@ -89,7 +104,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         status = state.status;
         render::draw_to_terminal(&mut terminal, &state.snapshot, &status)?;
 
-        if self_close_decision(&mut seen_sibling, own_view_sibling_count(&config)) {
+        if self_close_decision(&mut self_close, own_view_sibling_count(&config)) {
             debug!(
                 session = %config.session_name,
                 "sidebar tab emptied; exiting so the pane closes itself",
@@ -103,22 +118,44 @@ pub fn serve(config: ServeConfig) -> Result<()> {
 
 /// Decide whether the sidebar should exit so its own pane closes. The sidebar
 /// shares a tab/view with the user's working pane(s); when the last of them
-/// exits, the sidebar is alone and has no reason to stay. The `seen_sibling`
-/// latch prevents exiting during startup, before the terminal pane appears.
+/// exits, the sidebar is alone and has no reason to stay.
+///
+/// Startup gets one empty observation before close: during session birth the
+/// sidebar can run before Zellij materializes the terminal sibling, but a tab
+/// born permanently sidebar-only must still clean itself up.
 ///
 /// `sibling_count` is `None` when the count could not be determined (no mux
 /// pane env var, a failed `pane list`, or our own pane missing from the list);
 /// in that case we never close.
-fn self_close_decision(seen_sibling: &mut bool, sibling_count: Option<usize>) -> bool {
-    match sibling_count {
-        Some(0) => *seen_sibling,
-        Some(_) => {
-            *seen_sibling = true;
-            false
+fn self_close_decision(state: &mut SelfCloseState, sibling_count: Option<usize>) -> bool {
+    state.should_close(sibling_count)
+}
+
+#[derive(Debug, Default)]
+struct SelfCloseState {
+    seen_sibling: bool,
+    empty_startup_observations: u8,
+}
+
+impl SelfCloseState {
+    fn should_close(&mut self, sibling_count: Option<usize>) -> bool {
+        match sibling_count {
+            Some(0) if self.seen_sibling => true,
+            Some(0) => {
+                self.empty_startup_observations = self.empty_startup_observations.saturating_add(1);
+                self.empty_startup_observations >= EMPTY_STARTUP_OBSERVATIONS_BEFORE_CLOSE
+            }
+            Some(_) => {
+                self.seen_sibling = true;
+                self.empty_startup_observations = 0;
+                false
+            }
+            None => false,
         }
-        None => false,
     }
 }
+
+const EMPTY_STARTUP_OBSERVATIONS_BEFORE_CLOSE: u8 = 2;
 
 /// Count the panes that share this sidebar's view (tab/window) but are not the
 /// sidebar itself. Best-effort and backend-agnostic: it shells out to the
@@ -289,14 +326,59 @@ fn bind_socket(path: &Path) -> io::Result<UnixDatagram> {
     UnixDatagram::bind(path)
 }
 
+/// How long the resize watcher blocks per poll. A resize event wakes it
+/// immediately regardless; this only bounds how often it loops while idle.
+const RESIZE_POLL_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Watch the terminal for resize events and wake the serve loop so it repaints
+/// at the new size. Runs on its own thread for the life of the process; it
+/// self-wakes by sending to `wake_path` (the loop's bound wakeup socket), which
+/// keeps the loop's single recv-driven redraw path. Key and mouse events are
+/// ignored — the sidebar takes no input. Stops quietly if the event source or
+/// the socket goes away (e.g. the loop has exited).
+fn spawn_resize_waker(wake_path: PathBuf) {
+    std::thread::spawn(move || {
+        let waker = match UnixDatagram::unbound() {
+            Ok(socket) => socket,
+            Err(err) => {
+                warn!(error = %err, "resize waker disabled; resizes wait for the tick");
+                return;
+            }
+        };
+        loop {
+            match event::poll(RESIZE_POLL_INTERVAL) {
+                Ok(true) => match event::read() {
+                    Ok(Event::Resize(_, _)) => {
+                        if waker.send_to(b"resize", &wake_path).is_err() {
+                            return;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        warn!(error = %err, "resize waker stopping: event read failed");
+                        return;
+                    }
+                },
+                Ok(false) => {}
+                Err(err) => {
+                    warn!(error = %err, "resize waker stopping: event poll failed");
+                    return;
+                }
+            }
+        }
+    });
+}
+
 fn wait_for_wakeup(socket: &UnixDatagram) -> io::Result<()> {
     let mut buf = [0_u8; 4096];
     match socket.recv(&mut buf) {
         Ok(_) => Ok(()),
+        // Timeout (the tick), or a signal (the resize watcher's SIGWINCH handler
+        // interrupts this blocking recv): all are just "redraw now", never fatal.
         Err(err)
             if matches!(
                 err.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
             ) =>
         {
             Ok(())
@@ -305,17 +387,20 @@ fn wait_for_wakeup(socket: &UnixDatagram) -> io::Result<()> {
     }
 }
 
-struct SocketGuard {
+/// Removes a per-instance runtime file (wakeup socket, heartbeat) when the
+/// sidebar exits, so a later `rimz` launch sees an honest "no sidebar here" and
+/// rebirths one rather than trusting a stale artifact.
+struct RuntimeFileGuard {
     path: PathBuf,
 }
 
-impl Drop for SocketGuard {
+impl Drop for RuntimeFileGuard {
     fn drop(&mut self) {
         match std::fs::remove_file(&self.path) {
             Ok(()) => {}
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => {
-                warn!(path = %self.path.display(), error = %err, "sidebar socket cleanup failed")
+                warn!(path = %self.path.display(), error = %err, "sidebar runtime file cleanup failed")
             }
         }
     }
@@ -448,31 +533,48 @@ mod tests {
 
     #[test]
     fn self_close_waits_for_a_sibling_before_ever_closing() {
-        let mut seen = false;
-        // Startup: no sibling yet (terminal pane not materialized). Never close.
-        assert!(!self_close_decision(&mut seen, Some(0)));
-        assert!(!seen);
+        let mut state = SelfCloseState::default();
+        // Startup: no sibling yet (terminal pane not materialized). Give Zellij
+        // one observation to finish materializing the sibling.
+        assert!(!self_close_decision(&mut state, Some(0)));
+        assert!(!state.seen_sibling);
+    }
+
+    #[test]
+    fn self_close_fires_when_a_sibling_never_appears() {
+        let mut state = SelfCloseState::default();
+        assert!(!self_close_decision(&mut state, Some(0)));
+        assert!(self_close_decision(&mut state, Some(0)));
     }
 
     #[test]
     fn self_close_latches_then_fires_when_alone() {
-        let mut seen = false;
-        assert!(!self_close_decision(&mut seen, Some(1)));
-        assert!(seen, "seeing a sibling must latch");
+        let mut state = SelfCloseState::default();
+        assert!(!self_close_decision(&mut state, Some(1)));
+        assert!(state.seen_sibling, "seeing a sibling must latch");
         // Sibling went away: now alone, so close.
-        assert!(self_close_decision(&mut seen, Some(0)));
+        assert!(self_close_decision(&mut state, Some(0)));
     }
 
     #[test]
     fn self_close_holds_while_siblings_remain() {
-        let mut seen = true;
-        assert!(!self_close_decision(&mut seen, Some(2)));
+        let mut state = SelfCloseState {
+            seen_sibling: true,
+            empty_startup_observations: 0,
+        };
+        assert!(!self_close_decision(&mut state, Some(2)));
     }
 
     #[test]
     fn self_close_never_fires_on_unknown_count() {
-        let mut seen = true;
-        assert!(!self_close_decision(&mut seen, None));
-        assert!(seen, "an unknown count must not clear the latch");
+        let mut state = SelfCloseState {
+            seen_sibling: true,
+            empty_startup_observations: 0,
+        };
+        assert!(!self_close_decision(&mut state, None));
+        assert!(
+            state.seen_sibling,
+            "an unknown count must not clear the latch"
+        );
     }
 }

@@ -78,7 +78,6 @@ impl SidebarHarness {
             cwd: self.cwd.clone(),
             width_percent: 30,
             rimz_bin: PathBuf::from("rimz"),
-            session_preexisting: false,
         }
     }
 
