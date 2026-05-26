@@ -3,76 +3,13 @@
 //! rendered mode pill matches the closure of the unattended-runs audit story
 //! in `docs/guide/product.md`.
 
-use std::path::{Path, PathBuf};
-use std::process::Command as StdCommand;
-
-use assert_cmd::cargo::CommandCargoExt;
 use rimz::agents::AgentLifecycleObservation;
 use rimz::feed::{AgentMode, AgentStatus};
 use rimz::ids::{MuxName, ResolverId, SidebarInstanceId};
 use rimz::schema::event::EventEnvelope;
 use rimz::schema::heartbeat::{ResolverHeartbeat, SidebarHeartbeat};
-use rimz::{Ledger, RuntimePaths, StatePaths, WorkspaceId};
-use tempfile::TempDir;
 
-struct Env {
-    home: TempDir,
-    workspace_id: WorkspaceId,
-}
-
-impl Env {
-    fn new() -> Self {
-        let home = TempDir::new().expect("tempdir");
-        let project_root = canonical(home.path());
-        let workspace_id = WorkspaceId::from_project_root(&project_root);
-        for d in ["state", "runtime", "config"] {
-            std::fs::create_dir_all(project_root.join(d)).expect("mkdir env root");
-        }
-        Self { home, workspace_id }
-    }
-
-    fn project_root(&self) -> PathBuf {
-        canonical(self.home.path())
-    }
-
-    fn rimz(&self) -> StdCommand {
-        let mut cmd = StdCommand::cargo_bin("rimz").expect("cargo-bin");
-        cmd.env("XDG_STATE_HOME", self.project_root().join("state"))
-            .env("XDG_RUNTIME_DIR", self.project_root().join("runtime"))
-            .env("XDG_CONFIG_HOME", self.project_root().join("config"))
-            .env("HOME", self.project_root())
-            .env_remove("RUST_LOG")
-            .current_dir(self.project_root())
-            .args(["--root", &self.project_root().display().to_string()]);
-        cmd
-    }
-
-    fn ledger(&self) -> Ledger {
-        let state = StatePaths::under(
-            self.workspace_id.clone(),
-            &self.project_root().join("state"),
-        )
-        .expect("state paths");
-        let rt = RuntimePaths::under(
-            self.workspace_id.clone(),
-            &self.project_root().join("runtime"),
-        )
-        .expect("runtime paths");
-        Ledger::open(state, rt).expect("open ledger")
-    }
-
-    fn runtime_paths(&self) -> RuntimePaths {
-        RuntimePaths::under(
-            self.workspace_id.clone(),
-            &self.project_root().join("runtime"),
-        )
-        .expect("runtime paths")
-    }
-}
-
-fn canonical(p: &Path) -> PathBuf {
-    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
-}
+use crate::common::Env;
 
 fn inject_lifecycle(
     env: &Env,
@@ -86,7 +23,11 @@ fn inject_lifecycle(
         agent_id: Some(agent_id.to_owned()),
         status,
         mode,
+        worktree_path: Some(env.project_root.display().to_string()),
         worktree_branch: branch.map(ToOwned::to_owned),
+        task: None,
+        model: None,
+        effort: None,
     };
     let envelope = EventEnvelope::agent_lifecycle(
         env.workspace_id.clone(),

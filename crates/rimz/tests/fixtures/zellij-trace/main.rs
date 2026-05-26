@@ -1,4 +1,4 @@
-//! `zellij`-shaped trace shim used by `tests/zellij_backend.rs`.
+//! `zellij`-shaped trace shim used by `tests/integration/backend/zellij.rs`.
 //!
 //! Writes one line per invocation to the file at `$RIMZ_TEST_ZELLIJ_LOG` of
 //! the form `argv0\targv1\t...\n`, then exits 0. The test prepends the

@@ -2,8 +2,6 @@
 //! the event log back. Proves atomic write + length-framed log + snapshot
 //! rebuild work end to end.
 
-mod common;
-
 use rimz::{
     AbandonReason, EventEnvelope, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod,
     ResolverId, ResolverStep, ResolverStepState, SidebarActivity, Surface,
@@ -23,7 +21,7 @@ fn chain_step(id: &ResolverId, order: i32, budget_ms: u64) -> ResolverStep {
 
 #[test]
 fn push_then_resolve_round_trip() {
-    let h = common::Harness::new();
+    let h = crate::common::Harness::new();
 
     let item = FeedItem::new(
         h.workspace_id.clone(),
@@ -64,7 +62,7 @@ fn push_then_resolve_round_trip() {
 
 #[test]
 fn resolving_active_resolver_marks_chain_answered_and_clears_active() {
-    let h = common::Harness::new();
+    let h = crate::common::Harness::new();
     let opus: ResolverId = "opus-policy".parse().unwrap();
     let slack: ResolverId = "slack-on-call".parse().unwrap();
     let mut item = FeedItem::new(
@@ -99,7 +97,7 @@ fn resolving_active_resolver_marks_chain_answered_and_clears_active() {
 
 #[test]
 fn dismiss_only_applies_to_native_ui_surface() {
-    let h = common::Harness::new();
+    let h = crate::common::Harness::new();
 
     let item = FeedItem::new(
         h.workspace_id.clone(),
@@ -131,7 +129,7 @@ fn dismiss_only_applies_to_native_ui_surface() {
 
 #[test]
 fn resolve_rejects_native_ui_surface() {
-    let h = common::Harness::new();
+    let h = crate::common::Harness::new();
 
     let item = FeedItem::new(
         h.workspace_id.clone(),
@@ -158,7 +156,7 @@ fn resolve_rejects_native_ui_surface() {
 
 #[test]
 fn timeout_marks_script_item_and_late_answer_is_audit_only() {
-    let h = common::Harness::new();
+    let h = crate::common::Harness::new();
 
     let item = FeedItem::new(
         h.workspace_id.clone(),
@@ -210,7 +208,7 @@ fn timeout_marks_script_item_and_late_answer_is_audit_only() {
 
 #[test]
 fn wakeup_failure_does_not_fail_committed_push() {
-    let h = common::Harness::new();
+    let h = crate::common::Harness::new();
     std::fs::remove_dir(&h.runtime_paths.heartbeat_dir).expect("remove heartbeat dir");
     std::fs::write(&h.runtime_paths.heartbeat_dir, b"not a dir").expect("replace with file");
 
@@ -237,7 +235,7 @@ fn wakeup_failure_does_not_fail_committed_push() {
 
 #[test]
 fn standalone_events_rebuild_recent_activity_snapshot() {
-    let h = common::Harness::new();
+    let h = crate::common::Harness::new();
     let event = EventEnvelope::new(
         h.workspace_id.clone(),
         "rimz-test",
@@ -259,7 +257,7 @@ fn standalone_events_rebuild_recent_activity_snapshot() {
 
 #[test]
 fn abstain_advances_chain_and_records_audit_event() {
-    let h = common::Harness::new();
+    let h = crate::common::Harness::new();
     let mut item = FeedItem::new(
         h.workspace_id.clone(),
         Surface::Bridge,
@@ -324,7 +322,7 @@ fn abstain_advances_chain_and_records_audit_event() {
 
 #[test]
 fn abstain_rejects_non_active_resolver() {
-    let h = common::Harness::new();
+    let h = crate::common::Harness::new();
     let mut item = FeedItem::new(
         h.workspace_id.clone(),
         Surface::Bridge,
@@ -370,7 +368,7 @@ fn abstain_rejects_non_active_resolver() {
 
 #[test]
 fn abstain_with_no_next_resolver_exhausts_chain() {
-    let h = common::Harness::new();
+    let h = crate::common::Harness::new();
     let mut item = FeedItem::new(
         h.workspace_id.clone(),
         Surface::Bridge,
@@ -407,7 +405,7 @@ fn abstain_with_no_next_resolver_exhausts_chain() {
 
 #[test]
 fn timeout_marks_active_resolver_budget_elapsed() {
-    let h = common::Harness::new();
+    let h = crate::common::Harness::new();
     let opus: ResolverId = "opus-policy".parse().unwrap();
     let slack: ResolverId = "slack-on-call".parse().unwrap();
     let mut item = FeedItem::new(
@@ -440,7 +438,7 @@ fn timeout_marks_active_resolver_budget_elapsed() {
 
 #[test]
 fn concurrent_resolve_uses_first_writer_wins_cas() {
-    let h = common::Harness::new();
+    let h = crate::common::Harness::new();
     let item = FeedItem::new(
         h.workspace_id.clone(),
         Surface::Script,

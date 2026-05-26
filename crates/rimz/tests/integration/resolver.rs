@@ -1,8 +1,6 @@
 //! Round-trip integration tests for `rimz resolver` against a tempdir-rooted
 //! `$XDG_CONFIG_HOME/rimz/resolvers.toml`.
 
-mod common;
-
 use assert_cmd::Command;
 use predicates::str::contains;
 use tempfile::TempDir;

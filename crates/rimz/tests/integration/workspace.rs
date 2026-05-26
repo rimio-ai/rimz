@@ -1,76 +1,22 @@
 //! Integration coverage for `rimz workspace migrate/prune/rotate-events`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use assert_cmd::{assert::OutputAssertExt, cargo::CommandCargoExt};
+use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
+use rimz::WorkspaceId;
 use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::schema::event::EventEnvelope;
-use rimz::{Ledger, RuntimePaths, StatePaths, WorkspaceId};
 use serde_json::json;
-use tempfile::TempDir;
 
-struct Env {
-    home: TempDir,
-}
-
-impl Env {
-    fn new() -> Self {
-        let home = TempDir::new().expect("tempdir");
-        for d in ["state", "runtime", "config"] {
-            std::fs::create_dir_all(home.path().join(d)).expect("mkdir env root");
-        }
-        Self { home }
-    }
-
-    fn root(&self) -> &Path {
-        self.home.path()
-    }
-
-    fn state_root(&self) -> PathBuf {
-        self.root().join("state")
-    }
-
-    fn runtime_root(&self) -> PathBuf {
-        self.root().join("runtime")
-    }
-
-    fn rimz(&self) -> std::process::Command {
-        let mut cmd = std::process::Command::cargo_bin("rimz").expect("cargo-bin");
-        cmd.env("XDG_STATE_HOME", self.state_root())
-            .env("XDG_RUNTIME_DIR", self.runtime_root())
-            .env("XDG_CONFIG_HOME", self.root().join("config"))
-            .env("HOME", self.root())
-            .env_remove("RUST_LOG")
-            .current_dir(self.root());
-        cmd
-    }
-
-    fn ledger_for(&self, project_root: &Path) -> Ledger {
-        let workspace_id = WorkspaceId::from_project_root(&canonical(project_root));
-        let state =
-            StatePaths::under(workspace_id.clone(), &self.state_root()).expect("state paths");
-        let runtime =
-            RuntimePaths::under(workspace_id, &self.runtime_root()).expect("runtime paths");
-        Ledger::open(state, runtime).expect("open ledger")
-    }
-
-    fn state_path_for(&self, project_root: &Path) -> StatePaths {
-        let workspace_id = WorkspaceId::from_project_root(&canonical(project_root));
-        StatePaths::under(workspace_id, &self.state_root()).expect("state paths")
-    }
-}
-
-fn canonical(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-}
+use crate::common::{Env, canonical};
 
 #[test]
 fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
     let env = Env::new();
-    let old_root = env.root().join("old-project");
-    let new_root = env.root().join("new-project");
+    let old_root = env.project_root.join("old-project");
+    let new_root = env.project_root.join("new-project");
     std::fs::create_dir_all(&old_root).expect("mkdir old");
     std::fs::create_dir_all(&new_root).expect("mkdir new");
 
@@ -108,11 +54,7 @@ fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
     assert!(!old_paths.root.exists(), "old ledger dir should be gone");
     assert!(new_paths.root.exists(), "new ledger dir should exist");
 
-    let migrated = Ledger::open(
-        new_paths.clone(),
-        RuntimePaths::under(new_id.clone(), &env.runtime_root()).expect("runtime paths"),
-    )
-    .expect("open migrated ledger");
+    let migrated = env.ledger_for(&new_root);
     let loaded = migrated.load_feed_item(&request_id).expect("load item");
     assert_eq!(loaded.workspace_id, new_id);
 
@@ -129,7 +71,7 @@ fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
 #[test]
 fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
     let env = Env::new();
-    let project = env.root().join("project");
+    let project = env.project_root.join("project");
     std::fs::create_dir_all(&project).expect("mkdir project");
 
     let workspace_id = WorkspaceId::from_project_root(&canonical(&project));
@@ -216,19 +158,10 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
 #[test]
 fn workspace_prune_removes_ledgers_for_missing_roots() {
     let env = Env::new();
-    let live_root = env.root().join("live-project");
-    let gone_root = env.root().join("gone-project");
-    std::fs::create_dir_all(&live_root).expect("mkdir live");
-    std::fs::create_dir_all(&gone_root).expect("mkdir gone");
-
-    let live_workspace = rimz::WorkspaceResolver::resolve(&live_root, None).expect("resolve live");
-    let gone_workspace = rimz::WorkspaceResolver::resolve(&gone_root, None).expect("resolve gone");
-    env.ledger_for(&live_root)
-        .record_workspace(&live_workspace)
-        .expect("record live");
-    env.ledger_for(&gone_root)
-        .record_workspace(&gone_workspace)
-        .expect("record gone");
+    let live_root = env.project_root.join("live-project");
+    let gone_root = env.project_root.join("gone-project");
+    env.record(&live_root);
+    env.record(&gone_root);
 
     let live_paths = env.state_path_for(&live_root);
     let gone_paths = env.state_path_for(&gone_root);

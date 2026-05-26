@@ -3,8 +3,6 @@
 //! `proptest` shrinks counterexamples for shapes a few hand-written cases
 //! would miss.
 
-mod common;
-
 use std::io::Write;
 use std::path::Path;
 

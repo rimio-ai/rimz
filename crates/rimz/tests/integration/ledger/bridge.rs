@@ -1,8 +1,6 @@
 //! Synthetic hook driver. Exercises the per-request bridge socket and the
 //! sidebar wakeup walk against real ledger writes — no subprocess.
 
-mod common;
-
 use std::time::Duration;
 
 use rimz::bridge::{self, BridgeOutcome, ExpectedFrame, WakeupFrame};
@@ -31,8 +29,8 @@ fn expected_from(item: &FeedItem) -> ExpectedFrame {
 
 #[tokio::test(flavor = "current_thread")]
 async fn script_surface_resolves_via_bridge_wakeup() {
-    let h = common::Harness::new();
-    if common::af_unix_bind_sandboxed(&h.runtime_paths.sock_dir) {
+    let h = crate::common::Harness::new();
+    if crate::common::af_unix_bind_sandboxed(&h.runtime_paths.sock_dir) {
         tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
         return;
     }
@@ -69,8 +67,8 @@ async fn script_surface_resolves_via_bridge_wakeup() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn cap_timeout_returns_neutral() {
-    let h = common::Harness::new();
-    if common::af_unix_bind_sandboxed(&h.runtime_paths.sock_dir) {
+    let h = crate::common::Harness::new();
+    if crate::common::af_unix_bind_sandboxed(&h.runtime_paths.sock_dir) {
         tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
         return;
     }
@@ -99,8 +97,8 @@ async fn cap_timeout_returns_neutral() {
 async fn mismatched_nonce_is_dropped_real_resolve_wins() {
     use tokio::net::UnixDatagram;
 
-    let h = common::Harness::new();
-    if common::af_unix_bind_sandboxed(&h.runtime_paths.sock_dir) {
+    let h = crate::common::Harness::new();
+    if crate::common::af_unix_bind_sandboxed(&h.runtime_paths.sock_dir) {
         tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
         return;
     }
@@ -147,8 +145,8 @@ async fn mismatched_nonce_is_dropped_real_resolve_wins() {
 fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protocol() {
     use std::os::unix::net::UnixDatagram;
 
-    let h = common::Harness::new();
-    if common::af_unix_bind_sandboxed(&h.runtime_paths.sock_dir) {
+    let h = crate::common::Harness::new();
+    if crate::common::af_unix_bind_sandboxed(&h.runtime_paths.sock_dir) {
         tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
         return;
     }
@@ -257,8 +255,8 @@ fn wake_sidebars_restat_skips_when_mtime_aged_past_ttl() {
     use std::os::unix::net::UnixDatagram;
     use std::time::SystemTime;
 
-    let h = common::Harness::new();
-    if common::af_unix_bind_sandboxed(&h.runtime_paths.sock_dir) {
+    let h = crate::common::Harness::new();
+    if crate::common::af_unix_bind_sandboxed(&h.runtime_paths.sock_dir) {
         tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
         return;
     }

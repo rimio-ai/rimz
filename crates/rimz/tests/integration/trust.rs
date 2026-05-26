@@ -1,54 +1,18 @@
 //! Integration coverage for `rimz trust {status,grant,revoke}` and the
 //! auto-stale path.
 
-use std::path::Path;
-
-use assert_cmd::{assert::OutputAssertExt, cargo::CommandCargoExt};
+use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
-use tempfile::TempDir;
 
-struct Env {
-    home: TempDir,
-    project: std::path::PathBuf,
-}
-
-impl Env {
-    fn new() -> Self {
-        let home = TempDir::new().expect("tempdir");
-        for d in ["state", "runtime", "config"] {
-            std::fs::create_dir_all(home.path().join(d)).expect("mkdir env root");
-        }
-        let project = home.path().join("billing-service");
-        std::fs::create_dir_all(&project).expect("mkdir project");
-        Self { home, project }
-    }
-
-    fn root(&self) -> &Path {
-        self.home.path()
-    }
-
-    fn write_config(&self, body: &str) {
-        let dir = self.project.join(".rimz");
-        std::fs::create_dir_all(&dir).expect("mkdir .rimz");
-        std::fs::write(dir.join("config.toml"), body).expect("write config");
-    }
-
-    fn rimz(&self) -> std::process::Command {
-        let mut cmd = std::process::Command::cargo_bin("rimz").expect("cargo-bin");
-        cmd.env("XDG_STATE_HOME", self.root().join("state"))
-            .env("XDG_RUNTIME_DIR", self.root().join("runtime"))
-            .env("XDG_CONFIG_HOME", self.root().join("config"))
-            .env("HOME", self.root())
-            .env_remove("RUST_LOG")
-            .current_dir(&self.project);
-        cmd
-    }
-}
+use crate::common::Env;
 
 #[test]
 fn trust_status_grant_revoke_lifecycle() {
     let env = Env::new();
-    env.write_config("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n");
+    env.write_config(
+        &env.project_root,
+        "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
+    );
 
     env.rimz()
         .args(["trust", "status"])
@@ -78,12 +42,16 @@ fn trust_status_grant_revoke_lifecycle() {
 #[test]
 fn trust_auto_revokes_when_executable_surface_drifts() {
     let env = Env::new();
-    env.write_config("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n");
+    env.write_config(
+        &env.project_root,
+        "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
+    );
 
     env.rimz().args(["trust", "grant"]).assert().success();
 
     // Mutate the hook command — a command-running field.
     env.write_config(
+        &env.project_root,
         "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude --telemetry\"\n",
     );
 
@@ -98,7 +66,8 @@ fn trust_auto_revokes_when_executable_surface_drifts() {
 fn trust_ignores_non_command_field_edits() {
     let env = Env::new();
     env.write_config(
-        "display_name = \"Billing\"\n\n[[layout.initial_panes]]\ncommand = \"$SHELL\"\n",
+        &env.project_root,
+        "display_name = \"Query Engine\"\n\n[[layout.initial_panes]]\ncommand = \"$SHELL\"\n",
     );
 
     env.rimz().args(["trust", "grant"]).assert().success();
@@ -106,7 +75,8 @@ fn trust_ignores_non_command_field_edits() {
     // Edit a non-command field — `display_name` and `sidebar` are not in the
     // executable surface.
     env.write_config(
-        "display_name = \"Billing service\"\nsidebar = true\n\n[[layout.initial_panes]]\ncommand = \"$SHELL\"\n",
+        &env.project_root,
+        "display_name = \"Query Engine dev\"\nsidebar = true\n\n[[layout.initial_panes]]\ncommand = \"$SHELL\"\n",
     );
 
     env.rimz()
@@ -119,7 +89,10 @@ fn trust_ignores_non_command_field_edits() {
 #[test]
 fn trust_status_json_emits_canonical_fields() {
     let env = Env::new();
-    env.write_config("[notifications]\ncommand = \"notify-send rimz\"\n");
+    env.write_config(
+        &env.project_root,
+        "[notifications]\ncommand = \"notify-send rimz\"\n",
+    );
 
     let output = env
         .rimz()

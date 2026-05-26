@@ -1,191 +1,77 @@
 //! Integration coverage for the reference Python pane-send resolver under
 //! `examples/resolvers/`. The full happy path requires a live multiplexer
 //! pane to capture/send against; that is gated behind `tmux` availability
-//! (see `tmux_backend.rs` for the self-skip idiom). The path that does not
+//! (see `backend/tmux.rs` for the self-skip idiom). The path that does not
 //! require a multiplexer — abstain when the feed item carries no pane — is
 //! exercised here as a fast end-to-end signal that the resolver loop, the
 //! heartbeat protocol, and the `feed abstain` CLI integrate.
 
-mod common;
-
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command as StdCommand, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use assert_cmd::cargo::CommandCargoExt;
-use jiff::Timestamp;
-use rimz::WorkspaceId;
-use rimz::schema::heartbeat::ResolverHeartbeat;
-use serde_json::{Value, json};
-use tempfile::TempDir;
+use serde_json::Value;
 
-struct Env {
-    home: TempDir,
-    workspace_id: WorkspaceId,
-    runtime_root: PathBuf,
-    rimz_path: PathBuf,
+use crate::common::{Env, permission_payload, python3_present, wait_for_heartbeat};
+
+/// Isolated `TMUX_TMPDIR` so the live-pane happy path never collides with the
+/// user's tmux server. The production `rimz` binary the resolver shells out to
+/// uses the default tmux socket, so isolation flows through the environment
+/// rather than a `-S` flag.
+fn tmux_tmpdir(env: &Env) -> PathBuf {
+    let dir = env.project_root.join("tmux");
+    std::fs::create_dir_all(&dir).expect("mkdir tmux");
+    dir
 }
 
-impl Env {
-    fn new() -> Self {
-        let home = TempDir::new().expect("tempdir");
-        let project_root = canonical(home.path());
-        let workspace_id = WorkspaceId::from_project_root(&project_root);
-        let runtime_root = project_root.join("runtime");
-        for d in ["state", "runtime", "config", "tmux"] {
-            std::fs::create_dir_all(project_root.join(d)).expect("mkdir env root");
-        }
-        let rimz_path = StdCommand::cargo_bin("rimz")
-            .expect("cargo-bin")
-            .get_program()
-            .to_owned()
-            .into();
-        let env = Env {
-            home,
-            workspace_id,
-            runtime_root,
-            rimz_path,
-        };
-        std::fs::create_dir_all(env.heartbeat_dir()).expect("mkdir heartbeat");
-        env
+/// Spawn the reference resolver. When `tmux_pane` is `Some`, point the
+/// resolver's `rimz` invocations at the isolated tmux server: `TMUX_PANE`
+/// nudges backend auto-detection to tmux (zellij is tried first by
+/// `auto_detect_backend`), `TMUX_TMPDIR` pins the socket, and any ambient
+/// `TMUX` is dropped so it cannot hijack the target server.
+fn spawn_python_resolver(
+    env: &Env,
+    resolver_id: &str,
+    run_seconds: f32,
+    tmux_pane: Option<&str>,
+) -> Child {
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates/")
+        .parent()
+        .expect("workspace root")
+        .join("examples/resolvers/pane_send_resolver.py");
+    assert!(script.exists(), "resolver script missing: {script:?}");
+
+    let mut cmd = Command::new("python3");
+    cmd.arg(&script)
+        .args([
+            "--workspace-id",
+            env.workspace_id.as_str(),
+            "--resolver-id",
+            resolver_id,
+            "--rimz-bin",
+            &env.rimz_bin().display().to_string(),
+            "--tick-seconds",
+            "0.1",
+            "--run-seconds",
+            &run_seconds.to_string(),
+        ])
+        .env("XDG_STATE_HOME", env.state_root())
+        .env("XDG_RUNTIME_DIR", &env.runtime_root)
+        .env("XDG_CONFIG_HOME", env.config_root())
+        .env("HOME", &env.project_root)
+        .env_remove("RUST_LOG")
+        .current_dir(&env.project_root);
+    if let Some(pane) = tmux_pane {
+        cmd.env("TMUX_TMPDIR", tmux_tmpdir(env))
+            .env("TMUX_PANE", pane)
+            .env_remove("TMUX");
     }
-
-    fn project_root(&self) -> PathBuf {
-        canonical(self.home.path())
-    }
-
-    fn state_root(&self) -> PathBuf {
-        self.project_root().join("state")
-    }
-
-    fn config_root(&self) -> PathBuf {
-        self.project_root().join("config")
-    }
-
-    fn heartbeat_dir(&self) -> PathBuf {
-        self.runtime_root
-            .join("rimz")
-            .join(self.workspace_id.as_str())
-            .join("heartbeat")
-    }
-
-    fn sock_dir(&self) -> PathBuf {
-        self.runtime_root
-            .join("rimz")
-            .join(self.workspace_id.as_str())
-            .join("sock")
-    }
-
-    /// Isolated `TMUX_TMPDIR` so the live-pane happy path never collides with
-    /// the user's tmux server. The production `rimz` binary the resolver
-    /// shells out to uses the default tmux socket, so isolation has to flow
-    /// through the environment rather than a `-S` flag.
-    fn tmux_tmpdir(&self) -> PathBuf {
-        self.project_root().join("tmux")
-    }
-
-    fn rimz(&self) -> StdCommand {
-        let mut cmd = StdCommand::cargo_bin("rimz").expect("cargo-bin");
-        cmd.env("XDG_STATE_HOME", self.state_root())
-            .env("XDG_RUNTIME_DIR", &self.runtime_root)
-            .env("XDG_CONFIG_HOME", self.config_root())
-            .env("HOME", self.project_root())
-            .env_remove("RUST_LOG")
-            .current_dir(self.project_root())
-            .args(["--root", &self.project_root().display().to_string()]);
-        cmd
-    }
-
-    fn enrol(&self, id: &str, order: u32, budget: &str) {
-        let status = self
-            .rimz()
-            .args([
-                "resolver",
-                "add",
-                id,
-                "--order",
-                &order.to_string(),
-                "--budget",
-                budget,
-            ])
-            .status()
-            .expect("spawn resolver add");
-        assert!(status.success(), "resolver add `{id}` failed");
-    }
-
-    /// Spawn the reference resolver. When `tmux_pane` is `Some`, point the
-    /// resolver's `rimz` invocations at the isolated tmux server: `TMUX_PANE`
-    /// nudges backend auto-detection to tmux (zellij is tried first by
-    /// `auto_detect_backend`), `TMUX_TMPDIR` pins the socket, and any ambient
-    /// `TMUX` is dropped so it cannot hijack the target server.
-    fn spawn_python_resolver(
-        &self,
-        resolver_id: &str,
-        run_seconds: f32,
-        tmux_pane: Option<&str>,
-    ) -> Child {
-        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("crates/")
-            .parent()
-            .expect("workspace root")
-            .join("examples/resolvers/pane_send_resolver.py");
-        assert!(script.exists(), "resolver script missing: {script:?}");
-
-        let mut cmd = StdCommand::new("python3");
-        cmd.arg(&script)
-            .args([
-                "--workspace-id",
-                self.workspace_id.as_str(),
-                "--resolver-id",
-                resolver_id,
-                "--rimz-bin",
-                &self.rimz_path.display().to_string(),
-                "--tick-seconds",
-                "0.1",
-                "--run-seconds",
-                &run_seconds.to_string(),
-            ])
-            .env("XDG_STATE_HOME", self.state_root())
-            .env("XDG_RUNTIME_DIR", &self.runtime_root)
-            .env("XDG_CONFIG_HOME", self.config_root())
-            .env("HOME", self.project_root())
-            .env_remove("RUST_LOG")
-            .current_dir(self.project_root());
-        if let Some(pane) = tmux_pane {
-            cmd.env("TMUX_TMPDIR", self.tmux_tmpdir())
-                .env("TMUX_PANE", pane)
-                .env_remove("TMUX");
-        }
-        cmd.stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn python resolver")
-    }
-}
-
-fn canonical(p: &Path) -> PathBuf {
-    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
-}
-
-fn permission_payload() -> String {
-    serde_json::to_string(&json!({
-        "hook_event_name": "PermissionRequest",
-        "tool_name": "Bash",
-        "tool_input": { "command": "noop" }
-    }))
-    .expect("payload")
-}
-
-fn python3_present() -> bool {
-    StdCommand::new("python3")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn python resolver")
 }
 
 fn skip_preconditions(env: &Env) -> bool {
@@ -193,31 +79,7 @@ fn skip_preconditions(env: &Env) -> bool {
         tracing::warn!("skipping: python3 not on PATH");
         return true;
     }
-    std::fs::create_dir_all(env.sock_dir()).unwrap();
-    if common::af_unix_bind_sandboxed(&env.sock_dir()) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
-        return true;
-    }
-    false
-}
-
-fn wait_for_heartbeat(env: &Env, resolver_id: &str, until: Instant) {
-    let path = env
-        .heartbeat_dir()
-        .join(format!("resolver.{resolver_id}.json"));
-    let ttl = Duration::from_secs(3);
-    while Instant::now() < until {
-        if let Ok(bytes) = std::fs::read(&path)
-            && let Ok(parsed) = serde_json::from_slice::<ResolverHeartbeat>(&bytes)
-        {
-            let age = Timestamp::now().duration_since(parsed.last_seen);
-            if !age.is_negative() && (age.as_secs() as u64) < ttl.as_secs() {
-                return;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    panic!("python resolver never wrote a fresh heartbeat at {path:?}");
+    env.skip_if_sandboxed()
 }
 
 #[test]
@@ -230,25 +92,10 @@ fn pane_send_resolver_abstains_when_item_has_no_pane() {
     // the resolver abstains: chain exhausts and the hook emits neutral.
     env.enrol("pane-demo", 10, "1s");
 
-    let mut resolver = env.spawn_python_resolver("pane-demo", 8.0, None);
+    let mut resolver = spawn_python_resolver(&env, "pane-demo", 8.0, None);
     wait_for_heartbeat(&env, "pane-demo", Instant::now() + Duration::from_secs(3));
 
-    let mut child = env
-        .rimz()
-        .args(["hooks", "feed", "--source", "claude"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn hooks");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(permission_payload().as_bytes())
-        .unwrap();
-
-    let output = child.wait_with_output().expect("wait hook");
+    let output = env.run_hook("claude", &permission_payload("Bash"));
     let _ = resolver.kill();
     let _ = resolver.wait();
     assert!(
@@ -264,13 +111,8 @@ fn pane_send_resolver_abstains_when_item_has_no_pane() {
 
     // The abstain reason should appear in the audit log so unattended runs
     // can tell pane misses apart from policy misses.
-    let state =
-        rimz::StatePaths::under(env.workspace_id.clone(), &env.state_root()).expect("state paths");
-    let runtime =
-        rimz::RuntimePaths::under(env.workspace_id.clone(), &env.runtime_root).expect("runtime");
-    let ledger = rimz::Ledger::open(state, runtime).expect("ledger");
-    let events = ledger.read_events().expect("events");
-    let abstain_reasons: Vec<String> = events
+    let abstain_reasons: Vec<String> = env
+        .read_events()
         .into_iter()
         .filter(|e| e.method == "feed.abstain")
         .filter_map(|e| {
@@ -327,7 +169,7 @@ for lines in bad_cases:
 print("ok")
 "#;
 
-    let out = StdCommand::new("python3")
+    let out = Command::new("python3")
         .args(["-c", probe, &import_dir])
         .output()
         .expect("spawn python probe");
@@ -352,7 +194,7 @@ fn pane_send_resolver_help_is_well_formed() {
         .parent()
         .expect("workspace root")
         .join("examples/resolvers/pane_send_resolver.py");
-    let out = StdCommand::new("python3")
+    let out = Command::new("python3")
         .arg(&script)
         .arg("--help")
         .output()
@@ -369,11 +211,10 @@ fn pane_send_resolver_help_is_well_formed() {
         stdout.contains("pane-send resolver"),
         "help missing role line:\n{stdout}"
     );
-    let _: Value = json!({}); // keep the serde_json import in use
 }
 
 fn tmux_present() -> bool {
-    StdCommand::new("tmux")
+    Command::new("tmux")
         .arg("-V")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -386,7 +227,7 @@ fn tmux_present() -> bool {
 /// ambient session (a developer running the suite inside tmux) can't redirect
 /// us onto their server; `TMUX_TMPDIR` selects our private socket.
 fn run_tmux(tmpdir: &Path, args: &[&str]) -> std::process::Output {
-    StdCommand::new("tmux")
+    Command::new("tmux")
         .args(args)
         .env("TMUX_TMPDIR", tmpdir)
         .env_remove("TMUX")
@@ -435,11 +276,7 @@ fn stage_bridge_item_with_pane(
     pane_raw: &str,
     session: &str,
 ) -> String {
-    let state =
-        rimz::StatePaths::under(env.workspace_id.clone(), &env.state_root()).expect("state paths");
-    let runtime =
-        rimz::RuntimePaths::under(env.workspace_id.clone(), &env.runtime_root).expect("runtime");
-    let ledger = rimz::Ledger::open(state, runtime).expect("open ledger");
+    let ledger = env.ledger();
 
     let mut item = rimz::FeedItem::new(
         env.workspace_id.clone(),
@@ -487,9 +324,9 @@ fn pane_send_resolver_completes_full_round_trip() {
         return;
     }
 
-    let tmpdir = env.tmux_tmpdir();
+    let tmpdir = tmux_tmpdir(&env);
     let session = "rimz-pane-send";
-    let sentinel = env.project_root().join("answered.txt");
+    let sentinel = env.project_root.join("answered.txt");
     let _ = std::fs::remove_file(&sentinel);
 
     // The pane prints exactly one bounded prompt, blocks on a line of input,
@@ -521,7 +358,7 @@ fn pane_send_resolver_completes_full_round_trip() {
     let resolver_id = "pane-happy";
     let request_id = stage_bridge_item_with_pane(&env, resolver_id, &pane_raw, session);
 
-    let mut resolver = env.spawn_python_resolver(resolver_id, 10.0, Some(&pane_raw));
+    let mut resolver = spawn_python_resolver(&env, resolver_id, 10.0, Some(&pane_raw));
     wait_for_heartbeat(&env, resolver_id, Instant::now() + Duration::from_secs(3));
 
     let resolved = poll_until_resolved(&env, &request_id, Instant::now() + Duration::from_secs(10));

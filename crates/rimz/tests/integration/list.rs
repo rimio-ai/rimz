@@ -1,58 +1,10 @@
 //! Integration coverage for `rimz list`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use assert_cmd::cargo::CommandCargoExt;
-use rimz::{Ledger, RuntimePaths, StatePaths, WorkspaceId};
-use tempfile::TempDir;
+use rimz::WorkspaceId;
 
-struct Env {
-    home: TempDir,
-}
-
-impl Env {
-    fn new() -> Self {
-        let home = TempDir::new().expect("tempdir");
-        for d in ["state", "runtime", "config"] {
-            std::fs::create_dir_all(home.path().join(d)).expect("mkdir env root");
-        }
-        Self { home }
-    }
-
-    fn root(&self) -> &Path {
-        self.home.path()
-    }
-
-    fn state_root(&self) -> PathBuf {
-        self.root().join("state")
-    }
-
-    fn runtime_root(&self) -> PathBuf {
-        self.root().join("runtime")
-    }
-
-    fn rimz(&self) -> std::process::Command {
-        let mut cmd = std::process::Command::cargo_bin("rimz").expect("cargo-bin");
-        cmd.env("XDG_STATE_HOME", self.state_root())
-            .env("XDG_RUNTIME_DIR", self.runtime_root())
-            .env("XDG_CONFIG_HOME", self.root().join("config"))
-            .env("HOME", self.root())
-            .env_remove("RUST_LOG")
-            .current_dir(self.root());
-        cmd
-    }
-
-    fn record(&self, project_root: &Path) {
-        std::fs::create_dir_all(project_root).expect("mkdir project");
-        let workspace = rimz::WorkspaceResolver::resolve(project_root, None).expect("resolve");
-        let state =
-            StatePaths::under(workspace.workspace_id.clone(), &self.state_root()).expect("state");
-        let runtime = RuntimePaths::under(workspace.workspace_id.clone(), &self.runtime_root())
-            .expect("runtime");
-        let ledger = Ledger::open(state, runtime).expect("open");
-        ledger.record_workspace(&workspace).expect("record");
-    }
-}
+use crate::common::Env;
 
 #[test]
 fn list_with_no_workspaces_prints_nothing() {
@@ -69,8 +21,8 @@ fn list_with_no_workspaces_prints_nothing() {
 #[test]
 fn list_shows_known_workspaces_with_session_and_root() {
     let env = Env::new();
-    env.record(&env.root().join("billing-service"));
-    env.record(&env.root().join("invoicing"));
+    env.record(&env.project_root.join("query-engine"));
+    env.record(&env.project_root.join("invoicing"));
 
     let output = env.rimz().arg("list").output().expect("run");
     assert!(
@@ -84,8 +36,8 @@ fn list_shows_known_workspaces_with_session_and_root() {
         "header line missing:\n{stdout}"
     );
     assert!(
-        stdout.contains("billing-service"),
-        "billing project missing:\n{stdout}"
+        stdout.contains("query-engine"),
+        "query-engine project missing:\n{stdout}"
     );
     assert!(
         stdout.contains("invoicing"),
@@ -96,7 +48,7 @@ fn list_shows_known_workspaces_with_session_and_root() {
 #[test]
 fn list_json_emits_canonical_fields() {
     let env = Env::new();
-    env.record(&env.root().join("billing-service"));
+    env.record(&env.project_root.join("query-engine"));
 
     let output = env.rimz().args(["list", "--json"]).output().expect("run");
     assert!(output.status.success());
@@ -110,7 +62,7 @@ fn list_json_emits_canonical_fields() {
         row["project_root"]
             .as_str()
             .unwrap()
-            .contains("billing-service")
+            .contains("query-engine")
     );
     assert!(row["session_name"].as_str().unwrap().starts_with("rimz-"));
     // No real mux session is bound; expect None.
@@ -122,7 +74,7 @@ fn list_json_emits_canonical_fields() {
 #[test]
 fn list_skips_workspaces_with_unreadable_record() {
     let env = Env::new();
-    env.record(&env.root().join("billing-service"));
+    env.record(&env.project_root.join("query-engine"));
 
     // Add a sibling dir under workspaces with a garbled workspace.json.
     let mut bogus_dir = env.state_root();
@@ -145,6 +97,6 @@ fn list_skips_workspaces_with_unreadable_record() {
         rows[0]["project_root"]
             .as_str()
             .unwrap()
-            .contains("billing-service")
+            .contains("query-engine")
     );
 }

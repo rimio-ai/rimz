@@ -27,8 +27,6 @@ use rimz::ledger::RuntimePaths;
 use rimz::schema::heartbeat::SidebarHeartbeat;
 use tempfile::TempDir;
 
-mod common;
-
 const SESSION_NAME: &str = "rimz-wakeup-pipe-test";
 
 #[test]
@@ -60,7 +58,7 @@ fn wakeup_walk_dispatches_zellij_pipe_for_zellij_heartbeat() {
         RuntimePaths::under(workspace_id.clone(), &runtime_root).expect("RuntimePaths::under");
     runtime.ensure_dirs().expect("ensure runtime dirs");
 
-    if common::af_unix_bind_sandboxed(&runtime.sock_dir) {
+    if crate::common::af_unix_bind_sandboxed(&runtime.sock_dir) {
         tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
         return;
     }
