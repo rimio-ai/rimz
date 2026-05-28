@@ -315,6 +315,21 @@ struct TranscriptUsage {
     model: Option<String>,
 }
 
+impl TranscriptUsage {
+    /// A transcript that opened cleanly but carries no assistant usage yet — a
+    /// brand-new session. Report an explicit zero so the gauge draws an empty
+    /// bar at 0% instead of vanishing until the first turn completes. A
+    /// transcript that cannot be read stays `default()` (all `None`): unknown,
+    /// not zero.
+    fn fresh() -> Self {
+        Self {
+            context_pct: Some(0),
+            total_tokens: Some(0),
+            model: None,
+        }
+    }
+}
+
 /// Current Claude models expose a 200k-token context window. Kept as a single
 /// lookup so a future per-model window (e.g. a 1M beta) lands in one place.
 fn context_window_for(_model: Option<&str>) -> u64 {
@@ -379,7 +394,7 @@ fn usage_from_transcript(path: &str) -> TranscriptUsage {
             model,
         };
     }
-    TranscriptUsage::default()
+    TranscriptUsage::fresh()
 }
 
 fn claude_settings_path() -> Result<PathBuf> {
@@ -1379,6 +1394,48 @@ mod tests {
         assert_eq!(obs.context_pct, Some(50));
         assert_eq!(obs.total_tokens, Some(100_500));
         assert_eq!(obs.model.as_deref(), Some("claude-opus-4-7"));
+    }
+
+    #[test]
+    fn fresh_transcript_reports_zero_context_not_unknown() {
+        // A brand-new session has a transcript with no assistant usage yet. It
+        // must read as 0% (empty gauge), not None (no gauge), so a just-launched
+        // idle agent shows an empty context bar.
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("session.jsonl");
+        std::fs::write(
+            &transcript,
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\"}}\n",
+        )
+        .unwrap();
+        let obs = ClaudeIntegration
+            .observe_lifecycle(
+                "SessionStart",
+                &json!({
+                    "session_id": "sess-1",
+                    "transcript_path": transcript.to_str().unwrap(),
+                }),
+            )
+            .unwrap();
+        assert_eq!(obs.context_pct, Some(0));
+        assert_eq!(obs.total_tokens, Some(0));
+    }
+
+    #[test]
+    fn missing_transcript_leaves_context_unknown() {
+        // No readable transcript means unknown, not zero — the gauge stays
+        // hidden rather than asserting a false 0%.
+        let obs = ClaudeIntegration
+            .observe_lifecycle(
+                "SessionStart",
+                &json!({
+                    "session_id": "sess-1",
+                    "transcript_path": "/nonexistent/path/session.jsonl",
+                }),
+            )
+            .unwrap();
+        assert_eq!(obs.context_pct, None);
+        assert_eq!(obs.total_tokens, None);
     }
 
     #[test]
