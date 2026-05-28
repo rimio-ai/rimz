@@ -18,6 +18,11 @@ use super::labels::{
 };
 use super::theme::Theme;
 
+/// Shared gauge width for the inline ambient bar and the selected card's
+/// labeled `ctx` bar — one length, so the meter reads the same whether the
+/// card is selected or not.
+const GAUGE_WIDTH: usize = 10;
+
 /// Width band that drives the ambient row density.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Tier {
@@ -189,7 +194,7 @@ fn row_lines(
 ) -> Vec<Line<'static>> {
     let mut lines = vec![selected_line(row_line(theme, row, width), selected)];
     if row.row_kind == SidebarRowKind::Agent {
-        if let Some(line) = capability_line(theme, row, tier, width) {
+        if let Some(line) = capability_line(theme, row, tier, width, selected) {
             lines.push(selected_line(line, selected));
         }
         if selected {
@@ -314,6 +319,7 @@ fn capability_line(
     row: &SidebarRow,
     tier: Tier,
     width: usize,
+    selected: bool,
 ) -> Option<Line<'static>> {
     let mut tokens: Vec<CapabilityToken> = Vec::new();
     if let Some(model) = row.model.as_deref().filter(|model| !model.is_empty()) {
@@ -329,8 +335,12 @@ fn capability_line(
             .expect("posture is Some when its label is Some");
         tokens.push(CapabilityToken::Posture(posture, posture_label.to_owned()));
     }
-    let has_inline_gauge = matches!(tier, Tier::L1 | Tier::L2) && row.context_pct.is_some();
-    let has_inline_todo = tier == Tier::L2 && row.todo_total.unwrap_or(0) > 0;
+    // The selected card renders the labeled `ctx …` meter on its own line, so
+    // the ambient inline gauge and todo dots are suppressed here to avoid
+    // showing the same reading twice.
+    let has_inline_gauge =
+        !selected && matches!(tier, Tier::L1 | Tier::L2) && row.context_pct.is_some();
+    let has_inline_todo = !selected && tier == Tier::L2 && row.todo_total.unwrap_or(0) > 0;
     if tokens.is_empty() && !has_inline_gauge && !has_inline_todo {
         return None;
     }
@@ -354,9 +364,7 @@ fn capability_line(
             spans.push(Span::raw("  "));
         }
         let percent = row.context_pct.unwrap_or(0);
-        // The narrow ambient bar — five cells. The selected card shows the
-        // full eight-cell gauge.
-        spans.extend(gauge_spans(theme, percent, 5));
+        spans.extend(gauge_spans(theme, percent, GAUGE_WIDTH));
         printed_any = true;
     }
     if has_inline_todo {
@@ -377,12 +385,16 @@ fn selected_meter_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<
     if !has_ctx && !has_todo {
         return None;
     }
-    // Eight-cell gauge in the selected card. We keep the label on the left
-    // (`ctx ▰▰▰▱▱▱▱▱ 38%`) so the meter and its number read together.
+    // Same gauge length as the ambient inline bar — the selected card just
+    // adds the `ctx` label so the meter and its number read together.
     let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
     if has_ctx {
         spans.push(Span::styled("ctx ", theme.dim()));
-        spans.extend(gauge_spans(theme, row.context_pct.unwrap_or(0), 8));
+        spans.extend(gauge_spans(
+            theme,
+            row.context_pct.unwrap_or(0),
+            GAUGE_WIDTH,
+        ));
     }
     if has_ctx && has_todo {
         spans.push(Span::raw("  "));
