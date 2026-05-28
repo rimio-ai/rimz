@@ -316,21 +316,34 @@ fn is_agent_native_item(item: &FeedItem) -> bool {
     item.source_kind == "agent-hook"
 }
 
-/// True when an agent-hook ask names a session (`agent_id`/`session_id`) that
-/// the live agent rollup no longer carries. The rollup is the liveness source
-/// of truth — gated by `SessionEnd` and process-liveness — so an ask whose
-/// session has left it is stale and must not render as attention. Asks with no
+/// True when an agent-hook ask names a session (`agent_id`/`session_id`) that is
+/// no longer the live occupant of its pane. The rollup is the liveness source of
+/// truth — gated by `SessionEnd` and process-liveness — so an ask is stale when
+/// either its session has left the rollup entirely, or a strictly-newer session
+/// of the same kind has taken over the worktree. The latter reaps the zombie
+/// case: a pidless `SessionStart`-only session never ends and never gets reaped
+/// by process liveness, so without supersession its old permission prompt pins
+/// itself onto the freshly launched session sharing the pane. Asks with no
 /// session id can't be proven stale and are kept.
 fn agent_hook_session_stale(item: &FeedItem, agents: &[AgentState]) -> bool {
     if item.source_kind != "agent-hook" {
         return false;
     }
-    match agent_id_from_item(item) {
-        Some(agent_id) => !agents
-            .iter()
-            .any(|agent| agent.kind == item.source && agent.agent_id == agent_id),
-        None => false,
-    }
+    let Some(agent_id) = agent_id_from_item(item) else {
+        return false;
+    };
+    let Some(session) = agents
+        .iter()
+        .find(|agent| agent.kind == item.source && agent.agent_id == agent_id)
+    else {
+        return true;
+    };
+    agents.iter().any(|other| {
+        other.kind == session.kind
+            && other.agent_id != session.agent_id
+            && other.worktree_path == session.worktree_path
+            && other.last_activity > session.last_activity
+    })
 }
 
 fn build_worktree_groups(
@@ -1848,6 +1861,62 @@ mod tests {
         let rows = &snapshot.worktree_groups[0].rows;
         assert_eq!(rows.len(), 1, "only the live codex renders");
         assert_eq!(rows[0].name, "codex");
+        assert_eq!(rows[0].status, Some(AgentStatus::Idle));
+        assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "%1");
+    }
+
+    #[test]
+    fn superseded_zombie_ask_yields_pane_to_the_fresh_session() {
+        // Live reproduction: a pidless `SessionStart`-only claude never ends and
+        // never gets reaped, so it lingers in the rollup with an old pending
+        // ask. A freshly launched claude shares the worktree. The ask must not
+        // render as attention or pin the dead session's "permission" task and
+        // stale timestamp onto the live pane — the fresh session binds it idle.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut stale = FeedItem::new(
+            workspace.clone(),
+            Surface::NativeUi,
+            FeedKind::Permission,
+            "claude needs attention",
+            "claude",
+            "agent-hook",
+        );
+        stale.worktree_path = Some("/repo/main".to_owned());
+        stale.payload = serde_json::json!({ "session_id": "zombie-claude" });
+
+        let mut zombie = agent(
+            "claude",
+            "zombie-claude",
+            AgentStatus::Idle,
+            PermissionPosture::Default,
+            1_000,
+        );
+        zombie.worktree_path = Some("/repo/main".to_owned());
+        let mut fresh = agent(
+            "claude",
+            "fresh-claude",
+            AgentStatus::Idle,
+            PermissionPosture::Default,
+            2_000,
+        );
+        fresh.worktree_path = Some("/repo/main".to_owned());
+
+        let snapshot = SidebarSnapshot::build_with_carryover(
+            workspace,
+            vec![stale],
+            Vec::new(),
+            vec![zombie, fresh],
+        )
+        .with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
+
+        assert!(
+            snapshot.needs_attention.is_empty(),
+            "the superseded session's ask is not attention"
+        );
+        assert_eq!(snapshot.worktree_groups.len(), 1);
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert_eq!(rows.len(), 1, "only the fresh session renders");
+        assert_eq!(rows[0].id, "fresh-claude");
         assert_eq!(rows[0].status, Some(AgentStatus::Idle));
         assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "%1");
     }
