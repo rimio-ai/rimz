@@ -20,7 +20,7 @@ use rimz::ledger::paths::PathErr;
 use rimz::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use tracing::{debug, warn};
 
-use crate::render::{self, FetchStatus, UiState};
+use crate::render::{self, Alert, UiState};
 
 mod input;
 use input::{KeyAction, Wakeup, encode_key, encode_mouse, wait_for_wakeup};
@@ -87,7 +87,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     terminal.clear()?;
 
     let mut last_snapshot: Option<SidebarSnapshot> = None;
-    let mut status = FetchStatus::Ok;
+    let mut health = Health::default();
     let mut self_close = SelfCloseState::default();
     let mut ui = UiState::default();
 
@@ -106,13 +106,18 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             heartbeat_outcome.as_ref().err().map(|e| e.to_string()),
             snapshot_outcome.map_err(|e| e.to_string()),
             last_snapshot.take(),
-            &status,
+            &health,
         );
         if let Err(err) = &heartbeat_outcome {
             warn!(error = %err, "sidebar heartbeat failed");
         }
-        if let FetchStatus::Degraded { reason, .. } = &state.status {
-            warn!(reason = %reason, "sidebar refresh degraded");
+        if let Some(alert) = state
+            .health
+            .alert
+            .as_ref()
+            .filter(|alert| alert.is_active())
+        {
+            warn!(reason = %alert.reason, "sidebar refresh degraded");
         }
         let own_view = own_view_state(&config);
         clamp_selection(&mut ui, &state.snapshot);
@@ -125,8 +130,13 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 .and_then(|state| state.focused_pane_id.as_ref()),
         );
         last_snapshot = state.last_snapshot;
-        status = state.status;
-        render::draw_to_terminal_with_ui(&mut terminal, &state.snapshot, &status, &ui)?;
+        health = state.health;
+        render::draw_to_terminal_with_ui(
+            &mut terminal,
+            &state.snapshot,
+            health.alert.as_ref(),
+            &ui,
+        )?;
 
         if self_close_decision(
             &mut self_close,
@@ -139,9 +149,17 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             break;
         }
         let wakeup = wait_for_wakeup(&socket)?;
-        let outcome = handle_wakeup(wakeup, &mut ui, &state.snapshot, &status);
+        let outcome = handle_wakeup(wakeup, &mut ui, &state.snapshot);
+        if outcome.dismiss {
+            health.alert = None;
+        }
         if outcome.redraw {
-            render::draw_to_terminal_with_ui(&mut terminal, &state.snapshot, &status, &ui)?;
+            render::draw_to_terminal_with_ui(
+                &mut terminal,
+                &state.snapshot,
+                health.alert.as_ref(),
+                &ui,
+            )?;
         }
         if let Some(index) = outcome.focus_index {
             focus_selected_row(&state.snapshot, index, &config);
@@ -263,6 +281,22 @@ fn own_pane_id(mux: MuxName) -> Option<PaneId> {
     Some(PaneId::from_parts(mux, raw))
 }
 
+/// A single transient fetch hiccup must not flash a scary banner: the loop
+/// already holds the last good frame, so absorb the first failures silently
+/// and only raise an alert once a failure persists this many consecutive
+/// fetches. Sustained failures still surface promptly (~one tick apart).
+const ALERT_AFTER_FAILURES: u32 = 2;
+
+/// Debounced, sticky health of the refresh loop. `failure_streak` counts
+/// consecutive failed fetches so a lone blip never alarms; `alert` is the
+/// bottom-of-sidebar notice, which survives recovery (marked recovered) until
+/// the user dismisses it.
+#[derive(Clone, Debug, Default)]
+pub struct Health {
+    pub failure_streak: u32,
+    pub alert: Option<Alert>,
+}
+
 /// Decide what to render next given the latest heartbeat + snapshot outcomes.
 /// Pure data, no I/O — extracted so the loop's recovery rules are testable.
 pub fn compute_next_state(
@@ -270,18 +304,20 @@ pub fn compute_next_state(
     heartbeat_failure: Option<String>,
     snapshot: std::result::Result<SidebarSnapshot, String>,
     previous_snapshot: Option<SidebarSnapshot>,
-    previous_status: &FetchStatus,
+    previous_health: &Health,
 ) -> RenderState {
     let (last_snapshot, snapshot_failure) = match snapshot {
         Ok(snapshot) => (Some(snapshot), None),
         Err(reason) => (previous_snapshot, Some(reason)),
     };
 
-    let new_status = match (snapshot_failure, heartbeat_failure) {
-        (None, None) => FetchStatus::Ok,
-        (Some(reason), _) => promote(previous_status, format!("snapshot failed: {reason}")),
-        (None, Some(reason)) => promote(previous_status, format!("heartbeat failed: {reason}")),
-    };
+    // A failed snapshot is the headline; a heartbeat-only failure still keeps
+    // the fresh snapshot but reports its own reason.
+    let failure = snapshot_failure
+        .map(|reason| format!("snapshot failed: {reason}"))
+        .or_else(|| heartbeat_failure.map(|reason| format!("heartbeat failed: {reason}")));
+
+    let health = next_health(previous_health, failure);
 
     let snapshot_to_render = last_snapshot
         .clone()
@@ -289,20 +325,56 @@ pub fn compute_next_state(
 
     RenderState {
         snapshot: snapshot_to_render,
-        status: new_status,
+        health,
         last_snapshot,
     }
 }
 
-/// Reuse the existing `since` when the previous status was already degraded
-/// so the banner can show monotonically increasing "for Ns" elapsed time.
-fn promote(previous: &FetchStatus, reason: String) -> FetchStatus {
-    match previous {
-        FetchStatus::Degraded { since, .. } => FetchStatus::Degraded {
-            reason,
-            since: *since,
-        },
-        FetchStatus::Ok => FetchStatus::degraded(reason),
+/// Fold the latest fetch outcome into the debounced, sticky health.
+///
+/// - A failure bumps the streak and, once it crosses [`ALERT_AFTER_FAILURES`],
+///   arms (or refreshes) an active alert, preserving `since` so "for Ns" grows
+///   monotonically across an episode.
+/// - A success resets the streak and marks any active alert recovered, leaving
+///   it pinned to the bottom until the user dismisses it.
+fn next_health(previous: &Health, failure: Option<String>) -> Health {
+    match failure {
+        Some(reason) => {
+            let failure_streak = previous.failure_streak.saturating_add(1);
+            let alert = if failure_streak >= ALERT_AFTER_FAILURES {
+                let since = previous
+                    .alert
+                    .as_ref()
+                    .filter(|alert| alert.is_active())
+                    .map(|alert| alert.since)
+                    .unwrap_or_else(Timestamp::now);
+                Some(Alert {
+                    reason,
+                    since,
+                    recovered_at: None,
+                })
+            } else {
+                // Below the threshold: absorb the blip, but keep any lingering
+                // recovered alert from a previous episode.
+                previous.alert.clone()
+            };
+            Health {
+                failure_streak,
+                alert,
+            }
+        }
+        None => {
+            let alert = previous.alert.clone().map(|mut alert| {
+                if alert.is_active() {
+                    alert.recovered_at = Some(Timestamp::now());
+                }
+                alert
+            });
+            Health {
+                failure_streak: 0,
+                alert,
+            }
+        }
     }
 }
 
@@ -330,7 +402,7 @@ fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
 #[derive(Clone, Debug)]
 pub struct RenderState {
     pub snapshot: SidebarSnapshot,
-    pub status: FetchStatus,
+    pub health: Health,
     pub last_snapshot: Option<SidebarSnapshot>,
 }
 
@@ -464,15 +536,10 @@ fn spawn_event_waker(wake_path: PathBuf) {
     });
 }
 
-fn handle_wakeup(
-    wakeup: Wakeup,
-    ui: &mut UiState,
-    snapshot: &SidebarSnapshot,
-    status: &FetchStatus,
-) -> InputOutcome {
+fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -> InputOutcome {
     match wakeup {
         Wakeup::Key(action) => handle_key(action, ui, snapshot),
-        Wakeup::MouseClick { column, row } => handle_mouse_click(column, row, ui, snapshot, status),
+        Wakeup::MouseClick { column, row } => handle_mouse_click(column, row, ui, snapshot),
         Wakeup::Resize => InputOutcome::redraw(),
         Wakeup::Tick => InputOutcome::default(),
     }
@@ -482,6 +549,7 @@ fn handle_wakeup(
 struct InputOutcome {
     redraw: bool,
     focus_index: Option<usize>,
+    dismiss: bool,
 }
 
 impl InputOutcome {
@@ -489,6 +557,7 @@ impl InputOutcome {
         Self {
             redraw: true,
             focus_index: None,
+            dismiss: false,
         }
     }
 
@@ -496,6 +565,15 @@ impl InputOutcome {
         Self {
             redraw: true,
             focus_index: Some(index),
+            dismiss: false,
+        }
+    }
+
+    fn dismiss() -> Self {
+        Self {
+            redraw: true,
+            focus_index: None,
+            dismiss: true,
         }
     }
 }
@@ -529,6 +607,7 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
             ui.help_visible = !ui.help_visible;
             InputOutcome::redraw()
         }
+        KeyAction::Dismiss => InputOutcome::dismiss(),
         KeyAction::Digit(digit) => {
             let index = usize::from(digit.saturating_sub(1));
             if index < visible_row_count(snapshot) {
@@ -545,11 +624,8 @@ fn handle_mouse_click(
     row: u16,
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
-    status: &FetchStatus,
 ) -> InputOutcome {
-    if let Some(index) =
-        row_index_at_screen_position(snapshot, status, ui.selected_index, column, row)
-    {
+    if let Some(index) = row_index_at_screen_position(snapshot, ui.selected_index, column, row) {
         ui.selected_index = index;
         return InputOutcome::focus(ui.selected_index);
     }
@@ -584,7 +660,6 @@ fn sync_selection_to_focused_pane(
 
 fn row_index_at_screen_position(
     snapshot: &SidebarSnapshot,
-    status: &FetchStatus,
     selected_index: usize,
     column: u16,
     row: u16,
@@ -595,29 +670,18 @@ fn row_index_at_screen_position(
         return None;
     }
     let target = usize::from(row - 1);
-    row_index_at_content_line(snapshot, status, selected_index, target)
+    row_index_at_content_line(snapshot, selected_index, target)
 }
 
 fn row_index_at_content_line(
     snapshot: &SidebarSnapshot,
-    status: &FetchStatus,
     selected_index: usize,
     target: usize,
 ) -> Option<usize> {
+    // The health alert is pinned below every row, so it never shifts the row
+    // grid; clicks on it fall through to `None`.
     let mut line = 0_usize;
     let mut last_nonempty = false;
-
-    if matches!(status, FetchStatus::Degraded { .. }) {
-        if target == line {
-            return None;
-        }
-        line += 1;
-        if target == line {
-            return None;
-        }
-        line += 1;
-        last_nonempty = false;
-    }
 
     if has_attention_line(snapshot) {
         if target == line {
@@ -925,18 +989,30 @@ mod tests {
         snapshot
     }
 
+    /// Health seeded with a live alert, as if a failure already crossed the
+    /// debounce threshold — the starting point for recovery/sticky tests.
+    fn degraded_health(reason: &str) -> Health {
+        Health {
+            failure_streak: ALERT_AFTER_FAILURES,
+            alert: Some(Alert::active(reason)),
+        }
+    }
+
     #[test]
     fn first_ok_fetch_clears_status_and_records_snapshot() {
         let ws = workspace();
         let snap = snapshot(&ws);
-        let state = compute_next_state(&ws, None, Ok(snap.clone()), None, &FetchStatus::Ok);
-        assert!(matches!(state.status, FetchStatus::Ok));
+        let state = compute_next_state(&ws, None, Ok(snap.clone()), None, &Health::default());
+        assert!(state.health.alert.is_none());
+        assert_eq!(state.health.failure_streak, 0);
         assert!(state.last_snapshot.is_some());
         assert_eq!(state.snapshot.workspace_id, ws);
     }
 
     #[test]
-    fn fetch_failure_uses_previous_snapshot_and_marks_degraded() {
+    fn single_failure_is_absorbed_without_an_alert() {
+        // One flaky tick must not flash a banner: the streak climbs but no
+        // alert arms yet, and the last good frame is reused.
         let ws = workspace();
         let previous = snapshot(&ws);
         let state = compute_next_state(
@@ -944,88 +1020,106 @@ mod tests {
             None,
             Err("ledger not found".to_owned()),
             Some(previous.clone()),
-            &FetchStatus::Ok,
+            &Health::default(),
         );
-        match &state.status {
-            FetchStatus::Degraded { reason, .. } => {
-                assert!(reason.contains("snapshot failed"));
-                assert!(reason.contains("ledger not found"));
-            }
-            FetchStatus::Ok => panic!("expected Degraded"),
-        }
+        assert!(state.health.alert.is_none(), "one blip must not alarm");
+        assert_eq!(state.health.failure_streak, 1);
         assert!(state.last_snapshot.is_some());
         assert_eq!(state.snapshot.workspace_id, previous.workspace_id);
     }
 
     #[test]
-    fn fetch_failure_without_previous_snapshot_uses_placeholder() {
+    fn sustained_failure_raises_active_alert_after_threshold() {
         let ws = workspace();
-        let state = compute_next_state(
+        let previous = snapshot(&ws);
+        let first = compute_next_state(
             &ws,
             None,
             Err("ledger not found".to_owned()),
-            None,
-            &FetchStatus::Ok,
+            Some(previous.clone()),
+            &Health::default(),
         );
-        assert!(matches!(state.status, FetchStatus::Degraded { .. }));
-        assert!(state.last_snapshot.is_none());
-        assert_eq!(state.snapshot.workspace_id, ws);
-        assert!(state.snapshot.needs_attention.is_empty());
+        let second = compute_next_state(
+            &ws,
+            None,
+            Err("ledger not found".to_owned()),
+            first.last_snapshot,
+            &first.health,
+        );
+        let alert = second.health.alert.expect("a sustained failure alerts");
+        assert!(alert.is_active());
+        assert!(alert.reason.contains("snapshot failed"));
+        assert!(alert.reason.contains("ledger not found"));
+        assert!(second.last_snapshot.is_some());
     }
 
     #[test]
-    fn heartbeat_failure_alone_marks_degraded() {
+    fn sustained_failure_without_previous_snapshot_uses_placeholder() {
+        let ws = workspace();
+        let err = || Err::<SidebarSnapshot, String>("ledger not found".to_owned());
+        let first = compute_next_state(&ws, None, err(), None, &Health::default());
+        let second = compute_next_state(&ws, None, err(), None, &first.health);
+        assert!(second.health.alert.is_some_and(|alert| alert.is_active()));
+        assert!(second.last_snapshot.is_none());
+        assert_eq!(second.snapshot.workspace_id, ws);
+        assert!(second.snapshot.needs_attention.is_empty());
+    }
+
+    #[test]
+    fn sustained_heartbeat_failure_alerts_but_keeps_fresh_snapshot() {
         let ws = workspace();
         let snap = snapshot(&ws);
-        let state = compute_next_state(
+        let first = compute_next_state(
             &ws,
             Some("hb failed".to_owned()),
             Ok(snap.clone()),
             None,
-            &FetchStatus::Ok,
+            &Health::default(),
         );
-        match &state.status {
-            FetchStatus::Degraded { reason, .. } => {
-                assert!(reason.contains("heartbeat failed"));
-            }
-            FetchStatus::Ok => panic!("expected Degraded"),
-        }
+        let second = compute_next_state(
+            &ws,
+            Some("hb failed".to_owned()),
+            Ok(snap.clone()),
+            first.last_snapshot,
+            &first.health,
+        );
+        let alert = second
+            .health
+            .alert
+            .expect("sustained heartbeat failure alerts");
+        assert!(alert.reason.contains("heartbeat failed"));
         // Heartbeat failing does not invalidate a fresh snapshot.
-        assert!(state.last_snapshot.is_some());
+        assert!(second.last_snapshot.is_some());
     }
 
     #[test]
-    fn promote_preserves_since_across_iterations() {
+    fn active_alert_since_stays_pinned_across_the_episode() {
         let ws = workspace();
-        let first = compute_next_state(&ws, None, Err("first".to_owned()), None, &FetchStatus::Ok);
-        let FetchStatus::Degraded {
-            since: first_since, ..
-        } = first.status.clone()
-        else {
-            panic!("expected first iteration to be Degraded");
-        };
-        let second = compute_next_state(
+        let armed = degraded_health("snapshot failed: first");
+        let first_since = armed.alert.as_ref().unwrap().since;
+        let next = compute_next_state(
             &ws,
             None,
             Err("second".to_owned()),
-            first.last_snapshot,
-            &first.status,
+            Some(snapshot(&ws)),
+            &armed,
         );
-        match &second.status {
-            FetchStatus::Degraded { since, reason } => {
-                assert_eq!(*since, first_since, "since must remain pinned");
-                assert!(reason.contains("second"));
-            }
-            FetchStatus::Ok => panic!("expected second iteration still Degraded"),
-        }
+        let alert = next.health.alert.expect("still degraded");
+        assert_eq!(alert.since, first_since, "since must remain pinned");
+        assert!(alert.reason.contains("second"));
     }
 
     #[test]
-    fn recovery_clears_degraded_status() {
+    fn recovery_marks_alert_recovered_and_keeps_it_sticky() {
+        // Recovery does not erase the alert: it lingers, recovered, until the
+        // user dismisses it.
         let ws = workspace();
-        let degraded = FetchStatus::degraded("snapshot failed: x");
-        let recovered = compute_next_state(&ws, None, Ok(snapshot(&ws)), None, &degraded);
-        assert!(matches!(recovered.status, FetchStatus::Ok));
+        let armed = degraded_health("snapshot failed: x");
+        let recovered = compute_next_state(&ws, None, Ok(snapshot(&ws)), None, &armed);
+        let alert = recovered.health.alert.expect("recovered alert lingers");
+        assert!(!alert.is_active());
+        assert!(alert.recovered_at.is_some());
+        assert_eq!(recovered.health.failure_streak, 0);
     }
 
     #[test]
@@ -1172,23 +1266,17 @@ mod tests {
         );
 
         assert_eq!(
-            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 0, 1, 1),
+            row_index_at_screen_position(&snapshot, 0, 1, 1),
             None,
             "the group header is not a row"
         );
         assert_eq!(
-            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 0, 0, 2),
+            row_index_at_screen_position(&snapshot, 0, 0, 2),
             None,
             "the border is not clickable content"
         );
-        assert_eq!(
-            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 0, 1, 2),
-            Some(0)
-        );
-        assert_eq!(
-            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 0, 1, 3),
-            Some(1)
-        );
+        assert_eq!(row_index_at_screen_position(&snapshot, 0, 1, 2), Some(0));
+        assert_eq!(row_index_at_screen_position(&snapshot, 0, 1, 3), Some(1));
     }
 
     #[test]
@@ -1196,12 +1284,9 @@ mod tests {
         let ws = workspace();
         let snapshot = agent_snapshot(&ws);
 
+        assert_eq!(row_index_at_screen_position(&snapshot, 0, 1, 2), Some(0));
         assert_eq!(
-            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 0, 1, 2),
-            Some(0)
-        );
-        assert_eq!(
-            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 0, 1, 3),
+            row_index_at_screen_position(&snapshot, 0, 1, 3),
             Some(0),
             "clicking an agent capability line routes to that agent row"
         );
@@ -1222,7 +1307,7 @@ mod tests {
             help_visible: false,
         };
 
-        let outcome = handle_mouse_click(1, 3, &mut ui, &snapshot, &FetchStatus::Ok);
+        let outcome = handle_mouse_click(1, 3, &mut ui, &snapshot);
 
         assert_eq!(outcome, InputOutcome::focus(1));
         assert_eq!(ui.selected_index, 1);
@@ -1247,6 +1332,21 @@ mod tests {
 
         assert_eq!(outcome, InputOutcome::redraw());
         assert_eq!(ui.selected_index, 1);
+    }
+
+    #[test]
+    fn dismiss_key_requests_alert_dismissal() {
+        let ws = workspace();
+        let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
+        let mut ui = UiState::default();
+
+        let outcome = handle_key(KeyAction::Dismiss, &mut ui, &snapshot);
+
+        assert_eq!(outcome, InputOutcome::dismiss());
+        assert!(outcome.dismiss);
+        assert!(outcome.redraw);
+        // Dismiss never moves the selection.
+        assert_eq!(ui.selected_index, 0);
     }
 
     #[test]

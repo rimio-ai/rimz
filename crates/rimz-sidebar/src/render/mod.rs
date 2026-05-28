@@ -5,10 +5,12 @@
 //! composition lives in [`sections`]; vocabulary labels in [`labels`];
 //! pure formatting helpers in [`fmt`].
 //!
-//! Every entry point takes a [`FetchStatus`] alongside the snapshot. When
-//! degraded, a banner line surfaces the reason and the elapsed time since
-//! the loop went unhealthy. This is the reload-recovery contract documented
-//! in [`docs/internals/sidebar.md`](../../docs/internals/sidebar.md).
+//! Every entry point takes an optional [`Alert`] alongside the snapshot. The
+//! alert is the sticky health line pinned to the bottom of the sidebar: while
+//! the refresh loop is unhealthy it shows the reason and elapsed time, and
+//! after recovery it lingers as a dismissable "last alert" notice. This is the
+//! reload-recovery contract documented in
+//! [`docs/internals/sidebar.md`](../../docs/internals/sidebar.md).
 
 mod fmt;
 mod labels;
@@ -36,36 +38,41 @@ pub struct UiState {
     pub help_visible: bool,
 }
 
-/// Health of the sidebar's refresh loop. `Ok` means the last snapshot and
-/// heartbeat round-trip succeeded; `Degraded` carries a short reason and
-/// the time the degraded state started so the banner can show `for Ns`.
-#[derive(Clone, Debug, Default)]
-pub enum FetchStatus {
-    #[default]
-    Ok,
-    Degraded {
-        reason: String,
-        since: Timestamp,
-    },
+/// A sticky health alert pinned to the bottom of the sidebar.
+///
+/// `since` is when the unhealthy episode began, so an active alert can show
+/// `for Ns`. `recovered_at` is `None` while the loop is still unhealthy and
+/// `Some(t)` once it healed — a recovered alert lingers as a dismissable
+/// "last alert" notice rather than vanishing the instant a fetch succeeds.
+#[derive(Clone, Debug)]
+pub struct Alert {
+    pub reason: String,
+    pub since: Timestamp,
+    pub recovered_at: Option<Timestamp>,
 }
 
-impl FetchStatus {
-    pub fn degraded(reason: impl Into<String>) -> Self {
-        Self::Degraded {
+impl Alert {
+    pub fn active(reason: impl Into<String>) -> Self {
+        Self {
             reason: reason.into(),
             since: Timestamp::now(),
+            recovered_at: None,
         }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.recovered_at.is_none()
     }
 }
 
-pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, status: &FetchStatus) {
-    draw_with_ui(frame, snapshot, status, &UiState::default());
+pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Alert>) {
+    draw_with_ui(frame, snapshot, alert, &UiState::default());
 }
 
 pub fn draw_with_ui(
     frame: &mut Frame<'_>,
     snapshot: &SidebarSnapshot,
-    status: &FetchStatus,
+    alert: Option<&Alert>,
     ui: &UiState,
 ) {
     let area = frame.area();
@@ -77,34 +84,69 @@ pub fn draw_with_ui(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let lines = snapshot_lines(snapshot, status, ui, usize::from(inner.width));
+    let lines = compose_lines(snapshot, alert, ui, inner.width, inner.height);
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, inner);
+}
+
+/// Lay out the body, then pin the health alert to the bottom edge of the
+/// viewport like a status bar. Space for the alert is always reserved — the
+/// body is truncated before the alert is ever clipped — so the sticky notice
+/// can never scroll off the bottom of a full sidebar.
+fn compose_lines(
+    snapshot: &SidebarSnapshot,
+    alert: Option<&Alert>,
+    ui: &UiState,
+    width: u16,
+    height: u16,
+) -> Vec<Line<'static>> {
+    let mut body = snapshot_lines(snapshot, alert, ui, usize::from(width));
+    let Some(alert) = alert else {
+        return body;
+    };
+
+    let alert_block = alert_lines(&Theme::from_env(), alert);
+    let cells = usize::from(width.max(1));
+    let height = usize::from(height);
+    let alert_height = alert_block
+        .iter()
+        .map(|line| line.width().div_ceil(cells))
+        .sum::<usize>()
+        .min(height);
+
+    let max_body = height.saturating_sub(alert_height);
+    if body.len() > max_body {
+        body.truncate(max_body);
+    }
+    let pad = height.saturating_sub(body.len() + alert_height);
+    body.extend(std::iter::repeat_n(Line::from(""), pad));
+    body.extend(alert_block);
+    body
 }
 
 pub fn draw_to_terminal<B: Backend>(
     terminal: &mut Terminal<B>,
     snapshot: &SidebarSnapshot,
-    status: &FetchStatus,
+    alert: Option<&Alert>,
 ) -> Result<(), B::Error> {
-    draw_to_terminal_with_ui(terminal, snapshot, status, &UiState::default())
+    draw_to_terminal_with_ui(terminal, snapshot, alert, &UiState::default())
 }
 
 pub fn draw_to_terminal_with_ui<B: Backend>(
     terminal: &mut Terminal<B>,
     snapshot: &SidebarSnapshot,
-    status: &FetchStatus,
+    alert: Option<&Alert>,
     ui: &UiState,
 ) -> Result<(), B::Error> {
     terminal
-        .draw(|frame| draw_with_ui(frame, snapshot, status, ui))
+        .draw(|frame| draw_with_ui(frame, snapshot, alert, ui))
         .map(|_| ())
 }
 
 pub fn render_fixed<W: Write>(
     writer: W,
     snapshot: &SidebarSnapshot,
-    status: &FetchStatus,
+    alert: Option<&Alert>,
     width: u16,
     height: u16,
 ) -> io::Result<()> {
@@ -112,68 +154,82 @@ pub fn render_fixed<W: Write>(
     let viewport = Viewport::Fixed(Rect::new(0, 0, width, height));
     let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport })?;
     terminal.clear()?;
-    draw_to_terminal(&mut terminal, snapshot, status)?;
+    draw_to_terminal(&mut terminal, snapshot, alert)?;
     Ok(())
 }
 
 fn snapshot_lines(
     snapshot: &SidebarSnapshot,
-    status: &FetchStatus,
+    alert: Option<&Alert>,
     ui: &UiState,
     width: usize,
 ) -> Vec<Line<'static>> {
     let theme = Theme::from_env();
+    // An *active* alert means the body is a stale/empty fetch, not a live room:
+    // suppress the first-run hint, footer, and help so the alert speaks alone.
+    // A recovered alert is just a lingering notice — the room below it is live.
+    let active = alert.is_some_and(Alert::is_active);
     let mut lines = Vec::new();
-    if let FetchStatus::Degraded { reason, since } = status {
-        let elapsed = elapsed_short(*since);
-        lines.push(Line::styled(
-            format!("! Sidebar degraded for {elapsed}: {reason}"),
-            theme.style(Color::Red, Modifier::BOLD),
-        ));
-        lines.push(Line::from(""));
-    }
 
     if let Some(line) = attention_line(&theme, &snapshot.worktree_groups) {
         lines.push(line);
     }
     if snapshot.worktree_groups.is_empty() {
-        // A healthy, empty room is a first run (or a room whose agents have all
-        // exited); nudge the user toward launching one. When degraded the empty
-        // body is a failed fetch, not an empty room, so suppress the hint.
-        if matches!(status, FetchStatus::Ok) && should_show_first_run_hint(snapshot) {
+        if !active && should_show_first_run_hint(snapshot) {
             push_section_gap(&mut lines);
             lines.extend(first_run_hint_lines(&theme, snapshot.agent_hooks_ready));
         }
-        if matches!(status, FetchStatus::Ok) {
-            lines.extend(footer_lines(snapshot, status));
+        if !active {
+            lines.extend(footer_lines(snapshot));
         }
-        return lines;
+    } else {
+        push_section_gap(&mut lines);
+        let mut row_index = 0;
+        for (index, group) in snapshot.worktree_groups.iter().enumerate() {
+            if index > 0 {
+                lines.push(Line::from(""));
+            }
+            lines.extend(worktree_group_lines(
+                &theme,
+                group,
+                width,
+                &mut row_index,
+                ui.selected_index,
+            ));
+        }
+        if !active && should_show_first_run_hint(snapshot) {
+            lines.push(Line::from(""));
+            lines.extend(first_run_hint_lines(&theme, snapshot.agent_hooks_ready));
+        }
+        if ui.help_visible && !active {
+            lines.push(Line::from(""));
+            lines.extend(help_lines());
+        }
+        if !active {
+            lines.extend(footer_lines(snapshot));
+        }
     }
 
-    push_section_gap(&mut lines);
-    let mut row_index = 0;
-    for (index, group) in snapshot.worktree_groups.iter().enumerate() {
-        if index > 0 {
-            lines.push(Line::from(""));
-        }
-        lines.extend(worktree_group_lines(
-            &theme,
-            group,
-            width,
-            &mut row_index,
-            ui.selected_index,
-        ));
-    }
-    if matches!(status, FetchStatus::Ok) && should_show_first_run_hint(snapshot) {
-        lines.push(Line::from(""));
-        lines.extend(first_run_hint_lines(&theme, snapshot.agent_hooks_ready));
-    }
-    if ui.help_visible && matches!(status, FetchStatus::Ok) {
-        lines.push(Line::from(""));
-        lines.extend(help_lines());
-    }
-    lines.extend(footer_lines(snapshot, status));
     lines
+}
+
+fn alert_lines(theme: &Theme, alert: &Alert) -> Vec<Line<'static>> {
+    if alert.is_active() {
+        let elapsed = elapsed_short(alert.since);
+        vec![Line::styled(
+            format!("! Sidebar degraded for {elapsed}: {}", alert.reason),
+            theme.style(Color::Red, Modifier::BOLD),
+        )]
+    } else {
+        let elapsed = alert
+            .recovered_at
+            .map(elapsed_short)
+            .unwrap_or_else(|| "0s".to_owned());
+        vec![Line::styled(
+            format!("⚠ last alert {elapsed} ago: {}  ·  x dismiss", alert.reason),
+            theme.style(Color::Yellow, Modifier::DIM),
+        )]
+    }
 }
 
 fn push_section_gap(lines: &mut Vec<Line<'static>>) {
@@ -197,10 +253,7 @@ fn is_known_agent_process(row: &rimz::SidebarRow) -> bool {
         && (rimz::agents::KNOWN_AGENTS.contains(&row.name.as_str()) || row.name == "node")
 }
 
-fn footer_lines(snapshot: &SidebarSnapshot, status: &FetchStatus) -> Vec<Line<'static>> {
-    if !matches!(status, FetchStatus::Ok) {
-        return Vec::new();
-    }
+fn footer_lines(snapshot: &SidebarSnapshot) -> Vec<Line<'static>> {
     let attention = snapshot
         .worktree_groups
         .iter()
@@ -243,7 +296,7 @@ fn help_lines() -> Vec<Line<'static>> {
     vec![
         Line::styled("keys & legend", dim),
         Line::styled("↑/↓ select   1-9 jump   ↵ jump", dim),
-        Line::styled("␣ next ◆/✗   ? close keys", dim),
+        Line::styled("␣ next ◆/✗   x dismiss   ? close", dim),
         Line::styled("◆ waiting   ✗ failed   ▸ running", dim),
         Line::styled("○ idle      · process", dim),
     ]
@@ -271,21 +324,21 @@ mod tests {
     }
 
     fn snapshot_to_screen(snapshot: &SidebarSnapshot, width: u16, height: u16) -> String {
-        snapshot_to_screen_with_status(snapshot, &FetchStatus::Ok, width, height)
+        snapshot_to_screen_with_alert(snapshot, None, width, height)
     }
 
-    fn snapshot_to_screen_with_status(
+    fn snapshot_to_screen_with_alert(
         snapshot: &SidebarSnapshot,
-        status: &FetchStatus,
+        alert: Option<&Alert>,
         width: u16,
         height: u16,
     ) -> String {
-        snapshot_to_screen_with_status_and_ui(snapshot, status, &UiState::default(), width, height)
+        snapshot_to_screen_with_alert_and_ui(snapshot, alert, &UiState::default(), width, height)
     }
 
-    fn snapshot_to_screen_with_status_and_ui(
+    fn snapshot_to_screen_with_alert_and_ui(
         snapshot: &SidebarSnapshot,
-        status: &FetchStatus,
+        alert: Option<&Alert>,
         ui: &UiState,
         width: u16,
         height: u16,
@@ -295,7 +348,7 @@ mod tests {
         let viewport = Viewport::Fixed(Rect::new(0, 0, width, height));
         let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
         terminal.clear().unwrap();
-        draw_to_terminal_with_ui(&mut terminal, snapshot, status, ui).unwrap();
+        draw_to_terminal_with_ui(&mut terminal, snapshot, alert, ui).unwrap();
         drop(terminal);
         let mut parser = vt100::Parser::new(height, width, 0);
         parser.process(&bytes);
@@ -462,9 +515,9 @@ mod tests {
         snapshot.worktree_groups[0].diff_added = Some(127);
         snapshot.worktree_groups[0].diff_removed = Some(43);
 
-        let rendered = snapshot_to_screen_with_status_and_ui(
+        let rendered = snapshot_to_screen_with_alert_and_ui(
             &snapshot,
-            &FetchStatus::Ok,
+            None,
             &UiState {
                 selected_index: 0,
                 help_visible: false,
@@ -514,26 +567,43 @@ mod tests {
     }
 
     #[test]
-    fn render_degraded_status_shows_banner_above_snapshot() {
+    fn render_active_alert_shows_banner_below_snapshot() {
         let snapshot = snapshot_with(Vec::new(), Vec::new());
-        let status = FetchStatus::Degraded {
+        let alert = Alert {
             reason: "snapshot failed: ledger not found".to_owned(),
             since: fixed_now() - Duration::from_secs(8),
+            recovered_at: None,
         };
 
         assert_snapshot(
             "degraded_banner",
-            snapshot_to_screen_with_status(&snapshot, &status, 80, 18),
+            snapshot_to_screen_with_alert(&snapshot, Some(&alert), 80, 18),
         );
     }
 
     #[test]
-    fn render_ok_status_omits_banner() {
+    fn render_recovered_alert_lingers_with_dismiss_hint() {
         let snapshot = snapshot_with(Vec::new(), Vec::new());
-        let rendered = snapshot_to_screen_with_status(&snapshot, &FetchStatus::Ok, 80, 18);
+        let alert = Alert {
+            reason: "snapshot failed: ledger not found".to_owned(),
+            since: fixed_now() - Duration::from_secs(20),
+            recovered_at: Some(fixed_now() - Duration::from_secs(8)),
+        };
+        let rendered = snapshot_to_screen_with_alert(&snapshot, Some(&alert), 80, 18);
+
+        assert!(rendered.contains("last alert"), "{rendered}");
+        assert!(rendered.contains("x dismiss"), "{rendered}");
+        // Recovered means the room is live again: the first-run hint returns.
+        assert!(rendered.contains("rimz hooks install"), "{rendered}");
+    }
+
+    #[test]
+    fn render_no_alert_omits_banner() {
+        let snapshot = snapshot_with(Vec::new(), Vec::new());
+        let rendered = snapshot_to_screen_with_alert(&snapshot, None, 80, 18);
         assert!(
             !rendered.contains("Sidebar degraded"),
-            "ok status must not render the banner:\n{rendered}"
+            "no alert must not render the banner:\n{rendered}"
         );
     }
 
@@ -595,9 +665,9 @@ mod tests {
         let rendered = snapshot_to_screen(&snapshot, 80, 18);
         assert!(rendered.contains("↵ jump to codex"));
 
-        let help = snapshot_to_screen_with_status_and_ui(
+        let help = snapshot_to_screen_with_alert_and_ui(
             &snapshot,
-            &FetchStatus::Ok,
+            None,
             &UiState {
                 selected_index: 0,
                 help_visible: true,
@@ -625,17 +695,15 @@ mod tests {
     }
 
     #[test]
-    fn render_degraded_empty_suppresses_first_run_nudge() {
-        // An empty body under a degraded fetch is a failed snapshot, not an
+    fn render_active_alert_empty_suppresses_first_run_nudge() {
+        // An empty body under an active alert is a failed snapshot, not an
         // empty room — the nudge would misreport. The banner speaks instead.
         let snapshot = snapshot_with(Vec::new(), Vec::new());
-        let status = FetchStatus::Degraded {
-            reason: "snapshot failed: ledger not found".to_owned(),
-            since: fixed_now() - Duration::from_secs(8),
-        };
-        let rendered = snapshot_to_screen_with_status(&snapshot, &status, 80, 18);
+        let alert = Alert::active("snapshot failed: ledger not found");
+        let rendered = snapshot_to_screen_with_alert(&snapshot, Some(&alert), 80, 18);
 
         assert!(!rendered.contains("run claude or codex"));
+        assert!(!rendered.contains("rimz hooks install"));
     }
 
     #[test]

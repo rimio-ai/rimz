@@ -37,7 +37,7 @@ Row presence comes from the **live pane list**, not the ledger. `rimz sidebar sn
 
 This is why an exited agent never lingers: presence follows the process, so the bug it replaces ("agent quits, row stays") cannot recur. There is no `offline` status — a dead agent is a reverted shell row or no row at all.
 
-**Attention stays live for agents and scripts.** A script's blocking `feed ask` chose Rimz as its surface, so its pending item produces a row while the waiter process is alive. An agent prompt belongs to the agent pane, so a pending agent item renders only when a live non-shell pane corroborates that agent in the same worktree; if the pane has reverted to `zsh` or closed, the stale item remains in audit (`rimz feed list --audit` / `feed show`) but leaves the sidebar and default `feed list`. When pane discovery itself fails, the renderer keeps the last good snapshot and raises the degraded banner rather than inventing an empty room.
+**Attention stays live for agents and scripts.** A script's blocking `feed ask` chose Rimz as its surface, so its pending item produces a row while the waiter process is alive. An agent prompt belongs to the agent pane, so a pending agent item renders only when a live non-shell pane corroborates that agent in the same worktree; if the pane has reverted to `zsh` or closed, the stale item remains in audit (`rimz feed list --audit` / `feed show`) but leaves the sidebar and default `feed list`. When pane discovery itself fails, the renderer keeps the last good snapshot and, once the failure persists, raises the sticky health alert rather than inventing an empty room.
 
 ## Launch model
 
@@ -60,7 +60,7 @@ Zellij users can opt in to a wasm plugin that presents the same view-model as a 
 
 **Reference.** Model the rail on Zellij's bundled `strider` plugin. Strider is a docked side pane that ingests host data asynchronously, keeps `State` separate from per-section view structs, scrolls a bounded list, and handles key + mouse — the same shape carries the worktree-grouped roster and its jump-on-select rows. Mirror its split: state in one module, a render fn per worktree group, pure layout helpers (`calculate_list_bounds`) shared.
 
-**Data ingestion is async through the host.** A wasm plugin cannot block on a subprocess, so it never runs `rimz` inline. It calls `run_command(&["rimz", "sidebar", "snapshot", "--json", "--workspace-id", <id>], ctx)` and receives the bytes back as `Event::RunCommandResult(exit, stdout, stderr, ctx)` — the host bridge strider uses for the filesystem and `about` uses for `xdg-open`. The `ctx` map tags each request so the handler matches its response. Parse stdout into the snapshot view-model; on non-zero exit, keep the last good snapshot and raise the same degraded banner as the native loop. This is still read-only on the ledger: the rail reaches state only through `rimz sidebar snapshot`, never a ledger-writer import.
+**Data ingestion is async through the host.** A wasm plugin cannot block on a subprocess, so it never runs `rimz` inline. It calls `run_command(&["rimz", "sidebar", "snapshot", "--json", "--workspace-id", <id>], ctx)` and receives the bytes back as `Event::RunCommandResult(exit, stdout, stderr, ctx)` — the host bridge strider uses for the filesystem and `about` uses for `xdg-open`. The `ctx` map tags each request so the handler matches its response. Parse stdout into the snapshot view-model; on non-zero exit, keep the last good snapshot and raise the same sticky health alert as the native loop. This is still read-only on the ledger: the rail reaches state only through `rimz sidebar snapshot`, never a ledger-writer import.
 
 **Wakeups arrive as pipes; a timer backstops them.** `zellij pipe --name rimz::feed` lands in `fn pipe()`, which kicks a fresh snapshot `run_command`. A `set_timeout` keepalive tick re-fetches on the slow poll so a missed pipe never strands the rail. Subscribe to `RunCommandResult`, `Key`, `Mouse`, `Timer`, and `PermissionRequestResult` — `run_command` needs the one-time `RunCommands` grant.
 
@@ -81,7 +81,7 @@ For the felt, phase-by-phase walk-through — what the developer does, sees, and
 
 ### Empty-room hint
 
-With nothing waiting or failed the attention line is omitted and the body is never blank: each pane is still a [process row](#process-rows), and a dim first-run hint points at the real next step. The renderer keys the hint on the snapshot's `agent_hooks_ready` flag — an unwired room reads `install hooks: rimz hooks install claude`, a wired room reads `run claude or codex` — and clears it the instant the first agent or feed item appears, including a supported agent visible as a plain process row before hook enrichment lands. The hint is for a *healthy* empty room: under a degraded fetch the banner takes over and the hint is suppressed, because an empty body under a failed fetch is a missing snapshot, not an empty room (see [Reload recovery](#reload-recovery)). `rimz doctor` reports the same per-agent install status the flag reflects.
+With nothing waiting or failed the attention line is omitted and the body is never blank: each pane is still a [process row](#process-rows), and a dim first-run hint points at the real next step. The renderer keys the hint on the snapshot's `agent_hooks_ready` flag — an unwired room reads `install hooks: rimz hooks install claude`, a wired room reads `run claude or codex` — and clears it the instant the first agent or feed item appears, including a supported agent visible as a plain process row before hook enrichment lands. The hint is for a *healthy* empty room: under an active health alert the alert takes over and the hint is suppressed, because an empty body under a failed fetch is a missing snapshot, not an empty room (see [Reload recovery](#reload-recovery)). `rimz doctor` reports the same per-agent install status the flag reflects.
 
 ## State access
 
@@ -107,26 +107,28 @@ On wakeup, the sidebar refetches the snapshot. Missed wakeups are closed by poll
 
 ## Reload recovery
 
-The sidebar process keeps the last successful snapshot across iterations. When `rimz sidebar snapshot` or `rimz sidebar heartbeat` fails — the binary is missing, the ledger directory is gone, the JSON is mid-write — the loop:
+The sidebar process keeps the last successful snapshot across iterations. When `rimz sidebar snapshot` or `rimz sidebar heartbeat` fails — the binary is missing, the ledger directory is gone, pane discovery hit a transient mux hiccup — the loop:
 
 1. Reuses the last snapshot for the current draw, falling back to an empty placeholder when nothing has loaded yet (sidebar started cold after a workspace move).
-2. Promotes the fetch state to `Degraded` and pins the timestamp the loop went unhealthy.
-3. Renders a one-line banner at the top of the sidebar — `! Sidebar degraded for 8s: snapshot failed: ledger not found` — so the user sees *why* the UI isn't updating, instead of staring at a stale snapshot.
-4. Clears the banner the next iteration that succeeds.
+2. Counts the consecutive failures. A single flaky fetch is absorbed silently — the last good frame already covers it, so one blip never flashes a banner.
+3. Once a failure persists past the debounce threshold, raises a sticky **health alert** pinned to the bottom of the sidebar — `! Sidebar degraded for 8s: snapshot failed: ledger not found` — and pins the timestamp the episode began, so "for Ns" grows monotonically.
+4. On recovery the alert is not erased: it lingers as a dim `⚠ last alert 8s ago: … · x dismiss` notice so a failure that flickered past is still visible after the fact. Pressing `x` dismisses it; a fresh failure re-arms it. While the alert is *active* the body is a stale or empty fetch, so the first-run hint, footer, and help overlay step aside and let the alert speak alone.
+
+The alert is reserved space at the bottom edge of the viewport (status-bar style): the body is truncated before the alert is ever clipped, so the sticky notice can never scroll off a full sidebar.
 
 `rimz-sidebar` defaults tracing to `off` so warnings do not corrupt the terminal UI. Set `RUST_LOG` when debugging the renderer.
 
-The decision logic is the pure function `app::compute_next_state`; the loop applies its `RenderState` verbatim.
+The decision logic is the pure function `app::compute_next_state`, which folds each fetch outcome into a debounced, sticky `Health` (`failure_streak` plus an optional `Alert`); the loop applies its `RenderState` verbatim.
 
 ## Information architecture
 
 Top to bottom, the sidebar is:
 
 1. **Title** — the project display name (workspace-id fallback).
-2. **Degraded banner** — only when the refresh loop is unhealthy (see [Reload recovery](#reload-recovery)).
-3. **Attention line** — instant triage: `◆2  ✗1` (yellow/red) counts agents waiting or failed; omitted when nothing needs you. It counts even agents hidden by a per-worktree cap, so the aggregate is never lost.
-4. **Worktree groups** — the body (below).
-5. **Footer** — a dim hint for the interactive keys: `↵ jump`, plus `␣ next ◆` and `? keys` when more than one row needs you; with a single waiting item it names the target (`↵ jump to claude`). No timestamp; freshness is the degraded banner's job.
+2. **Attention line** — instant triage: `◆2  ✗1` (yellow/red) counts agents waiting or failed; omitted when nothing needs you. It counts even agents hidden by a per-worktree cap, so the aggregate is never lost.
+3. **Worktree groups** — the body (below).
+4. **Footer** — a dim hint for the interactive keys: `↵ jump`, plus `␣ next ◆` and `? keys` when more than one row needs you; with a single waiting item it names the target (`↵ jump to claude`). No timestamp; freshness is the health alert's job.
+5. **Health alert** — the sticky, dismissable bottom line, present only when the refresh loop is or recently was unhealthy (see [Reload recovery](#reload-recovery)).
 
 There are no feed-group sections: "Recently answered" and "Recent activity" are gone. The sidebar shows only what needs a decision or an action; full history lives in `rimz feed list --audit`.
 
@@ -172,6 +174,7 @@ You don't read where to go; you go. Selecting a row focuses that agent's pane vi
 - `↑/↓` select a row; `↵` jumps to the selected pane.
 - `1`–`9` jump by the row's visible ordinal (its position in the column, not a mux pane id).
 - `␣` jumps to the *next item that needs you* — the next `waiting`/`failed` row in ranking order — without first selecting it. This is the fleet-scale triage key (Phase 4): one keystroke to the oldest blocked pane, again for the next. It is bound only inside the Rimz session, so it never touches the user's global mux config.
+- `x` dismisses the sticky [health alert](#reload-recovery) once it has recovered; an active failure re-arms it.
 - `?` toggles a legend-and-keys overlay, so the glyph vocabulary and the key model are learnable in place without leaving the room.
 
 Per renderer this is the same model over different input plumbing:

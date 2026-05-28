@@ -23,6 +23,7 @@ pub(super) enum KeyAction {
     Enter,
     Space,
     Help,
+    Dismiss,
     Digit(u8),
 }
 
@@ -33,6 +34,7 @@ pub(super) fn encode_key(code: KeyCode) -> Option<String> {
         KeyCode::Enter => "key:enter",
         KeyCode::Char(' ') => "key:space",
         KeyCode::Char('?') => "key:help",
+        KeyCode::Char('x') => "key:dismiss",
         KeyCode::Char(c @ '1'..='9') => return Some(format!("key:digit:{c}")),
         _ => return None,
     };
@@ -65,6 +67,7 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         "key:enter" => Wakeup::Key(KeyAction::Enter),
         "key:space" => Wakeup::Key(KeyAction::Space),
         "key:help" => Wakeup::Key(KeyAction::Help),
+        "key:dismiss" => Wakeup::Key(KeyAction::Dismiss),
         _ => Wakeup::Tick,
     }
 }
