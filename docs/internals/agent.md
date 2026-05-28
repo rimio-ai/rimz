@@ -99,15 +99,17 @@ The five-value status set, in ranking order (most attention-hungry first), per [
 
 ```text
    (none) ──SessionStart──► idle ──UserPromptSubmit / SubagentStart──► running
-                             ▲                                          │  │
-                Stop(no work)│              blocking ask pending ───────┘  │
-                             │              Stop(clean) ──► success ◄──────┘
-                             │                  │
-                             └── next prompt ◄──┘
-                                                  Stop(error) / Failure feed ──► failed
+                             ▲                                          │
+              next prompt    │   Stop(clean) ──► success                │
+              re-enters ─────┤   Stop(error) ──► failed   ◄─────────────┤
+              running        │   SubagentStop ──► idle (child)          │
+                             └──────────────────────────────────────────┘
+   blocking ask pending while running ──► waiting (feed channel, not lifecycle)
 
    any state ── SessionEnd / pid dead / pane reverted to shell ──► removed (no row)
 ```
+
+`Stop` only fires after a turn ran, so it resolves the turn — `success`, or `failed` on an explicit error signal — never back to `idle`. `idle` is the resting state `SessionStart` establishes and a finished `SubagentStop` child returns to; `success`/`failed`/`idle` all re-enter `running` on the next prompt.
 
 The agent owns status and posture; Rimz observes and renders. `yolo` is observed from the agent's own bypass flag (`claude --dangerously-skip-permissions`, `codex --ask-for-approval never`). Workflow words such as `plan` and `interactive` fold into `default` because they are posture-neutral. The vocabulary is defined once in [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape).
 
@@ -121,7 +123,7 @@ When a payload carries no session id, the adapter keys on the captured `runtime_
 
 `task`, `context_pct`, `total_tokens`, and the todo counts are **enrichment**: display-only, redactable, and they never drive routing, ranking, or a decision (the no-transcript-correctness rule). A missing value reads as "the agent didn't report it" — never `0`.
 
-Context budget is the one field no agent puts directly in its hook JSON — usage lives in the transcript. Capture reads the **transcript tail** on the low-frequency events Rimz already fires (`SessionStart`, `UserPromptSubmit`, `Stop`), gated by `payload_mode`, so the gauge populates without a per-tool hook. The privacy mode strips the *content* of enrichment fields; it never suppresses the *state transition* they ride on.
+Context budget is the one field no agent puts directly in its hook JSON — usage lives in the transcript. Capture reads the **transcript tail** on the low-frequency events Rimz already fires (`SessionStart`, `UserPromptSubmit`, `Stop`), takes the most recent assistant `message.usage`, and scales it against the model's context window, so the gauge populates without a per-tool hook. These are bare token counts (metadata); `payload_mode` gates the *content* of telemetry events, never these gauges or the *state transition* they ride on.
 
 ## Liveness and presence
 
@@ -132,9 +134,9 @@ Presence comes from the live pane list, not from a session-exit hook (see [sideb
 
 There is no `offline` status — a dead agent is a reverted shell row or no row at all, never a retracted ledger fact.
 
-Two consequences this contract enforces, against which current code is measured in [Divergences](#divergences-to-reconcile):
+Two consequences this contract enforces (status in [Implementation status](#implementation-status)):
 
-- **A stale overlay never paints a non-agent pane.** After an agent exits and `git log` runs in the same pane, the foreground is `git` — a process row, never the agent that just left. An overlay attaches to a non-shell pane only when its foreground maps to the agent kind or a known launcher (`node`, `bun`, `deno`, `python`…) *and*, when both pids are known, the agent pid is an ancestor of the pane pid. The loose match exists for `node`-wrapped Codex, not for arbitrary commands.
+- **A stale overlay never paints a non-agent pane.** After an agent exits and `git log` runs in the same pane, the foreground is `git` — a process row, never the agent that just left. An overlay attaches to a non-shell pane only when its foreground maps to the agent kind or a known launcher (`node`, `bun`, `deno`, `python`…); the planned refinement also requires, when both pids are known, that the agent pid is an ancestor of the pane pid. The loose match exists for `node`-wrapped Codex, not for arbitrary commands.
 - **Worktree and branch track the live pane.** Branch and worktree are resolved from the pane's current cwd at snapshot time (the same place diff stats are read), so they follow `git checkout` and a pane `cd` into another worktree. The ledger's pinned `worktree_*` is a fallback only for a detached agent with no live pane.
 
 Pane binding and jump are the snapshot's job, documented in [sidebar.md → Jump](./sidebar.md#jump--the-row-is-the-link): the agent never self-reports a pane; binding is purely live, exact match before loose, and every jump reconciles pane id *and* `pane_process_start` so a reused id never focuses a stranger.
@@ -178,7 +180,7 @@ Native event → unified mapping:
 | ----------------------------- | --------- | ------------- | ----------------------------------- | ------------------------------------------- |
 | `SessionStart`                | default   | lifecycle     | `idle`                              | posture, model, context/tokens (transcript) |
 | `UserPromptSubmit`            | default   | lifecycle     | `running`                           | `task` = prompt; refresh context/tokens     |
-| `Stop`                        | default   | lifecycle     | `success`/`idle` (error → `failed`) | clear task; refresh context/tokens          |
+| `Stop`                        | default   | lifecycle     | `success` (error → `failed`)        | clear task; refresh context/tokens          |
 | `SessionEnd`                  | default   | lifecycle     | removed                             | —                                           |
 | `Notification`                | default   | lifecycle     | none (silent)                       | —                                           |
 | `PermissionRequest`           | default   | blocking-feed | `waiting`                           | —                                           |
@@ -207,9 +209,9 @@ Decision shapes — Claude requires `hookSpecificOutput`:
 | `UserPromptSubmit`                                    | default   | lifecycle     | `running`                    | `task` = prompt                                  |
 | `SubagentStart`                                       | default   | lifecycle     | `running`                    | keyed by child `agent_id`; `task` = `agent_type` |
 | `SubagentStop`                                        | default   | lifecycle     | `idle`                       | child row; clear task                            |
-| `Stop`                                                | default   | lifecycle     | `success`/`idle`             | clear task                                       |
+| `Stop`                                                | default   | lifecycle     | `success` (error → `failed`) | clear task                                       |
 | `PermissionRequest`                                   | default   | blocking-feed | `waiting`                    | —                                                |
-| `UserPromptSubmit`/`PreToolUse`/`PostToolUse` (broad) | telemetry | lifecycle     | none                         | audit depth                                      |
+| `PreToolUse`/`PostToolUse` (broad)                    | telemetry | lifecycle     | none                         | audit depth                                      |
 
 Decision shape — Codex permission hooks emit only `hookSpecificOutput.decision`:
 
@@ -227,13 +229,13 @@ Codex 0.134 routes thread-spawned subagents through `SubagentStart`/`SubagentSto
 
 ---
 
-## Divergences to reconcile
+## Implementation status
 
-The contract above is the target; current code diverges here. Each is a tracked fix, not a new design.
+The contract above is implemented. The history below is kept so the rationale for each fix stays discoverable.
 
-1. **`UserPromptSubmit` + `Stop` are telemetry-only**, so a default install never reaches `running` and never carries a task. They must move to the default set (state signal, not telemetry).
-2. **`Stop` is hard-coded to `idle`** in both adapters, so `success` and `failed` are unreachable from an agent. `Stop` must map clean/error to `success`/`failed`, with `idle` the fallback when the agent reports nothing.
-3. **Context budget is not captured** — the transcript-tail read on `SessionStart`/`UserPromptSubmit`/`Stop` is not yet implemented, so the gauge stays empty.
-4. **Agent visibility is gated on `runtime_owner`** (`Ledger::snapshot()` runs `RuntimeScope::Runtime`), which requires a captured pid and inverts the foreground-primary contract — agents without a pid vanish. The owner-required filter belongs to script feed items only; agents are kept by pane corroboration and suppressed only by a known-dead pid.
-5. **Worktree/branch are pinned at `SessionStart`** in the reducer and never re-derived from the live pane cwd, so the branch header goes stale after a `git checkout`.
-6. **The loose pane match accepts any non-shell command**, so a stale agent overlay can repaint a `git`/`vim` pane. It must require a known launcher plus pid ancestry.
+1. **`UserPromptSubmit` is default-install** in both adapters (it was telemetry-only), so a default install reaches `running` and carries the prompt as its task. `Stop` was already default.
+2. **`Stop` maps to `success`/`failed`** via a shared `stop_status_from_payload` — clean completion is `success`, an explicit error signal is `failed`. `idle` is owned by `SessionStart`/`SubagentStop`, never a `Stop` outcome.
+3. **Context budget is captured** from the Claude transcript tail on `SessionStart`/`UserPromptSubmit`/`Stop`.
+4. **Agent visibility no longer requires a pid.** `RuntimeScope::Runtime` applies the owner-required filter to `Surface::Script` items only; agents and bridge asks are kept unless a known owner is known-dead, so a pid-less agent is carried by pane corroboration instead of vanishing.
+5. **The branch label is re-derived live** from each worktree group's path by the snapshot CLI (cached under the diff-stats TTL), so the header follows a `git checkout`; the pinned ledger branch is the fallback when no live worktree resolves.
+6. **The loose pane match requires a known launcher** (`node`, `bun`, `deno`, `python`), so a `git`/`vim` pane never hosts a stale agent overlay. *Remaining:* the pid-ancestry refinement (agent pid an ancestor of the pane pid when both are known) needs a `/proc` walk in the snapshot CLI and is not yet wired.
