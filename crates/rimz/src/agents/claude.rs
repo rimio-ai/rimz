@@ -212,6 +212,7 @@ impl AgentIntegration for ClaudeIntegration {
             total_tokens,
             todo_done,
             todo_total,
+            pane_id: None,
         })
     }
 

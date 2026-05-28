@@ -158,6 +158,7 @@ impl AgentIntegration for CodexIntegration {
             // ships one.
             todo_done: None,
             todo_total: None,
+            pane_id: None,
         })
     }
 

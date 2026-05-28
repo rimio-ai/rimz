@@ -821,6 +821,23 @@ fn agent_id_from_item(item: &FeedItem) -> Option<String> {
     item.agent_session_id().map(ToOwned::to_owned)
 }
 
+/// Build a minimal `PaneRef` carrying just the normalized pane id. The reducer
+/// only needs identity for binding an agent to its live pane; the live
+/// multiplexer overlay fills in command/cwd/focus when it joins.
+fn pane_ref_from_id(pane_id: PaneId) -> PaneRef {
+    PaneRef {
+        pane_id,
+        session_name: String::new(),
+        view_id: None,
+        view_kind: None,
+        is_focused: false,
+        command: None,
+        cwd: None,
+        pane_pid: None,
+        pane_process_start: None,
+    }
+}
+
 fn active_resolver_state(item: &FeedItem) -> Option<SidebarResolverState> {
     if item.surface != Surface::Bridge || item.status != FeedStatus::Pending {
         return None;
@@ -1187,7 +1204,14 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
         let task = param_string("task");
         let model = param_string("model").or_else(|| prior.and_then(|p| p.model.clone()));
         let effort = param_string("effort").or_else(|| prior.and_then(|p| p.effort.clone()));
-        let pane = prior.and_then(|p| p.pane.clone());
+        // The hook stamps the mux pane id it ran inside on every lifecycle
+        // event; carry it forward when an event omits it so a `Stop` doesn't
+        // unbind the agent from its pane. Only the pane id is reduced — the
+        // rest of `PaneRef` is filled by the live `pane list` overlay.
+        let pane = param_string("pane_id")
+            .and_then(|raw| PaneId::parse(&raw).ok())
+            .map(pane_ref_from_id)
+            .or_else(|| prior.and_then(|p| p.pane.clone()));
         let state = AgentState {
             agent_id: agent_id.clone(),
             kind: kind.clone(),
@@ -1622,6 +1646,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn lifecycle_reduces_pane_id_and_carries_it_forward() {
+        // The hook stamps the mux pane id on every lifecycle event so the
+        // reducer can bind each agent to its own pane. A later event that omits
+        // pane_id must not unbind the agent.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let lifecycle = |params: serde_json::Value| {
+            EventEnvelope::new(
+                workspace.clone(),
+                "session",
+                "claude",
+                "agent-hook",
+                "agent.lifecycle",
+                params,
+            )
+        };
+        let start = lifecycle(serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "sess-1",
+            "status": "idle",
+            "pane_id": "tmux:%7",
+        }));
+        let prompt = lifecycle(serde_json::json!({
+            "event_name": "UserPromptSubmit",
+            "agent_id": "sess-1",
+            "status": "running",
+        }));
+
+        let agents = reduce_agent_states(&[start, prompt]);
+        assert_eq!(agents.len(), 1);
+        let bound = agents[0].pane.as_ref().expect("pane carries forward");
+        assert_eq!(bound.pane_id.raw(), "%7");
+    }
+
     /// Honesty contract for the event-pulse animation: the pulse counter is
     /// a function of *observed* lifecycle events alone — never wall-clock.
     /// Re-reducing the same event slice must produce the same counter, so a
@@ -1820,6 +1878,58 @@ mod tests {
         assert_eq!(row.name, "claude");
         assert_eq!(row.status, Some(AgentStatus::Waiting));
         assert_eq!(row.pane.as_ref().unwrap().pane_id.raw(), "%1");
+    }
+
+    #[test]
+    fn two_same_kind_agents_bind_to_their_stamped_panes() {
+        // Two claude sessions in one worktree are indistinguishable by name and
+        // cwd alone — without the hook-stamped pane id the loose `claude`-in-
+        // worktree fallback would just pick the first matching pane for both,
+        // cross-wiring the rows. Stamping `pane_id` on each agent state makes
+        // the binding deterministic.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut older = agent(
+            "claude",
+            "sess-a",
+            AgentStatus::Idle,
+            PermissionPosture::Default,
+            1_000,
+        );
+        older.worktree_path = Some("/repo/main".to_owned());
+        older.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+        let mut newer = agent(
+            "claude",
+            "sess-b",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            2_000,
+        );
+        newer.worktree_path = Some("/repo/main".to_owned());
+        newer.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%2")));
+
+        let snapshot = SidebarSnapshot::build_with_carryover(
+            workspace,
+            Vec::new(),
+            Vec::new(),
+            vec![older, newer],
+        )
+        .with_live_panes(
+            vec![
+                pane("%1", "claude", "/repo/main"),
+                pane("%2", "claude", "/repo/main"),
+            ],
+            None,
+        );
+
+        assert_eq!(snapshot.worktree_groups.len(), 1);
+        let rows = &snapshot.worktree_groups[0].rows;
+        let by_id = |id: &str| {
+            rows.iter()
+                .find(|row| row.id == id)
+                .unwrap_or_else(|| panic!("row {id} missing from {rows:?}"))
+        };
+        assert_eq!(by_id("sess-a").pane.as_ref().unwrap().pane_id.raw(), "%1");
+        assert_eq!(by_id("sess-b").pane.as_ref().unwrap().pane_id.raw(), "%2");
     }
 
     #[test]

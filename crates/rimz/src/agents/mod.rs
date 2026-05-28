@@ -19,6 +19,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution, RuntimeOwner};
+use crate::ids::PaneId;
 
 /// Conservative fallback for adapters that don't override. Claude overrides
 /// to 120s (see `claude::CLAUDE_HOOK_CAP`); Codex overrides to its own cap
@@ -141,6 +142,11 @@ pub struct AgentLifecycleObservation {
     /// Completed / total todos for the agent's current plan or task list.
     pub todo_done: Option<u32>,
     pub todo_total: Option<u32>,
+    /// Normalized multiplexer pane id the agent process is running inside,
+    /// read from the per-pane env var the mux exports (`TMUX_PANE` or
+    /// `ZELLIJ_PANE_ID`). Lets the sidebar bind each agent row to its actual
+    /// pane when two agents of the same kind share one worktree.
+    pub pane_id: Option<PaneId>,
 }
 
 /// Result of installing hooks. Surfaced to the CLI so the user sees which

@@ -30,6 +30,7 @@ use rimz::feed::{
     AbandonReason, FeedItem, FeedKind, FeedStatus, ResolverStep, ResolverStepState,
     RuntimeOwnerKind, Surface,
 };
+use rimz::ids::{MuxName, PaneId};
 use rimz::ledger::runtime::process_owner;
 use rimz::resolver::{Allowlist, AllowlistEntry, fresh_enrolled, is_resolver_fresh, restat};
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
@@ -115,6 +116,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         // `{}` for Claude.
         if let Some(mut observation) = agent.observe_lifecycle(&event_name, &payload) {
             attach_agent_owner(agent.name(), &mut observation);
+            attach_agent_pane(&mut observation);
             if observation.worktree_path.is_none() {
                 observation.worktree_path = Some(workspace.worktree_root.display().to_string());
             }
@@ -186,6 +188,37 @@ fn hook_agent_pid(source: &str) -> Option<u32> {
         return Some(pid);
     }
     walk_to_agent_ancestor(source)
+}
+
+/// Stamp the normalized pane id of the multiplexer pane the hook ran inside.
+/// The hook helper is a child of the agent process, which is itself a child of
+/// the user's mux pane, so the per-pane env var (`TMUX_PANE` /
+/// `ZELLIJ_PANE_ID`) names the right pane unambiguously — the only way to tell
+/// two same-kind agents in one worktree apart.
+fn attach_agent_pane(observation: &mut AgentLifecycleObservation) {
+    if observation.pane_id.is_some() {
+        return;
+    }
+    observation.pane_id = pane_id_from_env();
+}
+
+fn pane_id_from_env() -> Option<PaneId> {
+    if let Some(raw) = std::env::var("ZELLIJ_PANE_ID")
+        .ok()
+        .filter(|raw| !raw.is_empty())
+    {
+        return Some(PaneId::from_parts(
+            MuxName::Zellij,
+            format!("terminal_{raw}"),
+        ));
+    }
+    if let Some(raw) = std::env::var("TMUX_PANE")
+        .ok()
+        .filter(|raw| !raw.is_empty())
+    {
+        return Some(PaneId::from_parts(MuxName::Tmux, raw));
+    }
+    None
 }
 
 fn attach_agent_owner(source: &str, observation: &mut AgentLifecycleObservation) {

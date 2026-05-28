@@ -92,6 +92,7 @@ impl EventEnvelope {
             "total_tokens": observation.total_tokens,
             "todo_done": observation.todo_done,
             "todo_total": observation.todo_total,
+            "pane_id": observation.pane_id.as_ref().map(|id| id.as_str()),
         });
         Self::new(
             workspace_id,
