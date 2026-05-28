@@ -63,7 +63,7 @@ enum HooksSubcmd {
     Install {
         /// Agent name (`claude`, `codex`).
         source: String,
-        /// Also wire telemetry hooks (prompt submit, pre/post tool).
+        /// Also wire telemetry hooks (broad pre/post tool use).
         #[arg(long)]
         telemetry: bool,
     },
