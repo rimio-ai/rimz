@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
 use super::GlobalFlags;
@@ -37,7 +37,15 @@ enum PaneSubcmd {
     /// Send text to a pane as if it were typed.
     Send { pane_id: String, text: String },
     /// Focus a pane.
-    Focus { pane_id: String },
+    Focus {
+        pane_id: String,
+        /// Session to re-check before focusing when process-start metadata is provided.
+        #[arg(long)]
+        session_name: Option<String>,
+        /// Refuse to focus if this pane id has been reused since the snapshot.
+        #[arg(long)]
+        pane_process_start: Option<String>,
+    },
     /// Split off a new pane in the current view.
     Split,
 }
@@ -97,8 +105,23 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
             let pane = PaneId::parse(&pane_id)?;
             backend.send_keys(&pane, &text).map_err(Into::into)
         }
-        PaneSubcmd::Focus { pane_id } => {
+        PaneSubcmd::Focus {
+            pane_id,
+            session_name,
+            pane_process_start,
+        } => {
             let pane = PaneId::parse(&pane_id)?;
+            if let Some(expected_start) = pane_process_start.as_deref() {
+                let panes = backend.list_panes(PaneListOptions { session_name })?;
+                let Some(live) = panes.iter().find(|candidate| candidate.pane_id == pane) else {
+                    bail!("pane {pane} is no longer present");
+                };
+                if let Some(actual) = live.pane_process_start
+                    && actual.to_string() != expected_start
+                {
+                    bail!("pane {pane} was reused since the sidebar snapshot");
+                }
+            }
             backend.focus_pane(&pane).map_err(Into::into)
         }
         PaneSubcmd::Split => {

@@ -117,6 +117,7 @@ pub fn run(args: FeedArgs, globals: &GlobalFlags) -> Result<()> {
                 "cli",
             );
             item.body = body;
+            attach_worktree(&mut item, &workspace);
             ledger.push_feed_item(&item, &workspace.session_name)?;
             #[expect(clippy::print_stdout, reason = "command result is the request id")]
             {
@@ -139,6 +140,7 @@ pub fn run(args: FeedArgs, globals: &GlobalFlags) -> Result<()> {
                 "cli",
             );
             item.options = options;
+            attach_worktree(&mut item, &workspace);
             item.hook_wait_timeout_seconds = timeout_seconds.unwrap_or(0);
             if let Some(seconds) = timeout_seconds {
                 item.feed_deadline_at = Some(Timestamp::now() + Duration::from_secs(seconds));
@@ -322,4 +324,9 @@ pub fn run(args: FeedArgs, globals: &GlobalFlags) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn attach_worktree(item: &mut FeedItem, workspace: &rimz::ResolvedWorkspace) {
+    item.worktree_path = Some(workspace.worktree_root.display().to_string());
+    item.worktree_branch = workspace.worktree_branch.clone();
 }

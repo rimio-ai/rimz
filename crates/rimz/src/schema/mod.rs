@@ -7,5 +7,5 @@ pub mod event;
 pub mod heartbeat;
 
 pub const EVENT_SCHEMA_VERSION: &str = "rimz.event.v1";
-pub const SIDEBAR_PROTOCOL_VERSION: &str = "rimz.plugin.v1";
+pub const SIDEBAR_PROTOCOL_VERSION: &str = "rimz.plugin.v2";
 pub const RESOLVER_PROTOCOL_VERSION: &str = "rimz.resolver.v1";

@@ -14,7 +14,9 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::{
     CommandSpec, MuxBackend, MuxErr, PaneCapture, PaneListOptions, Result, SessionOptions,
@@ -156,7 +158,11 @@ impl MuxBackend for ZellijBackend {
                 session_name: session_name.clone(),
                 view_id: Some(format!("tab_{}", p.tab_id)),
                 view_kind: Some(ViewKind::Tab),
-                pane_process_start: None,
+                is_focused: p.is_focused,
+                command: p.command(),
+                cwd: p.cwd(),
+                pane_pid: p.pid(),
+                pane_process_start: p.process_start(),
             })
             .collect())
     }
@@ -229,8 +235,10 @@ impl MuxBackend for ZellijBackend {
         //   - Absent: first birth.
         //   - Exited: `attach` would resurrect a stale serialized layout (wrong
         //             geometry, suspended command panes), so delete and rebirth.
-        //   - Live + sidebar: healthy — it owns every resize the user has made
-        //             since, so never re-inject.
+        //   - Live + sidebar: healthy only when the caller still trusts a
+        //             fresh current-protocol heartbeat. If launch reached this
+        //             method after rejecting the heartbeat, the pane may be a
+        //             stale renderer with an incompatible snapshot schema.
         //   - Live, no sidebar: the renderer self-closed or crashed (or a launch
         //             was skipped and the session was born by a plain `attach
         //             --create`). A sidebar-less rimz session is non-functional
@@ -241,7 +249,12 @@ impl MuxBackend for ZellijBackend {
                 delete_session(&opts.session_name)?;
                 create_session_with_sidebar(opts)
             }
-            SessionState::Live if Self::session_has_healthy_sidebar(&opts.session_name) => Ok(()),
+            SessionState::Live
+                if Self::session_has_healthy_sidebar(&opts.session_name)
+                    && !opts.replace_existing =>
+            {
+                Ok(())
+            }
             SessionState::Live => {
                 delete_session(&opts.session_name)?;
                 create_session_with_sidebar(opts)
@@ -434,9 +447,67 @@ struct RawPane {
     is_held: bool,
     #[serde(default)]
     is_suppressed: bool,
+    #[serde(default)]
+    is_focused: bool,
     tab_id: u64,
     #[serde(default)]
     title: Option<String>,
+    #[serde(default)]
+    pane_command: Option<String>,
+    #[serde(default)]
+    command: Option<String>,
+    #[serde(default)]
+    pane_cwd: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    pane_pid: Option<u32>,
+    #[serde(default)]
+    pid: Option<u32>,
+    #[serde(default)]
+    pane_process_start: Option<Value>,
+    #[serde(default)]
+    process_start: Option<Value>,
+}
+
+impl RawPane {
+    fn command(&self) -> Option<String> {
+        self.pane_command
+            .clone()
+            .or_else(|| self.command.clone())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn cwd(&self) -> Option<String> {
+        self.pane_cwd
+            .clone()
+            .or_else(|| self.cwd.clone())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn pid(&self) -> Option<u32> {
+        self.pane_pid.or(self.pid)
+    }
+
+    fn process_start(&self) -> Option<Timestamp> {
+        self.pane_process_start
+            .as_ref()
+            .or(self.process_start.as_ref())
+            .and_then(timestamp_from_json)
+    }
+}
+
+fn timestamp_from_json(value: &Value) -> Option<Timestamp> {
+    if let Some(seconds) = value.as_i64() {
+        return Timestamp::from_second(seconds).ok();
+    }
+    if let Some(raw) = value.as_str() {
+        if let Ok(seconds) = raw.parse::<i64>() {
+            return Timestamp::from_second(seconds).ok();
+        }
+        return raw.parse::<Timestamp>().ok();
+    }
+    None
 }
 
 struct TempLayoutFile {
@@ -584,13 +655,15 @@ mod tests {
     #[test]
     fn raw_pane_deserializes_minimal_shape() {
         let json = r#"[
-          {"id": 0, "is_plugin": false, "is_suppressed": false, "tab_id": 0},
+          {"id": 0, "is_plugin": false, "is_suppressed": false, "is_focused": true, "tab_id": 0},
           {"id": 2, "is_plugin": true,  "is_suppressed": false, "tab_id": 0}
         ]"#;
         let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.len(), 2);
         assert!(!parsed[0].is_plugin);
+        assert!(parsed[0].is_focused);
         assert!(parsed[1].is_plugin);
+        assert!(!parsed[1].is_focused);
     }
 
     #[test]
@@ -609,27 +682,27 @@ mod tests {
     #[test]
     fn session_state_classifies_list_sessions_lines() {
         assert_eq!(
-            session_state_from_line("rimz-billing [Created 6m ago]", "rimz-billing"),
+            session_state_from_line("rimz-query-engine [Created 6m ago]", "rimz-query-engine"),
             Some(SessionState::Live),
         );
         assert_eq!(
             session_state_from_line(
-                "rimz-billing [Created 6m ago] (EXITED - attach to resurrect)",
-                "rimz-billing",
+                "rimz-query-engine [Created 6m ago] (EXITED - attach to resurrect)",
+                "rimz-query-engine",
             ),
             Some(SessionState::Exited),
         );
         // A colorized line (no `--no-formatting`) still parses via `strip_ansi`.
         assert_eq!(
             session_state_from_line(
-                "\x1b[32;1mrimz-billing\x1b[m [Created ago] (\x1b[31;1mEXITED\x1b[m - resurrect)",
-                "rimz-billing",
+                "\x1b[32;1mrimz-query-engine\x1b[m [Created ago] (\x1b[31;1mEXITED\x1b[m - resurrect)",
+                "rimz-query-engine",
             ),
             Some(SessionState::Exited),
         );
         // A different session's line is not a match.
         assert_eq!(
-            session_state_from_line("other [Created 6m ago]", "rimz-billing"),
+            session_state_from_line("other [Created 6m ago]", "rimz-query-engine"),
             None,
         );
     }
@@ -643,6 +716,7 @@ mod tests {
             cwd: PathBuf::from("/tmp/rimz-bar"),
             width_percent: 30,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
+            replace_existing: false,
         };
         let layout = render_sidebar_layout(&opts).expect("render layout");
         assert!(
@@ -661,6 +735,7 @@ mod tests {
             cwd: PathBuf::from("/tmp/rimz-focus"),
             width_percent: 30,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
+            replace_existing: false,
         };
         let layout = render_sidebar_layout(&opts).expect("render layout");
         // The template must spell out the focused terminal instead of relying
@@ -692,6 +767,7 @@ mod tests {
             cwd: PathBuf::from("/tmp/rimz-run"),
             width_percent: 30,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
+            replace_existing: false,
         };
         let layout = render_sidebar_layout(&opts).expect("render layout");
         assert!(

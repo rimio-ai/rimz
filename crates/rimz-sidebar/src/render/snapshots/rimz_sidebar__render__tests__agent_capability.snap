@@ -1,0 +1,17 @@
+---
+source: crates/rimz-sidebar/src/render/mod.rs
+assertion_line: 294
+expression: screen
+---
+┌ query-engine ──────────────────┐
+│✗1                              │
+│                                │
+│▌feature-migration            1✗│
+│✗ claude  db migrate          <t>│
+│  Opus · xhigh · bypass         │
+│                                │
+│↵ jump to claude                │
+│                                │
+│                                │
+│                                │
+└────────────────────────────────┘

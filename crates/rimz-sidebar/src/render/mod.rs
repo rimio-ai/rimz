@@ -20,15 +20,19 @@ use jiff::Timestamp;
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span, Text};
+use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
-use rimz::SidebarSnapshot;
+use rimz::{SidebarRowKind, SidebarSnapshot};
 
-use self::fmt::{elapsed_short, time_ago};
-use self::sections::{
-    MAX_ROWS_PER_GROUP, SectionMode, activity_section, agent_line, feed_section, section_title,
-};
+use self::fmt::elapsed_short;
+use self::sections::{attention_line, first_run_hint_lines, worktree_group_lines};
+
+#[derive(Clone, Debug, Default)]
+pub struct UiState {
+    pub selected_index: usize,
+    pub help_visible: bool,
+}
 
 /// Health of the sidebar's refresh loop. `Ok` means the last snapshot and
 /// heartbeat round-trip succeeded; `Degraded` carries a short reason and
@@ -53,8 +57,17 @@ impl FetchStatus {
 }
 
 pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, status: &FetchStatus) {
+    draw_with_ui(frame, snapshot, status, &UiState::default());
+}
+
+pub fn draw_with_ui(
+    frame: &mut Frame<'_>,
+    snapshot: &SidebarSnapshot,
+    status: &FetchStatus,
+    ui: &UiState,
+) {
     let area = frame.area();
-    let title = format!(" Rimz | {} ", snapshot.workspace_id);
+    let title = format!(" {} ", snapshot.display_name);
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
@@ -62,8 +75,8 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, status: &FetchSta
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let lines = snapshot_lines(snapshot, status);
-    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true });
+    let lines = snapshot_lines(snapshot, status, ui, usize::from(inner.width));
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, inner);
 }
 
@@ -72,8 +85,17 @@ pub fn draw_to_terminal<B: Backend>(
     snapshot: &SidebarSnapshot,
     status: &FetchStatus,
 ) -> Result<(), B::Error> {
+    draw_to_terminal_with_ui(terminal, snapshot, status, &UiState::default())
+}
+
+pub fn draw_to_terminal_with_ui<B: Backend>(
+    terminal: &mut Terminal<B>,
+    snapshot: &SidebarSnapshot,
+    status: &FetchStatus,
+    ui: &UiState,
+) -> Result<(), B::Error> {
     terminal
-        .draw(|frame| draw(frame, snapshot, status))
+        .draw(|frame| draw_with_ui(frame, snapshot, status, ui))
         .map(|_| ())
 }
 
@@ -92,7 +114,12 @@ pub fn render_fixed<W: Write>(
     Ok(())
 }
 
-fn snapshot_lines(snapshot: &SidebarSnapshot, status: &FetchStatus) -> Vec<Line<'static>> {
+fn snapshot_lines(
+    snapshot: &SidebarSnapshot,
+    status: &FetchStatus,
+    ui: &UiState,
+    width: usize,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if let FetchStatus::Degraded { reason, since } = status {
         let elapsed = elapsed_short(*since);
@@ -102,53 +129,128 @@ fn snapshot_lines(snapshot: &SidebarSnapshot, status: &FetchStatus) -> Vec<Line<
         ));
         lines.push(Line::from(""));
     }
-    lines.push(Line::from(vec![
-        Span::styled("Generated ", Style::default().fg(Color::DarkGray)),
-        Span::raw(time_ago(snapshot.generated_at)),
-    ]));
-    lines.push(Line::from(""));
 
-    if !snapshot.agents.is_empty() {
-        section_title(&mut lines, "Agents");
-        for agent in snapshot.agents.iter().take(MAX_ROWS_PER_GROUP) {
-            lines.push(agent_line(agent));
+    if let Some(line) = attention_line(&snapshot.worktree_groups) {
+        lines.push(line);
+    }
+    if snapshot.worktree_groups.is_empty() {
+        // A healthy, empty room is a first run (or a room whose agents have all
+        // exited); nudge the user toward launching one. When degraded the empty
+        // body is a failed fetch, not an empty room, so suppress the hint.
+        if matches!(status, FetchStatus::Ok) && should_show_first_run_hint(snapshot) {
+            push_section_gap(&mut lines);
+            lines.extend(first_run_hint_lines(snapshot.agent_hooks_ready));
         }
-        lines.push(Line::from(""));
+        if matches!(status, FetchStatus::Ok) {
+            lines.extend(footer_lines(snapshot, status));
+        }
+        return lines;
     }
 
-    feed_section(
-        &mut lines,
-        "Needs your attention",
-        &snapshot.needs_attention,
-        SectionMode::NeedsAttention,
-        true,
-    );
-    feed_section(
-        &mut lines,
-        "Resolver is working",
-        &snapshot.resolver_working,
-        SectionMode::ResolverWorking,
-        false,
-    );
-    feed_section(
-        &mut lines,
-        "Recently answered",
-        &snapshot.recently_answered,
-        SectionMode::RecentlyAnswered,
-        false,
-    );
-    activity_section(&mut lines, "Recent activity", &snapshot.recent_activity);
+    push_section_gap(&mut lines);
+    let mut row_index = 0;
+    for (index, group) in snapshot.worktree_groups.iter().enumerate() {
+        if index > 0 {
+            lines.push(Line::from(""));
+        }
+        lines.extend(worktree_group_lines(
+            group,
+            width,
+            &mut row_index,
+            ui.selected_index,
+        ));
+    }
+    if matches!(status, FetchStatus::Ok) && should_show_first_run_hint(snapshot) {
+        lines.push(Line::from(""));
+        lines.extend(first_run_hint_lines(snapshot.agent_hooks_ready));
+    }
+    if ui.help_visible && matches!(status, FetchStatus::Ok) {
+        lines.push(Line::from(""));
+        lines.extend(help_lines());
+    }
+    lines.extend(footer_lines(snapshot, status));
     lines
+}
+
+fn push_section_gap(lines: &mut Vec<Line<'static>>) {
+    if lines.last().is_some_and(|line| line.width() > 0) {
+        lines.push(Line::from(""));
+    }
+}
+
+fn should_show_first_run_hint(snapshot: &SidebarSnapshot) -> bool {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .all(|row| row.row_kind == SidebarRowKind::Process && !is_known_agent_process(row))
+}
+
+fn is_known_agent_process(row: &rimz::SidebarRow) -> bool {
+    // tmux can expose Claude/Codex as the shared Node host before hook
+    // enrichment claims the pane, so `node` is agent-like for the empty-room cue.
+    row.row_kind == SidebarRowKind::Process
+        && (rimz::agents::KNOWN_AGENTS.contains(&row.name.as_str()) || row.name == "node")
+}
+
+fn footer_lines(snapshot: &SidebarSnapshot, status: &FetchStatus) -> Vec<Line<'static>> {
+    if !matches!(status, FetchStatus::Ok) {
+        return Vec::new();
+    }
+    let attention = snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter(|row| {
+            matches!(
+                row.status,
+                Some(rimz::feed::AgentStatus::Waiting | rimz::feed::AgentStatus::Failed)
+            )
+        })
+        .collect::<Vec<_>>();
+    let jumpable = snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter(|row| row.pane.is_some())
+        .count();
+    let dim = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::DIM);
+    if attention.len() == 1 {
+        return vec![
+            Line::from(""),
+            Line::styled(format!("↵ jump to {}", attention[0].name), dim),
+        ];
+    }
+    if attention.len() > 1 || jumpable > 0 {
+        return vec![
+            Line::from(""),
+            Line::styled("↵ jump   ␣ next ◆   ? keys", dim),
+        ];
+    }
+    Vec::new()
+}
+
+fn help_lines() -> Vec<Line<'static>> {
+    let dim = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::DIM);
+    vec![
+        Line::styled("keys & legend", dim),
+        Line::styled("↑/↓ select   1-9 jump   ↵ jump", dim),
+        Line::styled("␣ next ◆/✗   ? close keys", dim),
+        Line::styled("◆ waiting   ✗ failed   ▸ running", dim),
+        Line::styled("○ idle      · process", dim),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use jiff::Timestamp;
-    use rimz::feed::{AgentMode, AgentState, AgentStatus, FeedKind, Resolution};
-    use rimz::{
-        EventEnvelope, FeedItem, FeedStatus, ResolutionMethod, SidebarActivity, SidebarSnapshot,
-        Surface, WorkspaceId,
-    };
+    use rimz::feed::{AgentMode, AgentState, AgentStatus, FeedKind, PaneRef};
+    use rimz::ids::{MuxName, PaneId, ViewKind};
+    use rimz::{EventEnvelope, FeedItem, FeedStatus, SidebarSnapshot, Surface, WorkspaceId};
     use serde_json::json;
     use std::time::Duration;
 
@@ -174,31 +276,91 @@ mod tests {
         width: u16,
         height: u16,
     ) -> String {
+        snapshot_to_screen_with_status_and_ui(snapshot, status, &UiState::default(), width, height)
+    }
+
+    fn snapshot_to_screen_with_status_and_ui(
+        snapshot: &SidebarSnapshot,
+        status: &FetchStatus,
+        ui: &UiState,
+        width: u16,
+        height: u16,
+    ) -> String {
         let mut bytes = Vec::new();
-        render_fixed(&mut bytes, snapshot, status, width, height).unwrap();
+        let backend = CrosstermBackend::new(&mut bytes);
+        let viewport = Viewport::Fixed(Rect::new(0, 0, width, height));
+        let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
+        terminal.clear().unwrap();
+        draw_to_terminal_with_ui(&mut terminal, snapshot, status, ui).unwrap();
+        drop(terminal);
         let mut parser = vt100::Parser::new(height, width, 0);
         parser.process(&bytes);
         parser.screen().contents()
     }
 
     fn assert_snapshot(name: &str, screen: String) {
-        // Three transients escape any `Timestamp::now()` call inside the
-        // renderer: the `Generated Ns ago` header and the per-event/answered
-        // timestamps (`\d+[smhd] ago`), plus the degraded banner's
-        // `for Ns` elapsed (`\d+[smhd]` without the `ago` suffix).
+        // Row ages and degraded elapsed values are intentionally relative.
         insta::with_settings!({
             filters => vec![
-                (r"\d+[smhd] ago", "<elapsed> ago"),
-                (r"\bjust now\b", "<elapsed> ago"),
                 (r"degraded for \d+[smhd]", "degraded for <elapsed>"),
+                (r"\b\d+[smhd]\b", "<t>"),
             ],
         }, {
             insta::assert_snapshot!(name, screen);
         });
     }
 
+    fn snapshot_with(items: Vec<FeedItem>, agents: Vec<AgentState>) -> SidebarSnapshot {
+        let mut snapshot =
+            SidebarSnapshot::build_with_carryover(fixed_workspace(), items, Vec::new(), agents);
+        snapshot.display_name = "query-engine".to_owned();
+        snapshot
+    }
+
+    fn agent(
+        id: &str,
+        kind: &str,
+        status: AgentStatus,
+        mode: AgentMode,
+        worktree_path: Option<&str>,
+        branch: Option<&str>,
+        task: Option<&str>,
+    ) -> AgentState {
+        let now = fixed_now();
+        AgentState {
+            agent_id: id.to_owned(),
+            kind: kind.to_owned(),
+            status,
+            mode,
+            pane: None,
+            agent_pid: None,
+            agent_process_start: None,
+            worktree_path: worktree_path.map(ToOwned::to_owned),
+            worktree_branch: branch.map(ToOwned::to_owned),
+            task: task.map(ToOwned::to_owned),
+            model: None,
+            effort: None,
+            last_seen: now,
+            last_activity: now,
+        }
+    }
+
+    fn pane(raw: &str, command: &str, cwd: &str) -> PaneRef {
+        PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Tmux, raw),
+            session_name: "rimz-test".to_owned(),
+            view_id: Some("@0".to_owned()),
+            view_kind: Some(ViewKind::Window),
+            is_focused: false,
+            command: Some(command.to_owned()),
+            cwd: Some(cwd.to_owned()),
+            pane_pid: None,
+            pane_process_start: None,
+        }
+    }
+
     #[test]
-    fn render_includes_four_sidebar_groups_and_native_actions() {
+    fn render_worktree_attention_map() {
         let workspace = fixed_workspace();
         let mut native = FeedItem::new(
             workspace.clone(),
@@ -208,9 +370,10 @@ mod tests {
             "claude",
             "agent-hook",
         );
-        native.worktree_path = Some("/home/me/billing-service".to_owned());
+        native.worktree_path = Some("/home/me/query-engine".to_owned());
+        native.updated_at = fixed_now() - Duration::from_secs(12 * 60);
         let mut script = FeedItem::new(
-            workspace.clone(),
+            workspace,
             Surface::Script,
             FeedKind::Question,
             "Deploy staging?",
@@ -218,6 +381,50 @@ mod tests {
             "cli",
         );
         script.options = vec!["yes".to_owned(), "no".to_owned()];
+        script.updated_at = fixed_now() - Duration::from_secs(5 * 60);
+        let mut running = agent(
+            "codex-1",
+            "codex",
+            AgentStatus::Running,
+            AgentMode::Interactive,
+            Some("/home/me/query-engine"),
+            Some("main"),
+            Some("add tests"),
+        );
+        running.model = Some("GPT-5.5".to_owned());
+        running.effort = Some("high".to_owned());
+        running.last_activity = fixed_now() - Duration::from_secs(8);
+
+        let snapshot = snapshot_with(vec![native, script], vec![running]);
+
+        assert_snapshot(
+            "worktree_attention_map",
+            snapshot_to_screen(&snapshot, 38, 18),
+        );
+    }
+
+    #[test]
+    fn render_agent_capability_and_mode() {
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Failed,
+            AgentMode::Bypass,
+            Some("/repo/feature-migration"),
+            Some("feature-migration"),
+            Some("db migrate"),
+        );
+        claude.model = Some("Opus".to_owned());
+        claude.effort = Some("xhigh".to_owned());
+        claude.last_activity = fixed_now() - Duration::from_secs(4 * 60);
+        let snapshot = snapshot_with(Vec::new(), vec![claude]);
+
+        assert_snapshot("agent_capability", snapshot_to_screen(&snapshot, 34, 12));
+    }
+
+    #[test]
+    fn render_omits_history_sections() {
+        let workspace = fixed_workspace();
         let mut answered = FeedItem::new(
             workspace.clone(),
             Surface::Script,
@@ -227,53 +434,6 @@ mod tests {
             "cli",
         );
         answered.status = FeedStatus::Resolved;
-        answered.resolution = Some(Resolution::new(
-            json!({ "choice": "yes" }),
-            ResolutionMethod::Sidebar,
-        ));
-        let snapshot = SidebarSnapshot {
-            workspace_id: workspace,
-            generated_at: fixed_now() - Duration::from_secs(2),
-            needs_attention: vec![native, script],
-            resolver_working: Vec::new(),
-            recently_answered: vec![answered],
-            recent_activity: Vec::new(),
-            agents: Vec::new(),
-        };
-
-        assert_snapshot(
-            "four_groups_and_native_actions",
-            snapshot_to_screen(&snapshot, 96, 24),
-        );
-    }
-
-    #[test]
-    fn render_includes_agent_rollup_when_present() {
-        let snapshot = SidebarSnapshot {
-            workspace_id: fixed_workspace(),
-            generated_at: fixed_now(),
-            needs_attention: Vec::new(),
-            resolver_working: Vec::new(),
-            recently_answered: Vec::new(),
-            recent_activity: Vec::new(),
-            agents: vec![AgentState {
-                agent_id: "agent-1".to_owned(),
-                kind: "codex".to_owned(),
-                status: AgentStatus::Waiting,
-                mode: AgentMode::Interactive,
-                pane: None,
-                worktree_path: None,
-                worktree_branch: Some("feature-migration".to_owned()),
-                last_seen: fixed_now(),
-            }],
-        };
-
-        assert_snapshot("agent_rollup", snapshot_to_screen(&snapshot, 80, 18));
-    }
-
-    #[test]
-    fn render_includes_event_activity() {
-        let workspace = fixed_workspace();
         let event = EventEnvelope::new(
             workspace.clone(),
             "rimz-test",
@@ -282,32 +442,19 @@ mod tests {
             "event.emit",
             json!({ "kind": "build.started", "title": "Building web" }),
         );
-        let snapshot = SidebarSnapshot {
-            workspace_id: workspace,
-            generated_at: fixed_now(),
-            needs_attention: Vec::new(),
-            resolver_working: Vec::new(),
-            recently_answered: Vec::new(),
-            recent_activity: vec![SidebarActivity::Event {
-                event: Box::new(event),
-            }],
-            agents: Vec::new(),
-        };
+        let mut snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, vec![answered], vec![event], vec![]);
+        snapshot.display_name = "query-engine".to_owned();
+        let rendered = snapshot_to_screen(&snapshot, 38, 10);
 
-        assert_snapshot("event_activity", snapshot_to_screen(&snapshot, 80, 18));
+        assert!(!rendered.contains("all clear"));
+        assert!(!rendered.contains("Recent activity"));
+        assert!(!rendered.contains("Recently answered"));
     }
 
     #[test]
     fn render_degraded_status_shows_banner_above_snapshot() {
-        let snapshot = SidebarSnapshot {
-            workspace_id: fixed_workspace(),
-            generated_at: fixed_now(),
-            needs_attention: Vec::new(),
-            resolver_working: Vec::new(),
-            recently_answered: Vec::new(),
-            recent_activity: Vec::new(),
-            agents: Vec::new(),
-        };
+        let snapshot = snapshot_with(Vec::new(), Vec::new());
         let status = FetchStatus::Degraded {
             reason: "snapshot failed: ledger not found".to_owned(),
             since: fixed_now() - Duration::from_secs(8),
@@ -321,15 +468,7 @@ mod tests {
 
     #[test]
     fn render_ok_status_omits_banner() {
-        let snapshot = SidebarSnapshot {
-            workspace_id: fixed_workspace(),
-            generated_at: fixed_now(),
-            needs_attention: Vec::new(),
-            resolver_working: Vec::new(),
-            recently_answered: Vec::new(),
-            recent_activity: Vec::new(),
-            agents: Vec::new(),
-        };
+        let snapshot = snapshot_with(Vec::new(), Vec::new());
         let rendered = snapshot_to_screen_with_status(&snapshot, &FetchStatus::Ok, 80, 18);
         assert!(
             !rendered.contains("Sidebar degraded"),
@@ -338,83 +477,128 @@ mod tests {
     }
 
     #[test]
-    fn render_empty_snapshot_shows_dashes() {
-        let snapshot = SidebarSnapshot {
-            workspace_id: fixed_workspace(),
-            generated_at: fixed_now(),
-            needs_attention: Vec::new(),
-            resolver_working: Vec::new(),
-            recently_answered: Vec::new(),
-            recent_activity: Vec::new(),
-            agents: Vec::new(),
-        };
+    fn render_first_run_nudge_points_at_install_when_unwired() {
+        // No hooks wired (the default): running an agent registers nothing, so
+        // the hint must point at `rimz hooks install`, not "run claude or codex".
+        let snapshot = snapshot_with(Vec::new(), Vec::new());
+        assert!(!snapshot.agent_hooks_ready);
+        let rendered = snapshot_to_screen(&snapshot, 80, 18);
 
-        assert_snapshot("empty_snapshot", snapshot_to_screen(&snapshot, 80, 18));
+        assert!(!rendered.contains("all clear"));
+        assert!(rendered.contains("rimz hooks install"));
+        assert!(!rendered.contains("run claude or codex"));
+        assert_snapshot("first_run_nudge", rendered);
     }
 
     #[test]
-    fn render_exactly_max_rows_shows_no_overflow() {
-        let workspace = fixed_workspace();
-        let items: Vec<FeedItem> = (0..MAX_ROWS_PER_GROUP)
-            .map(|i| {
-                let mut item = FeedItem::new(
-                    workspace.clone(),
-                    Surface::NativeUi,
-                    FeedKind::Permission,
-                    format!("decision-{i}"),
-                    "claude",
-                    "agent-hook",
-                );
-                item.worktree_path = Some("/repo/main".to_owned());
-                item
-            })
-            .collect();
-        let snapshot = SidebarSnapshot {
-            workspace_id: workspace,
-            generated_at: fixed_now(),
-            needs_attention: items,
-            resolver_working: Vec::new(),
-            recently_answered: Vec::new(),
-            recent_activity: Vec::new(),
-            agents: Vec::new(),
-        };
+    fn render_process_row_keeps_first_run_hint() {
+        let snapshot = snapshot_with(Vec::new(), Vec::new())
+            .with_live_panes(vec![pane("%1", "zsh", "/repo/main")], None);
+        let rendered = snapshot_to_screen(&snapshot, 80, 18);
 
-        assert_snapshot(
-            "max_rows_no_overflow",
-            snapshot_to_screen(&snapshot, 80, 24),
+        assert!(rendered.contains("· zsh"));
+        assert!(rendered.contains("rimz hooks install"));
+    }
+
+    #[test]
+    fn render_agent_process_rows_suppress_first_run_hint() {
+        let snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(
+            vec![
+                pane("%1", "claude", "/repo/main"),
+                pane("%2", "node", "/repo/main"),
+            ],
+            None,
         );
+        let rendered = snapshot_to_screen(&snapshot, 80, 18);
+
+        assert!(rendered.contains("· claude"));
+        assert!(rendered.contains("· node"));
+        assert!(!rendered.contains("no agents yet"));
+        assert!(!rendered.contains("rimz hooks install"));
+        assert!(!rendered.contains("run claude or codex"));
     }
 
     #[test]
-    fn render_above_max_rows_shows_overflow_indicator() {
+    fn render_footer_and_help_overlay() {
         let workspace = fixed_workspace();
-        let items: Vec<FeedItem> = (0..MAX_ROWS_PER_GROUP + 3)
-            .map(|i| {
-                let mut item = FeedItem::new(
-                    workspace.clone(),
-                    Surface::NativeUi,
-                    FeedKind::Permission,
-                    format!("decision-{i}"),
-                    "claude",
-                    "agent-hook",
-                );
-                item.worktree_path = Some("/repo/main".to_owned());
-                item
-            })
-            .collect();
-        let snapshot = SidebarSnapshot {
-            workspace_id: workspace,
-            generated_at: fixed_now(),
-            needs_attention: items,
-            resolver_working: Vec::new(),
-            recently_answered: Vec::new(),
-            recent_activity: Vec::new(),
-            agents: Vec::new(),
+        let mut native = FeedItem::new(
+            workspace,
+            Surface::NativeUi,
+            FeedKind::Permission,
+            "allow?",
+            "codex",
+            "agent-hook",
+        );
+        native.worktree_branch = Some("main".to_owned());
+        let snapshot = snapshot_with(vec![native], Vec::new());
+        let rendered = snapshot_to_screen(&snapshot, 80, 18);
+        assert!(rendered.contains("↵ jump to codex"));
+
+        let help = snapshot_to_screen_with_status_and_ui(
+            &snapshot,
+            &FetchStatus::Ok,
+            &UiState {
+                selected_index: 0,
+                help_visible: true,
+            },
+            80,
+            18,
+        );
+        assert!(help.contains("keys & legend"));
+        assert!(help.contains("◆ waiting"));
+        assert!(help.contains("○ idle"));
+        assert!(help.contains("· process"));
+    }
+
+    #[test]
+    fn render_first_run_nudge_invites_launch_when_wired() {
+        // Hooks wired but no agent launched yet: the hint invites running one.
+        let mut snapshot = snapshot_with(Vec::new(), Vec::new());
+        snapshot.agent_hooks_ready = true;
+        let rendered = snapshot_to_screen(&snapshot, 80, 18);
+
+        assert!(!rendered.contains("all clear"));
+        assert!(rendered.contains("run claude or codex"));
+        assert!(!rendered.contains("rimz hooks install"));
+        assert_snapshot("first_run_nudge_wired", rendered);
+    }
+
+    #[test]
+    fn render_degraded_empty_suppresses_first_run_nudge() {
+        // An empty body under a degraded fetch is a failed snapshot, not an
+        // empty room — the nudge would misreport. The banner speaks instead.
+        let snapshot = snapshot_with(Vec::new(), Vec::new());
+        let status = FetchStatus::Degraded {
+            reason: "snapshot failed: ledger not found".to_owned(),
+            since: fixed_now() - Duration::from_secs(8),
         };
+        let rendered = snapshot_to_screen_with_status(&snapshot, &status, 80, 18);
+
+        assert!(!rendered.contains("run claude or codex"));
+    }
+
+    #[test]
+    fn render_group_cap_shows_overflow_indicator() {
+        let agents = (0..9)
+            .map(|i| {
+                let mut agent = agent(
+                    &format!("codex-{i}"),
+                    "codex",
+                    AgentStatus::Running,
+                    AgentMode::Interactive,
+                    Some("/repo/main"),
+                    Some("main"),
+                    Some(&format!("task-{i}")),
+                );
+                agent.last_activity = fixed_now() - Duration::from_secs(i);
+                agent
+            })
+            .collect::<Vec<_>>();
+        let snapshot = snapshot_with(Vec::new(), agents);
 
         assert_snapshot(
-            "max_rows_with_overflow",
-            snapshot_to_screen(&snapshot, 80, 24),
+            "group_cap_with_overflow",
+            snapshot_to_screen(&snapshot, 36, 16),
         );
     }
 }

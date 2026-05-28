@@ -83,9 +83,14 @@ pub type Result<T> = std::result::Result<T, AgentErr>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentHookClass {
+    /// Non-blocking event that may carry a status/mode/task transition for
+    /// the agent rollup (`SessionStart`, `UserPromptSubmit`, `Stop`, …). Per
+    /// `docs/internals/agent.md` there are two runtime channels — lifecycle
+    /// and feed; "telemetry" is only an install-time privacy grouping, not a
+    /// channel. Whether a lifecycle event records anything is decided by
+    /// [`AgentIntegration::observe_lifecycle`] returning `Some`.
     Lifecycle,
     BlockingFeed,
-    Telemetry,
     Unknown,
 }
 
@@ -102,13 +107,30 @@ pub struct ClassifiedHook {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentLifecycleObservation {
     /// Agent-supplied session/process identifier (e.g. Claude `session_id`,
-    /// Codex `session_id`). The CLI uses this as the `agent_id`.
+    /// Codex root `session_id`, or Codex subagent `agent_id`). The CLI uses
+    /// this as the `agent_id`.
     pub agent_id: Option<String>,
     pub status: AgentStatus,
-    pub mode: AgentMode,
+    /// Process identity observed by the hook runner. The sidebar uses this
+    /// best-effort liveness marker to suppress stale ledger overlays when the
+    /// process disappears.
+    pub agent_pid: Option<u32>,
+    pub agent_process_start: Option<String>,
+    /// Mode pill the event establishes. `None` means "this event does not
+    /// report a mode" — the snapshot reducer carries the prior mode forward
+    /// rather than resetting it, so a `UserPromptSubmit` can never demote a
+    /// `bypass` agent to interactive (a security surface must stay visible).
+    pub mode: Option<AgentMode>,
+    /// Optional absolute worktree path observed from the agent payload or
+    /// filled by the CLI from the current Rimz workspace.
+    pub worktree_path: Option<String>,
     /// Optional worktree branch label observed from the payload, surfaced in
     /// the sidebar's worktree grouping.
     pub worktree_branch: Option<String>,
+    /// Display-only task descriptor. It never drives routing or decisions.
+    pub task: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
 }
 
 /// Result of installing hooks. Surfaced to the CLI so the user sees which
@@ -125,6 +147,17 @@ pub struct HookInstallReport {
     /// when the file was created fresh.
     pub merged: bool,
     /// True when telemetry hooks were included.
+    pub telemetry: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HookInstallPreview {
+    pub agent: &'static str,
+    pub config_path: PathBuf,
+    pub planned_events: Vec<String>,
+    pub original_config: Option<String>,
+    pub candidate_config: String,
+    pub merged: bool,
     pub telemetry: bool,
 }
 
@@ -163,6 +196,14 @@ pub trait AgentIntegration: Send + Sync {
         None
     }
 
+    /// Whether this event ends an agent session. When true the CLI expires the
+    /// session's pending asks: a permission prompt whose agent has exited is
+    /// no longer answerable, so it must not linger as attention. Defaults to
+    /// `false`; adapters override for their session-exit event.
+    fn ends_session(&self, _event_name: &str) -> bool {
+        false
+    }
+
     /// Write or merge the adapter's hook config into the agent's per-user
     /// config file. Telemetry hooks are included when `telemetry` is true.
     /// Defaults to an explicit "not implemented" error until an adapter
@@ -174,6 +215,15 @@ pub trait AgentIntegration: Send + Sync {
         })
     }
 
+    /// Preview the exact per-user config write the installer would make,
+    /// without touching disk. Used by the first-run consent gate.
+    fn preview_hook_install(&self, _telemetry: bool) -> Result<HookInstallPreview> {
+        Err(AgentErr::Install {
+            agent: self.name(),
+            reason: "install preview not implemented for this adapter".to_owned(),
+        })
+    }
+
     /// Remove the adapter's hook entries from the agent's per-user config
     /// file. Defaults to an explicit "not implemented" error.
     fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
@@ -182,7 +232,35 @@ pub trait AgentIntegration: Send + Sync {
             reason: "uninstall not implemented for this adapter".to_owned(),
         })
     }
+
+    /// Whether Rimz can currently install a hook configuration that the agent
+    /// actually executes. Adapters return `false` when the upstream hook
+    /// contract is known but not implemented here yet.
+    fn supports_hook_install(&self) -> bool {
+        false
+    }
+
+    /// User-facing reason shown by doctor/start when hook install is not
+    /// supported yet.
+    fn hook_install_unavailable_reason(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Whether this agent's per-user config currently carries Rimz-managed
+    /// hooks — i.e. the user ran `rimz hooks install`. Best-effort: a missing
+    /// file or any read/parse failure reads as "not installed". An agent only
+    /// ever fires `rimz hooks feed` when this holds, so `rimz doctor` and the
+    /// sidebar's first-run hint surface it — an un-wired agent is invisible,
+    /// never silently broken.
+    fn hooks_installed(&self) -> bool {
+        false
+    }
 }
+
+/// Every agent Rimz can wire, in display order. The single source of truth
+/// for "which agents exist" — `integration_by_name` resolves each entry, and
+/// `rimz doctor` walks this list to report hook-install status.
+pub const KNOWN_AGENTS: &[&str] = &["claude", "codex"];
 
 /// Lookup table for `--source <agent>` on the hook CLI.
 pub fn integration_by_name(name: &str) -> Result<Box<dyn AgentIntegration>> {
@@ -191,6 +269,13 @@ pub fn integration_by_name(name: &str) -> Result<Box<dyn AgentIntegration>> {
         "codex" => Ok(Box::new(CodexIntegration)),
         other => Err(AgentErr::Unknown(other.to_owned())),
     }
+}
+
+pub(crate) fn optional_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| payload.get(*key).and_then(Value::as_str))
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 /// Common helper: does the resolver decision read as an "allow"?

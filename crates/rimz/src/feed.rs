@@ -182,6 +182,9 @@ pub enum AbandonReason {
     /// A resolver answered after the hook had already returned neutral; the
     /// answer is recorded audit-only on the resolution.
     HookAlreadyReturnedNeutral,
+    /// The agent session that raised the ask ended before it was answered; the
+    /// pending item is expired so it can't outlive its session.
+    AgentSessionEnded,
 }
 
 impl AbandonReason {
@@ -193,6 +196,7 @@ impl AbandonReason {
             Self::ChainExhausted => "chain_exhausted",
             Self::ScriptWaitTimeout => "wait_timeout_elapsed",
             Self::HookAlreadyReturnedNeutral => "hook_already_returned_neutral",
+            Self::AgentSessionEnded => "agent_session_ended",
         }
     }
 }
@@ -236,10 +240,31 @@ pub struct ResolverStep {
 pub struct PaneRef {
     pub pane_id: PaneId,
     pub session_name: String,
+    #[serde(default)]
     pub view_id: Option<String>,
+    #[serde(default)]
     pub view_kind: Option<ViewKind>,
+    /// Whether the pane is the focused pane in its mux view. This is advisory
+    /// UI routing metadata; ledger correctness never depends on focus.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_focused: bool,
+    /// Foreground command as reported by the multiplexer, if available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Current working directory as reported by the multiplexer, if available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Best-effort live pane process id. This is advisory routing metadata,
+    /// not correctness state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_pid: Option<u32>,
     /// Used to detect reused pane IDs across mux restarts.
+    #[serde(default)]
     pub pane_process_start: Option<Timestamp>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -256,7 +281,10 @@ pub struct FeedItem {
     pub body: Option<String>,
     pub options: Vec<String>,
     pub pane: Option<PaneRef>,
+    #[serde(default)]
     pub worktree_path: Option<String>,
+    #[serde(default)]
+    pub worktree_branch: Option<String>,
     pub payload: Value,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -296,6 +324,7 @@ impl FeedItem {
             options: Vec::new(),
             pane: None,
             worktree_path: None,
+            worktree_branch: None,
             payload: Value::Object(serde_json::Map::new()),
             created_at: now,
             updated_at: now,
@@ -391,6 +420,20 @@ impl FeedItem {
         let step = self.chain.iter().find(|step| &step.resolver_id == active)?;
         Some(now + std::time::Duration::from_millis(step.budget_ms))
     }
+
+    /// The agent session this item belongs to, read from the hook payload
+    /// (`agent_id`, falling back to `session_id`). Used to tie an ask to the
+    /// agent that raised it so the snapshot can expire it when that session
+    /// ends. `None` for non-agent items (scripts, CLI) and payloads without a
+    /// session field.
+    pub fn agent_session_id(&self) -> Option<&str> {
+        ["agent_id", "session_id"].into_iter().find_map(|key| {
+            self.payload
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+        })
+    }
 }
 
 /// Five-value agent status rollup; the agent owns this, Rimz observes it.
@@ -422,9 +465,17 @@ pub struct AgentState {
     pub status: AgentStatus,
     pub mode: AgentMode,
     pub pane: Option<PaneRef>,
+    #[serde(default)]
+    pub agent_pid: Option<u32>,
+    #[serde(default)]
+    pub agent_process_start: Option<String>,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
+    pub task: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
     pub last_seen: Timestamp,
+    pub last_activity: Timestamp,
 }
 
 #[cfg(test)]

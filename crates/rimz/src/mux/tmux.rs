@@ -11,6 +11,7 @@
 
 use std::path::PathBuf;
 
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -170,7 +171,7 @@ impl MuxBackend for TmuxBackend {
             "list-panes",
             "-a",
             "-F",
-            "#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_current_path}",
+            "#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_start_time}\t#{pane_active}",
         ]);
         if let Some(session) = opts.session_name {
             spec = spec.args(["-t".to_owned(), session]);
@@ -185,12 +186,34 @@ impl MuxBackend for TmuxBackend {
             let session_name = cols[0].to_owned();
             let view_id = Some(cols[1].to_owned());
             let raw = cols[2].to_owned();
+            let command = cols
+                .get(3)
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+            let cwd = cols
+                .get(4)
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+            let pane_pid = cols
+                .get(5)
+                .and_then(|value| value.trim().parse::<u32>().ok());
+            let pane_process_start = cols
+                .get(6)
+                .and_then(|value| value.trim().parse::<i64>().ok())
+                .and_then(|seconds| Timestamp::from_second(seconds).ok());
+            let is_focused = cols.get(7).is_some_and(|value| value.trim() == "1");
             panes.push(PaneRef {
                 pane_id: PaneId::from_parts(MuxName::Tmux, &raw),
                 session_name,
                 view_id,
                 view_kind: Some(ViewKind::Window),
-                pane_process_start: None,
+                is_focused,
+                command,
+                cwd,
+                pane_pid,
+                pane_process_start,
             });
         }
         Ok(panes)
@@ -278,7 +301,28 @@ impl MuxBackend for TmuxBackend {
                 "-t".to_owned(),
                 opts.session_name.clone(),
             ])
-            .args(command)
+            .args(command.clone())
+            .run()?;
+
+        // Cross-backend parity (DESIGN.md): a Zellij session's layout doubles
+        // as its tab template, so every new tab is born with the same
+        // sidebar+terminal split. tmux has no tab template, so we install a
+        // session-scoped `after-new-window` hook that re-runs the same left
+        // split in each new window. `-b -d` keep the sidebar left and focus on
+        // the new window's terminal, exactly as the initial window.
+        let serve = command.join(" ");
+        let hook = format!(
+            "split-window -h -b -d -l {pct}% '{serve}'",
+            pct = opts.width_percent,
+        );
+        self.cmd()
+            .args([
+                "set-hook".to_owned(),
+                "-t".to_owned(),
+                opts.session_name.clone(),
+                "after-new-window".to_owned(),
+                hook,
+            ])
             .run()
             .map(|_| ())
     }

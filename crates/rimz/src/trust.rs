@@ -496,10 +496,10 @@ mod tests {
     #[test]
     fn unknown_non_command_field_does_not_change_hash() {
         let base = project_with(
-            "display_name = \"Billing\"\n\n[[layout.initial_panes]]\ncommand = \"$SHELL\"\n",
+            "display_name = \"Query Engine\"\n\n[[layout.initial_panes]]\ncommand = \"$SHELL\"\n",
         );
         let extra = project_with(
-            "display_name = \"Billing service\"\nsidebar = true\n\n[[layout.initial_panes]]\ncommand = \"$SHELL\"\n",
+            "display_name = \"Query Engine dev\"\nsidebar = true\n\n[[layout.initial_panes]]\ncommand = \"$SHELL\"\n",
         );
         let a = read_project_config(&base.path().join(CONFIG_REL))
             .expect("read base")

@@ -103,13 +103,25 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
     let classified = agent.classify_hook(&event_name, &payload);
 
     if classified.class != AgentHookClass::BlockingFeed {
-        // Lifecycle and telemetry events record their observation on the
-        // ledger (status, mode, agent_id) before emitting the neutral stdout
-        // payload. The neutral payload itself is the agent-native silent
-        // path — empty for Codex, `{}` for Claude.
-        if classified.class == AgentHookClass::Lifecycle
-            && let Some(observation) = agent.observe_lifecycle(&event_name, &payload)
-        {
+        // A non-blocking event records its observation on the ledger (status,
+        // mode, agent_id, task) before emitting the neutral stdout payload.
+        // `observe_lifecycle` returns `Some` only for transition-bearing
+        // events, so high-frequency tool hooks stay silent. The neutral
+        // payload itself is the agent-native silent path — empty for Codex,
+        // `{}` for Claude.
+        if let Some(mut observation) = agent.observe_lifecycle(&event_name, &payload) {
+            if observation.agent_pid.is_none()
+                && let Some(pid) = hook_agent_pid()
+            {
+                observation.agent_process_start = linux_process_start(pid);
+                observation.agent_pid = Some(pid);
+            }
+            if observation.worktree_path.is_none() {
+                observation.worktree_path = Some(workspace.worktree_root.display().to_string());
+            }
+            if observation.worktree_branch.is_none() {
+                observation.worktree_branch = workspace.worktree_branch.clone();
+            }
             let envelope = EventEnvelope::agent_lifecycle(
                 workspace.workspace_id.clone(),
                 &workspace.session_name,
@@ -126,6 +138,25 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                 );
             }
         }
+        // A session that just ended can no longer answer its own prompts.
+        // Expire the asks it left pending so they don't strand attention on a
+        // dead pane (the sidebar's read-side guard self-heals races).
+        if agent.ends_session(&event_name)
+            && let Some(agent_id) = payload
+                .get("session_id")
+                .or_else(|| payload.get("agent_id"))
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+            && let Err(err) =
+                ledger.expire_agent_session(agent.name(), agent_id, &workspace.session_name)
+        {
+            warn!(
+                agent = agent.name(),
+                event = %event_name,
+                error = %err,
+                "lifecycle: failed to expire pending asks for ended session",
+            );
+        }
         emit_neutral(agent.as_ref(), &event_name)?;
         return Ok(());
     }
@@ -139,6 +170,25 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         feed_kind,
         payload,
     )
+}
+
+fn hook_agent_pid() -> Option<u32> {
+    std::env::var("RIMZ_AGENT_PID")
+        .ok()
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .filter(|pid| *pid > 1)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_start(pid: u32) -> Option<String> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_comm = stat.rsplit_once(") ")?.1;
+    after_comm.split_whitespace().nth(19).map(ToOwned::to_owned)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn linux_process_start(_pid: u32) -> Option<String> {
+    None
 }
 
 fn run_install(source: String, telemetry: bool) -> Result<()> {
@@ -458,6 +508,8 @@ fn build_item(
         "agent-hook",
     );
     item.payload = payload;
+    item.worktree_path = Some(workspace.worktree_root.display().to_string());
+    item.worktree_branch = workspace.worktree_branch.clone();
     item
 }
 

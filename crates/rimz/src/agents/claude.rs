@@ -2,9 +2,10 @@
 //!
 //! Classifies the blocking events (`PermissionRequest`, `PreToolUse:
 //! ExitPlanMode`, `PreToolUse: AskUserQuestion`) and the lifecycle events
-//! (`SessionStart` / `SessionEnd` / `Stop` / `Notification`); renders the
-//! Claude-shaped `hookSpecificOutput` / `updatedInput` decision payload and
-//! the neutral fallback.
+//! (`SessionStart` registers idle, `UserPromptSubmit` moves to running with
+//! the prompt as task, `Stop` back to idle, `SessionEnd` exits, `Notification`
+//! silent); renders the Claude-shaped `hookSpecificOutput` / `updatedInput`
+//! decision payload and the neutral fallback.
 //!
 //! Owns hook install / uninstall through a non-destructive merge into
 //! `~/.claude/settings.json` under per-matcher `_rimz_managed` markers.
@@ -20,7 +21,8 @@ use serde_json::{Map, Value, json};
 
 use super::{
     AgentErr, AgentHookClass, AgentIntegration, AgentLifecycleObservation, ClassifiedHook,
-    HookInstallReport, HookUninstallReport, Result, choice_is_allow,
+    HookInstallPreview, HookInstallReport, HookUninstallReport, Result, choice_is_allow,
+    optional_payload_string,
 };
 use crate::feed::{AgentMode, AgentStatus, FeedItem, FeedKind, Resolution};
 use crate::ledger::atomic;
@@ -90,10 +92,8 @@ impl AgentIntegration for ClaudeIntegration {
             AgentHookClass::BlockingFeed
         } else {
             match event_name {
-                "SessionStart" | "SessionEnd" | "Stop" | "Notification" => {
-                    AgentHookClass::Lifecycle
-                }
-                "UserPromptSubmit" | "PreToolUse" | "PostToolUse" => AgentHookClass::Telemetry,
+                "SessionStart" | "SessionEnd" | "Stop" | "Notification" | "UserPromptSubmit"
+                | "PreToolUse" | "PostToolUse" => AgentHookClass::Lifecycle,
                 _ => AgentHookClass::Unknown,
             }
         };
@@ -149,15 +149,27 @@ impl AgentIntegration for ClaudeIntegration {
         CLAUDE_HOOK_CAP
     }
 
+    fn ends_session(&self, event_name: &str) -> bool {
+        event_name == "SessionEnd"
+    }
+
     fn observe_lifecycle(
         &self,
         event_name: &str,
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
-        let status = match event_name {
-            "SessionStart" => AgentStatus::Running,
-            "SessionEnd" | "Stop" => AgentStatus::Idle,
-            "Notification" => return None,
+        // SessionStart registers the agent idle (wired in, nothing asked yet);
+        // the prompt is what moves it to running. Only SessionStart establishes
+        // the mode pill — the prompt and stop carry no permission field, so they
+        // report `None` and the reducer keeps the established mode. SessionEnd
+        // records the exit so the reducer drops the agent from the rollup
+        // (mode carries no meaning on exit); `ends_session` then expires any
+        // asks the dead session left pending.
+        let (status, mode) = match event_name {
+            "SessionStart" => (AgentStatus::Idle, Some(mode_from_payload(payload))),
+            "UserPromptSubmit" => (AgentStatus::Running, None),
+            "Stop" => (AgentStatus::Idle, None),
+            "SessionEnd" => (AgentStatus::Idle, None),
             _ => return None,
         };
         Some(AgentLifecycleObservation {
@@ -166,11 +178,14 @@ impl AgentIntegration for ClaudeIntegration {
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
             status,
-            mode: mode_from_payload(payload),
-            worktree_branch: payload
-                .get("worktree_branch")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
+            agent_pid: None,
+            agent_process_start: None,
+            mode,
+            worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
+            worktree_branch: optional_payload_string(payload, &["worktree_branch"]),
+            task: optional_payload_string(payload, &["task", "prompt"]),
+            model: optional_payload_string(payload, &["model"]),
+            effort: optional_payload_string(payload, &["thinking_level", "effort"]),
         })
     }
 
@@ -179,10 +194,45 @@ impl AgentIntegration for ClaudeIntegration {
         install_into(&path, telemetry)
     }
 
+    fn preview_hook_install(&self, telemetry: bool) -> Result<HookInstallPreview> {
+        let path = claude_settings_path()?;
+        preview_install_at(&path, telemetry)
+    }
+
     fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
         let path = claude_settings_path()?;
         uninstall_from(&path)
     }
+
+    fn supports_hook_install(&self) -> bool {
+        true
+    }
+
+    fn hooks_installed(&self) -> bool {
+        claude_settings_path().is_ok_and(|path| hooks_installed_at(&path))
+    }
+}
+
+/// Whether `path` carries any `_rimz_managed` hook matcher. Best-effort: a
+/// missing file or parse error reads as "not installed".
+fn hooks_installed_at(path: &Path) -> bool {
+    let Ok(root) = read_existing_json(path) else {
+        return false;
+    };
+    root.get(HOOKS_KEY)
+        .and_then(Value::as_object)
+        .is_some_and(|hooks| {
+            hooks.values().any(|entries| {
+                entries.as_array().is_some_and(|arr| {
+                    arr.iter().any(|entry| {
+                        entry
+                            .get(RIMZ_MANAGED_KEY)
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                    })
+                })
+            })
+        })
 }
 
 /// Translate a Claude payload's mode/permission hints onto the five-value
@@ -221,6 +271,34 @@ fn claude_settings_path() -> Result<PathBuf> {
 
 fn install_into(path: &Path, telemetry: bool) -> Result<HookInstallReport> {
     let existed = path.exists();
+    let (root, installed) = install_candidate(path, telemetry)?;
+    write_json(path, &root)?;
+
+    Ok(HookInstallReport {
+        agent: "claude",
+        config_path: path.to_path_buf(),
+        installed_events: installed,
+        merged: existed,
+        telemetry,
+    })
+}
+
+fn preview_install_at(path: &Path, telemetry: bool) -> Result<HookInstallPreview> {
+    let existed = path.exists();
+    let original_config = original_text(path)?;
+    let (root, installed) = install_candidate(path, telemetry)?;
+    Ok(HookInstallPreview {
+        agent: "claude",
+        config_path: path.to_path_buf(),
+        planned_events: installed,
+        original_config,
+        candidate_config: render_json(&root)?,
+        merged: existed,
+        telemetry,
+    })
+}
+
+fn install_candidate(path: &Path, telemetry: bool) -> Result<(Map<String, Value>, Vec<String>)> {
     let mut root = read_existing_json(path)?;
 
     // Defensive: a tampered or stale Rimz write may carry a `_rimz_sync =
@@ -244,15 +322,7 @@ fn install_into(path: &Path, telemetry: bool) -> Result<HookInstallReport> {
         }
     }
 
-    write_json(path, &root)?;
-
-    Ok(HookInstallReport {
-        agent: "claude",
-        config_path: path.to_path_buf(),
-        installed_events: installed,
-        merged: existed,
-        telemetry,
-    })
+    Ok((root, installed))
 }
 
 fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
@@ -308,16 +378,31 @@ fn read_existing_json(path: &Path) -> Result<Map<String, Value>> {
 }
 
 fn write_json(path: &Path, root: &Map<String, Value>) -> Result<()> {
+    let text = render_json(root)?;
+    atomic::write_bytes_atomically(path, text.as_bytes())?;
+    Ok(())
+}
+
+fn render_json(root: &Map<String, Value>) -> Result<String> {
     let text = serde_json::to_string_pretty(&Value::Object(root.clone())).map_err(|source| {
         AgentErr::InstallSerializeJson {
             agent: "claude",
             source,
         }
     })?;
-    let mut bytes = text.into_bytes();
-    bytes.push(b'\n');
-    atomic::write_bytes_atomically(path, &bytes)?;
-    Ok(())
+    Ok(format!("{text}\n"))
+}
+
+fn original_text(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(AgentErr::InstallIo {
+            agent: "claude",
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 fn json_type_name(v: &Value) -> &'static str {
@@ -439,7 +524,8 @@ fn build_matcher_entry(event: &str, matcher: Option<&str>) -> Value {
     }
     entry.insert(RIMZ_MANAGED_KEY.to_owned(), Value::Bool(true));
     entry.insert(RIMZ_SYNC_KEY.to_owned(), Value::Bool(blocking));
-    let command = format!("rimz hooks feed --source claude --event {event}");
+    let command =
+        format!("RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event {event}");
     let mut hook = Map::new();
     hook.insert("type".to_owned(), Value::String("command".to_owned()));
     hook.insert("command".to_owned(), Value::String(command));
@@ -700,7 +786,7 @@ mod tests {
                 "_rimz_sync": false,
                 "hooks": [
                   {
-                    "command": "rimz hooks feed --source claude --event Notification",
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event Notification",
                     "timeout": 120,
                     "type": "command"
                   }
@@ -713,7 +799,7 @@ mod tests {
                 "_rimz_sync": true,
                 "hooks": [
                   {
-                    "command": "rimz hooks feed --source claude --event PermissionRequest",
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event PermissionRequest",
                     "timeout": 120,
                     "type": "command"
                   }
@@ -726,7 +812,7 @@ mod tests {
                 "_rimz_sync": true,
                 "hooks": [
                   {
-                    "command": "rimz hooks feed --source claude --event PreToolUse",
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event PreToolUse",
                     "timeout": 120,
                     "type": "command"
                   }
@@ -738,7 +824,7 @@ mod tests {
                 "_rimz_sync": true,
                 "hooks": [
                   {
-                    "command": "rimz hooks feed --source claude --event PreToolUse",
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event PreToolUse",
                     "timeout": 120,
                     "type": "command"
                   }
@@ -752,7 +838,7 @@ mod tests {
                 "_rimz_sync": false,
                 "hooks": [
                   {
-                    "command": "rimz hooks feed --source claude --event SessionEnd",
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event SessionEnd",
                     "timeout": 120,
                     "type": "command"
                   }
@@ -765,7 +851,7 @@ mod tests {
                 "_rimz_sync": false,
                 "hooks": [
                   {
-                    "command": "rimz hooks feed --source claude --event SessionStart",
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event SessionStart",
                     "timeout": 120,
                     "type": "command"
                   }
@@ -778,7 +864,7 @@ mod tests {
                 "_rimz_sync": false,
                 "hooks": [
                   {
-                    "command": "rimz hooks feed --source claude --event Stop",
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event Stop",
                     "timeout": 120,
                     "type": "command"
                   }
@@ -906,6 +992,41 @@ mod tests {
     }
 
     #[test]
+    fn hooks_installed_at_detects_managed_matcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        assert!(
+            !hooks_installed_at(&path),
+            "a missing settings file reads as not installed"
+        );
+        install_into(&path, false).unwrap();
+        assert!(
+            hooks_installed_at(&path),
+            "an installed settings file reads as installed"
+        );
+        uninstall_from(&path).unwrap();
+        assert!(
+            !hooks_installed_at(&path),
+            "an uninstalled settings file reads as not installed"
+        );
+    }
+
+    #[test]
+    fn hooks_installed_at_ignores_user_only_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{ "hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [] } ] } }"#,
+        )
+        .unwrap();
+        assert!(
+            !hooks_installed_at(&path),
+            "user-managed hooks with no _rimz_managed marker are not installed"
+        );
+    }
+
+    #[test]
     fn install_rejects_async_blocking_marker() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
@@ -984,7 +1105,7 @@ mod tests {
     }
 
     #[test]
-    fn session_start_observes_running_status() {
+    fn session_start_observes_idle_status() {
         let obs = ClaudeIntegration
             .observe_lifecycle(
                 "SessionStart",
@@ -992,8 +1113,26 @@ mod tests {
             )
             .unwrap();
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
+        // Wired in, nothing asked yet — idle, no task.
+        assert_eq!(obs.status, AgentStatus::Idle);
+        assert_eq!(obs.task, None);
+        assert_eq!(obs.mode, Some(AgentMode::Interactive));
+    }
+
+    #[test]
+    fn user_prompt_submit_observes_running_with_prompt_task() {
+        let obs = ClaudeIntegration
+            .observe_lifecycle(
+                "UserPromptSubmit",
+                &json!({ "session_id": "sess-1", "prompt": "fix auth flow" }),
+            )
+            .unwrap();
+        assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
         assert_eq!(obs.status, AgentStatus::Running);
-        assert_eq!(obs.mode, AgentMode::Interactive);
+        assert_eq!(obs.task.as_deref(), Some("fix auth flow"));
+        // The prompt reports no mode, so the reducer keeps the mode
+        // SessionStart established (a bypass agent stays bypass).
+        assert_eq!(obs.mode, None);
     }
 
     #[test]
@@ -1004,12 +1143,25 @@ mod tests {
                 &json!({ "permission_mode": "bypassPermissions" }),
             )
             .unwrap();
-        assert_eq!(obs.mode, AgentMode::Bypass);
+        assert_eq!(obs.mode, Some(AgentMode::Bypass));
     }
 
     #[test]
     fn notification_event_is_not_a_lifecycle_observation() {
         let obs = ClaudeIntegration.observe_lifecycle("Notification", &json!({}));
         assert!(obs.is_none());
+    }
+
+    #[test]
+    fn session_end_is_recorded_and_ends_the_session() {
+        // SessionEnd must produce an observation so the reducer drops the agent
+        // from the rollup, and must report `ends_session` so the CLI expires
+        // the dead session's pending asks.
+        let obs = ClaudeIntegration
+            .observe_lifecycle("SessionEnd", &json!({ "session_id": "sess-1" }))
+            .expect("SessionEnd is a recorded lifecycle observation");
+        assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
+        assert!(ClaudeIntegration.ends_session("SessionEnd"));
+        assert!(!ClaudeIntegration.ends_session("Stop"));
     }
 }

@@ -135,6 +135,7 @@ pub struct SidebarPaneOptions {
     pub cwd: PathBuf,
     pub width_percent: u16,
     pub rimz_bin: PathBuf,
+    pub replace_existing: bool,
 }
 
 #[derive(Clone, Debug, Default)]

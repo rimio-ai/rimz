@@ -1,62 +1,50 @@
-//! Vocabulary → wire-form labels. One table per enum, no logic.
+//! Semantic sidebar vocabulary: the canonical status glyphs and mode pills.
 
-use rimz::FeedStatus;
-use rimz::ResolutionMethod;
-use rimz::Surface;
-use rimz::feed::{AgentMode, AgentStatus, FeedKind};
+use ratatui::style::{Color, Modifier, Style};
+use rimz::feed::{AgentMode, AgentStatus};
 
-pub(super) fn status_label(status: FeedStatus, surface: Surface) -> &'static str {
-    match (status, surface) {
-        (FeedStatus::Pending, Surface::Bridge) => "active",
-        (FeedStatus::Pending, _) => "waiting",
-        (FeedStatus::Resolved, _) => "answered",
-        (FeedStatus::TimedOut, _) => "timed out",
-        (FeedStatus::Abandoned, _) => "abandoned",
-    }
-}
-
-pub(super) fn kind_label(kind: FeedKind) -> &'static str {
-    match kind {
-        FeedKind::Permission => "permission",
-        FeedKind::PlanApproval => "plan",
-        FeedKind::Question => "question",
-        FeedKind::NeedsInput => "needs input",
-        FeedKind::Completion => "completion",
-        FeedKind::Failure => "failure",
-        FeedKind::ToolTelemetry => "tool",
-        FeedKind::SubAgentStarted => "sub-agent started",
-        FeedKind::SubAgentStopped => "sub-agent stopped",
-        FeedKind::Generic => "activity",
-    }
-}
-
-pub(super) fn resolution_method(method: ResolutionMethod) -> &'static str {
-    match method {
-        ResolutionMethod::HookBridge => "hook",
-        ResolutionMethod::PaneSend => "pane",
-        ResolutionMethod::Cli => "cli",
-        ResolutionMethod::Sidebar => "sidebar",
-        ResolutionMethod::Dismiss => "dismiss",
-        ResolutionMethod::AgentMovedOn => "agent moved on",
-    }
-}
-
-pub(super) fn agent_status(status: AgentStatus) -> &'static str {
+pub(super) fn status_glyph(status: AgentStatus) -> &'static str {
     match status {
-        AgentStatus::Running => "running",
-        AgentStatus::Waiting => "waiting",
-        AgentStatus::Idle => "idle",
-        AgentStatus::Success => "success",
-        AgentStatus::Failed => "failed",
+        AgentStatus::Waiting => "◆",
+        AgentStatus::Failed => "✗",
+        AgentStatus::Running => "▸",
+        AgentStatus::Idle => "○",
+        AgentStatus::Success => "✓",
     }
 }
 
-pub(super) fn agent_mode(mode: AgentMode) -> &'static str {
+pub(super) fn status_style(status: AgentStatus) -> Style {
+    match status {
+        AgentStatus::Waiting => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+        AgentStatus::Failed => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        AgentStatus::Running => Style::default().fg(Color::Green),
+        AgentStatus::Idle => Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
+        AgentStatus::Success => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::DIM),
+    }
+}
+
+pub(super) fn mode_pill(mode: AgentMode) -> Option<&'static str> {
     match mode {
-        AgentMode::Interactive => "interactive",
-        AgentMode::Plan => "plan",
-        AgentMode::Auto => "auto",
-        AgentMode::Bypass => "bypass",
-        AgentMode::Unknown => "unknown",
+        AgentMode::Interactive | AgentMode::Unknown => None,
+        AgentMode::Plan => Some("plan"),
+        AgentMode::Auto => Some("auto"),
+        AgentMode::Bypass => Some("bypass"),
+    }
+}
+
+pub(super) fn mode_style(mode: AgentMode) -> Style {
+    match mode {
+        AgentMode::Bypass => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+        _ => Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
     }
 }

@@ -29,7 +29,9 @@ pub use crate::ids::{
     EventId, MuxName, PaneId, RequestId, ResolverId, SidebarInstanceId, ViewKind, WorkspaceId,
 };
 pub use crate::ledger::{
-    Ledger, RuntimePaths, SidebarActivity, SidebarSnapshot, StatePaths, WorkspaceRecord,
+    Ledger, RuntimePaths, SidebarActivity, SidebarResolverState, SidebarRow, SidebarRowKind,
+    SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, StatePaths,
+    WorkspaceRecord,
 };
 pub use crate::schema::event::EventEnvelope;
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

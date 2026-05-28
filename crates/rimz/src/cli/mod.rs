@@ -14,12 +14,13 @@ mod sidebar;
 mod trust;
 mod workspace;
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 
+use rimz::agents::HookInstallPreview;
 use rimz::ids::MuxName;
 use rimz::ledger::paths::workspaces_dir;
 use rimz::ledger::workspace_record;
@@ -192,9 +193,187 @@ fn parse_mux(value: &str) -> std::result::Result<MuxName, String> {
     value.parse::<MuxName>().map_err(|err| err.to_string())
 }
 
+fn ensure_detected_agent_hooks() -> Result<()> {
+    let mut missing = Vec::new();
+
+    for name in rimz::agents::KNOWN_AGENTS {
+        let agent = rimz::agents::integration_by_name(name)?;
+        if which::which(agent.name()).is_err() {
+            continue;
+        }
+
+        if !agent.supports_hook_install() {
+            let reason = agent
+                .hook_install_unavailable_reason()
+                .unwrap_or("hook install is not supported for this adapter");
+            tracing::warn!(
+                agent = agent.name(),
+                reason,
+                "detected agent cannot be wired automatically",
+            );
+            continue;
+        }
+
+        if !agent.hooks_installed() {
+            missing.push(agent.preview_hook_install(false)?);
+        }
+    }
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    if !std::io::stdin().is_terminal() {
+        print_hook_consent_gate(&missing, false)?;
+        return Ok(());
+    }
+
+    for name in approve_hook_install(&missing)? {
+        let agent = rimz::agents::integration_by_name(name)?;
+        let report = agent.install_hooks(false)?;
+        let mut stderr = std::io::stderr().lock();
+        writeln!(
+            stderr,
+            "Installed {} hooks at {}",
+            report.agent,
+            report.config_path.display(),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn approve_hook_install(previews: &[HookInstallPreview]) -> Result<Vec<&'static str>> {
+    print_hook_consent_gate(previews, true)?;
+    loop {
+        let mut stderr = std::io::stderr().lock();
+        write!(stderr, "Choose [Enter/d/c/s]: ")?;
+        stderr.flush()?;
+        drop(stderr);
+
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        match answer.trim() {
+            "" | "y" | "Y" | "yes" | "YES" | "Yes" => {
+                return Ok(previews.iter().map(|preview| preview.agent).collect());
+            }
+            "d" | "D" => {
+                print_hook_diffs(previews)?;
+            }
+            "c" | "C" => {
+                return choose_hook_agents(previews);
+            }
+            "s" | "S" | "n" | "N" | "no" | "NO" | "No" => return Ok(Vec::new()),
+            _ => {
+                writeln!(
+                    std::io::stderr().lock(),
+                    "Enter installs all, d shows the diff, c chooses per agent, s skips."
+                )?;
+            }
+        }
+    }
+}
+
+fn print_hook_consent_gate(previews: &[HookInstallPreview], interactive: bool) -> Result<()> {
+    let mut stderr = std::io::stderr().lock();
+    writeln!(
+        stderr,
+        "Rimz first run on this machine: detected agent hooks are not installed for {}.",
+        join_agent_names(previews.iter().map(|preview| preview.agent)),
+    )?;
+    writeln!(
+        stderr,
+        "Rimz will make an additive, reversible per-user config change so runs appear in the sidebar.",
+    )?;
+    writeln!(
+        stderr,
+        "These hooks only report events to Rimz. They never answer a prompt for you.",
+    )?;
+    for preview in previews {
+        writeln!(
+            stderr,
+            "  + {}: {} events at {}",
+            preview.agent,
+            preview.planned_events.len(),
+            preview.config_path.display(),
+        )?;
+    }
+    writeln!(
+        stderr,
+        "Reversible any time with `rimz hooks uninstall <agent>`."
+    )?;
+    writeln!(
+        stderr,
+        "[Enter] install all    [d] show full diff    [c] choose per agent    [s] skip",
+    )?;
+    if !interactive {
+        writeln!(
+            stderr,
+            "No terminal input is available, so Rimz installs nothing and continues into the room.",
+        )?;
+    }
+    Ok(())
+}
+
+fn print_hook_diffs(previews: &[HookInstallPreview]) -> Result<()> {
+    let mut stderr = std::io::stderr().lock();
+    for preview in previews {
+        writeln!(stderr, "{}", preview_diff(preview))?;
+    }
+    Ok(())
+}
+
+fn choose_hook_agents(previews: &[HookInstallPreview]) -> Result<Vec<&'static str>> {
+    let mut selected = Vec::new();
+    for preview in previews {
+        let mut stderr = std::io::stderr().lock();
+        write!(stderr, "Install {} hooks? [y/N] ", preview.agent)?;
+        stderr.flush()?;
+        drop(stderr);
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if matches!(answer.trim(), "y" | "Y" | "yes" | "YES" | "Yes") {
+            selected.push(preview.agent);
+        }
+    }
+    Ok(selected)
+}
+
+fn preview_diff(preview: &HookInstallPreview) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "--- {}\n+++ {}\n",
+        preview.config_path.display(),
+        preview.config_path.display()
+    ));
+    let original = preview.original_config.as_deref().unwrap_or("");
+    if original.is_empty() {
+        out.push_str("@@ new file @@\n");
+    } else {
+        out.push_str("@@ original @@\n");
+        for line in original.lines() {
+            out.push('-');
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.push_str("@@ candidate @@\n");
+    }
+    for line in preview.candidate_config.lines() {
+        out.push('+');
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn join_agent_names(names: impl IntoIterator<Item = &'static str>) -> String {
+    names.into_iter().collect::<Vec<_>>().join(", ")
+}
+
 fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(&args.path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", args.path.display()))?;
+    ensure_detected_agent_hooks()?;
     record_workspace(&workspace)?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
@@ -380,6 +559,7 @@ fn launch_sidebar_for_workspace(
         cwd: cwd.to_path_buf(),
         width_percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
         rimz_bin,
+        replace_existing: false,
     };
     rimz::sidebar::launch_sidebar_if_needed(backend, &runtime, &opts)
 }

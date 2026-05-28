@@ -80,7 +80,13 @@ impl EventEnvelope {
             "agent_id": observation.agent_id,
             "status": observation.status,
             "mode": observation.mode,
+            "agent_pid": observation.agent_pid,
+            "agent_process_start": observation.agent_process_start,
+            "worktree_path": observation.worktree_path,
             "worktree_branch": observation.worktree_branch,
+            "task": observation.task,
+            "model": observation.model,
+            "effort": observation.effort,
         });
         Self::new(
             workspace_id,

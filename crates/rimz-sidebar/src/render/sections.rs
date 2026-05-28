@@ -1,212 +1,278 @@
-//! Per-section composition: feed groups, agent rollup, activity stream.
-//! The four sidebar groups documented in DESIGN.md each map to one entry
-//! point here; `mod.rs` orchestrates the order.
+//! Worktree-grouped sidebar composition. The snapshot owns grouping and
+//! ordering; this module only maps the view-model to terminal lines.
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use rimz::feed::{AgentState, ResolverStepState};
-use rimz::{EventEnvelope, FeedItem, SidebarActivity, Surface};
+use rimz::feed::{AgentMode, AgentStatus};
+use rimz::{SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarWorktreeGroup};
 
-use super::fmt::{clip, time_ago, time_remaining, worktree_from_path};
-use super::labels::{agent_mode, agent_status, kind_label, resolution_method, status_label};
+use super::fmt::{age_short, clip, time_remaining};
+use super::labels::{mode_pill, mode_style, status_glyph, status_style};
 
-pub(super) const MAX_ROWS_PER_GROUP: usize = 8;
-
-#[derive(Clone, Copy)]
-pub(super) enum SectionMode {
-    NeedsAttention,
-    ResolverWorking,
-    RecentlyAnswered,
-    RecentActivity,
-}
-
-pub(super) fn section_title(lines: &mut Vec<Line<'static>>, title: &'static str) {
-    lines.push(Line::styled(
-        title,
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    ));
-}
-
-pub(super) fn feed_section(
-    lines: &mut Vec<Line<'static>>,
-    title: &'static str,
-    items: &[FeedItem],
-    mode: SectionMode,
-    group_by_worktree: bool,
-) {
-    section_title(lines, title);
-    if items.is_empty() {
-        lines.push(Line::from("  -"));
-        lines.push(Line::from(""));
-        return;
+pub(super) fn attention_line(groups: &[SidebarWorktreeGroup]) -> Option<Line<'static>> {
+    let waiting = status_total(groups, AgentStatus::Waiting);
+    let failed = status_total(groups, AgentStatus::Failed);
+    if waiting == 0 && failed == 0 {
+        return None;
     }
 
-    let mut current_group = String::new();
-    for item in items.iter().take(MAX_ROWS_PER_GROUP) {
-        if group_by_worktree {
-            let group = worktree_from_path(item.worktree_path.as_deref());
-            if group != current_group {
-                current_group = group.clone();
-                lines.push(Line::styled(
-                    format!("  Worktree: {group}"),
-                    Style::default().fg(Color::DarkGray),
-                ));
+    let mut spans = Vec::new();
+    if waiting > 0 {
+        spans.push(Span::styled(
+            format!("{}{}", status_glyph(AgentStatus::Waiting), waiting),
+            status_style(AgentStatus::Waiting),
+        ));
+    }
+    if failed > 0 {
+        if !spans.is_empty() {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(
+            format!("{}{}", status_glyph(AgentStatus::Failed), failed),
+            status_style(AgentStatus::Failed),
+        ));
+    }
+    Some(Line::from(spans))
+}
+
+/// Dim getting-started hint for a healthy room with no agent or feed rows.
+/// Shell/editor process rows can still be present; the renderer suppresses
+/// this cue once an agent-like process or product row appears.
+///
+/// The cue names the *real* next step. Until hooks are wired, running
+/// claude/codex registers nothing, so an un-wired room points at `rimz hooks
+/// install`; once wired (`hooks_ready`), it invites launching an agent.
+pub(super) fn first_run_hint_lines(hooks_ready: bool) -> Vec<Line<'static>> {
+    let dim = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::DIM);
+    let lines: [&str; 3] = if hooks_ready {
+        ["no agents yet", "run claude or codex", "in a pane to begin"]
+    } else {
+        [
+            "no agents yet",
+            "install hooks:",
+            "rimz hooks install claude",
+        ]
+    };
+    lines
+        .into_iter()
+        .map(|text| Line::styled(text, dim))
+        .collect()
+}
+
+pub(super) fn worktree_group_lines(
+    group: &SidebarWorktreeGroup,
+    width: usize,
+    row_index: &mut usize,
+    selected_index: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    lines.push(group_header(group, width));
+    for row in &group.rows {
+        let selected = *row_index == selected_index;
+        *row_index += 1;
+        lines.push(row_line(row, width, selected));
+        if row.row_kind == SidebarRowKind::Agent
+            && let Some(capability) = capability_line(row)
+        {
+            lines.push(capability);
+        }
+    }
+    if group.hidden_count > 0 {
+        lines.push(Line::styled(
+            format!("  +{} more", group.hidden_count),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
+        ));
+    }
+    lines
+}
+
+fn status_total(groups: &[SidebarWorktreeGroup], status: AgentStatus) -> usize {
+    groups
+        .iter()
+        .flat_map(|group| &group.status_counts)
+        .filter(|count| count.status == status)
+        .map(|count| count.count)
+        .sum()
+}
+
+fn group_header(group: &SidebarWorktreeGroup, width: usize) -> Line<'static> {
+    let label = format!("▌{}", group.label);
+    let tally = tally_text(&group.status_counts);
+    let available = width.saturating_sub(tally.chars().count() + 1);
+    let left = clip(&label, available.max(1));
+    let padding = width
+        .saturating_sub(left.chars().count() + tally.chars().count())
+        .max(1);
+    Line::from(vec![
+        Span::styled(
+            left,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" ".repeat(padding)),
+        Span::styled(
+            tally,
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
+        ),
+    ])
+}
+
+fn tally_text(counts: &[SidebarStatusCount]) -> String {
+    counts
+        .iter()
+        .map(|count| format!("{}{}", count.count, status_glyph(count.status)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn row_line(row: &SidebarRow, width: usize, selected: bool) -> Line<'static> {
+    if row.row_kind == SidebarRowKind::Process {
+        return selected_line(process_row_line(row, width), selected);
+    }
+
+    if let Some(resolver) = &row.resolver {
+        let resolver_name = resolver
+            .display_name
+            .as_deref()
+            .unwrap_or_else(|| resolver.resolver_id.as_str());
+        let remaining = resolver
+            .budget_until
+            .map(time_remaining)
+            .unwrap_or_else(|| "?".to_owned());
+        return selected_line(
+            composed_row(
+                Span::styled("⟳", status_style(AgentStatus::Waiting)),
+                &row.name,
+                &format!("{resolver_name} {remaining}"),
+                row.last_activity,
+                width,
+            ),
+            selected,
+        );
+    }
+
+    selected_line(
+        composed_row(
+            Span::styled(
+                status_glyph(row.status.unwrap_or(AgentStatus::Idle)),
+                status_style(row.status.unwrap_or(AgentStatus::Idle)),
+            ),
+            &row.name,
+            row.task.as_deref().unwrap_or("—"),
+            row.last_activity,
+            width,
+        ),
+        selected,
+    )
+}
+
+fn selected_line(line: Line<'static>, selected: bool) -> Line<'static> {
+    if selected {
+        return line.patch_style(Style::default().add_modifier(Modifier::REVERSED));
+    }
+    line
+}
+
+fn process_row_line(row: &SidebarRow, width: usize) -> Line<'static> {
+    let dim = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::DIM);
+    let label = clip(&row.name, width.saturating_sub(2).max(1));
+    Line::from(vec![
+        Span::styled("·", dim),
+        Span::raw(" "),
+        Span::styled(label, dim),
+    ])
+}
+
+fn composed_row(
+    lead: Span<'static>,
+    name: &str,
+    task: &str,
+    last_activity: jiff::Timestamp,
+    width: usize,
+) -> Line<'static> {
+    let age = age_short(last_activity);
+    let lead_width = 2;
+    let name_width = 7;
+    let age_width = age.chars().count();
+    let fixed = lead_width + name_width + 2 + age_width;
+    let task_width = width.saturating_sub(fixed).max(1);
+    let name = format!("{:<name_width$}", clip(name, name_width));
+    let task = clip(task, task_width);
+    let padding = width
+        .saturating_sub(lead_width + name.chars().count() + 1 + task.chars().count() + age_width)
+        .max(1);
+
+    Line::from(vec![
+        lead,
+        Span::raw(" "),
+        Span::raw(name),
+        Span::raw(" "),
+        Span::raw(task),
+        Span::raw(" ".repeat(padding)),
+        Span::styled(
+            age,
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
+        ),
+    ])
+}
+
+fn capability_line(row: &SidebarRow) -> Option<Line<'static>> {
+    let mut tokens = Vec::new();
+    if let Some(model) = row.model.as_deref().filter(|model| !model.is_empty()) {
+        tokens.push(CapabilityToken::Dim(model.to_owned()));
+    }
+    if let Some(effort) = row.effort.as_deref().filter(|effort| !effort.is_empty()) {
+        tokens.push(CapabilityToken::Dim(effort.to_owned()));
+    }
+    if let Some(mode) = row.mode.and_then(mode_pill) {
+        let token = if row.mode == Some(AgentMode::Bypass) {
+            CapabilityToken::Mode(AgentMode::Bypass, mode.to_owned())
+        } else {
+            CapabilityToken::Dim(mode.to_owned())
+        };
+        tokens.push(token);
+    }
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let mut spans = vec![Span::raw("  ")];
+    for (index, token) in tokens.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(
+                " · ",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            ));
+        }
+        match token {
+            CapabilityToken::Dim(value) => spans.push(Span::styled(
+                value,
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            )),
+            CapabilityToken::Mode(mode, value) => {
+                spans.push(Span::styled(value, mode_style(mode)));
             }
         }
-        lines.push(feed_item_line(item, mode));
     }
-    if items.len() > MAX_ROWS_PER_GROUP {
-        lines.push(overflow_line(items.len() - MAX_ROWS_PER_GROUP));
-    }
-    lines.push(Line::from(""));
+    Some(Line::from(spans))
 }
 
-pub(super) fn activity_section(
-    lines: &mut Vec<Line<'static>>,
-    title: &'static str,
-    items: &[SidebarActivity],
-) {
-    section_title(lines, title);
-    if items.is_empty() {
-        lines.push(Line::from("  -"));
-        lines.push(Line::from(""));
-        return;
-    }
-
-    for item in items.iter().take(MAX_ROWS_PER_GROUP) {
-        lines.push(activity_line(item));
-    }
-    if items.len() > MAX_ROWS_PER_GROUP {
-        lines.push(overflow_line(items.len() - MAX_ROWS_PER_GROUP));
-    }
-    lines.push(Line::from(""));
-}
-
-pub(super) fn agent_line(agent: &AgentState) -> Line<'static> {
-    let worktree = agent
-        .worktree_path
-        .as_deref()
-        .map(|path| worktree_from_path(Some(path)))
-        .or_else(|| {
-            agent
-                .worktree_branch
-                .as_ref()
-                .filter(|branch| !branch.is_empty())
-                .cloned()
-        })
-        .unwrap_or_else(|| "Workspace".to_owned());
-    Line::from(format!(
-        "  {:<10} {:<8} {:<11} {}",
-        clip(&agent.kind, 10),
-        agent_status(agent.status),
-        agent_mode(agent.mode),
-        worktree
-    ))
-}
-
-fn overflow_line(count: usize) -> Line<'static> {
-    Line::styled(
-        format!("  +{count} more"),
-        Style::default().fg(Color::DarkGray),
-    )
-}
-
-fn feed_item_line(item: &FeedItem, mode: SectionMode) -> Line<'static> {
-    let left = format!(
-        "  {:<10} {:<9} ",
-        clip(&item.source, 10),
-        status_label(item.status, item.surface)
-    );
-    let detail = match mode {
-        SectionMode::NeedsAttention => needs_attention_detail(item),
-        SectionMode::ResolverWorking => resolver_detail(item),
-        SectionMode::RecentlyAnswered => answered_detail(item),
-        SectionMode::RecentActivity => format!("{}: {}", kind_label(item.kind), item.title),
-    };
-    Line::from(vec![
-        Span::styled(left, Style::default().fg(Color::DarkGray)),
-        Span::raw(detail),
-    ])
-}
-
-fn activity_line(activity: &SidebarActivity) -> Line<'static> {
-    match activity {
-        SidebarActivity::Feed { item } => feed_item_line(item, SectionMode::RecentActivity),
-        SidebarActivity::Event { event } => event_line(event),
-    }
-}
-
-fn event_line(event: &EventEnvelope) -> Line<'static> {
-    let left = format!("  {:<10} {:<9} ", clip(&event.source, 10), "event");
-    let kind = event
-        .params
-        .get("kind")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or(&event.method);
-    let title = event
-        .params
-        .get("title")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("activity");
-    Line::from(vec![
-        Span::styled(left, Style::default().fg(Color::DarkGray)),
-        Span::raw(format!("{kind}: {title} ({})", time_ago(event.timestamp))),
-    ])
-}
-
-fn needs_attention_detail(item: &FeedItem) -> String {
-    let mut detail = format!("{}: {}", kind_label(item.kind), item.title);
-    match item.surface {
-        Surface::NativeUi => detail.push_str(" [focus] [dismiss]"),
-        Surface::Script if !item.options.is_empty() => {
-            detail.push(' ');
-            detail.push_str(
-                &item
-                    .options
-                    .iter()
-                    .take(4)
-                    .map(|option| format!("[{}]", clip(option, 12)))
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            );
-        }
-        Surface::Bridge => detail.push_str(" [override]"),
-        Surface::Script => {}
-    }
-    detail
-}
-
-fn resolver_detail(item: &FeedItem) -> String {
-    let active = item
-        .chain_active_resolver
-        .as_ref()
-        .map(ToString::to_string)
-        .or_else(|| {
-            item.chain
-                .iter()
-                .find(|step| matches!(step.state, ResolverStepState::Active))
-                .map(|step| step.resolver_id.to_string())
-        })
-        .unwrap_or_else(|| "resolver".to_owned());
-    let remaining = item
-        .chain_active_until
-        .map(time_remaining)
-        .unwrap_or_else(|| "budget unknown".to_owned());
-    format!("{active} active - {remaining} - {}", item.title)
-}
-
-fn answered_detail(item: &FeedItem) -> String {
-    let method = item
-        .resolution
-        .as_ref()
-        .map(|resolution| resolution_method(resolution.method))
-        .unwrap_or("unknown");
-    format!(
-        "{}: {} ({method}, {})",
-        kind_label(item.kind),
-        item.title,
-        time_ago(item.updated_at)
-    )
+enum CapabilityToken {
+    Dim(String),
+    Mode(AgentMode, String),
 }

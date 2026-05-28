@@ -7,6 +7,8 @@ use clap::{Args, Subcommand};
 use super::{GlobalFlags, open_ledger};
 use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
 use rimz::ledger::atomic;
+use rimz::ledger::workspace_record;
+use rimz::mux::PaneListOptions;
 use rimz::schema::heartbeat::SidebarHeartbeat;
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, RuntimePaths, StatePaths};
@@ -23,6 +25,12 @@ enum SidebarSubcmd {
     Snapshot {
         #[arg(long)]
         workspace_id: Option<String>,
+        #[arg(long)]
+        mux: Option<MuxName>,
+        #[arg(long)]
+        session_name: Option<String>,
+        #[arg(long)]
+        exclude_pane_id: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -54,15 +62,73 @@ enum SidebarSubcmd {
 
 pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
-        SidebarSubcmd::Snapshot { workspace_id, json } => {
+        SidebarSubcmd::Snapshot {
+            workspace_id,
+            mux,
+            session_name,
+            exclude_pane_id,
+            json,
+        } => {
+            let mut resolved_session = None;
             let ledger = match workspace_id {
                 Some(raw) => open_ledger_by_workspace_id(raw.parse()?),
                 None => {
                     let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
+                    resolved_session = Some(workspace.session_name.clone());
                     open_ledger(&workspace)
                 }
             }?;
-            let snapshot = ledger.snapshot()?;
+            let mut snapshot = ledger.snapshot()?;
+            // The serve loop names its session explicitly; a bare CLI/inspection
+            // call resolves it from the record. Only the former treats a
+            // pane-discovery failure as fatal (see the match below).
+            let explicit_session = session_name.is_some();
+            let session_name = session_name
+                .or(resolved_session)
+                .or_else(|| session_name_from_record(&ledger));
+            let exclude = exclude_pane_id
+                .as_deref()
+                .map(rimz::ids::PaneId::parse)
+                .transpose()?;
+            if let Some(session_name) = session_name {
+                if let Some(panes) = pane_list_fixture()? {
+                    snapshot = snapshot.with_live_panes(panes, exclude.as_ref());
+                } else {
+                    let mux = mux.or(globals.mux);
+                    if let Some(mux) = mux.or_else(|| rimz::mux::auto_detect_backend(None).ok()) {
+                        let backend = rimz::mux::backend_for(mux);
+                        match backend.list_panes(PaneListOptions {
+                            session_name: Some(session_name),
+                        }) {
+                            Ok(panes) => {
+                                snapshot = snapshot.with_live_panes(panes, exclude.as_ref());
+                            }
+                            // The serve loop owns a live session, so a discovery
+                            // failure there is real: fail hard and let the loop
+                            // hold its last good frame via the degraded path,
+                            // rather than flashing the raw ledger rollup (every
+                            // agent the log ever saw) for a single tick.
+                            Err(err) if explicit_session => {
+                                return Err(err).context("sidebar snapshot pane discovery");
+                            }
+                            // A bare inspection call has no live session to
+                            // trust; fall back to the ledger rollup.
+                            Err(err) => {
+                                tracing::warn!(error = %err, "sidebar snapshot pane discovery failed; showing ledger rollup");
+                            }
+                        }
+                    }
+                }
+            }
+            // Hook-install state is environment, not ledger, so the reducer
+            // can't know it — fill it here so the renderer's first-run hint
+            // can point at `rimz hooks install` until a supported agent is
+            // wired. Unsupported adapters must not make the room look ready.
+            snapshot.agent_hooks_ready = rimz::agents::KNOWN_AGENTS.iter().any(|name| {
+                rimz::agents::integration_by_name(name)
+                    .map(|agent| agent.supports_hook_install() && agent.hooks_installed())
+                    .unwrap_or(false)
+            });
             if json {
                 let rendered = serde_json::to_string_pretty(&snapshot)?;
                 #[expect(clippy::print_stdout, reason = "json emitter for sidebar")]
@@ -70,12 +136,26 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     println!("{rendered}");
                 }
             } else {
+                let waiting = snapshot
+                    .worktree_groups
+                    .iter()
+                    .flat_map(|group| &group.status_counts)
+                    .filter(|count| count.status == rimz::feed::AgentStatus::Waiting)
+                    .map(|count| count.count)
+                    .sum::<usize>();
+                let failed = snapshot
+                    .worktree_groups
+                    .iter()
+                    .flat_map(|group| &group.status_counts)
+                    .filter(|count| count.status == rimz::feed::AgentStatus::Failed)
+                    .map(|count| count.count)
+                    .sum::<usize>();
                 #[expect(clippy::print_stdout, reason = "human summary")]
                 {
-                    println!("Needs your attention: {}", snapshot.needs_attention.len());
-                    println!("Resolver is working: {}", snapshot.resolver_working.len());
-                    println!("Recently answered:   {}", snapshot.recently_answered.len());
-                    println!("Recent activity:     {}", snapshot.recent_activity.len());
+                    println!("Workspace:       {}", snapshot.display_name);
+                    println!("Worktree groups: {}", snapshot.worktree_groups.len());
+                    println!("Waiting:         {waiting}");
+                    println!("Failed:          {failed}");
                 }
             }
             Ok(())
@@ -170,6 +250,23 @@ fn open_ledger_by_workspace_id(workspace_id: WorkspaceId) -> Result<Ledger> {
     let paths = StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
     let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
     Ledger::open(paths, runtime).context("opening ledger")
+}
+
+fn session_name_from_record(ledger: &Ledger) -> Option<String> {
+    workspace_record::read(&ledger.paths().workspace_record)
+        .ok()
+        .map(|record| record.session_name)
+}
+
+fn pane_list_fixture() -> Result<Option<Vec<rimz::feed::PaneRef>>> {
+    let Some(path) = std::env::var_os("RIMZ_TEST_PANE_LIST").filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(path);
+    let bytes = std::fs::read(&path)
+        .with_context(|| format!("reading RIMZ_TEST_PANE_LIST {}", path.display()))?;
+    Ok(Some(serde_json::from_slice(&bytes)?))
 }
 
 pub(crate) fn sidebar_renderer_program() -> PathBuf {

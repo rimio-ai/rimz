@@ -64,6 +64,7 @@ pub fn run(globals: &GlobalFlags) -> Result<()> {
             Err(err) => println!("  multiplexer   : unavailable ({err})"),
         }
         report_sidebar_renderer();
+        report_agent_hooks();
 
         if let Ok(ws) = &workspace {
             report_protocol_versions(ws);
@@ -267,6 +268,76 @@ fn report_zellij_capabilities() {
             println!("  zellij floor  : {floor_status} (>= {maj}.{min}.{patch} required)");
         }
         Err(err) => println!("  zellij floor  : unavailable ({err})"),
+    }
+}
+
+/// Report which agents have their Rimz hooks wired. A run in a Rimz room
+/// registers nothing until the agent's real hook system invokes
+/// `rimz hooks feed`, so this section distinguishes installed, installable,
+/// and known-but-not-yet-installable adapters.
+#[expect(
+    clippy::print_stdout,
+    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
+)]
+fn report_agent_hooks() {
+    let statuses: Vec<(&str, AgentHookDoctorStatus)> = rimz::agents::KNOWN_AGENTS
+        .iter()
+        .map(|name| {
+            let status = rimz::agents::integration_by_name(name)
+                .map(|agent| {
+                    if !agent.supports_hook_install() {
+                        AgentHookDoctorStatus::Unsupported(
+                            agent
+                                .hook_install_unavailable_reason()
+                                .unwrap_or("hook install is not supported for this adapter")
+                                .to_owned(),
+                        )
+                    } else if agent.hooks_installed() {
+                        AgentHookDoctorStatus::Installed
+                    } else {
+                        AgentHookDoctorStatus::NotInstalled
+                    }
+                })
+                .unwrap_or(AgentHookDoctorStatus::Unsupported(
+                    "unknown adapter".to_owned(),
+                ));
+            (*name, status)
+        })
+        .collect();
+
+    let summary = statuses
+        .iter()
+        .map(|(name, status)| format!("{name} {}", status.label()))
+        .collect::<Vec<_>>()
+        .join("; ");
+    println!("  agent hooks   : {summary}");
+
+    for (name, status) in &statuses {
+        match status {
+            AgentHookDoctorStatus::NotInstalled => {
+                println!("  hooks install : run `rimz hooks install {name}` to wire {name} agents");
+            }
+            AgentHookDoctorStatus::Unsupported(reason) => {
+                println!("  hooks install : {name} unsupported ({reason})");
+            }
+            AgentHookDoctorStatus::Installed => {}
+        };
+    }
+}
+
+enum AgentHookDoctorStatus {
+    Installed,
+    NotInstalled,
+    Unsupported(String),
+}
+
+impl AgentHookDoctorStatus {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Installed => "installed",
+            Self::NotInstalled => "not installed",
+            Self::Unsupported(_) => "unsupported",
+        }
     }
 }
 

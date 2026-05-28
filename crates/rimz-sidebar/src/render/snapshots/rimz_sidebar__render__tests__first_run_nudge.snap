@@ -3,9 +3,9 @@ source: crates/rimz-sidebar/src/render/mod.rs
 expression: screen
 ---
 ┌ query-engine ────────────────────────────────────────────────────────────────┐
-│! Sidebar degraded for <elapsed>: snapshot failed: ledger not found                  │
-│                                                                              │
-│                                                                              │
+│no agents yet                                                                 │
+│install hooks:                                                                │
+│rimz hooks install claude                                                     │
 │                                                                              │
 │                                                                              │
 │                                                                              │

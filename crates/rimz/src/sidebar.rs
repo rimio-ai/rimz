@@ -63,7 +63,9 @@ pub fn launch_sidebar_if_needed(
     if fresh_sidebar_present(runtime) {
         return SidebarLaunchOutcome::SkippedFresh;
     }
-    match backend.open_sidebar(opts) {
+    let mut opts = opts.clone();
+    opts.replace_existing = true;
+    match backend.open_sidebar(&opts) {
         Ok(()) => SidebarLaunchOutcome::Opened,
         Err(err) => {
             tracing::warn!(

@@ -9,14 +9,21 @@ use std::time::Duration;
 use jiff::Timestamp;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event};
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind,
+};
+use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal;
 use rimz::feed::PaneRef;
 use rimz::ids::PaneId;
 use rimz::ledger::paths::PathErr;
 use rimz::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use tracing::{debug, warn};
 
-use crate::render::{self, FetchStatus};
+use crate::render::{self, FetchStatus, UiState};
+
+mod input;
+use input::{KeyAction, Wakeup, encode_key, encode_mouse, wait_for_wakeup};
 
 #[derive(Clone, Debug)]
 pub struct ServeConfig {
@@ -73,8 +80,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // time. The watcher nudges this loop through the same wakeup socket the
     // ledger uses, so a resize is just another wakeup; without it the first
     // usable frame waits for the next `tick`, reading as a blank sidebar.
-    spawn_resize_waker(socket_path.clone());
-
+    let _input_mode = InputModeGuard::enable()?;
+    spawn_event_waker(socket_path.clone());
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
@@ -82,10 +89,17 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     let mut last_snapshot: Option<SidebarSnapshot> = None;
     let mut status = FetchStatus::Ok;
     let mut self_close = SelfCloseState::default();
+    let mut ui = UiState::default();
 
     loop {
         let heartbeat_outcome = write_heartbeat(&config, &socket_path);
-        let snapshot_outcome = fetch_snapshot(&config.rimz_bin, &config.workspace_id);
+        let snapshot_outcome = fetch_snapshot_for(
+            &config.rimz_bin,
+            &config.workspace_id,
+            Some(config.mux),
+            Some(&config.session_name),
+            own_pane_id(config.mux),
+        );
 
         let state = compute_next_state(
             &config.workspace_id,
@@ -100,18 +114,38 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         if let FetchStatus::Degraded { reason, .. } = &state.status {
             warn!(reason = %reason, "sidebar refresh degraded");
         }
+        let own_view = own_view_state(&config);
+        clamp_selection(&mut ui, &state.snapshot);
+        sync_selection_to_focused_pane(
+            &mut ui,
+            &state.snapshot,
+            own_view
+                .as_ref()
+                .filter(|state| !state.own_is_focused)
+                .and_then(|state| state.focused_pane_id.as_ref()),
+        );
         last_snapshot = state.last_snapshot;
         status = state.status;
-        render::draw_to_terminal(&mut terminal, &state.snapshot, &status)?;
+        render::draw_to_terminal_with_ui(&mut terminal, &state.snapshot, &status, &ui)?;
 
-        if self_close_decision(&mut self_close, own_view_sibling_count(&config)) {
+        if self_close_decision(
+            &mut self_close,
+            own_view.as_ref().map(|state| state.sibling_count),
+        ) {
             debug!(
                 session = %config.session_name,
                 "sidebar tab emptied; exiting so the pane closes itself",
             );
             break;
         }
-        wait_for_wakeup(&socket)?;
+        let wakeup = wait_for_wakeup(&socket)?;
+        let outcome = handle_wakeup(wakeup, &mut ui, &state.snapshot, &status);
+        if outcome.redraw {
+            render::draw_to_terminal_with_ui(&mut terminal, &state.snapshot, &status, &ui)?;
+        }
+        if let Some(index) = outcome.focus_index {
+            focus_selected_row(&state.snapshot, index, &config);
+        }
     }
     Ok(())
 }
@@ -157,12 +191,18 @@ impl SelfCloseState {
 
 const EMPTY_STARTUP_OBSERVATIONS_BEFORE_CLOSE: u8 = 2;
 
-/// Count the panes that share this sidebar's view (tab/window) but are not the
-/// sidebar itself. Best-effort and backend-agnostic: it shells out to the
-/// normalized `rimz pane list`, the same read-only discovery primitive a
-/// resolver uses. Returns `None` on any failure so the caller never
-/// self-closes on bad data.
-fn own_view_sibling_count(config: &ServeConfig) -> Option<usize> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OwnViewState {
+    sibling_count: usize,
+    own_is_focused: bool,
+    focused_pane_id: Option<PaneId>,
+}
+
+/// Summarize the panes that share this sidebar's view (tab/window). Best-effort
+/// and backend-agnostic: it shells out to the normalized `rimz pane list`, the
+/// same read-only discovery primitive a resolver uses. Returns `None` on any
+/// failure so the caller never self-closes or moves selection on bad data.
+fn own_view_state(config: &ServeConfig) -> Option<OwnViewState> {
     let own = own_pane_id(config.mux)?;
     let output = Command::new(&config.rimz_bin)
         .args(["pane", "list", "--json", "--session-name"])
@@ -182,12 +222,34 @@ fn own_view_sibling_count(config: &ServeConfig) -> Option<usize> {
         .find(|pane| pane.pane_id == own)?
         .view_id
         .clone();
-    Some(
-        panes
-            .iter()
-            .filter(|pane| pane.pane_id != own && pane.view_id == own_view)
-            .count(),
-    )
+    own_view_state_from_panes(&own, &panes, own_view.as_deref())
+}
+
+fn own_view_state_from_panes(
+    own: &PaneId,
+    panes: &[PaneRef],
+    own_view: Option<&str>,
+) -> Option<OwnViewState> {
+    if !panes.iter().any(|pane| pane.pane_id == *own) {
+        return None;
+    }
+    let siblings = panes
+        .iter()
+        .filter(|pane| pane.pane_id != *own && pane.view_id.as_deref() == own_view)
+        .collect::<Vec<_>>();
+    let own_is_focused = panes
+        .iter()
+        .find(|pane| pane.pane_id == *own)
+        .is_some_and(|pane| pane.is_focused);
+    let focused_pane_id = siblings
+        .iter()
+        .find(|pane| pane.is_focused)
+        .map(|pane| pane.pane_id.clone());
+    Some(OwnViewState {
+        sibling_count: siblings.len(),
+        own_is_focused,
+        focused_pane_id,
+    })
 }
 
 /// This process's normalized pane id, read from the multiplexer's per-pane env
@@ -249,14 +311,18 @@ fn tick_for(seconds: u64) -> Duration {
 }
 
 fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
+    let display_name = workspace_id.as_str().to_owned();
     SidebarSnapshot {
         workspace_id,
+        display_name,
         generated_at: Timestamp::now(),
+        worktree_groups: Vec::new(),
         needs_attention: Vec::new(),
         resolver_working: Vec::new(),
         recently_answered: Vec::new(),
         recent_activity: Vec::new(),
         agents: Vec::new(),
+        agent_hooks_ready: false,
     }
 }
 
@@ -268,11 +334,28 @@ pub struct RenderState {
     pub last_snapshot: Option<SidebarSnapshot>,
 }
 
-fn fetch_snapshot(rimz_bin: &Path, workspace_id: &WorkspaceId) -> Result<SidebarSnapshot> {
-    let output = Command::new(rimz_bin)
+fn fetch_snapshot_for(
+    rimz_bin: &Path,
+    workspace_id: &WorkspaceId,
+    mux: Option<MuxName>,
+    session_name: Option<&str>,
+    exclude_pane_id: Option<PaneId>,
+) -> Result<SidebarSnapshot> {
+    let mut command = Command::new(rimz_bin);
+    command
         .args(["sidebar", "snapshot", "--workspace-id"])
-        .arg(workspace_id.as_str())
-        .arg("--json")
+        .arg(workspace_id.as_str());
+    if let Some(mux) = mux {
+        command.args(["--mux", mux.as_str()]);
+    }
+    if let Some(session_name) = session_name {
+        command.args(["--session-name", session_name]);
+    }
+    if let Some(pane_id) = exclude_pane_id {
+        command.args(["--exclude-pane-id", pane_id.as_str()]);
+    }
+    command.arg("--json");
+    let output = command
         .output()
         .map_err(|source| SidebarAppErr::CommandIo {
             program: rimz_bin.display().to_string(),
@@ -330,18 +413,16 @@ fn bind_socket(path: &Path) -> io::Result<UnixDatagram> {
 /// immediately regardless; this only bounds how often it loops while idle.
 const RESIZE_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Watch the terminal for resize events and wake the serve loop so it repaints
-/// at the new size. Runs on its own thread for the life of the process; it
-/// self-wakes by sending to `wake_path` (the loop's bound wakeup socket), which
-/// keeps the loop's single recv-driven redraw path. Key and mouse events are
-/// ignored — the sidebar takes no input. Stops quietly if the event source or
-/// the socket goes away (e.g. the loop has exited).
-fn spawn_resize_waker(wake_path: PathBuf) {
+/// Watch the terminal for resize and key events and wake the serve loop. Runs
+/// on its own thread for the life of the process; it self-wakes by sending to
+/// `wake_path` (the loop's bound wakeup socket), which keeps redraw and input
+/// on one path. Stops quietly if the event source or socket goes away.
+fn spawn_event_waker(wake_path: PathBuf) {
     std::thread::spawn(move || {
         let waker = match UnixDatagram::unbound() {
             Ok(socket) => socket,
             Err(err) => {
-                warn!(error = %err, "resize waker disabled; resizes wait for the tick");
+                warn!(error = %err, "event waker disabled; input waits for the tick");
                 return;
             }
         };
@@ -353,15 +434,29 @@ fn spawn_resize_waker(wake_path: PathBuf) {
                             return;
                         }
                     }
+                    Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+                        if let Some(encoded) = encode_key(key.code)
+                            && waker.send_to(encoded.as_bytes(), &wake_path).is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Ok(Event::Mouse(mouse)) => {
+                        if let Some(encoded) = encode_mouse(mouse.kind, mouse.column, mouse.row)
+                            && waker.send_to(encoded.as_bytes(), &wake_path).is_err()
+                        {
+                            return;
+                        }
+                    }
                     Ok(_) => {}
                     Err(err) => {
-                        warn!(error = %err, "resize waker stopping: event read failed");
+                        warn!(error = %err, "event waker stopping: event read failed");
                         return;
                     }
                 },
                 Ok(false) => {}
                 Err(err) => {
-                    warn!(error = %err, "resize waker stopping: event poll failed");
+                    warn!(error = %err, "event waker stopping: event poll failed");
                     return;
                 }
             }
@@ -369,21 +464,318 @@ fn spawn_resize_waker(wake_path: PathBuf) {
     });
 }
 
-fn wait_for_wakeup(socket: &UnixDatagram) -> io::Result<()> {
-    let mut buf = [0_u8; 4096];
-    match socket.recv(&mut buf) {
-        Ok(_) => Ok(()),
-        // Timeout (the tick), or a signal (the resize watcher's SIGWINCH handler
-        // interrupts this blocking recv): all are just "redraw now", never fatal.
-        Err(err)
-            if matches!(
-                err.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
-            ) =>
-        {
-            Ok(())
+fn handle_wakeup(
+    wakeup: Wakeup,
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+    status: &FetchStatus,
+) -> InputOutcome {
+    match wakeup {
+        Wakeup::Key(action) => handle_key(action, ui, snapshot),
+        Wakeup::MouseClick { column, row } => handle_mouse_click(column, row, ui, snapshot, status),
+        Wakeup::Resize => InputOutcome::redraw(),
+        Wakeup::Tick => InputOutcome::default(),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct InputOutcome {
+    redraw: bool,
+    focus_index: Option<usize>,
+}
+
+impl InputOutcome {
+    fn redraw() -> Self {
+        Self {
+            redraw: true,
+            focus_index: None,
         }
-        Err(err) => Err(err),
+    }
+
+    fn focus(index: usize) -> Self {
+        Self {
+            redraw: true,
+            focus_index: Some(index),
+        }
+    }
+}
+
+fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -> InputOutcome {
+    match action {
+        KeyAction::Up => {
+            if ui.selected_index > 0 {
+                ui.selected_index -= 1;
+                return InputOutcome::redraw();
+            }
+            InputOutcome::default()
+        }
+        KeyAction::Down => {
+            let len = visible_row_count(snapshot);
+            if ui.selected_index + 1 < len {
+                ui.selected_index += 1;
+                return InputOutcome::redraw();
+            }
+            InputOutcome::default()
+        }
+        KeyAction::Enter => InputOutcome::focus(ui.selected_index),
+        KeyAction::Space => {
+            if let Some(index) = next_attention_index(snapshot, ui.selected_index) {
+                ui.selected_index = index;
+                return InputOutcome::focus(ui.selected_index);
+            }
+            InputOutcome::default()
+        }
+        KeyAction::Help => {
+            ui.help_visible = !ui.help_visible;
+            InputOutcome::redraw()
+        }
+        KeyAction::Digit(digit) => {
+            let index = usize::from(digit.saturating_sub(1));
+            if index < visible_row_count(snapshot) {
+                ui.selected_index = index;
+                return InputOutcome::focus(ui.selected_index);
+            }
+            InputOutcome::default()
+        }
+    }
+}
+
+fn handle_mouse_click(
+    column: u16,
+    row: u16,
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+    status: &FetchStatus,
+) -> InputOutcome {
+    if let Some(index) = row_index_at_screen_position(snapshot, status, column, row) {
+        ui.selected_index = index;
+        return InputOutcome::focus(ui.selected_index);
+    }
+    InputOutcome::default()
+}
+
+fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
+    let len = visible_row_count(snapshot);
+    if len == 0 {
+        ui.selected_index = 0;
+    } else if ui.selected_index >= len {
+        ui.selected_index = len - 1;
+    }
+}
+
+fn sync_selection_to_focused_pane(
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+    focused_pane_id: Option<&PaneId>,
+) {
+    let Some(focused_pane_id) = focused_pane_id else {
+        return;
+    };
+    if let Some(index) = visible_rows(snapshot).position(|row| {
+        row.pane
+            .as_ref()
+            .is_some_and(|pane| pane.pane_id == *focused_pane_id)
+    }) {
+        ui.selected_index = index;
+    }
+}
+
+fn row_index_at_screen_position(
+    snapshot: &SidebarSnapshot,
+    status: &FetchStatus,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    // The block border occupies row 0 and column 0. Ratatui renders the
+    // snapshot body one cell in from the top-left border.
+    if row == 0 || column == 0 {
+        return None;
+    }
+    let target = usize::from(row - 1);
+    row_index_at_content_line(snapshot, status, target)
+}
+
+fn row_index_at_content_line(
+    snapshot: &SidebarSnapshot,
+    status: &FetchStatus,
+    target: usize,
+) -> Option<usize> {
+    let mut line = 0_usize;
+    let mut last_nonempty = false;
+
+    if matches!(status, FetchStatus::Degraded { .. }) {
+        if target == line {
+            return None;
+        }
+        line += 1;
+        if target == line {
+            return None;
+        }
+        line += 1;
+        last_nonempty = false;
+    }
+
+    if has_attention_line(snapshot) {
+        if target == line {
+            return None;
+        }
+        line += 1;
+        last_nonempty = true;
+    }
+
+    if snapshot.worktree_groups.is_empty() {
+        return None;
+    }
+
+    if last_nonempty {
+        if target == line {
+            return None;
+        }
+        line += 1;
+    }
+
+    let mut row_index = 0_usize;
+    for (group_index, group) in snapshot.worktree_groups.iter().enumerate() {
+        if group_index > 0 {
+            if target == line {
+                return None;
+            }
+            line += 1;
+        }
+
+        if target == line {
+            return None;
+        }
+        line += 1;
+
+        for row in &group.rows {
+            if target == line {
+                return Some(row_index);
+            }
+            line += 1;
+
+            if row.row_kind == rimz::SidebarRowKind::Agent && row_has_capability_line(row) {
+                if target == line {
+                    return Some(row_index);
+                }
+                line += 1;
+            }
+            row_index += 1;
+        }
+
+        if group.hidden_count > 0 {
+            if target == line {
+                return None;
+            }
+            line += 1;
+        }
+    }
+    None
+}
+
+fn has_attention_line(snapshot: &SidebarSnapshot) -> bool {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.status_counts)
+        .any(|count| {
+            count.count > 0
+                && matches!(
+                    count.status,
+                    rimz::feed::AgentStatus::Waiting | rimz::feed::AgentStatus::Failed
+                )
+        })
+}
+
+fn row_has_capability_line(row: &rimz::SidebarRow) -> bool {
+    row.model.as_deref().is_some_and(|value| !value.is_empty())
+        || row.effort.as_deref().is_some_and(|value| !value.is_empty())
+        || matches!(
+            row.mode,
+            Some(
+                rimz::feed::AgentMode::Plan
+                    | rimz::feed::AgentMode::Auto
+                    | rimz::feed::AgentMode::Bypass
+            )
+        )
+}
+
+fn visible_row_count(snapshot: &SidebarSnapshot) -> usize {
+    snapshot
+        .worktree_groups
+        .iter()
+        .map(|group| group.rows.len())
+        .sum()
+}
+
+fn visible_rows(snapshot: &SidebarSnapshot) -> impl Iterator<Item = &rimz::SidebarRow> {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| group.rows.iter())
+}
+
+fn next_attention_index(snapshot: &SidebarSnapshot, selected: usize) -> Option<usize> {
+    let rows = visible_rows(snapshot).collect::<Vec<_>>();
+    if rows.is_empty() {
+        return None;
+    }
+    let start = selected.saturating_add(1);
+    (0..rows.len()).find_map(|offset| {
+        let index = (start + offset) % rows.len();
+        matches!(
+            rows[index].status,
+            Some(rimz::feed::AgentStatus::Waiting | rimz::feed::AgentStatus::Failed)
+        )
+        .then_some(index)
+    })
+}
+
+fn focus_selected_row(snapshot: &SidebarSnapshot, selected: usize, config: &ServeConfig) {
+    let Some(row) = visible_rows(snapshot).nth(selected) else {
+        return;
+    };
+    let Some(pane) = &row.pane else {
+        return;
+    };
+    let mut command = Command::new(&config.rimz_bin);
+    command.args(["pane", "focus", pane.pane_id.as_str(), "--session-name"]);
+    command.arg(&pane.session_name);
+    if let Some(start) = pane.pane_process_start {
+        command.arg("--pane-process-start").arg(start.to_string());
+    }
+    match command.output() {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => warn!(
+            pane = %pane.pane_id,
+            stderr = %String::from_utf8_lossy(&output.stderr),
+            "sidebar pane focus failed",
+        ),
+        Err(err) => warn!(
+            pane = %pane.pane_id,
+            error = %err,
+            "sidebar pane focus command failed",
+        ),
+    }
+}
+
+struct InputModeGuard;
+
+impl InputModeGuard {
+    fn enable() -> io::Result<Self> {
+        terminal::enable_raw_mode()?;
+        if let Err(err) = execute!(io::stdout(), EnableMouseCapture) {
+            let _ = terminal::disable_raw_mode();
+            return Err(err);
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for InputModeGuard {
+    fn drop(&mut self) {
+        let _ = execute!(io::stdout(), DisableMouseCapture);
+        let _ = terminal::disable_raw_mode();
     }
 }
 
@@ -416,6 +808,87 @@ mod tests {
 
     fn snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         placeholder_snapshot(ws.clone())
+    }
+
+    fn pane(raw: &str, view: &str, focused: bool) -> PaneRef {
+        PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
+            session_name: "rimz-test".to_owned(),
+            view_id: Some(view.to_owned()),
+            view_kind: Some(rimz::ids::ViewKind::Tab),
+            is_focused: focused,
+            command: Some("zsh".to_owned()),
+            cwd: Some("/repo/main".to_owned()),
+            pane_pid: None,
+            pane_process_start: None,
+        }
+    }
+
+    fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> SidebarSnapshot {
+        let mut snapshot = snapshot(ws);
+        snapshot.worktree_groups = vec![rimz::SidebarWorktreeGroup {
+            key: "/repo/main".to_owned(),
+            label: "main".to_owned(),
+            kind: rimz::SidebarWorktreeKind::Worktree,
+            status_counts: Vec::new(),
+            rows: panes
+                .into_iter()
+                .map(|pane| rimz::SidebarRow {
+                    row_kind: rimz::SidebarRowKind::Process,
+                    id: pane.pane_id.to_string(),
+                    name: pane.command.clone().unwrap_or_else(|| "process".to_owned()),
+                    status: None,
+                    mode: None,
+                    pane: Some(pane),
+                    request_id: None,
+                    surface: None,
+                    task: None,
+                    model: None,
+                    effort: None,
+                    worktree_path: Some("/repo/main".to_owned()),
+                    worktree_branch: Some("main".to_owned()),
+                    last_activity: Timestamp::now(),
+                    resolver: None,
+                    options: Vec::new(),
+                })
+                .collect(),
+            hidden_count: 0,
+        }];
+        snapshot
+    }
+
+    fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
+        let mut snapshot = snapshot(ws);
+        let row = rimz::SidebarRow {
+            row_kind: rimz::SidebarRowKind::Agent,
+            id: "agent-1".to_owned(),
+            name: "claude".to_owned(),
+            status: Some(rimz::feed::AgentStatus::Idle),
+            mode: Some(rimz::feed::AgentMode::Plan),
+            pane: Some(pane("terminal_9", "tab_0", false)),
+            request_id: None,
+            surface: None,
+            task: Some("inspect auth".to_owned()),
+            model: Some("Opus".to_owned()),
+            effort: None,
+            worktree_path: Some("/repo/main".to_owned()),
+            worktree_branch: Some("main".to_owned()),
+            last_activity: Timestamp::now(),
+            resolver: None,
+            options: Vec::new(),
+        };
+        snapshot.worktree_groups = vec![rimz::SidebarWorktreeGroup {
+            key: "/repo/main".to_owned(),
+            label: "main".to_owned(),
+            kind: rimz::SidebarWorktreeKind::Worktree,
+            status_counts: vec![rimz::SidebarStatusCount {
+                status: rimz::feed::AgentStatus::Idle,
+                count: 1,
+            }],
+            rows: vec![row],
+            hidden_count: 0,
+        }];
+        snapshot
     }
 
     #[test]
@@ -576,5 +1049,190 @@ mod tests {
             state.seen_sibling,
             "an unknown count must not clear the latch"
         );
+    }
+
+    #[test]
+    fn own_view_state_tracks_focused_sibling_in_own_view() {
+        let own = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let focused_here = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let focused_elsewhere = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+        let panes = vec![
+            pane("terminal_1", "tab_0", false),
+            pane("terminal_2", "tab_0", true),
+            pane("terminal_3", "tab_1", true),
+        ];
+
+        let state =
+            own_view_state_from_panes(&own, &panes, Some("tab_0")).expect("own pane is present");
+
+        assert_eq!(state.sibling_count, 1);
+        assert_eq!(state.focused_pane_id, Some(focused_here));
+        assert_ne!(state.focused_pane_id, Some(focused_elsewhere));
+    }
+
+    #[test]
+    fn own_view_state_marks_when_sidebar_itself_is_focused() {
+        let own = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let panes = vec![
+            pane("terminal_1", "tab_0", true),
+            pane("terminal_2", "tab_0", false),
+        ];
+
+        let state =
+            own_view_state_from_panes(&own, &panes, Some("tab_0")).expect("own pane is present");
+
+        assert!(state.own_is_focused);
+        assert_eq!(state.focused_pane_id, None);
+    }
+
+    #[test]
+    fn selection_syncs_to_focused_pane_row() {
+        let ws = workspace();
+        let focused = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", true),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 0,
+            help_visible: false,
+        };
+
+        sync_selection_to_focused_pane(&mut ui, &snapshot, Some(&focused));
+
+        assert_eq!(ui.selected_index, 1);
+    }
+
+    #[test]
+    fn selection_stays_put_when_focus_is_unknown() {
+        let ws = workspace();
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 1,
+            help_visible: false,
+        };
+
+        sync_selection_to_focused_pane(&mut ui, &snapshot, None);
+
+        assert_eq!(ui.selected_index, 1);
+    }
+
+    #[test]
+    fn row_index_maps_process_row_screen_positions() {
+        let ws = workspace();
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+
+        assert_eq!(
+            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 1, 1),
+            None,
+            "the group header is not a row"
+        );
+        assert_eq!(
+            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 0, 2),
+            None,
+            "the border is not clickable content"
+        );
+        assert_eq!(
+            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 1, 2),
+            Some(0)
+        );
+        assert_eq!(
+            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 1, 3),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn row_index_maps_agent_capability_line_to_same_row() {
+        let ws = workspace();
+        let snapshot = agent_snapshot(&ws);
+
+        assert_eq!(
+            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 1, 2),
+            Some(0)
+        );
+        assert_eq!(
+            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 1, 3),
+            Some(0),
+            "clicking an agent capability line routes to that agent row"
+        );
+    }
+
+    #[test]
+    fn mouse_click_selects_clicked_row() {
+        let ws = workspace();
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 0,
+            help_visible: false,
+        };
+
+        let outcome = handle_mouse_click(1, 3, &mut ui, &snapshot, &FetchStatus::Ok);
+
+        assert_eq!(outcome, InputOutcome::focus(1));
+        assert_eq!(ui.selected_index, 1);
+    }
+
+    #[test]
+    fn arrow_key_reports_immediate_ui_change() {
+        let ws = workspace();
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 0,
+            help_visible: false,
+        };
+
+        let outcome = handle_key(KeyAction::Down, &mut ui, &snapshot);
+
+        assert_eq!(outcome, InputOutcome::redraw());
+        assert_eq!(ui.selected_index, 1);
+    }
+
+    #[test]
+    fn enter_reports_focus_after_highlight_redraw() {
+        let ws = workspace();
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 1,
+            help_visible: false,
+        };
+
+        let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
+
+        assert_eq!(outcome, InputOutcome::focus(1));
+        assert_eq!(ui.selected_index, 1);
     }
 }

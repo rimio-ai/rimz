@@ -46,7 +46,10 @@ use crate::workspace::ResolvedWorkspace;
 
 pub use crate::ledger::feed_store::FeedStoreErr;
 pub use crate::ledger::paths::{RuntimePaths, StatePaths};
-pub use crate::ledger::snapshot::{SidebarActivity, SidebarSnapshot};
+pub use crate::ledger::snapshot::{
+    SidebarActivity, SidebarResolverState, SidebarRow, SidebarRowKind, SidebarSnapshot,
+    SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
+};
 pub use crate::ledger::workspace_record::WorkspaceRecord;
 
 /// High-level handle to a workspace's durable state. Cheap to clone — the
@@ -626,6 +629,67 @@ impl Ledger {
             self.wake_sidebars_best_effort(workspace_id, request_id);
         }
         Ok(())
+    }
+
+    /// Expire every pending agent-hook ask raised by an agent session that has
+    /// just ended. Each match moves to `Abandoned` with an `AgentMovedOn`
+    /// resolution and a `feed.expire` audit event. A dead session can't answer
+    /// its own prompt, so leaving it pending would strand attention on the
+    /// sidebar; this closes the loop deterministically (the snapshot's
+    /// read-side guard self-heals anything that races this write). Returns the
+    /// number of items expired.
+    #[must_use = "durability barrier; check the result"]
+    pub fn expire_agent_session(
+        &self,
+        source: &str,
+        agent_id: &str,
+        session_name: &str,
+    ) -> Result<usize> {
+        let mut expired = Vec::new();
+        {
+            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+            for mut item in feed_store::list(&self.inner.paths.feed_dir)? {
+                if item.source_kind != "agent-hook"
+                    || item.source != source
+                    || item.status != FeedStatus::Pending
+                    || item.agent_session_id() != Some(agent_id)
+                {
+                    continue;
+                }
+                item.mark_active_resolver_budget_elapsed(AbandonReason::AgentSessionEnded);
+                let mut resolution =
+                    Resolution::new(json!({ "expired": true }), ResolutionMethod::AgentMovedOn);
+                resolution.reason = Some(AbandonReason::AgentSessionEnded.as_str().to_owned());
+                item.status = FeedStatus::Abandoned;
+                item.resolution = Some(resolution);
+                item.updated_at = Timestamp::now();
+                feed_store::write(&self.inner.paths.feed_dir, &item)?;
+                event_log::append(
+                    &self.inner.paths.events_log,
+                    &EventEnvelope::new(
+                        item.workspace_id.clone(),
+                        session_name,
+                        "rimz",
+                        "cli",
+                        "feed.expire",
+                        json!({
+                            "request_id": item.request_id,
+                            "source": source,
+                            "agent_id": agent_id,
+                            "reason": AbandonReason::AgentSessionEnded.as_str(),
+                        }),
+                    ),
+                )?;
+                expired.push((item.workspace_id.clone(), item.request_id.clone()));
+            }
+            if !expired.is_empty() {
+                snapshot::rebuild(&self.inner.paths)?;
+            }
+        }
+        for (workspace_id, request_id) in &expired {
+            self.wake_sidebars_best_effort(workspace_id, request_id);
+        }
+        Ok(expired.len())
     }
 
     /// Build a fresh snapshot in memory (no disk write).
