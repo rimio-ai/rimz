@@ -12,7 +12,9 @@
 //! `~/.codex/config.toml` using Codex's inline `[[hooks.Event]]` tables.
 
 use std::env;
-use std::path::PathBuf;
+use std::fs;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -126,15 +128,25 @@ impl AgentIntegration for CodexIntegration {
             "Stop" => (stop_status_from_payload(payload), None),
             _ => return None,
         };
+        // Context budget lives in the rollout JSONL, not the hook payload.
+        // Locate the session's rollout file by id and read its tail so the
+        // gauge populates on the same low-frequency events the reducer already
+        // fires; an explicit payload field (rare) still wins when present.
+        let usage = optional_payload_string(payload, &["session_id"])
+            .and_then(|id| find_session_transcript(&id))
+            .map(|path| usage_from_transcript(&path))
+            .unwrap_or_default();
         let context_pct = payload
             .get("context_pct")
             .or_else(|| payload.get("context_window_pct"))
             .and_then(Value::as_u64)
-            .map(|v| v.min(100) as u8);
+            .map(|v| v.min(100) as u8)
+            .or(usage.context_pct);
         let total_tokens = payload
             .get("total_tokens")
             .or_else(|| payload.get("token_count"))
-            .and_then(Value::as_u64);
+            .and_then(Value::as_u64)
+            .or(usage.total_tokens);
         Some(AgentLifecycleObservation {
             agent_id: codex_agent_id(payload),
             status,
@@ -145,7 +157,7 @@ impl AgentIntegration for CodexIntegration {
             worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
             worktree_branch: optional_payload_string(payload, &["worktree_branch"]),
             task: task_from_payload(event_name, payload),
-            model: optional_payload_string(payload, &["model"]),
+            model: optional_payload_string(payload, &["model"]).or(usage.model),
             effort: optional_payload_string(
                 payload,
                 &["model_reasoning_effort", "reasoning_effort", "effort"],
@@ -223,6 +235,184 @@ fn task_from_payload(event_name: &str, payload: &Value) -> Option<String> {
         optional_payload_string(payload, &["task", "prompt", "agent_type"])
     } else {
         optional_payload_string(payload, &["task", "prompt"])
+    }
+}
+
+/// Context-window usage derived from a Codex rollout tail.
+#[derive(Default)]
+struct TranscriptUsage {
+    context_pct: Option<u8>,
+    total_tokens: Option<u64>,
+    model: Option<String>,
+}
+
+impl TranscriptUsage {
+    /// A rollout that opened cleanly but carries no `token_count` event yet —
+    /// a brand-new session. Report an explicit zero so the gauge draws an
+    /// empty bar at 0% instead of vanishing until the first turn completes. A
+    /// rollout that cannot be read stays `default()` (all `None`): unknown,
+    /// not zero. Mirrors the Claude adapter's `fresh()` semantics.
+    fn fresh() -> Self {
+        Self {
+            context_pct: Some(0),
+            total_tokens: Some(0),
+            model: None,
+        }
+    }
+}
+
+/// Root directory holding Codex rollout JSONL files. Honours
+/// `RIMZ_CODEX_SESSIONS` so tests can point at a tempdir without touching the
+/// real `~/.codex/sessions/` tree.
+fn codex_sessions_root() -> Option<PathBuf> {
+    if let Some(raw) = env::var_os("RIMZ_CODEX_SESSIONS").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(raw));
+    }
+    env::var_os("HOME")
+        .filter(|v| !v.is_empty())
+        .map(|home| PathBuf::from(home).join(".codex").join("sessions"))
+}
+
+/// Locate the rollout JSONL for a Codex session by its `session_id`. Codex
+/// writes one file per session at
+/// `~/.codex/sessions/YYYY/MM/DD/rollout-*-{session_id}.jsonl`, so the walk
+/// descends the date hierarchy newest-first and stops at the first match.
+fn find_session_transcript(session_id: &str) -> Option<PathBuf> {
+    find_session_transcript_under(&codex_sessions_root()?, session_id)
+}
+
+/// Same walk as [`find_session_transcript`] but rooted at an explicit
+/// directory — kept separate so tests can pass a tempdir without setting
+/// `HOME` or `RIMZ_CODEX_SESSIONS` in-process. Bounded by a day-directory
+/// budget so a hook never stalls on a large archive.
+fn find_session_transcript_under(root: &Path, session_id: &str) -> Option<PathBuf> {
+    const DAY_BUDGET: usize = 16;
+    let needle = format!("{session_id}.jsonl");
+    let mut budget = DAY_BUDGET;
+    for year in sorted_subdirs_desc(root) {
+        for month in sorted_subdirs_desc(&year) {
+            for day in sorted_subdirs_desc(&month) {
+                if budget == 0 {
+                    return None;
+                }
+                budget -= 1;
+                let Ok(entries) = fs::read_dir(&day) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    if entry.file_name().to_string_lossy().ends_with(&needle) {
+                        return Some(entry.path());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn sorted_subdirs_desc(path: &Path) -> Vec<PathBuf> {
+    let Ok(read) = fs::read_dir(path) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<PathBuf> = read
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().ok().is_some_and(|t| t.is_dir()))
+        .map(|e| e.path())
+        .collect();
+    entries.sort();
+    entries.reverse();
+    entries
+}
+
+/// Derive context-window usage from the tail of a Codex rollout JSONL. Codex
+/// emits an `event_msg`/`token_count` payload after every assistant turn with
+/// the current `model_context_window` and `last_token_usage`. This reads a
+/// bounded tail and takes the most recent record. Best-effort: any IO or
+/// parse failure yields empty fields (enrichment, never correctness).
+fn usage_from_transcript(path: &Path) -> TranscriptUsage {
+    const TAIL_BYTES: u64 = 64 * 1024;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return TranscriptUsage::default();
+    };
+    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    if file
+        .seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES)))
+        .is_err()
+    {
+        return TranscriptUsage::default();
+    }
+    let mut buf = Vec::new();
+    if file.read_to_end(&mut buf).is_err() {
+        return TranscriptUsage::default();
+    }
+    let text = String::from_utf8_lossy(&buf);
+    // Walk the tail newest-first, tracking the latest `token_count` (gauge
+    // values) and the latest `turn_context.payload.model` (display name) seen.
+    // Bail once both are filled. A truncated leading line from the tail seek
+    // simply fails to parse and is skipped.
+    let mut latest_model: Option<String> = None;
+    let mut latest_usage: Option<(u64, Option<u64>, u64)> = None;
+    for line in text.lines().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if latest_model.is_none()
+            && value.get("type").and_then(Value::as_str) == Some("turn_context")
+            && let Some(model) = value
+                .get("payload")
+                .and_then(|p| p.get("model"))
+                .and_then(Value::as_str)
+                .filter(|model| !model.is_empty())
+        {
+            latest_model = Some(model.to_owned());
+        }
+        if latest_usage.is_none()
+            && let Some(payload) = value.get("payload")
+            && payload.get("type").and_then(Value::as_str) == Some("token_count")
+        {
+            let info = payload.get("info");
+            let window = info
+                .and_then(|info| info.get("model_context_window"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let last = info.and_then(|info| info.get("last_token_usage"));
+            let input = last
+                .and_then(|last| last.get("input_tokens"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let total = last
+                .and_then(|last| last.get("total_tokens"))
+                .and_then(Value::as_u64);
+            if window > 0 || input > 0 || total.is_some() {
+                latest_usage = Some((input, total, window));
+            }
+        }
+        if latest_model.is_some() && latest_usage.is_some() {
+            break;
+        }
+    }
+    match latest_usage {
+        Some((input, total, window)) => {
+            let context_pct = input
+                .saturating_mul(100)
+                .checked_div(window)
+                .map(|pct| pct.min(100) as u8);
+            TranscriptUsage {
+                context_pct,
+                total_tokens: total,
+                model: latest_model,
+            }
+        }
+        None => TranscriptUsage {
+            // Opened cleanly but no `token_count` yet — fresh session, may
+            // still have a `turn_context` model captured above.
+            model: latest_model,
+            ..TranscriptUsage::fresh()
+        },
     }
 }
 
@@ -978,5 +1168,73 @@ command = "rimz hooks feed --source codex --event PermissionRequest"
     fn codex_hook_cap_is_shorter_than_claude_default() {
         use crate::agents::ClaudeIntegration;
         assert!(CodexIntegration.hook_cap() < ClaudeIntegration.hook_cap());
+    }
+
+    #[test]
+    fn transcript_tail_populates_context_gauge() {
+        // Codex reports token usage only in the rollout JSONL; the lifecycle
+        // hooks read its tail to fill the context gauge. Half the model's
+        // 258_400-token window = 50% with the `last_token_usage.total_tokens`
+        // surfacing through to `total_tokens`.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-session.jsonl");
+        std::fs::write(
+            &path,
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"sess-1\"}}\n\
+             {\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.5\"}}\n\
+             {\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":\
+             {\"last_token_usage\":{\"input_tokens\":129200,\"total_tokens\":130000},\
+             \"model_context_window\":258400}}}\n",
+        )
+        .unwrap();
+        let usage = usage_from_transcript(&path);
+        assert_eq!(usage.context_pct, Some(50));
+        assert_eq!(usage.total_tokens, Some(130_000));
+        assert_eq!(usage.model.as_deref(), Some("gpt-5.5"));
+    }
+
+    #[test]
+    fn fresh_transcript_reports_zero_context_not_unknown() {
+        // A brand-new session has a rollout with no `token_count` event yet.
+        // It must read as 0% (empty gauge), not `None` (no gauge), so a
+        // just-launched idle Codex shows an empty context bar — matching the
+        // Claude adapter's fresh-session behaviour.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-session.jsonl");
+        std::fs::write(
+            &path,
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"sess-1\"}}\n",
+        )
+        .unwrap();
+        let usage = usage_from_transcript(&path);
+        assert_eq!(usage.context_pct, Some(0));
+        assert_eq!(usage.total_tokens, Some(0));
+    }
+
+    #[test]
+    fn missing_transcript_leaves_context_unknown() {
+        // No readable rollout means unknown, not zero — the gauge stays
+        // hidden rather than asserting a false 0%.
+        let usage = usage_from_transcript(Path::new("/nonexistent/path/rollout.jsonl"));
+        assert_eq!(usage.context_pct, None);
+        assert_eq!(usage.total_tokens, None);
+    }
+
+    #[test]
+    fn find_session_transcript_walks_codex_date_hierarchy() {
+        // Codex shards rollouts under `YYYY/MM/DD/`; the locator finds a file
+        // whose name ends with `{session_id}.jsonl` regardless of how deep the
+        // shard is.
+        let dir = tempfile::tempdir().unwrap();
+        let day_dir = dir.path().join("2026").join("05").join("26");
+        std::fs::create_dir_all(&day_dir).unwrap();
+        let expected = day_dir.join("rollout-2026-05-26T21-57-38-sess-abc.jsonl");
+        std::fs::write(&expected, "{}\n").unwrap();
+        // A noise file for a different session in the same day must not match.
+        std::fs::write(day_dir.join("rollout-other-sess.jsonl"), "{}\n").unwrap();
+
+        let found = find_session_transcript_under(dir.path(), "sess-abc").unwrap();
+        assert_eq!(found, expected);
+        assert!(find_session_transcript_under(dir.path(), "sess-missing").is_none());
     }
 }
