@@ -37,6 +37,25 @@ fn sidebar_launch_opens_once_without_heartbeat() {
 
     assert_eq!(outcome, SidebarLaunchOutcome::Opened);
     assert_eq!(backend.open_calls(), 1);
+    assert_eq!(
+        backend.replace_existing_values(),
+        vec![true],
+        "missing/stale heartbeat means any existing sidebar pane may be stale \
+         and must be replaced"
+    );
+}
+
+#[test]
+fn sidebar_launch_replaces_old_protocol_heartbeat() {
+    let h = SidebarHarness::new();
+    h.write_heartbeat_with_protocol("rimz.plugin.v1");
+    let backend = FakeBackend::default();
+
+    let outcome = launch_sidebar_if_needed(&backend, &h.runtime, &h.sidebar_opts());
+
+    assert_eq!(outcome, SidebarLaunchOutcome::Opened);
+    assert_eq!(backend.open_calls(), 1);
+    assert_eq!(backend.replace_existing_values(), vec![true]);
 }
 
 #[test]
@@ -78,19 +97,24 @@ impl SidebarHarness {
             cwd: self.cwd.clone(),
             width_percent: 30,
             rimz_bin: PathBuf::from("rimz"),
+            replace_existing: false,
         }
     }
 
     fn write_heartbeat(&self) {
+        self.write_heartbeat_with_protocol(SIDEBAR_PROTOCOL_VERSION);
+    }
+
+    fn write_heartbeat_with_protocol(&self, protocol_version: &str) {
         self.runtime.ensure_dirs().expect("runtime dirs");
-        let heartbeat = SidebarHeartbeat::new(
+        let mut heartbeat = SidebarHeartbeat::new(
             self.workspace_id.clone(),
             SidebarInstanceId::new(),
             MuxName::Tmux,
             "session",
             self.runtime.sock_dir.join("sidebar.sock"),
         );
-        assert_eq!(heartbeat.protocol_version, SIDEBAR_PROTOCOL_VERSION);
+        heartbeat.protocol_version = protocol_version.to_owned();
         std::fs::write(
             self.runtime.heartbeat_dir.join("sidebar.fresh.json"),
             serde_json::to_vec(&heartbeat).expect("json"),
@@ -102,6 +126,7 @@ impl SidebarHarness {
 #[derive(Default)]
 struct FakeBackend {
     open_calls: Mutex<usize>,
+    replace_existing_values: Mutex<Vec<bool>>,
     fail_open: bool,
 }
 
@@ -109,12 +134,20 @@ impl FakeBackend {
     fn failing() -> Self {
         Self {
             open_calls: Mutex::new(0),
+            replace_existing_values: Mutex::new(Vec::new()),
             fail_open: true,
         }
     }
 
     fn open_calls(&self) -> usize {
         *self.open_calls.lock().expect("open calls")
+    }
+
+    fn replace_existing_values(&self) -> Vec<bool> {
+        self.replace_existing_values
+            .lock()
+            .expect("replace existing values")
+            .clone()
     }
 }
 
@@ -145,6 +178,10 @@ impl MuxBackend for FakeBackend {
             session_name: "session".to_owned(),
             view_id: Some("@1".to_owned()),
             view_kind: Some(ViewKind::Window),
+            is_focused: false,
+            command: Some("sh".to_owned()),
+            cwd: None,
+            pane_pid: None,
             pane_process_start: None,
         }])
     }
@@ -174,8 +211,12 @@ impl MuxBackend for FakeBackend {
         Ok(())
     }
 
-    fn open_sidebar(&self, _opts: &SidebarPaneOptions) -> rimz::mux::Result<()> {
+    fn open_sidebar(&self, opts: &SidebarPaneOptions) -> rimz::mux::Result<()> {
         *self.open_calls.lock().expect("open calls") += 1;
+        self.replace_existing_values
+            .lock()
+            .expect("replace existing values")
+            .push(opts.replace_existing);
         if self.fail_open {
             return Err(MuxErr::Command {
                 program: "fake".to_owned(),

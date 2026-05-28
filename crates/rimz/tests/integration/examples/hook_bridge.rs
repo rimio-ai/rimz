@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::common::{Env, permission_payload, python3_present, wait_for_heartbeat};
+use crate::common::{Env, permission_payload, skip_preconditions, wait_for_heartbeat};
 
 /// Spawn the reference hook-bridge resolver, pointed at the harness workspace.
 fn spawn_python_resolver(env: &Env, resolver_id: &str, run_seconds: f32) -> Child {
@@ -47,14 +47,6 @@ fn spawn_python_resolver(env: &Env, resolver_id: &str, run_seconds: f32) -> Chil
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn python resolver")
-}
-
-fn skip_preconditions(env: &Env) -> bool {
-    if !python3_present() {
-        tracing::warn!("skipping: python3 not on PATH");
-        return true;
-    }
-    env.skip_if_sandboxed()
 }
 
 #[test]

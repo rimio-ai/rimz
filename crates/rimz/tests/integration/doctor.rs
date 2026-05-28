@@ -22,7 +22,9 @@ fn inject_lifecycle(
     let obs = AgentLifecycleObservation {
         agent_id: Some(agent_id.to_owned()),
         status,
-        mode,
+        mode: Some(mode),
+        agent_pid: None,
+        agent_process_start: None,
         worktree_path: Some(env.project_root.display().to_string()),
         worktree_branch: branch.map(ToOwned::to_owned),
         task: None,
@@ -140,6 +142,52 @@ fn doctor_keeps_latest_mode_per_agent_id() {
 }
 
 #[test]
+fn doctor_reports_agent_hooks_not_installed() {
+    // A fresh machine has no agent hooks wired. Running codex/claude in a Rimz
+    // room then registers nothing — and the only signal the user gets must be
+    // here: doctor names each un-wired agent and the command that wires it.
+    let env = Env::new();
+    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    assert!(
+        output.status.success(),
+        "doctor failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+
+    assert!(
+        stdout.contains("agent hooks"),
+        "doctor must report agent hook install status:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("not installed"),
+        "an un-onboarded machine must read 'not installed':\n{stdout}"
+    );
+    assert!(
+        stdout.contains("rimz hooks install claude") && stdout.contains("rimz hooks install codex"),
+        "doctor must name the wiring command for each missing agent:\n{stdout}"
+    );
+}
+
+#[test]
+fn doctor_reports_agent_hooks_installed_after_wiring() {
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+
+    assert!(
+        stdout.contains("codex installed"),
+        "a wired agent must read 'installed':\n{stdout}"
+    );
+    assert!(
+        stdout.contains("rimz hooks install claude"),
+        "claude is still unwired, so its install hint stays:\n{stdout}"
+    );
+}
+
+#[test]
 fn doctor_reports_protocol_version_mismatches() {
     let env = Env::new();
 
@@ -185,13 +233,13 @@ fn doctor_reports_protocol_version_mismatches() {
     let stdout = String::from_utf8(output.stdout).expect("utf8");
 
     assert!(stdout.contains(
-        "protocols     : event rimz.event.v1; sidebar rimz.plugin.v1; resolver rimz.resolver.v1",
+        "protocols     : event rimz.event.v1; sidebar rimz.plugin.v2; resolver rimz.resolver.v1",
     ));
     assert!(stdout.contains(
         "protocol warn : event log schema rimz.event.v0 seen 1 record (expected rimz.event.v1)",
     ));
     assert!(stdout.contains(
-        "protocol warn : sidebar heartbeat sidebar.old.json uses rimz.plugin.v0 (expected rimz.plugin.v1)",
+        "protocol warn : sidebar heartbeat sidebar.old.json uses rimz.plugin.v0 (expected rimz.plugin.v2)",
     ));
     assert!(stdout.contains(
         "protocol warn : resolver heartbeat resolver.opus-policy.json uses rimz.resolver.v0 (expected rimz.resolver.v1)",

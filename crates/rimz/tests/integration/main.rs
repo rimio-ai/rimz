@@ -14,6 +14,7 @@ mod doctor;
 mod examples;
 mod gc;
 mod hooks;
+mod journey;
 mod ledger;
 mod list;
 mod property;

@@ -482,3 +482,73 @@ fn concurrent_resolve_uses_first_writer_wins_cas() {
         1
     );
 }
+
+#[test]
+fn expire_agent_session_abandons_only_that_sessions_pending_asks() {
+    let h = crate::common::Harness::new();
+
+    // Two pending claude asks from the session that is about to end, plus an
+    // ask from a different live session that must survive.
+    let mut ended_a = FeedItem::new(
+        h.workspace_id.clone(),
+        Surface::NativeUi,
+        FeedKind::Permission,
+        "claude needs attention",
+        "claude",
+        "agent-hook",
+    );
+    ended_a.payload = json!({ "session_id": "ended" });
+    let mut ended_b = FeedItem::new(
+        h.workspace_id.clone(),
+        Surface::NativeUi,
+        FeedKind::Question,
+        "claude needs attention",
+        "claude",
+        "agent-hook",
+    );
+    ended_b.payload = json!({ "session_id": "ended" });
+    let mut other = FeedItem::new(
+        h.workspace_id.clone(),
+        Surface::NativeUi,
+        FeedKind::Permission,
+        "claude needs attention",
+        "claude",
+        "agent-hook",
+    );
+    other.payload = json!({ "session_id": "live" });
+
+    for item in [&ended_a, &ended_b, &other] {
+        h.ledger.push_feed_item(item, "rimz-test").expect("push");
+    }
+
+    let expired = h
+        .ledger
+        .expire_agent_session("claude", "ended", "rimz-test")
+        .expect("expire");
+    assert_eq!(expired, 2, "both asks from the ended session are expired");
+
+    let by_id = |id: &rimz::RequestId| h.ledger.load_feed_item(id).expect("load").status;
+    assert_eq!(by_id(&ended_a.request_id), FeedStatus::Abandoned);
+    assert_eq!(by_id(&ended_b.request_id), FeedStatus::Abandoned);
+    assert_eq!(
+        by_id(&other.request_id),
+        FeedStatus::Pending,
+        "a different live session keeps its ask"
+    );
+
+    let events = h.ledger.read_events().expect("events");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.method == "feed.expire")
+            .count(),
+        2,
+    );
+
+    // Idempotent: re-running expires nothing (no longer pending).
+    let again = h
+        .ledger
+        .expire_agent_session("claude", "ended", "rimz-test")
+        .expect("expire again");
+    assert_eq!(again, 0);
+}

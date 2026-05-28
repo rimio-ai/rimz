@@ -166,6 +166,11 @@ fn list_panes_with_session_returns_terminals() {
         pane.pane_id.raw(),
     );
     assert_eq!(pane.session_name, "panes");
+    assert_eq!(pane.command.as_deref(), Some("sh"));
+    assert!(
+        pane.cwd.as_deref().is_some_and(|cwd| !cwd.is_empty()),
+        "tmux should report pane_current_path into PaneRef::cwd: {pane:?}",
+    );
 }
 
 /// `split_pane` accepts `RIMZ_*` env injection via `tmux -e`. We split a
@@ -275,6 +280,7 @@ fn open_sidebar_split_window_succeeds() {
             cwd: std::env::current_dir().expect("cwd"),
             width_percent: 30,
             rimz_bin: stub,
+            replace_existing: false,
         })
         .expect("open_sidebar");
 
@@ -338,4 +344,70 @@ fn version_floor_parses_and_compares() {
     assert!(caps.meets_min_version);
     assert!(caps.popup_supported);
     assert!(caps.binary_version.contains("tmux"));
+}
+
+/// Cross-backend parity (DESIGN.md): every view the user opens should be born
+/// with its own left sidebar + focused right terminal, like every Zellij tab
+/// (`backend/zellij.rs::new_tab_is_born_with_a_right_terminal`). `open_sidebar`
+/// installs an `after-new-window` hook so a fresh tmux window is born with the
+/// same left split.
+#[test]
+fn new_window_is_born_with_a_sidebar_and_focused_terminal() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    server.ensure_with_shell("room");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    server
+        .backend
+        .open_sidebar(&SidebarPaneOptions {
+            session_name: "room".to_owned(),
+            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-newwindow")),
+            cwd: std::env::current_dir().expect("cwd"),
+            width_percent: 30,
+            rimz_bin: stub,
+            replace_existing: false,
+        })
+        .expect("open_sidebar");
+
+    // The user opens a second window.
+    Command::new("tmux")
+        .args([
+            "-S",
+            server.socket.to_str().expect("utf8 socket"),
+            "new-window",
+            "-t",
+            "room",
+        ])
+        .output()
+        .expect("tmux new-window");
+
+    let panes = window_pane_count(&server, "room", 1);
+    assert!(
+        panes >= 2,
+        "a new tmux window should be born with a sidebar beside its terminal, got {panes} pane(s)",
+    );
+}
+
+/// Count the panes in `session:window` via `list-panes`.
+fn window_pane_count(server: &TmuxServer, session: &str, window: u32) -> usize {
+    let out = Command::new("tmux")
+        .args([
+            "-S",
+            server.socket.to_str().expect("utf8 socket"),
+            "list-panes",
+            "-t",
+            &format!("{session}:{window}"),
+            "-F",
+            "#{pane_id}",
+        ])
+        .output()
+        .expect("tmux list-panes");
+    if !out.status.success() {
+        return 0;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .count()
 }

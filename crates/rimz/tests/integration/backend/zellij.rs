@@ -220,6 +220,7 @@ fn open_sidebar_creates_native_pane() {
             cwd: cwd.path().to_path_buf(),
             width_percent: 30,
             rimz_bin: stub,
+            replace_existing: false,
         })
         .expect("open_sidebar");
 
@@ -254,6 +255,7 @@ fn open_sidebar_installs_a_right_terminal_in_the_new_tab_template() {
             cwd: cwd.path().to_path_buf(),
             width_percent: 30,
             rimz_bin: stub,
+            replace_existing: false,
         })
         .expect("open_sidebar");
     wait_for_pane_count(&name, 2);
@@ -291,6 +293,7 @@ fn open_sidebar_starts_sidebar_without_a_run_prompt() {
             cwd: cwd.path().to_path_buf(),
             width_percent: 30,
             rimz_bin: stub,
+            replace_existing: false,
         })
         .expect("open_sidebar");
     wait_for_pane_count(&name, 2);
@@ -348,6 +351,7 @@ fn open_sidebar_on_live_session_is_idempotent() {
         cwd: cwd.path().to_path_buf(),
         width_percent: 30,
         rimz_bin: stub,
+        replace_existing: false,
     };
 
     ZellijBackend
@@ -415,6 +419,7 @@ fn open_sidebar_heals_a_live_session_with_a_held_sidebar() {
             cwd: cwd.path().to_path_buf(),
             width_percent: 30,
             rimz_bin: stub,
+            replace_existing: false,
         })
         .expect("open_sidebar");
     wait_for_pane_count(&name, 2);
@@ -476,6 +481,7 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
             cwd: cwd.path().to_path_buf(),
             width_percent: 30,
             rimz_bin: stub,
+            replace_existing: false,
         })
         .expect("open_sidebar");
 
@@ -511,6 +517,7 @@ fn new_tab_is_born_with_a_right_terminal() {
             cwd: cwd.path().to_path_buf(),
             width_percent: 30,
             rimz_bin: stub,
+            replace_existing: false,
         })
         .expect("open_sidebar");
     wait_for_pane_count(&name, 2);
@@ -554,6 +561,7 @@ fn tabs_focus_the_terminal_not_the_sidebar() {
             cwd: cwd.path().to_path_buf(),
             width_percent: 30,
             rimz_bin: stub,
+            replace_existing: false,
         })
         .expect("open_sidebar");
     wait_for_pane_count(&name, 2);
@@ -1126,7 +1134,7 @@ fn wake_sidebar_pipe_invocation_succeeds() {
     let name = unique_session_name("pipe");
     let _session = ZellijSession::spawn(&name);
 
-    let payload = br#"{"kind":"ledger_delta","workspace_id":"ws_test","request_id":"req_test","protocol_version":"rimz.plugin.v1"}"#;
+    let payload = br#"{"kind":"ledger_delta","workspace_id":"ws_test","request_id":"req_test","protocol_version":"rimz.plugin.v2"}"#;
     ZellijBackend
         .wake_sidebar(&name, payload)
         .expect("wake_sidebar succeeds against a live zellij session");
@@ -1161,6 +1169,16 @@ fn list_panes_with_session_returns_terminals() {
             pane.pane_id,
         );
         assert_eq!(pane.session_name, name);
+        assert!(
+            pane.command
+                .as_deref()
+                .is_some_and(|command| !command.is_empty()),
+            "zellij should report pane_command into PaneRef::command: {pane:?}",
+        );
+        assert!(
+            pane.cwd.as_deref().is_some_and(|cwd| !cwd.is_empty()),
+            "zellij should report pane_cwd into PaneRef::cwd: {pane:?}",
+        );
     }
 }
 

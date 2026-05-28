@@ -28,8 +28,8 @@ const REDRAW_BUDGET: Duration = Duration::from_secs(2);
 
 /// A throwaway `rimz` whose `sidebar snapshot`/`heartbeat` calls fail fast, so
 /// the serve loop renders its degraded placeholder. That frame still carries
-/// the "Needs your attention" section title we scan for — no real ledger
-/// needed to prove the loop redrew at the new size.
+/// the degraded banner we scan for — no real ledger needed to prove the loop
+/// redrew at the new size.
 fn failing_rimz_stub(dir: &std::path::Path) -> PathBuf {
     let path = dir.join("rimz-stub");
     std::fs::write(&path, "#!/bin/sh\nexit 1\n").expect("write stub");
@@ -111,7 +111,7 @@ fn sidebar_redraws_at_new_size_on_resize() {
     // Let the first (1x1) frame land and the loop settle into its wait.
     std::thread::sleep(Duration::from_millis(500));
     assert!(
-        !screen_text(&output.lock().unwrap(), 40, 120).contains("Needs your attention"),
+        !screen_text(&output.lock().unwrap(), 40, 120).contains("Sidebar degraded"),
         "content should not be visible before the pane is given a usable size",
     );
 
@@ -129,7 +129,7 @@ fn sidebar_redraws_at_new_size_on_resize() {
     let deadline = resized_at + Duration::from_secs(TICK_SECONDS + 3);
     let mut latency = None;
     while Instant::now() < deadline {
-        if screen_text(&output.lock().unwrap(), 40, 120).contains("Needs your attention") {
+        if screen_text(&output.lock().unwrap(), 40, 120).contains("Sidebar degraded") {
             latency = Some(resized_at.elapsed());
             break;
         }

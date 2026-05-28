@@ -12,7 +12,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::common::{Env, permission_payload, python3_present, wait_for_heartbeat};
+use crate::common::{
+    Env, permission_payload, python3_present, skip_preconditions, wait_for_heartbeat,
+};
 
 /// Isolated `TMUX_TMPDIR` so the live-pane happy path never collides with the
 /// user's tmux server. The production `rimz` binary the resolver shells out to
@@ -26,9 +28,11 @@ fn tmux_tmpdir(env: &Env) -> PathBuf {
 
 /// Spawn the reference resolver. When `tmux_pane` is `Some`, point the
 /// resolver's `rimz` invocations at the isolated tmux server: `TMUX_PANE`
-/// nudges backend auto-detection to tmux (zellij is tried first by
-/// `auto_detect_backend`), `TMUX_TMPDIR` pins the socket, and any ambient
-/// `TMUX` is dropped so it cannot hijack the target server.
+/// selects tmux for backend auto-detection, `TMUX_TMPDIR` pins the socket, and
+/// every other mux-detection variable is dropped. `auto_detect_backend` checks
+/// `ZELLIJ`/`ZELLIJ_PANE_ID` before `TMUX_PANE`, so a suite run from inside a
+/// Zellij session would otherwise capture the wrong backend; clearing those
+/// (and ambient `TMUX`) leaves tmux the only detectable mux.
 fn spawn_python_resolver(
     env: &Env,
     resolver_id: &str,
@@ -66,20 +70,15 @@ fn spawn_python_resolver(
     if let Some(pane) = tmux_pane {
         cmd.env("TMUX_TMPDIR", tmux_tmpdir(env))
             .env("TMUX_PANE", pane)
-            .env_remove("TMUX");
+            .env_remove("TMUX")
+            .env_remove("ZELLIJ")
+            .env_remove("ZELLIJ_PANE_ID")
+            .env_remove("ZELLIJ_SESSION_NAME");
     }
     cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn python resolver")
-}
-
-fn skip_preconditions(env: &Env) -> bool {
-    if !python3_present() {
-        tracing::warn!("skipping: python3 not on PATH");
-        return true;
-    }
-    env.skip_if_sandboxed()
 }
 
 #[test]
@@ -291,6 +290,10 @@ fn stage_bridge_item_with_pane(
         session_name: session.to_owned(),
         view_id: None,
         view_kind: None,
+        is_focused: false,
+        command: Some("sh".to_owned()),
+        cwd: None,
+        pane_pid: None,
         pane_process_start: None,
     });
     item.activate_resolver_chain(vec![rimz::ResolverStep {

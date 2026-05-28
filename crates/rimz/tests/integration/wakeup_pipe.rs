@@ -136,7 +136,7 @@ fn wakeup_walk_dispatches_zellij_pipe_for_zellij_heartbeat() {
     let payload = argv.last().expect("payload present");
     let parsed: serde_json::Value = serde_json::from_str(payload).expect("payload is JSON");
     assert_eq!(parsed["kind"], "ledger_delta");
-    assert_eq!(parsed["protocol_version"], "rimz.plugin.v1");
+    assert_eq!(parsed["protocol_version"], "rimz.plugin.v2");
     assert_eq!(
         parsed["workspace_id"],
         serde_json::to_value(&workspace_id).expect("workspace_id JSON"),
