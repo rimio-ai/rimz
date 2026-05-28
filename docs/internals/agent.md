@@ -4,37 +4,41 @@
 
 Agent integrations are adapters that translate a coding agent's native hook protocol onto Rimz events and feed items. The generic event/feed API is the ground truth; agents are sources. Anything an agent integration does, a shell script can do through the same CLI.
 
-## The integration trait
+This doc owns the *how Rimz knows what an agent is doing* layer end to end: the unified adapter interface, the normalized observation every adapter emits, the attribute catalog, the agent state machine, and liveness. [sidebar.md](./sidebar.md) owns what sits above this — presence, worktree grouping, ranking, and rendering. The seam is the snapshot: this doc produces the per-agent `AgentState`; the sidebar projects it.
 
-Every adapter implements:
+## The unified interface
+
+Every agent — Claude, Codex, and every future one — speaks to Rimz through **one trait**, [`AgentIntegration`](../../crates/rimz/src/agents/mod.rs). Adding an agent is implementing the trait; nothing downstream of it is agent-specific. The trait is the single place native protocol diverges and the single place it is normalized:
 
 ```text
-install_hooks()
-uninstall_hooks()
-hooks_installed()
-classify_hook()
-observe_lifecycle()
-render_decision(feed_kind, resolution)
-render_neutral(event_name)
-hook_cap()
+install_hooks() / uninstall_hooks() / hooks_installed()   — own the per-user config write
+classify_hook(event, payload)   → lifecycle | blocking-feed | unknown
+observe_lifecycle(event, payload) → Option<AgentLifecycleObservation>   — the normalized event
+render_decision(feed_kind, resolution) / render_neutral(event)          — agent-native stdout
+hook_cap() / ends_session(event)
 ```
 
-Hook install is an explicit, visible security step. `rimz start` detects installed, supported agents each run, previews the additive per-user config change, installs missing hooks when approved, and continues without installing when the user skips or declines. `rimz hooks install <agent>` remains the manual entry point. An agent run before hooks are installed fires no hook and registers nothing. `hooks_installed()` makes that state observable: `rimz doctor` reports it per agent, and the sidebar's first-run hint points at `rimz hooks install` until an agent is wired (see [sidebar.md → Phase 0](./sidebar.md#phase-0--bare-shell-nothing-running-yet)).
+Two outputs carry everything downstream needs, so the rest of Rimz never reads a native payload:
 
-Decision renderers are agent-specific. Do not reuse one agent's JSON shape for another. Claude and current Codex both use `hookSpecificOutput` for `PermissionRequest`, but Codex rejects fields such as `updatedInput`, `updatedPermissions`, and `interrupt` on that event.
+- **`classify_hook`** routes a native event into one of three lanes (§ Two hook channels). Blocking-feed lane → a `FeedItem`; lifecycle lane → an observation; unknown → ignored.
+- **`observe_lifecycle`** is the normalizer. It maps a native event onto a single [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs) — the **unified event shape**. Returning `None` means "this event carries no state transition", so high-frequency hooks stay silent. Every field an observation can carry is in the [attribute catalog](#attribute-catalog).
+
+The observation is the contract boundary. `EventEnvelope::agent_lifecycle` serializes it to the event log; `reduce_agent_states` folds the log into one [`AgentState`](../../crates/rimz/src/feed.rs) per running agent — the **unified global state** the sidebar paints. A new agent that emits well-formed observations gets the state machine, ranking, liveness, and jump for free.
+
+Decision renderers stay agent-specific. Do not reuse one agent's JSON shape for another. Claude and current Codex both use `hookSpecificOutput` for `PermissionRequest`, but Codex rejects fields such as `updatedInput`, `updatedPermissions`, and `interrupt` on that event.
 
 ## Two hook channels
 
-Adapters wire two kinds of hooks. The distinction is whether the hook can hold the agent open while Rimz waits for an answer.
+`classify_hook` sorts every native event into one of two wired channels (plus `unknown`, dropped). The distinction is whether the hook can hold the agent open while Rimz waits for an answer.
 
-**Lifecycle hooks — fast, non-blocking.** Drive agent status, permission posture, notifications, enrichment fields, and the audit history in `rimz feed list --audit`.
+**Lifecycle hooks — fast, non-blocking.** Drive agent status, permission posture, notifications, enrichment fields, and the audit history in `rimz feed list --audit`. They flow through `observe_lifecycle`.
 
 ```text
 SessionStart   UserPromptSubmit   PreToolUse   PostToolUse
 Stop           SessionEnd         Notification
 ```
 
-**Feed hooks — blocking-capable.** The path the bridge engages.
+**Feed hooks — blocking-capable.** The path the bridge engages; they become a `FeedItem`, not an observation.
 
 ```text
 permission request
@@ -44,111 +48,192 @@ user question
 
 Blocking decision hooks must be **sync**. Installing one as async is a hard error — the agent would ignore the decision printed on stdout. The installer rejects async configs explicitly.
 
-## Status and permission posture
+## The unified global state
 
-The agent owns status and permission hints; Rimz observes and renders. The five-value status set and the permission posture vocabulary (`default` / `auto` / `yolo` / `unknown`) are defined in [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape).
+`reduce_agent_states` folds the lifecycle observations into one `AgentState` keyed by `(kind, agent_id)`. Each event is a *partial* update: `status` always comes from the event, capability fields carry forward, and activity fields are replaced. The result is the agent row the sidebar projects.
 
-`yolo` is observed from the agent's own bypass flag (`claude --dangerously-skip-permissions`, `codex --ask-for-approval never`). Rimz does not own unattended mode. Workflow words such as `plan` and `interactive` fold into `default` because they are not permission posture.
+### Attribute catalog
 
-## Liveness
+Each field, where it comes from, and its **lifetime** — the rule the reducer follows when an event omits the field:
 
-Presence comes from the live pane list, not from a session-exit hook (see [sidebar.md → Presence model](./sidebar.md#presence-model)) — an agent whose pane reverts to a shell or closes is gone with no event required. The agent's pid is a *refining gate* layered on top of that, not the primary signal.
+- **identity** — established once at session start, stable for the session.
+- **activity** — replaced by the latest event; clearing it is meaningful (an idle agent has no task).
+- **carry-forward** — capability/enrichment that persists until a newer value arrives; a missing value never resets it.
+- **live-derived** — not stored in the ledger; computed at snapshot time from the live pane list or git (see [sidebar.md → Presence model](./sidebar.md#presence-model)).
 
-On a lifecycle event Rimz records the agent's pid best-effort: the hook process's parent is the agent that spawned it, so `getppid()` names it directly. It is best-effort by design — if the agent runs its hook through a shell wrapper, the parent is the wrapper, not the agent, and the gate simply abstains; the foreground-command signal carries liveness alone. The pid (and, on Linux, its process-start time, to defeat pid reuse) gates the ledger overlay: a dead pid stops Rimz from painting a fresh, unrelated process as the agent that just exited. There is no `offline` status — a dead agent is a reverted shell row, never a retracted ledger fact.
+| Field                               | Meaning                           | Source (event · payload field)                                    | Lifetime      |
+| ----------------------------------- | --------------------------------- | ----------------------------------------------------------------- | ------------- |
+| `agent_id`                          | session/instance key              | `session_id` (Claude); `agent_id`→`session_id` (Codex)            | identity      |
+| `kind`                              | `claude` / `codex`                | `--source` on the hook                                            | identity      |
+| `status`                            | 5-value rollup (below)            | derived from `event_name` (§ state machine)                       | activity      |
+| `permission_posture`                | `default`/`auto`/`yolo`/`unknown` | `SessionStart` · `permission_mode`/`approval_policy`              | carry-forward |
+| `task`                              | what it's working on              | `UserPromptSubmit` · `prompt`; `SubagentStart` · `agent_type`     | activity      |
+| `model`                             | `Opus`, `GPT-5.5`                 | lifecycle · `model`                                               | carry-forward |
+| `effort`                            | `xhigh`/`high`/…                  | lifecycle · `thinking_level`/`model_reasoning_effort`             | carry-forward |
+| `context_pct`                       | context-window % gauge            | payload or transcript tail (§ enrichment)                         | carry-forward |
+| `total_tokens`                      | cumulative tokens                 | payload or transcript tail                                        | carry-forward |
+| `todo_done`/`todo_total`            | plan progress dots                | Claude `TodoWrite` · `tool_input.todos`; Codex none today         | carry-forward |
+| `agent_pid` / `agent_process_start` | liveness gate                     | `RIMZ_AGENT_PID=$PPID`, else `/proc` ancestor walk                | identity      |
+| `runtime_owner`                     | owner-process identity            | built from `agent_pid` + start token                              | identity      |
+| `worktree_path` / `worktree_branch` | grouping spine                    | live pane cwd → worktree (ledger value is detached-only fallback) | live-derived  |
+| `pane`                              | jump target                       | bound live at snapshot from the pane list                         | live-derived  |
+| `last_activity`                     | age + ranking key                 | `event.timestamp` of the agent's own latest event                 | activity      |
+| `last_seen`                         | carryover-merge tiebreak          | `event.timestamp`                                                 | activity      |
+| `last_event_pulse`                  | Braille shimmer                   | `+1` per observed event                                           | activity      |
 
-## Telemetry is opt-in
+The catalog turns on one distinction: **identity vs. live-derived**. `worktree_*` and `pane` are *live* facts — the pane knows its current cwd every tick — so they are derived at snapshot time, not pinned at session start. Pinning them is the branch-tracking bug (§ Liveness and presence).
 
-```sh
-rimz hooks install claude --telemetry      # add high-frequency hooks
-rimz hooks install claude                  # default; install lifecycle + feed only
+### The state machine
+
+The five-value status set, in ranking order (most attention-hungry first), per [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape):
+
+| Status    | Glyph | Meaning                     | Raises attention |
+| --------- | ----- | --------------------------- | ---------------- |
+| `waiting` | `◆`   | blocked on a human decision | yes              |
+| `failed`  | `✗`   | the last turn errored       | yes              |
+| `running` | `▸`   | actively working a task     | no               |
+| `idle`    | `○`   | wired in, nothing in flight | no               |
+| `success` | `✓`   | last turn completed cleanly | no               |
+
+`waiting` is **not** a lifecycle transition. It is the presence of a pending blocking feed item joined to the agent (the feed channel, not the lifecycle channel). The lifecycle machine drives the other four:
+
+```text
+   (none) ──SessionStart──► idle ──UserPromptSubmit / SubagentStart──► running
+                             ▲                                          │  │
+                Stop(no work)│              blocking ask pending ───────┘  │
+                             │              Stop(clean) ──► success ◄──────┘
+                             │                  │
+                             └── next prompt ◄──┘
+                                                  Stop(error) / Failure feed ──► failed
+
+   any state ── SessionEnd / pid dead / pane reverted to shell ──► removed (no row)
 ```
 
-Telemetry adds prompt-submit, pre-tool, and post-tool hooks that fire on every tool call. They're useful for activity-history (`rimz feed list --audit`) depth and post-hoc audit, but they carry tool inputs, prompts, file paths, and outputs into the ledger. Gate them against `[privacy] payload_mode`:
+The agent owns status and posture; Rimz observes and renders. `yolo` is observed from the agent's own bypass flag (`claude --dangerously-skip-permissions`, `codex --ask-for-approval never`). Workflow words such as `plan` and `interactive` fold into `default` because they are posture-neutral. The vocabulary is defined once in [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape).
+
+### Instance identity and age
+
+An agent row belongs to **one running instance**. The key is `(kind, agent_id)` with `agent_id` the agent's session id, so two concurrent agents of the same kind never share a row and `last_activity` is always the agent's *own* latest event — never inherited from a previous instance of the same kind.
+
+When a payload carries no session id, the adapter keys on the captured `runtime_owner` (pid + start token) rather than a shared anonymous bucket, so two unidentified instances never merge; a truly unkeyable event is dropped rather than collapsed — better no row than a row that lies about its age.
+
+### Enrichment is display-only
+
+`task`, `context_pct`, `total_tokens`, and the todo counts are **enrichment**: display-only, redactable, and they never drive routing, ranking, or a decision (the no-transcript-correctness rule). A missing value reads as "the agent didn't report it" — never `0`.
+
+Context budget is the one field no agent puts directly in its hook JSON — usage lives in the transcript. Capture reads the **transcript tail** on the low-frequency events Rimz already fires (`SessionStart`, `UserPromptSubmit`, `Stop`), gated by `payload_mode`, so the gauge populates without a per-tool hook. The privacy mode strips the *content* of enrichment fields; it never suppresses the *state transition* they ride on.
+
+## Liveness and presence
+
+Presence comes from the live pane list, not from a session-exit hook (see [sidebar.md → Presence model](./sidebar.md#presence-model)) — an agent whose pane reverts to a shell or closes is gone with no event required. Precedence is fixed:
+
+- **Foreground command is the primary, cross-backend signal.** A TUI agent holds its pane's foreground for its whole life; a pane that drops back to `zsh` drops its agent overlay; a closed pane is absent next tick.
+- **The captured pid is a *refining gate*, never a requirement.** On a lifecycle event Rimz records the agent's pid best-effort — `RIMZ_AGENT_PID=$PPID` names the spawning agent, falling back to a `/proc` ancestor walk. On Linux it also records the process-start time to defeat pid reuse. A *known-dead* pid suppresses a stale overlay; an *unknown* pid abstains and lets the foreground signal carry liveness alone. Liveness suppresses; it never gates an agent in.
+
+There is no `offline` status — a dead agent is a reverted shell row or no row at all, never a retracted ledger fact.
+
+Two consequences this contract enforces, against which current code is measured in [Divergences](#divergences-to-reconcile):
+
+- **A stale overlay never paints a non-agent pane.** After an agent exits and `git log` runs in the same pane, the foreground is `git` — a process row, never the agent that just left. An overlay attaches to a non-shell pane only when its foreground maps to the agent kind or a known launcher (`node`, `bun`, `deno`, `python`…) *and*, when both pids are known, the agent pid is an ancestor of the pane pid. The loose match exists for `node`-wrapped Codex, not for arbitrary commands.
+- **Worktree and branch track the live pane.** Branch and worktree are resolved from the pane's current cwd at snapshot time (the same place diff stats are read), so they follow `git checkout` and a pane `cd` into another worktree. The ledger's pinned `worktree_*` is a fallback only for a detached agent with no live pane.
+
+Pane binding and jump are the snapshot's job, documented in [sidebar.md → Jump](./sidebar.md#jump--the-row-is-the-link): the agent never self-reports a pane; binding is purely live, exact match before loose, and every jump reconciles pane id *and* `pane_process_start` so a reused id never focuses a stranger.
+
+## Hook install is an explicit, visible step
+
+Hook install is a security surface. `rimz start` detects installed, supported agents each run, previews the additive per-user config change, installs missing hooks when approved, and continues without installing when the user skips or declines. `rimz hooks install <agent>` is the manual entry point. An agent run before hooks are installed fires no hook and registers nothing. `hooks_installed()` makes that state observable: `rimz doctor` reports it per agent, and the sidebar's first-run hint points at `rimz hooks install` until an agent is wired (see [sidebar.md → Empty-room hint](./sidebar.md#empty-room-hint)).
+
+### Default vs. telemetry install
+
+The default install wires every event the **state machine** needs; telemetry adds high-frequency, content-heavy hooks for audit depth.
+
+```sh
+rimz hooks install claude                  # lifecycle + feed: drives the full state machine
+rimz hooks install claude --telemetry      # add per-tool hooks for audit depth
+```
+
+The split is **state signal vs. payload depth**, not "some transitions are optional". `UserPromptSubmit` and `Stop` are state signal — without them an agent never enters `running` and never carries a task — so they are default. `PostToolUse` and broad `PreToolUse` fire on every tool call and carry tool inputs, prompts, file paths, and outputs; they are telemetry, useful for `rimz feed list --audit` depth. Gate telemetry payloads against `[privacy] payload_mode`:
 
 - `payload_mode = "metadata"` — strips inputs, prompts, args, errors. Smallest footprint.
 - `payload_mode = "redacted"` — keeps bounded payloads with built-in redaction. Default.
 - `payload_mode = "full"` — keeps hook payloads as delivered. `rimz doctor` warns.
 
-## Later agents
+Privacy gates the *content* of an event, never whether a state transition is observed.
 
-OpenCode, Pi, Cursor, Gemini, Copilot, Amp, Rovo, Hermes, Factory, Qoder, and similar agents land through the same trait once their hook surfaces and decision outputs are verified.
+## Adding an agent
 
-Adding an agent requires tests for: install/uninstall, lifecycle mapping, feed classification, neutral stdout, decision stdout, PID attribution, version drift behaviour.
+OpenCode, Pi, Cursor, Gemini, Copilot, Amp, Rovo, Hermes, Factory, Qoder, and similar agents land through `AgentIntegration` once their hook surfaces and decision outputs are verified. The work is a new appendix below — the native-event → unified-interface mapping — plus the trait impl. Nothing else changes.
 
-Pinned hook stdout shapes live as inline `insta::assert_*_snapshot!(... @"...")` goldens inside each adapter module — see [`crates/rimz/src/agents/claude.rs`](../../crates/rimz/src/agents/claude.rs) and [`crates/rimz/src/agents/codex.rs`](../../crates/rimz/src/agents/codex.rs). New adapters pin their shapes the same way.
+Adding an agent requires tests for: install/uninstall, lifecycle mapping (native event → observation → state), feed classification, neutral stdout, decision stdout, PID attribution, and version drift behaviour. Pinned hook stdout shapes live as inline `insta::assert_*_snapshot!(... @"...")` goldens inside each adapter module — see [`claude.rs`](../../crates/rimz/src/agents/claude.rs) and [`codex.rs`](../../crates/rimz/src/agents/codex.rs).
+
+---
 
 ## Appendix — Claude Code
 
-Default install:
+The mapping from Claude's native protocol onto the unified interface. The appendix says only *which native events are wired* and *how each maps* — the behaviour they drive is the state machine above.
 
-```text
-SessionStart   SessionEnd   Stop   Notification
-PermissionRequest
-PreToolUse: ExitPlanMode
-PreToolUse: AskUserQuestion
-```
+Native event → unified mapping:
 
-Telemetry install adds: `UserPromptSubmit`, `PreToolUse` (broad), `PostToolUse` (broad).
+| Native event                  | Install   | Channel       | `observe_lifecycle` → status        | Normalized fields                           |
+| ----------------------------- | --------- | ------------- | ----------------------------------- | ------------------------------------------- |
+| `SessionStart`                | default   | lifecycle     | `idle`                              | posture, model, context/tokens (transcript) |
+| `UserPromptSubmit`            | default   | lifecycle     | `running`                           | `task` = prompt; refresh context/tokens     |
+| `Stop`                        | default   | lifecycle     | `success`/`idle` (error → `failed`) | clear task; refresh context/tokens          |
+| `SessionEnd`                  | default   | lifecycle     | removed                             | —                                           |
+| `Notification`                | default   | lifecycle     | none (silent)                       | —                                           |
+| `PermissionRequest`           | default   | blocking-feed | `waiting`                           | —                                           |
+| `PreToolUse: ExitPlanMode`    | default   | blocking-feed | `waiting`                           | plan approval                               |
+| `PreToolUse: AskUserQuestion` | default   | blocking-feed | `waiting`                           | user question                               |
+| `PostToolUse`                 | telemetry | lifecycle     | none                                | `TodoWrite` todos; context/tokens           |
+| `PreToolUse` (broad)          | telemetry | lifecycle     | none                                | audit depth                                 |
 
 Decision shapes — Claude requires `hookSpecificOutput`:
 
 ```json
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PermissionRequest",
-    "decision": { "behavior": "allow" }
-  }
-}
+{ "hookSpecificOutput": { "hookEventName": "PermissionRequest", "decision": { "behavior": "allow" } } }
 ```
 
 ```json
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "allow",
-    "updatedInput": {}
-  }
-}
+{ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": {} } }
 ```
 
-`ExitPlanMode` and `AskUserQuestion` require `updatedInput`. The Claude adapter sets `hook_cap = 120s` (Claude's upstream cap is ~125s; Rimz leaves a 5s safety margin so the bridge times out before the agent kills the hook). The exact value lives in `CLAUDE_HOOK_CAP` in `crates/rimz/src/agents/claude.rs`.
+`ExitPlanMode` and `AskUserQuestion` require `updatedInput`. The Claude adapter sets `hook_cap = 120s` (upstream cap ~125s; Rimz leaves a 5s margin so the bridge times out before the agent kills the hook). The exact value is `CLAUDE_HOOK_CAP` in [`claude.rs`](../../crates/rimz/src/agents/claude.rs). Install merges non-destructively into `~/.claude/settings.json` under per-matcher `_rimz_managed` markers; blocking events are marked `_rimz_sync = true`.
 
 ## Appendix — Codex
 
-Default install:
+| Native event                                          | Install   | Channel       | `observe_lifecycle` → status | Normalized fields                                |
+| ----------------------------------------------------- | --------- | ------------- | ---------------------------- | ------------------------------------------------ |
+| `SessionStart`                                        | default   | lifecycle     | `idle`                       | posture, model, effort                           |
+| `UserPromptSubmit`                                    | default   | lifecycle     | `running`                    | `task` = prompt                                  |
+| `SubagentStart`                                       | default   | lifecycle     | `running`                    | keyed by child `agent_id`; `task` = `agent_type` |
+| `SubagentStop`                                        | default   | lifecycle     | `idle`                       | child row; clear task                            |
+| `Stop`                                                | default   | lifecycle     | `success`/`idle`             | clear task                                       |
+| `PermissionRequest`                                   | default   | blocking-feed | `waiting`                    | —                                                |
+| `UserPromptSubmit`/`PreToolUse`/`PostToolUse` (broad) | telemetry | lifecycle     | none                         | audit depth                                      |
 
-```text
-SessionStart   SubagentStart   SubagentStop   Stop
-PermissionRequest
-```
-
-Telemetry install adds prompt submit and tool telemetry where supported.
-
-Decision shape — Codex permission hooks emit only:
+Decision shape — Codex permission hooks emit only `hookSpecificOutput.decision`:
 
 ```json
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PermissionRequest",
-    "decision": { "behavior": "allow" }
-  }
-}
+{ "hookSpecificOutput": { "hookEventName": "PermissionRequest", "decision": { "behavior": "allow" } } }
 ```
 
 ```json
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PermissionRequest",
-    "decision": {
-      "behavior": "deny",
-      "message": "Blocked by repository policy."
-    }
-  }
-}
+{ "hookSpecificOutput": { "hookEventName": "PermissionRequest", "decision": { "behavior": "deny", "message": "Blocked by repository policy." } } }
 ```
 
-Codex install writes inline `[[hooks.Event]]` tables in `~/.codex/config.toml` with string `command` handlers. The old `[hooks.rimz]` table is ignored by Codex and exists only as legacy cleanup for uninstall.
+Never emit `updatedInput`, `updatedPermissions`, or `interrupt` for Codex permission hooks — those fields belong to other Codex hook types and corrupt the permission decision. Codex's hook cap is shorter than Claude's (`CODEX_HOOK_CAP`); chain budgets must account for it. Install writes inline `[[hooks.Event]]` tables in `~/.codex/config.toml`; the legacy `[hooks.rimz]` table is ignored by Codex and exists only as uninstall cleanup.
 
-Codex 0.134 routes thread-spawned subagents through `SubagentStart` and `SubagentStop` instead of the root `SessionStart` / `Stop` lifecycle. Normal hooks fired inside a subagent include a child `agent_id` and `agent_type`; Rimz keys those feed rows by the child `agent_id` so a pending subagent permission request replaces the subagent row rather than creating a parent session duplicate.
+Codex 0.134 routes thread-spawned subagents through `SubagentStart`/`SubagentStop` instead of the root `SessionStart`/`Stop` lifecycle. Hooks fired inside a subagent carry a child `agent_id` and `agent_type`; Rimz keys those rows by the child `agent_id`, so a pending subagent permission request replaces the subagent row rather than duplicating the parent session.
 
-Never emit `updatedInput`, `updatedPermissions`, or `interrupt` for Codex permission hooks — those fields belong to other Codex hook types and corrupt the permission decision when included. Codex's hook cap is shorter than Claude's; chain budgets should account for it.
+---
+
+## Divergences to reconcile
+
+The contract above is the target; current code diverges here. Each is a tracked fix, not a new design.
+
+1. **`UserPromptSubmit` + `Stop` are telemetry-only**, so a default install never reaches `running` and never carries a task. They must move to the default set (state signal, not telemetry).
+2. **`Stop` is hard-coded to `idle`** in both adapters, so `success` and `failed` are unreachable from an agent. `Stop` must map clean/error to `success`/`failed`, with `idle` the fallback when the agent reports nothing.
+3. **Context budget is not captured** — the transcript-tail read on `SessionStart`/`UserPromptSubmit`/`Stop` is not yet implemented, so the gauge stays empty.
+4. **Agent visibility is gated on `runtime_owner`** (`Ledger::snapshot()` runs `RuntimeScope::Runtime`), which requires a captured pid and inverts the foreground-primary contract — agents without a pid vanish. The owner-required filter belongs to script feed items only; agents are kept by pane corroboration and suppressed only by a known-dead pid.
+5. **Worktree/branch are pinned at `SessionStart`** in the reducer and never re-derived from the live pane cwd, so the branch header goes stale after a `git checkout`.
+6. **The loose pane match accepts any non-shell command**, so a stale agent overlay can repaint a `git`/`vim` pane. It must require a known launcher plus pid ancestry.
