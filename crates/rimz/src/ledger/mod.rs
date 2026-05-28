@@ -25,6 +25,7 @@ pub mod feed_store;
 pub mod gc;
 pub mod lock;
 pub mod paths;
+pub mod runtime;
 pub mod snapshot;
 pub mod wakeup;
 pub mod workspace_record;
@@ -46,6 +47,7 @@ use crate::workspace::ResolvedWorkspace;
 
 pub use crate::ledger::feed_store::FeedStoreErr;
 pub use crate::ledger::paths::{RuntimePaths, StatePaths};
+pub use crate::ledger::runtime::{RuntimeProjection, RuntimeScope};
 pub use crate::ledger::snapshot::{
     SidebarActivity, SidebarResolverState, SidebarRow, SidebarRowKind, SidebarSnapshot,
     SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
@@ -127,6 +129,51 @@ pub struct EventLogRotationOutcome {
     pub carryover_agents: usize,
 }
 
+fn abandon_dead_owned_items_locked(
+    paths: &StatePaths,
+    session_name: &str,
+) -> Result<Vec<(WorkspaceId, RequestId)>> {
+    let mut abandoned = Vec::new();
+    for mut item in feed_store::list(&paths.feed_dir)? {
+        if item.status != FeedStatus::Pending {
+            continue;
+        }
+        let Some(owner) = item.runtime_owner.clone() else {
+            continue;
+        };
+        if runtime::owner_is_live(&owner) {
+            continue;
+        }
+
+        item.mark_active_resolver_budget_elapsed(AbandonReason::OwnerProcessExited);
+        let mut resolution =
+            Resolution::new(json!({ "abandoned": true }), ResolutionMethod::OwnerExited);
+        resolution.reason = Some(AbandonReason::OwnerProcessExited.as_str().to_owned());
+        item.status = FeedStatus::Abandoned;
+        item.resolution = Some(resolution);
+        item.updated_at = Timestamp::now();
+        feed_store::write(&paths.feed_dir, &item)?;
+        event_log::append(
+            &paths.events_log,
+            &EventEnvelope::new(
+                item.workspace_id.clone(),
+                session_name,
+                "rimz",
+                "cli",
+                "feed.abandon",
+                json!({
+                    "request_id": item.request_id,
+                    "surface": item.surface,
+                    "reason": AbandonReason::OwnerProcessExited.as_str(),
+                    "owner": owner,
+                }),
+            ),
+        )?;
+        abandoned.push((item.workspace_id.clone(), item.request_id.clone()));
+    }
+    Ok(abandoned)
+}
+
 impl Ledger {
     pub fn open(paths: StatePaths, runtime: RuntimePaths) -> Result<Self> {
         paths.ensure_dirs()?;
@@ -203,10 +250,16 @@ impl Ledger {
     /// Append a freestanding event (no feed item write).
     #[must_use = "durability barrier; check the result"]
     pub fn append_event(&self, event: &EventEnvelope) -> Result<()> {
-        {
+        let abandoned = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+            let abandoned =
+                abandon_dead_owned_items_locked(&self.inner.paths, &event.session_name)?;
             event_log::append(&self.inner.paths.events_log, event)?;
             snapshot::rebuild(&self.inner.paths)?;
+            abandoned
+        };
+        for (workspace_id, request_id) in &abandoned {
+            self.wake_sidebars_best_effort(workspace_id, request_id);
         }
         self.wake_sidebars_for_event_best_effort(event);
         Ok(())
@@ -217,14 +270,19 @@ impl Ledger {
     /// lock so partial writes can't surface to the sidebar.
     #[must_use = "durability barrier; check the result"]
     pub fn push_feed_item(&self, item: &FeedItem, session_name: &str) -> Result<()> {
-        {
+        let abandoned = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+            let abandoned = abandon_dead_owned_items_locked(&self.inner.paths, session_name)?;
             feed_store::write(&self.inner.paths.feed_dir, item)?;
             event_log::append(
                 &self.inner.paths.events_log,
                 &EventEnvelope::feed_pushed(item, session_name),
             )?;
             snapshot::rebuild(&self.inner.paths)?;
+            abandoned
+        };
+        for (workspace_id, request_id) in &abandoned {
+            self.wake_sidebars_best_effort(workspace_id, request_id);
         }
         self.wake_sidebars_best_effort(&item.workspace_id, &item.request_id);
         Ok(())
@@ -236,6 +294,35 @@ impl Ledger {
 
     pub fn list_feed_items(&self) -> Result<Vec<FeedItem>> {
         Ok(feed_store::list(&self.inner.paths.feed_dir)?)
+    }
+
+    #[must_use = "durability barrier; check the result"]
+    pub fn abandon_dead_owned_items(&self, session_name: &str) -> Result<usize> {
+        let abandoned = {
+            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+            let abandoned = abandon_dead_owned_items_locked(&self.inner.paths, session_name)?;
+            if !abandoned.is_empty() {
+                snapshot::rebuild(&self.inner.paths)?;
+            }
+            abandoned
+        };
+        for (workspace_id, request_id) in &abandoned {
+            self.wake_sidebars_best_effort(workspace_id, request_id);
+        }
+        Ok(abandoned.len())
+    }
+
+    pub fn runtime_projection(
+        &self,
+        scope: runtime::RuntimeScope,
+    ) -> Result<runtime::RuntimeProjection> {
+        let items = feed_store::list(&self.inner.paths.feed_dir)?;
+        let events = event_log::read_all(&self.inner.paths.events_log)?;
+        let carryover = snapshot::read_carryover(&self.inner.paths.agents_carryover)?;
+        let agents = snapshot::agent_rollup_with_carryover(&events, carryover.agents);
+        Ok(runtime::RuntimeProjection::from_parts(
+            items, events, agents, scope,
+        ))
     }
 
     /// Apply a resolver decision. CAS on `status = Pending`. Late answers
@@ -694,7 +781,15 @@ impl Ledger {
 
     /// Build a fresh snapshot in memory (no disk write).
     pub fn snapshot(&self) -> Result<SidebarSnapshot> {
-        Ok(snapshot::build_from(&self.inner.paths)?)
+        let projection = self.runtime_projection(runtime::RuntimeScope::Runtime)?;
+        let mut snapshot = snapshot::SidebarSnapshot::build_with_agents(
+            self.inner.paths.workspace_id.clone(),
+            projection.items,
+            projection.events,
+            projection.agents,
+        );
+        snapshot.display_name = snapshot::display_name_for(&self.inner.paths);
+        Ok(snapshot)
     }
 
     /// Rotate the active event log when it exceeds `min_bytes`, preserving
@@ -719,9 +814,8 @@ impl Ledger {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
 
             let events = event_log::read_all(&self.inner.paths.events_log)?;
-            let live = snapshot::agent_rollup_for_events(&events);
             let existing = snapshot::read_carryover(&self.inner.paths.agents_carryover)?;
-            let merged = snapshot::merge_agent_rollups(&existing.agents, &live);
+            let merged = snapshot::agent_rollup_with_carryover(&events, existing.agents.clone());
 
             let rotation = event_log::rotate(
                 &self.inner.paths.events_log,

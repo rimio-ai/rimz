@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use rimz::feed::RuntimeOwnerKind;
+use rimz::ledger::runtime::current_process_owner;
+
 use crate::common::{
     Env, permission_payload, python3_present, skip_preconditions, wait_for_heartbeat,
 };
@@ -296,6 +299,10 @@ fn stage_bridge_item_with_pane(
         pane_pid: None,
         pane_process_start: None,
     });
+    item.runtime_owner = Some(current_process_owner(
+        RuntimeOwnerKind::Agent,
+        "pane-send-agent",
+    ));
     item.activate_resolver_chain(vec![rimz::ResolverStep {
         resolver_id: resolver_id.parse().expect("resolver id"),
         display_name: None,

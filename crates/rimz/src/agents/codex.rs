@@ -4,7 +4,8 @@
 //! (`SessionStart` registers idle, `SubagentStart` / `UserPromptSubmit` move
 //! to running, `SubagentStop` / `Stop` back to idle); renders the Codex-shaped
 //! `PermissionRequest` `hookSpecificOutput` decision payload (neutral is empty
-//! stdout). `permission_mode` from the agent payload drives the mode pill.
+//! stdout). `permission_mode` from the agent payload drives the permission
+//! posture.
 //!
 //! Owns hook install / uninstall through a non-destructive merge into
 //! `~/.codex/config.toml` using Codex's inline `[[hooks.Event]]` tables.
@@ -20,7 +21,7 @@ use super::{
     HookInstallPreview, HookInstallReport, HookUninstallReport, Result, choice_is_allow,
     optional_payload_string,
 };
-use crate::feed::{AgentMode, AgentStatus, FeedItem, FeedKind, Resolution};
+use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution};
 use crate::ledger::atomic;
 
 /// Codex's effective hook cap. Upstream's blocking-hook deadline is shorter
@@ -108,21 +109,31 @@ impl AgentIntegration for CodexIntegration {
         // anything yet, so it registers idle; the prompt is what moves it to
         // running. SubagentStart is different: it fires immediately before the
         // child model request, so it registers running under the child
-        // `agent_id`. Stop-like events report no mode so the reducer keeps the
-        // established mode.
-        let (status, mode) = match event_name {
-            "SessionStart" => (AgentStatus::Idle, Some(mode_from_payload(payload))),
-            "SubagentStart" => (AgentStatus::Running, Some(mode_from_payload(payload))),
+        // `agent_id`. Stop-like events report no posture so the reducer keeps
+        // the established posture.
+        let (status, posture) = match event_name {
+            "SessionStart" => (AgentStatus::Idle, Some(posture_from_payload(payload))),
+            "SubagentStart" => (AgentStatus::Running, Some(posture_from_payload(payload))),
             "UserPromptSubmit" => (AgentStatus::Running, None),
             "SubagentStop" | "Stop" => (AgentStatus::Idle, None),
             _ => return None,
         };
+        let context_pct = payload
+            .get("context_pct")
+            .or_else(|| payload.get("context_window_pct"))
+            .and_then(Value::as_u64)
+            .map(|v| v.min(100) as u8);
+        let total_tokens = payload
+            .get("total_tokens")
+            .or_else(|| payload.get("token_count"))
+            .and_then(Value::as_u64);
         Some(AgentLifecycleObservation {
             agent_id: codex_agent_id(payload),
             status,
             agent_pid: None,
             agent_process_start: None,
-            mode,
+            runtime_owner: None,
+            permission_posture: posture,
             worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
             worktree_branch: optional_payload_string(payload, &["worktree_branch"]),
             task: task_from_payload(event_name, payload),
@@ -131,6 +142,14 @@ impl AgentIntegration for CodexIntegration {
                 payload,
                 &["model_reasoning_effort", "reasoning_effort", "effort"],
             ),
+            context_pct,
+            total_tokens,
+            // Codex doesn't expose a stable todo-state hook field; the
+            // sidebar's todo dots stay None and read as "no todo state".
+            // Tracked: parity with Claude's TodoWrite shape if/when Codex
+            // ships one.
+            todo_done: None,
+            todo_total: None,
         })
     }
 
@@ -163,9 +182,10 @@ impl AgentIntegration for CodexIntegration {
 }
 
 /// Map Codex's `approval_policy` (or `mode`) payload field onto the
-/// five-value mode pill. Bypass is observed from `--ask-for-approval never`
-/// per docs/internals/agent.md:60.
-fn mode_from_payload(payload: &Value) -> AgentMode {
+/// four-value permission posture pill. `Yolo` is observed from
+/// `--ask-for-approval never` per docs/internals/agent.md:60. Codex's `plan`
+/// mode (when present) is still default-posture — folds into `Default`.
+fn posture_from_payload(payload: &Value) -> PermissionPosture {
     let policy = payload
         .get("permission_mode")
         .or_else(|| payload.get("approval_policy"))
@@ -173,16 +193,15 @@ fn mode_from_payload(payload: &Value) -> AgentMode {
         .and_then(Value::as_str);
     match policy {
         Some("never") | Some("bypass") | Some("bypassPermissions") | Some("dontAsk") => {
-            AgentMode::Bypass
+            PermissionPosture::Yolo
         }
         Some("acceptEdits") | Some("auto") | Some("auto-edit") | Some("on-failure") => {
-            AgentMode::Auto
+            PermissionPosture::Auto
         }
-        Some("plan") => AgentMode::Plan,
-        Some("default") | Some("interactive") | Some("untrusted") | Some("on-request")
-        | Some("ask") => AgentMode::Interactive,
-        Some(_) => AgentMode::Unknown,
-        None => AgentMode::Interactive,
+        Some("plan") | Some("default") | Some("interactive") | Some("untrusted")
+        | Some("on-request") | Some("ask") => PermissionPosture::Default,
+        Some(_) => PermissionPosture::Unknown,
+        None => PermissionPosture::Default,
     }
 }
 
@@ -613,7 +632,7 @@ mod tests {
     }
 
     #[test]
-    fn session_start_observes_idle_in_interactive_mode_by_default() {
+    fn session_start_observes_idle_in_default_posture_by_default() {
         let obs = CodexIntegration
             .observe_lifecycle(
                 "SessionStart",
@@ -624,7 +643,7 @@ mod tests {
         // Wired in, nothing asked yet — idle, no task.
         assert_eq!(obs.status, AgentStatus::Idle);
         assert_eq!(obs.task, None);
-        assert_eq!(obs.mode, Some(AgentMode::Interactive));
+        assert_eq!(obs.permission_posture, Some(PermissionPosture::Default));
     }
 
     #[test]
@@ -638,9 +657,9 @@ mod tests {
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
         assert_eq!(obs.status, AgentStatus::Running);
         assert_eq!(obs.task.as_deref(), Some("fix auth flow"));
-        // The prompt carries no policy field, so it reports no mode: the
-        // reducer keeps the mode SessionStart established.
-        assert_eq!(obs.mode, None);
+        // The prompt carries no policy field, so it reports no posture: the
+        // reducer keeps the posture SessionStart established.
+        assert_eq!(obs.permission_posture, None);
     }
 
     #[test]
@@ -660,7 +679,7 @@ mod tests {
         assert_eq!(obs.agent_id.as_deref(), Some("child-thread-1"));
         assert_eq!(obs.status, AgentStatus::Running);
         assert_eq!(obs.task.as_deref(), Some("review"));
-        assert_eq!(obs.mode, Some(AgentMode::Auto));
+        assert_eq!(obs.permission_posture, Some(PermissionPosture::Auto));
     }
 
     #[test]
@@ -679,26 +698,26 @@ mod tests {
         assert_eq!(obs.agent_id.as_deref(), Some("child-thread-1"));
         assert_eq!(obs.status, AgentStatus::Idle);
         assert_eq!(obs.task, None);
-        assert_eq!(obs.mode, None);
+        assert_eq!(obs.permission_posture, None);
     }
 
     #[test]
-    fn approval_policy_never_observes_bypass_mode() {
+    fn approval_policy_never_observes_yolo_posture() {
         let obs = CodexIntegration
             .observe_lifecycle("SessionStart", &json!({ "approval_policy": "never" }))
             .unwrap();
-        assert_eq!(obs.mode, Some(AgentMode::Bypass));
+        assert_eq!(obs.permission_posture, Some(PermissionPosture::Yolo));
     }
 
     #[test]
-    fn permission_mode_bypass_permissions_observes_bypass_mode() {
+    fn permission_mode_bypass_permissions_observes_yolo_posture() {
         let obs = CodexIntegration
             .observe_lifecycle(
                 "SessionStart",
                 &json!({ "permission_mode": "bypassPermissions" }),
             )
             .unwrap();
-        assert_eq!(obs.mode, Some(AgentMode::Bypass));
+        assert_eq!(obs.permission_posture, Some(PermissionPosture::Yolo));
     }
 
     #[test]

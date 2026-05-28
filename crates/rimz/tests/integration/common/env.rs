@@ -141,6 +141,7 @@ impl Env {
     pub fn hook_command(&self, source: &str) -> Command {
         let mut cmd = self.rimz();
         cmd.args(["hooks", "feed", "--source", source])
+            .env("RIMZ_AGENT_PID", std::process::id().to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -237,6 +238,7 @@ impl Env {
     pub fn spawn_installed_hook(&self, source: &str, event: &str, payload: &str) -> Child {
         let mut cmd = self.rimz();
         cmd.args(["hooks", "feed", "--source", source, "--event", event])
+            .env("RIMZ_AGENT_PID", std::process::id().to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -336,6 +338,20 @@ impl Env {
             String::from_utf8_lossy(&out.stderr)
         );
         serde_json::from_slice(&out.stdout).expect("feed list json")
+    }
+
+    pub fn feed_list_audit_json(&self) -> Value {
+        let out = self
+            .rimz()
+            .args(["feed", "list", "--json", "--audit"])
+            .output()
+            .expect("spawn feed list --audit");
+        assert!(
+            out.status.success(),
+            "feed list --audit failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).expect("feed list audit json")
     }
 
     pub fn feed_show_json(&self, request_id: &str) -> Value {

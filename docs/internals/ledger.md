@@ -61,6 +61,16 @@ Rules:
 - Every feed file carries `workspace_id`, `request_id`, nonce, resolver id, and timestamps.
 - `snapshots/latest.json` is rebuilt from the active event log, the agent carryover, and the feed dir on every ledger mutation. Cost is O(active-events + items); archives are read only at rotation time.
 
+## Runtime projection
+
+History and runtime are separate views over the same durable ledger.
+
+- **Expel** is read-time filtering. Default runtime views (`rimz sidebar snapshot`, `rimz feed list`, and the default agent summary in `rimz doctor`) include only feed items and agent rollups whose `runtime_owner` points at the same live process that created them. Ownerless legacy records, dead owners, and Linux PID-start mismatches are audit-only.
+- **Audit** is durable history. `rimz feed show <request-id>` is exact, `rimz feed list --audit` lists all feed items, and `rimz doctor --audit` reads the full agent rollup history.
+- **Abandon** is a durable terminal transition. When a ledger writer or `rimz gc` sees a pending item with a recorded but dead owner process, it writes `status = abandoned`, records reason `owner_process_exited`, and appends a `feed.abandon` audit event.
+
+`runtime_owner` records `kind = agent | script`, a stable subject id, `pid`, and the Linux process-start token when available. Agent hooks publish the detected agent process and session id; blocking script asks publish the running `rimz feed ask` waiter. Short-lived `feed push` and `feed ask --no-block` records are still written for audit, but once their CLI process exits they leave default runtime views.
+
 ## Runtime state
 
 Under `${XDG_RUNTIME_DIR}/rimz/<workspace_id>/`, or `/tmp/rimz-<uid>/<workspace_id>/` at mode `0700` when `XDG_RUNTIME_DIR` is unset (common inside containers and on minimal hosts):
@@ -76,7 +86,7 @@ heartbeat/resolver.<resolver_id>.json
 
 Sockets and heartbeats are liveness hints, not durable state. They're split from the ledger directory because Linux's `AF_UNIX` path-length limit (108 bytes) makes deeply nested state paths fragile.
 
-`rimz gc --older-than <duration>` removes stale resolver/sidebar heartbeat files and stale sidebar wakeup sockets named by those heartbeat files. It does not remove `feed.*.sock` files because a long-running `rimz feed ask` may still own one.
+`rimz gc --older-than <duration>` removes stale resolver/sidebar heartbeat files and stale sidebar wakeup sockets named by those heartbeat files. It does not remove `feed.*.sock` files because a long-running `rimz feed ask` may still own one. It also abandons pending feed items whose recorded owner process has exited.
 
 ## Default path
 

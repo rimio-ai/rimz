@@ -79,8 +79,8 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
 
     // Append two lifecycle events for the same agent so the rollup carries a
     // worktree branch we can assert on after rotation. Older first; newer wins.
-    for (status, mode, branch) in [
-        ("idle", "interactive", "main"),
+    for (status, permission_posture, branch) in [
+        ("idle", "default", "main"),
         ("running", "auto", "feature-migration"),
     ] {
         let event = EventEnvelope::new(
@@ -92,7 +92,7 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
             json!({
                 "agent_id": "claude-1",
                 "status": status,
-                "mode": mode,
+                "permission_posture": permission_posture,
                 "worktree_branch": branch,
             }),
         );
@@ -139,9 +139,11 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
 
     // After rotation the sidebar snapshot should still know the latest agent
     // observation because it was folded into the carryover.
-    let snapshot = ledger.snapshot().expect("snapshot");
-    assert_eq!(snapshot.agents.len(), 1);
-    let agent = &snapshot.agents[0];
+    let projection = ledger
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("audit projection");
+    assert_eq!(projection.agents.len(), 1);
+    let agent = &projection.agents[0];
     assert_eq!(agent.agent_id, "claude-1");
     assert_eq!(agent.kind, "claude");
     assert_eq!(agent.worktree_branch.as_deref(), Some("feature-migration"));

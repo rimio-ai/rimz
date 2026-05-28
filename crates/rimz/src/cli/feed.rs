@@ -8,9 +8,11 @@ use serde_json::Value;
 use super::{GlobalFlags, open_ledger};
 use rimz::bridge::{self, BridgeOutcome, ExpectedFrame, SocketGuard};
 use rimz::feed::{
-    AbandonReason, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, Surface,
+    AbandonReason, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, RuntimeOwnerKind,
+    Surface,
 };
 use rimz::ids::{RequestId, ResolverId};
+use rimz::ledger::runtime::{RuntimeScope, current_process_owner};
 use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
@@ -48,6 +50,8 @@ enum FeedSubcmd {
     List {
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        audit: bool,
     },
     /// Show one feed item by id.
     Show {
@@ -118,6 +122,7 @@ pub fn run(args: FeedArgs, globals: &GlobalFlags) -> Result<()> {
             );
             item.body = body;
             attach_worktree(&mut item, &workspace);
+            attach_current_owner(&mut item);
             ledger.push_feed_item(&item, &workspace.session_name)?;
             #[expect(clippy::print_stdout, reason = "command result is the request id")]
             {
@@ -141,6 +146,7 @@ pub fn run(args: FeedArgs, globals: &GlobalFlags) -> Result<()> {
             );
             item.options = options;
             attach_worktree(&mut item, &workspace);
+            attach_current_owner(&mut item);
             item.hook_wait_timeout_seconds = timeout_seconds.unwrap_or(0);
             if let Some(seconds) = timeout_seconds {
                 item.feed_deadline_at = Some(Timestamp::now() + Duration::from_secs(seconds));
@@ -224,8 +230,12 @@ pub fn run(args: FeedArgs, globals: &GlobalFlags) -> Result<()> {
                 }
             }
         }
-        FeedSubcmd::List { json } => {
-            let items = ledger.list_feed_items()?;
+        FeedSubcmd::List { json, audit } => {
+            let items = if audit {
+                ledger.list_feed_items()?
+            } else {
+                ledger.runtime_projection(RuntimeScope::Runtime)?.items
+            };
             if json {
                 let rendered = serde_json::to_string_pretty(&items)?;
                 #[expect(clippy::print_stdout, reason = "json emitter")]
@@ -329,4 +339,11 @@ pub fn run(args: FeedArgs, globals: &GlobalFlags) -> Result<()> {
 fn attach_worktree(item: &mut FeedItem, workspace: &rimz::ResolvedWorkspace) {
     item.worktree_path = Some(workspace.worktree_root.display().to_string());
     item.worktree_branch = workspace.worktree_branch.clone();
+}
+
+fn attach_current_owner(item: &mut FeedItem) {
+    item.runtime_owner = Some(current_process_owner(
+        RuntimeOwnerKind::Script,
+        item.request_id.to_string(),
+    ));
 }

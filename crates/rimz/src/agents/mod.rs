@@ -18,7 +18,7 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::feed::{AgentMode, AgentStatus, FeedItem, FeedKind, Resolution};
+use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution, RuntimeOwner};
 
 /// Conservative fallback for adapters that don't override. Claude overrides
 /// to 120s (see `claude::CLAUDE_HOOK_CAP`); Codex overrides to its own cap
@@ -116,11 +116,13 @@ pub struct AgentLifecycleObservation {
     /// process disappears.
     pub agent_pid: Option<u32>,
     pub agent_process_start: Option<String>,
-    /// Mode pill the event establishes. `None` means "this event does not
-    /// report a mode" — the snapshot reducer carries the prior mode forward
-    /// rather than resetting it, so a `UserPromptSubmit` can never demote a
-    /// `bypass` agent to interactive (a security surface must stay visible).
-    pub mode: Option<AgentMode>,
+    pub runtime_owner: Option<RuntimeOwner>,
+    /// Permission posture pill the event establishes. `None` means "this
+    /// event does not report a posture" — the snapshot reducer carries the
+    /// prior posture forward rather than resetting it, so a `UserPromptSubmit`
+    /// can never demote a `yolo` agent to default (a security surface must
+    /// stay visible).
+    pub permission_posture: Option<PermissionPosture>,
     /// Optional absolute worktree path observed from the agent payload or
     /// filled by the CLI from the current Rimz workspace.
     pub worktree_path: Option<String>,
@@ -131,6 +133,14 @@ pub struct AgentLifecycleObservation {
     pub task: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Context-window utilization in percent reported by the agent (0..=100).
+    /// Enrich-only / telemetry-gated — the no-transcript-correctness rule.
+    pub context_pct: Option<u8>,
+    /// Cumulative token usage for this agent session.
+    pub total_tokens: Option<u64>,
+    /// Completed / total todos for the agent's current plan or task list.
+    pub todo_done: Option<u32>,
+    pub todo_total: Option<u32>,
 }
 
 /// Result of installing hooks. Surfaced to the CLI so the user sees which

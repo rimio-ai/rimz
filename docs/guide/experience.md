@@ -218,7 +218,7 @@ The reader does exactly what they said they would: spins up four more agents acr
 │                            │
 │ ▌main             2▸ 1◆    │
 │ ◆ claude  fix auth flow 12m│
-│   Opus · xhigh · plan      │
+│   Opus · xhigh ▰▰▱▱▱ 38%  │
 │ ▸ claude  add tests     8s │
 │   Sonnet · high            │
 │ ▸ codex   refactor api 30s │
@@ -226,7 +226,7 @@ The reader does exactly what they said they would: spins up four more agents acr
 │                            │
 │ ▌feature-migration 1✗ 1○   │
 │ ✗ claude  db migrate    4m │
-│   Opus · xhigh · bypass    │
+│   Opus · xhigh · yolo      │
 │ ○ codex   —             1h │
 │   GPT-5.5 · low            │
 │                            │
@@ -271,7 +271,7 @@ The footer advertises `?`. Pressing it overlays the legend and keys, so the glyp
 │ ◆ waiting    ✗ failed      │
 │ ▸ running    ○ idle        │
 │ ✓ done       · process     │
-│ pills: plan auto bypass    │
+│ posture: auto yolo         │
 └────────────────────────────┘
 ```
 
@@ -350,7 +350,7 @@ By now the reader is hooked on the observe-and-route loop. The product grows wit
 
 - **Resolvers (the morning-after upgrade).** Tired of approving `cargo check` for the eighth time, they wrap a smarter model and enrol it once: `rimz resolver add opus-policy --order 10 --budget 30s --binary …`. Now routine permissions get answered ahead of them; the hard ones abstain back to their pane exactly as before. The framing that keeps it safe: in Phases 1–8 they were *already* the answerer — the resolver just slots ahead of them, and **the chain always ends with them.** Deeper chains (Slack, PagerDuty) follow the same shape. Mechanics in [resolvers.md](../internals/resolvers.md).
 - **Scripts as citizens.** A deploy or migration script posts to the same sidebar with `rimz event emit` and blocks on `rimz feed ask` — and *because the script chose Rimz as its surface*, its options are answerable straight from the column. No agent involved; same triage, same UX. This is the one case where the sidebar answers, by design.
-- **Unattended / CI.** No human at the end of the chain: launch agents with their own bypass flag, or enrol a permissive resolver for a real per-decision audit trail. Rimz observes both and renders the `bypass` pill so the audit story stays honest. Detail in [product.md → Unattended runs](./product.md#unattended-runs-in-ci--sandbox).
+- **Unattended / CI.** No human at the end of the chain: launch agents with their own bypass flag, or enrol a permissive resolver for a real per-decision audit trail. Rimz observes both and renders the `yolo` posture so the audit story stays honest. Detail in [product.md → Unattended runs](./product.md#unattended-runs-in-ci--sandbox).
 
 > **Design law — one feed, three audiences, no new model.** Everything an agent integration does, a shell script does through the same CLI. The reader learns the feed once in Phase 5 and every later capability is the same feed seen from a new angle.
 

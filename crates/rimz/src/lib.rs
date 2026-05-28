@@ -23,15 +23,15 @@ pub mod workspace;
 pub use crate::bridge::{BridgeErr, BridgeOutcome, ExpectedFrame};
 pub use crate::feed::{
     AbandonReason, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, ResolverStep,
-    ResolverStepState, Surface,
+    ResolverStepState, RuntimeOwner, RuntimeOwnerKind, Surface,
 };
 pub use crate::ids::{
     EventId, MuxName, PaneId, RequestId, ResolverId, SidebarInstanceId, ViewKind, WorkspaceId,
 };
 pub use crate::ledger::{
-    Ledger, RuntimePaths, SidebarActivity, SidebarResolverState, SidebarRow, SidebarRowKind,
-    SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, StatePaths,
-    WorkspaceRecord,
+    Ledger, RuntimePaths, RuntimeProjection, RuntimeScope, SidebarActivity, SidebarResolverState,
+    SidebarRow, SidebarRowKind, SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup,
+    SidebarWorktreeKind, StatePaths, WorkspaceRecord,
 };
 pub use crate::schema::event::EventEnvelope;
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

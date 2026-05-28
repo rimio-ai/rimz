@@ -64,8 +64,8 @@ impl EventEnvelope {
 
     /// Convenience constructor for an `agent.lifecycle` event. The CLI hook
     /// path calls this after a lifecycle hook fires, so the sidebar's agent
-    /// rollup sees the status + mode pill update without each adapter
-    /// touching the ledger.
+    /// rollup sees the status, permission posture, and enrichment update
+    /// without each adapter touching the ledger.
     pub fn agent_lifecycle(
         workspace_id: WorkspaceId,
         session_name: impl Into<String>,
@@ -79,14 +79,19 @@ impl EventEnvelope {
             "event_name": event_name,
             "agent_id": observation.agent_id,
             "status": observation.status,
-            "mode": observation.mode,
+            "permission_posture": observation.permission_posture,
             "agent_pid": observation.agent_pid,
             "agent_process_start": observation.agent_process_start,
+            "runtime_owner": observation.runtime_owner,
             "worktree_path": observation.worktree_path,
             "worktree_branch": observation.worktree_branch,
             "task": observation.task,
             "model": observation.model,
             "effort": observation.effort,
+            "context_pct": observation.context_pct,
+            "total_tokens": observation.total_tokens,
+            "todo_done": observation.todo_done,
+            "todo_total": observation.todo_total,
         });
         Self::new(
             workspace_id,

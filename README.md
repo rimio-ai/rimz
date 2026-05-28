@@ -10,7 +10,7 @@ Rimz pins every repo to one durable room — a Zellij or tmux session with a sid
 │                            │
 │ ▌main             2▸ 1◆    │
 │ ◆ claude  fix auth flow 12m│
-│   Opus · xhigh · plan      │
+│   Opus · xhigh ▰▰▱▱▱ 38%   │
 │ ▸ claude  add tests     8s │
 │   Sonnet · high            │
 │ ▸ codex   refactor api 30s │
@@ -18,7 +18,7 @@ Rimz pins every repo to one durable room — a Zellij or tmux session with a sid
 │                            │
 │ ▌feature-migration 1✗ 1○   │
 │ ✗ claude  db migrate    4m │
-│   Opus · xhigh · bypass    │
+│   Opus · xhigh · yolo      │
 │ ○ codex   —             1h │
 │   GPT-5.5 · low            │
 │                            │

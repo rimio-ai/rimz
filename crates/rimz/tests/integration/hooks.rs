@@ -360,7 +360,7 @@ fn codex_session_start_writes_agent_lifecycle_event() {
     assert_eq!(agents[0]["agent_id"], "sess-codex-01");
     // SessionStart registers the agent idle (wired in, nothing asked yet).
     assert_eq!(agents[0]["status"], "idle");
-    assert_eq!(agents[0]["mode"], "interactive");
+    assert_eq!(agents[0]["permission_posture"], "default");
     assert_eq!(agents[0]["worktree_branch"], "feature-x");
 }
 
@@ -450,7 +450,7 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
     );
     assert_eq!(agents[0]["agent_id"], "child-thread-1");
     assert_eq!(agents[0]["status"], "running");
-    assert_eq!(agents[0]["mode"], "auto");
+    assert_eq!(agents[0]["permission_posture"], "auto");
     assert_eq!(agents[0]["task"], "review");
 
     let stop_payload = serde_json::to_string(&json!({
@@ -540,7 +540,7 @@ fn codex_uninstall_cli_removes_legacy_config_block() {
 }
 
 #[test]
-fn codex_session_start_with_never_policy_observes_bypass_mode() {
+fn codex_session_start_with_never_policy_observes_yolo_posture() {
     let env = Env::new();
     let payload = serde_json::to_string(&json!({
         "hook_event_name": "SessionStart",
@@ -553,7 +553,7 @@ fn codex_session_start_with_never_policy_observes_bypass_mode() {
     assert!(output.status.success());
 
     let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["mode"], "bypass");
+    assert_eq!(parsed["agents"][0]["permission_posture"], "yolo");
 }
 
 #[test]
@@ -752,12 +752,12 @@ fn claude_session_start_writes_agent_lifecycle_event() {
     assert_eq!(agents[0]["agent_id"], "sess-claude-01");
     // SessionStart registers the agent idle (wired in, nothing asked yet).
     assert_eq!(agents[0]["status"], "idle");
-    assert_eq!(agents[0]["mode"], "interactive");
+    assert_eq!(agents[0]["permission_posture"], "default");
     assert_eq!(agents[0]["worktree_branch"], "feature-x");
 }
 
 #[test]
-fn claude_session_start_with_bypass_permissions_observes_bypass_mode() {
+fn claude_session_start_with_bypass_permissions_observes_yolo_posture() {
     let env = Env::new();
     let payload = serde_json::to_string(&json!({
         "hook_event_name": "SessionStart",
@@ -770,7 +770,7 @@ fn claude_session_start_with_bypass_permissions_observes_bypass_mode() {
     assert!(output.status.success());
 
     let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["mode"], "bypass");
+    assert_eq!(parsed["agents"][0]["permission_posture"], "yolo");
 }
 
 #[test]

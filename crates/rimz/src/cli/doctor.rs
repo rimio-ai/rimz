@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
+use clap::Args;
 use jiff::Timestamp;
 
 use super::{GlobalFlags, open_ledger};
@@ -19,6 +20,12 @@ use rimz::trust::{self, TrustState};
 use rimz::workspace::WorkspaceResolver;
 use rimz::{RuntimePaths, StatePaths};
 
+#[derive(Debug, Args)]
+pub struct DoctorArgs {
+    #[arg(long)]
+    audit: bool,
+}
+
 /// AF_UNIX paths are 108 bytes including the terminator. The per-request
 /// socket layout is `<sock_dir>/feed.<12-hex>.sock` (18 chars after
 /// `sock_dir`), so the dir itself can be at most 89 bytes. We round down
@@ -26,7 +33,7 @@ use rimz::{RuntimePaths, StatePaths};
 const AF_UNIX_PATH_LIMIT: usize = 108;
 const FEED_SOCKET_TAIL_LEN: usize = "/feed.123456789012.sock".len();
 
-pub fn run(globals: &GlobalFlags) -> Result<()> {
+pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone());
 
     #[expect(clippy::print_stdout, reason = "doctor is the user-facing report")]
@@ -70,7 +77,7 @@ pub fn run(globals: &GlobalFlags) -> Result<()> {
             report_protocol_versions(ws);
             report_trust(ws);
             report_unauthorized_resolver_heartbeats(ws);
-            report_agent_rollup(ws);
+            report_agent_rollup(ws, args.audit);
         }
     }
     Ok(())
@@ -187,14 +194,14 @@ fn heartbeat_protocol_version(path: &Path) -> std::result::Result<String, String
 }
 
 /// Walk the snapshot's agent rollup and print one row per `(kind, agent_id)`
-/// observed by `agent.lifecycle` events. The mode pill reflects the agent's
-/// own most recent observation — the per-agent unattended-runs audit story
-/// from `docs/guide/product.md` is the user-facing context.
+/// observed by `agent.lifecycle` events. Permission posture reflects the
+/// agent's own most recent observation — the per-agent unattended-runs audit
+/// story from `docs/guide/product.md` is the user-facing context.
 #[expect(
     clippy::print_stdout,
     reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
 )]
-fn report_agent_rollup(ws: &rimz::ResolvedWorkspace) {
+fn report_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) {
     let ledger = match open_ledger(ws) {
         Ok(l) => l,
         Err(err) => {
@@ -202,33 +209,38 @@ fn report_agent_rollup(ws: &rimz::ResolvedWorkspace) {
             return;
         }
     };
-    let snapshot = match ledger.snapshot() {
+    let scope = if audit {
+        rimz::RuntimeScope::Audit
+    } else {
+        rimz::RuntimeScope::Runtime
+    };
+    let projection = match ledger.runtime_projection(scope) {
         Ok(s) => s,
         Err(err) => {
             println!("  agents        : unavailable ({err})");
             return;
         }
     };
-    if snapshot.agents.is_empty() {
+    if projection.agents.is_empty() {
         println!("  agents        : none observed");
         return;
     }
     let now = Timestamp::now();
     let mut by_kind: std::collections::BTreeMap<&str, Vec<&AgentState>> =
         std::collections::BTreeMap::new();
-    for agent in &snapshot.agents {
+    for agent in &projection.agents {
         by_kind.entry(agent.kind.as_str()).or_default().push(agent);
     }
     for (kind, mut agents) in by_kind {
         agents.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
         println!("  agent ({kind})  : {} observed", agents.len());
         for agent in agents {
-            let mode = format!("{:?}", agent.mode).to_lowercase();
+            let posture = format!("{:?}", agent.permission_posture).to_lowercase();
             let status = format!("{:?}", agent.status).to_lowercase();
             let branch = agent.worktree_branch.as_deref().unwrap_or("-");
             let age = age_short(now, agent.last_seen);
             println!(
-                "    {id:<24} {branch:<20} {status:<8} · {mode:<7} · {age}",
+                "    {id:<24} {branch:<20} {status:<8} · {posture:<7} · {age}",
                 id = agent.agent_id,
             );
         }

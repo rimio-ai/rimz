@@ -12,6 +12,54 @@ use serde_json::Value;
 
 use crate::ids::{PaneId, RequestId, ResolverId, ViewKind, WorkspaceId};
 
+/// Runtime owner class for records that should appear in live views.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeOwnerKind {
+    Agent,
+    Script,
+}
+
+impl RuntimeOwnerKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Agent => "agent",
+            Self::Script => "script",
+        }
+    }
+}
+
+/// Process identity for read-time runtime projection.
+///
+/// Durable records remain on disk after the owner exits. Runtime views include
+/// them only while this process identity is still alive. `process_start` is
+/// the Linux `/proc/<pid>/stat` start-time token when available; it defeats PID
+/// reuse without becoming a cross-platform requirement.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeOwner {
+    pub kind: RuntimeOwnerKind,
+    pub subject_id: String,
+    pub pid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_start: Option<String>,
+}
+
+impl RuntimeOwner {
+    pub fn new(
+        kind: RuntimeOwnerKind,
+        subject_id: impl Into<String>,
+        pid: u32,
+        process_start: Option<String>,
+    ) -> Self {
+        Self {
+            kind,
+            subject_id: subject_id.into(),
+            pid,
+            process_start,
+        }
+    }
+}
+
 /// Which UI is responsible for collecting the answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -135,6 +183,7 @@ pub enum ResolutionMethod {
     Sidebar,
     Dismiss,
     AgentMovedOn,
+    OwnerExited,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -185,6 +234,9 @@ pub enum AbandonReason {
     /// The agent session that raised the ask ended before it was answered; the
     /// pending item is expired so it can't outlive its session.
     AgentSessionEnded,
+    /// The process that owned a pending runtime record exited before the item
+    /// reached a terminal state.
+    OwnerProcessExited,
 }
 
 impl AbandonReason {
@@ -197,6 +249,7 @@ impl AbandonReason {
             Self::ScriptWaitTimeout => "wait_timeout_elapsed",
             Self::HookAlreadyReturnedNeutral => "hook_already_returned_neutral",
             Self::AgentSessionEnded => "agent_session_ended",
+            Self::OwnerProcessExited => "owner_process_exited",
         }
     }
 }
@@ -286,6 +339,8 @@ pub struct FeedItem {
     #[serde(default)]
     pub worktree_branch: Option<String>,
     pub payload: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_owner: Option<RuntimeOwner>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     /// Hook cap from the agent's protocol. 0 means "no hook is waiting"
@@ -326,6 +381,7 @@ impl FeedItem {
             worktree_path: None,
             worktree_branch: None,
             payload: Value::Object(serde_json::Map::new()),
+            runtime_owner: None,
             created_at: now,
             updated_at: now,
             hook_wait_timeout_seconds: 0,
@@ -447,14 +503,26 @@ pub enum AgentStatus {
     Failed,
 }
 
-/// Agent mode pill; the agent owns this too.
+/// Permission posture pill: how much the human is in the loop for this agent's
+/// tool calls. The agent owns this; Rimz observes and surfaces it.
+///
+/// `Default` is the omitted baseline (the human approves each tool call —
+/// Claude's `default` and Codex's `on-request`/`ask`, and Claude's `plan` mode
+/// which is still default-posture); `Auto` is auto-accept (Claude
+/// `acceptEdits`, Codex `auto`/`on-failure`); `Yolo` is the full bypass (Claude
+/// `bypassPermissions`, Codex `--ask-for-approval never`). `Unknown` is any
+/// value the agent reports that doesn't fit the three buckets.
+///
+/// Wire format: snake_case (`default`/`auto`/`yolo`/`unknown`). Mode words like
+/// `plan` or `interactive` do not appear on the wire — they were a mix of
+/// posture and workflow that confused cross-backend parity, so they fold into
+/// `Default`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AgentMode {
-    Interactive,
-    Plan,
+pub enum PermissionPosture {
+    Default,
     Auto,
-    Bypass,
+    Yolo,
     Unknown,
 }
 
@@ -463,17 +531,42 @@ pub struct AgentState {
     pub agent_id: String,
     pub kind: String,
     pub status: AgentStatus,
-    pub mode: AgentMode,
+    pub permission_posture: PermissionPosture,
     pub pane: Option<PaneRef>,
     #[serde(default)]
     pub agent_pid: Option<u32>,
     #[serde(default)]
     pub agent_process_start: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_owner: Option<RuntimeOwner>,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
     pub task: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Context-window utilization in percent (0..=100). Reported by the
+    /// agent's hooks when available; `None` while the agent hasn't surfaced
+    /// it. Display-only — never drives a decision (the no-transcript-correctness
+    /// rule), so a missing value reads as "no gauge", not "0%".
+    #[serde(default)]
+    pub context_pct: Option<u8>,
+    /// Cumulative token usage for this agent session. Same enrich-only
+    /// discipline as `context_pct`.
+    #[serde(default)]
+    pub total_tokens: Option<u64>,
+    /// Completed and total todos for the agent's current plan, as reported
+    /// by the agent's plan/todo tool. `todo_total = 0` (or `None`) renders as
+    /// "no todo state".
+    #[serde(default)]
+    pub todo_done: Option<u32>,
+    #[serde(default)]
+    pub todo_total: Option<u32>,
+    /// Monotonic counter of observed lifecycle events for this agent. The
+    /// sidebar's event-pulse glyph is `pulse_glyph(last_event_pulse)`; advances
+    /// only when the reducer observes a new event, so a wedged agent's pulse
+    /// freezes (honest) while a busy one shimmers.
+    #[serde(default)]
+    pub last_event_pulse: u64,
     pub last_seen: Timestamp,
     pub last_activity: Timestamp,
 }

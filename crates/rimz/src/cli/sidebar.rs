@@ -1,8 +1,11 @@
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Subcommand};
+use serde::{Deserialize, Serialize};
 
 use super::{GlobalFlags, open_ledger};
 use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
@@ -129,6 +132,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     .map(|agent| agent.supports_hook_install() && agent.hooks_installed())
                     .unwrap_or(false)
             });
+            enrich_worktree_diff_stats(&mut snapshot, ledger.runtime_paths());
             if json {
                 let rendered = serde_json::to_string_pretty(&snapshot)?;
                 #[expect(clippy::print_stdout, reason = "json emitter for sidebar")]
@@ -269,6 +273,137 @@ fn pane_list_fixture() -> Result<Option<Vec<rimz::feed::PaneRef>>> {
     Ok(Some(serde_json::from_slice(&bytes)?))
 }
 
+const DIFF_STATS_TTL: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct DiffStats {
+    added: u32,
+    removed: u32,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct DiffStatsCache {
+    entries: BTreeMap<String, DiffStatsCacheEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DiffStatsCacheEntry {
+    refreshed_at_ms: u64,
+    added: Option<u32>,
+    removed: Option<u32>,
+}
+
+impl DiffStatsCacheEntry {
+    fn new(refreshed_at_ms: u64, stats: Option<DiffStats>) -> Self {
+        Self {
+            refreshed_at_ms,
+            added: stats.map(|stats| stats.added),
+            removed: stats.map(|stats| stats.removed),
+        }
+    }
+
+    fn fresh_stats(&self, now_ms: u64) -> Option<Option<DiffStats>> {
+        if now_ms.saturating_sub(self.refreshed_at_ms) > DIFF_STATS_TTL.as_millis() as u64 {
+            return None;
+        }
+        Some(
+            self.added
+                .zip(self.removed)
+                .map(|(added, removed)| DiffStats { added, removed }),
+        )
+    }
+}
+
+fn enrich_worktree_diff_stats(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::RuntimePaths) {
+    let cache_path = runtime.root.join("diff-stats.json");
+    let mut cache = read_diff_stats_cache(&cache_path);
+    let now_ms = unix_now_ms();
+    let mut changed = false;
+
+    for group in &mut snapshot.worktree_groups {
+        if group.kind != rimz::SidebarWorktreeKind::Worktree {
+            continue;
+        }
+        let worktree = Path::new(&group.key);
+        if !worktree.is_dir() {
+            continue;
+        }
+
+        let cached = cache
+            .entries
+            .get(&group.key)
+            .and_then(|entry| entry.fresh_stats(now_ms));
+        let stats = match cached {
+            Some(stats) => stats,
+            None => {
+                let stats = worktree_diff_stats(worktree);
+                cache
+                    .entries
+                    .insert(group.key.clone(), DiffStatsCacheEntry::new(now_ms, stats));
+                changed = true;
+                stats
+            }
+        };
+
+        if let Some(stats) = stats {
+            group.diff_added = Some(stats.added);
+            group.diff_removed = Some(stats.removed);
+        }
+    }
+
+    if changed && let Err(err) = atomic::write_temp_then_rename(&cache_path, &cache) {
+        tracing::warn!(path = %cache_path.display(), error = %err, "sidebar diff-stats cache write failed");
+    }
+}
+
+fn read_diff_stats_cache(path: &Path) -> DiffStatsCache {
+    let Ok(bytes) = std::fs::read(path) else {
+        return DiffStatsCache::default();
+    };
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+fn worktree_diff_stats(worktree: &Path) -> Option<DiffStats> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args(["diff", "--no-ext-diff", "--numstat", "HEAD", "--"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(parse_numstat(&String::from_utf8_lossy(&output.stdout)))
+}
+
+fn parse_numstat(output: &str) -> DiffStats {
+    let mut stats = DiffStats::default();
+    for line in output.lines() {
+        let mut columns = line.split('\t');
+        stats.added = stats
+            .added
+            .saturating_add(parse_numstat_cell(columns.next()));
+        stats.removed = stats
+            .removed
+            .saturating_add(parse_numstat_cell(columns.next()));
+    }
+    stats
+}
+
+fn parse_numstat_cell(cell: Option<&str>) -> u32 {
+    cell.and_then(|value| value.parse::<u64>().ok())
+        .map(|value| value.min(u64::from(u32::MAX)) as u32)
+        .unwrap_or(0)
+}
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
+
 pub(crate) fn sidebar_renderer_program() -> PathBuf {
     if let Some(path) = env_path("RIMZ_SIDEBAR_BIN") {
         return path;
@@ -314,4 +449,45 @@ fn rimz_cli_program() -> PathBuf {
 
 fn rimz_bin_name() -> String {
     format!("rimz{}", std::env::consts::EXE_SUFFIX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_numstat_sums_text_diff_and_ignores_binary_rows() {
+        let stats = parse_numstat("12\t4\tsrc/lib.rs\n-\t-\tassets/logo.png\n3\t0\tREADME.md\n");
+
+        assert_eq!(
+            stats,
+            DiffStats {
+                added: 15,
+                removed: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn diff_stats_cache_entry_expires_after_ttl() {
+        let entry = DiffStatsCacheEntry::new(
+            1_000,
+            Some(DiffStats {
+                added: 2,
+                removed: 1,
+            }),
+        );
+
+        assert_eq!(
+            entry.fresh_stats(1_000 + DIFF_STATS_TTL.as_millis() as u64),
+            Some(Some(DiffStats {
+                added: 2,
+                removed: 1,
+            }))
+        );
+        assert_eq!(
+            entry.fresh_stats(1_001 + DIFF_STATS_TTL.as_millis() as u64),
+            None
+        );
+    }
 }

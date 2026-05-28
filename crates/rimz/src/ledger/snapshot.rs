@@ -12,8 +12,8 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::feed::{
-    AgentMode, AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, PaneRef, ResolverStepState,
-    Surface,
+    AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, PaneRef, PermissionPosture,
+    ResolverStepState, RuntimeOwner, RuntimeOwnerKind, Surface,
 };
 use crate::ids::{PaneId, RequestId, ResolverId, WorkspaceId};
 use crate::ledger::atomic::{self, write_temp_then_rename};
@@ -95,6 +95,16 @@ pub struct SidebarWorktreeGroup {
     pub status_counts: Vec<SidebarStatusCount>,
     pub rows: Vec<SidebarRow>,
     pub hidden_count: usize,
+    /// Worktree-level `git diff` insertions and deletions, projected by the
+    /// `rimz sidebar snapshot` CLI (the reducer stays pure). Lives on the
+    /// group header — never on a per-agent row — so the shared-worktree
+    /// "whose diff?" ambiguity is resolved by belonging to the worktree, not
+    /// the agent. `None` when no git read was attempted or the worktree is
+    /// not a git repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_added: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_removed: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -118,13 +128,29 @@ pub struct SidebarRow {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<AgentStatus>,
-    pub mode: Option<AgentMode>,
+    /// Permission posture pill (`auto`/`yolo`; `default` and `unknown` omit).
+    /// Replaces the older `mode` field — mode/posture were conflated in a way
+    /// that didn't cross backends cleanly.
+    pub permission_posture: Option<PermissionPosture>,
     pub pane: Option<PaneRef>,
     pub request_id: Option<RequestId>,
     pub surface: Option<Surface>,
     pub task: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Context-window % gauge value (0..=100). Mirrors `AgentState.context_pct`
+    /// onto the row so renderers stay pure JSON consumers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_pct: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub todo_done: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub todo_total: Option<u32>,
+    /// Event-pulse counter — see `AgentState.last_event_pulse`.
+    #[serde(default)]
+    pub last_event_pulse: u64,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
     pub last_activity: Timestamp,
@@ -169,14 +195,21 @@ impl SidebarSnapshot {
     /// with a newer `last_seen` override the carryover.
     pub fn build_with_carryover(
         workspace_id: WorkspaceId,
-        mut items: Vec<FeedItem>,
+        items: Vec<FeedItem>,
         events: Vec<EventEnvelope>,
         carryover_agents: Vec<AgentState>,
     ) -> Self {
-        items.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
+        let agents = agent_rollup_with_carryover(&events, carryover_agents);
+        Self::build_with_agents(workspace_id, items, events, agents)
+    }
 
-        let live = reduce_agent_states(&events);
-        let agents = merge_agent_rollups(&carryover_agents, &live);
+    pub fn build_with_agents(
+        workspace_id: WorkspaceId,
+        mut items: Vec<FeedItem>,
+        events: Vec<EventEnvelope>,
+        agents: Vec<AgentState>,
+    ) -> Self {
+        items.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
 
         let mut needs_attention = Vec::new();
         let mut resolver_working = Vec::new();
@@ -241,6 +274,9 @@ impl SidebarSnapshot {
     pub fn drop_dead_agents_with(&mut self, mut is_alive: impl FnMut(u32, Option<&str>) -> bool) {
         let previous_len = self.agents.len();
         self.agents.retain(|agent| {
+            if let Some(owner) = &agent.runtime_owner {
+                return is_alive(owner.pid, owner.process_start.as_deref());
+            }
             agent
                 .agent_pid
                 .is_none_or(|pid| is_alive(pid, agent.agent_process_start.as_deref()))
@@ -325,7 +361,7 @@ fn build_worktree_groups_with_panes(
             let Some(agent) = matching_agent(item, agents) else {
                 continue;
             };
-            let Some(pane) = matching_pane_for_agent(agent, agents, panes, &used_panes) else {
+            let Some(pane) = matching_pane_for_agent(agent, panes, &used_panes) else {
                 continue;
             };
             let Some(mut row) = row_from_item(item, agents) else {
@@ -347,26 +383,29 @@ fn build_worktree_groups_with_panes(
     }
 
     // Assign panes to agents in two passes so an exact identity/command match
-    // always wins over a loose "looks like an agent" candidate. Without this an
-    // extra claude with no pane of its own would grab a codex pane in the same
-    // worktree before the codex agent's exact match ran, mislabelling the tab.
+    // always wins over a loose "looks like an agent" candidate. Within each
+    // pass, the most-recently-active agent binds first — so when the ledger
+    // holds stale ghosts of dead sessions on the same worktree, the live agent
+    // claims its pane instead of being blocked by the count.
+    let mut sorted: Vec<&AgentState> = agents.iter().collect();
+    sorted.sort_by_key(|agent| std::cmp::Reverse(agent.last_activity));
     let mut overlaid = BTreeSet::new();
-    for agent in agents {
+    for agent in &sorted {
         let key = (agent.kind.clone(), agent.agent_id.clone());
         if replaced_agents.contains(&key) {
             continue;
         }
-        if let Some(pane) = exact_pane_for_agent(agent, agents, panes, &used_panes) {
+        if let Some(pane) = exact_pane_for_agent(agent, panes, &used_panes) {
             push_agent_row(&mut rows, agent, pane, &mut used_panes);
             overlaid.insert(key);
         }
     }
-    for agent in agents {
+    for agent in &sorted {
         let key = (agent.kind.clone(), agent.agent_id.clone());
         if replaced_agents.contains(&key) || overlaid.contains(&key) {
             continue;
         }
-        if let Some(pane) = candidate_pane_for_agent(agent, agents, panes, &used_panes) {
+        if let Some(pane) = candidate_pane_for_agent(agent, panes, &used_panes) {
             push_agent_row(&mut rows, agent, pane, &mut used_panes);
         }
     }
@@ -463,6 +502,8 @@ fn build_worktree_groups_from_rows(rows: Vec<SidebarRow>) -> Vec<SidebarWorktree
                 status_counts,
                 hidden_count: total.saturating_sub(rows.len()),
                 rows,
+                diff_added: None,
+                diff_removed: None,
             }
         })
         .collect::<Vec<_>>();
@@ -476,13 +517,18 @@ fn row_from_agent(agent: &AgentState) -> SidebarRow {
         id: agent.agent_id.clone(),
         name: agent.kind.clone(),
         status: Some(agent.status),
-        mode: Some(agent.mode),
+        permission_posture: Some(agent.permission_posture),
         pane: agent.pane.clone(),
         request_id: None,
         surface: None,
         task: agent.task.clone(),
         model: agent.model.clone(),
         effort: agent.effort.clone(),
+        context_pct: agent.context_pct,
+        total_tokens: agent.total_tokens,
+        todo_done: agent.todo_done,
+        todo_total: agent.todo_total,
+        last_event_pulse: agent.last_event_pulse,
         worktree_path: agent.worktree_path.clone(),
         worktree_branch: agent.worktree_branch.clone(),
         last_activity: agent.last_activity,
@@ -503,13 +549,18 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
         id: pane.pane_id.to_string(),
         name,
         status: None,
-        mode: None,
+        permission_posture: None,
         pane: Some(pane.clone()),
         request_id: None,
         surface: None,
         task: None,
         model: None,
         effort: None,
+        context_pct: None,
+        total_tokens: None,
+        todo_done: None,
+        todo_total: None,
+        last_event_pulse: 0,
         worktree_path: pane.cwd.clone(),
         worktree_branch: None,
         last_activity: pane.pane_process_start.unwrap_or_else(Timestamp::now),
@@ -572,7 +623,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         id,
         name: item.source.clone(),
         status: Some(AgentStatus::Waiting),
-        mode: matched.map(|agent| agent.mode),
+        permission_posture: matched.map(|agent| agent.permission_posture),
         pane: item
             .pane
             .clone()
@@ -582,6 +633,11 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         task,
         model: matched.and_then(|agent| agent.model.clone()),
         effort: matched.and_then(|agent| agent.effort.clone()),
+        context_pct: matched.and_then(|agent| agent.context_pct),
+        total_tokens: matched.and_then(|agent| agent.total_tokens),
+        todo_done: matched.and_then(|agent| agent.todo_done),
+        todo_total: matched.and_then(|agent| agent.todo_total),
+        last_event_pulse: matched.map(|agent| agent.last_event_pulse).unwrap_or(0),
         worktree_path: item
             .worktree_path
             .clone()
@@ -638,7 +694,7 @@ fn matching_pane_for_item<'a>(
     }
 
     if let Some(agent) = matching_agent(item, agents)
-        && let Some(pane) = matching_pane_for_agent(agent, agents, panes, used_panes)
+        && let Some(pane) = matching_pane_for_agent(agent, panes, used_panes)
     {
         return Some(pane);
     }
@@ -664,19 +720,19 @@ fn matching_pane_for_item<'a>(
 
 fn matching_pane_for_agent<'a>(
     agent: &AgentState,
-    agents: &[AgentState],
     panes: &'a [PaneRef],
     used_panes: &BTreeSet<String>,
 ) -> Option<&'a PaneRef> {
-    exact_pane_for_agent(agent, agents, panes, used_panes)
-        .or_else(|| candidate_pane_for_agent(agent, agents, panes, used_panes))
+    exact_pane_for_agent(agent, panes, used_panes)
+        .or_else(|| candidate_pane_for_agent(agent, panes, used_panes))
 }
 
 /// Pane that is unambiguously this agent's: the same normalized id it
 /// published, or a foreground command equal to the agent kind in its worktree.
+/// Tie-breaking across multiple ledger agents claiming the same pane is owned
+/// by the caller, which iterates agents most-recent-first.
 fn exact_pane_for_agent<'a>(
     agent: &AgentState,
-    agents: &[AgentState],
     panes: &'a [PaneRef],
     used_panes: &BTreeSet<String>,
 ) -> Option<&'a PaneRef> {
@@ -690,15 +746,11 @@ fn exact_pane_for_agent<'a>(
         return Some(pane);
     }
 
-    let pane = panes.iter().find(|pane| {
+    panes.iter().find(|pane| {
         !used_panes.contains(pane.pane_id.as_str())
             && pane_command_matches(pane, &agent.kind)
             && worktree_matches(agent.worktree_path.as_deref(), pane.cwd.as_deref())
-    })?;
-    if agent_command_match_oversubscribed(agent, agents, panes) {
-        return None;
-    }
-    Some(pane)
+    })
 }
 
 /// Loose fallback for agents that run under a wrapper binary (e.g. codex as
@@ -706,13 +758,9 @@ fn exact_pane_for_agent<'a>(
 /// match is settled, so it can't steal a pane another agent owns by name.
 fn candidate_pane_for_agent<'a>(
     agent: &AgentState,
-    agents: &[AgentState],
     panes: &'a [PaneRef],
     used_panes: &BTreeSet<String>,
 ) -> Option<&'a PaneRef> {
-    if agent_candidate_match_oversubscribed(agent, agents, panes) {
-        return None;
-    }
     panes.iter().find(|pane| {
         !used_panes.contains(pane.pane_id.as_str())
             && pane_is_loose_agent_candidate(pane)
@@ -735,66 +783,6 @@ fn pane_is_loose_agent_candidate(pane: &PaneRef) -> bool {
         }
         command_agent_kind(command).is_none()
     })
-}
-
-fn agent_command_match_oversubscribed(
-    agent: &AgentState,
-    agents: &[AgentState],
-    panes: &[PaneRef],
-) -> bool {
-    let pane_count = panes
-        .iter()
-        .filter(|pane| {
-            pane_command_matches(pane, &agent.kind)
-                && worktree_matches(agent.worktree_path.as_deref(), pane.cwd.as_deref())
-        })
-        .count();
-    agent_match_oversubscribed(agent, agents, pane_count)
-}
-
-fn agent_candidate_match_oversubscribed(
-    agent: &AgentState,
-    agents: &[AgentState],
-    panes: &[PaneRef],
-) -> bool {
-    let pane_count = panes
-        .iter()
-        .filter(|pane| {
-            pane_is_loose_agent_candidate(pane)
-                && worktree_matches(agent.worktree_path.as_deref(), pane.cwd.as_deref())
-        })
-        .count();
-    agent_match_oversubscribed(agent, agents, pane_count)
-}
-
-fn agent_match_oversubscribed(
-    agent: &AgentState,
-    agents: &[AgentState],
-    pane_count: usize,
-) -> bool {
-    pane_count > 0
-        && agents
-            .iter()
-            .filter(|candidate| {
-                candidate.kind == agent.kind
-                    && same_agent_worktree(
-                        agent.worktree_path.as_deref(),
-                        candidate.worktree_path.as_deref(),
-                    )
-            })
-            .count()
-            > pane_count
-}
-
-fn same_agent_worktree(left: Option<&str>, right: Option<&str>) -> bool {
-    match (
-        left.filter(|value| !value.is_empty()),
-        right.filter(|value| !value.is_empty()),
-    ) {
-        (Some(left), Some(right)) => left == right,
-        (None, None) => true,
-        _ => false,
-    }
 }
 
 fn is_shell_command(command: &str) -> bool {
@@ -1026,12 +1014,35 @@ pub fn agent_rollup_for_events(events: &[EventEnvelope]) -> Vec<AgentState> {
     reduce_agent_states(events)
 }
 
+pub fn agent_rollup_with_carryover(
+    events: &[EventEnvelope],
+    carryover_agents: Vec<AgentState>,
+) -> Vec<AgentState> {
+    let live = reduce_agent_states(events);
+    let tombstones = agent_tombstones_for_events(events);
+    merge_agent_rollups_with_tombstones(&carryover_agents, &live, &tombstones)
+}
+
 /// Merge two agent rollups, preferring the newer `last_seen` per
 /// `(agent_kind, agent_id)` pair. `live` wins on ties so a same-second
 /// observation in the active log overrides carryover.
 pub fn merge_agent_rollups(base: &[AgentState], live: &[AgentState]) -> Vec<AgentState> {
+    merge_agent_rollups_with_tombstones(base, live, &BTreeSet::new())
+}
+
+fn merge_agent_rollups_with_tombstones(
+    base: &[AgentState],
+    live: &[AgentState],
+    tombstones: &BTreeSet<(String, String)>,
+) -> Vec<AgentState> {
     let mut map: BTreeMap<(String, String), AgentState> = BTreeMap::new();
-    for entry in base.iter().chain(live.iter()) {
+    for entry in base {
+        let key = (entry.kind.clone(), entry.agent_id.clone());
+        if !tombstones.contains(&key) {
+            map.insert(key, entry.clone());
+        }
+    }
+    for entry in live {
         let key = (entry.kind.clone(), entry.agent_id.clone());
         match map.get(&key) {
             Some(existing) if existing.last_seen > entry.last_seen => {}
@@ -1043,16 +1054,39 @@ pub fn merge_agent_rollups(base: &[AgentState], live: &[AgentState]) -> Vec<Agen
     map.into_values().collect()
 }
 
+fn agent_tombstones_for_events(events: &[EventEnvelope]) -> BTreeSet<(String, String)> {
+    let mut tombstones = BTreeSet::new();
+    for event in events {
+        if event.method != "agent.lifecycle" {
+            continue;
+        }
+        let event_name = event.params.get("event_name").and_then(|v| v.as_str());
+        let status = event.params.get("status").and_then(|v| v.as_str());
+        if event_name != Some("SessionEnd") && status != Some("offline") {
+            continue;
+        }
+        let kind = event.source.clone();
+        let agent_id = event
+            .params
+            .get("agent_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| format!("{kind}:anonymous"));
+        tombstones.insert((kind, agent_id));
+    }
+    tombstones
+}
+
 /// Fold `agent.lifecycle` events into the latest [`AgentState`] per
 /// agent_id, keyed by `(agent_kind, agent_id)`. Anonymous lifecycle events
 /// (no agent_id) collapse to a single rollup keyed by `agent_kind`. Events
 /// are walked in log order, so the newest observation wins.
 ///
 /// Each event is a *partial* update: `status` always comes from the event,
-/// but the stable capability/identity fields (`mode`, `model`, `effort`,
-/// worktree, pane) carry forward from the prior state when the event omits
-/// them. A `UserPromptSubmit` therefore moves the agent to running without
-/// erasing its model line or demoting a `bypass` mode pill.
+/// but the stable capability/identity fields (`permission_posture`, `model`,
+/// `effort`, worktree, pane) carry forward from the prior state when the event
+/// omits them. A `UserPromptSubmit` therefore moves the agent to running
+/// without erasing its model line or demoting a `yolo` posture.
 fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
     let mut map: BTreeMap<(String, String), AgentState> = BTreeMap::new();
     for event in events {
@@ -1079,12 +1113,12 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             .get("status")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or(AgentStatus::Idle);
-        let mode: AgentMode = event
+        let permission_posture: PermissionPosture = event
             .params
-            .get("mode")
+            .get("permission_posture")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .or_else(|| prior.map(|p| p.mode))
-            .unwrap_or(AgentMode::Unknown);
+            .or_else(|| prior.map(|p| p.permission_posture))
+            .unwrap_or(PermissionPosture::Default);
         let param_string = |key: &str| {
             event
                 .params
@@ -1092,6 +1126,25 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
                 .and_then(|v| v.as_str())
                 .map(ToOwned::to_owned)
         };
+        let param_number = |key: &str| event.params.get(key).and_then(|v| v.as_u64());
+        // Enrichment fields carry forward when an event omits them; the
+        // pulse always advances by 1 so a busy agent's spinner shimmers and a
+        // silent one's freezes. Pulse is event-paced — never timer-driven.
+        let context_pct = param_number("context_pct")
+            .map(|v| v.min(100) as u8)
+            .or_else(|| prior.and_then(|p| p.context_pct));
+        let total_tokens =
+            param_number("total_tokens").or_else(|| prior.and_then(|p| p.total_tokens));
+        let todo_done = param_number("todo_done")
+            .map(|v| v.min(u32::MAX as u64) as u32)
+            .or_else(|| prior.and_then(|p| p.todo_done));
+        let todo_total = param_number("todo_total")
+            .map(|v| v.min(u32::MAX as u64) as u32)
+            .or_else(|| prior.and_then(|p| p.todo_total));
+        let last_event_pulse = prior
+            .map(|p| p.last_event_pulse)
+            .unwrap_or(0)
+            .wrapping_add(1);
         let establishes_identity = matches!(event_name, Some("SessionStart" | "SubagentStart"));
         let event_worktree_path = param_string("worktree_path");
         let event_worktree_branch = param_string("worktree_branch");
@@ -1114,6 +1167,21 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             .or_else(|| prior.and_then(|p| p.agent_pid));
         let agent_process_start = param_string("agent_process_start")
             .or_else(|| prior.and_then(|p| p.agent_process_start.clone()));
+        let runtime_owner = event
+            .params
+            .get("runtime_owner")
+            .and_then(|v| serde_json::from_value::<RuntimeOwner>(v.clone()).ok())
+            .or_else(|| {
+                agent_pid.map(|pid| {
+                    RuntimeOwner::new(
+                        RuntimeOwnerKind::Agent,
+                        agent_id.clone(),
+                        pid,
+                        agent_process_start.clone(),
+                    )
+                })
+            })
+            .or_else(|| prior.and_then(|p| p.runtime_owner.clone()));
         // Task is activity-bound, not identity: a fresh event replaces it
         // (idle clears it back to "—"); only capability fields persist.
         let task = param_string("task");
@@ -1124,15 +1192,21 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             agent_id: agent_id.clone(),
             kind: kind.clone(),
             status,
-            mode,
+            permission_posture,
             pane,
             agent_pid,
             agent_process_start,
+            runtime_owner,
             worktree_path,
             worktree_branch,
             task,
             model,
             effort,
+            context_pct,
+            total_tokens,
+            todo_done,
+            todo_total,
+            last_event_pulse,
             last_seen: event.timestamp,
             last_activity: event.timestamp,
         };
@@ -1165,34 +1239,10 @@ pub fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
         carryover.agents,
     );
     snapshot.display_name = display_name_for(paths);
-    snapshot.drop_dead_agents_with(agent_process_alive);
     Ok(snapshot)
 }
 
-#[cfg(target_os = "linux")]
-fn agent_process_alive(pid: u32, expected_start: Option<&str>) -> bool {
-    let stat = match fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Ok(stat) => stat,
-        Err(_) => return false,
-    };
-    match expected_start {
-        Some(expected) => linux_process_start_from_stat(&stat) == Some(expected),
-        None => true,
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn agent_process_alive(_pid: u32, _expected_start: Option<&str>) -> bool {
-    true
-}
-
-#[cfg(target_os = "linux")]
-fn linux_process_start_from_stat(stat: &str) -> Option<&str> {
-    let after_comm = stat.rsplit_once(") ")?.1;
-    after_comm.split_whitespace().nth(19)
-}
-
-fn display_name_for(paths: &StatePaths) -> String {
+pub(crate) fn display_name_for(paths: &StatePaths) -> String {
     workspace_record::read(&paths.workspace_record)
         .ok()
         .and_then(|record| {
@@ -1217,7 +1267,7 @@ mod tests {
         kind: &str,
         id: &str,
         status: AgentStatus,
-        mode: AgentMode,
+        posture: PermissionPosture,
         last_seen: i64,
     ) -> AgentState {
         let timestamp = Timestamp::from_second(last_seen).unwrap();
@@ -1225,15 +1275,21 @@ mod tests {
             agent_id: id.into(),
             kind: kind.into(),
             status,
-            mode,
+            permission_posture: posture,
             pane: None,
             agent_pid: None,
             agent_process_start: None,
+            runtime_owner: None,
             worktree_path: None,
             worktree_branch: None,
             task: None,
             model: None,
             effort: None,
+            context_pct: None,
+            total_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            last_event_pulse: 0,
             last_seen: timestamp,
             last_activity: timestamp,
         }
@@ -1376,7 +1432,7 @@ mod tests {
             "claude",
             "agent-1",
             AgentStatus::Idle,
-            AgentMode::Interactive,
+            PermissionPosture::Default,
             1_000,
         );
         older.worktree_branch = Some("main".into());
@@ -1384,7 +1440,7 @@ mod tests {
             "claude",
             "agent-1",
             AgentStatus::Running,
-            AgentMode::Auto,
+            PermissionPosture::Auto,
             2_000,
         );
         newer.worktree_branch = Some("feature".into());
@@ -1401,14 +1457,14 @@ mod tests {
             "claude",
             "agent-1",
             AgentStatus::Idle,
-            AgentMode::Interactive,
+            PermissionPosture::Default,
             1_000,
         );
         let only_live = agent(
             "codex",
             "agent-2",
             AgentStatus::Running,
-            AgentMode::Plan,
+            PermissionPosture::Default,
             2_000,
         );
         let merged = merge_agent_rollups(
@@ -1416,6 +1472,37 @@ mod tests {
             std::slice::from_ref(&only_live),
         );
         assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn carryover_session_end_tombstones_older_agent_state() {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let carried = agent(
+            "claude",
+            "agent-1",
+            AgentStatus::Idle,
+            PermissionPosture::Default,
+            1_000,
+        );
+        let ended = EventEnvelope::new(
+            workspace,
+            "session",
+            "claude",
+            "agent-hook",
+            "agent.lifecycle",
+            serde_json::json!({
+                "event_name": "SessionEnd",
+                "agent_id": "agent-1",
+                "status": "idle",
+            }),
+        );
+
+        let merged = agent_rollup_with_carryover(&[ended], vec![carried]);
+
+        assert!(
+            merged.is_empty(),
+            "active-log SessionEnd must tombstone older carryover state"
+        );
     }
 
     #[test]
@@ -1434,7 +1521,7 @@ mod tests {
                     "claude",
                     "agent-1",
                     AgentStatus::Success,
-                    AgentMode::Interactive,
+                    PermissionPosture::Default,
                     3_000,
                 );
                 agent.worktree_branch = Some("main".into());
@@ -1459,22 +1546,22 @@ mod tests {
                 params,
             )
         };
-        // SessionStart establishes the capability line and a bypass pill.
+        // SessionStart establishes the capability line and a yolo posture pill.
         let start = lifecycle(serde_json::json!({
             "event_name": "SessionStart",
             "agent_id": "sess-1",
             "status": "idle",
-            "mode": "bypass",
+            "permission_posture": "yolo",
             "model": "GPT-5.5",
             "effort": "high",
             "worktree_branch": "main",
         }));
-        // A prompt-submit moves the agent to running but reports no mode/model.
+        // A prompt-submit moves the agent to running but reports no posture/model.
         let prompt = lifecycle(serde_json::json!({
             "event_name": "UserPromptSubmit",
             "agent_id": "sess-1",
             "status": "running",
-            "mode": serde_json::Value::Null,
+            "permission_posture": serde_json::Value::Null,
             "task": "fix auth flow",
             "worktree_path": "/tmp/hook-subprocess-cwd",
             "worktree_branch": "wrong-branch",
@@ -1485,11 +1572,86 @@ mod tests {
         let agent = &agents[0];
         assert_eq!(agent.status, AgentStatus::Running);
         assert_eq!(agent.task.as_deref(), Some("fix auth flow"));
-        // Capability and the security-relevant bypass pill survive the prompt.
-        assert_eq!(agent.mode, AgentMode::Bypass);
+        // Capability and the security-relevant yolo posture survive the prompt.
+        assert_eq!(agent.permission_posture, PermissionPosture::Yolo);
         assert_eq!(agent.model.as_deref(), Some("GPT-5.5"));
         assert_eq!(agent.effort.as_deref(), Some("high"));
         assert_eq!(agent.worktree_branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn lifecycle_carries_enrichment_forward_and_advances_pulse_per_event() {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let lifecycle = |params: serde_json::Value| {
+            EventEnvelope::new(
+                workspace.clone(),
+                "session",
+                "claude",
+                "agent-hook",
+                "agent.lifecycle",
+                params,
+            )
+        };
+        let start = lifecycle(serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "sess-1",
+            "status": "idle",
+            "permission_posture": "default",
+            "context_pct": 38,
+            "total_tokens": 12_400,
+            "todo_done": 3,
+            "todo_total": 5,
+        }));
+        let prompt = lifecycle(serde_json::json!({
+            "event_name": "UserPromptSubmit",
+            "agent_id": "sess-1",
+            "status": "running",
+            "task": "fix auth flow",
+        }));
+
+        let agents = reduce_agent_states(&[start, prompt]);
+        assert_eq!(agents.len(), 1);
+        let agent = &agents[0];
+        assert_eq!(agent.context_pct, Some(38));
+        assert_eq!(agent.total_tokens, Some(12_400));
+        assert_eq!(agent.todo_done, Some(3));
+        assert_eq!(agent.todo_total, Some(5));
+        assert_eq!(
+            agent.last_event_pulse, 2,
+            "pulse advances only when lifecycle events are reduced"
+        );
+    }
+
+    /// Honesty contract for the event-pulse animation: the pulse counter is
+    /// a function of *observed* lifecycle events alone — never wall-clock.
+    /// Re-reducing the same event slice must produce the same counter, so a
+    /// silent agent's pulse glyph freezes and a wedged agent never looks busy.
+    #[test]
+    fn event_pulse_freezes_when_no_lifecycle_events_arrive() {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let start = EventEnvelope::new(
+            workspace,
+            "session",
+            "claude",
+            "agent-hook",
+            "agent.lifecycle",
+            serde_json::json!({
+                "event_name": "SessionStart",
+                "agent_id": "sess-1",
+                "status": "idle",
+            }),
+        );
+
+        let first = reduce_agent_states(std::slice::from_ref(&start));
+        let second = reduce_agent_states(std::slice::from_ref(&start));
+        let third = reduce_agent_states(std::slice::from_ref(&start));
+
+        assert_eq!(first[0].last_event_pulse, 1);
+        assert_eq!(
+            first[0].last_event_pulse, second[0].last_event_pulse,
+            "no new event must not advance the pulse"
+        );
+        assert_eq!(second[0].last_event_pulse, third[0].last_event_pulse);
     }
 
     #[test]
@@ -1513,7 +1675,7 @@ mod tests {
             "codex",
             "sess-1",
             AgentStatus::Running,
-            AgentMode::Interactive,
+            PermissionPosture::Default,
             1_000,
         );
         codex.worktree_path = Some("/repo/main".to_owned());
@@ -1536,7 +1698,7 @@ mod tests {
             "codex",
             "sess-1",
             AgentStatus::Running,
-            AgentMode::Interactive,
+            PermissionPosture::Default,
             1_000,
         );
         codex.worktree_path = Some("/repo/main".to_owned());
@@ -1560,7 +1722,7 @@ mod tests {
             "codex",
             "sess-1",
             AgentStatus::Running,
-            AgentMode::Interactive,
+            PermissionPosture::Default,
             1_000,
         );
         codex.worktree_path = Some("/repo/main".to_owned());
@@ -1643,7 +1805,7 @@ mod tests {
             "claude",
             "live-claude",
             AgentStatus::Idle,
-            AgentMode::Interactive,
+            PermissionPosture::Default,
             1_000,
         );
         session.worktree_path = Some("/repo/main".to_owned());
@@ -1682,7 +1844,7 @@ mod tests {
             "codex",
             "sess-codex",
             AgentStatus::Idle,
-            AgentMode::Bypass,
+            PermissionPosture::Yolo,
             2_000,
         );
         codex.worktree_path = Some("/repo/main".to_owned());
@@ -1725,7 +1887,7 @@ mod tests {
             "claude",
             "stale-claude",
             AgentStatus::Idle,
-            AgentMode::Interactive,
+            PermissionPosture::Default,
             1_000,
         );
         claude.worktree_path = Some("/repo/main".to_owned());
@@ -1743,42 +1905,123 @@ mod tests {
         assert!(snapshot.worktree_groups[0].status_counts.is_empty());
     }
 
+    /// When the ledger holds multiple codex agents claiming the same worktree
+    /// but only one codex pane is live, the most-recently-active agent binds
+    /// to the pane and renders with full enrichment; the older ledger ghost is
+    /// dropped from the worktree group rather than blocking the match.
     #[test]
-    fn one_codex_pane_does_not_choose_among_multiple_old_codex_agents() {
+    fn one_codex_pane_binds_most_recent_among_multiple_old_codex_agents() {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut first = agent(
+        let mut older = agent(
             "codex",
             "old-1",
             AgentStatus::Idle,
-            AgentMode::Bypass,
+            PermissionPosture::Yolo,
             1_000,
         );
-        first.worktree_path = Some("/repo/main".to_owned());
-        first.model = Some("gpt-5.5".to_owned());
-        let mut second = agent(
+        older.worktree_path = Some("/repo/main".to_owned());
+        older.model = Some("gpt-5.5".to_owned());
+        let mut newer = agent(
             "codex",
             "old-2",
             AgentStatus::Idle,
-            AgentMode::Bypass,
+            PermissionPosture::Yolo,
             1_100,
         );
-        second.worktree_path = Some("/repo/main".to_owned());
-        second.model = Some("gpt-5.5".to_owned());
+        newer.worktree_path = Some("/repo/main".to_owned());
+        newer.model = Some("gpt-5.5".to_owned());
 
         let snapshot = SidebarSnapshot::build_with_carryover(
             workspace,
             Vec::new(),
             Vec::new(),
-            vec![first, second],
+            vec![older, newer],
         )
         .with_live_panes(vec![pane("%1", "node /usr/bin/codex", "/repo/main")], None);
 
         assert_eq!(snapshot.worktree_groups.len(), 1);
         let rows = &snapshot.worktree_groups[0].rows;
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+        assert_eq!(rows.len(), 1, "older ghost must not render its own row");
+        assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
         assert_eq!(rows[0].name, "codex");
-        assert_eq!(rows[0].status, None);
+        assert_eq!(rows[0].id, "old-2", "most-recent agent owns the pane");
+        assert_eq!(rows[0].status, Some(AgentStatus::Idle));
+    }
+
+    /// User's reported scenario: ledger carries a pile of stale claude
+    /// observations from killed sessions (no SessionEnd ever fired), all
+    /// claiming the same worktree path. A fresh claude pane lands. The fresh
+    /// agent must still bind to its pane — stale count does not block live
+    /// presence.
+    #[test]
+    fn live_claude_pane_binds_despite_pile_of_stale_ledger_ghosts() {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let stale_a = {
+            let mut a = agent(
+                "claude",
+                "stale-a",
+                AgentStatus::Idle,
+                PermissionPosture::Default,
+                1_000,
+            );
+            a.worktree_path = Some("/repo/main".to_owned());
+            a
+        };
+        let stale_b = {
+            let mut a = agent(
+                "claude",
+                "stale-b",
+                AgentStatus::Idle,
+                PermissionPosture::Default,
+                1_001,
+            );
+            a.worktree_path = Some("/repo/main".to_owned());
+            a
+        };
+        let stale_c = {
+            let mut a = agent(
+                "claude",
+                "stale-c",
+                AgentStatus::Idle,
+                PermissionPosture::Default,
+                1_002,
+            );
+            a.worktree_path = Some("/repo/main".to_owned());
+            a
+        };
+        let live = {
+            let mut a = agent(
+                "claude",
+                "live",
+                AgentStatus::Running,
+                PermissionPosture::Auto,
+                i64::from(u32::MAX),
+            );
+            a.worktree_path = Some("/repo/main".to_owned());
+            a.last_event_pulse = 7;
+            a
+        };
+
+        let snapshot = SidebarSnapshot::build_with_carryover(
+            workspace,
+            Vec::new(),
+            Vec::new(),
+            vec![stale_a, stale_b, stale_c, live],
+        )
+        .with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
+
+        let rows = &snapshot.worktree_groups[0].rows;
+        let agent_rows: Vec<_> = rows
+            .iter()
+            .filter(|r| r.row_kind == SidebarRowKind::Agent)
+            .collect();
+        assert_eq!(agent_rows.len(), 1, "only the live claude renders");
+        assert_eq!(agent_rows[0].id, "live");
+        assert_eq!(agent_rows[0].last_event_pulse, 7);
+        assert_eq!(
+            agent_rows[0].permission_posture,
+            Some(PermissionPosture::Auto)
+        );
     }
 
     #[test]
@@ -1815,7 +2058,7 @@ mod tests {
                     "codex",
                     &format!("sess-{i}"),
                     AgentStatus::Running,
-                    AgentMode::Interactive,
+                    PermissionPosture::Default,
                     1_000 + i,
                 );
                 agent.worktree_path = Some("/repo/main".to_owned());
@@ -1826,7 +2069,7 @@ mod tests {
             "claude",
             "failed",
             AgentStatus::Failed,
-            AgentMode::Interactive,
+            PermissionPosture::Default,
             2_000,
         );
         failed.worktree_path = Some("/repo/main".to_owned());
@@ -1854,7 +2097,7 @@ mod tests {
                     "codex",
                     &format!("sess-{i}"),
                     AgentStatus::Running,
-                    AgentMode::Interactive,
+                    PermissionPosture::Default,
                     1_000 + i,
                 );
                 agent.worktree_path = Some("/repo/main".to_owned());
@@ -1895,7 +2138,7 @@ mod tests {
             "codex",
             "sess-1",
             AgentStatus::Running,
-            AgentMode::Interactive,
+            PermissionPosture::Default,
             1_000,
         );
         codex.agent_pid = Some(424_242);

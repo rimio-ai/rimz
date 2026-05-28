@@ -9,11 +9,13 @@
 
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
+use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use fs4::FileExt;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, WorkspaceId};
@@ -37,7 +39,7 @@ macro_rules! require_zellij {
 /// kept alive (and silently drained) to avoid SIGHUP'ing the session.
 struct ZellijSession {
     name: String,
-    _serial: MutexGuard<'static, ()>,
+    _serial: ZellijTestGuard,
     _master: Box<dyn portable_pty::MasterPty + Send>,
     _child: Box<dyn portable_pty::Child + Send + Sync>,
     _reader_thread: Option<std::thread::JoinHandle<()>>,
@@ -89,9 +91,35 @@ impl ZellijSession {
     }
 }
 
-fn zellij_test_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+struct ZellijTestLock;
+
+struct ZellijTestGuard {
+    file: File,
+}
+
+impl ZellijTestLock {
+    fn lock(&self) -> std::io::Result<ZellijTestGuard> {
+        let path = std::env::temp_dir().join("rimz-zellij-integration.lock");
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(path)?;
+        file.lock()?;
+        Ok(ZellijTestGuard { file })
+    }
+}
+
+impl Drop for ZellijTestGuard {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
+fn zellij_test_lock() -> &'static ZellijTestLock {
+    static LOCK: OnceLock<ZellijTestLock> = OnceLock::new();
+    LOCK.get_or_init(|| ZellijTestLock)
 }
 
 impl Drop for ZellijSession {

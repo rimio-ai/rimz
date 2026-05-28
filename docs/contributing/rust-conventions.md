@@ -126,7 +126,7 @@ impl FeedStatus {
 
 The CAS rules from [ledger.md](../internals/ledger.md) — first valid writer wins — live at the file boundary (`ledger/feed_store.rs`), not inside the status enum. The enum carries the *vocabulary*; the boundary carries the *rule*.
 
-`AgentStatus`, `AgentMode`, surfaces, resolution methods — same shape.
+`AgentStatus`, `PermissionPosture`, surfaces, resolution methods — same shape.
 
 ## Durable-state handle pattern
 

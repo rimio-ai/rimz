@@ -547,7 +547,9 @@ fn handle_mouse_click(
     snapshot: &SidebarSnapshot,
     status: &FetchStatus,
 ) -> InputOutcome {
-    if let Some(index) = row_index_at_screen_position(snapshot, status, column, row) {
+    if let Some(index) =
+        row_index_at_screen_position(snapshot, status, ui.selected_index, column, row)
+    {
         ui.selected_index = index;
         return InputOutcome::focus(ui.selected_index);
     }
@@ -583,6 +585,7 @@ fn sync_selection_to_focused_pane(
 fn row_index_at_screen_position(
     snapshot: &SidebarSnapshot,
     status: &FetchStatus,
+    selected_index: usize,
     column: u16,
     row: u16,
 ) -> Option<usize> {
@@ -592,12 +595,13 @@ fn row_index_at_screen_position(
         return None;
     }
     let target = usize::from(row - 1);
-    row_index_at_content_line(snapshot, status, target)
+    row_index_at_content_line(snapshot, status, selected_index, target)
 }
 
 fn row_index_at_content_line(
     snapshot: &SidebarSnapshot,
     status: &FetchStatus,
+    selected_index: usize,
     target: usize,
 ) -> Option<usize> {
     let mut line = 0_usize;
@@ -654,7 +658,8 @@ fn row_index_at_content_line(
             }
             line += 1;
 
-            if row.row_kind == rimz::SidebarRowKind::Agent && row_has_capability_line(row) {
+            let selected = row_index == selected_index;
+            for _ in 0..row_extra_line_count(row, selected) {
                 if target == line {
                     return Some(row_index);
                 }
@@ -687,17 +692,32 @@ fn has_attention_line(snapshot: &SidebarSnapshot) -> bool {
         })
 }
 
+fn row_extra_line_count(row: &rimz::SidebarRow, selected: bool) -> usize {
+    if row.row_kind != rimz::SidebarRowKind::Agent {
+        return 0;
+    }
+    let mut lines = 0;
+    if row_has_capability_line(row) {
+        lines += 1;
+    }
+    if selected && (row.context_pct.is_some() || row.todo_total.unwrap_or(0) > 0) {
+        lines += 1;
+    }
+    if selected && row.total_tokens.is_some() {
+        lines += 1;
+    }
+    lines
+}
+
 fn row_has_capability_line(row: &rimz::SidebarRow) -> bool {
     row.model.as_deref().is_some_and(|value| !value.is_empty())
         || row.effort.as_deref().is_some_and(|value| !value.is_empty())
         || matches!(
-            row.mode,
-            Some(
-                rimz::feed::AgentMode::Plan
-                    | rimz::feed::AgentMode::Auto
-                    | rimz::feed::AgentMode::Bypass
-            )
+            row.permission_posture,
+            Some(rimz::feed::PermissionPosture::Auto | rimz::feed::PermissionPosture::Yolo)
         )
+        || row.context_pct.is_some()
+        || row.todo_total.unwrap_or(0) > 0
 }
 
 fn visible_row_count(snapshot: &SidebarSnapshot) -> usize {
@@ -838,13 +858,18 @@ mod tests {
                     id: pane.pane_id.to_string(),
                     name: pane.command.clone().unwrap_or_else(|| "process".to_owned()),
                     status: None,
-                    mode: None,
+                    permission_posture: None,
                     pane: Some(pane),
                     request_id: None,
                     surface: None,
                     task: None,
                     model: None,
                     effort: None,
+                    context_pct: None,
+                    total_tokens: None,
+                    todo_done: None,
+                    todo_total: None,
+                    last_event_pulse: 0,
                     worktree_path: Some("/repo/main".to_owned()),
                     worktree_branch: Some("main".to_owned()),
                     last_activity: Timestamp::now(),
@@ -853,6 +878,8 @@ mod tests {
                 })
                 .collect(),
             hidden_count: 0,
+            diff_added: None,
+            diff_removed: None,
         }];
         snapshot
     }
@@ -864,13 +891,18 @@ mod tests {
             id: "agent-1".to_owned(),
             name: "claude".to_owned(),
             status: Some(rimz::feed::AgentStatus::Idle),
-            mode: Some(rimz::feed::AgentMode::Plan),
+            permission_posture: Some(rimz::feed::PermissionPosture::Default),
             pane: Some(pane("terminal_9", "tab_0", false)),
             request_id: None,
             surface: None,
             task: Some("inspect auth".to_owned()),
             model: Some("Opus".to_owned()),
             effort: None,
+            context_pct: None,
+            total_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            last_event_pulse: 0,
             worktree_path: Some("/repo/main".to_owned()),
             worktree_branch: Some("main".to_owned()),
             last_activity: Timestamp::now(),
@@ -887,6 +919,8 @@ mod tests {
             }],
             rows: vec![row],
             hidden_count: 0,
+            diff_added: None,
+            diff_removed: None,
         }];
         snapshot
     }
@@ -1138,21 +1172,21 @@ mod tests {
         );
 
         assert_eq!(
-            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 1, 1),
+            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 0, 1, 1),
             None,
             "the group header is not a row"
         );
         assert_eq!(
-            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 0, 2),
+            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 0, 0, 2),
             None,
             "the border is not clickable content"
         );
         assert_eq!(
-            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 1, 2),
+            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 0, 1, 2),
             Some(0)
         );
         assert_eq!(
-            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 1, 3),
+            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 0, 1, 3),
             Some(1)
         );
     }
@@ -1163,11 +1197,11 @@ mod tests {
         let snapshot = agent_snapshot(&ws);
 
         assert_eq!(
-            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 1, 2),
+            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 0, 1, 2),
             Some(0)
         );
         assert_eq!(
-            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 1, 3),
+            row_index_at_screen_position(&snapshot, &FetchStatus::Ok, 0, 1, 3),
             Some(0),
             "clicking an agent capability line routes to that agent row"
         );

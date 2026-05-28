@@ -13,6 +13,7 @@
 mod fmt;
 mod labels;
 mod sections;
+mod theme;
 
 use std::io::{self, Write};
 
@@ -27,6 +28,7 @@ use rimz::{SidebarRowKind, SidebarSnapshot};
 
 use self::fmt::elapsed_short;
 use self::sections::{attention_line, first_run_hint_lines, worktree_group_lines};
+use self::theme::Theme;
 
 #[derive(Clone, Debug, Default)]
 pub struct UiState {
@@ -120,17 +122,18 @@ fn snapshot_lines(
     ui: &UiState,
     width: usize,
 ) -> Vec<Line<'static>> {
+    let theme = Theme::from_env();
     let mut lines = Vec::new();
     if let FetchStatus::Degraded { reason, since } = status {
         let elapsed = elapsed_short(*since);
         lines.push(Line::styled(
             format!("! Sidebar degraded for {elapsed}: {reason}"),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            theme.style(Color::Red, Modifier::BOLD),
         ));
         lines.push(Line::from(""));
     }
 
-    if let Some(line) = attention_line(&snapshot.worktree_groups) {
+    if let Some(line) = attention_line(&theme, &snapshot.worktree_groups) {
         lines.push(line);
     }
     if snapshot.worktree_groups.is_empty() {
@@ -139,7 +142,7 @@ fn snapshot_lines(
         // body is a failed fetch, not an empty room, so suppress the hint.
         if matches!(status, FetchStatus::Ok) && should_show_first_run_hint(snapshot) {
             push_section_gap(&mut lines);
-            lines.extend(first_run_hint_lines(snapshot.agent_hooks_ready));
+            lines.extend(first_run_hint_lines(&theme, snapshot.agent_hooks_ready));
         }
         if matches!(status, FetchStatus::Ok) {
             lines.extend(footer_lines(snapshot, status));
@@ -154,6 +157,7 @@ fn snapshot_lines(
             lines.push(Line::from(""));
         }
         lines.extend(worktree_group_lines(
+            &theme,
             group,
             width,
             &mut row_index,
@@ -162,7 +166,7 @@ fn snapshot_lines(
     }
     if matches!(status, FetchStatus::Ok) && should_show_first_run_hint(snapshot) {
         lines.push(Line::from(""));
-        lines.extend(first_run_hint_lines(snapshot.agent_hooks_ready));
+        lines.extend(first_run_hint_lines(&theme, snapshot.agent_hooks_ready));
     }
     if ui.help_visible && matches!(status, FetchStatus::Ok) {
         lines.push(Line::from(""));
@@ -248,7 +252,7 @@ fn help_lines() -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use jiff::Timestamp;
-    use rimz::feed::{AgentMode, AgentState, AgentStatus, FeedKind, PaneRef};
+    use rimz::feed::{AgentState, AgentStatus, FeedKind, PaneRef, PermissionPosture};
     use rimz::ids::{MuxName, PaneId, ViewKind};
     use rimz::{EventEnvelope, FeedItem, FeedStatus, SidebarSnapshot, Surface, WorkspaceId};
     use serde_json::json;
@@ -310,6 +314,14 @@ mod tests {
         });
     }
 
+    #[test]
+    fn no_color_theme_suppresses_color_not_shape_modifiers() {
+        let style = Theme::fixed(true).style(Color::Red, Modifier::BOLD);
+
+        assert_eq!(style.fg, None);
+        assert!(style.add_modifier.contains(Modifier::BOLD));
+    }
+
     fn snapshot_with(items: Vec<FeedItem>, agents: Vec<AgentState>) -> SidebarSnapshot {
         let mut snapshot =
             SidebarSnapshot::build_with_carryover(fixed_workspace(), items, Vec::new(), agents);
@@ -321,7 +333,7 @@ mod tests {
         id: &str,
         kind: &str,
         status: AgentStatus,
-        mode: AgentMode,
+        permission_posture: PermissionPosture,
         worktree_path: Option<&str>,
         branch: Option<&str>,
         task: Option<&str>,
@@ -331,15 +343,21 @@ mod tests {
             agent_id: id.to_owned(),
             kind: kind.to_owned(),
             status,
-            mode,
+            permission_posture,
             pane: None,
             agent_pid: None,
             agent_process_start: None,
+            runtime_owner: None,
             worktree_path: worktree_path.map(ToOwned::to_owned),
             worktree_branch: branch.map(ToOwned::to_owned),
             task: task.map(ToOwned::to_owned),
             model: None,
             effort: None,
+            context_pct: None,
+            total_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            last_event_pulse: 0,
             last_seen: now,
             last_activity: now,
         }
@@ -386,7 +404,7 @@ mod tests {
             "codex-1",
             "codex",
             AgentStatus::Running,
-            AgentMode::Interactive,
+            PermissionPosture::Default,
             Some("/home/me/query-engine"),
             Some("main"),
             Some("add tests"),
@@ -404,12 +422,12 @@ mod tests {
     }
 
     #[test]
-    fn render_agent_capability_and_mode() {
+    fn render_agent_capability_and_posture() {
         let mut claude = agent(
             "claude-1",
             "claude",
             AgentStatus::Failed,
-            AgentMode::Bypass,
+            PermissionPosture::Yolo,
             Some("/repo/feature-migration"),
             Some("feature-migration"),
             Some("db migrate"),
@@ -420,6 +438,49 @@ mod tests {
         let snapshot = snapshot_with(Vec::new(), vec![claude]);
 
         assert_snapshot("agent_capability", snapshot_to_screen(&snapshot, 34, 12));
+    }
+
+    #[test]
+    fn render_enriched_selected_agent_card() {
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Auto,
+            Some("/repo/feature-migration"),
+            Some("feature-migration"),
+            Some("db migrate"),
+        );
+        claude.model = Some("Opus".to_owned());
+        claude.effort = Some("xhigh".to_owned());
+        claude.context_pct = Some(38);
+        claude.total_tokens = Some(12_400);
+        claude.todo_done = Some(3);
+        claude.todo_total = Some(5);
+        claude.last_event_pulse = 3;
+        let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+        snapshot.worktree_groups[0].diff_added = Some(127);
+        snapshot.worktree_groups[0].diff_removed = Some(43);
+
+        let rendered = snapshot_to_screen_with_status_and_ui(
+            &snapshot,
+            &FetchStatus::Ok,
+            &UiState {
+                selected_index: 0,
+                help_visible: false,
+            },
+            54,
+            14,
+        );
+
+        assert!(rendered.contains("+127 -43"));
+        assert!(rendered.contains("Opus"));
+        assert!(rendered.contains("auto"));
+        assert!(rendered.contains("ctx"));
+        assert!(rendered.contains("38%"));
+        assert!(rendered.contains("●●●○○ 3/5"));
+        assert!(rendered.contains("12.4k tok"));
+        assert_snapshot("enriched_selected_agent_card", rendered);
     }
 
     #[test]
@@ -585,7 +646,7 @@ mod tests {
                     &format!("codex-{i}"),
                     "codex",
                     AgentStatus::Running,
-                    AgentMode::Interactive,
+                    PermissionPosture::Default,
                     Some("/repo/main"),
                     Some("main"),
                     Some(&format!("task-{i}")),
@@ -599,6 +660,67 @@ mod tests {
         assert_snapshot(
             "group_cap_with_overflow",
             snapshot_to_screen(&snapshot, 36, 16),
+        );
+    }
+
+    /// L0 density (~24 columns): line 1 still names the row by status glyph
+    /// and clipped name, and label-less meter chrome from line 2 is dropped
+    /// when capability data is absent.
+    #[test]
+    fn render_l0_density_keeps_identity_when_narrow() {
+        let mut codex = agent(
+            "codex-1",
+            "codex",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            Some("/repo/main"),
+            Some("main"),
+            Some("compile"),
+        );
+        codex.last_activity = fixed_now() - Duration::from_secs(3);
+        let snapshot = snapshot_with(Vec::new(), vec![codex]);
+        let rendered = snapshot_to_screen(&snapshot, 24, 8);
+
+        assert!(
+            rendered.contains("▸ codex"),
+            "L0 keeps status glyph + name:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("main"),
+            "L0 keeps the worktree label:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("auto") && !rendered.contains("yolo"),
+            "default posture stays the omitted baseline:\n{rendered}"
+        );
+        assert_snapshot("l0_density_minimal_row", rendered);
+    }
+
+    /// Honesty test: the pulse glyph is a pure function of the agent's
+    /// observed event count. Re-rendering at any wall-clock time without a
+    /// new lifecycle event must produce the same pulse frame — a silent
+    /// agent freezes instead of pretending work continues.
+    #[test]
+    fn render_event_pulse_freezes_between_renders_without_events() {
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            Some("/repo/main"),
+            Some("main"),
+            Some("waiting on tools"),
+        );
+        claude.last_event_pulse = 4;
+        let snapshot = snapshot_with(Vec::new(), vec![claude]);
+        let first = snapshot_to_screen(&snapshot, 40, 8);
+        // Sleep so any timer-driven animation would tick.
+        std::thread::sleep(Duration::from_millis(50));
+        let second = snapshot_to_screen(&snapshot, 40, 8);
+
+        assert_eq!(
+            first, second,
+            "no new lifecycle event must mean no frame change",
         );
     }
 }

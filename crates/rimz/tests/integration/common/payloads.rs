@@ -14,6 +14,7 @@ use super::env::Env;
 pub fn permission_payload(tool_name: &str) -> String {
     serde_json::to_string(&json!({
         "hook_event_name": "PermissionRequest",
+        "session_id": "sess-claude-permission",
         "tool_name": tool_name,
         "tool_input": { "command": "echo hi" },
     }))
@@ -25,6 +26,7 @@ pub fn permission_payload(tool_name: &str) -> String {
 pub fn codex_permission_payload() -> String {
     serde_json::to_string(&json!({
         "hook_event_name": "PermissionRequest",
+        "session_id": "sess-codex-permission",
         "tool_name": "shell",
         "command": ["echo", "hi"],
     }))

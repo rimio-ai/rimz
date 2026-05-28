@@ -24,7 +24,7 @@ use super::{
     HookInstallPreview, HookInstallReport, HookUninstallReport, Result, choice_is_allow,
     optional_payload_string,
 };
-use crate::feed::{AgentMode, AgentStatus, FeedItem, FeedKind, Resolution};
+use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution};
 use crate::ledger::atomic;
 
 /// Claude's effective hook cap. The upstream cap is ~125s; we leave a small
@@ -160,18 +160,28 @@ impl AgentIntegration for ClaudeIntegration {
     ) -> Option<AgentLifecycleObservation> {
         // SessionStart registers the agent idle (wired in, nothing asked yet);
         // the prompt is what moves it to running. Only SessionStart establishes
-        // the mode pill — the prompt and stop carry no permission field, so they
-        // report `None` and the reducer keeps the established mode. SessionEnd
-        // records the exit so the reducer drops the agent from the rollup
-        // (mode carries no meaning on exit); `ends_session` then expires any
-        // asks the dead session left pending.
-        let (status, mode) = match event_name {
-            "SessionStart" => (AgentStatus::Idle, Some(mode_from_payload(payload))),
+        // the permission posture — the prompt and stop carry no permission
+        // field, so they report `None` and the reducer keeps the established
+        // posture. SessionEnd records the exit so the reducer drops the agent
+        // from the rollup (posture carries no meaning on exit); `ends_session`
+        // then expires any asks the dead session left pending.
+        let (status, posture) = match event_name {
+            "SessionStart" => (AgentStatus::Idle, Some(posture_from_payload(payload))),
             "UserPromptSubmit" => (AgentStatus::Running, None),
             "Stop" => (AgentStatus::Idle, None),
             "SessionEnd" => (AgentStatus::Idle, None),
             _ => return None,
         };
+        let context_pct = payload
+            .get("context_pct")
+            .or_else(|| payload.get("context_window_pct"))
+            .and_then(Value::as_u64)
+            .map(|v| v.min(100) as u8);
+        let total_tokens = payload
+            .get("total_tokens")
+            .or_else(|| payload.get("token_count"))
+            .and_then(Value::as_u64);
+        let (todo_done, todo_total) = todos_from_payload(payload);
         Some(AgentLifecycleObservation {
             agent_id: payload
                 .get("session_id")
@@ -180,12 +190,17 @@ impl AgentIntegration for ClaudeIntegration {
             status,
             agent_pid: None,
             agent_process_start: None,
-            mode,
+            runtime_owner: None,
+            permission_posture: posture,
             worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
             worktree_branch: optional_payload_string(payload, &["worktree_branch"]),
             task: optional_payload_string(payload, &["task", "prompt"]),
             model: optional_payload_string(payload, &["model"]),
             effort: optional_payload_string(payload, &["thinking_level", "effort"]),
+            context_pct,
+            total_tokens,
+            todo_done,
+            todo_total,
         })
     }
 
@@ -235,22 +250,50 @@ fn hooks_installed_at(path: &Path) -> bool {
         })
 }
 
-/// Translate a Claude payload's mode/permission hints onto the five-value
-/// mode pill. `permission_mode = "bypassPermissions"` (the value
-/// `--dangerously-skip-permissions` surfaces) maps to `Bypass`.
-fn mode_from_payload(payload: &Value) -> AgentMode {
+/// Translate a Claude payload's mode/permission hints onto the four-value
+/// permission posture pill. `permission_mode = "bypassPermissions"` (the value
+/// `--dangerously-skip-permissions` surfaces) maps to `Yolo`. Claude's `plan`
+/// mode is still default-posture — the human approves each tool call from the
+/// plan — so it folds into `Default`.
+fn posture_from_payload(payload: &Value) -> PermissionPosture {
     let raw = payload
         .get("permission_mode")
         .or_else(|| payload.get("mode"))
         .and_then(Value::as_str);
     match raw {
-        Some("bypassPermissions") | Some("bypass") => AgentMode::Bypass,
-        Some("acceptEdits") | Some("auto") => AgentMode::Auto,
-        Some("plan") => AgentMode::Plan,
-        Some("default") | Some("interactive") | Some("ask") => AgentMode::Interactive,
-        Some(_) => AgentMode::Unknown,
-        None => AgentMode::Interactive,
+        Some("bypassPermissions") | Some("bypass") => PermissionPosture::Yolo,
+        Some("acceptEdits") | Some("auto") => PermissionPosture::Auto,
+        Some("plan") | Some("default") | Some("interactive") | Some("ask") => {
+            PermissionPosture::Default
+        }
+        Some(_) => PermissionPosture::Unknown,
+        None => PermissionPosture::Default,
     }
+}
+
+/// Read a Claude `TodoWrite` payload's `tool_input.todos` (or the post-hook
+/// shape under `tool_response.todos`) into a `(done, total)` pair. Returns
+/// `(None, None)` when the payload carries no todo state — the snapshot
+/// reducer then carries the prior pair forward.
+fn todos_from_payload(payload: &Value) -> (Option<u32>, Option<u32>) {
+    let todos = ["tool_input", "tool_response", "input", "response"]
+        .into_iter()
+        .find_map(|key| payload.get(key).and_then(|v| v.get("todos")))
+        .or_else(|| payload.get("todos"))
+        .and_then(Value::as_array);
+    let Some(todos) = todos else {
+        return (None, None);
+    };
+    let total = todos.len() as u32;
+    let done = todos
+        .iter()
+        .filter(|todo| {
+            todo.get("status")
+                .and_then(Value::as_str)
+                .is_some_and(|s| matches!(s, "completed" | "done"))
+        })
+        .count() as u32;
+    (Some(done), Some(total))
 }
 
 fn claude_settings_path() -> Result<PathBuf> {
@@ -1116,7 +1159,7 @@ mod tests {
         // Wired in, nothing asked yet — idle, no task.
         assert_eq!(obs.status, AgentStatus::Idle);
         assert_eq!(obs.task, None);
-        assert_eq!(obs.mode, Some(AgentMode::Interactive));
+        assert_eq!(obs.permission_posture, Some(PermissionPosture::Default));
     }
 
     #[test]
@@ -1130,20 +1173,55 @@ mod tests {
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
         assert_eq!(obs.status, AgentStatus::Running);
         assert_eq!(obs.task.as_deref(), Some("fix auth flow"));
-        // The prompt reports no mode, so the reducer keeps the mode
-        // SessionStart established (a bypass agent stays bypass).
-        assert_eq!(obs.mode, None);
+        // The prompt reports no posture, so the reducer keeps the posture
+        // SessionStart established (a yolo agent stays yolo).
+        assert_eq!(obs.permission_posture, None);
     }
 
     #[test]
-    fn bypass_permissions_observes_bypass_mode() {
+    fn bypass_permissions_observes_yolo_posture() {
         let obs = ClaudeIntegration
             .observe_lifecycle(
                 "SessionStart",
                 &json!({ "permission_mode": "bypassPermissions" }),
             )
             .unwrap();
-        assert_eq!(obs.mode, Some(AgentMode::Bypass));
+        assert_eq!(obs.permission_posture, Some(PermissionPosture::Yolo));
+    }
+
+    #[test]
+    fn plan_mode_collapses_to_default_posture() {
+        // Plan is a workflow mode, not a permission posture — the human still
+        // approves each tool call when the plan executes. It folds into the
+        // omitted baseline so the sidebar's posture pill only flags Auto/Yolo.
+        let obs = ClaudeIntegration
+            .observe_lifecycle("SessionStart", &json!({ "permission_mode": "plan" }))
+            .unwrap();
+        assert_eq!(obs.permission_posture, Some(PermissionPosture::Default));
+    }
+
+    #[test]
+    fn todo_write_payload_extracts_progress() {
+        // Claude TodoWrite hooks expose the todo list in `tool_input.todos`;
+        // the reducer projects the count of completed items onto the row.
+        let obs = ClaudeIntegration
+            .observe_lifecycle(
+                "UserPromptSubmit",
+                &json!({
+                    "session_id": "sess-1",
+                    "tool_input": {
+                        "todos": [
+                            { "status": "completed" },
+                            { "status": "completed" },
+                            { "status": "in_progress" },
+                            { "status": "pending" },
+                        ]
+                    }
+                }),
+            )
+            .unwrap();
+        assert_eq!(obs.todo_done, Some(2));
+        assert_eq!(obs.todo_total, Some(4));
     }
 
     #[test]

@@ -54,11 +54,13 @@ Agent statuses (exactly five), highest attention first. Each maps to one glyph a
 | 4    | `idle`    | `○`   | gray / dim  |
 | 5    | `success` | `✓`   | green dim   |
 
-Agent modes (observed from the agent, not set by Rimz) render as a dim pill; `interactive` and `unknown` are omitted, `bypass` is warn-colored:
+Agent permission postures (observed from the agent, not set by Rimz) render as capability tokens; `default` and `unknown` are omitted, `auto` is dim, and `yolo` is warn-colored. Workflow words such as `plan` and `interactive` are not posture and do not render.
 
 ```text
-interactive   plan   auto   bypass   unknown
+default   auto   yolo   unknown
 ```
+
+Live enrichments use one grammar. Context-window %, todo progress, and worktree diff stats render as segmented meters or paired numeric tokens; they enrich display only and never drive a decision. A running or waiting agent may show one event-pulsed activity glyph on line 1; it advances only when a lifecycle event is observed, so silence freezes instead of pretending work continues. Color is a garnish layer over the same glyph grammar, and `NO_COLOR` keeps every shape readable.
 
 Renderer details — the two-line row anatomy, attention ranking, and the jump interaction — live in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
 

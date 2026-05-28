@@ -96,7 +96,7 @@ All `insta` snapshots — CLI stdout, `--json` event payloads, hook stdout, side
 - Panes group by their cwd's worktree; a pane outside every worktree lands in the `workspace` catch-all.
 - The sidebar's own pane is excluded from the roster.
 - Liveness: an agent whose pane reverts to a shell drops its overlay back to a process row; a dead captured pid suppresses the overlay; a closed pane drops the row entirely.
-- Pending script attention produces a row from the ledger; pending agent attention renders only with a live corroborating agent pane, so a stale agent prompt cannot outlive its pane.
+- Pending script attention produces a row only while the owning `feed ask` waiter is live; pending agent attention renders only with a live owner and corroborating agent pane, so stale prompts cannot outlive their process.
 - Process rows sort below every agent row and are part of the cap-truncatable tail.
 
 ## End-user journey suite

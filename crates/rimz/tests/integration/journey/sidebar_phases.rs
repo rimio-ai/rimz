@@ -7,8 +7,9 @@
 //! smokes live in `journey/deep.rs`.
 
 use rimz::EventEnvelope;
-use rimz::feed::{FeedItem, FeedKind, Surface};
+use rimz::feed::{FeedItem, FeedKind, RuntimeOwnerKind, Surface};
 use rimz::ids::MuxName;
+use rimz::ledger::runtime::current_process_owner;
 use serde_json::json;
 
 use super::{
@@ -295,10 +296,10 @@ fn phase4_waiting_rises_within_worktree() {
     if env.skip_if_sandboxed() {
         return;
     }
-    // A waiting ask and a calm agent in the same worktree, both produced
-    // through public user surfaces where possible. `feed ask --no-block`
-    // attaches the current worktree, so the agent reports that same path.
-    env.feed_ask_no_block("approve deploy?", &["yes", "no"]);
+    // A waiting ask and a calm agent in the same worktree. The short
+    // `feed ask --no-block` process is audit-only under runtime expel rules,
+    // so this fixture keeps the script owner live for the rendered scenario.
+    push_worktree_script_ask_fixture(&env, "approve deploy?");
     let worktree = env.project_root.display().to_string();
 
     let room = RoomHarness::launch(&env, MuxName::Tmux);
@@ -719,7 +720,7 @@ fn target_full_fleet_tallies_script_gate_and_never_caps_attention_rows() {
 /// narrow fixture setup for the workspace-level script state the CLI cannot
 /// produce yet.
 fn push_workspace_script_ask_fixture(env: &Env, title: &str) {
-    let item = FeedItem::new(
+    let mut item = FeedItem::new(
         env.workspace_id.clone(),
         Surface::Script,
         FeedKind::Question,
@@ -727,9 +728,32 @@ fn push_workspace_script_ask_fixture(env: &Env, title: &str) {
         "deploy",
         "script",
     );
+    item.runtime_owner = Some(current_process_owner(
+        RuntimeOwnerKind::Script,
+        item.request_id.to_string(),
+    ));
     env.ledger()
         .push_feed_item(&item, "rimz-journey")
         .expect("push script ask");
+}
+
+fn push_worktree_script_ask_fixture(env: &Env, title: &str) {
+    let mut item = FeedItem::new(
+        env.workspace_id.clone(),
+        Surface::Script,
+        FeedKind::Question,
+        title,
+        "deploy",
+        "script",
+    );
+    item.worktree_path = Some(env.project_root.display().to_string());
+    item.runtime_owner = Some(current_process_owner(
+        RuntimeOwnerKind::Script,
+        item.request_id.to_string(),
+    ));
+    env.ledger()
+        .push_feed_item(&item, "rimz-journey")
+        .expect("push worktree script ask");
 }
 
 fn push_stale_agent_attention_fixture(env: &Env, source: &str, session_id: &str) {

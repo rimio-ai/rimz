@@ -27,7 +27,7 @@ Decision renderers are agent-specific. Do not reuse one agent's JSON shape for a
 
 Adapters wire two kinds of hooks. The distinction is whether the hook can hold the agent open while Rimz waits for an answer.
 
-**Lifecycle hooks — fast, non-blocking.** Drive agent status, mode pills, notifications, and the activity history in `rimz feed list`.
+**Lifecycle hooks — fast, non-blocking.** Drive agent status, permission posture, notifications, enrichment fields, and the audit history in `rimz feed list --audit`.
 
 ```text
 SessionStart   UserPromptSubmit   PreToolUse   PostToolUse
@@ -44,11 +44,11 @@ user question
 
 Blocking decision hooks must be **sync**. Installing one as async is a hard error — the agent would ignore the decision printed on stdout. The installer rejects async configs explicitly.
 
-## Status and mode
+## Status and permission posture
 
-The agent owns the status and mode vocabulary; Rimz observes and renders. The five-value status set and the five-value mode pill are defined in [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape).
+The agent owns status and permission hints; Rimz observes and renders. The five-value status set and the permission posture vocabulary (`default` / `auto` / `yolo` / `unknown`) are defined in [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape).
 
-Bypass is observed from the agent's own flag (`claude --dangerously-skip-permissions`, `codex --ask-for-approval never`). Rimz does not own unattended mode.
+`yolo` is observed from the agent's own bypass flag (`claude --dangerously-skip-permissions`, `codex --ask-for-approval never`). Rimz does not own unattended mode. Workflow words such as `plan` and `interactive` fold into `default` because they are not permission posture.
 
 ## Liveness
 
@@ -63,7 +63,7 @@ rimz hooks install claude --telemetry      # add high-frequency hooks
 rimz hooks install claude                  # default; install lifecycle + feed only
 ```
 
-Telemetry adds prompt-submit, pre-tool, and post-tool hooks that fire on every tool call. They're useful for activity-history (`rimz feed list`) depth and post-hoc audit, but they carry tool inputs, prompts, file paths, and outputs into the ledger. Gate them against `[privacy] payload_mode`:
+Telemetry adds prompt-submit, pre-tool, and post-tool hooks that fire on every tool call. They're useful for activity-history (`rimz feed list --audit`) depth and post-hoc audit, but they carry tool inputs, prompts, file paths, and outputs into the ledger. Gate them against `[privacy] payload_mode`:
 
 - `payload_mode = "metadata"` — strips inputs, prompts, args, errors. Smallest footprint.
 - `payload_mode = "redacted"` — keeps bounded payloads with built-in redaction. Default.

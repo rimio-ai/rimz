@@ -5,8 +5,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
-use super::GlobalFlags;
+use super::{GlobalFlags, open_ledger};
 use rimz::ledger::gc;
+use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
 pub struct GcArgs {
@@ -15,15 +16,25 @@ pub struct GcArgs {
     older_than: Duration,
 }
 
-pub fn run(args: GcArgs, _globals: &GlobalFlags) -> Result<()> {
+pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     if args.older_than.is_zero() {
         bail!("--older-than must be greater than zero");
     }
     let report = gc::collect_runtime(args.older_than).context("collecting runtime garbage")?;
+    let abandoned = match WorkspaceResolver::resolve(".", globals.root.clone()) {
+        Ok(workspace) => {
+            let ledger = open_ledger(&workspace)?;
+            ledger
+                .abandon_dead_owned_items(&workspace.session_name)
+                .context("abandoning dead owned feed items")?
+        }
+        Err(_) => 0,
+    };
     #[expect(clippy::print_stdout, reason = "user-facing maintenance report")]
     {
         println!("gc complete");
         println!("  older than    : {}s", args.older_than.as_secs());
+        println!("  feed abandoned: {abandoned}");
         println!("  runtime roots : {}", report.runtime_roots_scanned);
         println!("  heartbeats    : {}", report.heartbeat_files_removed);
         println!("  sidebar socks : {}", report.sidebar_sockets_removed);

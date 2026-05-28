@@ -13,7 +13,7 @@ rimz [--attach|--no-attach|--print] [PATH]
 rimz start [--attach|--no-attach|--print] [PATH]
 rimz attach [--attach|--no-attach|--print] [SESSION]
 rimz list [--json]                # show running and known workspaces
-rimz doctor                       # diagnose backend, hooks, trust, resolvers
+rimz doctor [--audit]             # diagnose backend, hooks, trust, resolvers
 rimz trust [status|grant|revoke]  # manage the project's executable-surface trust
 ```
 
@@ -29,11 +29,13 @@ rimz trust [status|grant|revoke]  # manage the project's executable-surface trus
 rimz event emit --kind <kind> [--title <s>] [--body <s>] [--json <payload>]
 rimz feed push --kind <kind> --title <s> [--body <s>]
 rimz feed ask  --title <s> --options <a,b,c> [--timeout <duration>]
-rimz feed list [--json]
+rimz feed list [--json] [--audit]
 rimz feed show <request-id> [--json]
 ```
 
-`event emit` is fire-and-forget telemetry that lands in the ledger (read it back with `rimz feed list`). `feed push` posts a richer item that surfaces in the sidebar without blocking. `feed ask` blocks the script until somebody answers or the timeout fires; the question lands in the sidebar with declared options as answer buttons.
+`event emit` is fire-and-forget telemetry that lands in the ledger. `feed push` posts a richer audit item without blocking. `feed ask` blocks the script until somebody answers or the timeout fires; while that waiting process is alive, the question lands in runtime views and the sidebar with declared options as answer buttons.
+
+Default `feed list` is a runtime view: it expels records whose recorded owner process is gone, reused, or missing. `feed list --audit` shows durable feed history exactly as written. `feed show <request-id>` is always an exact audit lookup.
 
 Common flow — a deploy gate:
 
@@ -108,7 +110,7 @@ rimz trust [status|grant|revoke] [--json]      # executable-surface trust
 rimz gc          [--older-than <duration>]
 ```
 
-`workspace migrate` moves the state directory from the workspace ID derived from `<old-root>` to the ID derived from `<new-root>`, then rewrites feed items, event envelopes, snapshots, and `workspace.json` to the new ID. `workspace prune` only removes ledgers with a `workspace.json` record whose project root no longer exists; ledgers without readable metadata are reported and kept. `workspace rotate-events` archives the active event log into `events.log.archive/` when it exceeds `--max-bytes` (default `64MiB`), folds the agent rollup into `agents.carryover.json` so it survives the rename, and removes archives older than `--archive-older-than` when provided. `trust status` re-hashes the project's executable surface on every call and reports `trusted`, `stale`, `untrusted`, or `no_config`; `trust grant` pins the current hash and `trust revoke` drops the record. Full contract in [trust.md](../internals/trust.md). `gc` removes stale runtime liveness hints only — stale resolver/sidebar heartbeats and stale sidebar wakeup sockets — and leaves per-request feed sockets intact.
+`workspace migrate` moves the state directory from the workspace ID derived from `<old-root>` to the ID derived from `<new-root>`, then rewrites feed items, event envelopes, snapshots, and `workspace.json` to the new ID. `workspace prune` only removes ledgers with a `workspace.json` record whose project root no longer exists; ledgers without readable metadata are reported and kept. `workspace rotate-events` archives the active event log into `events.log.archive/` when it exceeds `--max-bytes` (default `64MiB`), folds the agent rollup into `agents.carryover.json` so it survives the rename, and removes archives older than `--archive-older-than` when provided. `trust status` re-hashes the project's executable surface on every call and reports `trusted`, `stale`, `untrusted`, or `no_config`; `trust grant` pins the current hash and `trust revoke` drops the record. Full contract in [trust.md](../internals/trust.md). `gc` removes stale runtime liveness hints — stale resolver/sidebar heartbeats and stale sidebar wakeup sockets — and abandons pending feed items whose recorded owner process has exited.
 
 `--telemetry` is opt-in for every agent integration. It adds high-frequency hooks (prompt submit, pre/post tool) and is gated by `[privacy] payload_mode`. See [agent.md](../internals/agent.md).
 

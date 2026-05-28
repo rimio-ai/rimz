@@ -1,10 +1,10 @@
 //! `rimz doctor` agent rollup integration tests. Inject an `agent.lifecycle`
 //! event directly into the ledger, then run the binary and assert the
-//! rendered mode pill matches the closure of the unattended-runs audit story
+//! rendered permission posture matches the closure of the unattended-runs audit story
 //! in `docs/guide/product.md`.
 
 use rimz::agents::AgentLifecycleObservation;
-use rimz::feed::{AgentMode, AgentStatus};
+use rimz::feed::{AgentStatus, PermissionPosture};
 use rimz::ids::{MuxName, ResolverId, SidebarInstanceId};
 use rimz::schema::event::EventEnvelope;
 use rimz::schema::heartbeat::{ResolverHeartbeat, SidebarHeartbeat};
@@ -16,20 +16,25 @@ fn inject_lifecycle(
     agent_kind: &str,
     agent_id: &str,
     status: AgentStatus,
-    mode: AgentMode,
+    posture: PermissionPosture,
     branch: Option<&str>,
 ) {
     let obs = AgentLifecycleObservation {
         agent_id: Some(agent_id.to_owned()),
         status,
-        mode: Some(mode),
+        permission_posture: Some(posture),
         agent_pid: None,
         agent_process_start: None,
+        runtime_owner: None,
         worktree_path: Some(env.project_root.display().to_string()),
         worktree_branch: branch.map(ToOwned::to_owned),
         task: None,
         model: None,
         effort: None,
+        context_pct: None,
+        total_tokens: None,
+        todo_done: None,
+        todo_total: None,
     };
     let envelope = EventEnvelope::agent_lifecycle(
         env.workspace_id.clone(),
@@ -44,7 +49,11 @@ fn inject_lifecycle(
 #[test]
 fn doctor_reports_no_agents_when_none_observed() {
     let env = Env::new();
-    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    let output = env
+        .rimz()
+        .args(["doctor", "--audit"])
+        .output()
+        .expect("spawn doctor");
     assert!(
         output.status.success(),
         "doctor failed: {}",
@@ -65,7 +74,7 @@ fn doctor_renders_mode_pill_per_agent() {
         "claude",
         "claude-session-abc",
         AgentStatus::Waiting,
-        AgentMode::Bypass,
+        PermissionPosture::Yolo,
         Some("main"),
     );
     inject_lifecycle(
@@ -73,11 +82,15 @@ fn doctor_renders_mode_pill_per_agent() {
         "codex",
         "codex-session-xyz",
         AgentStatus::Running,
-        AgentMode::Auto,
+        PermissionPosture::Auto,
         Some("feature-migration"),
     );
 
-    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    let output = env
+        .rimz()
+        .args(["doctor", "--audit"])
+        .output()
+        .expect("spawn doctor");
     assert!(
         output.status.success(),
         "doctor failed: {}",
@@ -95,11 +108,11 @@ fn doctor_renders_mode_pill_per_agent() {
         "missing codex group header in:\n{stdout}"
     );
 
-    // Per-agent row: agent id + worktree + status + mode pill.
+    // Per-agent row: agent id + worktree + status + posture pill.
     assert!(stdout.contains("claude-session-abc"));
     assert!(stdout.contains("main"));
     assert!(stdout.contains("waiting"));
-    assert!(stdout.contains("bypass"));
+    assert!(stdout.contains("yolo"));
 
     assert!(stdout.contains("codex-session-xyz"));
     assert!(stdout.contains("feature-migration"));
@@ -108,14 +121,14 @@ fn doctor_renders_mode_pill_per_agent() {
 }
 
 #[test]
-fn doctor_keeps_latest_mode_per_agent_id() {
+fn doctor_keeps_latest_posture_per_agent_id() {
     let env = Env::new();
     inject_lifecycle(
         &env,
         "claude",
         "claude-session-abc",
         AgentStatus::Idle,
-        AgentMode::Interactive,
+        PermissionPosture::Default,
         Some("main"),
     );
     inject_lifecycle(
@@ -123,21 +136,25 @@ fn doctor_keeps_latest_mode_per_agent_id() {
         "claude",
         "claude-session-abc",
         AgentStatus::Waiting,
-        AgentMode::Bypass,
+        PermissionPosture::Yolo,
         Some("main"),
     );
 
-    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    let output = env
+        .rimz()
+        .args(["doctor", "--audit"])
+        .output()
+        .expect("spawn doctor");
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("utf8");
 
     assert!(
-        stdout.contains("waiting") && stdout.contains("bypass"),
+        stdout.contains("waiting") && stdout.contains("yolo"),
         "rollup should reflect the latest observation, got:\n{stdout}"
     );
     assert!(
-        !stdout.contains("interactive"),
-        "old mode pill should be replaced, got:\n{stdout}"
+        !stdout.contains("default"),
+        "old posture should be replaced, got:\n{stdout}"
     );
 }
 

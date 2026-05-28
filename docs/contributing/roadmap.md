@@ -22,7 +22,7 @@ At M1, scripts and remote workflows work without any agent integrations.
 
 ## M2 — Codex adapter
 
-Internal proof of the agent integration interface. Lifecycle hooks, `PermissionRequest` default and bridge paths, neutral and decision goldens, mode observation, both backends.
+Internal proof of the agent integration interface. Lifecycle hooks, `PermissionRequest` default and bridge paths, neutral and decision goldens, permission-posture observation, both backends.
 
 Codex alone is not the public agent-coding launch bar.
 
@@ -49,7 +49,7 @@ OS notifications, sounds, user/project notification policy.
 The approved design in [sidebar.md](../internals/sidebar.md) now drives the native renderer: the snapshot carries worktree-grouped rows, capability fields, attention ranking, per-worktree caps, and history stays out of the sidebar. Remaining interaction work:
 
 - Make rows jump targets: rail click/keys plus a native-pane key handler, both calling `focus_pane`.
-- Add future `AgentState.token_budget` once agents expose that telemetry.
+- Expand renderer parity for any future Zellij rail projection of the same enrichment grammar.
 
 ## M6 — Sub-agent observability
 

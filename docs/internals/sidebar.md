@@ -20,7 +20,7 @@ Because the view-model owns every decision, the per-renderer code is just painti
 
 Semantic→glyph conventions:
 
-- agent status (`waiting`/`failed`/`running`/`idle`/`success`) and the mode pill (`interactive`/`plan`/`auto`/`bypass`/`unknown`) map to the canonical glyph + color table in [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape). The glyph carries the status by shape so it survives `NO_COLOR`; color reinforces it.
+- agent status (`waiting`/`failed`/`running`/`idle`/`success`) and permission posture (`default`/`auto`/`yolo`/`unknown`) map to the canonical glyph + color table in [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape). The glyph carries the status by shape so it survives `NO_COLOR`; color reinforces it. `default` and `unknown` postures are omitted; `yolo` is warn-colored.
 - a resolver mid-flight renders in place of `◆ waiting` as `⟳ <resolver> <budget>` on the same row; full chain detail stays in `rimz feed list`.
 - a per-row, right-aligned age (`12m`) shows time since the agent's last activity on its task; there is no global "updated" timestamp.
 
@@ -28,7 +28,7 @@ Semantic→glyph conventions:
 
 Row presence comes from the **live pane list**, not the ledger. `rimz sidebar snapshot` enumerates the workspace session's panes, reads each pane's foreground command and cwd, resolves the cwd to a worktree, and emits **one row per pane**. A pane running `zsh` is a dim process row; a pane running an agent is that agent's row. The sidebar's own pane is excluded — it is chrome, not work.
 
-**The ledger overlays identity and state.** A pane's foreground command cannot name the agent: Claude and Codex both run under `node`, so the command reads `node`, not `claude`. Identity comes from the ledger — the agent's `agent.lifecycle` events (status, mode, task, model, effort) captured from its hooks. The snapshot joins a pane to a ledger agent by **worktree** (the hook resolves its workspace from cwd; the pane carries the same cwd) when the pane's foreground is a non-shell command. The result is one enriched row, never a pane row plus a separate agent row.
+**The ledger overlays identity and state.** A pane's foreground command cannot name the agent: Claude and Codex both run under `node`, so the command reads `node`, not `claude`. Identity comes from the ledger — the agent's `agent.lifecycle` events (status, permission posture, task, model, effort, and telemetry enrichments) captured from its hooks. The snapshot joins a pane to a ledger agent by **worktree** (the hook resolves its workspace from cwd; the pane carries the same cwd) when the pane's foreground is a non-shell command. The result is one enriched row, never a pane row plus a separate agent row.
 
 **Liveness is the live process, layered over two signals:**
 
@@ -37,7 +37,7 @@ Row presence comes from the **live pane list**, not the ledger. `rimz sidebar sn
 
 This is why an exited agent never lingers: presence follows the process, so the bug it replaces ("agent quits, row stays") cannot recur. There is no `offline` status — a dead agent is a reverted shell row or no row at all.
 
-**Attention stays live for agents and ledger-first for scripts.** A script's `feed ask` chose Rimz as its surface, so its pending item produces a row from the ledger until resolved. An agent prompt belongs to the agent pane, so a pending agent item renders only when a live non-shell pane corroborates that agent in the same worktree; if the pane has reverted to `zsh` or closed, the stale item remains in `rimz feed list` but leaves the sidebar. When pane discovery itself fails, the renderer keeps the last good snapshot and raises the degraded banner rather than inventing an empty room.
+**Attention stays live for agents and scripts.** A script's blocking `feed ask` chose Rimz as its surface, so its pending item produces a row while the waiter process is alive. An agent prompt belongs to the agent pane, so a pending agent item renders only when a live non-shell pane corroborates that agent in the same worktree; if the pane has reverted to `zsh` or closed, the stale item remains in audit (`rimz feed list --audit` / `feed show`) but leaves the sidebar and default `feed list`. When pane discovery itself fails, the renderer keeps the last good snapshot and raises the degraded banner rather than inventing an empty room.
 
 ## Launch model
 
@@ -128,11 +128,11 @@ Top to bottom, the sidebar is:
 4. **Worktree groups** — the body (below).
 5. **Footer** — a dim hint for the interactive keys: `↵ jump`, plus `␣ next ◆` and `? keys` when more than one row needs you; with a single waiting item it names the target (`↵ jump to claude`). No timestamp; freshness is the degraded banner's job.
 
-There are no feed-group sections: "Recently answered" and "Recent activity" are gone. The sidebar shows only what needs a decision or an action; history lives in `rimz feed list`.
+There are no feed-group sections: "Recently answered" and "Recent activity" are gone. The sidebar shows only what needs a decision or an action; full history lives in `rimz feed list --audit`.
 
 ### Worktree groups
 
-A worktree is total isolation — only same-worktree agents collaborate — so it is the spine of the layout. Each group is a bold header with a `▌` isolation marker and a right-aligned status tally (`2▸ 1◆`), then its rows. A pane's group is its cwd's worktree. The `workspace` group is the catch-all: scripts and CI not tied to a worktree, plus panes whose cwd sits outside any of the project's worktrees. It renders last unless it holds a waiting ask.
+A worktree is total isolation — only same-worktree agents collaborate — so it is the spine of the layout. Each group is a bold header with a `▌` isolation marker, optional worktree diff stats (`+127 -43`), and a right-aligned status tally (`2▸ 1◆`), then its rows. Diff stats are read by `rimz sidebar snapshot` from `git diff --numstat HEAD --`, cached briefly in runtime state, and live on the worktree header rather than a row so shared-worktree changes never pretend to belong to one agent. A pane's group is its cwd's worktree. The `workspace` group is the catch-all: scripts and CI not tied to a worktree, plus panes whose cwd sits outside any of the project's worktrees. It renders last unless it holds a waiting ask.
 
 ### Attention ranking and the per-worktree cap
 
@@ -145,8 +145,8 @@ Each worktree shows at most N rows (default ~6, configurable) with a dim `+K mor
 Each agent is a two-line cell — line 1 is *what's happening*, line 2 (dim) is *what it is*. Non-agent jobs (scripts, CI) and bare process rows (below) have no model and stay a single line.
 
 ```
-◆ claude  fix auth flow    12m     line 1 — status · name · task · age
-  Opus · xhigh · plan              line 2 — model · effort · mode (dim)
+◆ claude  fix auth flow  12m ⠋     line 1 — status · name · task · age · event pulse
+  Opus · xhigh ▰▰▱▱▱ 38%          line 2 — model · effort · context gauge · posture when non-default
 ```
 
 Line 1:
@@ -155,8 +155,9 @@ Line 1:
 - **Name**, clipped with `…`.
 - **Task descriptor** — the agent's reported task, or the first ~20 chars of its initial prompt. Display-only enrichment: redactable, never drives a decision (the no-transcript-correctness rule).
 - **Age** — right-aligned, dim: time since the agent's last activity on its task. It doubles as the ranking signal (the most-overdue waiting row shows the largest age) and flags a stalled `running` agent.
+- **Event pulse** — a small Braille activity glyph for `running`/`waiting` agents. It advances only when a lifecycle event increments `last_event_pulse`; no render-side timer exists, so a silent agent freezes honestly.
 
-Line 2 — the capability line, dim `·`-joined tokens: model (`Opus`, `GPT-5.5`), effort/thinking (`xhigh`/`high`/…), and mode (`interactive`/`unknown` omitted, `bypass` warn-colored). When narrow, keep model → effort → mode, except `bypass` which is always kept; with no capability data the line is dropped and the agent renders single-line.
+Line 2 — the capability and meter line: model (`Opus`, `GPT-5.5`), effort/thinking (`xhigh`/`high`/…), non-default permission posture (`auto` dim, `yolo` warn-colored), and the context gauge when reported. The default posture is omitted. With no capability or meter data the line is dropped and the agent renders single-line. At wider widths the same line may include todo progress (`●●●○○ 3/5`); when selected, the row expands in place to show the full field set, including the wider context gauge, todo ratio, and total tokens (`12.4k tok`).
 
 A resolver mid-flight replaces `◆ waiting` on its row with `⟳ <resolver> <budget>` (the agent name stays; the budget fills the task slot), and still counts in the attention tally — the item is pending, just being handled. When the chain exhausts it flips back to `◆ waiting`. Override a slow chain with `rimz feed resolve --override-chain`.
 
@@ -182,15 +183,17 @@ Either way the jump reconciles pane id *and* `pane_process_start`, so a reused p
 
 On every refresh, the native pane mirrors selection to the focused working pane in its own mux view. If focus is on the sidebar itself or focus cannot be discovered, the current manual selection stays in place.
 
-### Token-budget health (future)
+### Live enrichments and density
 
-An agent can expose remaining context/token budget; the sidebar will reflect it as a small color-graded gauge on line 2 (`▰▰▰▱▱ 38%`), shaded green → amber → red by the value alone so it never competes with the status glyph. Enrich-only and telemetry-gated (like tool telemetry): it never drives a decision. Backed by a future `AgentState.token_budget`.
+Every enrichment follows the same grammar: line 1 is the cue, and line 2+ are meters. Context-window percent renders as a segmented block gauge (`▰▰▱▱▱ 38%`), todo progress renders as the same bounded shape family (`●●●○○ 3/5`), total tokens render as a compact selected-card token (`12.4k tok`), and worktree diff stats render on the group header (`+127 -43`). All are display-only and telemetry-gated; a missing field means "agent did not report it", never zero, and none drives attention counts or routing.
+
+Width controls ambient density: narrow rows keep identity and bare gauges, the default width shows model/effort plus context and pulse, and wider rows inline todo progress. Selection is orthogonal: the focused row expands in place at any width to show its full field set. The renderer uses `NO_COLOR` by suppressing color only; the glyph count and fill still carry the meaning.
 
 ### View-model fields the rows use
 
-The rows read `SidebarRow.{row_kind, name, status, mode, pane, task, model, effort, worktree_path, worktree_branch, last_activity, resolver, options}` plus the per-group `status_counts`. `row_kind` is `agent`, `item`, or `process`; a process row carries its command in `name` and leaves `status` unset (it never enters `status_counts`). Pane presence reaches the reducer through `PaneRef.{command, cwd}`, resolved to `worktree_path`/`worktree_branch` before grouping. Age and ranking come from `last_activity`. The only future field is `.token_budget` (above).
+The rows read `SidebarRow.{row_kind, name, status, permission_posture, pane, task, model, effort, context_pct, total_tokens, todo_done, todo_total, last_event_pulse, worktree_path, worktree_branch, last_activity, resolver, options}` plus the per-group `status_counts` and `diff_added`/`diff_removed`. `row_kind` is `agent`, `item`, or `process`; a process row carries its command in `name` and leaves `status` unset (it never enters `status_counts`). Pane presence reaches the reducer through `PaneRef.{command, cwd}`, resolved to `worktree_path`/`worktree_branch` before grouping. Age and ranking come from `last_activity`; pulse comes from `last_event_pulse`.
 
-`SidebarSnapshot` still carries `recently_answered` and `recent_activity`, but the sidebar renderer ignores them — it paints only `worktree_groups` and the attention line. History surfaces through `rimz feed list`. If no renderer ever consumes those two fields, drop them from the sidebar view-model; they restate ledger queries.
+`SidebarSnapshot` still carries `recently_answered` and `recent_activity`, but the sidebar renderer ignores them — it paints only `worktree_groups` and the attention line. Full history surfaces through `rimz feed list --audit`. If no renderer ever consumes those two fields, drop them from the sidebar view-model; they restate ledger queries.
 
 ## Action rules
 

@@ -12,6 +12,7 @@ mod backend;
 mod chain_advance;
 mod doctor;
 mod examples;
+mod feed_runtime;
 mod gc;
 mod hooks;
 mod journey;

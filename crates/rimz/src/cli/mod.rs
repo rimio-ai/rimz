@@ -45,7 +45,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
         Some(Subcmd::Trust(args)) => trust::run(args, &globals),
-        Some(Subcmd::Doctor) => doctor::run(&globals),
+        Some(Subcmd::Doctor(args)) => doctor::run(args, &globals),
         Some(Subcmd::Ping) => doctor::ping(),
         Some(Subcmd::Start(args)) => start(args, &globals),
         Some(Subcmd::Attach(args)) => attach(args, &globals),
@@ -121,7 +121,7 @@ enum Subcmd {
     /// Manage the project's executable-surface trust grant.
     Trust(trust::TrustArgs),
     /// Environment + backend report.
-    Doctor,
+    Doctor(doctor::DoctorArgs),
     /// Machine-readable liveness check (prints `ok`).
     Ping,
 }

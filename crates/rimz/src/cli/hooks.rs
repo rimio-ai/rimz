@@ -22,11 +22,15 @@ use tracing::{debug, warn};
 use super::{GlobalFlags, open_ledger};
 use rimz::EventEnvelope;
 use rimz::Ledger;
-use rimz::agents::{AgentHookClass, AgentIntegration, integration_by_name};
+use rimz::agents::{
+    AgentHookClass, AgentIntegration, AgentLifecycleObservation, integration_by_name,
+};
 use rimz::bridge::{self, BridgeOutcome, ExpectedFrame, SocketGuard};
 use rimz::feed::{
-    AbandonReason, FeedItem, FeedKind, FeedStatus, ResolverStep, ResolverStepState, Surface,
+    AbandonReason, FeedItem, FeedKind, FeedStatus, ResolverStep, ResolverStepState,
+    RuntimeOwnerKind, Surface,
 };
+use rimz::ledger::runtime::process_owner;
 use rimz::resolver::{Allowlist, AllowlistEntry, fresh_enrolled, is_resolver_fresh, restat};
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
@@ -110,12 +114,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         // payload itself is the agent-native silent path — empty for Codex,
         // `{}` for Claude.
         if let Some(mut observation) = agent.observe_lifecycle(&event_name, &payload) {
-            if observation.agent_pid.is_none()
-                && let Some(pid) = hook_agent_pid()
-            {
-                observation.agent_process_start = linux_process_start(pid);
-                observation.agent_pid = Some(pid);
-            }
+            attach_agent_owner(agent.name(), &mut observation);
             if observation.worktree_path.is_none() {
                 observation.worktree_path = Some(workspace.worktree_root.display().to_string());
             }
@@ -172,23 +171,88 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
     )
 }
 
-fn hook_agent_pid() -> Option<u32> {
-    std::env::var("RIMZ_AGENT_PID")
+/// Best-effort PID of the agent process that spawned this hook helper. Tests
+/// and unusual launch chains pin the value via `RIMZ_AGENT_PID`; production
+/// hooks fall back to walking the parent chain from `getppid()` looking for an
+/// ancestor whose process name matches the agent kind (or its known launcher,
+/// e.g. `node` for codex). The walk gracefully returns `None` on non-Linux or
+/// if `/proc` lookups fail, preserving the legacy "no PID, no reap" behavior.
+fn hook_agent_pid(source: &str) -> Option<u32> {
+    if let Some(pid) = std::env::var("RIMZ_AGENT_PID")
         .ok()
         .and_then(|raw| raw.parse::<u32>().ok())
         .filter(|pid| *pid > 1)
+    {
+        return Some(pid);
+    }
+    walk_to_agent_ancestor(source)
+}
+
+fn attach_agent_owner(source: &str, observation: &mut AgentLifecycleObservation) {
+    if observation.runtime_owner.is_some() {
+        return;
+    }
+    let Some(agent_id) = observation.agent_id.as_deref().filter(|id| !id.is_empty()) else {
+        return;
+    };
+    let Some(pid) = observation.agent_pid.or_else(|| hook_agent_pid(source)) else {
+        return;
+    };
+    let owner = process_owner(RuntimeOwnerKind::Agent, agent_id, pid);
+    observation.agent_pid = Some(pid);
+    observation.agent_process_start = owner.process_start.clone();
+    observation.runtime_owner = Some(owner);
 }
 
 #[cfg(target_os = "linux")]
-fn linux_process_start(pid: u32) -> Option<String> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let after_comm = stat.rsplit_once(") ")?.1;
-    after_comm.split_whitespace().nth(19).map(ToOwned::to_owned)
+fn walk_to_agent_ancestor(source: &str) -> Option<u32> {
+    // Cap the walk so a pathologically deep tree (or a /proc parse glitch)
+    // cannot loop the hook helper. 32 levels is far beyond any real agent
+    // launch chain.
+    let mut pid = std::os::unix::process::parent_id();
+    for _ in 0..32 {
+        if pid <= 1 {
+            return None;
+        }
+        let (name, ppid) = read_proc_status(pid)?;
+        if matches_agent_kind(&name, source) {
+            return Some(pid);
+        }
+        pid = ppid;
+    }
+    None
 }
 
 #[cfg(not(target_os = "linux"))]
-fn linux_process_start(_pid: u32) -> Option<String> {
+fn walk_to_agent_ancestor(_source: &str) -> Option<u32> {
     None
+}
+
+#[cfg(target_os = "linux")]
+fn read_proc_status(pid: u32) -> Option<(String, u32)> {
+    let raw = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let mut name = None;
+    let mut ppid = None;
+    for line in raw.lines() {
+        if let Some(rest) = line.strip_prefix("Name:") {
+            name = Some(rest.trim().to_owned());
+        } else if let Some(rest) = line.strip_prefix("PPid:") {
+            ppid = rest.trim().parse::<u32>().ok();
+        }
+        if name.is_some() && ppid.is_some() {
+            break;
+        }
+    }
+    Some((name?, ppid?))
+}
+
+/// Codex ships as a JS bundle launched through `node`, so the binary `comm`
+/// reported by the kernel is `node`, not `codex`. The matcher allows either.
+fn matches_agent_kind(comm: &str, source: &str) -> bool {
+    if comm == source {
+        return true;
+    }
+    matches!((source, comm), ("codex", "node"))
 }
 
 fn run_install(source: String, telemetry: bool) -> Result<()> {
@@ -508,9 +572,20 @@ fn build_item(
         "agent-hook",
     );
     item.payload = payload;
+    item.runtime_owner = agent_runtime_owner(agent.name(), &item.payload);
     item.worktree_path = Some(workspace.worktree_root.display().to_string());
     item.worktree_branch = workspace.worktree_branch.clone();
     item
+}
+
+fn agent_runtime_owner(source: &str, payload: &Value) -> Option<rimz::RuntimeOwner> {
+    let subject_id = payload
+        .get("agent_id")
+        .or_else(|| payload.get("session_id"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())?;
+    let pid = hook_agent_pid(source)?;
+    Some(process_owner(RuntimeOwnerKind::Agent, subject_id, pid))
 }
 
 fn attach_resolver_chain(item: &mut FeedItem, fresh: &[AllowlistEntry]) {
@@ -547,4 +622,23 @@ fn emit_neutral(agent: &dyn AgentIntegration, event_name: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::matches_agent_kind;
+
+    /// Claude's binary is `claude`; codex is shipped as a node bundle, so the
+    /// kernel-visible `comm` is `node`. The matcher accepts both so the
+    /// ancestor walk pins the right PID under either launch shape.
+    #[test]
+    fn agent_kind_matches_known_launch_shapes() {
+        assert!(matches_agent_kind("claude", "claude"));
+        assert!(matches_agent_kind("codex", "codex"));
+        assert!(matches_agent_kind("node", "codex"));
+
+        assert!(!matches_agent_kind("node", "claude"));
+        assert!(!matches_agent_kind("zsh", "claude"));
+        assert!(!matches_agent_kind("bash", "codex"));
+    }
 }

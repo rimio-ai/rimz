@@ -1,0 +1,13 @@
+---
+source: crates/rimz-sidebar/src/render/mod.rs
+assertion_line: 313
+expression: screen
+---
+┌ query-engine ────────┐
+│▌main               1▸│
+│▸ codex   compile <t> ⠋│
+│                      │
+│                      │
+│                      │
+│                      │
+└──────────────────────┘
