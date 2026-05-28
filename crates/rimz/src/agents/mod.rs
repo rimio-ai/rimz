@@ -297,3 +297,28 @@ pub(crate) fn choice_is_allow(resolution: &Resolution) -> bool {
         .map(|v| matches!(v, "allow" | "yes" | "approve"))
         .unwrap_or(false)
 }
+
+/// Status a `Stop`-style turn-end event records. A `Stop` only fires after a
+/// turn ran, so a clean end is `success`; an explicit error signal in the
+/// payload demotes to `failed`. `idle` stays owned by `SessionStart` (wired in,
+/// nothing asked) — it is never a `Stop` outcome.
+pub(crate) fn stop_status_from_payload(payload: &Value) -> AgentStatus {
+    let errored = payload
+        .get("is_error")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || payload.get("error").is_some_and(|v| !v.is_null())
+        || matches!(
+            payload.get("status").and_then(Value::as_str),
+            Some("error" | "failed" | "failure")
+        )
+        || matches!(
+            payload.get("subtype").and_then(Value::as_str),
+            Some("error" | "error_during_execution" | "error_max_turns")
+        );
+    if errored {
+        AgentStatus::Failed
+    } else {
+        AgentStatus::Success
+    }
+}

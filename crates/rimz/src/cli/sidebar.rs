@@ -132,7 +132,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     .map(|agent| agent.supports_hook_install() && agent.hooks_installed())
                     .unwrap_or(false)
             });
-            enrich_worktree_diff_stats(&mut snapshot, ledger.runtime_paths());
+            enrich_worktree_groups(&mut snapshot, ledger.runtime_paths());
             if json {
                 let rendered = serde_json::to_string_pretty(&snapshot)?;
                 #[expect(clippy::print_stdout, reason = "json emitter for sidebar")]
@@ -291,30 +291,41 @@ struct DiffStatsCacheEntry {
     refreshed_at_ms: u64,
     added: Option<u32>,
     removed: Option<u32>,
+    /// Live branch resolved from the worktree path, cached under the same TTL
+    /// as the diff stats so the group header tracks `git checkout` without a
+    /// git call every tick.
+    #[serde(default)]
+    branch: Option<String>,
 }
 
 impl DiffStatsCacheEntry {
-    fn new(refreshed_at_ms: u64, stats: Option<DiffStats>) -> Self {
+    fn new(refreshed_at_ms: u64, stats: Option<DiffStats>, branch: Option<String>) -> Self {
         Self {
             refreshed_at_ms,
             added: stats.map(|stats| stats.added),
             removed: stats.map(|stats| stats.removed),
+            branch,
         }
     }
 
-    fn fresh_stats(&self, now_ms: u64) -> Option<Option<DiffStats>> {
-        if now_ms.saturating_sub(self.refreshed_at_ms) > DIFF_STATS_TTL.as_millis() as u64 {
-            return None;
-        }
-        Some(
-            self.added
-                .zip(self.removed)
-                .map(|(added, removed)| DiffStats { added, removed }),
-        )
+    fn is_fresh(&self, now_ms: u64) -> bool {
+        now_ms.saturating_sub(self.refreshed_at_ms) <= DIFF_STATS_TTL.as_millis() as u64
+    }
+
+    fn stats(&self) -> Option<DiffStats> {
+        self.added
+            .zip(self.removed)
+            .map(|(added, removed)| DiffStats { added, removed })
     }
 }
 
-fn enrich_worktree_diff_stats(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::RuntimePaths) {
+/// Project live git facts onto each worktree group: the diff stats shown on
+/// the header and the live branch label. Both are properties of the worktree
+/// *path*, not of any one agent, so they belong to the group — which also
+/// settles the shared-worktree "whose branch?" ambiguity. The live branch
+/// overrides the reducer's pinned label so the header tracks `git checkout` in
+/// the linked pane.
+fn enrich_worktree_groups(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::RuntimePaths) {
     let cache_path = runtime.root.join("diff-stats.json");
     let mut cache = read_diff_stats_cache(&cache_path);
     let now_ms = unix_now_ms();
@@ -329,25 +340,26 @@ fn enrich_worktree_diff_stats(snapshot: &mut rimz::SidebarSnapshot, runtime: &ri
             continue;
         }
 
-        let cached = cache
-            .entries
-            .get(&group.key)
-            .and_then(|entry| entry.fresh_stats(now_ms));
-        let stats = match cached {
-            Some(stats) => stats,
+        let entry = match cache.entries.get(&group.key).filter(|e| e.is_fresh(now_ms)) {
+            Some(entry) => entry.clone(),
             None => {
-                let stats = worktree_diff_stats(worktree);
-                cache
-                    .entries
-                    .insert(group.key.clone(), DiffStatsCacheEntry::new(now_ms, stats));
+                let entry = DiffStatsCacheEntry::new(
+                    now_ms,
+                    worktree_diff_stats(worktree),
+                    worktree_branch(worktree),
+                );
+                cache.entries.insert(group.key.clone(), entry.clone());
                 changed = true;
-                stats
+                entry
             }
         };
 
-        if let Some(stats) = stats {
+        if let Some(stats) = entry.stats() {
             group.diff_added = Some(stats.added);
             group.diff_removed = Some(stats.removed);
+        }
+        if let Some(branch) = entry.branch.filter(|branch| !branch.is_empty()) {
+            group.label = branch;
         }
     }
 
@@ -361,6 +373,26 @@ fn read_diff_stats_cache(path: &Path) -> DiffStatsCache {
         return DiffStatsCache::default();
     };
     serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+fn worktree_branch(worktree: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    // A detached HEAD has no branch to track — keep the reducer's path-basename
+    // label rather than printing the literal "HEAD".
+    if branch.is_empty() || branch == "HEAD" {
+        None
+    } else {
+        Some(branch)
+    }
 }
 
 fn worktree_diff_stats(worktree: &Path) -> Option<DiffStats> {
@@ -469,6 +501,43 @@ mod tests {
     }
 
     #[test]
+    fn worktree_branch_reads_live_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .status();
+            match status {
+                Ok(status) => status.success(),
+                Err(_) => false,
+            }
+        };
+        if !git(&["init", "-q"]) {
+            // No git on PATH (or init failed); the helper degrades to None,
+            // which is the documented fallback. Nothing to assert.
+            assert_eq!(worktree_branch(dir.path()), None);
+            return;
+        }
+        let _ = git(&["config", "user.email", "t@example.com"]);
+        let _ = git(&["config", "user.name", "t"]);
+        let _ = git(&["checkout", "-q", "-b", "feature-migration"]);
+        std::fs::write(dir.path().join("f"), "x").unwrap();
+        let _ = git(&["add", "f"]);
+        let _ = git(&["commit", "-q", "-m", "init"]);
+
+        assert_eq!(
+            worktree_branch(dir.path()).as_deref(),
+            Some("feature-migration"),
+            "the live branch is read from the worktree, overriding any pinned label"
+        );
+        // A non-repository path has no branch to track.
+        let plain = tempfile::tempdir().unwrap();
+        assert_eq!(worktree_branch(plain.path()), None);
+    }
+
+    #[test]
     fn diff_stats_cache_entry_expires_after_ttl() {
         let entry = DiffStatsCacheEntry::new(
             1_000,
@@ -476,18 +545,18 @@ mod tests {
                 added: 2,
                 removed: 1,
             }),
+            Some("feature-migration".to_owned()),
         );
 
+        assert!(entry.is_fresh(1_000 + DIFF_STATS_TTL.as_millis() as u64));
+        assert!(!entry.is_fresh(1_001 + DIFF_STATS_TTL.as_millis() as u64));
         assert_eq!(
-            entry.fresh_stats(1_000 + DIFF_STATS_TTL.as_millis() as u64),
-            Some(Some(DiffStats {
+            entry.stats(),
+            Some(DiffStats {
                 added: 2,
                 removed: 1,
-            }))
+            })
         );
-        assert_eq!(
-            entry.fresh_stats(1_001 + DIFF_STATS_TTL.as_millis() as u64),
-            None
-        );
+        assert_eq!(entry.branch.as_deref(), Some("feature-migration"));
     }
 }

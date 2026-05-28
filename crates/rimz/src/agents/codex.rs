@@ -2,7 +2,8 @@
 //!
 //! Classifies `PermissionRequest` (blocking) and the lifecycle events
 //! (`SessionStart` registers idle, `SubagentStart` / `UserPromptSubmit` move
-//! to running, `SubagentStop` / `Stop` back to idle); renders the Codex-shaped
+//! to running, `SubagentStop` returns the child to idle, `Stop` completes the
+//! root turn — success, or failed on an error signal); renders the Codex-shaped
 //! `PermissionRequest` `hookSpecificOutput` decision payload (neutral is empty
 //! stdout). `permission_mode` from the agent payload drives the permission
 //! posture.
@@ -19,7 +20,7 @@ use serde_json::{Value, json};
 use super::{
     AgentErr, AgentHookClass, AgentIntegration, AgentLifecycleObservation, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, Result, choice_is_allow,
-    optional_payload_string,
+    optional_payload_string, stop_status_from_payload,
 };
 use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution};
 use crate::ledger::atomic;
@@ -30,16 +31,20 @@ use crate::ledger::atomic;
 /// before tightening.
 const CODEX_HOOK_CAP: Duration = Duration::from_secs(60);
 
-/// Default-install events (always wired).
+/// Default-install events (always wired). `UserPromptSubmit` is state signal —
+/// it moves the root agent to running and carries the task — so it is default,
+/// not telemetry.
 const DEFAULT_EVENTS: &[&str] = &[
     "SessionStart",
+    "UserPromptSubmit",
     "SubagentStart",
     "SubagentStop",
     "Stop",
     "PermissionRequest",
 ];
-/// Telemetry-install events (added when `--telemetry` is passed).
-const TELEMETRY_EVENTS: &[&str] = &["UserPromptSubmit", "PreToolUse", "PostToolUse"];
+/// Telemetry-install events (added when `--telemetry` is passed): high-frequency
+/// per-tool hooks for audit depth.
+const TELEMETRY_EVENTS: &[&str] = &["PreToolUse", "PostToolUse"];
 
 /// Legacy config block written by older Rimz builds. Codex ignores this block;
 /// uninstall still removes it so users can clean up stale config.
@@ -115,7 +120,10 @@ impl AgentIntegration for CodexIntegration {
             "SessionStart" => (AgentStatus::Idle, Some(posture_from_payload(payload))),
             "SubagentStart" => (AgentStatus::Running, Some(posture_from_payload(payload))),
             "UserPromptSubmit" => (AgentStatus::Running, None),
-            "SubagentStop" | "Stop" => (AgentStatus::Idle, None),
+            // A child finishing returns its row to idle; the root agent's Stop
+            // completes the turn (success), or fails it on an error signal.
+            "SubagentStop" => (AgentStatus::Idle, None),
+            "Stop" => (stop_status_from_payload(payload), None),
             _ => return None,
         };
         let context_pct = payload
@@ -721,11 +729,22 @@ mod tests {
     }
 
     #[test]
-    fn stop_observes_idle_status() {
+    fn clean_stop_observes_success() {
         let obs = CodexIntegration
             .observe_lifecycle("Stop", &json!({ "session_id": "sess-1" }))
             .unwrap();
-        assert_eq!(obs.status, AgentStatus::Idle);
+        assert_eq!(obs.status, AgentStatus::Success);
+    }
+
+    #[test]
+    fn errored_stop_observes_failed() {
+        let obs = CodexIntegration
+            .observe_lifecycle(
+                "Stop",
+                &json!({ "session_id": "sess-1", "status": "failed" }),
+            )
+            .unwrap();
+        assert_eq!(obs.status, AgentStatus::Failed);
     }
 
     #[test]
@@ -788,6 +807,14 @@ mod tests {
         [[hooks.SubagentStop.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex --event SubagentStop"
         statusMessage = "Routing SubagentStop through Rimz"
+        timeout = 60
+        type = "command"
+
+        [[hooks.UserPromptSubmit]]
+
+        [[hooks.UserPromptSubmit.hooks]]
+        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex --event UserPromptSubmit"
+        statusMessage = "Routing UserPromptSubmit through Rimz"
         timeout = 60
         type = "command"
         "###);

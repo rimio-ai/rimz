@@ -775,31 +775,18 @@ fn pane_start_matches(expected: &PaneRef, actual: &PaneRef) -> bool {
     }
 }
 
+/// A pane whose foreground is a known agent *launcher* — the wrapper binaries
+/// agents ship under (Codex runs as `node`). Used only for the loose fallback
+/// match, so a stale overlay can attach to a `node` pane but never to a `git`
+/// or `vim` pane that an exited agent left behind.
 fn pane_is_loose_agent_candidate(pane: &PaneRef) -> bool {
     pane.command.as_deref().is_some_and(|command| {
-        let label = command_label(command);
-        if is_shell_command(&label) || label == "rimz-sidebar" {
-            return false;
-        }
-        command_agent_kind(command).is_none()
+        is_agent_launcher(&command_label(command)) && command_agent_kind(command).is_none()
     })
 }
 
-fn is_shell_command(command: &str) -> bool {
-    matches!(
-        command,
-        "sh" | "bash"
-            | "zsh"
-            | "fish"
-            | "dash"
-            | "ksh"
-            | "mksh"
-            | "elvish"
-            | "nu"
-            | "xonsh"
-            | "pwsh"
-            | "powershell"
-    )
+fn is_agent_launcher(label: &str) -> bool {
+    matches!(label, "node" | "bun" | "deno" | "python" | "python3" | "py")
 }
 
 fn pane_command_matches(pane: &PaneRef, expected: &str) -> bool {
@@ -2160,5 +2147,36 @@ mod tests {
 
         assert!(snapshot.agents.is_empty());
         assert!(snapshot.worktree_groups.is_empty());
+    }
+
+    #[test]
+    fn loose_match_ignores_non_launcher_pane() {
+        // Reproduces "exit claude -> git log -> sidebar shows claude again":
+        // once the agent leaves, the pane runs git. git is not an agent
+        // launcher, so it renders as a process row and never repaints a stale
+        // agent overlay.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut claude = agent(
+            "claude",
+            "sess-1",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            1_000,
+        );
+        claude.worktree_path = Some("/repo/main".to_owned());
+
+        let snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![claude])
+                .with_live_panes(vec![pane("%1", "git", "/repo/main")], None);
+
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert!(
+            rows.iter().all(|row| row.row_kind != SidebarRowKind::Agent),
+            "a non-launcher pane must not host an agent overlay: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.row_kind == SidebarRowKind::Process && row.name == "git"),
+        );
     }
 }

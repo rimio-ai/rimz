@@ -6,7 +6,7 @@
 
 use std::fs;
 
-use crate::feed::{AgentState, FeedItem, RuntimeOwner, RuntimeOwnerKind};
+use crate::feed::{AgentState, FeedItem, RuntimeOwner, RuntimeOwnerKind, Surface};
 use crate::schema::event::EventEnvelope;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,18 +36,35 @@ impl RuntimeProjection {
                 agents,
             },
             RuntimeScope::Runtime => Self {
-                items: items
-                    .into_iter()
-                    .filter(|item| item.runtime_owner.as_ref().is_some_and(owner_is_live))
-                    .collect(),
+                items: items.into_iter().filter(item_is_runtime_visible).collect(),
                 events,
                 agents: agents
                     .into_iter()
-                    .filter(|agent| agent.runtime_owner.as_ref().is_some_and(owner_is_live))
+                    .filter(agent_is_runtime_visible)
                     .collect(),
             },
         }
     }
+}
+
+/// Runtime visibility for a feed item. The owner-required liveness gate is a
+/// script concern: a script that exits must not strand its prompt as attention.
+/// Agent and bridge asks are governed by the agent rollup join in the snapshot
+/// reducer (`agent_hook_session_stale`), so a missing owner there is not by
+/// itself a reason to hide — only a *known-dead* owner suppresses them.
+fn item_is_runtime_visible(item: &FeedItem) -> bool {
+    if item.surface == Surface::Script {
+        return item.runtime_owner.as_ref().is_some_and(owner_is_live);
+    }
+    item.runtime_owner.as_ref().is_none_or(owner_is_live)
+}
+
+/// Runtime visibility for an agent. Liveness suppresses; it never gates an
+/// agent in. An unknown pid abstains (foreground/pane corroboration carries
+/// liveness — see `docs/internals/agent.md`); a known owner that is known-dead
+/// suppresses the stale overlay.
+fn agent_is_runtime_visible(agent: &AgentState) -> bool {
+    agent.runtime_owner.as_ref().is_none_or(owner_is_live)
 }
 
 pub fn current_process_owner(
@@ -107,9 +124,35 @@ fn linux_process_start_from_stat(stat: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::feed::{FeedKind, Surface};
+    use crate::feed::{AgentStatus, FeedKind, PermissionPosture, Surface};
     use crate::ids::WorkspaceId;
+    use jiff::Timestamp;
     use std::path::Path;
+
+    fn agent(owner: Option<RuntimeOwner>) -> AgentState {
+        AgentState {
+            agent_id: "sess-1".to_owned(),
+            kind: "claude".to_owned(),
+            status: AgentStatus::Idle,
+            permission_posture: PermissionPosture::Default,
+            pane: None,
+            agent_pid: owner.as_ref().map(|owner| owner.pid),
+            agent_process_start: owner.as_ref().and_then(|owner| owner.process_start.clone()),
+            runtime_owner: owner,
+            worktree_path: None,
+            worktree_branch: None,
+            task: None,
+            model: None,
+            effort: None,
+            context_pct: None,
+            total_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            last_event_pulse: 0,
+            last_seen: Timestamp::UNIX_EPOCH,
+            last_activity: Timestamp::UNIX_EPOCH,
+        }
+    }
 
     #[test]
     fn runtime_projection_includes_live_owner() {
@@ -186,6 +229,54 @@ mod tests {
         );
 
         assert!(projection.items.is_empty());
+    }
+
+    #[test]
+    fn runtime_projection_keeps_ownerless_agent() {
+        // An agent with no captured pid abstains — foreground/pane corroboration
+        // carries its liveness, so the owner-required gate must not hide it.
+        let projection = RuntimeProjection::from_parts(
+            Vec::new(),
+            Vec::new(),
+            vec![agent(None)],
+            RuntimeScope::Runtime,
+        );
+        assert_eq!(projection.agents.len(), 1);
+    }
+
+    #[test]
+    fn runtime_projection_keeps_ownerless_non_script_item() {
+        // A bridge ask whose owner pid was never captured stays visible; its
+        // staleness is the agent rollup join's job, not the owner gate.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let item = FeedItem::new(
+            workspace,
+            Surface::Bridge,
+            FeedKind::Permission,
+            "allow?",
+            "claude",
+            "agent-hook",
+        );
+        let projection = RuntimeProjection::from_parts(
+            vec![item],
+            Vec::new(),
+            Vec::new(),
+            RuntimeScope::Runtime,
+        );
+        assert_eq!(projection.items.len(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn runtime_projection_excludes_known_dead_agent() {
+        let dead = RuntimeOwner::new(RuntimeOwnerKind::Agent, "sess-1", u32::MAX, None);
+        let projection = RuntimeProjection::from_parts(
+            Vec::new(),
+            Vec::new(),
+            vec![agent(Some(dead))],
+            RuntimeScope::Runtime,
+        );
+        assert!(projection.agents.is_empty());
     }
 
     #[cfg(target_os = "linux")]

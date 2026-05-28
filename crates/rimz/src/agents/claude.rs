@@ -3,9 +3,10 @@
 //! Classifies the blocking events (`PermissionRequest`, `PreToolUse:
 //! ExitPlanMode`, `PreToolUse: AskUserQuestion`) and the lifecycle events
 //! (`SessionStart` registers idle, `UserPromptSubmit` moves to running with
-//! the prompt as task, `Stop` back to idle, `SessionEnd` exits, `Notification`
-//! silent); renders the Claude-shaped `hookSpecificOutput` / `updatedInput`
-//! decision payload and the neutral fallback.
+//! the prompt as task, `Stop` completes the turn — success, or failed on an
+//! error signal, `SessionEnd` exits, `Notification` silent); renders the
+//! Claude-shaped `hookSpecificOutput` / `updatedInput` decision payload and the
+//! neutral fallback. Context budget is read from the transcript tail.
 //!
 //! Owns hook install / uninstall through a non-destructive merge into
 //! `~/.claude/settings.json` under per-matcher `_rimz_managed` markers.
@@ -14,6 +15,7 @@
 //! `docs/internals/agent.md`).
 
 use std::env;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -22,7 +24,7 @@ use serde_json::{Map, Value, json};
 use super::{
     AgentErr, AgentHookClass, AgentIntegration, AgentLifecycleObservation, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, Result, choice_is_allow,
-    optional_payload_string,
+    optional_payload_string, stop_status_from_payload,
 };
 use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution};
 use crate::ledger::atomic;
@@ -41,6 +43,7 @@ const CLAUDE_HOOK_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_EVENTS: &[(&str, Option<&str>)] = &[
     ("SessionStart", None),
     ("SessionEnd", None),
+    ("UserPromptSubmit", None),
     ("Stop", None),
     ("Notification", None),
     ("PermissionRequest", None),
@@ -48,12 +51,10 @@ const DEFAULT_EVENTS: &[(&str, Option<&str>)] = &[
     ("PreToolUse", Some("AskUserQuestion")),
 ];
 
-/// Telemetry-install events (added when `--telemetry` is passed).
-const TELEMETRY_EVENTS: &[(&str, Option<&str>)] = &[
-    ("UserPromptSubmit", None),
-    ("PreToolUse", None),
-    ("PostToolUse", None),
-];
+/// Telemetry-install events (added when `--telemetry` is passed). These are
+/// high-frequency, content-heavy hooks for audit depth — `UserPromptSubmit`
+/// and `Stop` are state signal and live in the default set.
+const TELEMETRY_EVENTS: &[(&str, Option<&str>)] = &[("PreToolUse", None), ("PostToolUse", None)];
 
 /// Events that hold the agent open while the bridge waits for an answer.
 /// Installing one with `_rimz_sync = false` in the existing config is a hard
@@ -159,28 +160,38 @@ impl AgentIntegration for ClaudeIntegration {
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
         // SessionStart registers the agent idle (wired in, nothing asked yet);
-        // the prompt is what moves it to running. Only SessionStart establishes
-        // the permission posture — the prompt and stop carry no permission
-        // field, so they report `None` and the reducer keeps the established
-        // posture. SessionEnd records the exit so the reducer drops the agent
-        // from the rollup (posture carries no meaning on exit); `ends_session`
-        // then expires any asks the dead session left pending.
+        // the prompt is what moves it to running; a clean Stop completes the
+        // turn (success), an errored Stop fails it. Only SessionStart
+        // establishes the permission posture — the prompt and stop carry no
+        // permission field, so they report `None` and the reducer keeps the
+        // established posture. SessionEnd records the exit so the reducer drops
+        // the agent from the rollup (posture carries no meaning on exit);
+        // `ends_session` then expires any asks the dead session left pending.
         let (status, posture) = match event_name {
             "SessionStart" => (AgentStatus::Idle, Some(posture_from_payload(payload))),
             "UserPromptSubmit" => (AgentStatus::Running, None),
-            "Stop" => (AgentStatus::Idle, None),
+            "Stop" => (stop_status_from_payload(payload), None),
             "SessionEnd" => (AgentStatus::Idle, None),
             _ => return None,
         };
+        // Context budget lives in the transcript, not the hook payload. Read its
+        // tail on the low-frequency events Rimz already fires so the gauge
+        // populates without a per-tool hook; an explicit payload field (rare)
+        // still wins when present.
+        let usage = optional_payload_string(payload, &["transcript_path"])
+            .map(|path| usage_from_transcript(&path))
+            .unwrap_or_default();
         let context_pct = payload
             .get("context_pct")
             .or_else(|| payload.get("context_window_pct"))
             .and_then(Value::as_u64)
-            .map(|v| v.min(100) as u8);
+            .map(|v| v.min(100) as u8)
+            .or(usage.context_pct);
         let total_tokens = payload
             .get("total_tokens")
             .or_else(|| payload.get("token_count"))
-            .and_then(Value::as_u64);
+            .and_then(Value::as_u64)
+            .or(usage.total_tokens);
         let (todo_done, todo_total) = todos_from_payload(payload);
         Some(AgentLifecycleObservation {
             agent_id: payload
@@ -195,7 +206,7 @@ impl AgentIntegration for ClaudeIntegration {
             worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
             worktree_branch: optional_payload_string(payload, &["worktree_branch"]),
             task: optional_payload_string(payload, &["task", "prompt"]),
-            model: optional_payload_string(payload, &["model"]),
+            model: optional_payload_string(payload, &["model"]).or(usage.model),
             effort: optional_payload_string(payload, &["thinking_level", "effort"]),
             context_pct,
             total_tokens,
@@ -294,6 +305,81 @@ fn todos_from_payload(payload: &Value) -> (Option<u32>, Option<u32>) {
         })
         .count() as u32;
     (Some(done), Some(total))
+}
+
+/// Context-window usage derived from a Claude transcript tail.
+#[derive(Default)]
+struct TranscriptUsage {
+    context_pct: Option<u8>,
+    total_tokens: Option<u64>,
+    model: Option<String>,
+}
+
+/// Current Claude models expose a 200k-token context window. Kept as a single
+/// lookup so a future per-model window (e.g. a 1M beta) lands in one place.
+fn context_window_for(_model: Option<&str>) -> u64 {
+    200_000
+}
+
+/// Derive context-window usage from the tail of a Claude transcript JSONL.
+/// Claude never puts token counts in the hook payload — they live in the
+/// transcript — so this is the only place the context gauge can be sourced.
+/// Reads a bounded tail and takes the most recent assistant `message.usage`.
+/// Best-effort: any IO or parse failure yields empty fields (enrichment, never
+/// correctness).
+fn usage_from_transcript(path: &str) -> TranscriptUsage {
+    const TAIL_BYTES: u64 = 64 * 1024;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return TranscriptUsage::default();
+    };
+    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    if file
+        .seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES)))
+        .is_err()
+    {
+        return TranscriptUsage::default();
+    }
+    let mut buf = Vec::new();
+    if file.read_to_end(&mut buf).is_err() {
+        return TranscriptUsage::default();
+    }
+    let text = String::from_utf8_lossy(&buf);
+    // Newest-first: the last assistant usage record wins. A truncated leading
+    // line from the tail seek simply fails to parse and is skipped.
+    for line in text.lines().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let message = value.get("message");
+        let Some(usage) = message.and_then(|m| m.get("usage")) else {
+            continue;
+        };
+        let field = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+        let context_tokens = field("input_tokens")
+            + field("cache_read_input_tokens")
+            + field("cache_creation_input_tokens");
+        let output = field("output_tokens");
+        if context_tokens == 0 && output == 0 {
+            continue;
+        }
+        let model = message
+            .and_then(|m| m.get("model"))
+            .and_then(Value::as_str)
+            .filter(|model| !model.is_empty())
+            .map(ToOwned::to_owned);
+        let window = context_window_for(model.as_deref()).max(1);
+        let context_pct = (context_tokens.saturating_mul(100) / window).min(100) as u8;
+        return TranscriptUsage {
+            context_pct: Some(context_pct),
+            total_tokens: Some(context_tokens + output),
+            model,
+        };
+    }
+    TranscriptUsage::default()
 }
 
 fn claude_settings_path() -> Result<PathBuf> {
@@ -913,6 +999,19 @@ mod tests {
                   }
                 ]
               }
+            ],
+            "UserPromptSubmit": [
+              {
+                "_rimz_managed": true,
+                "_rimz_sync": false,
+                "hooks": [
+                  {
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event UserPromptSubmit",
+                    "timeout": 120,
+                    "type": "command"
+                  }
+                ]
+              }
             ]
           }
         }
@@ -948,10 +1047,18 @@ mod tests {
         assert_eq!(pre_tool.len(), 3);
         assert!(pre_tool.iter().any(|e| e["matcher"] == "Bash"
             && e.get("_rimz_managed").and_then(Value::as_bool) != Some(true)));
-        // User UserPromptSubmit hook stays untouched in default install.
+        // UserPromptSubmit is state signal, so a default install wires it. The
+        // user's own UserPromptSubmit hook is preserved alongside ours.
         let ups = parsed["hooks"]["UserPromptSubmit"].as_array().unwrap();
-        assert_eq!(ups.len(), 1);
-        assert!(ups[0].get("_rimz_managed").is_none());
+        assert_eq!(ups.len(), 2);
+        assert!(
+            ups.iter()
+                .any(|e| e.get("_rimz_managed").and_then(Value::as_bool) != Some(true))
+        );
+        assert!(
+            ups.iter()
+                .any(|e| e.get("_rimz_managed").and_then(Value::as_bool) == Some(true))
+        );
     }
 
     #[test]
@@ -1228,6 +1335,50 @@ mod tests {
     fn notification_event_is_not_a_lifecycle_observation() {
         let obs = ClaudeIntegration.observe_lifecycle("Notification", &json!({}));
         assert!(obs.is_none());
+    }
+
+    #[test]
+    fn clean_stop_observes_success() {
+        // A Stop fires only after a turn ran; a clean end completes it.
+        let obs = ClaudeIntegration
+            .observe_lifecycle("Stop", &json!({ "session_id": "sess-1" }))
+            .unwrap();
+        assert_eq!(obs.status, AgentStatus::Success);
+        // Turn over: the task clears back to "—".
+        assert_eq!(obs.task, None);
+    }
+
+    #[test]
+    fn errored_stop_observes_failed() {
+        let obs = ClaudeIntegration
+            .observe_lifecycle("Stop", &json!({ "session_id": "sess-1", "is_error": true }))
+            .unwrap();
+        assert_eq!(obs.status, AgentStatus::Failed);
+    }
+
+    #[test]
+    fn transcript_tail_populates_context_gauge() {
+        // Claude reports token usage only in the transcript JSONL; the Stop hook
+        // reads its tail to fill the context gauge. 100k of a 200k window = 50%.
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("session.jsonl");
+        std::fs::write(
+            &transcript,
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\"}}\n{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-7\",\"usage\":{\"input_tokens\":100000,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0,\"output_tokens\":500}}}\n",
+        )
+        .unwrap();
+        let obs = ClaudeIntegration
+            .observe_lifecycle(
+                "Stop",
+                &json!({
+                    "session_id": "sess-1",
+                    "transcript_path": transcript.to_str().unwrap(),
+                }),
+            )
+            .unwrap();
+        assert_eq!(obs.context_pct, Some(50));
+        assert_eq!(obs.total_tokens, Some(100_500));
+        assert_eq!(obs.model.as_deref(), Some("claude-opus-4-7"));
     }
 
     #[test]
