@@ -36,20 +36,15 @@ Each commitment is a decision a reader might challenge. The reason is on the sam
 
 ## Sidebar shape
 
-The sidebar is a **worktree-keyed attention and navigation map**, not a feed
-reader. Three laws govern it:
+The sidebar is a **worktree-keyed presence and attention map**, not a feed reader. Three laws govern it:
 
-- **Worktree-first.** A worktree is total isolation — only same-worktree agents
-  collaborate — so the sidebar groups by worktree before anything else.
-- **Notify, don't answer.** The sidebar routes you to the pane that needs you; it
-  never reproduces the agent's question. You read and answer in the agent's own
-  UI. (A script's `feed ask`, which chose Rimz as its surface, is the exception.)
-- **Attention only.** It shows what needs a decision or an action — nothing
-  resolved or historical. History lives in `rimz feed list`.
+- **Worktree-first.** A worktree is total isolation — only same-worktree agents collaborate — so the sidebar groups by worktree before anything else.
+- **Notify, don't answer.** The sidebar routes you to the pane that needs you; it never reproduces the agent's question. You read and answer in the agent's own UI. (A script's `feed ask`, which chose Rimz as its surface, is the exception.)
+- **Presence and attention, never history.** It shows what is *running now* — every pane's foreground process, with agents enriched from the ledger — and what *needs you* (waiting/failed agents, pending items). Nothing resolved or historical; that lives in `rimz feed list`.
 
-Agent statuses (exactly five), highest attention first. Each maps to one glyph
-and color — the canonical vocabulary every renderer paints. The glyph carries the
-status by **shape** (so it survives `NO_COLOR`); color reinforces it.
+**Presence is a live view; the ledger is truth.** Row presence is read live from the multiplexer's pane list — a pane running `zsh` is a row, and it becomes the agent's row when that pane runs an agent. The ledger stays the source of attention and of every durable fact; the pane list never decides correctness. A hook-driven agent that exits is gone the moment its pane reverts to a shell or closes — liveness is the live process, not a status the ledger has to retract.
+
+Agent statuses (exactly five), highest attention first. Each maps to one glyph and color — the canonical vocabulary every renderer paints. The glyph carries the status by **shape** (so it survives `NO_COLOR`); color reinforces it. A pane running a non-agent process (a bare shell, an editor) renders as a dim process row with no status glyph and never counts as attention.
 
 | rank | status    | glyph | color       |
 |------|-----------|-------|-------------|
@@ -59,15 +54,13 @@ status by **shape** (so it survives `NO_COLOR`); color reinforces it.
 | 4    | `idle`    | `○`   | gray / dim  |
 | 5    | `success` | `✓`   | green dim   |
 
-Agent modes (observed from the agent, not set by Rimz) render as a dim pill;
-`interactive` and `unknown` are omitted, `bypass` is warn-colored:
+Agent modes (observed from the agent, not set by Rimz) render as a dim pill; `interactive` and `unknown` are omitted, `bypass` is warn-colored:
 
 ```text
 interactive   plan   auto   bypass   unknown
 ```
 
-Renderer details — the two-line row anatomy, attention ranking, and the jump
-interaction — live in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
+Renderer details — the two-line row anatomy, attention ranking, and the jump interaction — live in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
 
 ## Non-goals
 

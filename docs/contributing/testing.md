@@ -28,6 +28,7 @@ Local runner: `cargo xtask test` (wraps `cargo nextest run`). Doctests run separ
 - self-close: a real `rimz-sidebar` whose tab's last terminal pane exits closes its own pane (non-plugin pane count drops to zero),
 - sidebar heartbeat socket,
 - broadcast `zellij pipe` fast path,
+- `list-panes -j` parsing of `pane_command` and `pane_cwd` into `PaneRef`,
 - minimum Zellij version detection.
 
 **M0c** runs the same matrix under tmux and adds:
@@ -35,6 +36,7 @@ Local runner: `cargo xtask test` (wraps `cargo nextest run`). Doctests run separ
 - native managed sidebar pane with workspace ID, cwd, and width-percentage passthrough,
 - explicit `RIMZ_*` env injection with `tmux -e`,
 - detach/reattach,
+- `list-panes -F` parsing of `#{pane_current_command}` and `#{pane_current_path}` into `PaneRef`,
 - optional status-line integration trust prompt,
 - optional popup smoke test for tmux ≥ 3.2,
 - minimum tmux version detection.
@@ -87,6 +89,24 @@ All `insta` snapshots — CLI stdout, `--json` event payloads, hook stdout, side
 - Worktree grouping is stable across reloads.
 - Pane focus refuses reused pane IDs (reconciles process start time).
 - Method labels render correctly for `hook_bridge`, `pane_send`, `cli`, and `sidebar`.
+
+**Presence and liveness** (the reducer folds the live pane list in):
+
+- A pane running a shell renders as a process row; a pane running an agent renders as that agent's row — one row, never both.
+- Panes group by their cwd's worktree; a pane outside every worktree lands in the `workspace` catch-all.
+- The sidebar's own pane is excluded from the roster.
+- Liveness: an agent whose pane reverts to a shell drops its overlay back to a process row; a dead captured pid suppresses the overlay; a closed pane drops the row entirely.
+- Pending script attention produces a row from the ledger; pending agent attention renders only with a live corroborating agent pane, so a stale agent prompt cannot outlive its pane.
+- Process rows sort below every agent row and are part of the cap-truncatable tail.
+
+## End-user journey suite
+
+`tests/integration/journey/` tells the session as a story from `docs/guide/product.md` and `docs/guide/experience.md`: launch the room, onboard, run an agent, watch the column move through `shell → idle → running → waiting → fleet`. `docs/internals/sidebar.md` owns renderer mechanics, not the story source. "Running an agent" fires its *installed* hook, never a hand-rolled `rimz hooks feed`: the harness onboards with `rimz hooks install` and then runs the exact `rimz hooks feed --source <agent> --event <event>` command the agent's config wires. An un-onboarded `agent_hook` is a no-op — exactly what a real agent does with no Rimz hook configured — so the suite fails when "I ran codex and nothing showed up" would. That faithfulness is non-negotiable: a journey test that fires hooks an un-wired agent could never fire would pass against a broken product.
+
+- **Content** (`sidebar_phases.rs`) drives the real `rimz-sidebar serve` renderer through a `portable-pty` over a real ledger and asserts on the `vt100`-parsed pane (the `resize_redraw.rs` pattern). The renderer gets its own short `XDG_RUNTIME_DIR` so the per-instance wakeup socket stays under the AF_UNIX limit.
+- **Deep smokes** (`deep.rs`) birth a real tmux/zellij session with a real sidebar pane, fire a hook, and capture the live pane content; they self-skip without the mux binary. They poll for a *complete* frame (every expected token) so a partial repaint captured mid-paint under load never reads as a failure.
+- **Layout, tabs, and focus** live in `backend/zellij.rs` (left-30% sidebar, focused right terminal, every new tab born with the same split); tmux per-window parity — every new window born with its own sidebar via the `after-new-window` hook — is `backend/tmux.rs::new_window_is_born_with_a_sidebar_and_focused_terminal`.
+- The whole journey suite is green against `main`. When a phase needs to assert a documented experience *ahead* of its implementation, it lands `#[ignore = "TDD: <gap>"]` so the enforced gate stays green, and un-ignores when the behaviour ships; run any such targets with `cargo nextest run -- journey:: --run-ignored all`.
 
 ## Attach tests
 

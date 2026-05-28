@@ -5,7 +5,7 @@ Run one coding agent and you flip tabs. Run four and you lose them.
 Rimz pins every repo to one durable room — a Zellij or tmux session with a sidebar that tells you which pane needs you, and a ledger that survives detach, sidebar reload, and reattach from anywhere. Humans, scripts, CI, and coding agents share the same feed through one CLI.
 
 ```
-┌ billing-service ───────────┐
+┌ query-engine ──────────────┐
 │ ◆2  ✗1                     │
 │                            │
 │ ▌main             2▸ 1◆    │
@@ -34,14 +34,14 @@ Rimz pins every repo to one durable room — a Zellij or tmux session with a sid
 ## Quickstart
 
 ```sh
-cd ~/code/billing-service
+cd ~/code/query-engine
 rimz                                                # open or reattach the room
 
 rimz event emit --kind build.started --title "web"  # any script can post
 rimz feed ask --title "Promote staging → prod?" \
               --options yes,no --timeout-seconds 3600
 
-ssh dev-box rimz attach billing-service             # reattach from anywhere
+ssh dev-box rimz attach query-engine                # reattach from anywhere
 rimz pane split && claude                           # start an agent in a new pane
 ```
 

@@ -6,7 +6,9 @@ The sidebar is the product surface. It's a UI client over the workspace ledger; 
 
 ## Renderers
 
-The `rimz sidebar snapshot` JSON is the shared view-model. It carries the worktree-grouped agent roster, the attention items, per-agent statuses and capability, the ranking keys, and timestamps — every grouping and ordering decision is made once, here. A renderer is a projection: it maps the view-model's semantics to glyphs and paints them. It never re-derives which worktree an agent belongs to or how the rows rank.
+The `rimz sidebar snapshot` JSON is the shared view-model. It carries the worktree-grouped row roster — every live pane as a row, agents enriched from the ledger — plus the attention items, per-agent statuses and capability, the ranking keys, and timestamps. Every grouping and ordering decision is made once, here. A renderer is a projection: it maps the view-model's semantics to glyphs and paints them. It never re-derives which worktree a row belongs to, how rows rank, or which pane runs an agent.
+
+The snapshot command runs in the `rimz` binary, which owns mux access, so it enumerates the session's panes and folds them into the roster before serializing. The renderer (and the Zellij plugin rail) stay pure JSON consumers — pane presence reaches them only through the snapshot, never a mux call of their own.
 
 Three renderers project the same snapshot:
 
@@ -22,6 +24,21 @@ Semantic→glyph conventions:
 - a resolver mid-flight renders in place of `◆ waiting` as `⟳ <resolver> <budget>` on the same row; full chain detail stays in `rimz feed list`.
 - a per-row, right-aligned age (`12m`) shows time since the agent's last activity on its task; there is no global "updated" timestamp.
 
+## Presence model
+
+Row presence comes from the **live pane list**, not the ledger. `rimz sidebar snapshot` enumerates the workspace session's panes, reads each pane's foreground command and cwd, resolves the cwd to a worktree, and emits **one row per pane**. A pane running `zsh` is a dim process row; a pane running an agent is that agent's row. The sidebar's own pane is excluded — it is chrome, not work.
+
+**The ledger overlays identity and state.** A pane's foreground command cannot name the agent: Claude and Codex both run under `node`, so the command reads `node`, not `claude`. Identity comes from the ledger — the agent's `agent.lifecycle` events (status, mode, task, model, effort) captured from its hooks. The snapshot joins a pane to a ledger agent by **worktree** (the hook resolves its workspace from cwd; the pane carries the same cwd) when the pane's foreground is a non-shell command. The result is one enriched row, never a pane row plus a separate agent row.
+
+**Liveness is the live process, layered over two signals:**
+
+1. **Foreground command (primary, cross-backend).** A TUI agent holds its pane's foreground for its whole life; when it exits, the foreground reverts to the shell. So a pane that drops back to `zsh` drops its agent overlay automatically, on both backends, with no exit hook required. A closed pane is simply absent from the next snapshot — its row is gone.
+2. **Captured pid (refining gate, where available).** The agent's pid, recorded best-effort by its hook (see [agent.md](./agent.md)), gates the overlay: a dead pid suppresses it, so a fresh, unrelated `node` process in the same worktree is never painted as the agent that just exited. The pid is Linux best-effort and never *required* — when it is unknown the foreground-command signal carries liveness alone.
+
+This is why an exited agent never lingers: presence follows the process, so the bug it replaces ("agent quits, row stays") cannot recur. There is no `offline` status — a dead agent is a reverted shell row or no row at all.
+
+**Attention stays live for agents and ledger-first for scripts.** A script's `feed ask` chose Rimz as its surface, so its pending item produces a row from the ledger until resolved. An agent prompt belongs to the agent pane, so a pending agent item renders only when a live non-shell pane corroborates that agent in the same worktree; if the pane has reverted to `zsh` or closed, the stale item remains in `rimz feed list` but leaves the sidebar. When pane discovery itself fails, the renderer keeps the last good snapshot and raises the degraded banner rather than inventing an empty room.
+
 ## Launch model
 
 `rimz`, `rimz start`, and cwd-based `rimz attach` ensure the workspace session exists, then launch one sidebar pane best-effort before entering or printing the attach command. `rimz attach <session>` does the same only when a matching `workspace.json` record gives Rimz the workspace ID and cwd; otherwise it warns and leaves the exact session-name attach path alone.
@@ -29,7 +46,7 @@ Semantic→glyph conventions:
 Both backends run the same native renderer through `rimz sidebar serve`:
 
 - Zellij: the session is born from a layout — a left 30% `rimz-sidebar` pane plus a focused terminal — which doubles as the default tab template, so every tab is born with a sidebar. Rimz touches the layout only at creation; an existing session already carries its sidebar (and survives detach/reattach server-side), so launch there is a no-op. One `rimz-sidebar` renderer per tab, each a read-only view of the same room ledger.
-- tmux: `tmux split-window -d -h -l <width>% -b -t <session> <rimz-bin> sidebar serve ...` places a left sidebar in the initial window.
+- tmux: `tmux split-window -d -h -l <width>% -b -t <session> <rimz-bin> sidebar serve ...` places a left sidebar in the initial window, and an `after-new-window` hook re-runs the same split so every window opened later is born with its own sidebar — the tab-template parity Zellij gets from its layout.
 
 Launch is idempotent by heartbeat. Before opening a pane, Rimz scans `runtime/heartbeat/sidebar.*.json` and treats only readable, current-protocol files whose mtime is within the sidebar heartbeat TTL as live. Stale, unreadable, or old-protocol heartbeats are ignored so a crashed sidebar or upgraded protocol does not suppress relaunch.
 
@@ -56,46 +73,15 @@ Zellij users can opt in to a wasm plugin that presents the same view-model as a 
 
 **Lifecycle.** Workspace ID and the `rimz` binary path arrive in the `load()` `configuration` map, mirroring strider's `caller_cwd`. The rail writes no heartbeat: Zellij owns its liveness and an idempotent `launch-or-focus-plugin` dedupes by URL + config, so the heartbeat-scan idempotency above stays the native pane's concern. "Non-killable" is that docked pane plus `launch-or-focus-plugin` — it resists accidental loss and the next `rimz` / attach re-summons it. Left re-placement is the rail's reason to exist: `launch-or-focus-plugin` docks it left into a live session, which a CLI-launched pane cannot reach after birth.
 
-## What it looks like
+## Phase projection
 
-A narrow column (default 30% width, ~24–36 cols), keyed on worktree, showing only
-what needs you. Each agent is a two-line cell; the whole row is a jump target.
+The same renderer paints every moment of a session — bare shell, first agent, a waiting prompt, a fleet across worktrees, detach and reattach. What changes between phases is the snapshot, never the renderer: the view-model owns every transition and the renderer only projects it. There is no per-phase rendering code, so the mechanics each phase exercises are documented once, in the sections of this doc — the pane→agent overlay and the revert to a shell row in [Presence model](#presence-model), the `◆`/`✗` rise, bucket-then-age sort, and calm-tail cap in [Attention ranking and the per-worktree cap](#attention-ranking-and-the-per-worktree-cap), the two-line cell and the resolver `⟳` swap in [Agent rows](#agent-rows), the dim `· zsh` row in [Process rows](#process-rows), and the notify-and-route discipline in [Notifications](#notifications). Detach and reattach reconstruct from the ledger ([Reload recovery](#reload-recovery)); hook installs are gated by the consent screen the [experience walkthrough](../guide/experience.md#phase-1--the-first-keystroke-rimz-and-the-consent-gate) frames.
 
-```
-┌ billing-service ───────────┐
-│ ◆2  ✗1                     │
-│                            │
-│ ▌main             2▸ 1◆    │
-│ ◆ claude  fix auth flow 12m│
-│   Opus · xhigh · plan      │
-│ ▸ claude  add tests     8s │
-│   Sonnet · high            │
-│ ▸ codex   refactor api 30s │
-│   GPT-5.5 · high           │
-│                            │
-│ ▌feature-migration 1✗ 1○   │
-│ ✗ claude  db migrate    4m │
-│   Opus · xhigh · bypass    │
-│ ○ codex   —             1h │
-│   GPT-5.5 · low            │
-│                            │
-│ ▌workspace         1◆      │
-│ ◆ deploy  promote?      5m │
-│                            │
-│ ↵ focus                    │
-└────────────────────────────┘
-```
+For the felt, phase-by-phase walk-through — what the developer does, sees, and thinks from first keystroke to a ten-agent fleet — see [the experience walkthrough](../guide/experience.md).
 
-Color legend (ASCII can't show it): `◆` waiting = yellow, `✗` failed = red, `▸`
-running = green, `○` idle = dim, `✓` success = green dim; `bypass` mode is
-warn-colored. The glyph table is canonical in [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape).
+### Empty-room hint
 
-> Product invariant lives in [DESIGN.md](../../DESIGN.md).
-
-The sidebar **notifies and navigates; it never reproduces the question.** A row
-says *who* needs you, *what task* they're on, and is itself the jump to that pane —
-you read the actual prompt and answer in the agent's own UI. A script's `feed ask`
-is the one surface Rimz can answer directly.
+With nothing waiting or failed the attention line is omitted and the body is never blank: each pane is still a [process row](#process-rows), and a dim first-run hint points at the real next step. The renderer keys the hint on the snapshot's `agent_hooks_ready` flag — an unwired room reads `install hooks: rimz hooks install claude`, a wired room reads `run claude or codex` — and clears it the instant the first agent or feed item appears, including a supported agent visible as a plain process row before hook enrichment lands. The hint is for a *healthy* empty room: under a degraded fetch the banner takes over and the hint is suppressed, because an empty body under a failed fetch is a missing snapshot, not an empty room (see [Reload recovery](#reload-recovery)). `rimz doctor` reports the same per-agent install status the flag reflects.
 
 ## State access
 
@@ -117,8 +103,7 @@ The heartbeat binds `sock/sidebar.<instance_id>.sock` and writes:
 - wakeup socket path,
 - last-seen timestamp.
 
-On wakeup, the sidebar refetches the snapshot. Missed wakeups are closed by polling (~2s tick). A terminal resize is also a wakeup: a watcher thread turns Zellij's resize (`SIGWINCH`) into a socket nudge so the loop repaints at the new size at once — without it the first usable frame on attach waits for the next tick, reading as a blank pane. The blocking wait treats a signal-interrupted receive as that same "redraw now", never an error.
-Ledger wakeups skip sidebar heartbeats whose `protocol_version` does not match the current sidebar protocol; `rimz doctor` reports the mismatch so reload issues are visible after upgrades.
+On wakeup, the sidebar refetches the snapshot. Missed wakeups are closed by polling (~2s tick). A terminal resize is also a wakeup: a watcher thread turns Zellij's resize (`SIGWINCH`) into a socket nudge so the loop repaints at the new size at once — without it the first usable frame on attach waits for the next tick, reading as a blank pane. The blocking wait treats a signal-interrupted receive as that same "redraw now", never an error. Ledger wakeups skip sidebar heartbeats whose `protocol_version` does not match the current sidebar protocol; `rimz doctor` reports the mismatch so reload issues are visible after upgrades.
 
 ## Reload recovery
 
@@ -139,25 +124,25 @@ Top to bottom, the sidebar is:
 
 1. **Title** — the project display name (workspace-id fallback).
 2. **Degraded banner** — only when the refresh loop is unhealthy (see [Reload recovery](#reload-recovery)).
-3. **Attention line** — instant triage: `◆2  ✗1` (yellow/red) counts agents waiting or failed; `✓ all clear` (dim) when nothing needs you. It counts even agents hidden by a per-worktree cap, so the aggregate is never lost.
+3. **Attention line** — instant triage: `◆2  ✗1` (yellow/red) counts agents waiting or failed; omitted when nothing needs you. It counts even agents hidden by a per-worktree cap, so the aggregate is never lost.
 4. **Worktree groups** — the body (below).
-5. **Footer** — a dim jump hint (`↵ focus`) on interactive renderers; nothing on the read-only pane. No timestamp; freshness is the degraded banner's job.
+5. **Footer** — a dim hint for the interactive keys: `↵ jump`, plus `␣ next ◆` and `? keys` when more than one row needs you; with a single waiting item it names the target (`↵ jump to claude`). No timestamp; freshness is the degraded banner's job.
 
 There are no feed-group sections: "Recently answered" and "Recent activity" are gone. The sidebar shows only what needs a decision or an action; history lives in `rimz feed list`.
 
 ### Worktree groups
 
-A worktree is total isolation — only same-worktree agents collaborate — so it is the spine of the layout. Each group is a bold header with a `▌` isolation marker and a right-aligned status tally (`2▸ 1◆`), then its rows. The `workspace` group holds scripts and CI not tied to a worktree and renders last unless it holds a waiting ask.
+A worktree is total isolation — only same-worktree agents collaborate — so it is the spine of the layout. Each group is a bold header with a `▌` isolation marker and a right-aligned status tally (`2▸ 1◆`), then its rows. A pane's group is its cwd's worktree. The `workspace` group is the catch-all: scripts and CI not tied to a worktree, plus panes whose cwd sits outside any of the project's worktrees. It renders last unless it holds a waiting ask.
 
 ### Attention ranking and the per-worktree cap
 
-One principle: the most attention-hungry rises. Within a worktree, agents sort by status bucket (`waiting` → `failed` → `running` → `idle` → `success`), then by age in that bucket — attention-demanding buckets (`waiting`, `failed`) oldest-first (longest overdue rises), calm buckets (`running`, `idle`, `success`) most-recent-first. Worktree groups themselves sort by their top-ranked member.
+One principle: the most attention-hungry rises. Within a worktree, agents sort by status bucket (`waiting` → `failed` → `running` → `idle` → `success`), then by age in that bucket — attention-demanding buckets (`waiting`, `failed`) oldest-first (longest overdue rises), calm buckets (`running`, `idle`, `success`) most-recent-first. Bare process rows have no status, so they sort below every agent row, most-recent-first. Worktree groups themselves sort by their top-ranked member.
 
-Each worktree shows at most N agents (default ~6, configurable) with a dim `+K more`. The cap truncates only the calm/done tail; every `waiting`/`failed` agent is exempt and always shown, so the cap can never hide something that needs you.
+Each worktree shows at most N rows (default ~6, configurable) with a dim `+K more`. The cap truncates only the calm tail — calm agents and process rows; every `waiting`/`failed` agent is exempt and always shown, so the cap can never hide something that needs you.
 
 ## Agent rows
 
-Each agent is a two-line cell — line 1 is *what's happening*, line 2 (dim) is *what it is*. Non-agent jobs (scripts, CI) have no model and stay a single line.
+Each agent is a two-line cell — line 1 is *what's happening*, line 2 (dim) is *what it is*. Non-agent jobs (scripts, CI) and bare process rows (below) have no model and stay a single line.
 
 ```
 ◆ claude  fix auth flow    12m     line 1 — status · name · task · age
@@ -173,22 +158,39 @@ Line 1:
 
 Line 2 — the capability line, dim `·`-joined tokens: model (`Opus`, `GPT-5.5`), effort/thinking (`xhigh`/`high`/…), and mode (`interactive`/`unknown` omitted, `bypass` warn-colored). When narrow, keep model → effort → mode, except `bypass` which is always kept; with no capability data the line is dropped and the agent renders single-line.
 
-A resolver mid-flight replaces `◆ waiting` on its row with `⟳ <resolver> <budget>`; when the chain exhausts it flips back to `◆ waiting`. Override a slow chain with `rimz feed resolve --override-chain`.
+A resolver mid-flight replaces `◆ waiting` on its row with `⟳ <resolver> <budget>` (the agent name stays; the budget fills the task slot), and still counts in the attention tally — the item is pending, just being handled. When the chain exhausts it flips back to `◆ waiting`. Override a slow chain with `rimz feed resolve --override-chain`.
+
+### Process rows
+
+A pane whose foreground is not an agent renders as a single dim line: a `·` marker, the command name (`zsh`, `vim`, `node`), and the right-aligned age since the pane was last seen. No capability line, no status glyph, no attention count — it is presence, not a cue. It is still a jump target: selecting it focuses that pane like any other row. A process row carries no ledger identity; the moment its foreground becomes an agent, the ledger overlay claims the same row (Phase 1).
 
 ### Jump — the row is the link
 
-You don't read where to go; you go. Selecting a row focuses that agent's pane via the `pane` ref on the snapshot — no view/pane number is ever printed.
+You don't read where to go; you go. Selecting a row focuses that agent's pane via the `pane` ref on the snapshot — no mux pane number is ever printed. Both renderers share one key model:
 
-- **Zellij plugin rail** — mouse click or `↑/↓` + `↵` calls `focus_pane_with_id(...)`, reconciling `pane_process_start` to refuse a stale pane.
-- **Native pane** — read-only output gains a minimal key handler (`↑/↓` select, `↵` focus → mux focus command); where the terminal forwards mouse, a click does the same. The glyph + color stays the at-a-glance signal regardless of input support.
+- `↑/↓` select a row; `↵` jumps to the selected pane.
+- `1`–`9` jump by the row's visible ordinal (its position in the column, not a mux pane id).
+- `␣` jumps to the *next item that needs you* — the next `waiting`/`failed` row in ranking order — without first selecting it. This is the fleet-scale triage key (Phase 4): one keystroke to the oldest blocked pane, again for the next. It is bound only inside the Rimz session, so it never touches the user's global mux config.
+- `?` toggles a legend-and-keys overlay, so the glyph vocabulary and the key model are learnable in place without leaving the room.
+
+Per renderer this is the same model over different input plumbing:
+
+- **Zellij plugin rail** — mouse click or the keys above call `focus_pane_with_id(...)`, reconciling `pane_process_start` to refuse a stale pane.
+- **Native pane** — the renderer's key handler maps the same keys to mux focus commands; where the terminal forwards mouse, a click does the same. The glyph + color stays the at-a-glance signal regardless of input support.
+
+Either way the jump reconciles pane id *and* `pane_process_start`, so a reused pane id never silently focuses a stranger (see [Action rules](#action-rules)).
+
+On every refresh, the native pane mirrors selection to the focused working pane in its own mux view. If focus is on the sidebar itself or focus cannot be discovered, the current manual selection stays in place.
 
 ### Token-budget health (future)
 
 An agent can expose remaining context/token budget; the sidebar will reflect it as a small color-graded gauge on line 2 (`▰▰▰▱▱ 38%`), shaded green → amber → red by the value alone so it never competes with the status glyph. Enrich-only and telemetry-gated (like tool telemetry): it never drives a decision. Backed by a future `AgentState.token_budget`.
 
-### View-model fields this assumes
+### View-model fields the rows use
 
-Beyond today's snapshot the rows need `AgentState.task`, `.model`, `.effort`, a last-activity timestamp (for age and ranking), and — future — `.token_budget`; `mode` and the `pane` ref already exist. The sidebar no longer projects `recently_answered` or `recent_activity`; those stay in the ledger for `rimz feed list`.
+The rows read `SidebarRow.{row_kind, name, status, mode, pane, task, model, effort, worktree_path, worktree_branch, last_activity, resolver, options}` plus the per-group `status_counts`. `row_kind` is `agent`, `item`, or `process`; a process row carries its command in `name` and leaves `status` unset (it never enters `status_counts`). Pane presence reaches the reducer through `PaneRef.{command, cwd}`, resolved to `worktree_path`/`worktree_branch` before grouping. Age and ranking come from `last_activity`. The only future field is `.token_budget` (above).
+
+`SidebarSnapshot` still carries `recently_answered` and `recent_activity`, but the sidebar renderer ignores them — it paints only `worktree_groups` and the attention line. History surfaces through `rimz feed list`. If no renderer ever consumes those two fields, drop them from the sidebar view-model; they restate ledger queries.
 
 ## Action rules
 
@@ -208,3 +210,7 @@ Notify on:
 - item is answered,
 - agent resumes after waiting,
 - agent stays `waiting` past a configured threshold.
+
+**Coalesce, then escalate.** Several agents entering `waiting` together produce one notification (*"3 agents need you · query-engine"*), not one each. An agent that stays `waiting` past the threshold earns a single nudge, not a stream.
+
+**A notification routes; it never answers.** Its text names *who* needs you and *what task* — never the agent's prompt. Activating one focuses the terminal best-effort and pre-selects that row, so even when the OS cannot focus an exact pane the sidebar already has it highlighted for the jump. A missed notification loses nothing; the ledger and the attention line stay authoritative.

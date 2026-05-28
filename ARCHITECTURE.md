@@ -100,7 +100,7 @@ CLI binary, hook entrypoints, and the runtime/domain library. Start here for any
 - `src/ledger/event_log.rs` — length-framed append log, fsync, torn-trailing-record recovery, size-cap rotation, archive pruning.
 - `src/ledger/feed_store.rs` — atomic feed item writes and status CAS.
 - `src/ledger/gc.rs` — runtime garbage collection for stale liveness hints.
-- `src/ledger/snapshot.rs` — reduced workspace snapshot rebuild, latest snapshot write, agent-rollup carryover across event-log rotation.
+- `src/ledger/snapshot.rs` — reduced workspace snapshot rebuild, latest snapshot write, agent-rollup carryover across event-log rotation, and the pure pane-presence fold-in (the `sidebar` CLI supplies the live pane list; the reducer never calls the mux).
 - `src/ledger/workspace_record.rs` — `workspace.json` maintenance index for migrate/prune.
 - `src/ledger/wakeup.rs` — best-effort per-request and sidebar wakeup datagrams.
 - `src/ledger/mod.rs` — `Ledger` handle (`Arc<LedgerInner>`); public methods take the workspace lock and drive `event_log`, `feed_store`, `snapshot` directly. No actor.
@@ -113,9 +113,7 @@ CLI binary, hook entrypoints, and the runtime/domain library. Start here for any
 - `src/agents/mod.rs` — `AgentIntegration` trait.
 - `src/agents/claude.rs` — Claude wrapper, hook installer, classification, rendering.
 - `src/agents/codex.rs` — Codex hook install merge, classification, rendering.
-- Additional agent adapters (OpenCode, Pi, etc.) land per
-  [docs/contributing/roadmap.md](./docs/contributing/roadmap.md) once their hook surfaces
-  and decision shapes are verified.
+- Additional agent adapters (OpenCode, Pi, etc.) land per [docs/contributing/roadmap.md](./docs/contributing/roadmap.md) once their hook surfaces and decision shapes are verified.
 - `src/resolver/mod.rs` — re-exports for the resolver subsystem.
 - `src/resolver/allowlist.rs` — per-machine TOML allowlist with atomic writes.
 - `src/resolver/freshness.rs` — heartbeat TTL walk, single-resolver health check, TOCTOU `restat`.
@@ -135,7 +133,7 @@ Crate-local rules:
 Native terminal sidebar renderer — the default on both backends.
 
 - `app.rs` — snapshot model, tick loop, wakeup handling, `FetchStatus`/`RenderState` recovery logic for snapshot or heartbeat failure.
-- `render/` — projects the snapshot view-model into worktree-grouped, attention-ranked agent rows.
+- `render/` — projects the snapshot view-model into worktree-grouped, attention-ranked rows (agents, attention items, and bare process rows for non-agent panes).
 
 Crate-local rules:
 

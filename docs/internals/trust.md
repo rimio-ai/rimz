@@ -1,12 +1,8 @@
 # Project trust
 
-> See [`docs/guide/security.md`](../guide/security.md) for the user-facing
-> threat model and [`docs/reference/cli.md`](../reference/cli.md) for the
-> `rimz trust` surface.
+> See [`docs/guide/security.md`](../guide/security.md) for the user-facing threat model and [`docs/reference/cli.md`](../reference/cli.md) for the `rimz trust` surface.
 
-Project config at `<project_root>/.rimz/config.toml` is inert until the
-workspace is trusted. A grant pins a SHA-256 of every command-running field;
-later reads re-hash and demote to stale when the hash drifts.
+Project config at `<project_root>/.rimz/config.toml` is inert until the workspace is trusted. A grant pins a SHA-256 of every command-running field; later reads re-hash and demote to stale when the hash drifts.
 
 ## States
 
@@ -17,15 +13,11 @@ later reads re-hash and demote to stale when the hash drifts.
 | `trusted` | Grant record matches the current executable-surface hash. |
 | `stale` | Grant record exists but the surface hash drifted since the grant. Equivalent to `untrusted` for any command-running gate. |
 
-`stale` is the auto-revoke half of the contract: `rimz trust status` recomputes
-the hash every call, so there is no separate sweep — the next read of the
-workspace sees the new state.
+`stale` is the auto-revoke half of the contract: `rimz trust status` recomputes the hash every call, so there is no separate sweep — the next read of the workspace sees the new state.
 
 ## Executable surface
 
-Every field that can cause a process to run enters the hash. The current
-projection lives in
-[`crates/rimz/src/trust.rs::ExecutableSurface`](../../crates/rimz/src/trust.rs).
+Every field that can cause a process to run enters the hash. The current projection lives in [`crates/rimz/src/trust.rs::ExecutableSurface`](../../crates/rimz/src/trust.rs).
 
 - `[[layout.initial_panes]]` — `name`, `command`, `cwd`, `env`.
 - `[layout.tmux]` — `status_left`, `status_right`, `popup_command`.
@@ -35,26 +27,19 @@ projection lives in
 - `[env]` — every key/value (PATH-affecting overrides included).
 - `[notifications]` — `command`.
 
-The hash input is canonical JSON over `ExecutableSurface`. Struct field order
-is fixed, `BTreeMap` keys sort, `Option::None` serializes as `null`. The wire
-format is `sha256:<hex>`.
+The hash input is canonical JSON over `ExecutableSurface`. Struct field order is fixed, `BTreeMap` keys sort, `Option::None` serializes as `null`. The wire format is `sha256:<hex>`.
 
-Adding a command-running field that isn't projected into `ExecutableSurface`
-is a CI invariant violation — the
-`hash_covers_every_documented_surface_field` unit test will collide and the
-`docs/guide/security.md` doc gate will not match.
+Adding a command-running field that isn't projected into `ExecutableSurface` is a CI invariant violation — the `hash_covers_every_documented_surface_field` unit test will collide and the `docs/guide/security.md` doc gate will not match.
 
 ## Storage
 
 - **Project config.** `<project_root>/.rimz/config.toml`. Committed.
-- **Trust record.** `$XDG_CONFIG_HOME/rimz/projects/<workspace_id>/trust.toml`.
-  Per-machine. Atomic temp+rename writes through
-  [`ledger::atomic::write_bytes_atomically`](../../crates/rimz/src/ledger/atomic.rs).
+- **Trust record.** `$XDG_CONFIG_HOME/rimz/projects/<workspace_id>/trust.toml`. Per-machine. Atomic temp+rename writes through [`ledger::atomic::write_bytes_atomically`](../../crates/rimz/src/ledger/atomic.rs).
 
 Record schema:
 
 ```toml
-project_root = "/home/me/code/billing-service"
+project_root = "/home/me/code/query-engine"
 surface_hash = "sha256:..."
 granted_at   = "2026-05-23T12:34:56Z"
 ```
@@ -65,6 +50,4 @@ granted_at   = "2026-05-23T12:34:56Z"
 rimz trust [status|grant|revoke] [--json]
 ```
 
-`status` is the default. `grant` pins the live hash; `revoke` deletes the
-record. `rimz doctor` surfaces the trust state alongside the protocol and
-resolver checks.
+`status` is the default. `grant` pins the live hash; `revoke` deletes the record. `rimz doctor` surfaces the trust state alongside the protocol and resolver checks.

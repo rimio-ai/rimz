@@ -2,12 +2,12 @@
 
 > See [DESIGN.md](../../DESIGN.md) for the commitments this doc operationalizes.
 
-Rimz gives every project one room — a Zellij or tmux session with a sidebar — where humans, scripts, CI, and coding agents share one feed. This doc is the five-minute tour: what the sidebar looks like, who it's for, how the three operating paths feel in practice, and the commands you'd actually run today.
+Rimz gives every project one room — a Zellij or tmux session with a sidebar — where humans, scripts, CI, and coding agents share one feed. This doc is the five-minute tour: what the sidebar looks like, who it's for, how the three operating paths feel in practice, and the commands you'd actually run today. For the full phase-by-phase walk-through — first keystroke to a ten-agent fleet — see [experience.md](./experience.md).
 
 ## The sidebar
 
 ```
-┌ billing-service ───────────┐
+┌ query-engine ──────────────┐
 │ ◆2  ✗1                     │
 │                            │
 │ ▌main             2▸ 1◆    │
@@ -33,12 +33,12 @@ Rimz gives every project one room — a Zellij or tmux session with a sidebar �
 
 > Product invariant lives in [DESIGN.md](../../DESIGN.md).
 
-The sidebar is a worktree-keyed attention map: each agent shows its status (a colored glyph), the task it's on, and how long since it last moved — grouped by the worktree it lives in. It **routes you to the pane that needs you** — select a row to jump there — and you read the actual prompt and answer in the agent's own UI. That safety net never breaks. Resolvers can slot ahead of you when you want help; the chain ends with you.
+The sidebar is a worktree-keyed presence and attention map: every pane is a row — a bare shell shows as `· zsh`, and becomes the agent's row the moment you run one — and each agent shows its status (a colored glyph), the task it's on, and how long since it last moved, grouped by the worktree it lives in. When an agent exits, its row reverts to the shell, so the column always mirrors what's actually running. It **routes you to the pane that needs you** — select a row to jump there — and you read the actual prompt and answer in the agent's own UI. That safety net never breaks. Resolvers can slot ahead of you when you want help; the chain ends with you.
 
 ## Three audiences, one room
 
 - **Agent users.** You have four Claude Code or Codex sessions in flight across two worktrees. One hits a permission prompt. The sidebar surfaces it, you focus the pane, read what it actually wants to run, and approve in Claude's own prompt. Triage goes from "stare at five terminals" to "answer the questions that need me, when they need me."
-- **Remote developers.** Your dev box is on a server. You start agents, close the laptop, reopen from a tablet on the train. `ssh dev-box rimz attach billing-service` and the sidebar reconstructs from the ledger — every agent where you left it, every pending question still waiting.
+- **Remote developers.** Your dev box is on a server. You start agents, close the laptop, reopen from a tablet on the train. `ssh dev-box rimz attach query-engine` and the sidebar reconstructs from the ledger — every agent where you left it, every pending question still waiting.
 - **Script and tool authors.** Your deploy pipeline runs 40 minutes unattended, then pauses at the staging-to-prod gate. The script calls `rimz feed ask --title "Promote build 2026.05.18-rc.4?"` and a teammate sees it from their phone over Tailscale alongside everything the agents are doing.
 
 ## How a question reaches you
@@ -53,7 +53,7 @@ Every actionable item travels one of three paths. The schema names (`native_ui`,
 
 ```sh
 # 1. Start (or attach to) the workspace for this project
-cd ~/code/billing-service
+cd ~/code/query-engine
 rimz
 
 # 2. Emit a workspace event from any pane — no agent required
@@ -71,7 +71,7 @@ rimz feed resolve <request-id> --decision '{"choice":"yes"}'
 #    Zellij: Ctrl-O then d. tmux: prefix then d. Or: rimz detach.
 
 # 6. Come back later from anywhere
-ssh dev-box rimz attach billing-service
+ssh dev-box rimz attach query-engine
 
 # 7. Launch a coding agent in a new view
 rimz pane split --view new
@@ -82,7 +82,7 @@ That's the loop. Every other feature in Rimz is a variation on those primitives.
 
 ## Many agents, many worktrees
 
-Rimz groups panes by worktree, so a fleet spread across `../billing-service` (main), `../billing-service-feature-migration`, and `../billing-service-feature-frontend` renders as three groups inside one room. Agents in the same worktree share file space; sibling worktrees keep their own. The sidebar shows you which worktree each agent is in. Two write-capable agents in the *same* worktree trigger a one-time advisory; running them in *sibling* worktrees is the recommended pattern.
+Rimz groups panes by worktree, so a fleet spread across `../query-engine` (main), `../query-engine-feature-migration`, and `../query-engine-feature-frontend` renders as three groups inside one room. Agents in the same worktree share file space; sibling worktrees keep their own. The sidebar shows you which worktree each agent is in. Two write-capable agents in the *same* worktree trigger a one-time advisory; running them in *sibling* worktrees is the recommended pattern.
 
 ## Survive overnight, survive reboot
 

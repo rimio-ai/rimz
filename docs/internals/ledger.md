@@ -112,7 +112,7 @@ On hook-cap timeout (Claude 120s, Codex shorter — see [agent.md](./agent.md) f
 After every ledger write the CLI or hook subprocess:
 
 1. Walks fresh `heartbeat/sidebar.*.json` entries on the current sidebar protocol version (TTL ~5s).
-2. Sends a small wakeup datagram (`{ "kind": "ledger_delta", "request_id": "...", "workspace_id": "...", "protocol_version": "rimz.plugin.v1" }`) to each `sock/sidebar.<instance_id>.sock`.
+2. Sends a small wakeup datagram (`{ "kind": "ledger_delta", "request_id": "...", "workspace_id": "...", "protocol_version": "rimz.plugin.v2" }`) to each `sock/sidebar.<instance_id>.sock`.
 3. **On the Zellij backend only**, additionally issues a broadcast `zellij --session <name> pipe --name rimz::feed -- <envelope>` as a latency optimization for pipe-aware Zellij clients. The native sidebar pane still uses the socket above as the wakeup channel of record.
 
 The sidebar's response to a wakeup is always to refetch via `rimz sidebar snapshot`. A missed wakeup is closed by the next tick (~2s).

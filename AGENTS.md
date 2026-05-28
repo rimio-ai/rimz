@@ -10,6 +10,8 @@ If a child `AGENTS.md` appears under a subtree, it extends this file with local-
 
 Declarative, present tense. State the contract; don't narrate history. Prefer imperatives (`Use Result.`, `Resolvers own pane I/O.`) over prohibitions where the meaning carries.
 
+Markdown prose uses one logical line per paragraph, list item, and blockquote paragraph. Do not hard-wrap prose.
+
 ## Engineering principles
 
 - **Explicit Rust.** Typed IDs, typed state machines, structured parsers, explicit errors. Domain errors return `Result`; `unwrap`, `expect`, and panics belong in tests, build scripts, and provably-impossible states (with a comment).
@@ -33,7 +35,7 @@ Declarative, present tense. State the contract; don't narrate history. Prefer im
 - Rust unless the task targets docs, tests, scripts, examples, or build glue.
 - Root docs stay short and authoritative; detail lives in `docs/` and is linked.
 - Update [ARCHITECTURE.md](./ARCHITECTURE.md) when modules move. Update [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes.
-- Reuse the canonical example in docs: `~/code/billing-service` with `main` + `feature-migration` worktrees.
+- Reuse the canonical example in docs: `~/code/query-engine` with `main` + `feature-migration` worktrees.
 - `cargo xtask ci` is the single contributor entry point for every quality gate; new automation lands as an `xtask` task, not a shell script. Gate stack lives in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
 
 ## Testing requirements
@@ -41,10 +43,7 @@ Declarative, present tense. State the contract; don't narrate history. Prefer im
 - Unit tests around state machines, schema rendering, and trust decisions.
 - Integration tests for ledger CAS, bridge timeouts, socket wakeups, and backend parity.
 - Golden tests for every agent hook stdout shape, including neutral timeout output.
-- Every command-executing config field projected into
-  `ExecutableSurface` (asserted by the
-  `hash_covers_every_documented_surface_field` unit test in
-  `crates/rimz/src/trust.rs`).
+- Every command-executing config field projected into `ExecutableSurface` (asserted by the `hash_covers_every_documented_surface_field` unit test in `crates/rimz/src/trust.rs`).
 - Grep-style CI invariants reject:
   - `Stdio::inherit` in hook subprocess paths,
   - sidebar imports of ledger-write modules,
@@ -63,6 +62,7 @@ Every other document is a leaf from here. The `docs/` tree groups by audience: *
 
 **Guide** — `docs/guide/`
 - [product.md](./docs/guide/product.md) — five-minute tour, audiences, sidebar walk-through.
+- [experience.md](./docs/guide/experience.md) — first-run-to-fleet experience, phase by phase.
 - [security.md](./docs/guide/security.md) — threat model and guardrails.
 
 **Reference** — `docs/reference/`

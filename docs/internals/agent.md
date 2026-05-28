@@ -11,6 +11,7 @@ Every adapter implements:
 ```text
 install_hooks()
 uninstall_hooks()
+hooks_installed()
 classify_hook()
 observe_lifecycle()
 render_decision(feed_kind, resolution)
@@ -18,7 +19,9 @@ render_neutral(event_name)
 hook_cap()
 ```
 
-Decision renderers are agent-specific. Do not reuse one agent's JSON shape for another — Claude expects `hookSpecificOutput`, Codex expects a bare `{"decision": "allow"}`, and conflating them silently breaks one of them.
+Hook install is an explicit, visible security step. `rimz start` detects installed, supported agents each run, previews the additive per-user config change, installs missing hooks when approved, and continues without installing when the user skips or declines. `rimz hooks install <agent>` remains the manual entry point. An agent run before hooks are installed fires no hook and registers nothing. `hooks_installed()` makes that state observable: `rimz doctor` reports it per agent, and the sidebar's first-run hint points at `rimz hooks install` until an agent is wired (see [sidebar.md → Phase 0](./sidebar.md#phase-0--bare-shell-nothing-running-yet)).
+
+Decision renderers are agent-specific. Do not reuse one agent's JSON shape for another. Claude and current Codex both use `hookSpecificOutput` for `PermissionRequest`, but Codex rejects fields such as `updatedInput`, `updatedPermissions`, and `interrupt` on that event.
 
 ## Two hook channels
 
@@ -47,11 +50,17 @@ The agent owns the status and mode vocabulary; Rimz observes and renders. The fi
 
 Bypass is observed from the agent's own flag (`claude --dangerously-skip-permissions`, `codex --ask-for-approval never`). Rimz does not own unattended mode.
 
+## Liveness
+
+Presence comes from the live pane list, not from a session-exit hook (see [sidebar.md → Presence model](./sidebar.md#presence-model)) — an agent whose pane reverts to a shell or closes is gone with no event required. The agent's pid is a *refining gate* layered on top of that, not the primary signal.
+
+On a lifecycle event Rimz records the agent's pid best-effort: the hook process's parent is the agent that spawned it, so `getppid()` names it directly. It is best-effort by design — if the agent runs its hook through a shell wrapper, the parent is the wrapper, not the agent, and the gate simply abstains; the foreground-command signal carries liveness alone. The pid (and, on Linux, its process-start time, to defeat pid reuse) gates the ledger overlay: a dead pid stops Rimz from painting a fresh, unrelated process as the agent that just exited. There is no `offline` status — a dead agent is a reverted shell row, never a retracted ledger fact.
+
 ## Telemetry is opt-in
 
 ```sh
-rimz hooks claude install --telemetry      # add high-frequency hooks
-rimz hooks claude install --no-telemetry   # default; install lifecycle + feed only
+rimz hooks install claude --telemetry      # add high-frequency hooks
+rimz hooks install claude                  # default; install lifecycle + feed only
 ```
 
 Telemetry adds prompt-submit, pre-tool, and post-tool hooks that fire on every tool call. They're useful for activity-history (`rimz feed list`) depth and post-hoc audit, but they carry tool inputs, prompts, file paths, and outputs into the ledger. Gate them against `[privacy] payload_mode`:
@@ -109,7 +118,8 @@ Decision shapes — Claude requires `hookSpecificOutput`:
 Default install:
 
 ```text
-SessionStart   Stop   PermissionRequest
+SessionStart   SubagentStart   SubagentStop   Stop
+PermissionRequest
 ```
 
 Telemetry install adds prompt submit and tool telemetry where supported.
@@ -117,11 +127,28 @@ Telemetry install adds prompt submit and tool telemetry where supported.
 Decision shape — Codex permission hooks emit only:
 
 ```json
-{ "decision": "allow" }
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PermissionRequest",
+    "decision": { "behavior": "allow" }
+  }
+}
 ```
 
 ```json
-{ "decision": "deny" }
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PermissionRequest",
+    "decision": {
+      "behavior": "deny",
+      "message": "Blocked by repository policy."
+    }
+  }
+}
 ```
+
+Codex install writes inline `[[hooks.Event]]` tables in `~/.codex/config.toml` with string `command` handlers. The old `[hooks.rimz]` table is ignored by Codex and exists only as legacy cleanup for uninstall.
+
+Codex 0.134 routes thread-spawned subagents through `SubagentStart` and `SubagentStop` instead of the root `SessionStart` / `Stop` lifecycle. Normal hooks fired inside a subagent include a child `agent_id` and `agent_type`; Rimz keys those feed rows by the child `agent_id` so a pending subagent permission request replaces the subagent row rather than creating a parent session duplicate.
 
 Never emit `updatedInput`, `updatedPermissions`, or `interrupt` for Codex permission hooks — those fields belong to other Codex hook types and corrupt the permission decision when included. Codex's hook cap is shorter than Claude's; chain budgets should account for it.

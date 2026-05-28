@@ -44,14 +44,12 @@ Detach/reattach polish, sidebar reload recovery, protocol-version doctor checks,
 
 OS notifications, sounds, user/project notification policy.
 
-## Follow-up — Sidebar attention redesign
+## Follow-up — Sidebar interaction polish
 
-The approved design in [sidebar.md](../internals/sidebar.md) reflows the renderer for the narrow (30%) column and reframes it as a worktree-keyed attention map. The M1 renderer diverges from it; tracked work to converge:
+The approved design in [sidebar.md](../internals/sidebar.md) now drives the native renderer: the snapshot carries worktree-grouped rows, capability fields, attention ranking, per-worktree caps, and history stays out of the sidebar. Remaining interaction work:
 
-- Reflow `rimz-sidebar` to the spec — two-line agent cells, per-row activity age, attention-ranked sort, per-worktree cap, no "updated" footer — with narrow-width (24/28-col) snapshot fixtures replacing the 80/96-col ones.
 - Make rows jump targets: rail click/keys plus a native-pane key handler, both calling `focus_pane`.
-- Extend the snapshot — `AgentState.task`, `.model`, `.effort`, a last-activity timestamp, and (future) `.token_budget` — fed by the agent hooks.
-- Drop the `recently_answered` / `recent_activity` projection from the sidebar; history stays in `rimz feed list`.
+- Add future `AgentState.token_budget` once agents expose that telemetry.
 
 ## M6 — Sub-agent observability
 

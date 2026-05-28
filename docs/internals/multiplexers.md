@@ -26,7 +26,7 @@ ensure_session(session_name, cwd)
 attach_command(name) -> CommandSpec
 detach(name)
 list_sessions()
-list_panes(session)
+list_panes(session)               id, view, foreground command, cwd
 split_pane(args)
 focus_pane(pane_id)
 capture_pane(pane_id, opts)     normalized output
@@ -37,6 +37,17 @@ version()
 ```
 
 Backend-specific fast paths cannot become correctness requirements. If a feature exists only on Zellij, the tmux backend must still pass the same matrix without it.
+
+### Pane metadata
+
+`list_panes` reports each pane's **foreground command** and **cwd** alongside its id and view. The sidebar uses these for presence: a pane is a row, its command labels it, and its cwd groups it by worktree (see [sidebar.md → Presence model](./sidebar.md#presence-model)). Both fields are cross-backend:
+
+| field        | tmux                       | Zellij (`list-panes -j`) |
+|--------------|----------------------------|--------------------------|
+| command      | `#{pane_current_command}`  | `pane_command`           |
+| cwd          | `#{pane_current_path}`     | `pane_cwd`               |
+
+`PaneRef.pane_process_start` stays the reused-id reconciliation key. Neither backend's pane PID feeds the sidebar: tmux's `#{pane_pid}` is the pane's *shell*, not the agent it launched, and Zellij exposes no pane PID at all. Agent liveness instead uses the agent's own pid, captured best-effort by its hook ([agent.md](./agent.md)) — so the parity floor for presence is command + cwd, which both backends meet.
 
 ## Pane IDs
 
@@ -83,7 +94,11 @@ The sidebar runs as a managed pane:
 ```text
 tmux split-window -d -h -l <width>% -b -t <session> \
   <rimz-bin> sidebar serve --mux tmux --workspace-id <id> --session-name <session>
+tmux set-hook -t <session> after-new-window \
+  "split-window -h -b -d -l <width>% '<rimz-bin> sidebar serve ...'"
 ```
+
+`open_sidebar` does both: it splits the sidebar into the initial window and installs a session-scoped `after-new-window` hook that re-runs the same left split in every window opened later. tmux has no tab template, so the hook is how it matches Zellij's `default_tab_template` parity — every view the user opens is born with a left sidebar and a focused right terminal (`-b` keeps the sidebar left, `-d` keeps focus on the new window's terminal).
 
 The pane is best-effort. A fresh sidebar heartbeat suppresses relaunch; a missing, stale, unreadable, or protocol-mismatched heartbeat lets `rimz start` / `rimz attach` open a new pane. Optional status-line and popup integrations are opt-in and trust-gated because they execute shell snippets.
 
@@ -97,7 +112,7 @@ tmux has no plugin surface to dock into, so the native pane is its only renderer
 - **Minimum version is 3.2.0.** `split-window -e KEY=VAL` (needed for `RIMZ_*` env injection on the managed sidebar pane) and `display-popup` (used by the optional popup integration that M1 will trust-gate) both landed in tmux 3.2. `rimz doctor` reports the floor compliance; the constant lives in `crates/rimz/src/mux/tmux.rs::MIN_TMUX_VERSION`.
 - **Server-less `list_sessions` is empty, not an error.** tmux exits 1 with `no server running` when the daemon hasn't been started yet. The backend swallows that specific stderr shape and returns an empty `Vec`, matching the Zellij contract (`zellij list-sessions` exits 0 with no output in the same state).
 - **`open_sidebar` reports split creation.** The tmux command returns once the managed pane is created; the inner `rimz sidebar serve` process owns rendering, heartbeat, and wakeup handling inside that pane. The sidebar self-closes the same way it does on Zellij — through the normalized `rimz pane list` — so a lone sidebar removes itself when its window's last working pane exits.
-- **New windows don't get a sidebar yet.** The initial window gets one (the `-b` split places it left at creation); auto-adding a sidebar to windows opened later needs a tmux hook and is a follow-up.
+- **Every window is born with a sidebar.** Alongside the initial split, `open_sidebar` installs an `after-new-window` hook so windows opened later get the same left sidebar + focused terminal. The hook runs `split-window` (not `new-window`), so it never recurses, and the sidebar self-close keeps a lone sidebar from outliving its window.
 - **Per-test server isolation in CI.** Integration tests construct the backend via `TmuxBackend::with_socket(<tempdir>/tmux.sock)` to keep each test's `tmux` server off the user's default socket. Production code uses the unit-default constructor and inherits the system socket.
 
 ## Common contract

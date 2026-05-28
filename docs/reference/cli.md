@@ -17,7 +17,7 @@ rimz doctor                       # diagnose backend, hooks, trust, resolvers
 rimz trust [status|grant|revoke]  # manage the project's executable-surface trust
 ```
 
-`rimz` resolves the project root, records `workspace.json`, creates or finds the multiplexer session, opens one native sidebar pane when no fresh sidebar heartbeat exists, and then enters the mux session on an interactive TTY. In non-interactive contexts it prints the attach command instead. `--attach` forces entering the mux; `--no-attach` and `--print` force printing. First-run UX is non-invasive: nothing is written to your shell or the agent's config until you run `rimz hooks <agent> install`.
+`rimz` resolves the project root, records `workspace.json`, creates or finds the multiplexer session, opens one native sidebar pane when no fresh sidebar heartbeat exists, and then enters the mux session on an interactive TTY. In non-interactive contexts it prints the attach command instead. `--attach` forces entering the mux; `--no-attach` and `--print` force printing. First-run UX is non-invasive: nothing is written to your shell or the agent's config until you run `rimz hooks install <agent>`.
 
 `rimz attach` without a session name resolves the cwd workspace and follows the same create/sidebar/attach flow. `rimz attach <session>` keeps exact session-name semantics: it prefers a mux already hosting that session, and when a matching `workspace.json` record exists it uses that record's workspace ID and cwd to ensure the session and relaunch the sidebar. Without a record, it warns and continues with the attach command only.
 
@@ -96,8 +96,8 @@ Resolvers form an ordered chain that ends with you. Each entry has its own `--bu
 ## Operate and maintain
 
 ```sh
-rimz hooks <agent> install  [--yes] [--telemetry|--no-telemetry]
-rimz hooks <agent> uninstall
+rimz hooks install <agent>   [--telemetry]
+rimz hooks uninstall <agent>
 
 rimz workspace migrate <old-root> <new-root>   # repo moved; rewire the ledger
 rimz workspace prune                           # drop ledgers whose roots are gone
@@ -124,6 +124,5 @@ rimz sidebar heartbeat --workspace-id <id> --instance-id <id> \
                        --wakeup-socket <path>
 rimz sidebar serve [--workspace-id <id>] [--mux <zellij|tmux>] \
                    [--session-name <name>] [--tick-seconds N]
-rimz hooks <agent> <subcommand>
 rimz hooks feed --source <agent> [--event <event>]
 ```
