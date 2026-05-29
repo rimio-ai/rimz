@@ -906,6 +906,8 @@ mod tests {
             .observe_lifecycle("SessionStart", &json!({ "approval_policy": "never" }))
             .unwrap();
         assert_eq!(obs.permission_posture, Some(PermissionPosture::Yolo));
+        assert_eq!(obs.context_pct, None);
+        assert_eq!(obs.total_tokens, None);
     }
 
     #[test]

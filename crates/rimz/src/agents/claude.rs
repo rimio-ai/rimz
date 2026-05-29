@@ -178,7 +178,8 @@ impl AgentIntegration for ClaudeIntegration {
         // tail on the low-frequency events Rimz already fires so the gauge
         // populates without a per-tool hook; an explicit payload field (rare)
         // still wins when present.
-        let usage = optional_payload_string(payload, &["transcript_path"])
+        let usage = optional_payload_string(payload, &["session_id"])
+            .and_then(|_| optional_payload_string(payload, &["transcript_path"]))
             .map(|path| usage_from_transcript(&path))
             .unwrap_or_default();
         let context_pct = payload
@@ -1433,6 +1434,29 @@ mod tests {
                     "session_id": "sess-1",
                     "transcript_path": "/nonexistent/path/session.jsonl",
                 }),
+            )
+            .unwrap();
+        assert_eq!(obs.context_pct, None);
+        assert_eq!(obs.total_tokens, None);
+    }
+
+    #[test]
+    fn transcript_requires_session_id() {
+        // Transcript reads are keyed by the agent's own session identity. A
+        // transcript path without a session id stays unknown; the sidebar row
+        // projection is responsible for the visible 0% baseline.
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("session.jsonl");
+        std::fs::write(
+            &transcript,
+            "{\"message\":{\"model\":\"claude-opus-4-7\",\"usage\":\
+             {\"input_tokens\":100000,\"output_tokens\":500}}}\n",
+        )
+        .unwrap();
+        let obs = ClaudeIntegration
+            .observe_lifecycle(
+                "SessionStart",
+                &json!({ "transcript_path": transcript.to_str().unwrap() }),
             )
             .unwrap();
         assert_eq!(obs.context_pct, None);
