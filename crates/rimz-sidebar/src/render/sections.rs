@@ -630,8 +630,9 @@ fn token_split_line(theme: &Theme, context: &AgentContext, width: usize) -> Opti
     Some(Line::from(trim_spans_to_width(spans, width)))
 }
 
-/// The bare token total, shown for an agent with no statusline context (today,
-/// Codex) so selection still reveals *something* for every agent.
+/// The bare token total, shown when the context carries no read-only token
+/// usage (Codex, whose app-server exposes none) so selection still reveals
+/// *something* for every agent.
 fn tokens_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     let total = row.total_tokens?;
     let spans = vec![Span::raw("  "), tokens_label(theme, total)];

@@ -513,6 +513,40 @@ mod tests {
         }
     }
 
+    /// The Codex app-server enrichment: rate-limit windows, the official model
+    /// display name, effort, and version — but no token usage or cost (the
+    /// app-server exposes neither read-only, so those stay `None` and the gauge
+    /// falls back to the rollout scalars). The mirror of `claude_context` for the
+    /// other transport.
+    fn codex_context(now: Timestamp) -> AgentContext {
+        AgentContext {
+            source: "codex".to_owned(),
+            session_name: None,
+            model_id: Some("gpt-5.5-codex".to_owned()),
+            model_display_name: Some("GPT-5.5 Codex".to_owned()),
+            effort: Some("xhigh".to_owned()),
+            thinking_enabled: None,
+            output_style: None,
+            vim_mode: None,
+            agent_version: Some("0.135.0".to_owned()),
+            exceeds_200k_tokens: None,
+            cost: None,
+            tokens: None,
+            rate_limits: Some(AgentRateLimits {
+                five_hour: Some(RateLimitWindow {
+                    used_percentage: Some(42),
+                    resets_at: Some(now + Duration::from_secs(3 * 3_600 + 12 * 60)),
+                }),
+                seven_day: Some(RateLimitWindow {
+                    used_percentage: Some(7),
+                    resets_at: Some(now + Duration::from_secs(3 * 86_400 + 4 * 3_600)),
+                }),
+            }),
+            pr: None,
+            observed_at: now,
+        }
+    }
+
     #[test]
     fn render_worktree_attention_map() {
         let workspace = fixed_workspace();
@@ -656,7 +690,8 @@ mod tests {
 
     #[test]
     fn selected_agent_without_context_keeps_bare_token_total() {
-        // An agent that publishes no statusline (today, Codex) degrades to the
+        // An agent with no context sidecar yet (a Codex session before its first
+        // app-server refresh, or any agent that publishes none) degrades to the
         // simple selected-row token total — no cost, no usage windows.
         let mut codex = agent(
             "codex-1",
@@ -685,6 +720,57 @@ mod tests {
 
         assert!(rendered.contains("5.0k tok"));
         assert!(!rendered.contains('↻'));
+        assert!(!rendered.contains('$'));
+    }
+
+    #[test]
+    fn codex_app_server_context_links_to_rich_card() {
+        // Codex's app-server enrichment rides the same `AgentContext` field as
+        // Claude's statusline, so it lights up the rich card with no renderer
+        // change: the official display name and effort on the capability line,
+        // and both usage windows in the selected detail block. Token usage and
+        // cost have no read-only source, so the gauge and detail fall back to the
+        // rollout scalars.
+        let mut codex = agent(
+            "codex-1",
+            "codex",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            Some("/repo/main"),
+            Some("main"),
+            Some("add tests"),
+        );
+        // Rollout scalars are the coarse fallback the app-server context upgrades.
+        codex.model = Some("gpt-5.5-codex".to_owned());
+        codex.context_pct = Some(21);
+        codex.total_tokens = Some(48_000);
+        codex.context = Some(codex_context(fixed_now()));
+        let snapshot = snapshot_with(Vec::new(), vec![codex]);
+        let rendered = snapshot_to_screen_with_alert_and_ui(
+            &snapshot,
+            None,
+            &UiState {
+                selected_index: 0,
+                help_visible: false,
+                animation_phase: 0,
+            },
+            54,
+            14,
+        );
+
+        // The app-server display name supersedes the raw catalog id, and effort
+        // surfaces — neither was on the rollout-only row.
+        assert!(rendered.contains("GPT-5.5 Codex"));
+        assert!(!rendered.contains("gpt-5.5-codex"));
+        assert!(rendered.contains("xhigh"));
+        // Selection reveals both rate-limit windows with reset countdowns.
+        assert!(rendered.contains('↻'));
+        assert!(rendered.contains("5h "));
+        assert!(rendered.contains("7d "));
+        // No read-only token usage or cost: the bare rollout total stands in for
+        // the token split, and no cost pins to the row.
+        assert!(rendered.contains("48.0k tok"));
+        assert!(!rendered.contains('↑'));
         assert!(!rendered.contains('$'));
     }
 

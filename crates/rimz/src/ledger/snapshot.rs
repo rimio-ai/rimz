@@ -191,12 +191,13 @@ pub struct SidebarRow {
     pub todo_done: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub todo_total: Option<u32>,
-    /// The session's rich statusline enrichment (cost, token breakdown,
-    /// rate-limit windows, session name), copied from `AgentState.context` so
-    /// the renderer reads one struct instead of cross-referencing `agents[]`.
-    /// Display-only and Claude-driven today; `None` for process rows and agents
-    /// that publish no statusline (the scalar `model`/`effort`/`context_pct`/
-    /// `total_tokens` carry those a renderer falls back to).
+    /// The session's rich enrichment (cost, token breakdown, rate-limit windows,
+    /// session name), copied from `AgentState.context` so the renderer reads one
+    /// struct instead of cross-referencing `agents[]`. Source-agnostic: Claude
+    /// fills it from its statusline, Codex from the app-server (rate-limit
+    /// windows, model display name, effort, version). Display-only; `None` for
+    /// process rows and any agent with no out-of-band source, where the scalar
+    /// `model`/`effort`/`context_pct`/`total_tokens` are the fallback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<AgentContext>,
     pub worktree_path: Option<String>,

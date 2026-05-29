@@ -1,6 +1,7 @@
 //! CLI parsing surface. Each subcommand has its own file under `cli/` and
 //! exposes a single `run(...)` entry called from `dispatch`.
 
+mod codex;
 mod doctor;
 mod event;
 mod feed;
@@ -48,6 +49,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
         Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
+        Some(Subcmd::Codex(args)) => codex::run(args, &globals),
         Some(Subcmd::Trust(args)) => trust::run(args, &globals),
         Some(Subcmd::Doctor(args)) => doctor::run(args, &globals),
         Some(Subcmd::Ping) => doctor::ping(),
@@ -128,6 +130,9 @@ enum Subcmd {
     Statusline(statusline::StatuslineArgs),
     /// Install/uninstall agent hooks. Internal hook entrypoints live here too.
     Hooks(hooks::HooksArgs),
+    /// Codex helper API. The Codex hook calls these; humans usually do not.
+    #[command(hide = true)]
+    Codex(codex::CodexArgs),
     /// Manage the project's executable-surface trust grant.
     Trust(trust::TrustArgs),
     /// Environment + backend report.

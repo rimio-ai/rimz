@@ -10,6 +10,14 @@
 //!
 //! Owns hook install / uninstall through a non-destructive merge into
 //! `~/.codex/config.toml` using Codex's inline `[[hooks.Event]]` tables.
+//!
+//! Realtime details split across two sources. The context-window gauge
+//! (`context_pct` / `total_tokens`) is read from the rollout tail below, because
+//! the Codex app-server exposes token usage only on a live, subscribing
+//! `thread/resume` — never read-only. The rich enrichment Claude gets from its
+//! statusline (rate-limit windows, model display name + effort, version) comes
+//! from the app-server read-only methods via [`refresh_context`], spawned
+//! out-of-band by `rimz codex refresh-context`.
 
 use std::env;
 use std::fs;
@@ -18,6 +26,10 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use jiff::Timestamp;
+
+use super::codex_app_server::CodexAppServer;
+use super::context::AgentContext;
 use super::{
     AgentErr, AgentHookClass, AgentIntegration, AgentLifecycleObservation, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, Result, agent_config_path,
@@ -227,6 +239,17 @@ impl AgentIntegration for CodexIntegration {
     fn hooks_installed(&self) -> bool {
         codex_config_path().is_ok_and(|path| hooks_installed_at(&path))
     }
+}
+
+/// Read Codex's read-only realtime details from the app-server and project them
+/// onto an [`AgentContext`] for the session sidecar. Spawned out-of-band by
+/// `rimz codex refresh-context` (never inline in a hook). `model_hint` is the
+/// session's model id from the lifecycle observation, used to resolve the
+/// model's display name + effort. `None` when the app-server is unreachable
+/// (codex missing, not runnable, handshake failed) — best-effort enrichment.
+pub fn refresh_context(model_hint: Option<&str>) -> Option<AgentContext> {
+    let mut client = CodexAppServer::connect()?;
+    Some(client.observe_context("codex", model_hint, Timestamp::now()))
 }
 
 /// Map Codex's `approval_policy` (or `mode`) payload field onto the

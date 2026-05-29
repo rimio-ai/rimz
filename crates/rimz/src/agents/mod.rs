@@ -11,6 +11,7 @@
 
 pub mod claude;
 pub mod codex;
+pub(crate) mod codex_app_server;
 pub mod context;
 pub mod statusline;
 
@@ -232,11 +233,12 @@ pub trait AgentIntegration: Send + Sync {
 
     /// Translate a raw out-of-band context payload into the normalized
     /// [`AgentContext`]. The transport is the adapter's business: Claude parses
-    /// the statusline JSON; Codex will parse a JSON-RPC result later. Returns
-    /// `None` when the adapter has no rich-context source (today: Codex) or the
-    /// payload is unusable. `source` is the ingest `--source` tag, stamped onto
-    /// the record so downstream knows the provenance. Display-only enrichment —
-    /// it never reaches the event log or a decision.
+    /// the statusline JSON it is handed on stdin. Returns `None` when the
+    /// adapter has no payload-driven rich-context source (Codex — it ingests
+    /// out-of-band via the app-server, see [`codex::refresh_context`], not from
+    /// a payload) or the payload is unusable. `source` is the ingest `--source`
+    /// tag, stamped onto the record so downstream knows the provenance.
+    /// Display-only enrichment — it never reaches the event log or a decision.
     fn observe_context(&self, _source: &str, _payload: &Value) -> Option<AgentContext> {
         None
     }

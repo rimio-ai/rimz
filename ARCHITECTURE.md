@@ -88,7 +88,7 @@ General coding rules live in [AGENTS.md](./AGENTS.md); only crate-local constrai
 CLI binary, hook entrypoints, and the runtime/domain library. Start here for any non-sidebar behaviour.
 
 - `src/main.rs` — CLI bootstrap, top-level error reporting.
-- `src/cli/` — command parsing and per-subcommand handlers (`workspace`, `list`, `event`, `feed`, `gc`, `pane`, `resolver`, `sidebar`, `hooks`, `trust`, `doctor`).
+- `src/cli/` — command parsing and per-subcommand handlers (`workspace`, `list`, `event`, `feed`, `gc`, `pane`, `resolver`, `sidebar`, `hooks`, `codex`, `trust`, `doctor`). `codex refresh-context` is the hidden entrypoint the Codex hook spawns to refresh the app-server `AgentContext` sidecar.
 - `src/workspace.rs` — project root, worktree root, workspace ID, session name.
 - `src/trust.rs` — executable-surface hash, per-machine grant record, trust state (no_config / untrusted / trusted / stale). `status` re-hashes every call so staleness is auto-detected.
 - `src/ids.rs` — typed identifier newtypes (workspace, request, event, resolver, sidebar instance, pane, mux).
@@ -113,6 +113,7 @@ CLI binary, hook entrypoints, and the runtime/domain library. Start here for any
 - `src/agents/mod.rs` — `AgentIntegration` trait.
 - `src/agents/claude.rs` — Claude wrapper, hook installer, classification, rendering.
 - `src/agents/codex.rs` — Codex hook install merge, classification, rendering.
+- `src/agents/codex_app_server.rs` — read-only Codex app-server JSON-RPC client (rate limits, model display name, version) behind a transport seam; the out-of-band `AgentContext` producer for Codex.
 - Additional agent adapters (OpenCode, Pi, etc.) land per [docs/contributing/roadmap.md](./docs/contributing/roadmap.md) once their hook surfaces and decision shapes are verified.
 - `src/resolver/mod.rs` — re-exports for the resolver subsystem.
 - `src/resolver/allowlist.rs` — per-machine TOML allowlist with atomic writes.

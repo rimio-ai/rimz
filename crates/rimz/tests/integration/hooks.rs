@@ -3,7 +3,7 @@
 //! binary; XDG roots are scoped under a tempdir so allowlist, state, and
 //! runtime files don't escape.
 
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use assert_cmd::cargo::CommandCargoExt;
@@ -946,6 +946,119 @@ fn statusline_context_folds_into_the_snapshot_agent() {
     assert_eq!(
         agent["context"]["rate_limits"]["five_hour"]["used_percentage"], 24,
         "statusline context folds onto the agent row (23.5 rounds to 24)"
+    );
+}
+
+/// Build the `rimz hooks feed --source codex` command with `RIMZ_CODEX_BIN`
+/// pointed at `codex_bin`, mirroring an installed hook. The detached
+/// `rimz codex refresh-context` child inherits this env, so it spawns
+/// `codex_bin app-server` for its read-only enrichment.
+fn codex_hook_with_app_server(env: &Env, codex_bin: &std::path::Path) -> Command {
+    let mut cmd = env.rimz();
+    cmd.args(["hooks", "feed", "--source", "codex"])
+        .env("RIMZ_AGENT_PID", std::process::id().to_string())
+        .env("RIMZ_CODEX_BIN", codex_bin)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    cmd
+}
+
+/// Absolute path to the built `codex app-server` stub fixture.
+fn codex_appserver_stub() -> std::path::PathBuf {
+    Command::cargo_bin("codex-appserver-stub")
+        .expect("cargo-bin stub")
+        .get_program()
+        .to_owned()
+        .into()
+}
+
+/// A Codex turn boundary spawns a detached refresh that reads the app-server
+/// (here, a stub) and writes the session's context sidecar with the rich
+/// details Claude gets from its statusline: rate-limit windows, model display
+/// name + effort, and version. The context gauge (`tokens`) stays `None` — the
+/// app-server exposes no read-only token usage, so that stays rollout-sourced.
+#[test]
+fn codex_turn_boundary_refreshes_context_sidecar_from_app_server() {
+    let env = Env::new();
+    let payload = serde_json::to_string(&json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "sess-codex-rt",
+        "approval_policy": "ask",
+        "model": "gpt-5.5-codex",
+    }))
+    .expect("payload");
+
+    let cmd = codex_hook_with_app_server(&env, &codex_appserver_stub());
+    let out = env
+        .spawn_payload(cmd, &payload)
+        .wait_with_output()
+        .expect("wait hook");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.stdout.is_empty(), "lifecycle hook is silent");
+
+    // The refresh is detached, so the sidecar lands after the hook returns.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let record = loop {
+        if let Some(record) = env
+            .agent_contexts()
+            .into_iter()
+            .find(|record| record.agent_id == "sess-codex-rt")
+        {
+            break record;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "codex context sidecar was never written"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+
+    assert_eq!(record.kind, "codex");
+    assert_eq!(record.context.source, "codex");
+    let limits = record.context.rate_limits.expect("rate limits present");
+    assert_eq!(limits.five_hour.unwrap().used_percentage, Some(42));
+    assert_eq!(limits.seven_day.unwrap().used_percentage, Some(7));
+    assert_eq!(
+        record.context.model_display_name.as_deref(),
+        Some("GPT-5.5 Codex")
+    );
+    assert_eq!(record.context.effort.as_deref(), Some("high"));
+    assert_eq!(record.context.agent_version.as_deref(), Some("9.9.9"));
+    assert!(
+        record.context.tokens.is_none(),
+        "no read-only token source for Codex — the gauge stays rollout-sourced"
+    );
+}
+
+/// When `codex` cannot be launched the refresh is a silent no-op: the hook
+/// still succeeds and writes no sidecar (best-effort enrichment, never
+/// correctness).
+#[test]
+fn codex_context_refresh_is_noop_when_binary_missing() {
+    let env = Env::new();
+    let cmd =
+        codex_hook_with_app_server(&env, std::path::Path::new("/nonexistent/codex-binary-xyz"));
+    let payload = r#"{ "hook_event_name": "SessionStart", "session_id": "sess-missing", "approval_policy": "ask" }"#;
+    let out = env
+        .spawn_payload(cmd, payload)
+        .wait_with_output()
+        .expect("wait hook");
+    assert!(out.status.success());
+
+    // Give a detached refresh time to run and fail; it must write nothing. The
+    // assertion holds whether or not the child has finished — nothing is ever
+    // written for a missing binary.
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        env.agent_contexts()
+            .iter()
+            .all(|record| record.agent_id != "sess-missing"),
+        "no sidecar when the app-server binary is missing"
     );
 }
 

@@ -12,6 +12,7 @@
 //! `docs/internals/ledger.md` for the wire-level contract.
 
 use std::io::{self, Read};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -111,6 +112,10 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         // events, so high-frequency tool hooks stay silent. The neutral
         // payload itself is the agent-native silent path — empty for Codex,
         // `{}` for Claude.
+        //
+        // Captured for the out-of-band Codex context refresh below: the model id
+        // the observation resolved, used to look up the model's display name.
+        let mut model_hint: Option<String> = None;
         if let Some(mut observation) = agent.observe_lifecycle(&event_name, &payload) {
             attach_agent_owner(agent.name(), &mut observation);
             attach_agent_pane(&mut observation);
@@ -120,6 +125,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             if observation.worktree_branch.is_none() {
                 observation.worktree_branch = workspace.worktree_branch.clone();
             }
+            model_hint = observation.model.clone();
             let envelope = EventEnvelope::agent_lifecycle(
                 workspace.workspace_id.clone(),
                 &workspace.session_name,
@@ -192,6 +198,14 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                     error = %err,
                     "lifecycle: failed to touch the agent activity heartbeat",
                 );
+            }
+            // Codex has no statusline, so its rich realtime context (rate-limit
+            // windows, model display name, version) is refreshed out-of-band
+            // from the app-server. Spawn the reader detached with fresh stdio on
+            // turn boundaries so it never adds latency to the agent's turn; the
+            // sidebar's next wakeup folds the fresh sidecar in.
+            if agent.name() == "codex" && refreshes_codex_context(&event_name) {
+                spawn_codex_context_refresh(&workspace, agent_id, model_hint.as_deref());
             }
         }
         emit_neutral(agent.as_ref(), &event_name)?;
@@ -678,6 +692,51 @@ fn event_records_activity(event_name: &str) -> bool {
             | "SubagentStart"
             | "SubagentStop"
     )
+}
+
+/// Codex turn-boundary events that refresh the app-server context sidecar.
+/// `SessionStart` populates it early (rate limits + model need no thread); the
+/// turn boundaries keep it current. Per-tool events (`PreToolUse`/`PostToolUse`)
+/// are excluded — spawning an app-server per tool call is too frequent.
+fn refreshes_codex_context(event_name: &str) -> bool {
+    matches!(event_name, "SessionStart" | "UserPromptSubmit" | "Stop")
+}
+
+/// Spawn `rimz codex refresh-context` detached, with all stdio nulled (the
+/// fresh-stdio invariant for hook helper children). The hook drops the child
+/// without waiting, so it returns before the app-server round-trip runs and
+/// never adds latency to the agent's turn. Best-effort: a spawn failure is
+/// logged and ignored — context enrichment is never correctness.
+fn spawn_codex_context_refresh(
+    workspace: &ResolvedWorkspace,
+    session_id: &str,
+    model_hint: Option<&str>,
+) {
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(err) => {
+            warn!(error = %err, "lifecycle: cannot locate rimz to refresh codex context");
+            return;
+        }
+    };
+    let mut cmd = Command::new(exe);
+    cmd.args([
+        "codex",
+        "refresh-context",
+        "--session-id",
+        session_id,
+        "--workspace-id",
+        workspace.workspace_id.as_str(),
+    ]);
+    if let Some(model) = model_hint {
+        cmd.args(["--model", model]);
+    }
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Err(err) = cmd.spawn() {
+        warn!(error = %err, "lifecycle: failed to spawn codex context refresh");
+    }
 }
 
 /// The agent session id from a hook payload, read in the same order as

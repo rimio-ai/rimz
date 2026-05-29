@@ -26,6 +26,16 @@ required-features = []
 test = false
 bench = false
 
+# Test-only fixture: a `codex app-server`-shaped JSON-RPC stub. Used by
+# `tests/integration/hooks.rs` to exercise `rimz codex refresh-context` without
+# the real `codex` binary (pointed at via `RIMZ_CODEX_BIN`).
+[[bin]]
+name = "codex-appserver-stub"
+path = "tests/fixtures/codex-appserver-stub/main.rs"
+required-features = []
+test = false
+bench = false
+
 [[test]]
 name = "integration"
 path = "tests/integration/main.rs"
