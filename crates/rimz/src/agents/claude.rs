@@ -197,12 +197,20 @@ impl AgentIntegration for ClaudeIntegration {
             .and_then(|_| optional_payload_string(payload, &["transcript_path"]))
             .map(|path| usage_from_transcript(&path))
             .unwrap_or_default();
+        // Resolve the model before the gauge: the payload id carries the `[1m]`
+        // marker that sets the window, the transcript id never does.
+        let model = optional_payload_string(payload, &["model"]).or(usage.model);
         let context_pct = payload
             .get("context_pct")
             .or_else(|| payload.get("context_window_pct"))
             .and_then(Value::as_u64)
             .map(|v| v.min(100) as u8)
-            .or(usage.context_pct);
+            .or_else(|| {
+                let window = context_window_for(model.as_deref()).max(1);
+                usage
+                    .context_tokens
+                    .map(|tokens| (tokens.saturating_mul(100) / window).min(100) as u8)
+            });
         let total_tokens = payload
             .get("total_tokens")
             .or_else(|| payload.get("token_count"))
@@ -223,7 +231,7 @@ impl AgentIntegration for ClaudeIntegration {
             worktree_branch: optional_payload_string(payload, &["worktree_branch"]),
             task: background_task_label(&pending_background)
                 .or_else(|| optional_payload_string(payload, &["task", "prompt"])),
-            model: optional_payload_string(payload, &["model"]).or(usage.model),
+            model,
             effort: optional_payload_string(payload, &["thinking_level", "effort"]),
             context_pct,
             total_tokens,
@@ -378,10 +386,14 @@ fn todos_from_payload(payload: &Value) -> (Option<u32>, Option<u32>) {
     (Some(done), Some(total))
 }
 
-/// Context-window usage derived from a Claude transcript tail.
+/// Context-window usage derived from a Claude transcript tail. Carries the raw
+/// context-token count, not a percentage: the window divisor depends on the
+/// model variant, and the authoritative model (with its `[1m]` marker) rides
+/// the hook payload — not the transcript — so the caller resolves the model and
+/// computes the percentage.
 #[derive(Default)]
 struct TranscriptUsage {
-    context_pct: Option<u8>,
+    context_tokens: Option<u64>,
     total_tokens: Option<u64>,
     model: Option<String>,
 }
@@ -394,17 +406,25 @@ impl TranscriptUsage {
     /// not zero.
     fn fresh() -> Self {
         Self {
-            context_pct: Some(0),
+            context_tokens: Some(0),
             total_tokens: Some(0),
             model: None,
         }
     }
 }
 
-/// Current Claude models expose a 200k-token context window. Kept as a single
-/// lookup so a future per-model window (e.g. a 1M beta) lands in one place.
-fn context_window_for(_model: Option<&str>) -> u64 {
-    200_000
+/// Claude's context window depends on the model variant. The 1M-token beta is
+/// signalled by a `[1m]` marker on the model id (`claude-opus-4-8[1m]`);
+/// everything else is the standard 200k window. The marker only rides the hook
+/// payload's `model` field — the transcript always writes the bare id — so
+/// callers must resolve the payload model before asking, or the bump is lost.
+fn context_window_for(model: Option<&str>) -> u64 {
+    const STANDARD: u64 = 200_000;
+    const EXTENDED: u64 = 1_000_000;
+    match model {
+        Some(model) if model.contains("[1m]") => EXTENDED,
+        _ => STANDARD,
+    }
 }
 
 /// Derive context-window usage from the tail of a Claude transcript JSONL.
@@ -457,10 +477,10 @@ fn usage_from_transcript(path: &str) -> TranscriptUsage {
             .and_then(Value::as_str)
             .filter(|model| !model.is_empty())
             .map(ToOwned::to_owned);
-        let window = context_window_for(model.as_deref()).max(1);
-        let context_pct = (context_tokens.saturating_mul(100) / window).min(100) as u8;
+        // Raw tokens only: the window divisor is resolved by the caller from
+        // the payload model, which is the one carrying the `[1m]` marker.
         return TranscriptUsage {
-            context_pct: Some(context_pct),
+            context_tokens: Some(context_tokens),
             total_tokens: Some(context_tokens + output),
             model,
         };
@@ -1561,6 +1581,34 @@ mod tests {
         assert_eq!(obs.context_pct, Some(50));
         assert_eq!(obs.total_tokens, Some(100_500));
         assert_eq!(obs.model.as_deref(), Some("claude-opus-4-7"));
+    }
+
+    #[test]
+    fn payload_one_million_marker_widens_the_context_window() {
+        // The 1M beta is signalled by a `[1m]` marker that rides only the hook
+        // payload's model field — the transcript writes the bare id. The gauge
+        // must divide by the payload-resolved window: 100k of 1M = 10%, where
+        // the bare-id default would have over-read it as 50%.
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("session.jsonl");
+        std::fs::write(
+            &transcript,
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":100000,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0,\"output_tokens\":500}}}\n",
+        )
+        .unwrap();
+        let obs = ClaudeIntegration
+            .observe_lifecycle(
+                "Stop",
+                &json!({
+                    "session_id": "sess-1",
+                    "model": "claude-opus-4-8[1m]",
+                    "transcript_path": transcript.to_str().unwrap(),
+                }),
+            )
+            .unwrap();
+        assert_eq!(obs.context_pct, Some(10));
+        assert_eq!(obs.total_tokens, Some(100_500));
+        assert_eq!(obs.model.as_deref(), Some("claude-opus-4-8[1m]"));
     }
 
     #[test]
