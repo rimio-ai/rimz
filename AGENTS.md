@@ -32,7 +32,7 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 ## Implementation rules
 
 - `AGENTS.md` and `CLAUDE.md` are the same file via symlink (`ln -s AGENTS.md CLAUDE.md`); edits to either land in both.
-- Inside a git worktree, resolve every file write against the worktree's own root; never target the main checkout's path. A worktree edit that lands on `main` is a bug, not a shortcut.
+- Pin the write root once per session: `git rev-parse --show-toplevel` of the working directory is the only root, and every file write resolves under it. Never address a file by a hard-coded absolute path — a worktree mirrors `main`'s tree, so an absolute path is exactly how a write meant for the worktree lands on `main`. A write that resolves outside the pinned root is a bug, not a shortcut.
 - Rust unless the task targets docs, tests, scripts, examples, or build glue.
 - Root docs stay short and authoritative; detail lives in `docs/` and is linked.
 - Update [ARCHITECTURE.md](./ARCHITECTURE.md) when modules move. Update [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes.
