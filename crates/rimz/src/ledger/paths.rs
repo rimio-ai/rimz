@@ -205,7 +205,8 @@ pub fn config_home() -> PathBuf {
     env::temp_dir().join("rimz-config")
 }
 
-fn env_path(key: &str) -> Option<PathBuf> {
+/// Read an environment variable as a path, treating an empty value as unset.
+pub fn env_path(key: &str) -> Option<PathBuf> {
     env::var_os(key)
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)

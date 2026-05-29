@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::{GlobalFlags, open_ledger};
 use rimz::ids::{MuxName, WorkspaceId};
 use rimz::ledger::atomic;
+use rimz::ledger::paths::env_path;
 use rimz::ledger::workspace_record;
 use rimz::mux::PaneListOptions;
 use rimz::workspace::WorkspaceResolver;
@@ -123,10 +124,13 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             // Fold each session's rich statusline context onto its agent state
             // (read-only; the feed process is the writer). This enriches the
             // snapshot's `agents[]` for `--json` consumers without changing row
-            // rendering.
-            snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(
-                ledger.runtime_paths(),
-            ));
+            // rendering. An empty room has nothing to enrich, so skip the
+            // sidecar directory scan entirely — the common idle case.
+            if !snapshot.agents.is_empty() {
+                snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(
+                    ledger.runtime_paths(),
+                ));
+            }
 
             if let Some(panes) = panes {
                 if let Some(own) = exclude.as_ref() {
@@ -151,20 +155,17 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     println!("{rendered}");
                 }
             } else {
-                let waiting = snapshot
-                    .worktree_groups
-                    .iter()
-                    .flat_map(|group| &group.status_counts)
-                    .filter(|count| count.status == rimz::feed::AgentStatus::Waiting)
-                    .map(|count| count.count)
-                    .sum::<usize>();
-                let failed = snapshot
-                    .worktree_groups
-                    .iter()
-                    .flat_map(|group| &group.status_counts)
-                    .filter(|count| count.status == rimz::feed::AgentStatus::Failed)
-                    .map(|count| count.count)
-                    .sum::<usize>();
+                let tally = |status| {
+                    snapshot
+                        .worktree_groups
+                        .iter()
+                        .flat_map(|group| &group.status_counts)
+                        .filter(|count| count.status == status)
+                        .map(|count| count.count)
+                        .sum::<usize>()
+                };
+                let waiting = tally(rimz::feed::AgentStatus::Waiting);
+                let failed = tally(rimz::feed::AgentStatus::Failed);
                 #[expect(clippy::print_stdout, reason = "human summary")]
                 {
                     println!("Workspace:       {}", snapshot.display_name);
@@ -562,47 +563,34 @@ pub(crate) fn sidebar_renderer_program() -> PathBuf {
     if let Some(path) = env_path("RIMZ_SIDEBAR_BIN") {
         return path;
     }
-    if let Some(path) = sibling_renderer_bin().filter(|path| path.is_file()) {
+    if let Some(path) = sibling_bin("rimz-sidebar").filter(|path| path.is_file()) {
         return path;
     }
-    if let Ok(path) = which::which(renderer_bin_name()) {
-        return path;
-    }
-    PathBuf::from(renderer_bin_name())
+    which::which(bin_name("rimz-sidebar")).unwrap_or_else(|_| PathBuf::from(bin_name("rimz-sidebar")))
 }
 
 pub(crate) fn sidebar_renderer_present() -> bool {
     if let Some(path) = env_path("RIMZ_SIDEBAR_BIN") {
         return path.is_file();
     }
-    sibling_renderer_bin().is_some_and(|path| path.is_file())
-        || which::which(renderer_bin_name()).is_ok()
+    sibling_bin("rimz-sidebar").is_some_and(|path| path.is_file())
+        || which::which(bin_name("rimz-sidebar")).is_ok()
 }
 
-fn sibling_renderer_bin() -> Option<PathBuf> {
+/// A sibling of the running executable, named `stem` with the platform suffix.
+fn sibling_bin(stem: &str) -> Option<PathBuf> {
     let current = std::env::current_exe().ok()?;
-    let parent = current.parent()?;
-    Some(parent.join(renderer_bin_name()))
+    Some(current.parent()?.join(bin_name(stem)))
 }
 
-fn renderer_bin_name() -> String {
-    format!("rimz-sidebar{}", std::env::consts::EXE_SUFFIX)
-}
-
-fn env_path(key: &str) -> Option<PathBuf> {
-    std::env::var_os(key)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+fn bin_name(stem: &str) -> String {
+    format!("{stem}{}", std::env::consts::EXE_SUFFIX)
 }
 
 fn rimz_cli_program() -> PathBuf {
     env_path("RIMZ_BIN")
         .or_else(|| std::env::current_exe().ok())
-        .unwrap_or_else(|| PathBuf::from(rimz_bin_name()))
-}
-
-fn rimz_bin_name() -> String {
-    format!("rimz{}", std::env::consts::EXE_SUFFIX)
+        .unwrap_or_else(|| PathBuf::from(bin_name("rimz")))
 }
 
 #[cfg(test)]
