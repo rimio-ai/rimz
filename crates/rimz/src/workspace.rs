@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::ids::{MuxName, WorkspaceId};
 
@@ -174,24 +173,26 @@ fn resolve_marker(start: &Path) -> Option<PathBuf> {
 }
 
 fn session_name_for(project_root: &Path) -> String {
-    let basename = project_root
-        .file_name()
-        .and_then(OsStr::to_str)
-        .unwrap_or("workspace");
-    let safe: String = basename
+    let slug: String = project_root
+        .to_string_lossy()
         .chars()
         .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            if c.is_ascii_alphanumeric() || c == '_' {
                 c
             } else {
                 '-'
             }
         })
-        .collect();
-    let mut hasher = Sha256::new();
-    hasher.update(project_root.to_string_lossy().as_bytes());
-    let hash = hex::encode(hasher.finalize());
-    format!("rimz-{}-{}", safe, &hash[..10])
+        // Collapse runs of separators (leading slash, spaces, `/`) into one `-`.
+        .fold(String::new(), |mut acc, c| {
+            if c == '-' && acc.ends_with('-') {
+                return acc;
+            }
+            acc.push(c);
+            acc
+        });
+    let slug = slug.trim_matches('-');
+    format!("rimz-{slug}")
 }
 
 #[cfg(test)]
@@ -199,13 +200,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn session_name_uses_safe_basename() {
-        let name = session_name_for(Path::new("/tmp/my repo"));
-        assert!(name.starts_with("rimz-my-repo-"), "got `{name}`");
-        // Suffix is `rimz-` + basename + `-` + 10 hex chars.
-        let suffix = name.rsplit('-').next().expect("hash suffix");
-        assert_eq!(suffix.len(), 10);
-        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
+    fn session_name_slugs_the_full_path() {
+        assert_eq!(
+            session_name_for(Path::new("/home/marvin/xxx")),
+            "rimz-home-marvin-xxx",
+        );
+    }
+
+    #[test]
+    fn session_name_collapses_unsafe_runs() {
+        // Spaces and `/` both fold to `-`, and runs collapse to a single `-`.
+        assert_eq!(
+            session_name_for(Path::new("/tmp/my repo")),
+            "rimz-tmp-my-repo",
+        );
     }
 
     #[test]

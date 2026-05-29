@@ -28,13 +28,13 @@ The session URL is the Zellij web base URL plus the Rimz session name:
 For example:
 
 ```text
-http://127.0.0.1:8082/rimz-terrain-lab-<path-hash>
+http://127.0.0.1:8082/rimz-home-me-code-terrain-lab
 ```
 
 Behind a reverse proxy with Zellij's `web_client.base_url` set:
 
 ```text
-https://devbox.example/zellij/rimz-terrain-lab-<path-hash>
+https://devbox.example/zellij/rimz-home-me-code-terrain-lab
 ```
 
 The route is the existing Rimz/Zellij session identity. There is no separate Rimz web session ID.
@@ -43,15 +43,15 @@ The route is the existing Rimz/Zellij session identity. There is no separate Rim
 
 Rimz session names are derived from the project root because the product invariant is `project repo == Rimz workspace == multiplexer session`.
 
-The session name should stay URL-safe, shell-friendly, and collision-resistant:
+The session name is the `rimz-` prefix plus the slugified project root:
 
 ```text
-rimz-<safe-project-name>-<path-hash>
+rimz-<slugified-project-path>
 ```
 
-Using the literal project path as `rimz-<path>` is possible only if Rimz encodes it first. Raw paths contain `/`, spaces, home directories, and sometimes private customer or branch names. `/` is especially bad for Zellij web because the session name lives in a URL path segment. A raw `rimz-/home/me/code/terrain-lab` would be parsed as multiple route segments, not one session name.
+The slug maps every character that is not ASCII alphanumeric or `_` to `-`, then collapses runs of `-` and trims the ends. `/home/me/code/terrain-lab` becomes `rimz-home-me-code-terrain-lab`.
 
-The path hash is the right identity anchor. It keeps one stable session per project root, avoids collisions between repos with the same basename, keeps URLs short, and avoids leaking full local paths. The readable prefix is still useful for humans scanning `zellij list-sessions`.
+Encoding the full path keeps the name URL-safe, shell-friendly, and collision-free: the project root is already unique, so the slug needs no extra hash. `/` collapses to a single `-`, so the name stays one URL path segment rather than several route segments. The tradeoff is that the name is longer and embeds the local path — including home directories and any private customer or branch names in the path — directly in `zellij list-sessions` output and web URLs.
 
 ## Planned CLI
 
