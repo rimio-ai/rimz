@@ -16,6 +16,7 @@ use crate::feed::{
     ResolverStepState, RuntimeOwner, RuntimeOwnerKind, Surface,
 };
 use crate::ids::{PaneId, RequestId, ResolverId, WorkspaceId};
+use crate::ledger::agent_context::AgentContextRecord;
 use crate::ledger::atomic::{self, write_temp_then_rename};
 use crate::ledger::event_log::{self, EventLogErr};
 use crate::ledger::feed_store::{self, FeedStoreErr};
@@ -315,6 +316,29 @@ impl SidebarSnapshot {
             &self.resolver_working,
             self.project_root.as_deref(),
         );
+        self
+    }
+
+    /// Attach each session's rich statusline context to its `AgentState` by
+    /// `(kind, agent_id)`. Capture/store-only: this enriches `agents[]` for
+    /// `sidebar snapshot --json` consumers (and future renderers) without
+    /// changing row rendering, so worktree groups are not rebuilt. A context
+    /// whose session is absent from the (already reaped) rollup is dropped — the
+    /// session is gone, so its context is just history. Records carry no
+    /// identity of their own; the key they're filed under is authority.
+    pub fn with_agent_context(mut self, records: Vec<AgentContextRecord>) -> Self {
+        if records.is_empty() {
+            return self;
+        }
+        let mut by_key: BTreeMap<(String, String), _> = records
+            .into_iter()
+            .map(|record| ((record.kind, record.agent_id), record.context))
+            .collect();
+        for agent in &mut self.agents {
+            if let Some(context) = by_key.remove(&(agent.kind.clone(), agent.agent_id.clone())) {
+                agent.context = Some(context);
+            }
+        }
         self
     }
 
@@ -1391,6 +1415,9 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             total_tokens,
             todo_done,
             todo_total,
+            // Never reduced from events — the snapshot CLI folds the latest
+            // statusline context in via `with_agent_context`.
+            context: None,
             last_seen: event.timestamp,
             last_activity: event.timestamp,
         };
@@ -1481,6 +1508,7 @@ mod tests {
             total_tokens: None,
             todo_done: None,
             todo_total: None,
+            context: None,
             last_seen: timestamp,
             last_activity: timestamp,
         }

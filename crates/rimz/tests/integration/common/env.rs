@@ -273,6 +273,31 @@ impl Env {
         self.spawn_payload(cmd, payload)
     }
 
+    // --- statusline datasource ---
+
+    /// `rimz statusline feed --source <source>` with all three stdio piped,
+    /// mirroring how Claude's installed `statusLine` command invokes it.
+    pub fn statusline_feed_command(&self, source: &str) -> Command {
+        let mut cmd = self.rimz();
+        cmd.args(["statusline", "feed", "--source", source])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        cmd
+    }
+
+    /// Run the statusline feed to completion, writing `payload` to its stdin.
+    pub fn run_statusline_feed(&self, source: &str, payload: &str) -> Output {
+        self.spawn_payload(self.statusline_feed_command(source), payload)
+            .wait_with_output()
+            .expect("wait statusline feed")
+    }
+
+    /// Read every persisted agent-context sidecar for the harness workspace.
+    pub fn agent_contexts(&self) -> Vec<rimz::ledger::agent_context::AgentContextRecord> {
+        rimz::ledger::agent_context::read_all(&self.runtime_paths())
+    }
+
     // --- feed commands ---
 
     pub fn feed_ask_no_block(&self, title: &str, options: &[&str]) -> String {

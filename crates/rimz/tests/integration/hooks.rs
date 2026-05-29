@@ -776,6 +776,14 @@ fn claude_session_start_with_bypass_permissions_observes_yolo_posture() {
 fn claude_install_uninstall_cli_round_trips_into_settings_json() {
     let env = Env::new();
     let claude_settings = env.project_root.join(".claude").join("settings.json");
+    // Seed a pre-existing user statusLine so the round-trip also proves the
+    // wrap-then-restore contract, not just hooks.
+    std::fs::create_dir_all(claude_settings.parent().unwrap()).unwrap();
+    std::fs::write(
+        &claude_settings,
+        r#"{ "statusLine": { "type": "command", "command": "npx -y ccstatusline@latest" } }"#,
+    )
+    .unwrap();
 
     let install = env
         .rimz()
@@ -790,7 +798,7 @@ fn claude_install_uninstall_cli_round_trips_into_settings_json() {
     );
     let report: Value = serde_json::from_slice(&install.stdout).expect("install report json");
     assert_eq!(report["agent"], "claude");
-    assert_eq!(report["merged"], false);
+    assert_eq!(report["merged"], true);
     let events = report["installed_events"].as_array().expect("events");
     let names: Vec<&str> = events.iter().filter_map(Value::as_str).collect();
     assert!(names.contains(&"SessionStart"));
@@ -807,6 +815,15 @@ fn claude_install_uninstall_cli_round_trips_into_settings_json() {
     // per-tool hook.
     let pre_tool = on_disk["hooks"]["PreToolUse"].as_array().expect("array");
     assert_eq!(pre_tool.len(), 2);
+    // The statusLine now points at Rimz and wraps the user's original verbatim.
+    assert_eq!(
+        on_disk["statusLine"]["command"],
+        "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source claude"
+    );
+    assert_eq!(
+        on_disk["statusLine"]["_rimz_wrapped"]["command"],
+        "npx -y ccstatusline@latest"
+    );
 
     let uninstall = env
         .rimz()
@@ -826,4 +843,145 @@ fn claude_install_uninstall_cli_round_trips_into_settings_json() {
         !removed.is_empty(),
         "uninstall must report removed event labels"
     );
+    // The user's original statusLine is restored exactly.
+    let restored: Value =
+        serde_json::from_slice(&std::fs::read(&claude_settings).unwrap()).expect("settings json");
+    assert_eq!(
+        restored["statusLine"]["command"],
+        "npx -y ccstatusline@latest"
+    );
+    assert!(restored["statusLine"].get("_rimz_managed").is_none());
+}
+
+/// The statusline feed passes the JSON through to the wrapped command verbatim
+/// and forwards its stdout, so the user's rendering is unaffected.
+#[test]
+fn statusline_feed_passes_json_through_to_wrapped_command() {
+    let env = Env::new();
+    let claude_settings = env.agent_config_path("claude");
+    std::fs::create_dir_all(claude_settings.parent().unwrap()).unwrap();
+    // Wrap `cat`, which echoes the JSON it receives on stdin straight back.
+    std::fs::write(
+        &claude_settings,
+        r#"{ "statusLine": { "type": "command", "command": "cat" } }"#,
+    )
+    .unwrap();
+    env.install_agent_hooks("claude");
+
+    let payload = r#"{"session_id":"sess-1","model":{"id":"claude-opus-4-8"}}"#;
+    let out = env.run_statusline_feed("claude", payload);
+    assert!(
+        out.status.success(),
+        "feed stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        payload,
+        "wrapped command's stdout must be forwarded verbatim"
+    );
+}
+
+/// With no wrapped command, the feed prints nothing (Claude falls back to its
+/// built-in statusline) but still captures the per-session context sidecar.
+#[test]
+fn statusline_feed_with_no_wrap_emits_nothing_but_captures_context() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+
+    let payload = r#"{
+        "session_id": "sess-ctx",
+        "model": { "id": "claude-opus-4-8", "display_name": "Opus" },
+        "context_window": { "used_percentage": 42 },
+        "cost": { "total_cost_usd": 0.5 }
+    }"#;
+    let out = env.run_statusline_feed("claude", payload);
+    assert!(out.status.success());
+    assert!(
+        out.stdout.is_empty(),
+        "no wrap means empty stdout, got: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    let contexts = env.agent_contexts();
+    assert_eq!(contexts.len(), 1, "the session's context was captured");
+    let record = &contexts[0];
+    assert_eq!(record.kind, "claude");
+    assert_eq!(record.agent_id, "sess-ctx");
+    assert_eq!(record.context.model_display_name.as_deref(), Some("Opus"));
+    assert_eq!(
+        record.context.tokens.as_ref().unwrap().used_percentage,
+        Some(42)
+    );
+}
+
+/// The captured context surfaces on the session's agent row in the snapshot
+/// JSON once a lifecycle event has created the agent state.
+#[test]
+fn statusline_context_folds_into_the_snapshot_agent() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+
+    // A SessionStart creates the agent state for `sess-fold`. The installed
+    // command is `--event`-free, so the event rides the payload.
+    let start = env.run_installed_hook(
+        "claude",
+        r#"{ "hook_event_name": "SessionStart", "session_id": "sess-fold", "permission_mode": "default" }"#,
+    );
+    assert!(start.status.success());
+
+    // The statusline feed publishes rich context for the same session.
+    let feed = env.run_statusline_feed(
+        "claude",
+        r#"{ "session_id": "sess-fold", "rate_limits": { "five_hour": { "used_percentage": 23.5 } } }"#,
+    );
+    assert!(feed.status.success());
+
+    let snapshot = env.snapshot_json();
+    let agents = snapshot["agents"].as_array().expect("agents array");
+    let agent = agents
+        .iter()
+        .find(|a| a["agent_id"] == "sess-fold")
+        .expect("session agent present");
+    assert_eq!(
+        agent["context"]["rate_limits"]["five_hour"]["used_percentage"], 24,
+        "statusline context folds onto the agent row (23.5 rounds to 24)"
+    );
+}
+
+/// A nonzero exit from the wrapped command is forwarded, so a broken user
+/// statusline surfaces as it would without Rimz in the middle.
+#[test]
+fn statusline_feed_forwards_wrapped_exit_code() {
+    let env = Env::new();
+    let claude_settings = env.agent_config_path("claude");
+    std::fs::create_dir_all(claude_settings.parent().unwrap()).unwrap();
+    std::fs::write(
+        &claude_settings,
+        r#"{ "statusLine": { "type": "command", "command": "exit 3" } }"#,
+    )
+    .unwrap();
+    env.install_agent_hooks("claude");
+
+    let out = env.run_statusline_feed("claude", r#"{"session_id":"s"}"#);
+    assert_eq!(out.status.code(), Some(3));
+}
+
+/// Malformed stdin must still pass through unchanged — a parse failure can
+/// never blank the user's statusline.
+#[test]
+fn statusline_feed_malformed_json_still_passes_through() {
+    let env = Env::new();
+    let claude_settings = env.agent_config_path("claude");
+    std::fs::create_dir_all(claude_settings.parent().unwrap()).unwrap();
+    std::fs::write(
+        &claude_settings,
+        r#"{ "statusLine": { "type": "command", "command": "cat" } }"#,
+    )
+    .unwrap();
+    env.install_agent_hooks("claude");
+
+    let out = env.run_statusline_feed("claude", "not json at all");
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "not json at all");
 }

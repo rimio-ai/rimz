@@ -120,6 +120,14 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     (None, _) => (ledger.snapshot()?, None),
                 };
 
+            // Fold each session's rich statusline context onto its agent state
+            // (read-only; the feed process is the writer). This enriches the
+            // snapshot's `agents[]` for `--json` consumers without changing row
+            // rendering.
+            snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(
+                ledger.runtime_paths(),
+            ));
+
             if let Some(panes) = panes {
                 if let Some(own) = exclude.as_ref() {
                     snapshot.own_view = rimz::SidebarOwnView::from_panes(own, &panes);

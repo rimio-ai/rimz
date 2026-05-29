@@ -162,6 +162,22 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                     "lifecycle: failed to expire the session's pending asks",
                 );
             }
+            // Tombstone the session's statusline context sidecar so it can't
+            // pin stale enrichment to a session the rollup has dropped.
+            if agent.ends_session(&event_name)
+                && let Err(err) = rimz::ledger::agent_context::remove(
+                    ledger.runtime_paths(),
+                    agent.name(),
+                    agent_id,
+                )
+            {
+                warn!(
+                    agent = agent.name(),
+                    event = %event_name,
+                    error = %err,
+                    "lifecycle: failed to remove the session's context sidecar",
+                );
+            }
         }
         emit_neutral(agent.as_ref(), &event_name)?;
         return Ok(());

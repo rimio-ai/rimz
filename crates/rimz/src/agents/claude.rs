@@ -21,12 +21,13 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use jiff::Timestamp;
 use serde_json::{Map, Value, json};
 
 use super::{
-    AgentErr, AgentHookClass, AgentIntegration, AgentLifecycleObservation, ClassifiedHook,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, Result, choice_is_allow,
-    optional_payload_string, stop_status_from_payload,
+    AgentContext, AgentErr, AgentHookClass, AgentIntegration, AgentLifecycleObservation,
+    ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
+    StatusLineChange, choice_is_allow, optional_payload_string, stop_status_from_payload,
 };
 use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution};
 use crate::ledger::atomic;
@@ -80,6 +81,17 @@ const RIMZ_HOOK_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --sou
 /// reclaim legacy and unmarked entries on install and uninstall, so duplicates
 /// never accumulate.
 const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source claude";
+
+/// `settings.json` key holding the statusline command Claude `exec`s on every
+/// render. Rimz wraps it so it can capture the rich JSON Claude pipes there.
+const STATUS_LINE_KEY: &str = "statusLine";
+/// Marker key, on a Rimz-managed `statusLine` object, holding the user's
+/// original `statusLine` value verbatim so uninstall restores it exactly.
+const RIMZ_WRAPPED_KEY: &str = "_rimz_wrapped";
+/// The statusline command Rimz installs. Fixed (no per-user content) so the
+/// install stays idempotent and snapshot-stable; the wrapped original lives
+/// under [`RIMZ_WRAPPED_KEY`], not embedded in this string.
+const STATUS_LINE_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source claude";
 
 #[derive(Clone, Debug, Default)]
 pub struct ClaudeIntegration;
@@ -256,6 +268,20 @@ impl AgentIntegration for ClaudeIntegration {
             todo_total,
             pane_id: None,
         })
+    }
+
+    fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
+        // Claude's transport is the statusline JSON blob. Tolerant parse: any
+        // non-object payload yields `None` rather than an error.
+        let parsed: super::statusline::StatuslinePayload =
+            serde_json::from_value(payload.clone()).ok()?;
+        Some(parsed.into_context(source, Timestamp::now()))
+    }
+
+    fn wrapped_status_line_command(&self) -> Option<String> {
+        let path = claude_settings_path().ok()?;
+        let root = read_existing_json(&path).ok()?;
+        wrapped_status_line_command_from(&root)
     }
 
     fn install_hooks(&self) -> Result<HookInstallReport> {
@@ -537,6 +563,7 @@ fn install_into(path: &Path) -> Result<HookInstallReport> {
 fn preview_install_at(path: &Path) -> Result<HookInstallPreview> {
     let existed = path.exists();
     let original_config = original_text(path)?;
+    let status_line_change = classify_status_line_change(&read_existing_json(path)?);
     let (root, installed) = install_candidate(path)?;
     Ok(HookInstallPreview {
         agent: "claude",
@@ -545,6 +572,7 @@ fn preview_install_at(path: &Path) -> Result<HookInstallPreview> {
         original_config,
         candidate_config: render_json(&root)?,
         merged: existed,
+        status_line_change: Some(status_line_change),
     })
 }
 
@@ -566,6 +594,11 @@ fn install_candidate(path: &Path) -> Result<(Map<String, Value>, Vec<String>)> {
         installed.push(event_label(event, matcher));
     }
 
+    // Wrap the statusline so Rimz captures Claude's rich per-render JSON. Idempotent
+    // by construction: a prior Rimz-managed statusline carries the user's original
+    // under `_rimz_wrapped`, which the upsert reads back rather than re-wrapping.
+    upsert_rimz_status_line(&mut root);
+
     Ok((root, installed))
 }
 
@@ -581,6 +614,8 @@ fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
     }
     let mut root = read_existing_json(path)?;
     let removed = strip_rimz_matchers(&mut root);
+    // Restore the user's original statusline (or drop the field if Rimz added it).
+    strip_rimz_status_line(&mut root);
     write_json(path, &root)?;
     Ok(HookUninstallReport {
         agent: "claude",
@@ -850,6 +885,111 @@ fn event_label(event: &str, matcher: Option<&str>) -> String {
     match matcher {
         Some(m) if !m.is_empty() => format!("{event}:{m}"),
         _ => event.to_owned(),
+    }
+}
+
+fn is_rimz_managed_object(obj: &Map<String, Value>) -> bool {
+    obj.get(RIMZ_MANAGED_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Insert or refresh Rimz's `statusLine` wrapper. Idempotent: a prior
+/// Rimz-managed statusline has the user's original under `_rimz_wrapped`, which
+/// is read back (never double-wrapped); a user's prior statusline of any shape
+/// (command object, bare string, or other type) is captured whole; no prior
+/// statusline leaves `_rimz_wrapped` absent.
+fn upsert_rimz_status_line(root: &mut Map<String, Value>) {
+    let wrapped = match root.remove(STATUS_LINE_KEY) {
+        Some(Value::Object(ref obj)) if is_rimz_managed_object(obj) => {
+            obj.get(RIMZ_WRAPPED_KEY).cloned()
+        }
+        Some(other) => Some(other),
+        None => None,
+    };
+    let mut entry = Map::new();
+    entry.insert("type".to_owned(), Value::String("command".to_owned()));
+    entry.insert(
+        "command".to_owned(),
+        Value::String(STATUS_LINE_COMMAND.to_owned()),
+    );
+    entry.insert(RIMZ_MANAGED_KEY.to_owned(), Value::Bool(true));
+    if let Some(original) = wrapped {
+        entry.insert(RIMZ_WRAPPED_KEY.to_owned(), original);
+    }
+    root.insert(STATUS_LINE_KEY.to_owned(), Value::Object(entry));
+}
+
+/// Restore the user's original `statusLine`. When the current one is
+/// Rimz-managed, replace it with the captured `_rimz_wrapped` value, or remove
+/// the key entirely when nothing was wrapped. A non-Rimz statusline is left
+/// untouched. Returns whether a Rimz-managed statusline was found.
+fn strip_rimz_status_line(root: &mut Map<String, Value>) -> bool {
+    let managed = matches!(
+        root.get(STATUS_LINE_KEY),
+        Some(Value::Object(obj)) if is_rimz_managed_object(obj)
+    );
+    if !managed {
+        return false;
+    }
+    let original = match root.remove(STATUS_LINE_KEY) {
+        Some(Value::Object(mut obj)) => obj.remove(RIMZ_WRAPPED_KEY),
+        _ => None,
+    };
+    if let Some(original) = original {
+        root.insert(STATUS_LINE_KEY.to_owned(), original);
+    }
+    true
+}
+
+/// Classify how an install would change the statusline, for the consent summary.
+fn classify_status_line_change(root: &Map<String, Value>) -> StatusLineChange {
+    match root.get(STATUS_LINE_KEY) {
+        None => StatusLineChange::Added,
+        Some(Value::Object(obj)) if is_rimz_managed_object(obj) => StatusLineChange::Unchanged,
+        Some(other) => StatusLineChange::Wrapping {
+            original: status_line_display(other),
+        },
+    }
+}
+
+/// A readable one-line form of a statusline value for the consent summary: the
+/// inner `command` of an object, a bare string verbatim, else compact JSON.
+fn status_line_display(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Object(obj) => obj
+            .get("command")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| value.to_string()),
+        other => other.to_string(),
+    }
+}
+
+/// The user's original statusline command that a Rimz-managed `statusLine`
+/// currently wraps, if any — read from `_rimz_wrapped` (handling both the
+/// `{type,command}` object form and a bare command string). `None` when the
+/// statusline is absent, not Rimz-managed, or wraps nothing runnable.
+fn wrapped_status_line_command_from(root: &Map<String, Value>) -> Option<String> {
+    let Some(Value::Object(obj)) = root.get(STATUS_LINE_KEY) else {
+        return None;
+    };
+    if !is_rimz_managed_object(obj) {
+        return None;
+    }
+    extract_status_line_command(obj.get(RIMZ_WRAPPED_KEY)?)
+}
+
+fn extract_status_line_command(value: &Value) -> Option<String> {
+    match value {
+        Value::String(s) if !s.is_empty() => Some(s.clone()),
+        Value::Object(obj) => obj
+            .get("command")
+            .and_then(Value::as_str)
+            .filter(|c| !c.is_empty())
+            .map(ToOwned::to_owned),
+        _ => None,
     }
 }
 
@@ -1161,6 +1301,11 @@ mod tests {
                 ]
               }
             ]
+          },
+          "statusLine": {
+            "_rimz_managed": true,
+            "command": "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source claude",
+            "type": "command"
           }
         }
         "###);
@@ -1356,6 +1501,136 @@ mod tests {
         let report = uninstall_from(&path).unwrap();
         assert!(!report.existed);
         assert!(report.removed_events.is_empty());
+    }
+
+    #[test]
+    fn install_adds_status_line_when_none_existed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        install_into(&path).unwrap();
+        let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(parsed["statusLine"]["command"], STATUS_LINE_COMMAND);
+        assert_eq!(parsed["statusLine"]["_rimz_managed"], true);
+        // Nothing was wrapped, so no `_rimz_wrapped`.
+        assert!(parsed["statusLine"].get("_rimz_wrapped").is_none());
+    }
+
+    #[test]
+    fn install_wraps_existing_status_line_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{ "statusLine": { "type": "command", "command": "npx -y ccstatusline@latest" } }"#,
+        )
+        .unwrap();
+        install_into(&path).unwrap();
+        let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(parsed["statusLine"]["command"], STATUS_LINE_COMMAND);
+        assert_eq!(parsed["statusLine"]["_rimz_managed"], true);
+        // The user's whole original value is captured verbatim.
+        assert_eq!(
+            parsed["statusLine"]["_rimz_wrapped"]["command"],
+            "npx -y ccstatusline@latest"
+        );
+        assert_eq!(parsed["statusLine"]["_rimz_wrapped"]["type"], "command");
+    }
+
+    #[test]
+    fn reinstall_does_not_double_wrap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{ "statusLine": { "type": "command", "command": "user-line" } }"#,
+        )
+        .unwrap();
+        install_into(&path).unwrap();
+        let first = std::fs::read_to_string(&path).unwrap();
+        install_into(&path).unwrap();
+        let second = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(first, second, "re-install must be byte-identical");
+        let parsed: Value = serde_json::from_str(&second).unwrap();
+        // Still the user's command, not a nested Rimz wrapper.
+        assert_eq!(
+            parsed["statusLine"]["_rimz_wrapped"]["command"],
+            "user-line"
+        );
+        assert!(
+            parsed["statusLine"]["_rimz_wrapped"]
+                .get("_rimz_wrapped")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn uninstall_restores_original_status_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let original = r#"{ "statusLine": { "type": "command", "command": "npx ccstatusline" } }"#;
+        std::fs::write(&path, original).unwrap();
+        install_into(&path).unwrap();
+        uninstall_from(&path).unwrap();
+        let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(parsed["statusLine"]["command"], "npx ccstatusline");
+        assert_eq!(parsed["statusLine"]["type"], "command");
+        assert!(parsed["statusLine"].get("_rimz_managed").is_none());
+    }
+
+    #[test]
+    fn uninstall_removes_status_line_when_none_existed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        install_into(&path).unwrap();
+        uninstall_from(&path).unwrap();
+        let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(
+            parsed.get("statusLine").is_none(),
+            "a Rimz-added statusLine is removed on uninstall"
+        );
+    }
+
+    #[test]
+    fn install_captures_and_restores_bare_string_status_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{ "statusLine": "echo hi" }"#).unwrap();
+        install_into(&path).unwrap();
+        let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(parsed["statusLine"]["_rimz_wrapped"], "echo hi");
+        // The feed command reads the bare string back as the pass-through target.
+        let root = read_existing_json(&path).unwrap();
+        assert_eq!(
+            wrapped_status_line_command_from(&root).as_deref(),
+            Some("echo hi")
+        );
+        uninstall_from(&path).unwrap();
+        let restored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(restored["statusLine"], "echo hi");
+    }
+
+    #[test]
+    fn classify_status_line_change_reports_each_case() {
+        let none = Map::new();
+        assert_eq!(classify_status_line_change(&none), StatusLineChange::Added);
+
+        let user: Map<String, Value> = serde_json::from_str(
+            r#"{ "statusLine": { "type": "command", "command": "npx ccstatusline" } }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            classify_status_line_change(&user),
+            StatusLineChange::Wrapping {
+                original: "npx ccstatusline".to_owned()
+            }
+        );
+
+        let mut managed = Map::new();
+        upsert_rimz_status_line(&mut managed);
+        assert_eq!(
+            classify_status_line_change(&managed),
+            StatusLineChange::Unchanged
+        );
     }
 
     #[test]

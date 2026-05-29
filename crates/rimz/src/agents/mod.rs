@@ -11,6 +11,8 @@
 
 pub mod claude;
 pub mod codex;
+pub mod context;
+pub mod statusline;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -20,6 +22,10 @@ use serde_json::Value;
 
 use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution, RuntimeOwner};
 use crate::ids::PaneId;
+
+pub use context::{
+    AgentContext, AgentCost, AgentPullRequest, AgentRateLimits, AgentTokenUsage, RateLimitWindow,
+};
 
 /// Conservative fallback for adapters that don't override. Claude overrides
 /// to 120s (see `claude::CLAUDE_HOOK_CAP`); Codex overrides to its own cap
@@ -171,6 +177,26 @@ pub struct HookInstallPreview {
     pub original_config: Option<String>,
     pub candidate_config: String,
     pub merged: bool,
+    /// How the install changes the agent's statusline, for the one-line consent
+    /// summary that keeps the wrap a visible security surface. The full change
+    /// is also in `candidate_config`'s diff. `None` for agents that manage no
+    /// statusline (Codex).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_line_change: Option<StatusLineChange>,
+}
+
+/// What `rimz hooks install` does to the agent's statusline command, surfaced
+/// in the consent gate alongside the hook diff.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum StatusLineChange {
+    /// No prior statusline; install adds Rimz's reader.
+    Added,
+    /// Wraps the user's existing statusline command, restored on uninstall.
+    /// `original` is the user's command, shown verbatim in the summary.
+    Wrapping { original: String },
+    /// Re-install over an identical Rimz wrap — no change.
+    Unchanged,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -205,6 +231,17 @@ pub trait AgentIntegration: Send + Sync {
         _event_name: &str,
         _payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
+        None
+    }
+
+    /// Translate a raw out-of-band context payload into the normalized
+    /// [`AgentContext`]. The transport is the adapter's business: Claude parses
+    /// the statusline JSON; Codex will parse a JSON-RPC result later. Returns
+    /// `None` when the adapter has no rich-context source (today: Codex) or the
+    /// payload is unusable. `source` is the ingest `--source` tag, stamped onto
+    /// the record so downstream knows the provenance. Display-only enrichment —
+    /// it never reaches the event log or a decision.
+    fn observe_context(&self, _source: &str, _payload: &Value) -> Option<AgentContext> {
         None
     }
 
@@ -252,6 +289,15 @@ pub trait AgentIntegration: Send + Sync {
             agent: self.name(),
             reason: "uninstall not implemented for this adapter".to_owned(),
         })
+    }
+
+    /// The user's original statusline command this agent currently wraps, if
+    /// any. `None` when the agent manages no statusline (Codex), or when no
+    /// wrap is configured. The `rimz statusline feed` CLI calls this to find
+    /// its pass-through target. Best-effort: a read/parse failure reads as
+    /// `None`.
+    fn wrapped_status_line_command(&self) -> Option<String> {
+        None
     }
 
     /// Whether Rimz can currently install a hook configuration that the agent

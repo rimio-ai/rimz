@@ -102,6 +102,8 @@ It refreshes its own liveness heartbeat **in process** — no `rimz` fork per ti
 
 On wakeup, the sidebar refetches the snapshot. Missed wakeups are closed by polling (~2s tick). A terminal resize is also a wakeup: a watcher thread turns Zellij's resize (`SIGWINCH`) into a socket nudge so the loop repaints at the new size at once — without it the first usable frame on attach waits for the next tick, reading as a blank pane. The blocking wait treats a signal-interrupted receive as that same "redraw now", never an error. Ledger wakeups skip sidebar heartbeats whose `protocol_version` does not match the current sidebar protocol; `rimz doctor` reports the mismatch so reload issues are visible after upgrades.
 
+The snapshot CLI also folds each session's rich statusline context onto its `agents[]` entry as `AgentState.context` (read-only; the feed process is the writer — see [agent.md → The statusline as a context datasource](./agent.md#the-statusline-as-a-context-datasource)). This is captured-and-exposed only: `snapshot --json` carries the full `context` blob (cost, token breakdown, rate-limit windows, PR) for detail views and tooling, but the compact rows do not render it yet.
+
 ## Reload recovery
 
 The sidebar process keeps the last successful snapshot across iterations. When the `rimz sidebar snapshot` fetch or the in-process heartbeat write fails — the binary is missing, the ledger directory is gone, pane discovery hit a transient mux hiccup — the loop:

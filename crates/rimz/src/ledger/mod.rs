@@ -19,6 +19,7 @@
 //! serialization is the workspace lock's job; every writer is a short-lived
 //! CLI process serialized through `workspace.lock` (flock).
 
+pub mod agent_context;
 pub mod atomic;
 pub mod event_log;
 pub mod feed_store;

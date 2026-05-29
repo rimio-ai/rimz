@@ -9,6 +9,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest, Sha256};
+
 use crate::ids::{SidebarInstanceId, WorkspaceId};
 
 #[derive(Debug, thiserror::Error)]
@@ -91,6 +93,10 @@ pub struct RuntimePaths {
     pub root: PathBuf,
     pub sock_dir: PathBuf,
     pub heartbeat_dir: PathBuf,
+    /// Holds one latest-wins agent-context sidecar per session (Claude
+    /// statusline enrichment). Written by the feed process, read by the
+    /// snapshot CLI — never the sidebar.
+    pub agent_context_dir: PathBuf,
 }
 
 impl RuntimePaths {
@@ -104,12 +110,27 @@ impl RuntimePaths {
         let root = runtime_root.join("rimz").join(workspace_id.as_str());
         let sock_dir = root.join("sock");
         let heartbeat_dir = root.join("heartbeat");
+        let agent_context_dir = root.join("agent_context");
         Ok(Self {
             workspace_id,
             root,
             sock_dir,
             heartbeat_dir,
+            agent_context_dir,
         })
+    }
+
+    /// Sidecar file for one agent session's rich context, keyed by
+    /// `(kind, agent_id)`. The filename is a digest so an arbitrary session id
+    /// (a free string, possibly path-hostile) maps to a safe, fixed-width name.
+    pub fn agent_context_path(&self, kind: &str, agent_id: &str) -> PathBuf {
+        let mut hasher = Sha256::new();
+        hasher.update(kind.as_bytes());
+        hasher.update([0]);
+        hasher.update(agent_id.as_bytes());
+        let digest = hex::encode(hasher.finalize());
+        self.agent_context_dir
+            .join(format!("ctx.{}.json", &digest[..32]))
     }
 
     /// Path of a sidebar instance's heartbeat file. The freshness scan in
@@ -124,6 +145,7 @@ impl RuntimePaths {
     pub fn ensure_dirs(&self) -> Result<()> {
         mkdir_p(&self.sock_dir)?;
         mkdir_p(&self.heartbeat_dir)?;
+        mkdir_p(&self.agent_context_dir)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

@@ -568,6 +568,12 @@ pub struct AgentState {
     pub todo_done: Option<u32>,
     #[serde(default)]
     pub todo_total: Option<u32>,
+    /// Rich session-scoped enrichment from a high-frequency out-of-band source
+    /// (Claude's statusline). Folded in at snapshot time by
+    /// `SidebarSnapshot::with_agent_context`, never reduced from the event log.
+    /// Same enrich-only discipline as `context_pct`: display, never routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<crate::agents::context::AgentContext>,
     pub last_seen: Timestamp,
     pub last_activity: Timestamp,
 }

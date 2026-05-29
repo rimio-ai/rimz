@@ -431,6 +431,7 @@ mod tests {
             total_tokens: None,
             todo_done: None,
             todo_total: None,
+            context: None,
             last_seen: now,
             last_activity: now,
         }

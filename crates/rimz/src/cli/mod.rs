@@ -12,6 +12,7 @@ mod parse;
 mod reload;
 mod resolver;
 mod sidebar;
+mod statusline;
 mod trust;
 mod workspace;
 
@@ -21,7 +22,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 
-use rimz::agents::HookInstallPreview;
+use rimz::agents::{HookInstallPreview, StatusLineChange};
 use rimz::ids::MuxName;
 use rimz::ledger::paths::workspaces_dir;
 use rimz::ledger::workspace_record;
@@ -45,6 +46,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
         Some(Subcmd::Resolver(args)) => resolver::run(args, &globals),
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
+        Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
         Some(Subcmd::Trust(args)) => trust::run(args, &globals),
         Some(Subcmd::Doctor(args)) => doctor::run(args, &globals),
@@ -120,6 +122,10 @@ enum Subcmd {
     /// Sidebar helper API. The sidebar calls these; humans usually do not.
     #[command(hide = true)]
     Sidebar(sidebar::SidebarArgs),
+    /// Statusline datasource. The installed `statusLine` command calls this;
+    /// humans do not.
+    #[command(hide = true)]
+    Statusline(statusline::StatuslineArgs),
     /// Install/uninstall agent hooks. Internal hook entrypoints live here too.
     Hooks(hooks::HooksArgs),
     /// Manage the project's executable-surface trust grant.
@@ -301,6 +307,17 @@ fn print_hook_consent_gate(previews: &[HookInstallPreview], interactive: bool) -
             preview.planned_events.len(),
             preview.config_path.display(),
         )?;
+        match &preview.status_line_change {
+            Some(StatusLineChange::Added) => writeln!(
+                stderr,
+                "      also sets your statusLine to report context to Rimz (removed on uninstall)",
+            )?,
+            Some(StatusLineChange::Wrapping { original }) => writeln!(
+                stderr,
+                "      also wraps your statusLine command ({original}) — restored on uninstall",
+            )?,
+            Some(StatusLineChange::Unchanged) | None => {}
+        }
     }
     writeln!(
         stderr,

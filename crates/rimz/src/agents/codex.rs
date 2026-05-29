@@ -476,6 +476,8 @@ fn preview_install_at(path: &std::path::Path) -> Result<HookInstallPreview> {
         original_config,
         candidate_config: render_table(&root)?,
         merged: existed,
+        // Codex has no statusline; it inherits the no-op `wrapped_status_line_command`.
+        status_line_change: None,
     })
 }
 

@@ -1,0 +1,117 @@
+//! Agent-agnostic, session-scoped context enrichment.
+//!
+//! [`AgentContext`] is the normalized shape for the rich, high-frequency
+//! per-session data an agent publishes out of band — Claude's statusline feed
+//! today, Codex's JSON-RPC poll later. It is display-only and redactable: it
+//! never drives routing, ranking, or a decision (the no-transcript-correctness
+//! rule). Each agent integration produces it from its own transport via
+//! [`super::AgentIntegration::observe_context`]; storage
+//! ([`crate::ledger::agent_context`]) and the snapshot fold-in are
+//! transport-agnostic, so a new agent slots in with only a new producer — no
+//! change to this type, the sidecar, or the fold-in.
+
+use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
+
+/// Rich per-session enrichment that has no first-class home on
+/// [`crate::feed::AgentState`]. Attached whole as `AgentState.context` and
+/// dropped whole when the session ends. The record is identity-free — the
+/// session it belongs to is the key it is filed under, never a field here, so
+/// the two cannot drift. Overlapping scalars (`model`, `effort`) are carried
+/// too: the statusline reports them more precisely than the transcript tail,
+/// and a future renderer can prefer them for display.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentContext {
+    /// Which transport produced this record (`"claude"` today). Stamped from
+    /// the ingest `--source` tag, not parsed from the payload.
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vim_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exceeds_200k_tokens: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<AgentCost>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<AgentTokenUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limits: Option<AgentRateLimits>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<AgentPullRequest>,
+    /// When the producer observed this record. The snapshot reaper drops a
+    /// sidecar past the ghost-session TTL even if a `SessionEnd` was missed.
+    pub observed_at: Timestamp,
+}
+
+/// Cumulative spend for the session, as the agent reports it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AgentCost {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_cost_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_api_duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_lines_added: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_lines_removed: Option<u64>,
+}
+
+/// Context-window token accounting. `used_percentage` is the authoritative
+/// gauge value the statusline reports directly (0..=100).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AgentTokenUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window_size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_percentage: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining_percentage: Option<u8>,
+}
+
+/// Rate-limit windows the agent surfaces, each with a reset instant a renderer
+/// can format as a countdown.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AgentRateLimits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub five_hour: Option<RateLimitWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seven_day: Option<RateLimitWindow>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RateLimitWindow {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_percentage: Option<u8>,
+    /// Reset instant, parsed to a typed timestamp on ingest so renderers format
+    /// a countdown rather than re-parsing a raw value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<Timestamp>,
+}
+
+/// The pull request the agent associates with the session, when it reports one.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AgentPullRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_state: Option<String>,
+}
