@@ -541,10 +541,17 @@ fn rows_from_ledger(
         if agent_hook_session_stale(item, agents) {
             continue;
         }
+        // One row per session. Items arrive newest-first, so the first ask for
+        // a session wins and any later ask (a sequential permission/question
+        // pair, or a stale duplicate that outran expiry) folds onto it instead
+        // of stacking an identical row. The same set then suppresses the
+        // session's calm agent-rollup row below.
+        if let Some(agent_id) = agent_id_from_item(item)
+            && !replaced_agents.insert((item.source.clone(), agent_id))
+        {
+            continue;
+        }
         if let Some(row) = row_from_item(item, agents) {
-            if let Some(agent_id) = agent_id_from_item(item) {
-                replaced_agents.insert((item.source.clone(), agent_id));
-            }
             rows.push(row);
         }
     }
@@ -1561,6 +1568,52 @@ mod tests {
             snap.worktree_groups[0].rows[0].task.as_deref(),
             Some("Should I proceed?")
         );
+    }
+
+    #[test]
+    fn multiple_pending_asks_for_one_session_render_one_row() {
+        // The live pile-up: a session held several pending native_ui asks, and
+        // the no-panes rollup emitted one row each. Read-time dedup collapses
+        // them to a single row keyed by `(source, agent_id)`.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut session = agent(
+            "claude",
+            "sess-1",
+            AgentStatus::Idle,
+            PermissionPosture::Default,
+            1_000,
+        );
+        session.worktree_path = Some("/repo/main".to_owned());
+
+        let mk = |kind: FeedKind| {
+            let mut item = FeedItem::new(
+                workspace.clone(),
+                Surface::NativeUi,
+                kind,
+                "claude needs attention",
+                "claude",
+                "agent-hook",
+            );
+            item.worktree_path = Some("/repo/main".to_owned());
+            item.payload = serde_json::json!({ "session_id": "sess-1" });
+            item
+        };
+
+        let items = vec![mk(FeedKind::Permission), mk(FeedKind::Question)];
+        let snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, items, Vec::new(), vec![session]);
+
+        let rows = &snapshot.worktree_groups[0].rows;
+        let agent_rows: Vec<_> = rows
+            .iter()
+            .filter(|row| row.row_kind == SidebarRowKind::Agent)
+            .collect();
+        assert_eq!(
+            agent_rows.len(),
+            1,
+            "two pending asks for one session collapse to one row: {rows:?}"
+        );
+        assert_eq!(agent_rows[0].status, Some(AgentStatus::Waiting));
     }
 
     #[test]
