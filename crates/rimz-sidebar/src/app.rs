@@ -88,7 +88,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     let mut health = Health::default();
     let mut self_close = SelfCloseState::default();
     let mut ui = UiState::default();
-    let mut reload_requested = false;
+    let mut reexec_to: Option<PathBuf> = None;
 
     'serve: loop {
         let heartbeat_outcome = write_heartbeat(&config, &runtime, &socket_path);
@@ -189,18 +189,35 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                         &state.snapshot,
                         &config,
                     )? {
-                        reload_requested = true;
-                        break 'serve;
+                        if let Some(target) = reexec_target() {
+                            reexec_to = Some(target);
+                            break 'serve;
+                        }
+                        warn!(
+                            session = %config.session_name,
+                            "reload requested but no renderer binary is on disk; keeping the current build",
+                        );
                     }
                     break;
                 }
                 Wakeup::Reload => {
-                    debug!(
+                    if let Some(target) = reexec_target() {
+                        debug!(
+                            session = %config.session_name,
+                            target = %target.display(),
+                            "reload requested; re-execing the renderer in place",
+                        );
+                        reexec_to = Some(target);
+                        break 'serve;
+                    }
+                    // A reload that cannot find its replacement (a partial or
+                    // in-flight install) must never make the sidebar vanish —
+                    // keep serving the current build and re-fetch.
+                    warn!(
                         session = %config.session_name,
-                        "reload requested; re-execing the renderer in place",
+                        "reload requested but no renderer binary is on disk; keeping the current build",
                     );
-                    reload_requested = true;
-                    break 'serve;
+                    break;
                 }
                 wakeup => {
                     apply_input(
@@ -215,40 +232,64 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             }
         }
     }
-    if reload_requested {
+    if let Some(target) = reexec_to {
         // Restore the terminal and release this instance's runtime files before
         // replacing the process image — `exec` never returns, so their RAII
         // Drop would otherwise be skipped and leak a stale socket + heartbeat.
         drop(_input_mode);
         drop(_socket_cleanup);
         drop(_heartbeat_cleanup);
-        return Err(reexec_self());
+        return Err(reexec_self(&target));
     }
     Ok(())
 }
 
-/// Replace this process with a fresh invocation of its own binary and argv.
+/// Replace this process with a fresh invocation of `exe` and our own argv.
 /// After `rimz reload`, the renderer's binary on disk has been updated in
-/// place; re-execing the same command line loads the new code without touching
-/// the pane or session. Only returns on failure — success replaces the image.
-fn reexec_self() -> SidebarAppErr {
+/// place; re-execing the resolved path loads the new code without touching the
+/// pane or session. Only returns on failure — success replaces the image.
+fn reexec_self(exe: &Path) -> SidebarAppErr {
     use std::os::unix::process::CommandExt;
 
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(source) => {
-            return SidebarAppErr::CommandIo {
-                program: "current_exe".to_owned(),
-                source,
-            };
-        }
-    };
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let source = Command::new(&exe).args(&args).exec();
+    let source = Command::new(exe).args(&args).exec();
     SidebarAppErr::CommandIo {
-        program: exe.to_string_lossy().into_owned(),
+        program: exe.display().to_string(),
         source,
     }
+}
+
+/// Resolve the on-disk binary to re-exec for a reload, or `None` when none can
+/// be found — in which case the caller keeps serving the current build instead
+/// of vanishing.
+fn reexec_target() -> Option<PathBuf> {
+    resolve_reexec_target(std::env::current_exe().ok()?)
+}
+
+/// Pick the live binary behind a `current_exe()` reading.
+///
+/// A fresh `cargo install` replaces our binary via atomic rename, which unlinks
+/// the inode the running process still holds. The kernel then annotates
+/// `/proc/self/exe` (what `current_exe()` reads) with a trailing " (deleted)",
+/// so the raw path no longer resolves on disk. The replacement now lives at the
+/// un-annotated path — exactly the build `rimz reload` means to pick up — so we
+/// strip that marker and prefer whichever path is a real file. `None` (neither
+/// path exists, e.g. a partial install) tells the caller to keep the old build.
+fn resolve_reexec_target(exe: PathBuf) -> Option<PathBuf> {
+    if exe.is_file() {
+        return Some(exe);
+    }
+    strip_deleted_suffix(&exe).filter(|path| path.is_file())
+}
+
+/// Strip the kernel's " (deleted)" annotation from a `/proc/self/exe` path.
+/// `None` when the path carries no such suffix.
+fn strip_deleted_suffix(path: &Path) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+
+    const DELETED_SUFFIX: &[u8] = b" (deleted)";
+    let stripped = path.as_os_str().as_bytes().strip_suffix(DELETED_SUFFIX)?;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(stripped)))
 }
 
 /// Decide whether the sidebar should exit so its own pane closes. The sidebar
@@ -1206,6 +1247,51 @@ mod tests {
         assert!(!alert.is_active());
         assert!(alert.recovered_at.is_some());
         assert_eq!(recovered.health.failure_streak, 0);
+    }
+
+    #[test]
+    fn strip_deleted_suffix_removes_only_the_kernel_annotation() {
+        assert_eq!(
+            strip_deleted_suffix(Path::new("/usr/bin/rimz-sidebar (deleted)")),
+            Some(PathBuf::from("/usr/bin/rimz-sidebar"))
+        );
+        // A path the kernel did not annotate is left alone.
+        assert_eq!(
+            strip_deleted_suffix(Path::new("/usr/bin/rimz-sidebar")),
+            None
+        );
+        // " (deleted)" only counts as a trailing suffix, never mid-path.
+        assert_eq!(
+            strip_deleted_suffix(Path::new("/opt/my (deleted)/rimz-sidebar")),
+            None
+        );
+    }
+
+    #[test]
+    fn reexec_target_resolves_the_replacement_after_an_install() {
+        // Post-`cargo install`: the inode behind our `current_exe()` was
+        // unlinked, so it reads "<path> (deleted)" while the freshly-installed
+        // binary now sits at the un-annotated path — that is what we re-exec.
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("rimz-sidebar");
+        std::fs::write(&real, b"x").unwrap();
+        let deleted = PathBuf::from(format!("{} (deleted)", real.display()));
+        assert!(!deleted.is_file(), "the annotated path must not exist");
+        assert_eq!(resolve_reexec_target(deleted), Some(real.clone()));
+        // The ordinary, not-replaced case uses the live path as-is.
+        assert_eq!(resolve_reexec_target(real.clone()), Some(real));
+    }
+
+    #[test]
+    fn reexec_target_is_none_when_nothing_exists_on_disk() {
+        // A partial or in-flight install: neither the annotated nor the
+        // stripped path is a file, so the loop keeps serving the current build
+        // rather than re-execing into nothing and vanishing.
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("rimz-sidebar");
+        let deleted = PathBuf::from(format!("{} (deleted)", missing.display()));
+        assert_eq!(resolve_reexec_target(deleted), None);
+        assert_eq!(resolve_reexec_target(missing), None);
     }
 
     #[test]
