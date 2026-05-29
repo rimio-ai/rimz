@@ -27,7 +27,9 @@ use rimz::agents::{HookInstallPreview, StatusLineChange};
 use rimz::ids::MuxName;
 use rimz::ledger::paths::workspaces_dir;
 use rimz::ledger::workspace_record;
-use rimz::mux::{MuxBackend, SessionOptions, SidebarPaneOptions};
+use rimz::mux::{
+    BackgroundViewLaunch, BackgroundViewOptions, MuxBackend, SessionOptions, SidebarPaneOptions,
+};
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, RuntimePaths, StatePaths, WorkspaceRecord};
 
@@ -414,6 +416,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         &workspace.session_name,
         &workspace.worktree_root,
     );
+    maybe_launch_remote_control(backend.as_ref(), &workspace);
     let spec = backend.attach_command(&workspace.session_name);
     tracing::info!(
         workspace = %workspace.workspace_id,
@@ -641,6 +644,55 @@ fn launch_sidebar_for_workspace(
     rimz::sidebar::launch_sidebar_if_needed(backend, &runtime, &opts)
 }
 
+/// Auto-launch Claude Remote Control in a managed background view when the
+/// per-machine config opts in and `claude` is on PATH. Best-effort: every
+/// failure is logged and the room still opens. The view runs from the project
+/// root (the main checkout), so `--spawn=worktree` carves new on-demand remote
+/// sessions off the canonical repo rather than the current worktree.
+fn maybe_launch_remote_control(backend: &dyn MuxBackend, workspace: &rimz::ResolvedWorkspace) {
+    let auto = match rimz::config::MachineConfig::load() {
+        Ok(config) => config.remote_control.auto,
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "reading per-machine config; skipping remote-control auto-launch",
+            );
+            return;
+        }
+    };
+    if !should_launch_remote_control(auto, which::which("claude").is_ok()) {
+        return;
+    }
+    let opts = BackgroundViewOptions {
+        session_name: workspace.session_name.clone(),
+        cwd: workspace.project_root.clone(),
+        name: rimz::remote_control::VIEW_NAME.to_owned(),
+        command: rimz::remote_control::command(),
+    };
+    match backend.open_background_view(&opts) {
+        Ok(BackgroundViewLaunch::Launched) => tracing::info!(
+            session = %workspace.session_name,
+            view = rimz::remote_control::VIEW_NAME,
+            "launched Claude Remote Control in a background view",
+        ),
+        Ok(BackgroundViewLaunch::AlreadyRunning) => tracing::debug!(
+            session = %workspace.session_name,
+            "Claude Remote Control view already present; skipping",
+        ),
+        Err(err) => tracing::warn!(
+            session = %workspace.session_name,
+            error = %err,
+            "Claude Remote Control auto-launch failed; continuing without it",
+        ),
+    }
+}
+
+/// Pure gate for [`maybe_launch_remote_control`], split out for testing: launch
+/// only when the per-machine config opts in *and* Claude is detected on PATH.
+fn should_launch_remote_control(auto_enabled: bool, claude_present: bool) -> bool {
+    auto_enabled && claude_present
+}
+
 fn run_attach_action(spec: &rimz::mux::CommandSpec, mode: AttachMode, mux: MuxName) -> Result<()> {
     match attach_action(
         mode,
@@ -776,6 +828,14 @@ mod tests {
             attach_action(AttachMode::Print, true, true, false),
             AttachAction::Print,
         );
+    }
+
+    #[test]
+    fn remote_control_gate_requires_opt_in_and_detection() {
+        assert!(should_launch_remote_control(true, true));
+        assert!(!should_launch_remote_control(false, true));
+        assert!(!should_launch_remote_control(true, false));
+        assert!(!should_launch_remote_control(false, false));
     }
 
     #[test]

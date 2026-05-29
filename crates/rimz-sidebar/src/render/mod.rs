@@ -408,6 +408,29 @@ mod tests {
         assert!(style.add_modifier.contains(Modifier::BOLD));
     }
 
+    #[test]
+    fn remote_control_host_renders_as_a_distinct_pinned_row() {
+        // A `claude remote-control` pane gets the host treatment: a `⇅`-marked
+        // "remote control" line, never an agent card and never labelled `claude`.
+        let snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(
+            vec![
+                pane("%1", "zsh", "/repo/main"),
+                pane("%2", "claude remote-control --spawn worktree", "/repo/main"),
+            ],
+            None,
+        );
+        let screen = snapshot_to_screen(&snapshot, 32, 24);
+        assert!(screen.contains("remote control"), "screen:\n{screen}");
+        assert!(
+            screen.contains('⇅'),
+            "remote-control glyph missing:\n{screen}"
+        );
+        assert!(
+            !screen.contains("claude"),
+            "the host must not read as a claude agent/process:\n{screen}",
+        );
+    }
+
     fn snapshot_with(items: Vec<FeedItem>, agents: Vec<AgentState>) -> SidebarSnapshot {
         let mut snapshot =
             SidebarSnapshot::build_with_carryover(fixed_workspace(), items, Vec::new(), agents);
@@ -456,6 +479,7 @@ mod tests {
             session_name: "rimz-test".to_owned(),
             view_id: Some("@0".to_owned()),
             view_kind: Some(ViewKind::Window),
+            view_name: None,
             is_focused: false,
             command: Some(command.to_owned()),
             cwd: Some(cwd.to_owned()),

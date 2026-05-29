@@ -188,6 +188,32 @@ pub struct SplitPaneOptions {
     pub env: BTreeMap<String, String>,
 }
 
+/// Options for launching a managed command into a dedicated, named *view* of a
+/// session — a tmux window or a Zellij tab — out of the user's focus. Generic
+/// on purpose: the mux layer never names the command it hosts, so this serves
+/// any "run this alongside the room, tucked aside, exactly once" need (today,
+/// the Claude Remote Control host).
+#[derive(Clone, Debug)]
+pub struct BackgroundViewOptions {
+    pub session_name: String,
+    /// Working directory the view's command runs in.
+    pub cwd: PathBuf,
+    /// View name. Doubles as the idempotency key: a live view by this name in
+    /// the session suppresses a relaunch.
+    pub name: String,
+    /// Full argv (program first) to run in the view.
+    pub command: Vec<String>,
+}
+
+/// Outcome of [`MuxBackend::open_background_view`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BackgroundViewLaunch {
+    /// A view by this name was already present; nothing was launched.
+    AlreadyRunning,
+    /// A fresh view was launched.
+    Launched,
+}
+
 /// Backend-neutral mux operations. Every Zellij/tmux command lives behind
 /// one of these methods.
 pub trait MuxBackend: Send + Sync {
@@ -212,6 +238,11 @@ pub trait MuxBackend: Send + Sync {
     /// and skipped — never retried, never a session rebirth. Unlike
     /// [`Self::open_sidebar`], this never deletes or recreates the session.
     fn recover_sidebars(&self, opts: &SidebarPaneOptions) -> Result<SidebarRecovery>;
+    /// Launch `command` in a dedicated, named background view (tmux window /
+    /// Zellij tab) of an existing session, out of the user's focus. Idempotent:
+    /// a second call while a view of that name is present is a no-op. The view
+    /// never gates correctness — a failure here leaves the room intact.
+    fn open_background_view(&self, opts: &BackgroundViewOptions) -> Result<BackgroundViewLaunch>;
     /// Best-effort wakeup; sockets are the channel of record per the docs.
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()>;
     fn version(&self) -> Result<String>;

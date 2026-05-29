@@ -1152,6 +1152,63 @@ fn assert_sidebar_is_left_thirty_percent(session: &str) {
     );
 }
 
+/// `open_background_view` opens a dedicated, named tab for a managed command
+/// and is idempotent on that tab name: a second call is a no-op.
+#[test]
+fn open_background_view_creates_named_tab_idempotently() {
+    require_zellij!();
+
+    let name = unique_session_name("bgview");
+    let _session = ZellijSession::spawn(&name);
+
+    let opts = rimz::mux::BackgroundViewOptions {
+        session_name: name.clone(),
+        cwd: std::env::temp_dir(),
+        name: "rimz-rc".to_owned(),
+        command: vec!["sleep".to_owned(), "120".to_owned()],
+    };
+
+    let first = ZellijBackend
+        .open_background_view(&opts)
+        .expect("first launch");
+    assert_eq!(first, rimz::mux::BackgroundViewLaunch::Launched);
+    assert!(
+        wait_for_tab_named(&name, "rimz-rc"),
+        "expected a rimz-rc tab after launch",
+    );
+
+    let second = ZellijBackend
+        .open_background_view(&opts)
+        .expect("second launch");
+    assert_eq!(
+        second,
+        rimz::mux::BackgroundViewLaunch::AlreadyRunning,
+        "relaunching into a session that already carries the view is a no-op",
+    );
+}
+
+/// Poll `query-tab-names` until a tab named `tab_name` appears, or time out.
+fn wait_for_tab_named(session: &str, tab_name: &str) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let listed = std::process::Command::new("zellij")
+            .args(["--session", session, "action", "query-tab-names"])
+            .output();
+        if let Ok(out) = listed
+            && out.status.success()
+            && String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .any(|line| line.trim() == tab_name)
+        {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// `wake_sidebar` issues `zellij --session <name> pipe --name rimz::feed --
 /// <payload>`. We assert the subprocess returns success even when no
 /// pipe-aware client consumes the payload.

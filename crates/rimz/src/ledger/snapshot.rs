@@ -157,6 +157,11 @@ pub enum SidebarRowKind {
     Agent,
     /// A live pane with no agent bound to it: a shell, an editor, `git`.
     Process,
+    /// The Claude Remote Control host pane. It is not a coding agent — it never
+    /// stamps a pane or fires hooks — so rather than masquerade as an idle
+    /// Claude process it gets its own row: rendered like progress but specially
+    /// marked, and pinned to the bottom of its group (see `row_rank`).
+    RemoteControl,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -635,6 +640,9 @@ fn rows_from_panes(
                 }
                 rows.push(row);
             }
+            None if crate::remote_control::pane_is_host(pane) => {
+                rows.push(row_from_remote_control(pane));
+            }
             None => rows.push(row_from_process(pane)),
         }
     }
@@ -952,6 +960,37 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
     }
 }
 
+/// The Remote Control host's row: a process-style single line, but a distinct
+/// kind so the renderer marks it specially and `row_rank` pins it to the bottom
+/// of its group. Named "remote control", never "claude", so it never reads as a
+/// stray Claude agent.
+fn row_from_remote_control(pane: &PaneRef) -> SidebarRow {
+    SidebarRow {
+        row_kind: SidebarRowKind::RemoteControl,
+        id: pane.pane_id.to_string(),
+        name: "remote control".to_owned(),
+        status: None,
+        permission_posture: None,
+        plan_mode: false,
+        pane: Some(pane.clone()),
+        request_id: None,
+        surface: None,
+        task: None,
+        model: None,
+        effort: None,
+        context_pct: None,
+        total_tokens: None,
+        todo_done: None,
+        todo_total: None,
+        context: None,
+        worktree_path: pane.cwd.clone(),
+        worktree_branch: None,
+        last_activity: pane.pane_process_start.unwrap_or_else(Timestamp::now),
+        resolver: None,
+        options: Vec::new(),
+    }
+}
+
 fn process_label(command: &str) -> String {
     command_agent_kind(command)
         .map(ToOwned::to_owned)
@@ -1088,6 +1127,7 @@ fn pane_ref_from_id(pane_id: PaneId) -> PaneRef {
         session_name: String::new(),
         view_id: None,
         view_kind: None,
+        view_name: None,
         is_focused: false,
         command: None,
         cwd: None,
@@ -1282,6 +1322,11 @@ fn compare_group_top(left: &SidebarWorktreeGroup, right: &SidebarWorktreeGroup) 
 }
 
 fn row_rank(row: &SidebarRow) -> u8 {
+    // The remote-control host is pinned below every agent and process row in its
+    // group: it is ambient infrastructure, never the thing you came to look at.
+    if row.row_kind == SidebarRowKind::RemoteControl {
+        return 7;
+    }
     match row.status {
         Some(status) => status_rank(status),
         None => 6,
@@ -1668,6 +1713,7 @@ mod tests {
             session_name: "rimz-test".to_owned(),
             view_id: Some("@0".to_owned()),
             view_kind: Some(crate::ids::ViewKind::Window),
+            view_name: None,
             is_focused: false,
             command: Some(command.to_owned()),
             cwd: Some(cwd.to_owned()),
@@ -1979,6 +2025,64 @@ mod tests {
         assert!(
             rows.iter()
                 .any(|row| row.row_kind == SidebarRowKind::Process && row.name == "zsh")
+        );
+    }
+
+    #[test]
+    fn remote_control_host_is_a_pinned_special_row_not_a_claude_agent() {
+        // A `claude remote-control` pane (Zellij reports the full command line)
+        // must not read as a Claude agent or a stray `claude` process: it gets
+        // its own RemoteControl row, named "remote control", pinned last.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new()).with_live_panes(
+            vec![
+                pane("%1", "zsh", "/repo/main"),
+                pane("%2", "claude remote-control --spawn worktree", "/repo/main"),
+            ],
+            None,
+        );
+
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert!(
+            rows.iter().all(|row| row.row_kind != SidebarRowKind::Agent),
+            "remote-control host must never be an agent row: {rows:?}",
+        );
+        let rc: Vec<_> = rows
+            .iter()
+            .filter(|row| row.row_kind == SidebarRowKind::RemoteControl)
+            .collect();
+        assert_eq!(rc.len(), 1, "exactly one remote-control row: {rows:?}");
+        assert_eq!(rc[0].name, "remote control");
+        assert!(
+            rows.iter().all(|row| row.name != "claude"),
+            "host must not be labelled `claude`: {rows:?}",
+        );
+        assert_eq!(
+            rows.last().map(|row| row.row_kind),
+            Some(SidebarRowKind::RemoteControl),
+            "remote-control row must sort to the bottom of its group: {rows:?}",
+        );
+    }
+
+    #[test]
+    fn remote_control_host_detected_by_view_name_when_command_is_bare() {
+        // tmux reports only the `claude` basename, but names the window — so the
+        // view name is what marks the host there.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut rc_pane = pane("%2", "claude", "/repo/main");
+        rc_pane.view_name = Some(crate::remote_control::VIEW_NAME.to_owned());
+        let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new())
+            .with_live_panes(vec![rc_pane], None);
+
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert!(
+            rows.iter()
+                .any(|row| row.row_kind == SidebarRowKind::RemoteControl),
+            "a bare-`claude` pane in the rimz-rc window is the host: {rows:?}",
+        );
+        assert!(
+            rows.iter().all(|row| row.row_kind != SidebarRowKind::Agent),
+            "host must never be an agent row: {rows:?}",
         );
     }
 
@@ -3110,6 +3214,7 @@ mod tests {
                         session_name: "rimz-test".to_owned(),
                         view_id: Some("@0".to_owned()),
                         view_kind: Some(crate::ids::ViewKind::Window),
+                        view_name: None,
                         is_focused: true,
                         command: Some("codex".to_owned()),
                         cwd: Some("/repo/main".to_owned()),
@@ -3323,6 +3428,7 @@ mod tests {
             session_name: "rimz-test".to_owned(),
             view_id: Some(view.to_owned()),
             view_kind: Some(crate::ids::ViewKind::Tab),
+            view_name: None,
             is_focused: focused,
             command: Some("zsh".to_owned()),
             cwd: Some("/repo/main".to_owned()),

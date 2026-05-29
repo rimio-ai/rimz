@@ -1220,6 +1220,7 @@ mod tests {
             session_name: "rimz-test".to_owned(),
             view_id: Some(view.to_owned()),
             view_kind: Some(rimz::ids::ViewKind::Tab),
+            view_name: None,
             is_focused: focused,
             command: Some("zsh".to_owned()),
             cwd: Some("/repo/main".to_owned()),

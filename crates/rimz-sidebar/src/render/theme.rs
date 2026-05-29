@@ -21,7 +21,7 @@ const AMBER: Color = Color::Indexed(179); // gold — waiting / mid gauge
 const RED: Color = Color::Indexed(167); // balanced red — failed / high gauge
 const CYAN: Color = Color::Indexed(73); // teal — worktree headers / cache writes
 const BLUE: Color = Color::Indexed(75); // sky — cache reads in the context bar
-const VIOLET: Color = Color::Indexed(141); // soft purple — the weekly "mana" bar
+const VIOLET: Color = Color::Indexed(141); // soft purple — the weekly "mana" bar and remote-host rows
 const DIM: Color = Color::Indexed(244); // mid gray — separators, ages, labels
 
 /// Claude clay — the running agent's animated working/thinking head, so the

@@ -19,8 +19,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    CommandSpec, MuxBackend, MuxErr, PaneCapture, PaneListOptions, Result, SessionOptions,
-    SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, ensure_pane_backend,
+    BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, MuxBackend, MuxErr, PaneCapture,
+    PaneListOptions, Result, SessionOptions, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions,
+    ensure_pane_backend,
 };
 use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
@@ -181,6 +182,10 @@ impl MuxBackend for ZellijBackend {
                 session_name: session_name.clone(),
                 view_id: Some(format!("tab_{}", p.tab_id)),
                 view_kind: Some(ViewKind::Tab),
+                // Zellij `list-panes` carries no per-pane tab name; the
+                // remote-control classifier reads the full command line here
+                // instead (which Zellij does report).
+                view_name: None,
                 is_focused: p.is_focused,
                 pane_pid: p.pid(),
                 pane_process_start: p.process_start(),
@@ -338,6 +343,33 @@ impl MuxBackend for ZellijBackend {
             let _ = focus_terminal(&opts.session_name, own);
         }
         Ok(report)
+    }
+
+    fn open_background_view(&self, opts: &BackgroundViewOptions) -> Result<BackgroundViewLaunch> {
+        // Idempotent on the tab name: a relaunch into a session already carrying
+        // the view is a no-op. A failed query propagates rather than risk a
+        // duplicate launch.
+        if session_has_named_tab(&opts.session_name, &opts.name)? {
+            return Ok(BackgroundViewLaunch::AlreadyRunning);
+        }
+        // `--layout` gives the tab exactly one pane running the command, bypassing
+        // the session's sidebar-carrying default tab template. `new-tab` is
+        // synchronous (it prints the new tab id), so the temp layout file can drop
+        // as soon as the call returns.
+        let layout = TempLayoutFile::new(render_command_layout(&opts.command)?)?;
+        zellij_action(&opts.session_name)
+            .args([
+                "new-tab".to_owned(),
+                "--layout".to_owned(),
+                layout.path().to_string_lossy().into_owned(),
+                "--name".to_owned(),
+                opts.name.clone(),
+                "--cwd".to_owned(),
+                opts.cwd.to_string_lossy().into_owned(),
+            ])
+            .run()?;
+        drop(layout);
+        Ok(BackgroundViewLaunch::Launched)
     }
 
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()> {
@@ -861,6 +893,49 @@ fn kdl_string(value: &str) -> Result<String> {
     })
 }
 
+/// Whether `session` already holds a tab named `tab_name`. `query-tab-names`
+/// prints one tab name per line; a Rimz background view is idempotent on its
+/// name, so a relaunch into a session that already carries it is skipped.
+fn session_has_named_tab(session: &str, tab_name: &str) -> Result<bool> {
+    let output = zellij_action(session).arg("query-tab-names").run()?;
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(strip_ansi)
+        .any(|line| line.trim() == tab_name))
+}
+
+/// A one-pane tab layout that runs `command` (program first) immediately and
+/// closes when it exits. Supplying this as `new-tab --layout` overrides the
+/// session's sidebar-carrying default tab template, so a background view's tab
+/// holds only this pane.
+fn render_command_layout(command: &[String]) -> Result<String> {
+    let (program, args) = command.split_first().ok_or_else(|| MuxErr::Output {
+        program: "zellij".to_owned(),
+        reason: "background view command is empty".to_owned(),
+    })?;
+    let program = kdl_string(program)?;
+    let args_line = if args.is_empty() {
+        String::new()
+    } else {
+        let rendered = args
+            .iter()
+            .map(|arg| kdl_string(arg))
+            .collect::<Result<Vec<_>>>()?
+            .join(" ");
+        format!("\n        args {rendered}")
+    };
+    Ok(format!(
+        r#"layout {{
+    pane {{
+        command {program}{args_line}
+        start_suspended false
+        close_on_exit true
+    }}
+}}
+"#,
+    ))
+}
+
 /// Defensive ANSI strip for `list-sessions` output. Zellij ships a colored
 /// banner in newer versions; the parser only cares about the bare name.
 ///
@@ -1059,6 +1134,31 @@ mod tests {
             !layout.contains("tab "),
             "every tab comes from the template; no explicit `tab` node:\n{layout}",
         );
+    }
+
+    #[test]
+    fn command_layout_runs_program_with_args_unsuspended() {
+        let layout = render_command_layout(&[
+            "claude".to_owned(),
+            "remote-control".to_owned(),
+            "--spawn".to_owned(),
+            "worktree".to_owned(),
+        ])
+        .expect("render command layout");
+        assert!(layout.contains(r#"command "claude""#), "{layout}");
+        assert!(
+            layout.contains(r#"args "remote-control" "--spawn" "worktree""#),
+            "{layout}",
+        );
+        // A command pane is held at a run prompt unless the layout opts out, and
+        // a background view should vanish with its process rather than linger.
+        assert!(layout.contains("start_suspended false"), "{layout}");
+        assert!(layout.contains("close_on_exit true"), "{layout}");
+    }
+
+    #[test]
+    fn command_layout_rejects_an_empty_command() {
+        assert!(render_command_layout(&[]).is_err());
     }
 
     #[test]

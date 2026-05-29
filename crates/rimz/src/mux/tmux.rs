@@ -15,8 +15,9 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CommandSpec, MuxBackend, MuxErr, PaneCapture, PaneListOptions, Result, SessionOptions,
-    SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, ensure_pane_backend,
+    BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, MuxBackend, MuxErr, PaneCapture,
+    PaneListOptions, Result, SessionOptions, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions,
+    ensure_pane_backend,
 };
 use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
@@ -116,6 +117,19 @@ impl TmuxBackend {
             .args(sidebar_serve_command(opts))
             .run()
             .map(|_| ())
+    }
+
+    /// Whether `session` already holds a window named `name`. A Rimz background
+    /// view is idempotent on its window name, so a relaunch into a session that
+    /// already carries it is skipped.
+    fn session_has_window(&self, session: &str, name: &str) -> Result<bool> {
+        let output = self
+            .cmd()
+            .args(["list-windows", "-t", session, "-F", "#{window_name}"])
+            .run()?;
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.trim() == name))
     }
 }
 
@@ -236,7 +250,7 @@ impl MuxBackend for TmuxBackend {
             "list-panes",
             "-a",
             "-F",
-            "#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_start_time}\t#{pane_active}",
+            "#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_start_time}\t#{pane_active}\t#{window_name}",
         ]);
         if let Some(session) = opts.session_name {
             spec = spec.args(["-t".to_owned(), session]);
@@ -269,11 +283,17 @@ impl MuxBackend for TmuxBackend {
                 .and_then(|value| value.trim().parse::<i64>().ok())
                 .and_then(|seconds| Timestamp::from_second(seconds).ok());
             let is_focused = cols.get(7).is_some_and(|value| value.trim() == "1");
+            let view_name = cols
+                .get(8)
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
             panes.push(PaneRef {
                 pane_id: PaneId::from_parts(MuxName::Tmux, &raw),
                 session_name,
                 view_id,
                 view_kind: Some(ViewKind::Window),
+                view_name,
                 is_focused,
                 command,
                 cwd,
@@ -413,6 +433,31 @@ impl MuxBackend for TmuxBackend {
             }
         }
         Ok(report)
+    }
+
+    fn open_background_view(&self, opts: &BackgroundViewOptions) -> Result<BackgroundViewLaunch> {
+        // Idempotent on the window name; a relaunch into a session already
+        // carrying the view is a no-op. A failed query propagates rather than
+        // risk a duplicate window.
+        if self.session_has_window(&opts.session_name, &opts.name)? {
+            return Ok(BackgroundViewLaunch::AlreadyRunning);
+        }
+        // `-d` opens the window without pulling the user's focus to it; the
+        // command runs as the window's process.
+        self.cmd()
+            .args([
+                "new-window".to_owned(),
+                "-d".to_owned(),
+                "-t".to_owned(),
+                opts.session_name.clone(),
+                "-n".to_owned(),
+                opts.name.clone(),
+                "-c".to_owned(),
+                opts.cwd.to_string_lossy().into_owned(),
+            ])
+            .args(opts.command.clone())
+            .run()
+            .map(|_| BackgroundViewLaunch::Launched)
     }
 
     fn wake_sidebar(&self, _session_name: &str, _bytes: &[u8]) -> Result<()> {

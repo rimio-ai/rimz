@@ -182,6 +182,7 @@ impl MuxBackend for FakeBackend {
             session_name: "session".to_owned(),
             view_id: Some("@1".to_owned()),
             view_kind: Some(ViewKind::Window),
+            view_name: None,
             is_focused: false,
             command: Some("sh".to_owned()),
             cwd: None,
@@ -236,6 +237,13 @@ impl MuxBackend for FakeBackend {
         _opts: &SidebarPaneOptions,
     ) -> rimz::mux::Result<rimz::mux::SidebarRecovery> {
         Ok(rimz::mux::SidebarRecovery::default())
+    }
+
+    fn open_background_view(
+        &self,
+        _opts: &rimz::mux::BackgroundViewOptions,
+    ) -> rimz::mux::Result<rimz::mux::BackgroundViewLaunch> {
+        Ok(rimz::mux::BackgroundViewLaunch::Launched)
     }
 
     fn wake_sidebar(&self, _session_name: &str, _bytes: &[u8]) -> rimz::mux::Result<()> {

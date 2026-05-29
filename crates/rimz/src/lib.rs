@@ -11,10 +11,12 @@
 pub mod agent_activity;
 pub mod agents;
 pub mod bridge;
+pub mod config;
 pub mod feed;
 pub mod ids;
 pub mod ledger;
 pub mod mux;
+pub mod remote_control;
 pub mod resolver;
 pub mod schema;
 pub mod sidebar;

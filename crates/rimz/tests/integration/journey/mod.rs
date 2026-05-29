@@ -499,6 +499,7 @@ fn process_pane(mux: MuxName, index: usize, command: &str, cwd: String) -> PaneR
             MuxName::Tmux => ViewKind::Window,
             MuxName::Zellij => ViewKind::Tab,
         }),
+        view_name: None,
         is_focused: false,
         command: Some(command.to_owned()),
         cwd: Some(cwd),

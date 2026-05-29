@@ -30,6 +30,11 @@ use super::theme::Theme;
 /// reserved on every row so selecting one never shifts the columns.
 const SELECTION_BAR: &str = "▎";
 
+/// Lead glyph for the remote-control host row — a sync mark that, with the
+/// violet tone, sets it apart from an agent's `◌`/spinner and a process's `·`.
+/// The shape alone carries the distinction under `NO_COLOR`.
+const REMOTE_CONTROL_GLYPH: &str = "⇅";
+
 /// Width left for a row's content after the selection gutter claims its cell.
 fn content_width(width: usize) -> usize {
     width.saturating_sub(1).max(1)
@@ -274,6 +279,10 @@ fn row_line(theme: &Theme, row: &SidebarRow, width: usize, animation_phase: u64)
         return process_row_line(theme, row, width);
     }
 
+    if row.row_kind == SidebarRowKind::RemoteControl {
+        return remote_control_row_line(theme, row, width);
+    }
+
     if let Some(resolver) = &row.resolver {
         let resolver_name = resolver
             .display_name
@@ -374,6 +383,21 @@ fn process_row_line(theme: &Theme, row: &SidebarRow, width: usize) -> Line<'stat
         Span::styled("·", dim),
         Span::raw(" "),
         Span::styled(label, dim),
+    ])
+}
+
+/// The remote-control host: a calm, single violet line. It is ambient
+/// infrastructure (the snapshot pins it to the bottom of its group), never a
+/// status-bearing agent, so it carries no motion or meters.
+fn remote_control_row_line(theme: &Theme, row: &SidebarRow, width: usize) -> Line<'static> {
+    let label = clip(&row.name, width.saturating_sub(2).max(1));
+    Line::from(vec![
+        Span::styled(
+            REMOTE_CONTROL_GLYPH,
+            theme.style(Color::Magenta, Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(label, theme.style(Color::Magenta, Modifier::empty())),
     ])
 }
 

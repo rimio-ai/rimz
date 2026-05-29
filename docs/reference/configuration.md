@@ -43,21 +43,36 @@ May define:
 
 Project config is inert until the workspace is trusted. See [security.md](../guide/security.md).
 
-## Per-machine config — `~/.config/rimz/projects/<sha256(project_root)>/`
+## Per-machine config — `~/.config/rimz/`
+
+Personal, never committed. Two scopes:
 
 ```text
-config.toml         local overrides
-resolvers.toml      resolver allowlist and chain order
+config.toml                         machine-wide preferences (see below)
+resolvers.toml                      resolver allowlist and chain order
+projects/<sha256(project_root)>/    per-project, per-machine state
+  trust.toml                          executable-surface grant for this project
 ```
 
-May define:
+`config.toml` may define:
 
+- remote-control auto-launch (`[remote_control] auto`),
 - local workspace display name,
 - sound profile,
 - hook install state,
 - local agent binary paths,
-- per-machine mux preference (overrides project `auto`),
-- resolver allowlist and chain order.
+- per-machine mux preference (overrides project `auto`).
+
+### Remote Control auto-launch
+
+```toml
+[remote_control]
+auto = true            # off when unset
+```
+
+When `auto` is set and `claude` is on PATH, `rimz start` launches `claude remote-control --spawn worktree` in a dedicated background view — a `rimz-rc` tab on Zellij, a `rimz-rc` window on tmux — out of your working pane and idempotent on that name (a second `rimz` start is a no-op). It runs from the project root (the main checkout), so on-demand remote sessions get isolated worktrees off the canonical repo rather than the current worktree.
+
+This is per-machine on purpose: Remote Control links *your* Claude account and accepts remote spawn commands, so a clone never inherits it and it never enters the project trust hash. The host pane is ambient infrastructure, not a coding agent — the sidebar shows it as a pinned, specially-coloured `remote control` row, never as an idle Claude agent.
 
 ## Merge order
 
@@ -65,7 +80,7 @@ Later layers win:
 
 1. built-in defaults,
 2. project-local config (`.rimz/config.toml`),
-3. per-machine project config (`~/.config/rimz/projects/<hash>/config.toml`),
+3. per-machine config (`~/.config/rimz/config.toml`),
 4. CLI flags and `RIMZ_*` environment variables.
 
 The project layer sets the shared defaults every contributor sees. The per-machine layer mutes notifications, swaps sound profiles, overrides agent paths, or disables specific hooks without leaking those choices back into the repo. CLI flags win for one-off use.

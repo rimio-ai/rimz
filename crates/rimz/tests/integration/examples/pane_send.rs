@@ -230,6 +230,7 @@ fn stage_bridge_item_with_pane(
         session_name: session.to_owned(),
         view_id: None,
         view_kind: None,
+        view_name: None,
         is_focused: false,
         command: Some("sh".to_owned()),
         cwd: None,

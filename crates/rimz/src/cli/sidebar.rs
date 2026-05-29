@@ -711,6 +711,7 @@ mod tests {
             session_name: "s".to_owned(),
             view_id: None,
             view_kind: None,
+            view_name: None,
             is_focused: false,
             command: command.map(ToOwned::to_owned),
             cwd: Some("/tmp".to_owned()),

@@ -112,6 +112,25 @@ impl TmuxServer {
         );
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
     }
+
+    fn window_names(&self, session: &str) -> Vec<String> {
+        let output = Command::new("tmux")
+            .args([
+                "-S",
+                self.socket.to_str().expect("utf8 socket"),
+                "list-windows",
+                "-t",
+                session,
+                "-F",
+                "#{window_name}",
+            ])
+            .output()
+            .expect("spawn tmux list-windows");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|line| line.trim().to_owned())
+            .collect()
+    }
 }
 
 impl Drop for TmuxServer {
@@ -195,6 +214,47 @@ fn list_panes_with_session_returns_terminals() {
     assert!(
         pane.cwd.as_deref().is_some_and(|cwd| !cwd.is_empty()),
         "tmux should report pane_current_path into PaneRef::cwd: {pane:?}",
+    );
+}
+
+/// `open_background_view` opens a dedicated, named window for a managed command
+/// and is idempotent on that window name: a second call is a no-op.
+#[test]
+fn open_background_view_creates_named_window_idempotently() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    server.ensure_with_shell("rimz-bgview");
+
+    let opts = rimz::mux::BackgroundViewOptions {
+        session_name: "rimz-bgview".to_owned(),
+        cwd: std::env::temp_dir(),
+        name: "rimz-rc".to_owned(),
+        command: vec!["sleep".to_owned(), "120".to_owned()],
+    };
+
+    let first = server
+        .backend
+        .open_background_view(&opts)
+        .expect("first launch");
+    assert_eq!(first, rimz::mux::BackgroundViewLaunch::Launched);
+    assert!(
+        server
+            .window_names("rimz-bgview")
+            .iter()
+            .any(|name| name == "rimz-rc"),
+        "expected a rimz-rc window after launch, got {:?}",
+        server.window_names("rimz-bgview"),
+    );
+
+    let second = server
+        .backend
+        .open_background_view(&opts)
+        .expect("second launch");
+    assert_eq!(
+        second,
+        rimz::mux::BackgroundViewLaunch::AlreadyRunning,
+        "relaunching into a session that already carries the view is a no-op",
     );
 }
 
