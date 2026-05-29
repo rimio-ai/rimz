@@ -899,8 +899,14 @@ fn is_rimz_managed_object(obj: &Map<String, Value>) -> bool {
 /// is read back (never double-wrapped); a user's prior statusline of any shape
 /// (command object, bare string, or other type) is captured whole; no prior
 /// statusline leaves `_rimz_wrapped` absent.
+///
+/// When the original is a command object, its sibling rendering keys
+/// (`padding`, `refreshInterval`, …) are carried onto the managed object so the
+/// wrap stays visually faithful while installed — Claude reads them off the
+/// top-level object, which would otherwise lose them until uninstall. The whole
+/// original is still stored under `_rimz_wrapped` for exact restoration.
 fn upsert_rimz_status_line(root: &mut Map<String, Value>) {
-    let wrapped = match root.remove(STATUS_LINE_KEY) {
+    let original = match root.remove(STATUS_LINE_KEY) {
         Some(Value::Object(ref obj)) if is_rimz_managed_object(obj) => {
             obj.get(RIMZ_WRAPPED_KEY).cloned()
         }
@@ -908,13 +914,23 @@ fn upsert_rimz_status_line(root: &mut Map<String, Value>) {
         None => None,
     };
     let mut entry = Map::new();
+    // Carry the original's own rendering options forward (everything but the
+    // command we're replacing and our own markers).
+    if let Some(Value::Object(orig)) = &original {
+        for (key, value) in orig {
+            if key == "command" || key == RIMZ_MANAGED_KEY || key == RIMZ_WRAPPED_KEY {
+                continue;
+            }
+            entry.insert(key.clone(), value.clone());
+        }
+    }
     entry.insert("type".to_owned(), Value::String("command".to_owned()));
     entry.insert(
         "command".to_owned(),
         Value::String(STATUS_LINE_COMMAND.to_owned()),
     );
     entry.insert(RIMZ_MANAGED_KEY.to_owned(), Value::Bool(true));
-    if let Some(original) = wrapped {
+    if let Some(original) = original {
         entry.insert(RIMZ_WRAPPED_KEY.to_owned(), original);
     }
     root.insert(STATUS_LINE_KEY.to_owned(), Value::Object(entry));
@@ -1534,6 +1550,38 @@ mod tests {
             "npx -y ccstatusline@latest"
         );
         assert_eq!(parsed["statusLine"]["_rimz_wrapped"]["type"], "command");
+    }
+
+    #[test]
+    fn install_preserves_status_line_sibling_keys() {
+        // A real ccstatusline config carries rendering options alongside the
+        // command. They must ride the managed object so the wrap stays visually
+        // faithful while installed, and the whole original still restores.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{ "statusLine": { "type": "command", "command": "npx -y ccstatusline@latest", "padding": 0, "refreshInterval": 10 } }"#,
+        )
+        .unwrap();
+        install_into(&path).unwrap();
+        let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(parsed["statusLine"]["command"], STATUS_LINE_COMMAND);
+        // Sibling rendering keys are carried onto the managed object.
+        assert_eq!(parsed["statusLine"]["padding"], 0);
+        assert_eq!(parsed["statusLine"]["refreshInterval"], 10);
+        // The whole original is still captured for restoration.
+        assert_eq!(parsed["statusLine"]["_rimz_wrapped"]["refreshInterval"], 10);
+
+        uninstall_from(&path).unwrap();
+        let restored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            restored["statusLine"]["command"],
+            "npx -y ccstatusline@latest"
+        );
+        assert_eq!(restored["statusLine"]["padding"], 0);
+        assert_eq!(restored["statusLine"]["refreshInterval"], 10);
+        assert!(restored["statusLine"].get("_rimz_managed").is_none());
     }
 
     #[test]
