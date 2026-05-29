@@ -847,6 +847,7 @@ impl Ledger {
             projection.events,
             projection.agents,
         );
+        snapshot.reap_stale_sessions(Timestamp::now());
         snapshot.display_name = snapshot::display_name_for(&self.inner.paths);
         let snapshot = snapshot.with_project_root(snapshot::project_root_for(&self.inner.paths));
         Ok(snapshot)

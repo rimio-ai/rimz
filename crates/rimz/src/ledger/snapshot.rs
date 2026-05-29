@@ -339,6 +339,49 @@ impl SidebarSnapshot {
         }
     }
 
+    /// Reap ghost sessions from the agent rollup. This filters the *derived*
+    /// rollup only; the append-only event log is untouched, so it complements
+    /// the workspace-level `rimz gc`. Two rules, both safe for the
+    /// one-pane-one-row invariant:
+    ///
+    /// (a) a **pidless** session past [`GHOST_SESSION_TTL_SECS`] — it never
+    ///     captured a pid, so process liveness can never reap it, yet it has
+    ///     not reported in hours. A recent pidless session (a just-launched
+    ///     agent) is kept.
+    /// (b) an older session **superseded** by a strictly-newer same-kind
+    ///     session on the same `(worktree_path, worktree_branch)`, when the
+    ///     older holds no live pane the newer doesn't already occupy. This
+    ///     collapses relaunch-in-place and shared-pid ghosts to the newest
+    ///     while never dropping a concurrent agent that owns its own pane.
+    pub fn reap_stale_sessions(&mut self, now: Timestamp) {
+        let previous_len = self.agents.len();
+        let superseded: BTreeSet<(String, String)> = self
+            .agents
+            .iter()
+            .filter(|older| {
+                self.agents.iter().any(|newer| {
+                    newer.kind == older.kind
+                        && newer.agent_id != older.agent_id
+                        && newer.last_activity > older.last_activity
+                        && newer.worktree_path == older.worktree_path
+                        && newer.worktree_branch == older.worktree_branch
+                        && older_yields_pane(older, newer)
+                })
+            })
+            .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+            .collect();
+        self.agents.retain(|agent| {
+            if superseded.contains(&(agent.kind.clone(), agent.agent_id.clone())) {
+                return false;
+            }
+            !(agent_is_pidless(agent) && session_age_secs(now, agent) > GHOST_SESSION_TTL_SECS)
+        });
+        if self.agents.len() != previous_len {
+            self.worktree_groups =
+                build_worktree_groups(&self.agents, &self.needs_attention, &self.resolver_working);
+        }
+    }
+
     /// Fold live multiplexer panes into the sidebar view-model. This reducer is
     /// pure: callers own pane discovery and pass the result in, so snapshot
     /// building stays independent of any backend command.
@@ -389,6 +432,35 @@ impl SidebarOwnView {
 }
 
 const WORKTREE_ROW_CAP: usize = 6;
+
+/// Age in seconds after which a pidless agent session is reaped as a ghost.
+/// A session that never captured a pid can't be reaped by process liveness, so
+/// without a TTL it would linger forever; a few hours is long enough that a
+/// genuinely live but pidless session (rare) survives, short enough that an
+/// abandoned one clears on its own.
+const GHOST_SESSION_TTL_SECS: i64 = 3 * 60 * 60;
+
+fn agent_is_pidless(agent: &AgentState) -> bool {
+    agent.runtime_owner.is_none() && agent.agent_pid.is_none()
+}
+
+fn session_age_secs(now: Timestamp, agent: &AgentState) -> i64 {
+    now.duration_since(agent.last_activity).as_secs()
+}
+
+/// True when reaping `older` cannot drop a concurrently-live agent: either it
+/// never stamped a pane, or it stamped the very pane `newer` now occupies (a
+/// relaunch in place). An older session holding its own distinct pane is a
+/// separate live agent and is kept.
+fn older_yields_pane(older: &AgentState, newer: &AgentState) -> bool {
+    match older.pane.as_ref() {
+        None => true,
+        Some(older_pane) => newer
+            .pane
+            .as_ref()
+            .is_some_and(|newer_pane| newer_pane.pane_id == older_pane.pane_id),
+    }
+}
 
 fn is_agent_native_item(item: &FeedItem) -> bool {
     item.source_kind == "agent-hook"
@@ -1436,6 +1508,7 @@ pub fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
         events,
         carryover.agents,
     );
+    snapshot.reap_stale_sessions(Timestamp::now());
     snapshot.display_name = display_name_for(paths);
     let snapshot = snapshot.with_project_root(project_root_for(paths));
     Ok(snapshot)
@@ -2735,6 +2808,158 @@ mod tests {
 
         assert!(snapshot.agents.is_empty());
         assert!(snapshot.worktree_groups.is_empty());
+    }
+
+    /// Build a single-agent rollup, run the reap, and return the surviving
+    /// agent ids. Timestamps are stamped relative to `now` so the TTL rules are
+    /// exercised deterministically.
+    fn reap_survivors(now: Timestamp, agents: Vec<AgentState>) -> Vec<String> {
+        let mut snapshot = SidebarSnapshot::build_with_carryover(
+            WorkspaceId::from_project_root(Path::new("/tmp/x")),
+            Vec::new(),
+            Vec::new(),
+            agents,
+        );
+        snapshot.reap_stale_sessions(now);
+        let mut ids: Vec<String> = snapshot.agents.iter().map(|a| a.agent_id.clone()).collect();
+        ids.sort();
+        ids
+    }
+
+    fn aged(mut agent: AgentState, now: Timestamp, secs_ago: i64) -> AgentState {
+        let at = Timestamp::from_second(now.as_second() - secs_ago).unwrap();
+        agent.last_activity = at;
+        agent.last_seen = at;
+        agent
+    }
+
+    #[test]
+    fn reap_drops_pidless_session_past_ttl_but_keeps_recent_and_pidful() {
+        let now = Timestamp::now();
+        let mut stale = aged(
+            agent(
+                "claude",
+                "stale",
+                AgentStatus::Idle,
+                PermissionPosture::Default,
+                0,
+            ),
+            now,
+            GHOST_SESSION_TTL_SECS + 60,
+        );
+        stale.worktree_path = Some("/repo/stale".to_owned());
+        let mut recent = aged(
+            agent(
+                "claude",
+                "recent",
+                AgentStatus::Idle,
+                PermissionPosture::Default,
+                0,
+            ),
+            now,
+            60,
+        );
+        recent.worktree_path = Some("/repo/recent".to_owned());
+        // Old but pid-bearing: TTL reaping is for pidless ghosts only.
+        let mut pidful = aged(
+            agent(
+                "codex",
+                "pidful",
+                AgentStatus::Idle,
+                PermissionPosture::Default,
+                0,
+            ),
+            now,
+            GHOST_SESSION_TTL_SECS * 10,
+        );
+        pidful.worktree_path = Some("/repo/pidful".to_owned());
+        pidful.agent_pid = Some(4242);
+
+        assert_eq!(
+            reap_survivors(now, vec![stale, recent, pidful]),
+            vec!["pidful".to_owned(), "recent".to_owned()],
+            "only the pidless, past-TTL ghost is reaped"
+        );
+    }
+
+    #[test]
+    fn reap_collapses_superseded_paneless_session_to_the_newest() {
+        let now = Timestamp::now();
+        let mut older = aged(
+            agent(
+                "codex",
+                "older",
+                AgentStatus::Idle,
+                PermissionPosture::Default,
+                0,
+            ),
+            now,
+            120,
+        );
+        older.worktree_path = Some("/repo/a".to_owned());
+        older.worktree_branch = Some("main".to_owned());
+        let mut newer = aged(
+            agent(
+                "codex",
+                "newer",
+                AgentStatus::Idle,
+                PermissionPosture::Default,
+                0,
+            ),
+            now,
+            60,
+        );
+        newer.worktree_path = Some("/repo/a".to_owned());
+        newer.worktree_branch = Some("main".to_owned());
+
+        assert_eq!(
+            reap_survivors(now, vec![older, newer]),
+            vec!["newer".to_owned()],
+            "the older paneless session on the same path+branch is reaped"
+        );
+    }
+
+    #[test]
+    fn reap_keeps_concurrent_agents_each_holding_a_distinct_pane() {
+        // The one-pane-one-row safety property: two same-branch agents in
+        // distinct panes are both live and must both survive supersession.
+        let now = Timestamp::now();
+        let mut older = aged(
+            agent(
+                "claude",
+                "older",
+                AgentStatus::Running,
+                PermissionPosture::Default,
+                0,
+            ),
+            now,
+            120,
+        );
+        older.worktree_path = Some("/repo/a".to_owned());
+        older.worktree_branch = Some("main".to_owned());
+        older.agent_pid = Some(111);
+        older.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+        let mut newer = aged(
+            agent(
+                "claude",
+                "newer",
+                AgentStatus::Running,
+                PermissionPosture::Default,
+                0,
+            ),
+            now,
+            60,
+        );
+        newer.worktree_path = Some("/repo/a".to_owned());
+        newer.worktree_branch = Some("main".to_owned());
+        newer.agent_pid = Some(222);
+        newer.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%2")));
+
+        assert_eq!(
+            reap_survivors(now, vec![older, newer]),
+            vec!["newer".to_owned(), "older".to_owned()],
+            "an agent holding its own distinct pane is never reaped"
+        );
     }
 
     #[test]

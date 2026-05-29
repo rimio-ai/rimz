@@ -135,6 +135,8 @@ Presence comes from the live pane list, not from a session-exit hook (see [sideb
 
 There is no `offline` status — a dead agent is a reverted shell row or no row at all, never a retracted ledger fact.
 
+**The rollup reaps its own ghosts.** A session that never captured a pid and never fired `SessionEnd` would otherwise pin a stale row forever, and relaunch-in-place or shared-pid sessions stack duplicates. At snapshot time the derived rollup (never the event log) drops two classes, both safe for one-pane-one-row: a *pidless* session past a few-hours TTL, and an *older* session superseded by a strictly-newer same-kind session on the same `(worktree_path, worktree_branch)` when the older holds no live pane the newer doesn't already occupy. An agent holding its own distinct pane is always kept. This is workspace-local and complements the cross-workspace `rimz gc`.
+
 Two consequences this contract enforces (status in [Implementation status](#implementation-status)):
 
 - **A stale overlay never paints a non-agent pane.** After an agent exits and `git log` runs in the same pane, the foreground is `git` — a process row, never the agent that just left. An overlay attaches to a non-shell pane only when its foreground maps to the agent kind or a known launcher (`node`, `bun`, `deno`, `python`…); the planned refinement also requires, when both pids are known, that the agent pid is an ancestor of the pane pid. The loose match exists for `node`-wrapped Codex, not for arbitrary commands.
