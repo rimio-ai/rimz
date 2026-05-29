@@ -17,8 +17,6 @@
 //! `docs/internals/agent.md`). The `PreToolUse` blocking sub-events ride the
 //! broad `PreToolUse` hook and self-classify from `tool_name`.
 
-use std::env;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -28,7 +26,8 @@ use serde_json::{Map, Value, json};
 use super::{
     AgentContext, AgentErr, AgentHookClass, AgentIntegration, AgentLifecycleObservation,
     ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
-    StatusLineChange, choice_is_allow, optional_payload_string, stop_status_from_payload,
+    StatusLineChange, agent_config_path, choice_is_allow, optional_payload_string,
+    permission_decision, read_optional_file, read_transcript_tail, stop_status_from_payload,
 };
 use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution};
 use crate::ledger::atomic;
@@ -134,14 +133,7 @@ impl AgentIntegration for ClaudeIntegration {
 
     fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
         match item.kind {
-            FeedKind::Permission => Ok(json!({
-                "hookSpecificOutput": {
-                    "hookEventName": "PermissionRequest",
-                    "decision": {
-                        "behavior": if choice_is_allow(resolution) { "allow" } else { "deny" }
-                    }
-                }
-            })),
+            FeedKind::Permission => Ok(permission_decision(resolution)),
             FeedKind::PlanApproval | FeedKind::Question => {
                 let updated_input = resolution
                     .decision
@@ -322,12 +314,8 @@ fn hooks_installed_at(path: &Path) -> bool {
         .is_some_and(|hooks| {
             hooks.values().any(|entries| {
                 entries.as_array().is_some_and(|arr| {
-                    arr.iter().any(|entry| {
-                        entry
-                            .get(RIMZ_MANAGED_KEY)
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false)
-                    })
+                    arr.iter()
+                        .any(|entry| entry.as_object().is_some_and(is_rimz_managed_object))
                 })
             })
         })
@@ -480,22 +468,9 @@ fn context_window_for(model: Option<&str>) -> u64 {
 /// Best-effort: any IO or parse failure yields empty fields (enrichment, never
 /// correctness).
 fn usage_from_transcript(path: &str) -> TranscriptUsage {
-    const TAIL_BYTES: u64 = 64 * 1024;
-    let Ok(mut file) = std::fs::File::open(path) else {
+    let Some(text) = read_transcript_tail(Path::new(path)) else {
         return TranscriptUsage::default();
     };
-    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
-    if file
-        .seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES)))
-        .is_err()
-    {
-        return TranscriptUsage::default();
-    }
-    let mut buf = Vec::new();
-    if file.read_to_end(&mut buf).is_err() {
-        return TranscriptUsage::default();
-    }
-    let text = String::from_utf8_lossy(&buf);
     // Newest-first: the last assistant usage record wins. A truncated leading
     // line from the tail seek simply fails to parse and is skipped.
     for line in text.lines().rev() {
@@ -537,17 +512,11 @@ fn usage_from_transcript(path: &str) -> TranscriptUsage {
 fn claude_settings_path() -> Result<PathBuf> {
     // Honour an explicit override (`RIMZ_CLAUDE_SETTINGS`) so tests and tooling
     // can point the installer at a tempdir without touching real config.
-    if let Some(raw) = env::var_os("RIMZ_CLAUDE_SETTINGS").filter(|v| !v.is_empty()) {
-        return Ok(PathBuf::from(raw));
-    }
-    let home = env::var_os("HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .ok_or_else(|| AgentErr::Install {
-            agent: "claude",
-            reason: "$HOME is not set; cannot resolve ~/.claude/settings.json".to_owned(),
-        })?;
-    Ok(home.join(".claude").join("settings.json"))
+    agent_config_path(
+        "claude",
+        "RIMZ_CLAUDE_SETTINGS",
+        Path::new(".claude/settings.json"),
+    )
 }
 
 fn install_into(path: &Path) -> Result<HookInstallReport> {
@@ -565,7 +534,7 @@ fn install_into(path: &Path) -> Result<HookInstallReport> {
 
 fn preview_install_at(path: &Path) -> Result<HookInstallPreview> {
     let existed = path.exists();
-    let original_config = original_text(path)?;
+    let original_config = read_optional_file("claude", path)?;
     let status_line_change = classify_status_line_change(&read_existing_json(path)?);
     let (root, installed) = install_candidate(path)?;
     Ok(HookInstallPreview {
@@ -633,10 +602,10 @@ fn read_existing_json(path: &Path) -> Result<Map<String, Value>> {
         Ok(text) if text.trim().is_empty() => Ok(Map::new()),
         Ok(text) => {
             let value: Value =
-                serde_json::from_str(&text).map_err(|source| AgentErr::InstallParseJson {
+                serde_json::from_str(&text).map_err(|source| AgentErr::InstallParse {
                     agent: "claude",
                     path: path.to_path_buf(),
-                    source,
+                    source: Box::new(source),
                 })?;
             match value {
                 Value::Object(map) => Ok(map),
@@ -667,24 +636,12 @@ fn write_json(path: &Path, root: &Map<String, Value>) -> Result<()> {
 
 fn render_json(root: &Map<String, Value>) -> Result<String> {
     let text = serde_json::to_string_pretty(&Value::Object(root.clone())).map_err(|source| {
-        AgentErr::InstallSerializeJson {
+        AgentErr::InstallSerialize {
             agent: "claude",
-            source,
+            source: Box::new(source),
         }
     })?;
     Ok(format!("{text}\n"))
-}
-
-fn original_text(path: &Path) -> Result<Option<String>> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(AgentErr::InstallIo {
-            agent: "claude",
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
 }
 
 fn json_type_name(v: &Value) -> &'static str {
@@ -714,11 +671,7 @@ fn reject_async_blocking_in_existing(root: &Map<String, Value>) -> Result<()> {
             let Some(obj) = entry.as_object() else {
                 continue;
             };
-            if !obj
-                .get(RIMZ_MANAGED_KEY)
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
+            if !is_rimz_managed_object(obj) {
                 continue;
             }
             // Match on the same matcher we'd install — entries that don't
@@ -783,11 +736,7 @@ fn upsert_rimz_matcher(root: &mut Map<String, Value>, event: &str, matcher: Opti
         let Some(obj) = entry.as_object() else {
             return true;
         };
-        if !obj
-            .get(RIMZ_MANAGED_KEY)
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
+        if !is_rimz_managed_object(obj) {
             return true;
         }
         let actual = obj.get("matcher").and_then(Value::as_str);
@@ -827,11 +776,7 @@ fn build_matcher_entry(event: &str, matcher: Option<&str>) -> Value {
 /// untouched. The command-substring arm reclaims legacy and unmarked entries
 /// older builds left behind, so reinstall never stacks duplicates.
 fn entry_is_rimz_owned(obj: &Map<String, Value>) -> bool {
-    if obj
-        .get(RIMZ_MANAGED_KEY)
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
+    if is_rimz_managed_object(obj) {
         return true;
     }
     let Some(handlers) = obj.get(HOOKS_KEY).and_then(Value::as_array) else {

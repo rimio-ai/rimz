@@ -14,11 +14,12 @@ pub mod codex;
 pub mod context;
 pub mod statusline;
 
-use std::path::PathBuf;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution, RuntimeOwner};
 use crate::ids::PaneId;
@@ -60,27 +61,14 @@ pub enum AgentErr {
     InstallSerialize {
         agent: &'static str,
         #[source]
-        source: Box<toml::ser::Error>,
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
     #[error("parsing existing {agent} hook config at {path}: {source}")]
     InstallParse {
         agent: &'static str,
         path: PathBuf,
         #[source]
-        source: Box<toml::de::Error>,
-    },
-    #[error("serializing {agent} hook config: {source}")]
-    InstallSerializeJson {
-        agent: &'static str,
-        #[source]
-        source: serde_json::Error,
-    },
-    #[error("parsing existing {agent} hook config at {path}: {source}")]
-    InstallParseJson {
-        agent: &'static str,
-        path: PathBuf,
-        #[source]
-        source: serde_json::Error,
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
     #[error("writing hook config: {0}")]
     WriteHookConfig(#[from] crate::ledger::atomic::AtomicErr),
@@ -338,6 +326,58 @@ pub fn integration_by_name(name: &str) -> Result<Box<dyn AgentIntegration>> {
     }
 }
 
+/// Resolve an agent's per-user config file path. An explicit `override_env`
+/// value wins (so tests and tooling can point at a tempdir); otherwise the path
+/// is `$HOME` joined with `rel`. Returns an `Install` error naming the agent
+/// when `$HOME` is unset.
+pub(crate) fn agent_config_path(
+    agent: &'static str,
+    override_env: &str,
+    rel: &Path,
+) -> Result<PathBuf> {
+    if let Some(raw) = std::env::var_os(override_env).filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(raw));
+    }
+    let home = std::env::var_os("HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| AgentErr::Install {
+            agent,
+            reason: format!("$HOME is not set; cannot resolve ~/{}", rel.display()),
+        })?;
+    Ok(home.join(rel))
+}
+
+/// Read an agent config file's current contents for install preview and
+/// uninstall. A missing file reads as `None`; any other IO error propagates
+/// with agent + path context so the user sees which adapter failed and where.
+pub(crate) fn read_optional_file(agent: &'static str, path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(AgentErr::InstallIo {
+            agent,
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+/// Read the trailing window of a transcript/rollout JSONL as lossy UTF-8, for
+/// tail-scanning the most recent records newest-first. Returns `None` on any IO
+/// error — context enrichment is best-effort, never correctness. A truncated
+/// leading line from the seek simply fails to parse in the caller's walk.
+pub(crate) fn read_transcript_tail(path: &Path) -> Option<String> {
+    const TAIL_BYTES: u64 = 64 * 1024;
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    file.seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES)))
+        .ok()?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).ok()?;
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
 pub(crate) fn optional_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
     keys.iter()
         .find_map(|key| payload.get(*key).and_then(Value::as_str))
@@ -353,6 +393,20 @@ pub(crate) fn choice_is_allow(resolution: &Resolution) -> bool {
         .and_then(Value::as_str)
         .map(|v| matches!(v, "allow" | "yes" | "approve"))
         .unwrap_or(false)
+}
+
+/// The agent-native `PermissionRequest` decision envelope, shared by every
+/// adapter whose permission hook speaks the `hookSpecificOutput.decision`
+/// shape. `allow`/`deny` is projected from the resolver's choice.
+pub(crate) fn permission_decision(resolution: &Resolution) -> Value {
+    json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PermissionRequest",
+            "decision": {
+                "behavior": if choice_is_allow(resolution) { "allow" } else { "deny" }
+            }
+        }
+    })
 }
 
 /// Status a `Stop`-style turn-end event records. A `Stop` only fires after a

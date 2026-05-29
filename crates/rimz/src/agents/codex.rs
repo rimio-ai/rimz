@@ -13,16 +13,16 @@
 
 use std::env;
 use std::fs;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::{
     AgentErr, AgentHookClass, AgentIntegration, AgentLifecycleObservation, ClassifiedHook,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, Result, choice_is_allow,
-    optional_payload_string, stop_status_from_payload,
+    HookInstallPreview, HookInstallReport, HookUninstallReport, Result, agent_config_path,
+    optional_payload_string, permission_decision, read_optional_file, read_transcript_tail,
+    stop_status_from_payload,
 };
 use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution};
 use crate::ledger::atomic;
@@ -33,20 +33,25 @@ use crate::ledger::atomic;
 /// before tightening.
 const CODEX_HOOK_CAP: Duration = Duration::from_secs(60);
 
-/// Installed events (always wired). `UserPromptSubmit` is state signal — it
-/// moves the root agent to running and carries the task. The broad
-/// `PreToolUse`/`PostToolUse` hooks fire on every tool call; they keep the
-/// sidebar's enrichment current and feed `rimz feed list --audit` depth, with
-/// their payload content gated by `[privacy] payload_mode`.
-const INSTALLED_EVENTS: &[&str] = &[
-    "SessionStart",
-    "UserPromptSubmit",
-    "SubagentStart",
-    "SubagentStop",
-    "Stop",
-    "PermissionRequest",
-    "PreToolUse",
-    "PostToolUse",
+/// Installed events. Tuple is `(event_name, optional_matcher)` — the single
+/// source of truth for which Codex events Rimz wires and with which matcher,
+/// mirroring the Claude adapter's table. `SessionStart` filters to its
+/// lifecycle subtypes; the per-call hooks match everything (`.*`); the
+/// turn-boundary events (`UserPromptSubmit`, `Stop`) carry no matcher.
+/// `UserPromptSubmit` is state signal — it moves the root agent to running and
+/// carries the task. The broad `PreToolUse`/`PostToolUse` hooks fire on every
+/// tool call; they keep the sidebar's enrichment current and feed
+/// `rimz feed list --audit` depth, with their payload content gated by
+/// `[privacy] payload_mode`.
+const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
+    ("SessionStart", Some("startup|resume|clear|compact")),
+    ("UserPromptSubmit", None),
+    ("SubagentStart", Some(".*")),
+    ("SubagentStop", Some(".*")),
+    ("Stop", None),
+    ("PermissionRequest", Some(".*")),
+    ("PreToolUse", Some(".*")),
+    ("PostToolUse", Some(".*")),
 ];
 
 /// Legacy config block written by older Rimz builds. Codex ignores this block;
@@ -97,14 +102,7 @@ impl AgentIntegration for CodexIntegration {
 
     fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
         match item.kind {
-            FeedKind::Permission => Ok(json!({
-                "hookSpecificOutput": {
-                    "hookEventName": "PermissionRequest",
-                    "decision": {
-                        "behavior": if choice_is_allow(resolution) { "allow" } else { "deny" }
-                    }
-                }
-            })),
+            FeedKind::Permission => Ok(permission_decision(resolution)),
             other => Err(AgentErr::Render {
                 agent: "codex",
                 reason: format!("unsupported feed kind {other:?}"),
@@ -350,22 +348,9 @@ fn sorted_subdirs_desc(path: &Path) -> Vec<PathBuf> {
 /// bounded tail and takes the most recent record. Best-effort: any IO or
 /// parse failure yields empty fields (enrichment, never correctness).
 fn usage_from_transcript(path: &Path) -> TranscriptUsage {
-    const TAIL_BYTES: u64 = 64 * 1024;
-    let Ok(mut file) = std::fs::File::open(path) else {
+    let Some(text) = read_transcript_tail(path) else {
         return TranscriptUsage::default();
     };
-    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
-    if file
-        .seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES)))
-        .is_err()
-    {
-        return TranscriptUsage::default();
-    }
-    let mut buf = Vec::new();
-    if file.read_to_end(&mut buf).is_err() {
-        return TranscriptUsage::default();
-    }
-    let text = String::from_utf8_lossy(&buf);
     // Walk the tail newest-first, tracking the latest `token_count` (gauge
     // values) and the latest `turn_context.payload.model` (display name) seen.
     // Bail once both are filled. A truncated leading line from the tail seek
@@ -439,17 +424,7 @@ fn usage_from_transcript(path: &Path) -> TranscriptUsage {
 fn codex_config_path() -> Result<PathBuf> {
     // Honour an explicit override (`RIMZ_CODEX_CONFIG`) so tests and tooling
     // can point the installer at a tempdir without touching real config.
-    if let Some(raw) = env::var_os("RIMZ_CODEX_CONFIG").filter(|v| !v.is_empty()) {
-        return Ok(PathBuf::from(raw));
-    }
-    let home = env::var_os("HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .ok_or_else(|| AgentErr::Install {
-            agent: "codex",
-            reason: "$HOME is not set; cannot resolve ~/.codex/config.toml".to_owned(),
-        })?;
-    Ok(home.join(".codex").join("config.toml"))
+    agent_config_path("codex", "RIMZ_CODEX_CONFIG", Path::new(".codex/config.toml"))
 }
 
 fn install_into(path: &std::path::Path) -> Result<HookInstallReport> {
@@ -467,7 +442,7 @@ fn install_into(path: &std::path::Path) -> Result<HookInstallReport> {
 
 fn preview_install_at(path: &std::path::Path) -> Result<HookInstallPreview> {
     let existed = path.exists();
-    let original_config = original_text(path)?;
+    let original_config = read_optional_file("codex", path)?;
     let (root, installed) = install_candidate(path)?;
     Ok(HookInstallPreview {
         agent: "codex",
@@ -489,10 +464,10 @@ fn install_candidate(path: &std::path::Path) -> Result<(toml::Table, Vec<String>
     strip_rimz_hook_commands(&mut root);
     remove_rimz_block(&mut root);
 
-    let installed: Vec<String> = INSTALLED_EVENTS.iter().map(|s| (*s).to_owned()).collect();
-
-    for event in &installed {
-        insert_rimz_hook_group(&mut root, event);
+    let mut installed = Vec::new();
+    for &(event, matcher) in INSTALLED_EVENTS {
+        insert_rimz_hook_group(&mut root, event, matcher);
+        installed.push(event.to_owned());
     }
 
     Ok((root, installed))
@@ -530,7 +505,7 @@ fn hooks_installed_at(path: &std::path::Path) -> bool {
     };
     INSTALLED_EVENTS
         .iter()
-        .all(|event| has_rimz_hook_command(&root, event))
+        .all(|(event, _)| has_rimz_hook_command(&root, event))
 }
 
 fn read_existing_table(path: &std::path::Path) -> Result<toml::Table> {
@@ -563,19 +538,7 @@ fn render_table(table: &toml::Table) -> Result<String> {
     })
 }
 
-fn original_text(path: &std::path::Path) -> Result<Option<String>> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(AgentErr::InstallIo {
-            agent: "codex",
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
-}
-
-fn insert_rimz_hook_group(root: &mut toml::Table, event: &str) {
+fn insert_rimz_hook_group(root: &mut toml::Table, event: &str, matcher: Option<&str>) {
     let hooks = root
         .entry(HOOKS_TABLE.to_owned())
         .or_insert_with(|| toml::Value::Table(toml::Table::new()));
@@ -614,7 +577,7 @@ fn insert_rimz_hook_group(root: &mut toml::Table, event: &str) {
     );
 
     let mut group = toml::Table::new();
-    if let Some(matcher) = matcher_for_event(event) {
+    if let Some(matcher) = matcher {
         group.insert(
             "matcher".to_owned(),
             toml::Value::String(matcher.to_owned()),
@@ -716,17 +679,6 @@ fn is_rimz_hook_handler(handler: &toml::Value) -> bool {
     handler_command(handler).is_some_and(|command| command.contains(RIMZ_HOOK_MARKER))
 }
 
-fn matcher_for_event(event: &str) -> Option<&'static str> {
-    match event {
-        "SessionStart" => Some("startup|resume|clear|compact"),
-        "PermissionRequest" | "PreToolUse" | "PostToolUse" | "SubagentStart" | "SubagentStop" => {
-            Some(".*")
-        }
-        "UserPromptSubmit" | "Stop" => None,
-        _ => None,
-    }
-}
-
 fn remove_rimz_block(root: &mut toml::Table) -> Vec<String> {
     let Some(hooks_value) = root.get_mut(HOOKS_TABLE) else {
         return Vec::new();
@@ -755,6 +707,8 @@ fn remove_rimz_block(root: &mut toml::Table) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::feed::{ResolutionMethod, Surface};
     use crate::ids::WorkspaceId;
@@ -955,7 +909,8 @@ mod tests {
         let report = install_into(&path).unwrap();
         assert!(!report.merged);
         assert_eq!(report.agent, "codex");
-        assert_eq!(report.installed_events, INSTALLED_EVENTS);
+        let expected: Vec<&str> = INSTALLED_EVENTS.iter().map(|(event, _)| *event).collect();
+        assert_eq!(report.installed_events, expected);
         assert!(hooks_installed_at(&path));
 
         // Every command is identical (no `--event`; the helper reads the event
