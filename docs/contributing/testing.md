@@ -92,11 +92,12 @@ All `insta` snapshots — CLI stdout, `--json` event payloads, hook stdout, side
 
 **Presence and liveness** (the reducer folds the live pane list in):
 
-- A pane running a shell renders as a process row; a pane running an agent renders as that agent's row — one row, never both.
+- A pane running a shell renders as a process row; a pane an agent stamped renders as that agent's row — one row, never both, and no pane id shared by two rows.
+- Binding is by the hook-stamped pane id alone: a pane whose command/cwd merely *look* like an agent that never stamped it stays a process row (`agent_binds_only_by_stamped_pane_id`), and N panes yield N rows with no duplicated pane id (`each_live_pane_yields_exactly_one_row`).
 - Panes group by their cwd's worktree; a pane outside every worktree lands in the `workspace` catch-all.
 - The sidebar's own pane is excluded from the roster.
-- Liveness: an agent whose pane reverts to a shell drops its overlay back to a process row; a dead captured pid suppresses the overlay; a closed pane drops the row entirely.
-- Pending script attention produces a row only while the owning `feed ask` waiter is live; pending agent attention renders only with a live owner and corroborating agent pane, so stale prompts cannot outlive their process.
+- Liveness: an agent renders only on its stamped live pane; a pane it no longer holds (reverted to a shell, closed, or absent from the list) drops the agent row. Rollup hygiene reaps pidless-past-TTL and superseded ghost sessions separately.
+- Pending script attention produces a standalone row only while the owning `feed ask` waiter is live; pending agent attention folds onto the agent's stamped-pane row (one ask per session), and with no live stamped pane it does not render, so stale prompts cannot outlive their pane.
 - Process rows sort below every agent row and are part of the cap-truncatable tail.
 
 ## End-user journey suite

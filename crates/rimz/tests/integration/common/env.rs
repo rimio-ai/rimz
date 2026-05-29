@@ -227,20 +227,50 @@ impl Env {
     /// --source <source> --event <event>` with `payload` on stdin. This is
     /// what a supported agent invokes when the event fires.
     pub fn run_installed_hook(&self, source: &str, event: &str, payload: &str) -> Output {
-        self.spawn_installed_hook(source, event, payload)
-            .wait_with_output()
-            .expect("wait installed hook")
+        self.run_installed_hook_in_pane(source, event, payload, &[])
     }
 
     /// Spawn the installed-hook command, returning the live child so a test
     /// can drive the ledger while a blocking hook holds open on the bridge.
     pub fn spawn_installed_hook(&self, source: &str, event: &str, payload: &str) -> Child {
+        self.spawn_installed_hook_in_pane(source, event, payload, &[])
+    }
+
+    /// Fire an installed hook with the per-pane env the mux exports
+    /// (`TMUX_PANE` / `ZELLIJ_PANE_ID`), so the hook stamps the pane it ran
+    /// inside exactly as it does under a real multiplexer. Any mux pane var
+    /// leaking from the test runner is cleared first, so the stamp is
+    /// deterministic.
+    pub fn run_installed_hook_in_pane(
+        &self,
+        source: &str,
+        event: &str,
+        payload: &str,
+        pane_env: &[(&str, &str)],
+    ) -> Output {
+        self.spawn_installed_hook_in_pane(source, event, payload, pane_env)
+            .wait_with_output()
+            .expect("wait installed hook")
+    }
+
+    pub fn spawn_installed_hook_in_pane(
+        &self,
+        source: &str,
+        event: &str,
+        payload: &str,
+        pane_env: &[(&str, &str)],
+    ) -> Child {
         let mut cmd = self.rimz();
         cmd.args(["hooks", "feed", "--source", source, "--event", event])
             .env("RIMZ_AGENT_PID", std::process::id().to_string())
+            .env_remove("TMUX_PANE")
+            .env_remove("ZELLIJ_PANE_ID")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        for (key, value) in pane_env {
+            cmd.env(key, value);
+        }
         self.spawn_payload(cmd, payload)
     }
 

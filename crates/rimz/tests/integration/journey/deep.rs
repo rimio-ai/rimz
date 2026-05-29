@@ -101,13 +101,17 @@ fn tmux_room_shows_agent_after_hook() {
             &format!("{} 60", fake_codex.display()),
         ],
     );
+    // The fake_codex pane is the only one until we split; capture its id so the
+    // hook stamps it exactly as TMUX_PANE would inside that pane, binding the
+    // agent row to its live pane.
+    let codex_pane = tmux_capture(&socket, &["list-panes", "-t", "room", "-F", "#{pane_id}"]);
     let serve = sidebar_serve_line(&env, &sidebar, runtime.path(), "tmux", "room");
     tmux(&socket, &["split-window", "-h", "-t", "room", &serve]);
 
     // Wire codex the way the user does, then run it through its installed
     // hook against the shared ledger — the only way a real agent reaches Rimz.
     env.install_agent_hooks("codex");
-    let out = env.run_installed_hook(
+    let out = env.run_installed_hook_in_pane(
         "codex",
         "SessionStart",
         &session_start_at(
@@ -118,6 +122,7 @@ fn tmux_room_shows_agent_after_hook() {
             Some("main"),
         )
         .to_string(),
+        &[("TMUX_PANE", &codex_pane)],
     );
     assert!(
         out.status.success(),
@@ -292,6 +297,11 @@ fn attach_and_read_until(runtime: &Path, session: &str, needle: &str, budget: Du
 // --- tmux helpers ---
 
 fn tmux(socket: &Path, args: &[&str]) {
+    tmux_capture(socket, args);
+}
+
+/// Run a tmux command and return its trimmed stdout (used to read a pane id).
+fn tmux_capture(socket: &Path, args: &[&str]) -> String {
     let out = Command::new("tmux")
         .arg("-S")
         .arg(socket)
@@ -303,6 +313,7 @@ fn tmux(socket: &Path, args: &[&str]) {
         "tmux {args:?} failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
 /// Poll `capture-pane` on the session's active pane (the sidebar split) until

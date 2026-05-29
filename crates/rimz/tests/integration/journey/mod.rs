@@ -228,31 +228,29 @@ impl<'a> RoomHarness<'a> {
             .get("hook_event_name")
             .and_then(Value::as_str)
             .expect("payload carries hook_event_name");
+        let session_id = payload_session_id(payload, source);
         if event == "SessionStart" {
-            let session_id = payload
-                .get("session_id")
-                .or_else(|| payload.get("agent_id"))
-                .and_then(Value::as_str)
-                .unwrap_or(source);
             let cwd = payload
                 .get("worktree_path")
                 .and_then(Value::as_str)
                 .unwrap_or_else(|| self.env.project_root.to_str().unwrap_or("."));
-            self.start_agent_process(session_id, source, cwd);
+            self.start_agent_process(&session_id, source, cwd);
         } else if event == "SessionEnd" {
-            let session_id = payload
-                .get("session_id")
-                .or_else(|| payload.get("agent_id"))
-                .and_then(Value::as_str)
-                .unwrap_or(source);
-            self.stop_agent_process(session_id);
+            self.stop_agent_process(&session_id);
         }
         if !self.env.agent_hooks_installed(source) {
             return;
         }
-        let out = self
-            .env
-            .run_installed_hook(source, event, &payload.to_string());
+        // The hook reads the mux's per-pane env var to stamp the pane it ran
+        // inside; feed it the roster's pane id so the bind matches the fixture.
+        let pane_env = self.pane_env(&session_id);
+        let pane_env: Vec<(&str, &str)> = pane_env
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        let out =
+            self.env
+                .run_installed_hook_in_pane(source, event, &payload.to_string(), &pane_env);
         assert!(
             out.status.success(),
             "{source} {event} hook failed: {}",
@@ -267,8 +265,31 @@ impl<'a> RoomHarness<'a> {
             self.env.agent_hooks_installed(source),
             "spawn_agent needs an onboarded room — call onboard(&[{source:?}]) first"
         );
+        let session_id = payload_session_id(payload, source);
+        let pane_env = self.pane_env(&session_id);
+        let pane_env: Vec<(&str, &str)> = pane_env
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
         self.env
-            .spawn_installed_hook(source, event, &payload.to_string())
+            .spawn_installed_hook_in_pane(source, event, &payload.to_string(), &pane_env)
+    }
+
+    /// The per-pane env the mux exports for `session_id`'s pane, matching the
+    /// roster fixture's pane id, so the simulated hook stamps the same pane the
+    /// renderer sees live. Empty when the session has no pane (e.g. SessionEnd
+    /// already retired it) — the hook then stamps nothing, as it would for a
+    /// pane that has closed.
+    fn pane_env(&self, session_id: &str) -> Vec<(String, String)> {
+        let roster = self.pane_roster.lock().expect("pane roster");
+        let Some(index) = roster.index_of(session_id) else {
+            return Vec::new();
+        };
+        let pair = match self.mux {
+            MuxName::Tmux => ("TMUX_PANE".to_owned(), format!("%{index}")),
+            MuxName::Zellij => ("ZELLIJ_PANE_ID".to_owned(), index.to_string()),
+        };
+        vec![pair]
     }
 
     fn start_agent_process(&self, session_id: &str, command: &str, cwd: &str) {
@@ -343,6 +364,10 @@ impl PaneRoster {
         self.agents.remove(session_id);
     }
 
+    fn index_of(&self, session_id: &str) -> Option<usize> {
+        self.agents.get(session_id).map(|process| process.index)
+    }
+
     fn panes(&self, mux: MuxName, project_root: &std::path::Path) -> Vec<PaneRef> {
         if self.agents.is_empty() {
             return vec![process_pane(
@@ -376,6 +401,17 @@ impl Drop for RoomHarness<'_> {
 //
 // The adapter reads worktree/model/effort/task from the hook payload, so a
 // test controls the worktree group and capability line by what it sends.
+
+/// The session id a hook payload carries (`session_id`, then `agent_id`),
+/// falling back to the source name for payloads that name neither.
+fn payload_session_id(payload: &Value, source: &str) -> String {
+    payload
+        .get("session_id")
+        .or_else(|| payload.get("agent_id"))
+        .and_then(Value::as_str)
+        .unwrap_or(source)
+        .to_owned()
+}
 
 /// `SessionStart` lifecycle payload. Groups key on `worktree_path` (the
 /// renderer labels by branch), so each worktree needs a distinct path — without

@@ -146,8 +146,11 @@ pub struct SidebarStatusCount {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SidebarRowKind {
+    /// An agent session: a live pane it stamped, or — in the no-pane rollup — a
+    /// session row. A standalone script/bridge ask reuses this kind; it renders
+    /// the same single line when no capability fields are set.
     Agent,
-    Item,
+    /// A live pane with no agent bound to it: a shell, an editor, `git`.
     Process,
 }
 
@@ -377,8 +380,12 @@ impl SidebarSnapshot {
             !(agent_is_pidless(agent) && session_age_secs(now, agent) > GHOST_SESSION_TTL_SECS)
         });
         if self.agents.len() != previous_len {
-            self.worktree_groups =
-                build_worktree_groups(&self.agents, &self.needs_attention, &self.resolver_working);
+            self.worktree_groups = build_worktree_groups(
+                &self.agents,
+                &self.needs_attention,
+                &self.resolver_working,
+                self.project_root.as_deref(),
+            );
         }
     }
 
@@ -506,6 +513,14 @@ fn build_worktree_groups(
     build_worktree_groups_from_rows(rows, project_root)
 }
 
+/// One pane = one row, by construction. Every live pane anchors exactly one
+/// row: it binds the unique agent that stamped this pane id — rendering that
+/// agent with its single most-relevant pending ask folded in — or, with no such
+/// agent, renders as a plain process row. Agents with no live pane (ghosts,
+/// sub-agents, a relaunch the reaper has not yet collapsed) do not render, so a
+/// dead session can never resurrect a row or latch onto a stranger's pane. The
+/// only paneless rows are standalone script/bridge asks, which no agent session
+/// raised.
 fn build_worktree_groups_with_panes(
     agents: &[AgentState],
     needs_attention: &[FeedItem],
@@ -513,89 +528,105 @@ fn build_worktree_groups_with_panes(
     panes: &[PaneRef],
     project_root: Option<&Path>,
 ) -> Vec<SidebarWorktreeGroup> {
-    let mut rows = Vec::new();
-    let mut used_panes = BTreeSet::new();
-    let mut replaced_agents = BTreeSet::new();
-
-    for item in needs_attention.iter().chain(resolver_working.iter()) {
-        if item.source_kind == "agent-hook" {
-            // An agent-hook ask is real only while its originating session is
-            // live; it then binds to that session's own pane. A stale ask
-            // (session ended or process reaped) never claims an unrelated pane,
-            // so a dead claude prompt can't latch onto a fresh codex.
-            let Some(agent) = matching_agent(item, agents) else {
-                continue;
-            };
-            let Some(pane) = matching_pane_for_agent(agent, panes, &used_panes) else {
-                continue;
-            };
-            let Some(mut row) = row_from_item(item, agents) else {
-                continue;
-            };
-            row.pane = Some(pane.clone());
-            used_panes.insert(pane.pane_id.to_string());
-            replaced_agents.insert((agent.kind.clone(), agent.agent_id.clone()));
-            rows.push(row);
-        } else if let Some(mut row) = row_from_item(item, agents) {
-            if row.pane.is_none()
-                && let Some(pane) = matching_pane_for_item(item, agents, panes, &used_panes)
-            {
-                row.pane = Some(pane.clone());
-                used_panes.insert(pane.pane_id.to_string());
-            }
-            rows.push(row);
-        }
-    }
-
-    // Assign panes to agents in two passes so an exact identity/command match
-    // always wins over a loose "looks like an agent" candidate. Within each
-    // pass, the most-recently-active agent binds first — so when the ledger
-    // holds stale ghosts of dead sessions on the same worktree, the live agent
-    // claims its pane instead of being blocked by the count.
-    let mut sorted: Vec<&AgentState> = agents.iter().collect();
-    sorted.sort_by_key(|agent| std::cmp::Reverse(agent.last_activity));
-    let mut overlaid = BTreeSet::new();
-    for agent in &sorted {
-        let key = (agent.kind.clone(), agent.agent_id.clone());
-        if replaced_agents.contains(&key) {
-            continue;
-        }
-        if let Some(pane) = exact_pane_for_agent(agent, panes, &used_panes) {
-            push_agent_row(&mut rows, agent, pane, &mut used_panes);
-            overlaid.insert(key);
-        }
-    }
-    for agent in &sorted {
-        let key = (agent.kind.clone(), agent.agent_id.clone());
-        if replaced_agents.contains(&key) || overlaid.contains(&key) {
-            continue;
-        }
-        if let Some(pane) = candidate_pane_for_agent(agent, panes, &used_panes) {
-            push_agent_row(&mut rows, agent, pane, &mut used_panes);
-        }
-    }
-
-    for pane in panes {
-        if used_panes.contains(pane.pane_id.as_str()) {
-            continue;
-        }
-        rows.push(row_from_process(pane));
-    }
-
-    build_worktree_groups_from_rows(rows, project_root)
+    build_worktree_groups_from_rows(
+        rows_from_panes(agents, needs_attention, resolver_working, panes),
+        project_root,
+    )
 }
 
-fn push_agent_row(
-    rows: &mut Vec<SidebarRow>,
-    agent: &AgentState,
+fn rows_from_panes(
+    agents: &[AgentState],
+    needs_attention: &[FeedItem],
+    resolver_working: &[FeedItem],
+    panes: &[PaneRef],
+) -> Vec<SidebarRow> {
+    let mut rows = Vec::new();
+    let mut bound_agents: BTreeSet<(String, String)> = BTreeSet::new();
+
+    for pane in panes {
+        match agent_for_pane(pane, agents, &bound_agents) {
+            Some(agent) => {
+                bound_agents.insert((agent.kind.clone(), agent.agent_id.clone()));
+                let mut row = row_from_agent(agent);
+                row.worktree_path = row.worktree_path.or_else(|| pane.cwd.clone());
+                row.pane = Some(pane.clone());
+                if let Some(ask) = most_relevant_ask(agent, needs_attention, resolver_working) {
+                    fold_ask_onto_row(&mut row, ask);
+                }
+                rows.push(row);
+            }
+            None => rows.push(row_from_process(pane)),
+        }
+    }
+
+    // Script/bridge asks raised outside an agent session have no pane to anchor
+    // to, so they keep a standalone attention row. Agent-hook asks never do:
+    // they fold onto their pane above, or do not render at all.
+    for item in needs_attention.iter().chain(resolver_working.iter()) {
+        if item.source_kind != "agent-hook"
+            && let Some(row) = row_from_item(item, agents)
+        {
+            rows.push(row);
+        }
+    }
+
+    rows
+}
+
+/// The agent that stamped this exact pane id, if one is still unbound. Binding
+/// is by stamped pane id alone — never by foreground command or cwd — so a pane
+/// can only ever host the agent that ran in it (`agent_binds_only_by_stamped_
+/// pane_id` pins this). When a stale rollup holds more than one claimant for a
+/// pane id (a relaunch the reaper has not yet collapsed), the most-recently-
+/// active wins, keeping the bind deterministic.
+fn agent_for_pane<'a>(
     pane: &PaneRef,
-    used_panes: &mut BTreeSet<String>,
-) {
-    let mut row = row_from_agent(agent);
-    row.worktree_path = row.worktree_path.or_else(|| pane.cwd.clone());
-    row.pane = Some(pane.clone());
-    used_panes.insert(pane.pane_id.to_string());
-    rows.push(row);
+    agents: &'a [AgentState],
+    bound: &BTreeSet<(String, String)>,
+) -> Option<&'a AgentState> {
+    agents
+        .iter()
+        .filter(|agent| !bound.contains(&(agent.kind.clone(), agent.agent_id.clone())))
+        .filter(|agent| {
+            agent.pane.as_ref().is_some_and(|stamped| {
+                stamped.pane_id == pane.pane_id && pane_start_matches(stamped, pane)
+            })
+        })
+        .max_by_key(|agent| agent.last_activity)
+}
+
+/// The agent's single most-relevant pending ask: the newest agent-hook ask that
+/// names this session. Asks arrive newest-first, so the first match wins.
+/// Folding only one ask onto the row is the read-side guarantee that a session
+/// never stacks more than one attention row.
+fn most_relevant_ask<'a>(
+    agent: &AgentState,
+    needs_attention: &'a [FeedItem],
+    resolver_working: &'a [FeedItem],
+) -> Option<&'a FeedItem> {
+    needs_attention
+        .iter()
+        .chain(resolver_working.iter())
+        .find(|item| {
+            item.source_kind == "agent-hook"
+                && item.source == agent.kind
+                && agent_id_from_item(item).as_deref() == Some(agent.agent_id.as_str())
+        })
+}
+
+/// Overlay a pending ask onto its agent's pane row: the row keeps the agent's
+/// identity and capability line but takes the ask's waiting status, request,
+/// surface, resolver, options, and age.
+fn fold_ask_onto_row(row: &mut SidebarRow, ask: &FeedItem) {
+    row.status = Some(AgentStatus::Waiting);
+    row.request_id = Some(ask.request_id.clone());
+    row.surface = Some(ask.surface);
+    row.resolver = active_resolver_state(ask);
+    row.options = ask.options.clone();
+    row.last_activity = ask.updated_at;
+    if row.task.is_none() {
+        row.task = Some(feed_kind_task(ask.kind).to_owned());
+    }
 }
 
 fn rows_from_ledger(
@@ -799,18 +830,21 @@ fn command_agent_kind(command: &str) -> Option<&'static str> {
     })
 }
 
+/// A standalone attention row for a pending ask. Two callers, two shapes: an
+/// agent-hook ask in the no-pane rollup, enriched from its live session; or a
+/// script/bridge ask raised outside any agent, titled by the ask itself.
+/// Pane-bound agent asks never reach here — they fold onto their pane row in
+/// `rows_from_panes`.
 fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
     if item.status != FeedStatus::Pending {
         return None;
     }
-    let matched = matching_agent(item, agents);
-    let row_kind = if item.source_kind == "agent-hook" {
-        SidebarRowKind::Agent
-    } else {
-        SidebarRowKind::Item
-    };
-    let is_agent = row_kind == SidebarRowKind::Agent;
-    let task = if is_agent {
+    let is_agent_hook = item.source_kind == "agent-hook";
+    // A non-agent ask has no session to enrich from; leave it bare and titled.
+    let matched = is_agent_hook
+        .then(|| matching_agent(item, agents))
+        .flatten();
+    let task = if is_agent_hook {
         matched
             .and_then(|agent| agent.task.clone())
             .or_else(|| Some(feed_kind_task(item.kind).to_owned()))
@@ -819,7 +853,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
     };
     let id = agent_id_from_item(item).unwrap_or_else(|| item.request_id.to_string());
     Some(SidebarRow {
-        row_kind,
+        row_kind: SidebarRowKind::Agent,
         id,
         name: item.source.clone(),
         status: Some(AgentStatus::Waiting),
@@ -833,7 +867,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         task,
         model: matched.and_then(|agent| agent.model.clone()),
         effort: matched.and_then(|agent| agent.effort.clone()),
-        context_pct: if is_agent {
+        context_pct: if is_agent_hook {
             Some(matched.and_then(|agent| agent.context_pct).unwrap_or(0))
         } else {
             None
@@ -880,131 +914,11 @@ fn matching_agent<'a>(item: &FeedItem, agents: &'a [AgentState]) -> Option<&'a A
     }
 }
 
-fn matching_pane_for_item<'a>(
-    item: &FeedItem,
-    agents: &[AgentState],
-    panes: &'a [PaneRef],
-    used_panes: &BTreeSet<String>,
-) -> Option<&'a PaneRef> {
-    if let Some(item_pane) = &item.pane
-        && let Some(pane) = panes.iter().find(|pane| {
-            !used_panes.contains(pane.pane_id.as_str())
-                && pane.pane_id == item_pane.pane_id
-                && pane_start_matches(item_pane, pane)
-        })
-    {
-        return Some(pane);
-    }
-
-    if let Some(agent) = matching_agent(item, agents)
-        && let Some(pane) = matching_pane_for_agent(agent, panes, used_panes)
-    {
-        return Some(pane);
-    }
-
-    panes
-        .iter()
-        .find(|pane| {
-            !used_panes.contains(pane.pane_id.as_str())
-                && pane_command_matches(pane, &item.source)
-                && worktree_matches(item.worktree_path.as_deref(), pane.cwd.as_deref())
-        })
-        .or_else(|| {
-            if item.source_kind != "agent-hook" {
-                return None;
-            }
-            panes.iter().find(|pane| {
-                !used_panes.contains(pane.pane_id.as_str())
-                    && pane_is_loose_agent_candidate(pane)
-                    && worktree_matches(item.worktree_path.as_deref(), pane.cwd.as_deref())
-            })
-        })
-}
-
-fn matching_pane_for_agent<'a>(
-    agent: &AgentState,
-    panes: &'a [PaneRef],
-    used_panes: &BTreeSet<String>,
-) -> Option<&'a PaneRef> {
-    exact_pane_for_agent(agent, panes, used_panes)
-        .or_else(|| candidate_pane_for_agent(agent, panes, used_panes))
-}
-
-/// Pane that is unambiguously this agent's: the same normalized id it
-/// published, or a foreground command equal to the agent kind in its worktree.
-/// Tie-breaking across multiple ledger agents claiming the same pane is owned
-/// by the caller, which iterates agents most-recent-first.
-fn exact_pane_for_agent<'a>(
-    agent: &AgentState,
-    panes: &'a [PaneRef],
-    used_panes: &BTreeSet<String>,
-) -> Option<&'a PaneRef> {
-    if let Some(agent_pane) = &agent.pane
-        && let Some(pane) = panes.iter().find(|pane| {
-            !used_panes.contains(pane.pane_id.as_str())
-                && pane.pane_id == agent_pane.pane_id
-                && pane_start_matches(agent_pane, pane)
-        })
-    {
-        return Some(pane);
-    }
-
-    panes.iter().find(|pane| {
-        !used_panes.contains(pane.pane_id.as_str())
-            && pane_command_matches(pane, &agent.kind)
-            && worktree_matches(agent.worktree_path.as_deref(), pane.cwd.as_deref())
-    })
-}
-
-/// Loose fallback for agents that run under a wrapper binary (e.g. codex as
-/// `node`): any non-shell pane in the worktree. Only used after every exact
-/// match is settled, so it can't steal a pane another agent owns by name.
-fn candidate_pane_for_agent<'a>(
-    agent: &AgentState,
-    panes: &'a [PaneRef],
-    used_panes: &BTreeSet<String>,
-) -> Option<&'a PaneRef> {
-    panes.iter().find(|pane| {
-        !used_panes.contains(pane.pane_id.as_str())
-            && pane_is_loose_agent_candidate(pane)
-            && worktree_matches(agent.worktree_path.as_deref(), pane.cwd.as_deref())
-    })
-}
-
 fn pane_start_matches(expected: &PaneRef, actual: &PaneRef) -> bool {
     match (expected.pane_process_start, actual.pane_process_start) {
         (Some(expected), Some(actual)) => expected == actual,
         _ => true,
     }
-}
-
-/// A pane whose foreground is a known agent *launcher* — the wrapper binaries
-/// agents ship under (Codex runs as `node`). Used only for the loose fallback
-/// match, so a stale overlay can attach to a `node` pane but never to a `git`
-/// or `vim` pane that an exited agent left behind.
-fn pane_is_loose_agent_candidate(pane: &PaneRef) -> bool {
-    pane.command.as_deref().is_some_and(|command| {
-        is_agent_launcher(&command_label(command)) && command_agent_kind(command).is_none()
-    })
-}
-
-fn is_agent_launcher(label: &str) -> bool {
-    matches!(label, "node" | "bun" | "deno" | "python" | "python3" | "py")
-}
-
-fn pane_command_matches(pane: &PaneRef, expected: &str) -> bool {
-    pane.command.as_deref().is_some_and(|command| {
-        command_agent_kind(command)
-            .map(|kind| kind == expected)
-            .unwrap_or_else(|| command_label(command) == expected)
-    })
-}
-
-fn worktree_matches(expected: Option<&str>, actual: Option<&str>) -> bool {
-    expected
-        .filter(|expected| !expected.is_empty())
-        .zip(actual.filter(|actual| !actual.is_empty()))
-        .is_none_or(|(expected, actual)| expected == actual)
 }
 
 fn agent_id_from_item(item: &FeedItem) -> Option<String> {
@@ -1790,6 +1704,7 @@ mod tests {
         );
         claude.worktree_path = Some("/repo/main".to_owned());
         claude.worktree_branch = Some("main".to_owned());
+        claude.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
 
         let snapshot =
             SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![claude])
@@ -2222,6 +2137,7 @@ mod tests {
         );
         codex.worktree_path = Some("/repo/main".to_owned());
         codex.worktree_branch = Some("main".to_owned());
+        codex.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
         let snapshot =
             SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![codex])
                 .with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
@@ -2230,30 +2146,6 @@ mod tests {
         assert_eq!(snapshot.worktree_groups[0].rows.len(), 1);
         let row = &snapshot.worktree_groups[0].rows[0];
         assert_eq!(row.row_kind, SidebarRowKind::Agent);
-        assert_eq!(row.pane.as_ref().unwrap().pane_id.raw(), "%1");
-    }
-
-    #[test]
-    fn live_panes_overlay_runtime_command_by_worktree() {
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut codex = agent(
-            "codex",
-            "sess-1",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            1_000,
-        );
-        codex.worktree_path = Some("/repo/main".to_owned());
-
-        let snapshot =
-            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![codex])
-                .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
-
-        assert_eq!(snapshot.worktree_groups.len(), 1);
-        assert_eq!(snapshot.worktree_groups[0].rows.len(), 1);
-        let row = &snapshot.worktree_groups[0].rows[0];
-        assert_eq!(row.row_kind, SidebarRowKind::Agent);
-        assert_eq!(row.name, "codex");
         assert_eq!(row.pane.as_ref().unwrap().pane_id.raw(), "%1");
     }
 
@@ -2351,7 +2243,10 @@ mod tests {
             1_000,
         );
         session.worktree_path = Some("/repo/main".to_owned());
+        session.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
 
+        // The pane runs under a `node` wrapper, not a `claude` foreground — the
+        // bind is by the session's stamped pane id, so the command is moot.
         let snapshot =
             SidebarSnapshot::build_with_carryover(workspace, vec![item], Vec::new(), vec![session])
                 .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
@@ -2367,10 +2262,8 @@ mod tests {
     #[test]
     fn two_same_kind_agents_bind_to_their_stamped_panes() {
         // Two claude sessions in one worktree are indistinguishable by name and
-        // cwd alone — without the hook-stamped pane id the loose `claude`-in-
-        // worktree fallback would just pick the first matching pane for both,
-        // cross-wiring the rows. Stamping `pane_id` on each agent state makes
-        // the binding deterministic.
+        // cwd alone; binding is by the hook-stamped pane id, so each session
+        // lands on exactly its own pane instead of cross-wiring the rows.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let mut older = agent(
             "claude",
@@ -2417,6 +2310,85 @@ mod tests {
     }
 
     #[test]
+    fn agent_binds_only_by_stamped_pane_id() {
+        // The pane-keyed invariant: an agent stamped `%2`, but only `%1` is
+        // live. `%1`'s command and cwd both match the agent — under the old
+        // command/cwd fallback it would have bound. Stamped-id binding refuses
+        // it, so `%1` stays a process row and the agent simply does not render.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut claude = agent(
+            "claude",
+            "sess-1",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            1_000,
+        );
+        claude.worktree_path = Some("/repo/main".to_owned());
+        claude.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%2")));
+
+        let snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![claude])
+                .with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
+
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+        assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "%1");
+    }
+
+    #[test]
+    fn each_live_pane_yields_exactly_one_row() {
+        // One pane = one row, by construction: every live pane produces exactly
+        // one row — agent or process — and no pane id is ever duplicated.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let stamped = |id, raw| {
+            let mut a = agent(
+                "claude",
+                id,
+                AgentStatus::Running,
+                PermissionPosture::Default,
+                1_000,
+            );
+            a.worktree_path = Some("/repo/main".to_owned());
+            a.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, raw)));
+            a
+        };
+
+        let snapshot = SidebarSnapshot::build_with_carryover(
+            workspace,
+            Vec::new(),
+            Vec::new(),
+            vec![stamped("sess-a", "%1"), stamped("sess-b", "%2")],
+        )
+        .with_live_panes(
+            vec![
+                pane("%1", "claude", "/repo/main"),
+                pane("%2", "claude", "/repo/main"),
+                pane("%3", "zsh", "/repo/main"),
+            ],
+            None,
+        );
+
+        let rows: Vec<_> = snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .collect();
+        assert_eq!(rows.len(), 3, "three panes render three rows: {rows:?}");
+        let mut pane_ids: Vec<&str> = rows
+            .iter()
+            .map(|row| row.pane.as_ref().unwrap().pane_id.raw())
+            .collect();
+        pane_ids.sort_unstable();
+        assert_eq!(pane_ids, vec!["%1", "%2", "%3"], "no pane id is duplicated");
+        let agents = rows
+            .iter()
+            .filter(|row| row.row_kind == SidebarRowKind::Agent)
+            .count();
+        assert_eq!(agents, 2, "the two stamped panes bound their agents");
+    }
+
+    #[test]
     fn stale_session_ask_does_not_render_or_steal_a_pane() {
         // Reproduces the live bug: a pending permission ask whose claude
         // session has ended must not become attention, and must not latch onto
@@ -2442,6 +2414,7 @@ mod tests {
             2_000,
         );
         codex.worktree_path = Some("/repo/main".to_owned());
+        codex.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
 
         let snapshot =
             SidebarSnapshot::build_with_carryover(workspace, vec![stale], Vec::new(), vec![codex])
@@ -2494,6 +2467,8 @@ mod tests {
             2_000,
         );
         fresh.worktree_path = Some("/repo/main".to_owned());
+        // Only the fresh session stamped the live pane; the zombie holds none.
+        fresh.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
 
         let snapshot = SidebarSnapshot::build_with_carryover(
             workspace,
@@ -2555,49 +2530,6 @@ mod tests {
         assert!(snapshot.worktree_groups[0].status_counts.is_empty());
     }
 
-    /// When the ledger holds multiple codex agents claiming the same worktree
-    /// but only one codex pane is live, the most-recently-active agent binds
-    /// to the pane and renders with full enrichment; the older ledger ghost is
-    /// dropped from the worktree group rather than blocking the match.
-    #[test]
-    fn one_codex_pane_binds_most_recent_among_multiple_old_codex_agents() {
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut older = agent(
-            "codex",
-            "old-1",
-            AgentStatus::Idle,
-            PermissionPosture::Yolo,
-            1_000,
-        );
-        older.worktree_path = Some("/repo/main".to_owned());
-        older.model = Some("gpt-5.5".to_owned());
-        let mut newer = agent(
-            "codex",
-            "old-2",
-            AgentStatus::Idle,
-            PermissionPosture::Yolo,
-            1_100,
-        );
-        newer.worktree_path = Some("/repo/main".to_owned());
-        newer.model = Some("gpt-5.5".to_owned());
-
-        let snapshot = SidebarSnapshot::build_with_carryover(
-            workspace,
-            Vec::new(),
-            Vec::new(),
-            vec![older, newer],
-        )
-        .with_live_panes(vec![pane("%1", "node /usr/bin/codex", "/repo/main")], None);
-
-        assert_eq!(snapshot.worktree_groups.len(), 1);
-        let rows = &snapshot.worktree_groups[0].rows;
-        assert_eq!(rows.len(), 1, "older ghost must not render its own row");
-        assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
-        assert_eq!(rows[0].name, "codex");
-        assert_eq!(rows[0].id, "old-2", "most-recent agent owns the pane");
-        assert_eq!(rows[0].status, Some(AgentStatus::Idle));
-    }
-
     /// User's reported scenario: ledger carries a pile of stale claude
     /// observations from killed sessions (no SessionEnd ever fired), all
     /// claiming the same worktree path. A fresh claude pane lands. The fresh
@@ -2648,6 +2580,7 @@ mod tests {
                 i64::from(u32::MAX),
             );
             a.worktree_path = Some("/repo/main".to_owned());
+            a.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
             a
         };
 
@@ -2959,37 +2892,6 @@ mod tests {
             reap_survivors(now, vec![older, newer]),
             vec!["newer".to_owned(), "older".to_owned()],
             "an agent holding its own distinct pane is never reaped"
-        );
-    }
-
-    #[test]
-    fn loose_match_ignores_non_launcher_pane() {
-        // Reproduces "exit claude -> git log -> sidebar shows claude again":
-        // once the agent leaves, the pane runs git. git is not an agent
-        // launcher, so it renders as a process row and never repaints a stale
-        // agent overlay.
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut claude = agent(
-            "claude",
-            "sess-1",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            1_000,
-        );
-        claude.worktree_path = Some("/repo/main".to_owned());
-
-        let snapshot =
-            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![claude])
-                .with_live_panes(vec![pane("%1", "git", "/repo/main")], None);
-
-        let rows = &snapshot.worktree_groups[0].rows;
-        assert!(
-            rows.iter().all(|row| row.row_kind != SidebarRowKind::Agent),
-            "a non-launcher pane must not host an agent overlay: {rows:?}"
-        );
-        assert!(
-            rows.iter()
-                .any(|row| row.row_kind == SidebarRowKind::Process && row.name == "git"),
         );
     }
 
