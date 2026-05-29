@@ -505,36 +505,71 @@ fn read_diff_stats_cache(path: &Path) -> DiffStatsCache {
 }
 
 fn worktree_branch(worktree: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(worktree)
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let branch = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let branch = git_line(worktree, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     // A detached HEAD has no branch to track — keep the reducer's path-basename
     // label rather than printing the literal "HEAD".
-    if branch.is_empty() || branch == "HEAD" {
-        None
-    } else {
-        Some(branch)
-    }
+    if branch == "HEAD" { None } else { Some(branch) }
 }
 
+/// The total diff the worktree carries relative to `main`: committed, staged,
+/// and unstaged changes folded into one `+/-`. We diff the *working tree*
+/// against the merge-base with the trunk, so it counts what this branch added
+/// on top of where it forked — never the trunk's own progress since the fork —
+/// and `git diff <commit>` reads the tree on disk, so staged and unstaged work
+/// land in the same number as committed work.
 fn worktree_diff_stats(worktree: &Path) -> Option<DiffStats> {
+    let base = diff_base(worktree)?;
     let output = Command::new("git")
         .arg("-C")
         .arg(worktree)
-        .args(["diff", "--no-ext-diff", "--numstat", "HEAD", "--"])
+        .args(["diff", "--no-ext-diff", "--numstat", &base, "--"])
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
     Some(parse_numstat(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// The commit a worktree's diff is measured against: the merge-base between its
+/// HEAD and the repo's trunk — the fork point a PR diffs against. Returns
+/// `None` (so the header simply omits stats) when there is no trunk or no
+/// shared ancestor, e.g. an orphan branch or a repo without `main`/`master`.
+fn diff_base(worktree: &Path) -> Option<String> {
+    let trunk = trunk_ref(worktree)?;
+    git_line(worktree, &["merge-base", "HEAD", &trunk])
+}
+
+/// The repo's trunk branch: the local `main`/`master` a worktree forks from and
+/// merges back into, falling back to the remote's advertised default for a
+/// non-standard name. Branch refs are shared across a repo's worktrees, so this
+/// resolves from inside any of them.
+fn trunk_ref(worktree: &Path) -> Option<String> {
+    for name in ["main", "master"] {
+        if git_line(worktree, &["rev-parse", "--verify", "--quiet", name]).is_some() {
+            return Some(name.to_owned());
+        }
+    }
+    git_line(
+        worktree,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    )
+}
+
+/// Run `git -C <worktree> <args>` and return its stdout's first non-empty line,
+/// or `None` on a missing git binary, a non-zero exit, or empty output.
+fn git_line(worktree: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let line = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if line.is_empty() { None } else { Some(line) }
 }
 
 fn parse_numstat(output: &str) -> DiffStats {
@@ -652,6 +687,66 @@ mod tests {
         // A non-repository path has no branch to track.
         let plain = tempfile::tempdir().unwrap();
         assert_eq!(worktree_branch(plain.path()), None);
+    }
+
+    #[test]
+    fn worktree_diff_stats_total_committed_staged_and_unstaged_over_trunk() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+        };
+        // `-b main` needs Git >= 2.28; an older git fails init and the helper
+        // degrades to None, which is the documented fallback.
+        if !git(&["init", "-q", "-b", "main"]) {
+            assert_eq!(worktree_diff_stats(dir.path()), None);
+            return;
+        }
+        let _ = git(&["config", "user.email", "t@example.com"]);
+        let _ = git(&["config", "user.name", "t"]);
+        let write = |name: &str, body: &str| std::fs::write(dir.path().join(name), body).unwrap();
+
+        // Fork point on `main`: a three-line tracked file.
+        write("base.txt", "a\nb\nc\n");
+        let _ = git(&["add", "base.txt"]);
+        let _ = git(&["commit", "-q", "-m", "base"]);
+        let _ = git(&["branch", "feature-migration"]);
+
+        // `main` advances *after* the fork — a merge-base diff must ignore this,
+        // so it never shows up as the worktree's own churn.
+        write("base.txt", "a\nB\nc\n");
+        let _ = git(&["commit", "-aqm", "trunk moves on"]);
+
+        let _ = git(&["checkout", "-q", "feature-migration"]);
+        // Committed on the branch: a new two-line file.
+        write("feat.txt", "x\ny\n");
+        let _ = git(&["add", "feat.txt"]);
+        let _ = git(&["commit", "-q", "-m", "feature work"]);
+        // Staged but uncommitted: a new one-line file.
+        write("staged.txt", "s\n");
+        let _ = git(&["add", "staged.txt"]);
+        // Unstaged: one more line appended to a tracked file.
+        write("base.txt", "a\nb\nc\nd\n");
+
+        assert_eq!(
+            worktree_diff_stats(dir.path()),
+            Some(DiffStats {
+                // +2 committed, +1 staged, +1 unstaged — all measured from the
+                // fork point, none from main's post-fork commit.
+                added: 4,
+                removed: 0,
+            }),
+            "the header counts committed + staged + unstaged over the trunk merge-base"
+        );
+
+        // A non-repository path has nothing to diff.
+        let plain = tempfile::tempdir().unwrap();
+        assert_eq!(worktree_diff_stats(plain.path()), None);
     }
 
     #[test]

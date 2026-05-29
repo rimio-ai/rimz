@@ -127,7 +127,9 @@ pub struct SidebarWorktreeGroup {
     pub status_counts: Vec<SidebarStatusCount>,
     pub rows: Vec<SidebarRow>,
     pub hidden_count: usize,
-    /// Worktree-level `git diff` insertions and deletions, projected by the
+    /// The worktree's total insertions and deletions relative to the trunk —
+    /// committed, staged, and unstaged folded into one `+/-` by diffing the
+    /// working tree against the merge-base with `main`. Projected by the
     /// `rimz sidebar snapshot` CLI (the reducer stays pure). Lives on the
     /// group header — never on a per-agent row — so the shared-worktree
     /// "whose diff?" ambiguity is resolved by belonging to the worktree, not
