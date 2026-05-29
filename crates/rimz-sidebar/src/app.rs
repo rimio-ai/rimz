@@ -129,6 +129,27 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             &ui,
         )?;
 
+        // A renderer that has been degraded this long is non-functional and,
+        // with a now-stale heartbeat, unreachable by `rimz reload` — so it gives
+        // up rather than lingering as a zombie showing a frozen frame. The
+        // common deleted-binary snapshot failure already self-heals in place
+        // (`resolve_snapshot_bin` falls back to the installed `rimz` each tick);
+        // give-up is the backstop for what that cannot cure — a failing
+        // heartbeat write, a vanished ledger, or no `rimz` on `PATH` at all.
+        // Exiting closes its `close_on_exit` pane; reload/attach recovery then
+        // rebuilds a current-build sidebar against the live panes, and a lone
+        // orphan with no working pane simply disappears. This is the degraded
+        // twin of self-close: self-close fires when the view empties, give-up
+        // fires when the view can no longer be read at all.
+        if degraded_too_long(&health, Timestamp::now()) {
+            warn!(
+                session = %config.session_name,
+                reason = health.alert.as_ref().map(|alert| alert.reason.as_str()),
+                "sidebar degraded too long; exiting so the pane closes and reload/attach can rebuild it",
+            );
+            break;
+        }
+
         // Own-view (sibling count, focus) now rides in on the snapshot itself —
         // the `rimz sidebar snapshot` CLI computes it from the same pane list it
         // already enumerated, so the renderer no longer spawns a second `pane
@@ -308,6 +329,29 @@ fn strip_deleted_suffix(path: &Path) -> Option<PathBuf> {
     const DELETED_SUFFIX: &[u8] = b" (deleted)";
     let stripped = path.as_os_str().as_bytes().strip_suffix(DELETED_SUFFIX)?;
     Some(PathBuf::from(std::ffi::OsStr::from_bytes(stripped)))
+}
+
+/// How long the refresh loop may stay continuously degraded before the renderer
+/// gives up and exits. Generous so a transient mux hiccup or the sub-second gap
+/// while `cargo install` swaps `rimz` never closes a healthy sidebar; short
+/// enough that a genuinely broken renderer (missing `RIMZ_BIN`, deleted ledger,
+/// an old build whose heartbeat subcommand was removed) heals on the next
+/// reload/attach instead of lingering for minutes.
+const GIVE_UP_AFTER_DEGRADED: Duration = Duration::from_secs(30);
+
+/// Whether the refresh loop has been *continuously* degraded past
+/// [`GIVE_UP_AFTER_DEGRADED`]. Keys off the sticky health alert: `since` is
+/// pinned to the start of the current failure episode and any successful fetch
+/// clears the active state (the alert lingers only as a dim recovered notice),
+/// so this fires only on an unbroken run of failures, never after a recovery.
+fn degraded_too_long(health: &Health, now: Timestamp) -> bool {
+    health
+        .alert
+        .as_ref()
+        .filter(|alert| alert.is_active())
+        .is_some_and(|alert| {
+            now.duration_since(alert.since).as_secs() >= GIVE_UP_AFTER_DEGRADED.as_secs() as i64
+        })
 }
 
 /// Decide whether the sidebar should exit so its own pane closes. The sidebar
@@ -1265,6 +1309,54 @@ mod tests {
         assert!(!alert.is_active());
         assert!(alert.recovered_at.is_some());
         assert_eq!(recovered.health.failure_streak, 0);
+    }
+
+    /// Health seeded with an alert whose episode started at `since`. `recovered`
+    /// flips it to the sticky-but-inactive (last fetch succeeded) state.
+    fn degraded_since(since: Timestamp, recovered: bool) -> Health {
+        Health {
+            failure_streak: ALERT_AFTER_FAILURES,
+            alert: Some(Alert {
+                reason: "snapshot failed: boom".to_owned(),
+                since,
+                recovered_at: recovered.then_some(since),
+            }),
+        }
+    }
+
+    #[test]
+    fn gives_up_after_sustained_degradation() {
+        let base = 1_700_000_000;
+        let since = Timestamp::from_second(base).unwrap();
+        let now = Timestamp::from_second(base + GIVE_UP_AFTER_DEGRADED.as_secs() as i64).unwrap();
+        assert!(degraded_too_long(&degraded_since(since, false), now));
+    }
+
+    #[test]
+    fn holds_while_degradation_is_still_brief() {
+        // A few seconds of failure must not close the sidebar — that is a hiccup
+        // or the sub-second gap while `cargo install` swaps the binary.
+        let base = 1_700_000_000;
+        let since = Timestamp::from_second(base).unwrap();
+        let now = Timestamp::from_second(base + 5).unwrap();
+        assert!(!degraded_too_long(&degraded_since(since, false), now));
+    }
+
+    #[test]
+    fn never_gives_up_once_recovered() {
+        // A recovered (sticky but inactive) alert means the latest fetch
+        // succeeded: the renderer is healthy and must not exit, however old the
+        // past episode is.
+        let base = 1_700_000_000;
+        let since = Timestamp::from_second(base).unwrap();
+        let now = Timestamp::from_second(base + 1_000).unwrap();
+        assert!(!degraded_too_long(&degraded_since(since, true), now));
+    }
+
+    #[test]
+    fn never_gives_up_without_an_alert() {
+        let now = Timestamp::from_second(1_700_000_000).unwrap();
+        assert!(!degraded_too_long(&Health::default(), now));
     }
 
     #[test]
