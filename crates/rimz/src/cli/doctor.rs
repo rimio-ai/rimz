@@ -26,12 +26,13 @@ pub struct DoctorArgs {
     audit: bool,
 }
 
-/// AF_UNIX paths are 108 bytes including the terminator. The per-request
-/// socket layout is `<sock_dir>/feed.<12-hex>.sock` (18 chars after
-/// `sock_dir`), so the dir itself can be at most 89 bytes. We round down
-/// to 88 to leave a byte of headroom.
+/// AF_UNIX paths are 108 bytes including the terminator. The longest socket
+/// name under `sock_dir` is the sidebar wakeup socket
+/// `<sock_dir>/sidebar.<12-hex>.sock`; the per-request `feed.<12-hex>.sock` is
+/// shorter. Both use the 12-hex short id (`SidebarInstanceId::short`,
+/// `RequestId::short`) so the dir can be as long as possible.
 const AF_UNIX_PATH_LIMIT: usize = 108;
-const FEED_SOCKET_TAIL_LEN: usize = "/feed.123456789012.sock".len();
+const LONGEST_SOCKET_TAIL_LEN: usize = "/sidebar.123456789012.sock".len();
 
 pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone());
@@ -407,7 +408,7 @@ fn report_socket_headroom(ws: &rimz::ResolvedWorkspace) {
         }
     };
     let dir_len = runtime.sock_dir.as_os_str().len();
-    let total = dir_len + FEED_SOCKET_TAIL_LEN;
+    let total = dir_len + LONGEST_SOCKET_TAIL_LEN;
     let status = if total < AF_UNIX_PATH_LIMIT {
         "OK"
     } else {

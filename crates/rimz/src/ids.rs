@@ -135,6 +135,17 @@ macro_rules! uuid_v7_id {
             pub fn as_str(&self) -> &str {
                 &self.0
             }
+
+            /// First 12 hex chars of the UUID portion, with the `<prefix>_`
+            /// stripped. Used to name AF_UNIX sockets, where the 108-byte path
+            /// budget makes the full 32-char UUID wasteful; 48 bits of entropy
+            /// makes a collision within one workspace effectively impossible.
+            pub fn short(&self) -> &str {
+                // `new`/`parse` guarantee `<prefix>_<32 hex>`, so the hex begins
+                // right after the underscore and this slice is always in bounds.
+                let start = $prefix.len() + 1;
+                &self.0[start..start + 12]
+            }
         }
 
         impl Default for $name {
@@ -217,25 +228,6 @@ fn validate_uuid_id(
 
 uuid_v7_id!(RequestId, "req", "Per-feed-item request identifier.");
 uuid_v7_id!(EventId, "evt", "Per-event identifier in the event log.");
-
-impl RequestId {
-    /// First 12 hex chars of the UUID portion. Used to name per-request
-    /// sockets — the AF_UNIX path-length budget (108 bytes) is tight enough
-    /// that the full 32-char UUID is wasteful when collisions on 48 bits of
-    /// entropy across one workspace are effectively impossible.
-    ///
-    /// ```
-    /// use rimz::ids::RequestId;
-    /// let id = RequestId::new();
-    /// let short = id.short();
-    /// assert_eq!(short.len(), 12);
-    /// assert!(id.as_str().contains(short));
-    /// ```
-    pub fn short(&self) -> &str {
-        // Macro guarantees `req_<32 hex>`; the slice is always in-bounds.
-        &self.0[4..16]
-    }
-}
 uuid_v7_id!(
     SidebarInstanceId,
     "sb",
@@ -459,12 +451,24 @@ mod tests {
     }
 
     #[test]
-    fn request_id_short_returns_12_hex_chars() {
-        let id = RequestId::new();
-        let short = id.short();
-        assert_eq!(short.len(), 12);
-        assert!(short.chars().all(|c| c.is_ascii_hexdigit()));
-        assert!(id.as_str().contains(short));
+    fn short_returns_12_hex_chars_after_the_prefix() {
+        // `short()` strips `<prefix>_` before slicing, so it must work across
+        // prefixes of different lengths ("req" vs "sb").
+        for (short, full) in [
+            {
+                let id = RequestId::new();
+                (id.short().to_owned(), id.as_str().to_owned())
+            },
+            {
+                let id = SidebarInstanceId::new();
+                (id.short().to_owned(), id.as_str().to_owned())
+            },
+        ] {
+            assert_eq!(short.len(), 12);
+            assert!(short.chars().all(|c| c.is_ascii_hexdigit()));
+            // The short id is the hex immediately after `<prefix>_`.
+            assert!(full.split('_').next_back().unwrap().starts_with(&short));
+        }
     }
 
     #[test]

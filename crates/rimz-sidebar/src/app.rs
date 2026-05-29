@@ -488,9 +488,12 @@ fn write_heartbeat(config: &ServeConfig, runtime: &RuntimePaths, socket_path: &P
 }
 
 fn sidebar_socket_path(runtime: &RuntimePaths, instance_id: &SidebarInstanceId) -> PathBuf {
+    // Use the short (12-hex) id, not the full `sb_<32 hex>`: the bound path must
+    // fit the 108-byte AF_UNIX budget, same as the per-request feed socket. The
+    // heartbeat carries this path verbatim, so senders stay in sync.
     runtime
         .sock_dir
-        .join(format!("sidebar.{}.sock", instance_id.as_str()))
+        .join(format!("sidebar.{}.sock", instance_id.short()))
 }
 
 fn bind_socket(path: &Path) -> io::Result<UnixDatagram> {
