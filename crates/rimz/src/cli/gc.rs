@@ -30,6 +30,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         }
         Err(_) => 0,
     };
+    let prune = gc::prune_dead_workspaces().context("pruning dead workspaces")?;
     #[expect(clippy::print_stdout, reason = "user-facing maintenance report")]
     {
         println!("gc complete");
@@ -40,6 +41,14 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         println!("  sidebar socks : {}", report.sidebar_sockets_removed);
         println!("  dirs removed  : {}", report.dirs_removed);
         println!("  bytes removed : {}", report.bytes_removed);
+        println!("  workspaces    : {}", prune.removed.len());
+        super::workspace::print_prune_removals(&prune);
+        if !prune.retained_unreadable.is_empty() {
+            println!(
+                "  retained      : {} (unreadable record + history)",
+                prune.retained_unreadable.len()
+            );
+        }
     }
     Ok(())
 }

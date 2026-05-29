@@ -38,3 +38,25 @@ fn gc_removes_stale_runtime_heartbeat() {
         "stale heartbeat should be removed"
     );
 }
+
+#[test]
+fn gc_prunes_dead_root_workspace() {
+    let env = Env::new();
+    let gone_root = env.project_root.join("gone-project");
+    env.record(&gone_root);
+    let gone_paths = env.state_path_for(&gone_root);
+    std::fs::remove_dir_all(&gone_root).expect("remove gone root");
+
+    // `gc` is the global garbage collector: it reaps provably-dead workspaces
+    // alongside runtime liveness hints.
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("gc complete"));
+
+    assert!(
+        !gone_paths.root.exists(),
+        "gc should reap the workspace whose project root is gone"
+    );
+}

@@ -7,8 +7,7 @@ use clap::{Args, Subcommand};
 use super::GlobalFlags;
 use rimz::ids::WorkspaceId;
 use rimz::ledger::event_log::RotationOutcome;
-use rimz::ledger::paths::workspaces_dir;
-use rimz::ledger::workspace_record;
+use rimz::ledger::gc;
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, RuntimePaths, StatePaths};
 
@@ -129,78 +128,36 @@ fn migrate(old_root: PathBuf, new_root: PathBuf) -> Result<()> {
 }
 
 fn prune() -> Result<()> {
-    let root = workspaces_dir();
-    let entries = match std::fs::read_dir(&root) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            #[expect(clippy::print_stdout, reason = "user-facing maintenance report")]
-            {
-                println!("pruned 0 workspace(s)");
-                println!("  kept          : 0");
-                println!("  skipped       : 0");
-            }
-            return Ok(());
-        }
-        Err(err) => return Err(err).with_context(|| format!("reading {}", root.display())),
-    };
-
-    let mut kept = 0usize;
-    let mut pruned = Vec::new();
-    let mut skipped = Vec::new();
-
-    for entry in entries {
-        let entry = entry.with_context(|| format!("reading {}", root.display()))?;
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        let Ok(workspace_id) = WorkspaceId::parse(name) else {
-            continue;
-        };
-
-        let record_path = path.join("workspace.json");
-        let record = match workspace_record::read(&record_path) {
-            Ok(record) => record,
-            Err(err) => {
-                skipped.push(format!("{workspace_id} ({err})"));
-                continue;
-            }
-        };
-        if record.project_root.exists() {
-            kept += 1;
-            continue;
-        }
-
-        std::fs::remove_dir_all(&path)
-            .with_context(|| format!("removing ledger {}", path.display()))?;
-        if let Ok(runtime) = RuntimePaths::for_workspace(workspace_id.clone())
-            && runtime.root.exists()
-        {
-            std::fs::remove_dir_all(&runtime.root)
-                .with_context(|| format!("removing runtime {}", runtime.root.display()))?;
-        }
-        pruned.push((workspace_id, record.project_root));
-    }
-
+    let report = gc::prune_dead_workspaces().context("pruning dead workspaces")?;
     #[expect(clippy::print_stdout, reason = "user-facing maintenance report")]
     {
-        println!("pruned {} workspace(s)", pruned.len());
-        println!("  kept          : {kept}");
-        println!("  skipped       : {}", skipped.len());
-        for (workspace_id, project_root) in &pruned {
-            println!(
-                "  removed       : {workspace_id} {}",
-                project_root.display()
-            );
-        }
-        for item in &skipped {
-            println!("  skipped       : {item}");
+        println!("pruned {} workspace(s)", report.removed.len());
+        println!("  kept          : {}", report.kept);
+        println!("  skipped       : {}", report.retained_unreadable.len());
+        print_prune_removals(&report);
+        for (workspace_id, err) in &report.retained_unreadable {
+            println!("  skipped       : {workspace_id} ({err})");
         }
     }
     Ok(())
+}
+
+/// Render the per-workspace removal lines shared by `workspace prune` and `gc`.
+#[expect(clippy::print_stdout, reason = "user-facing maintenance report")]
+pub(super) fn print_prune_removals(report: &gc::WorkspacePruneReport) {
+    for removed in &report.removed {
+        match &removed.project_root {
+            Some(root) => println!(
+                "  removed       : {} {}",
+                removed.workspace_id,
+                root.display()
+            ),
+            None => println!(
+                "  removed       : {} (abandoned scaffold)",
+                removed.workspace_id
+            ),
+        }
+    }
 }
 
 fn rotate_events(args: RotateEventsArgs, globals: &GlobalFlags) -> Result<()> {

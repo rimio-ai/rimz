@@ -12,7 +12,7 @@ Commands are grouped below by intent. Each cluster opens with the most common fl
 rimz [--attach|--no-attach|--print] [PATH]
 rimz start [--attach|--no-attach|--print] [PATH]
 rimz attach [--attach|--no-attach|--print] [SESSION]
-rimz list [--json]                # show running and known workspaces
+rimz list [--all] [--json]        # running + recently-active workspaces; --all adds dormant ones
 rimz doctor [--audit]             # diagnose backend, hooks, trust, resolvers
 rimz trust [status|grant|revoke]  # manage the project's executable-surface trust
 ```
@@ -21,7 +21,7 @@ rimz trust [status|grant|revoke]  # manage the project's executable-surface trus
 
 `rimz attach` without a session name resolves the cwd workspace and follows the same create/sidebar/attach flow. `rimz attach <session>` keeps exact session-name semantics: it prefers a mux already hosting that session, and when a matching `workspace.json` record exists it uses that record's workspace ID and cwd to ensure the session and relaunch the sidebar. Without a record, it warns and continues with the attach command only.
 
-`rimz list` walks the workspace state directory and joins each known workspace against `zellij list-sessions` and `tmux list-sessions` so you can tell at a glance which mux is currently hosting a session and which sessions are dormant. Sort order puts running sessions first, then by most recent activity.
+`rimz list` walks the workspace state directory and joins each known workspace against `zellij list-sessions` and `tmux list-sessions` so you can tell at a glance which mux is currently hosting a session. By default it shows running sessions plus workspaces touched within the last 24h; `--all` adds the dormant ones. Sort order puts running sessions first, then by most recent activity. A workspace directory missing its `workspace.json` is skipped silently — it is not a usable workspace and `rimz workspace prune` reaps it; a record that exists but fails to parse is still surfaced.
 
 ## Publish events and ask questions
 
@@ -102,7 +102,7 @@ rimz hooks install <agent>   [--telemetry]
 rimz hooks uninstall <agent>
 
 rimz workspace migrate <old-root> <new-root>   # repo moved; rewire the ledger
-rimz workspace prune                           # drop ledgers whose roots are gone
+rimz workspace prune                           # reap provably-dead ledgers (gone root or empty scaffold)
 rimz workspace rotate-events                   # archive events.log.jsonl past a size cap
                   [--max-bytes <size>]
                   [--archive-older-than <duration>]
@@ -111,7 +111,7 @@ rimz gc          [--older-than <duration>]
 rimz reload                                    # reload running sidebars in place
 ```
 
-`workspace migrate` moves the state directory from the workspace ID derived from `<old-root>` to the ID derived from `<new-root>`, then rewrites feed items, event envelopes, snapshots, and `workspace.json` to the new ID. `workspace prune` only removes ledgers with a `workspace.json` record whose project root no longer exists; ledgers without readable metadata are reported and kept. `workspace rotate-events` archives the active event log into `events.log.archive/` when it exceeds `--max-bytes` (default `64MiB`), folds the agent rollup into `agents.carryover.json` so it survives the rename, and removes archives older than `--archive-older-than` when provided. `trust status` re-hashes the project's executable surface on every call and reports `trusted`, `stale`, `untrusted`, or `no_config`; `trust grant` pins the current hash and `trust revoke` drops the record. Full contract in [trust.md](../internals/trust.md). `gc` removes stale runtime liveness hints — stale resolver/sidebar heartbeats and stale sidebar wakeup sockets — and abandons pending feed items whose recorded owner process has exited. `reload` tells the cwd workspace's live sidebars to re-exec their own binary in place, so a freshly-installed build (`make install`) takes effect without a session rebirth or pane churn; the per-tick `rimz sidebar snapshot` subprocess already reloads on its own. A wedged or already-dead sidebar receives nothing — relaunch it with `rimz start`/`rimz attach`.
+`workspace migrate` moves the state directory from the workspace ID derived from `<old-root>` to the ID derived from `<new-root>`, then rewrites feed items, event envelopes, snapshots, and `workspace.json` to the new ID. `workspace prune` reaps provably-dead ledgers: a `workspace.json` record whose project root no longer exists, or an abandoned `rimz start` scaffold with no record and no durable history. A directory whose record is unreadable but still holds history is reported and kept, never deleted. `workspace rotate-events` archives the active event log into `events.log.archive/` when it exceeds `--max-bytes` (default `64MiB`), folds the agent rollup into `agents.carryover.json` so it survives the rename, and removes archives older than `--archive-older-than` when provided. `trust status` re-hashes the project's executable surface on every call and reports `trusted`, `stale`, `untrusted`, or `no_config`; `trust grant` pins the current hash and `trust revoke` drops the record. Full contract in [trust.md](../internals/trust.md). `gc` is the global garbage collector: it removes stale runtime liveness hints — stale resolver/sidebar heartbeats and stale sidebar wakeup sockets — abandons pending feed items whose recorded owner process has exited, and prunes provably-dead workspaces under the same rule as `workspace prune`. `reload` tells the cwd workspace's live sidebars to re-exec their own binary in place, so a freshly-installed build (`make install`) takes effect without a session rebirth or pane churn; the per-tick `rimz sidebar snapshot` subprocess already reloads on its own. A wedged or already-dead sidebar receives nothing — relaunch it with `rimz start`/`rimz attach`.
 
 `--telemetry` is opt-in for every agent integration. It adds high-frequency hooks (prompt submit, pre/post tool) and is gated by `[privacy] payload_mode`. See [agent.md](../internals/agent.md).
 

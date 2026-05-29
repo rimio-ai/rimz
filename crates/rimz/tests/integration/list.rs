@@ -1,6 +1,7 @@
 //! Integration coverage for `rimz list`.
 
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use rimz::WorkspaceId;
 
@@ -99,4 +100,56 @@ fn list_skips_workspaces_with_unreadable_record() {
             .unwrap()
             .contains("query-engine")
     );
+}
+
+#[test]
+fn list_hides_dormant_workspaces_unless_all() {
+    let env = Env::new();
+    env.record(&env.project_root.join("query-engine"));
+
+    // Backdate the workspace's files past the 24h recency window so it counts
+    // as dormant. It is not running, so the default view should drop it.
+    let workspaces = env.state_root().join("rimz").join("workspaces");
+    let ws_dir = std::fs::read_dir(&workspaces)
+        .expect("read workspaces")
+        .next()
+        .expect("one workspace dir")
+        .expect("entry")
+        .path();
+    backdate_tree(
+        &ws_dir,
+        SystemTime::now() - Duration::from_secs(48 * 60 * 60),
+    );
+
+    let default = env.rimz().arg("list").output().expect("run");
+    assert!(default.status.success());
+    let default_out = String::from_utf8(default.stdout).expect("utf8");
+    assert!(
+        !default_out.contains("query-engine"),
+        "dormant workspace should be hidden by default:\n{default_out}"
+    );
+
+    let all = env.rimz().args(["list", "--all"]).output().expect("run");
+    assert!(all.status.success());
+    let all_out = String::from_utf8(all.stdout).expect("utf8");
+    assert!(
+        all_out.contains("query-engine"),
+        "--all should reveal the dormant workspace:\n{all_out}"
+    );
+}
+
+/// Recursively set every file's mtime under `dir`, so `activity_for`'s
+/// newest-mtime probe reports the workspace as dormant.
+fn backdate_tree(dir: &Path, when: SystemTime) {
+    for entry in std::fs::read_dir(dir).expect("read dir") {
+        let path = entry.expect("entry").path();
+        if path.is_dir() {
+            backdate_tree(&path, when);
+        } else {
+            std::fs::File::open(&path)
+                .expect("open file")
+                .set_modified(when)
+                .expect("set mtime");
+        }
+    }
 }
