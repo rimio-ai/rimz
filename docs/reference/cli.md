@@ -126,3 +126,5 @@ rimz sidebar serve [--workspace-id <id>] [--mux <zellij|tmux>] \
                    [--session-name <name>] [--tick-seconds N]
 rimz hooks feed --source <agent> [--event <event>]
 ```
+
+The installed hook command passes only `--source`; the event is read from the payload's `hook_event_name` on stdin. `--event` is a manual override for debugging.

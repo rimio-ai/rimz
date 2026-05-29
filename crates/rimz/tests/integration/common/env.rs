@@ -224,16 +224,17 @@ impl Env {
     }
 
     /// Fire the exact command an installed hook runs: `rimz hooks feed
-    /// --source <source> --event <event>` with `payload` on stdin. This is
-    /// what a supported agent invokes when the event fires.
-    pub fn run_installed_hook(&self, source: &str, event: &str, payload: &str) -> Output {
-        self.run_installed_hook_in_pane(source, event, payload, &[])
+    /// --source <source>` with `payload` on stdin. The event is read from the
+    /// payload's `hook_event_name` — no `--event` flag, mirroring the installed
+    /// command. This is what a supported agent invokes when the event fires.
+    pub fn run_installed_hook(&self, source: &str, payload: &str) -> Output {
+        self.run_installed_hook_in_pane(source, payload, &[])
     }
 
     /// Spawn the installed-hook command, returning the live child so a test
     /// can drive the ledger while a blocking hook holds open on the bridge.
-    pub fn spawn_installed_hook(&self, source: &str, event: &str, payload: &str) -> Child {
-        self.spawn_installed_hook_in_pane(source, event, payload, &[])
+    pub fn spawn_installed_hook(&self, source: &str, payload: &str) -> Child {
+        self.spawn_installed_hook_in_pane(source, payload, &[])
     }
 
     /// Fire an installed hook with the per-pane env the mux exports
@@ -244,11 +245,10 @@ impl Env {
     pub fn run_installed_hook_in_pane(
         &self,
         source: &str,
-        event: &str,
         payload: &str,
         pane_env: &[(&str, &str)],
     ) -> Output {
-        self.spawn_installed_hook_in_pane(source, event, payload, pane_env)
+        self.spawn_installed_hook_in_pane(source, payload, pane_env)
             .wait_with_output()
             .expect("wait installed hook")
     }
@@ -256,12 +256,11 @@ impl Env {
     pub fn spawn_installed_hook_in_pane(
         &self,
         source: &str,
-        event: &str,
         payload: &str,
         pane_env: &[(&str, &str)],
     ) -> Child {
         let mut cmd = self.rimz();
-        cmd.args(["hooks", "feed", "--source", source, "--event", event])
+        cmd.args(["hooks", "feed", "--source", source])
             .env("RIMZ_AGENT_PID", std::process::id().to_string())
             .env_remove("TMUX_PANE")
             .env_remove("ZELLIJ_PANE_ID")

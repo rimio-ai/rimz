@@ -248,9 +248,9 @@ impl<'a> RoomHarness<'a> {
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str()))
             .collect();
-        let out =
-            self.env
-                .run_installed_hook_in_pane(source, event, &payload.to_string(), &pane_env);
+        let out = self
+            .env
+            .run_installed_hook_in_pane(source, &payload.to_string(), &pane_env);
         assert!(
             out.status.success(),
             "{source} {event} hook failed: {}",
@@ -260,7 +260,7 @@ impl<'a> RoomHarness<'a> {
 
     /// Spawn a blocking agent hook (the bridge path) through its installed
     /// command, returning the live child. Requires an onboarded room.
-    pub fn spawn_agent(&self, source: &str, event: &str, payload: &Value) -> std::process::Child {
+    pub fn spawn_agent(&self, source: &str, payload: &Value) -> std::process::Child {
         assert!(
             self.env.agent_hooks_installed(source),
             "spawn_agent needs an onboarded room — call onboard(&[{source:?}]) first"
@@ -272,7 +272,7 @@ impl<'a> RoomHarness<'a> {
             .map(|(key, value)| (key.as_str(), value.as_str()))
             .collect();
         self.env
-            .spawn_installed_hook_in_pane(source, event, &payload.to_string(), &pane_env)
+            .spawn_installed_hook_in_pane(source, &payload.to_string(), &pane_env)
     }
 
     /// The per-pane env the mux exports for `session_id`'s pane, matching the

@@ -54,6 +54,17 @@ const INSTALLED_EVENTS: &[&str] = &[
 const RIMZ_BLOCK: &str = "rimz";
 const HOOKS_TABLE: &str = "hooks";
 
+/// The exact command every rimz-managed Codex hook runs. Identical across all
+/// events — the helper reads the event from the stdin payload's
+/// `hook_event_name`, so no `--event` flag is needed.
+const RIMZ_HOOK_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex";
+
+/// Stable substring identifying a rimz-owned hook command across every form an
+/// older build may have written (with `--event`, without `exec`). Used to
+/// reclaim legacy entries on install and uninstall, so duplicates never
+/// accumulate.
+const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source codex";
+
 #[derive(Clone, Debug, Default)]
 pub struct CodexIntegration;
 
@@ -589,7 +600,7 @@ fn insert_rimz_hook_group(root: &mut toml::Table, event: &str) {
     handler.insert("type".to_owned(), toml::Value::String("command".to_owned()));
     handler.insert(
         "command".to_owned(),
-        toml::Value::String(rimz_hook_command(event)),
+        toml::Value::String(RIMZ_HOOK_COMMAND.to_owned()),
     );
     handler.insert(
         "timeout".to_owned(),
@@ -643,7 +654,7 @@ fn strip_rimz_hook_commands(root: &mut toml::Table) -> Vec<String> {
                 continue;
             };
             let before = handlers.len();
-            handlers.retain(|handler| !is_rimz_hook_handler(handler, &event));
+            handlers.retain(|handler| !is_rimz_hook_handler(handler));
             if handlers.len() != before {
                 removed.push(event.clone());
             }
@@ -677,11 +688,7 @@ fn has_rimz_hook_command(root: &toml::Table, event: &str) -> bool {
                     .as_table()
                     .and_then(|table| table.get("hooks"))
                     .and_then(toml::Value::as_array)
-                    .is_some_and(|handlers| {
-                        handlers
-                            .iter()
-                            .any(|handler| is_current_rimz_hook_handler(handler, event))
-                    })
+                    .is_some_and(|handlers| handlers.iter().any(is_current_rimz_hook_handler))
             })
         })
 }
@@ -693,22 +700,18 @@ fn handler_command(handler: &toml::Value) -> Option<&str> {
         .and_then(toml::Value::as_str)
 }
 
-fn is_current_rimz_hook_handler(handler: &toml::Value, event: &str) -> bool {
-    handler_command(handler).is_some_and(|command| command == rimz_hook_command(event))
+/// Whether a handler is the current rimz command exactly — drives "already
+/// installed correctly?" detection, so an old `--event` form reads as needing
+/// reinstall.
+fn is_current_rimz_hook_handler(handler: &toml::Value) -> bool {
+    handler_command(handler).is_some_and(|command| command == RIMZ_HOOK_COMMAND)
 }
 
-fn is_rimz_hook_handler(handler: &toml::Value, event: &str) -> bool {
-    handler_command(handler).is_some_and(|command| {
-        command == rimz_hook_command(event) || command == legacy_rimz_hook_command(event)
-    })
-}
-
-fn rimz_hook_command(event: &str) -> String {
-    format!("RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex --event {event}")
-}
-
-fn legacy_rimz_hook_command(event: &str) -> String {
-    format!("rimz hooks feed --source codex --event {event}")
+/// Whether a handler is rimz-owned in any historical form (with `--event`,
+/// without `exec`). Drives strip on install/uninstall, so duplicates never
+/// accumulate across version drift.
+fn is_rimz_hook_handler(handler: &toml::Value) -> bool {
+    handler_command(handler).is_some_and(|command| command.contains(RIMZ_HOOK_MARKER))
 }
 
 fn matcher_for_event(event: &str) -> Option<&'static str> {
@@ -953,13 +956,15 @@ mod tests {
         assert_eq!(report.installed_events, INSTALLED_EVENTS);
         assert!(hooks_installed_at(&path));
 
+        // Every command is identical (no `--event`; the helper reads the event
+        // from the stdin payload's `hook_event_name`).
         let text = std::fs::read_to_string(&path).unwrap();
         insta::assert_snapshot!(text, @r###"
         [[hooks.PermissionRequest]]
         matcher = ".*"
 
         [[hooks.PermissionRequest.hooks]]
-        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex --event PermissionRequest"
+        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing PermissionRequest through Rimz"
         timeout = 60
         type = "command"
@@ -968,7 +973,7 @@ mod tests {
         matcher = ".*"
 
         [[hooks.PostToolUse.hooks]]
-        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex --event PostToolUse"
+        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing PostToolUse through Rimz"
         timeout = 60
         type = "command"
@@ -977,7 +982,7 @@ mod tests {
         matcher = ".*"
 
         [[hooks.PreToolUse.hooks]]
-        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex --event PreToolUse"
+        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing PreToolUse through Rimz"
         timeout = 60
         type = "command"
@@ -986,7 +991,7 @@ mod tests {
         matcher = "startup|resume|clear|compact"
 
         [[hooks.SessionStart.hooks]]
-        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex --event SessionStart"
+        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing SessionStart through Rimz"
         timeout = 60
         type = "command"
@@ -994,7 +999,7 @@ mod tests {
         [[hooks.Stop]]
 
         [[hooks.Stop.hooks]]
-        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex --event Stop"
+        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing Stop through Rimz"
         timeout = 60
         type = "command"
@@ -1003,7 +1008,7 @@ mod tests {
         matcher = ".*"
 
         [[hooks.SubagentStart.hooks]]
-        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex --event SubagentStart"
+        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing SubagentStart through Rimz"
         timeout = 60
         type = "command"
@@ -1012,7 +1017,7 @@ mod tests {
         matcher = ".*"
 
         [[hooks.SubagentStop.hooks]]
-        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex --event SubagentStop"
+        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing SubagentStop through Rimz"
         timeout = 60
         type = "command"
@@ -1020,7 +1025,7 @@ mod tests {
         [[hooks.UserPromptSubmit]]
 
         [[hooks.UserPromptSubmit.hooks]]
-        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex --event UserPromptSubmit"
+        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing UserPromptSubmit through Rimz"
         timeout = 60
         type = "command"
@@ -1168,6 +1173,61 @@ command = "rimz hooks feed --source codex --event PermissionRequest"
             "legacy commands lack the PID wrapper and must be reinstalled"
         );
         install_into(&path).unwrap();
+        assert!(hooks_installed_at(&path));
+    }
+
+    #[test]
+    fn install_reclaims_legacy_event_tables() {
+        // Version drift: an older build wrote the exec form *with* `--event`,
+        // and a duplicate stacked up. Reinstall must reclaim every old rimz
+        // table — regardless of `--event` — and leave exactly one current
+        // handler per event, with the user hook untouched.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"[[hooks.SessionStart]]
+matcher = "startup|resume|clear|compact"
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex --event SessionStart"
+
+[[hooks.SessionStart]]
+matcher = "startup|resume|clear|compact"
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex --event SessionStart"
+
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo user"
+"#,
+        )
+        .unwrap();
+        install_into(&path).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains("--event"),
+            "every legacy `--event` table must be reclaimed: {text}"
+        );
+        assert!(text.contains("echo user"), "user hook must survive install");
+
+        let parsed: toml::Table = toml::from_str(&text).unwrap();
+        let group_count = |event: &str| {
+            parsed
+                .get("hooks")
+                .and_then(toml::Value::as_table)
+                .and_then(|hooks| hooks.get(event))
+                .and_then(toml::Value::as_array)
+                .map_or(0, Vec::len)
+        };
+        // Two stacked legacy SessionStart tables collapse to one.
+        assert_eq!(group_count("SessionStart"), 1);
+        // PreToolUse keeps the user group and gains exactly one rimz group.
+        assert_eq!(group_count("PreToolUse"), 2);
         assert!(hooks_installed_at(&path));
     }
 

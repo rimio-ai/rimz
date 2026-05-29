@@ -163,6 +163,14 @@ rimz hooks install claude
 
 Privacy gates the *content* of an event, never whether a state transition is observed.
 
+### The installed config shape
+
+Each event is its own key in the agent's config — neither Claude nor Codex has a wildcard event key, so install writes one block per wired event. Inside that constraint the config stays minimal:
+
+- **One command for every event.** The installed command carries no `--event`: it is `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source <agent>` everywhere. The helper reads the event from the stdin payload's `hook_event_name` (the override flag `rimz hooks feed --event` survives only for manual debugging).
+- **One matcher for the blocking pair.** Claude's `ExitPlanMode` and `AskUserQuestion` blocking hooks install as a single `|`-list matcher, `ExitPlanMode|AskUserQuestion`. Runtime classification still routes by `tool_name`, so each still maps to its own feed kind.
+- **Idempotent and self-healing.** Install reclaims every rimz-owned entry — marked or not, with or without a legacy `--event` — by the stable command substring `rimz hooks feed --source <agent>`, then rewrites the canonical set. Duplicate or stale blocks left by older builds never accumulate. User-authored hooks (no rimz command) are untouched.
+
 ## Adding an agent
 
 OpenCode, Pi, Cursor, Gemini, Copilot, Amp, Rovo, Hermes, Factory, Qoder, and similar agents land through `AgentIntegration` once their hook surfaces and decision outputs are verified. The work is a new appendix below — the native-event → unified-interface mapping — plus the trait impl. Nothing else changes.
@@ -200,7 +208,7 @@ Decision shapes — Claude requires `hookSpecificOutput`:
 { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": {} } }
 ```
 
-`ExitPlanMode` and `AskUserQuestion` require `updatedInput`. The Claude adapter sets `hook_cap = 120s` (upstream cap ~125s; Rimz leaves a 5s margin so the bridge times out before the agent kills the hook). The exact value is `CLAUDE_HOOK_CAP` in [`claude.rs`](../../crates/rimz/src/agents/claude.rs). Install merges non-destructively into `~/.claude/settings.json` under per-matcher `_rimz_managed` markers; blocking events are marked `_rimz_sync = true`.
+`ExitPlanMode` and `AskUserQuestion` require `updatedInput`. The Claude adapter sets `hook_cap = 120s` (upstream cap ~125s; Rimz leaves a 5s margin so the bridge times out before the agent kills the hook). The exact value is `CLAUDE_HOOK_CAP` in [`claude.rs`](../../crates/rimz/src/agents/claude.rs). Install merges non-destructively into `~/.claude/settings.json` under per-matcher `_rimz_managed` markers; the two blocking `PreToolUse` matchers install as one `ExitPlanMode|AskUserQuestion` entry marked `_rimz_sync = true` (see [The installed config shape](#the-installed-config-shape)).
 
 ## Appendix — Codex
 
@@ -224,7 +232,7 @@ Decision shape — Codex permission hooks emit only `hookSpecificOutput.decision
 { "hookSpecificOutput": { "hookEventName": "PermissionRequest", "decision": { "behavior": "deny", "message": "Blocked by repository policy." } } }
 ```
 
-Never emit `updatedInput`, `updatedPermissions`, or `interrupt` for Codex permission hooks — those fields belong to other Codex hook types and corrupt the permission decision. Codex's hook cap is shorter than Claude's (`CODEX_HOOK_CAP`); chain budgets must account for it. Install writes inline `[[hooks.Event]]` tables in `~/.codex/config.toml`; the legacy `[hooks.rimz]` table is ignored by Codex and exists only as uninstall cleanup.
+Never emit `updatedInput`, `updatedPermissions`, or `interrupt` for Codex permission hooks — those fields belong to other Codex hook types and corrupt the permission decision. Codex's hook cap is shorter than Claude's (`CODEX_HOOK_CAP`); chain budgets must account for it. Install writes inline `[[hooks.Event]]` tables in `~/.codex/config.toml` with the same `--event`-free command and substring-based reclaim as Claude (see [The installed config shape](#the-installed-config-shape)); the legacy `[hooks.rimz]` table is ignored by Codex and exists only as uninstall cleanup.
 
 Codex 0.134 routes thread-spawned subagents through `SubagentStart`/`SubagentStop` instead of the root `SessionStart`/`Stop` lifecycle. Hooks fired inside a subagent carry a child `agent_id` and `agent_type`; Rimz keys those rows by the child `agent_id`, so a pending subagent permission request replaces the subagent row rather than duplicating the parent session.
 

@@ -40,11 +40,11 @@ const CLAUDE_HOOK_CAP: Duration = Duration::from_secs(120);
 const CLAUDE_HOOK_TIMEOUT_SECS: u64 = 120;
 
 /// Installed events. Tuple is `(event_name, optional_matcher)` — the matcher
-/// is `Some(_)` for `PreToolUse` sub-events that target a specific Claude tool
-/// (`ExitPlanMode`, `AskUserQuestion`). The broad `PreToolUse`/`PostToolUse`
-/// hooks fire on every tool call; they keep the sidebar's enrichment current
-/// and feed `rimz feed list --audit` depth, with their payload content gated by
-/// `[privacy] payload_mode`.
+/// is `Some(_)` for the blocking `PreToolUse` sub-events, collapsed into one
+/// `|`-list (`ExitPlanMode|AskUserQuestion`) that Claude evaluates as either
+/// tool. The broad `PreToolUse`/`PostToolUse` hooks fire on every tool call;
+/// they keep the sidebar's enrichment current and feed `rimz feed list --audit`
+/// depth, with their payload content gated by `[privacy] payload_mode`.
 const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
     ("SessionStart", None),
     ("SessionEnd", None),
@@ -52,8 +52,7 @@ const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
     ("Stop", None),
     ("Notification", None),
     ("PermissionRequest", None),
-    ("PreToolUse", Some("ExitPlanMode")),
-    ("PreToolUse", Some("AskUserQuestion")),
+    ("PreToolUse", Some("ExitPlanMode|AskUserQuestion")),
     ("PreToolUse", None),
     ("PostToolUse", None),
 ];
@@ -64,13 +63,23 @@ const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
 /// on-disk file.
 const BLOCKING_EVENTS: &[(&str, Option<&str>)] = &[
     ("PermissionRequest", None),
-    ("PreToolUse", Some("ExitPlanMode")),
-    ("PreToolUse", Some("AskUserQuestion")),
+    ("PreToolUse", Some("ExitPlanMode|AskUserQuestion")),
 ];
 
 const HOOKS_KEY: &str = "hooks";
 const RIMZ_MANAGED_KEY: &str = "_rimz_managed";
 const RIMZ_SYNC_KEY: &str = "_rimz_sync";
+
+/// The exact command every rimz-managed Claude hook runs. Identical across all
+/// events — the helper reads the event from the stdin payload's
+/// `hook_event_name`, so no `--event` flag is needed.
+const RIMZ_HOOK_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude";
+
+/// Stable substring identifying a rimz-owned hook command across every form an
+/// older build may have written (with `--event`, without `exec`). Used to
+/// reclaim legacy and unmarked entries on install and uninstall, so duplicates
+/// never accumulate.
+const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source claude";
 
 #[derive(Clone, Debug, Default)]
 pub struct ClaudeIntegration;
@@ -759,8 +768,9 @@ fn build_matcher_entry(event: &str, matcher: Option<&str>) -> Value {
     }
     entry.insert(RIMZ_MANAGED_KEY.to_owned(), Value::Bool(true));
     entry.insert(RIMZ_SYNC_KEY.to_owned(), Value::Bool(blocking));
-    let command =
-        format!("RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event {event}");
+    // No `--event`: the helper reads `hook_event_name` from the hook's stdin
+    // payload, so every installed command is identical (`RIMZ_HOOK_COMMAND`).
+    let command = RIMZ_HOOK_COMMAND.to_owned();
     let mut hook = Map::new();
     hook.insert("type".to_owned(), Value::String("command".to_owned()));
     hook.insert("command".to_owned(), Value::String(command));
@@ -772,8 +782,35 @@ fn build_matcher_entry(event: &str, matcher: Option<&str>) -> Value {
     Value::Object(entry)
 }
 
-/// Remove every matcher tagged `_rimz_managed = true` across the hook tree.
-/// Returns the labels of removed entries (`Event` or `Event:matcher`).
+/// Whether a `hooks.<Event>` entry belongs to Rimz: either tagged
+/// `_rimz_managed = true`, or its handlers are *solely* the rimz feed command in
+/// any historical form (with `--event`, without `exec`). The "solely" guard
+/// leaves a user entry that merely embeds a rimz command alongside their own
+/// untouched. The command-substring arm reclaims legacy and unmarked entries
+/// older builds left behind, so reinstall never stacks duplicates.
+fn entry_is_rimz_owned(obj: &Map<String, Value>) -> bool {
+    if obj
+        .get(RIMZ_MANAGED_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    let Some(handlers) = obj.get(HOOKS_KEY).and_then(Value::as_array) else {
+        return false;
+    };
+    !handlers.is_empty()
+        && handlers.iter().all(|handler| {
+            handler
+                .get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|command| command.contains(RIMZ_HOOK_MARKER))
+        })
+}
+
+/// Remove every rimz-owned matcher across the hook tree (see
+/// [`entry_is_rimz_owned`]). Returns the labels of removed entries (`Event` or
+/// `Event:matcher`).
 fn strip_rimz_matchers(root: &mut Map<String, Value>) -> Vec<String> {
     let mut removed = Vec::new();
     let Some(hooks_value) = root.get_mut(HOOKS_KEY) else {
@@ -791,11 +828,7 @@ fn strip_rimz_matchers(root: &mut Map<String, Value>) -> Vec<String> {
             let Some(obj) = entry.as_object() else {
                 return true;
             };
-            let managed = obj
-                .get(RIMZ_MANAGED_KEY)
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            if managed {
+            if entry_is_rimz_owned(obj) {
                 let matcher = obj.get("matcher").and_then(Value::as_str);
                 removed.push(event_label(&event, matcher));
                 false
@@ -994,12 +1027,7 @@ mod tests {
         assert!(
             report
                 .installed_events
-                .contains(&"PreToolUse:ExitPlanMode".to_owned())
-        );
-        assert!(
-            report
-                .installed_events
-                .contains(&"PreToolUse:AskUserQuestion".to_owned())
+                .contains(&"PreToolUse:ExitPlanMode|AskUserQuestion".to_owned())
         );
         assert!(
             report
@@ -1008,9 +1036,11 @@ mod tests {
         );
 
         // Lock the full on-disk shape: event set, matcher ordering, sync
-        // flags, command strings, and the 120 s blocking-hook timeout. The
-        // file is deterministic — fixed commands, constant timeout, no paths —
-        // so the whole settings.json snapshots cleanly.
+        // flags, command strings, and the 120 s blocking-hook timeout. Every
+        // command is identical (no `--event`; the helper reads the event from
+        // stdin), and the two blocking PreToolUse matchers collapse into one
+        // `|`-list. The file is deterministic, so the whole settings.json
+        // snapshots cleanly.
         let written = std::fs::read_to_string(&path).unwrap();
         insta::assert_snapshot!(written, @r###"
         {
@@ -1021,7 +1051,7 @@ mod tests {
                 "_rimz_sync": false,
                 "hooks": [
                   {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event Notification",
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
                     "timeout": 120,
                     "type": "command"
                   }
@@ -1034,7 +1064,7 @@ mod tests {
                 "_rimz_sync": true,
                 "hooks": [
                   {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event PermissionRequest",
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
                     "timeout": 120,
                     "type": "command"
                   }
@@ -1047,7 +1077,7 @@ mod tests {
                 "_rimz_sync": false,
                 "hooks": [
                   {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event PostToolUse",
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
                     "timeout": 120,
                     "type": "command"
                   }
@@ -1060,31 +1090,19 @@ mod tests {
                 "_rimz_sync": true,
                 "hooks": [
                   {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event PreToolUse",
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
                     "timeout": 120,
                     "type": "command"
                   }
                 ],
-                "matcher": "ExitPlanMode"
-              },
-              {
-                "_rimz_managed": true,
-                "_rimz_sync": true,
-                "hooks": [
-                  {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event PreToolUse",
-                    "timeout": 120,
-                    "type": "command"
-                  }
-                ],
-                "matcher": "AskUserQuestion"
+                "matcher": "ExitPlanMode|AskUserQuestion"
               },
               {
                 "_rimz_managed": true,
                 "_rimz_sync": false,
                 "hooks": [
                   {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event PreToolUse",
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
                     "timeout": 120,
                     "type": "command"
                   }
@@ -1097,7 +1115,7 @@ mod tests {
                 "_rimz_sync": false,
                 "hooks": [
                   {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event SessionEnd",
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
                     "timeout": 120,
                     "type": "command"
                   }
@@ -1110,7 +1128,7 @@ mod tests {
                 "_rimz_sync": false,
                 "hooks": [
                   {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event SessionStart",
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
                     "timeout": 120,
                     "type": "command"
                   }
@@ -1123,7 +1141,7 @@ mod tests {
                 "_rimz_sync": false,
                 "hooks": [
                   {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event Stop",
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
                     "timeout": 120,
                     "type": "command"
                   }
@@ -1136,7 +1154,7 @@ mod tests {
                 "_rimz_sync": false,
                 "hooks": [
                   {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event UserPromptSubmit",
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
                     "timeout": 120,
                     "type": "command"
                   }
@@ -1173,9 +1191,10 @@ mod tests {
         let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(parsed["model"], "claude-opus-4-7");
         let pre_tool = parsed["hooks"]["PreToolUse"].as_array().unwrap();
-        // user `Bash` matcher + 3 rimz matchers (ExitPlanMode, AskUserQuestion,
-        // and the broad per-tool hook).
-        assert_eq!(pre_tool.len(), 4);
+        // user `Bash` matcher + 2 rimz matchers (the combined
+        // `ExitPlanMode|AskUserQuestion` blocking matcher and the broad per-tool
+        // hook).
+        assert_eq!(pre_tool.len(), 3);
         assert!(pre_tool.iter().any(|e| e["matcher"] == "Bash"
             && e.get("_rimz_managed").and_then(Value::as_bool) != Some(true)));
         // UserPromptSubmit is state signal, so a default install wires it. The
@@ -1202,8 +1221,8 @@ mod tests {
 
         let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let pre_tool = parsed["hooks"]["PreToolUse"].as_array().unwrap();
-        // 2 blocking matchers + 1 broad per-tool hook (no matcher) = 3.
-        assert_eq!(pre_tool.len(), 3);
+        // 1 combined blocking matcher + 1 broad per-tool hook (no matcher) = 2.
+        assert_eq!(pre_tool.len(), 2);
         // The broad per-tool hook has no matcher key and is non-blocking.
         let broad = pre_tool
             .iter()
@@ -1225,6 +1244,79 @@ mod tests {
             first, second,
             "second install must produce identical config"
         );
+    }
+
+    #[test]
+    fn install_reclaims_legacy_and_duplicate_entries() {
+        // Reproduces a bloated real-world file: legacy *unmarked* rimz copies
+        // (older builds wrote `--event` and no marker) stacked alongside an old
+        // separate-matcher managed entry, plus a genuine user hook. Install must
+        // reclaim every rimz-owned entry — marked or not — and leave exactly the
+        // canonical set, with the user hook untouched.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{
+              "hooks": {
+                "Notification": [
+                  { "hooks": [{ "type": "command", "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event Notification" }] },
+                  { "hooks": [{ "type": "command", "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event Notification" }] }
+                ],
+                "PreToolUse": [
+                  { "matcher": "ExitPlanMode", "hooks": [{ "type": "command", "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event PreToolUse" }] },
+                  { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event PreToolUse" }] },
+                  { "_rimz_managed": true, "_rimz_sync": true, "matcher": "ExitPlanMode", "hooks": [{ "type": "command", "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event PreToolUse" }] },
+                  { "matcher": "Bash", "hooks": [{ "type": "command", "command": "echo hi" }] }
+                ]
+              }
+            }"#,
+        )
+        .unwrap();
+        install_into(&path).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !written.contains("--event"),
+            "every legacy `--event` command must be reclaimed: {written}"
+        );
+
+        let parsed: Value = serde_json::from_slice(written.as_bytes()).unwrap();
+        let managed =
+            |entry: &Value| entry.get("_rimz_managed").and_then(Value::as_bool) == Some(true);
+
+        // Two stacked legacy copies collapse to one managed Notification hook.
+        let notif = parsed["hooks"]["Notification"].as_array().unwrap();
+        assert_eq!(notif.len(), 1);
+        assert!(managed(&notif[0]));
+
+        // PreToolUse: the user `Bash` hook survives; the two unmarked legacy
+        // matchers and the old separate managed matcher are gone, replaced by
+        // one combined blocking matcher + the broad hook.
+        let pre_tool = parsed["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre_tool.len(), 3);
+        assert!(
+            pre_tool
+                .iter()
+                .any(|e| e["matcher"] == "Bash" && !managed(e)),
+            "user Bash hook preserved"
+        );
+        assert!(
+            pre_tool
+                .iter()
+                .any(|e| e["matcher"] == "ExitPlanMode|AskUserQuestion"
+                    && managed(e)
+                    && e["_rimz_sync"] == true),
+            "combined blocking matcher present"
+        );
+        assert!(
+            pre_tool.iter().any(|e| managed(e)
+                && !e.as_object().unwrap().contains_key("matcher")
+                && e["_rimz_sync"] == false),
+            "broad enrichment hook present"
+        );
+        // Exactly the two canonical rimz entries — no stale duplicates.
+        assert_eq!(pre_tool.iter().filter(|e| managed(e)).count(), 2);
     }
 
     #[test]
@@ -1343,7 +1435,7 @@ mod tests {
               "hooks": {
                 "PreToolUse": [
                   {
-                    "matcher": "ExitPlanMode",
+                    "matcher": "ExitPlanMode|AskUserQuestion",
                     "_rimz_managed": true,
                     "_rimz_sync": false,
                     "hooks": [{ "type": "command", "command": "x" }]
@@ -1359,7 +1451,7 @@ mod tests {
         };
         assert_eq!(agent, "claude");
         assert!(
-            reason.contains("PreToolUse:ExitPlanMode"),
+            reason.contains("PreToolUse:ExitPlanMode|AskUserQuestion"),
             "reason should name the violating event: {reason}"
         );
     }

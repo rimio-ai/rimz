@@ -393,7 +393,7 @@ fn codex_install_uninstall_cli_round_trips_into_codex_config() {
     let written = std::fs::read_to_string(&codex_config).expect("read codex config");
     assert!(
         written.contains("[[hooks.SessionStart]]")
-            && written.contains("rimz hooks feed --source codex --event SessionStart"),
+            && written.contains("rimz hooks feed --source codex"),
         "config must use Codex's documented inline hook shape:\n{written}"
     );
 
@@ -795,8 +795,7 @@ fn claude_install_uninstall_cli_round_trips_into_settings_json() {
     let names: Vec<&str> = events.iter().filter_map(Value::as_str).collect();
     assert!(names.contains(&"SessionStart"));
     assert!(names.contains(&"PermissionRequest"));
-    assert!(names.contains(&"PreToolUse:ExitPlanMode"));
-    assert!(names.contains(&"PreToolUse:AskUserQuestion"));
+    assert!(names.contains(&"PreToolUse:ExitPlanMode|AskUserQuestion"));
 
     assert!(
         claude_settings.exists(),
@@ -804,9 +803,10 @@ fn claude_install_uninstall_cli_round_trips_into_settings_json() {
     );
     let on_disk: Value =
         serde_json::from_slice(&std::fs::read(&claude_settings).unwrap()).expect("settings json");
-    // PreToolUse block has both blocking matchers plus the broad per-tool hook.
+    // PreToolUse block has the combined blocking matcher plus the broad
+    // per-tool hook.
     let pre_tool = on_disk["hooks"]["PreToolUse"].as_array().expect("array");
-    assert_eq!(pre_tool.len(), 3);
+    assert_eq!(pre_tool.len(), 2);
 
     let uninstall = env
         .rimz()

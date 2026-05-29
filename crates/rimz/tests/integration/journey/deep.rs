@@ -113,7 +113,6 @@ fn tmux_room_shows_agent_after_hook() {
     env.install_agent_hooks("codex");
     let out = env.run_installed_hook_in_pane(
         "codex",
-        "SessionStart",
         &session_start_at(
             "sess-1",
             "GPT-5.5",
@@ -216,7 +215,6 @@ fn zellij_room_shows_agent_after_hook() {
     env.install_agent_hooks("codex");
     let out = env.run_installed_hook(
         "codex",
-        "SessionStart",
         &session_start_at(
             "sess-1",
             "GPT-5.5",

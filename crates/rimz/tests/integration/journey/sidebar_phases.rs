@@ -216,11 +216,7 @@ fn phase3b_resolver_in_front_shows_chain() {
     room.agent_hook("codex", &user_prompt_submit("sess-1", "fix auth flow"));
     // Fire the blocking hook in the background; it holds open on the bridge
     // while we observe the mid-flight render.
-    let mut child = room.spawn_agent(
-        "codex",
-        "PermissionRequest",
-        &permission_request("sess-1", "DO_NOT_RENDER_ME"),
-    );
+    let mut child = room.spawn_agent("codex", &permission_request("sess-1", "DO_NOT_RENDER_ME"));
 
     let screen = room.wait_for(|s| s.contains("⟳"), SETTLE);
     let _ = child.kill();
