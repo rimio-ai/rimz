@@ -79,7 +79,6 @@ Each field, where it comes from, and its **lifetime** — the rule the reducer f
 | `pane`                              | jump target                       | bound live at snapshot from the pane list                         | live-derived  |
 | `last_activity`                     | age + ranking key                 | `event.timestamp` of the agent's own latest event                 | activity      |
 | `last_seen`                         | carryover-merge tiebreak          | `event.timestamp`                                                 | activity      |
-| `last_event_pulse`                  | Braille shimmer                   | `+1` per observed event                                           | activity      |
 
 The catalog turns on one distinction: **identity vs. live-derived**. `worktree_*` and `pane` are *live* facts — the pane knows its current cwd every tick — so they are derived at snapshot time, not pinned at session start. Pinning them is the branch-tracking bug (§ Liveness and presence).
 
@@ -91,7 +90,7 @@ The five-value status set, in ranking order (most attention-hungry first), per [
 | --------- | ----- | --------------------------- | ---------------- |
 | `waiting` | `◆`   | blocked on a human decision | yes              |
 | `failed`  | `✗`   | the last turn errored       | yes              |
-| `running` | `▸`   | actively working a task     | no               |
+| `running` | `◐`   | actively working a task     | no               |
 | `idle`    | `○`   | wired in, nothing in flight | no               |
 | `success` | `✓`   | last turn completed cleanly | no               |
 
@@ -121,9 +120,9 @@ When a payload carries no session id, the adapter keys on the captured `runtime_
 
 ### Enrichment is display-only
 
-`task`, `context_pct`, `total_tokens`, and the todo counts are **enrichment**: display-only, redactable, and they never drive routing, ranking, or a decision (the no-transcript-correctness rule). A missing value reads as "the agent didn't report it" — never `0`.
+`task`, `context_pct`, `total_tokens`, and the todo counts are **enrichment**: display-only, redactable, and they never drive routing, ranking, or a decision (the no-transcript-correctness rule). The reduced agent state keeps missing context as "the agent didn't report it"; the sidebar row projects that missing value to a visible 0% baseline so every observed agent has a context bar.
 
-Context budget is the one field no agent puts directly in its hook JSON — usage lives in the transcript. Capture reads the **transcript tail** on the low-frequency events Rimz already fires (`SessionStart`, `UserPromptSubmit`, `Stop`), takes the most recent assistant `message.usage`, and scales it against the model's context window, so the gauge populates without a per-tool hook. These are bare token counts (metadata); `payload_mode` gates the *content* of telemetry events, never these gauges or the *state transition* they ride on.
+Context budget is the one field no agent puts directly in its hook JSON — usage lives in the transcript. Capture reads the **transcript tail** only after the agent payload supplies a `session_id`, on the low-frequency events Rimz already fires (`SessionStart`, `UserPromptSubmit`, `Stop`), takes the most recent assistant usage record, and scales it against the model's context window, so the gauge upgrades without a per-tool hook. These are bare token counts (metadata); `payload_mode` gates the *content* of telemetry events, never these gauges or the *state transition* they ride on.
 
 ## Liveness and presence
 

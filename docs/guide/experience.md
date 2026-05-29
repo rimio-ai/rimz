@@ -141,12 +141,12 @@ agent showed up in the sidebar, correctly named, with its model and effort. The 
 
 ## Phase 4 — Prompted and working
 
-The reader gives Claude a task. `UserPromptSubmit` then `PreToolUse` move the row to `▸ running`; the task slot fills with the agent's reported task (or the first ~20 chars of the prompt). The right-aligned age counts from the agent's last activity — so a *wedged* `running` agent betrays itself with an age that keeps climbing.
+The reader gives Claude a task. `UserPromptSubmit` then `PreToolUse` move the row to `◐ running`; the task slot fills with the agent's reported task (or the first ~20 chars of the prompt). The right-aligned age counts from the agent's last activity — so a *wedged* `running` agent betrays itself with an age that keeps climbing.
 
 ```
 ┌ query-engine ──────────────┐
-│ ▌main                  1▸  │
-│ ▸ claude  fix auth flow  8s│
+│ ▌main                  1◐  │
+│ ◐ claude  fix auth flow  8s│
 │   Opus · xhigh             │
 └────────────────────────────┘
 ```
@@ -216,12 +216,12 @@ The reader does exactly what they said they would: spins up four more agents acr
 ┌ query-engine ──────────────┐
 │ ◆2  ✗1                     │
 │                            │
-│ ▌main             2▸ 1◆    │
+│ ▌main             2◐ 1◆    │
 │ ◆ claude  fix auth flow 12m│
-│   Opus · xhigh ▰▰▱▱▱ 38%  │
-│ ▸ claude  add tests     8s │
+│   Opus · xhigh █▉░░░ 38%  │
+│ ◐ claude  add tests     8s │
 │   Sonnet · high            │
-│ ▸ codex   refactor api 30s │
+│ ◐ codex   refactor api 30s │
 │   GPT-5.5 · high           │
 │                            │
 │ ▌feature-migration 1✗ 1○   │
@@ -269,7 +269,7 @@ The footer advertises `?`. Pressing it overlays the legend and keys, so the glyp
 │ ?    close                 │
 │                            │
 │ ◆ waiting    ✗ failed      │
-│ ▸ running    ○ idle        │
+│ ◐ running    ○ idle        │
 │ ✓ done       · process     │
 │ posture: auto yolo         │
 └────────────────────────────┘
@@ -324,8 +324,8 @@ The product's honesty law gets tested when a fetch fails — the binary moved, t
 ┌ query-engine ──────────────┐
 │ ! degraded 8s: snapshot    │
 │   failed: ledger not found │
-│ ▌main                  1▸  │
-│ ▸ claude  fix auth flow  2m│
+│ ▌main                  1◐  │
+│ ◐ claude  fix auth flow  2m│
 │   Opus · xhigh             │
 └────────────────────────────┘
 ```
@@ -377,7 +377,7 @@ on the very first screen.
 | 1 Consent | runs `rimz` | additive-diff gate | reassured | report, don't answer; reversible |
 | 2 Empty room | looks left | `· zsh`, hint | oriented | never blank |
 | 3 First agent | types `claude` | row re-skins to `○ claude` | delight | it just knows |
-| 4 Working | prompts | `▸ running`, climbing age | calm | age is the honesty signal |
+| 4 Working | prompts | `◐ running`, climbing age | calm | age is the honesty signal |
 | 5 Question | gets notified, jumps | `◆ waiting`, OS notify | *the pitch* | notify & route, never answer |
 | 6 Fleet | hits "next ◆" | grouped roster, `◆2 ✗1` | in control | one key tames the fleet |
 | 7 Tabs | opens a tab | same room everywhere | coherent | tabs are viewports |

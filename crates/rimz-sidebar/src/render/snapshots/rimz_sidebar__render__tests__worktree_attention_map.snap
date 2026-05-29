@@ -5,16 +5,16 @@ expression: screen
 ┌ query-engine ──────────────────────┐
 │◆2                                  │
 │                                    │
-│▌main                          1◆ 1▸│
-│◆ claude  permission           <t> ⠋│
-│▸ codex   add tests             <t> ⠋│
-│  GPT-5.5 · high                    │
+│▌main                          1◆ 1◐│
+│▎◆ claude  permission            <t>│
+│▎  ░░░░░░░░░░ 0%                    │
+│ ◐ codex   add tests              <t>│
+│   GPT-5.5 · high  ░░░░░░░░░░ 0%    │
 │                                    │
 │▌workspace                        1◆│
-│◆ depl... Deploy staging?         <t>│
+│ ◆ depl... Deploy staging?        <t>│
 │                                    │
 │↵ jump   ␣ next ◆   ? keys          │
-│                                    │
 │                                    │
 │                                    │
 │                                    │

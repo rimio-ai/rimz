@@ -148,7 +148,6 @@ mod tests {
             total_tokens: None,
             todo_done: None,
             todo_total: None,
-            last_event_pulse: 0,
             last_seen: Timestamp::UNIX_EPOCH,
             last_activity: Timestamp::UNIX_EPOCH,
         }

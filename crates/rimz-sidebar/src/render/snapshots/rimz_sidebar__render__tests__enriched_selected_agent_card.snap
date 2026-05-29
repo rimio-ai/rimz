@@ -3,11 +3,11 @@ source: crates/rimz-sidebar/src/render/mod.rs
 expression: screen
 ---
 ┌ query-engine ──────────────────────────────────────┐
-│▌feature-migration                      +127 -43  1▸│
-│▸ claude  db migrate                            <t> ⠸│
-│  Opus · xhigh · auto                               │
-│  ctx ▰▰▰▰▱▱▱▱▱▱ 38%  ●●●○○ 3/5                     │
-│  12.4k tok                                         │
+│▌feature-migration                      +127 -43  1◐│
+│▎◐ claude  db migrate                             <t>│
+│▎  Opus · xhigh · auto  ███▊░░░░░░ 38%  ●●●○○ 3/5   │
+│▎  12.4k tok                                        │
+│                                                    │
 │                                                    │
 │                                                    │
 │                                                    │

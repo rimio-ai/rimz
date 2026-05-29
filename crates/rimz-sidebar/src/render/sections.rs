@@ -6,29 +6,36 @@
 //! agent, not a stack of one-off widgets. See the
 //! [grammar in docs/internals/sidebar.md](../../../docs/internals/sidebar.md).
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 use rimz::feed::{AgentStatus, PermissionPosture};
 use rimz::{SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarWorktreeGroup};
 
-use super::fmt::{age_short, clip, time_remaining};
+use super::fmt::{age_short, clip, is_fresh, time_remaining};
 use super::labels::{
-    diff_spans, gauge_spans, posture_pill, posture_style, pulse_glyph, status_glyph, status_style,
-    todo_spans, tokens_label,
+    diff_spans, gauge_spans, posture_pill, posture_style, running_glyph, status_glyph,
+    status_style, todo_spans, tokens_label,
 };
 use super::theme::Theme;
 
-/// Shared gauge width for the inline ambient bar and the selected card's
-/// labeled `ctx` bar — one length, so the meter reads the same whether the
-/// card is selected or not.
+/// Fixed width of the inline context gauge.
 const GAUGE_WIDTH: usize = 10;
+
+/// Glyph for the selected row's left accent bar; lives in a one-cell gutter
+/// reserved on every row so selecting one never shifts the columns.
+const SELECTION_BAR: &str = "▎";
+
+/// Width left for a row's content after the selection gutter claims its cell.
+fn content_width(width: usize) -> usize {
+    width.saturating_sub(1).max(1)
+}
 
 /// Width band that drives the ambient row density.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Tier {
     /// Identity + a bare gauge, no labels (~24 columns).
     L0,
-    /// Default: line 1 cue + capability + ctx gauge + pulse (~30 columns).
+    /// Default: line 1 cue + capability + context gauge (~30 columns).
     L1,
     /// Wide: line 2 also inlines todo / extra meters (~44+).
     L2,
@@ -105,14 +112,22 @@ pub(super) fn worktree_group_lines(
     width: usize,
     row_index: &mut usize,
     selected_index: usize,
+    animation_phase: u64,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     lines.push(group_header(theme, group, width));
-    let tier = Tier::for_width(width);
+    let tier = Tier::for_width(content_width(width));
     for row in &group.rows {
         let selected = *row_index == selected_index;
         *row_index += 1;
-        lines.extend(row_lines(theme, row, width, tier, selected));
+        lines.extend(row_lines(
+            theme,
+            row,
+            width,
+            tier,
+            selected,
+            animation_phase,
+        ));
     }
     if group.hidden_count > 0 {
         lines.push(Line::styled(
@@ -191,25 +206,29 @@ fn row_lines(
     width: usize,
     tier: Tier,
     selected: bool,
+    animation_phase: u64,
 ) -> Vec<Line<'static>> {
-    let mut lines = vec![selected_line(row_line(theme, row, width), selected)];
+    let cw = content_width(width);
+    // Selecting a row never reshapes it: line 1 and the capability/meter line
+    // render the same whether selected or not. Selection only *adds* lines for
+    // data not already on screen — for now just the token total — so a calm row
+    // stays exactly as tall as its unselected self.
+    let mut inner = vec![row_line(theme, row, cw, animation_phase)];
     if row.row_kind == SidebarRowKind::Agent {
-        if let Some(line) = capability_line(theme, row, tier, width, selected) {
-            lines.push(selected_line(line, selected));
+        if let Some(line) = capability_line(theme, row, tier, cw) {
+            inner.push(line);
         }
-        if selected {
-            if let Some(line) = selected_meter_line(theme, row, width) {
-                lines.push(selected_line(line, selected));
-            }
-            if let Some(line) = selected_diff_line(theme, row, width) {
-                lines.push(selected_line(line, selected));
-            }
+        if selected && let Some(line) = tokens_line(theme, row, cw) {
+            inner.push(line);
         }
     }
-    lines
+    inner
+        .into_iter()
+        .map(|line| with_gutter(theme, line, selected))
+        .collect()
 }
 
-fn row_line(theme: &Theme, row: &SidebarRow, width: usize) -> Line<'static> {
+fn row_line(theme: &Theme, row: &SidebarRow, width: usize, animation_phase: u64) -> Line<'static> {
     if row.row_kind == SidebarRowKind::Process {
         return process_row_line(theme, row, width);
     }
@@ -229,30 +248,41 @@ fn row_line(theme: &Theme, row: &SidebarRow, width: usize) -> Line<'static> {
             &row.name,
             &format!("{resolver_name} {remaining}"),
             row.last_activity,
-            row,
             width,
         );
     }
 
+    let status = row.status.unwrap_or(AgentStatus::Idle);
+    // A running agent's head is the only animated cell — it rotates while the
+    // agent is fresh and freezes when it goes quiet, so motion never implies a
+    // wedged agent is working.
+    let glyph = if status == AgentStatus::Running {
+        running_glyph(animation_phase, is_fresh(row.last_activity))
+    } else {
+        status_glyph(status)
+    };
     composed_row(
         theme,
-        Span::styled(
-            status_glyph(row.status.unwrap_or(AgentStatus::Idle)),
-            status_style(theme, row.status.unwrap_or(AgentStatus::Idle)),
-        ),
+        Span::styled(glyph, status_style(theme, status)),
         &row.name,
         row.task.as_deref().unwrap_or("—"),
         row.last_activity,
-        row,
         width,
     )
 }
 
-fn selected_line(line: Line<'static>, selected: bool) -> Line<'static> {
+/// Prefix a row line with the one-cell selection gutter: an accent `▎` on the
+/// selected row, a blank cell otherwise. Applied to every line of a row so the
+/// bar spans the whole (possibly multi-line) card.
+fn with_gutter(theme: &Theme, line: Line<'static>, selected: bool) -> Line<'static> {
+    let mut spans = Vec::with_capacity(line.spans.len() + 1);
     if selected {
-        return line.patch_style(Style::default().add_modifier(Modifier::REVERSED));
+        spans.push(Span::styled(SELECTION_BAR, theme.selection()));
+    } else {
+        spans.push(Span::raw(" "));
     }
-    line
+    spans.extend(line.spans);
+    Line::from(spans)
 }
 
 fn process_row_line(theme: &Theme, row: &SidebarRow, width: usize) -> Line<'static> {
@@ -271,31 +301,21 @@ fn composed_row(
     name: &str,
     task: &str,
     last_activity: jiff::Timestamp,
-    row: &SidebarRow,
     width: usize,
 ) -> Line<'static> {
     let age = age_short(last_activity);
-    let pulse = (row.row_kind == SidebarRowKind::Agent
-        && matches!(
-            row.status,
-            Some(AgentStatus::Running | AgentStatus::Waiting)
-        ))
-    .then(|| pulse_glyph(row.last_event_pulse));
     let lead_width = 2;
     let name_width = 7;
     let age_width = age.chars().count();
-    let pulse_width = pulse.map(|_| 2).unwrap_or(0);
-    let fixed = lead_width + name_width + 2 + age_width + pulse_width;
+    let fixed = lead_width + name_width + 2 + age_width;
     let task_width = width.saturating_sub(fixed).max(1);
     let name = format!("{:<name_width$}", clip(name, name_width));
     let task = clip(task, task_width);
     let padding = width
-        .saturating_sub(
-            lead_width + name.chars().count() + 1 + task.chars().count() + age_width + pulse_width,
-        )
+        .saturating_sub(lead_width + name.chars().count() + 1 + task.chars().count() + age_width)
         .max(1);
 
-    let mut spans = vec![
+    Line::from(vec![
         lead,
         Span::raw(" "),
         Span::raw(name),
@@ -303,15 +323,7 @@ fn composed_row(
         Span::raw(task),
         Span::raw(" ".repeat(padding)),
         Span::styled(age, theme.dim()),
-    ];
-    if let Some(glyph) = pulse {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            glyph,
-            theme.style(Color::Cyan, Modifier::empty()),
-        ));
-    }
-    Line::from(spans)
+    ])
 }
 
 fn capability_line(
@@ -319,7 +331,6 @@ fn capability_line(
     row: &SidebarRow,
     tier: Tier,
     width: usize,
-    selected: bool,
 ) -> Option<Line<'static>> {
     let mut tokens: Vec<CapabilityToken> = Vec::new();
     if let Some(model) = row.model.as_deref().filter(|model| !model.is_empty()) {
@@ -335,12 +346,8 @@ fn capability_line(
             .expect("posture is Some when its label is Some");
         tokens.push(CapabilityToken::Posture(posture, posture_label.to_owned()));
     }
-    // The selected card renders the labeled `ctx …` meter on its own line, so
-    // the ambient inline gauge and todo dots are suppressed here to avoid
-    // showing the same reading twice.
-    let has_inline_gauge =
-        !selected && matches!(tier, Tier::L1 | Tier::L2) && row.context_pct.is_some();
-    let has_inline_todo = !selected && tier == Tier::L2 && row.todo_total.unwrap_or(0) > 0;
+    let has_inline_gauge = row.context_pct.is_some();
+    let has_inline_todo = tier == Tier::L2 && row.todo_total.unwrap_or(0) > 0;
     if tokens.is_empty() && !has_inline_gauge && !has_inline_todo {
         return None;
     }
@@ -379,37 +386,11 @@ fn capability_line(
     Some(Line::from(trim_spans_to_width(spans, width)))
 }
 
-fn selected_meter_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
-    let has_ctx = row.context_pct.is_some();
-    let has_todo = row.todo_total.unwrap_or(0) > 0;
-    if !has_ctx && !has_todo {
-        return None;
-    }
-    // Same gauge length as the ambient inline bar — the selected card just
-    // adds the `ctx` label so the meter and its number read together.
-    let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
-    if has_ctx {
-        spans.push(Span::styled("ctx ", theme.dim()));
-        spans.extend(gauge_spans(
-            theme,
-            row.context_pct.unwrap_or(0),
-            GAUGE_WIDTH,
-        ));
-    }
-    if has_ctx && has_todo {
-        spans.push(Span::raw("  "));
-    }
-    if has_todo {
-        let (done, total) = (row.todo_done.unwrap_or(0), row.todo_total.unwrap_or(0));
-        spans.extend(todo_spans(theme, done, total));
-    }
-    Some(Line::from(trim_spans_to_width(spans, width)))
-}
-
-fn selected_diff_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
+/// The one line selection adds today: the token total, which never appears on
+/// the ambient capability line. As richer per-agent detail lands it joins here.
+fn tokens_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     let total = row.total_tokens?;
-    let mut spans = vec![Span::raw("  ")];
-    spans.push(tokens_label(theme, total));
+    let spans = vec![Span::raw("  "), tokens_label(theme, total)];
     Some(Line::from(trim_spans_to_width(spans, width)))
 }
 

@@ -36,6 +36,10 @@ use self::theme::Theme;
 pub struct UiState {
     pub selected_index: usize,
     pub help_visible: bool,
+    /// Wall-clock animation frame counter, advanced by the serve loop's
+    /// animation tick. The renderer derives the running-agent spin frame from
+    /// it; freshness gating (per row) keeps a quiet agent frozen.
+    pub animation_phase: u64,
 }
 
 /// A sticky health alert pinned to the bottom of the sidebar.
@@ -69,6 +73,22 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Al
     draw_with_ui(frame, snapshot, alert, &UiState::default());
 }
 
+/// Whether any visible row is a running agent that acted recently enough to
+/// keep its head spinning. The serve loop uses this to switch to the fast
+/// animation tick only while there is live motion to paint — a calm sidebar
+/// keeps idling on the slow data tick.
+pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .any(|row| {
+            row.row_kind == SidebarRowKind::Agent
+                && row.status == Some(rimz::feed::AgentStatus::Running)
+                && self::fmt::is_fresh(row.last_activity)
+        })
+}
+
 pub fn draw_with_ui(
     frame: &mut Frame<'_>,
     snapshot: &SidebarSnapshot,
@@ -80,7 +100,7 @@ pub fn draw_with_ui(
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(Color::Indexed(244)));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -195,6 +215,7 @@ fn snapshot_lines(
                 width,
                 &mut row_index,
                 ui.selected_index,
+                ui.animation_phase,
             ));
         }
         if !active && should_show_first_run_hint(snapshot) {
@@ -272,7 +293,7 @@ fn footer_lines(snapshot: &SidebarSnapshot) -> Vec<Line<'static>> {
         .filter(|row| row.pane.is_some())
         .count();
     let dim = Style::default()
-        .fg(Color::DarkGray)
+        .fg(Color::Indexed(244))
         .add_modifier(Modifier::DIM);
     if attention.len() == 1 {
         return vec![
@@ -291,13 +312,13 @@ fn footer_lines(snapshot: &SidebarSnapshot) -> Vec<Line<'static>> {
 
 fn help_lines() -> Vec<Line<'static>> {
     let dim = Style::default()
-        .fg(Color::DarkGray)
+        .fg(Color::Indexed(244))
         .add_modifier(Modifier::DIM);
     vec![
         Line::styled("keys & legend", dim),
         Line::styled("↑/↓ select   1-9 jump   ↵ jump", dim),
         Line::styled("␣ next ◆/✗   x dismiss   ? close", dim),
-        Line::styled("◆ waiting   ✗ failed   ▸ running", dim),
+        Line::styled("◆ waiting   ✗ failed   ◐ running", dim),
         Line::styled("○ idle      · process", dim),
     ]
 }
@@ -410,7 +431,6 @@ mod tests {
             total_tokens: None,
             todo_done: None,
             todo_total: None,
-            last_event_pulse: 0,
             last_seen: now,
             last_activity: now,
         }
@@ -510,7 +530,6 @@ mod tests {
         claude.total_tokens = Some(12_400);
         claude.todo_done = Some(3);
         claude.todo_total = Some(5);
-        claude.last_event_pulse = 3;
         let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
         snapshot.worktree_groups[0].diff_added = Some(127);
         snapshot.worktree_groups[0].diff_removed = Some(43);
@@ -521,6 +540,7 @@ mod tests {
             &UiState {
                 selected_index: 0,
                 help_visible: false,
+                animation_phase: 0,
             },
             54,
             14,
@@ -529,7 +549,6 @@ mod tests {
         assert!(rendered.contains("+127 -43"));
         assert!(rendered.contains("Opus"));
         assert!(rendered.contains("auto"));
-        assert!(rendered.contains("ctx"));
         assert!(rendered.contains("38%"));
         assert!(rendered.contains("●●●○○ 3/5"));
         assert!(rendered.contains("12.4k tok"));
@@ -671,6 +690,7 @@ mod tests {
             &UiState {
                 selected_index: 0,
                 help_visible: true,
+                animation_phase: 0,
             },
             80,
             18,
@@ -750,7 +770,7 @@ mod tests {
         let rendered = snapshot_to_screen(&snapshot, 24, 8);
 
         assert!(
-            rendered.contains("▸ codex"),
+            rendered.contains("◐ codex"),
             "L0 keeps status glyph + name:\n{rendered}"
         );
         assert!(
@@ -764,12 +784,19 @@ mod tests {
         assert_snapshot("l0_density_minimal_row", rendered);
     }
 
-    /// Honesty test: the pulse glyph is a pure function of the agent's
-    /// observed event count. Re-rendering at any wall-clock time without a
-    /// new lifecycle event must produce the same pulse frame — a silent
-    /// agent freezes instead of pretending work continues.
+    fn ui_at_phase(phase: u64) -> UiState {
+        UiState {
+            selected_index: 0,
+            help_visible: false,
+            animation_phase: phase,
+        }
+    }
+
+    /// Honesty test: a stale running agent (no recent activity) must freeze —
+    /// advancing the animation phase must not change its head, so motion never
+    /// pretends a wedged agent is working.
     #[test]
-    fn render_event_pulse_freezes_between_renders_without_events() {
+    fn render_running_head_freezes_when_agent_is_stale() {
         let mut claude = agent(
             "claude-1",
             "claude",
@@ -779,16 +806,34 @@ mod tests {
             Some("main"),
             Some("waiting on tools"),
         );
-        claude.last_event_pulse = 4;
+        claude.last_activity = fixed_now() - Duration::from_secs(30);
         let snapshot = snapshot_with(Vec::new(), vec![claude]);
-        let first = snapshot_to_screen(&snapshot, 40, 8);
-        // Sleep so any timer-driven animation would tick.
-        std::thread::sleep(Duration::from_millis(50));
-        let second = snapshot_to_screen(&snapshot, 40, 8);
+        let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 8);
+        let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 40, 8);
 
-        assert_eq!(
+        assert_eq!(first, second, "a stale agent's head must not spin");
+    }
+
+    /// A fresh running agent animates: advancing the phase advances the head.
+    #[test]
+    fn render_running_head_spins_when_agent_is_fresh() {
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            Some("/repo/main"),
+            Some("main"),
+            Some("compiling"),
+        );
+        claude.last_activity = fixed_now();
+        let snapshot = snapshot_with(Vec::new(), vec![claude]);
+        let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 8);
+        let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 40, 8);
+
+        assert_ne!(
             first, second,
-            "no new lifecycle event must mean no frame change",
+            "a fresh agent's head must advance with the phase"
         );
     }
 }

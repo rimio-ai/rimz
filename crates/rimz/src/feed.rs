@@ -547,7 +547,8 @@ pub struct AgentState {
     /// Context-window utilization in percent (0..=100). Reported by the
     /// agent's hooks when available; `None` while the agent hasn't surfaced
     /// it. Display-only — never drives a decision (the no-transcript-correctness
-    /// rule), so a missing value reads as "no gauge", not "0%".
+    /// rule). Sidebar row projection renders that unknown state as the visible
+    /// 0% baseline, but the reduced agent state keeps the distinction.
     #[serde(default)]
     pub context_pct: Option<u8>,
     /// Cumulative token usage for this agent session. Same enrich-only
@@ -561,12 +562,6 @@ pub struct AgentState {
     pub todo_done: Option<u32>,
     #[serde(default)]
     pub todo_total: Option<u32>,
-    /// Monotonic counter of observed lifecycle events for this agent. The
-    /// sidebar's event-pulse glyph is `pulse_glyph(last_event_pulse)`; advances
-    /// only when the reducer observes a new event, so a wedged agent's pulse
-    /// freezes (honest) while a busy one shimmers.
-    #[serde(default)]
-    pub last_event_pulse: u64,
     pub last_seen: Timestamp,
     pub last_activity: Timestamp,
 }

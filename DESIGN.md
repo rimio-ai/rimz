@@ -50,7 +50,7 @@ Agent statuses (exactly five), highest attention first. Each maps to one glyph a
 |------|-----------|-------|-------------|
 | 1    | `waiting` | `◆`   | yellow bold |
 | 2    | `failed`  | `✗`   | red bold    |
-| 3    | `running` | `▸`   | green       |
+| 3    | `running` | `◐`   | green       |
 | 4    | `idle`    | `○`   | gray / dim  |
 | 5    | `success` | `✓`   | green dim   |
 
@@ -60,7 +60,7 @@ Agent permission postures (observed from the agent, not set by Rimz) render as c
 default   auto   yolo   unknown
 ```
 
-Live enrichments use one grammar. Context-window %, todo progress, and worktree diff stats render as segmented meters or paired numeric tokens; they enrich display only and never drive a decision. A running or waiting agent may show one event-pulsed activity glyph on line 1; it advances only when a lifecycle event is observed, so silence freezes instead of pretending work continues. Color is a garnish layer over the same glyph grammar, and `NO_COLOR` keeps every shape readable.
+Live enrichments use one grammar. Context-window % renders as a smooth `Gauge`-style fill bar, todo progress as dots, and worktree diff stats as paired numeric tokens; they enrich display only and never drive a decision. A running agent's leading head animates (`◐ ◓ ◑ ◒`) while the agent is *fresh* and freezes once it goes quiet, so silence stops the motion instead of pretending work continues. Color is a garnish layer over the same glyph grammar, and `NO_COLOR` keeps every shape readable.
 
 Renderer details — the two-line row anatomy, attention ranking, and the jump interaction — live in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
 

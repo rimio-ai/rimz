@@ -8,12 +8,12 @@ Rimz pins every repo to one durable room — a Zellij or tmux session with a sid
 ┌ query-engine ──────────────┐
 │ ◆2  ✗1                     │
 │                            │
-│ ▌main             2▸ 1◆    │
+│ ▌main             2◐ 1◆    │
 │ ◆ claude  fix auth flow 12m│
-│   Opus · xhigh ▰▰▱▱▱ 38%   │
-│ ▸ claude  add tests     8s │
+│   Opus · xhigh █▉░░░ 38%   │
+│ ◐ claude  add tests     8s │
 │   Sonnet · high            │
-│ ▸ codex   refactor api 30s │
+│ ◐ codex   refactor api 30s │
 │   GPT-5.5 · high           │
 │                            │
 │ ▌feature-migration 1✗ 1○   │

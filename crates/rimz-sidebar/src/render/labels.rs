@@ -15,10 +15,28 @@ pub(super) fn status_glyph(status: AgentStatus) -> &'static str {
     match status {
         AgentStatus::Waiting => "◆",
         AgentStatus::Failed => "✗",
-        AgentStatus::Running => "▸",
+        // A running agent's head is the only animated cell; see `running_glyph`.
+        // The static fallback is the first spin frame, so a frozen running row
+        // still reads distinctly from idle `○` and from todo `●`.
+        AgentStatus::Running => RUNNING_FRAMES[0],
         AgentStatus::Idle => "○",
         AgentStatus::Success => "✓",
     }
+}
+
+/// Leading glyph for a running agent's row. The head rotates `◐ ◓ ◑ ◒` so the
+/// eye lands on motion, but only while the agent is *fresh* — `fresh` is gated
+/// on the agent's last activity (see [`super::sections`]). A stale (wedged or
+/// quiet) agent freezes on the first frame, so motion never lies about a hung
+/// agent. The rotating set is chosen over a filling circle so no spin frame
+/// ever collides with idle `○` or a todo `●`.
+const RUNNING_FRAMES: [&str; 4] = ["◐", "◓", "◑", "◒"];
+
+pub(super) fn running_glyph(animation_phase: u64, fresh: bool) -> &'static str {
+    if !fresh {
+        return RUNNING_FRAMES[0];
+    }
+    RUNNING_FRAMES[(animation_phase as usize) % RUNNING_FRAMES.len()]
 }
 
 pub(super) fn status_style(theme: &Theme, status: AgentStatus) -> Style {
@@ -51,38 +69,38 @@ pub(super) fn posture_style(theme: &Theme, posture: PermissionPosture) -> Style 
     }
 }
 
-/// Eight Braille frames — same shape vocabulary every TUI uses for "working".
-/// The renderer indexes by the agent's event-pulse counter, so the frame only
-/// advances when the agent emits a new lifecycle event. A wedged agent's pulse
-/// freezes; a busy one shimmers. One motion, one meaning.
-const PULSE_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+/// Fractional cell glyphs (1/8 steps) for the gauge's leading edge, the same
+/// trick ratatui's native `Gauge` uses for sub-cell resolution. Index `0` is an
+/// empty edge (no partial); `1..=7` are the eighth blocks.
+const EIGHTHS: [char; 8] = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
 
-/// Pulse glyph for an agent's current event-pulse counter. `0` renders as
-/// the first frame, which doubles as the "no activity yet" frame — the agent
-/// has been observed but has not emitted any events that bump the counter.
-pub(super) fn pulse_glyph(pulse: u64) -> &'static str {
-    PULSE_FRAMES[(pulse as usize) % PULSE_FRAMES.len()]
-}
-
-/// Segmented-block gauge: a fixed-width bar with the same shape vocabulary
-/// every meter shares. The ramp green → amber → red lights up by the value
-/// alone (low fill = green, mid = amber, high = red), so the gauge reads under
-/// `NO_COLOR` from the count of `▰` cells too. The label `38%` is appended in
-/// dim chrome.
+/// Smooth fixed-width gauge, modeled on ratatui's `Gauge`: solid `█` cells plus
+/// a fractional eighth-block at the fill edge, over a dim `░` track, with the
+/// `38%` label in dim chrome. The ramp green → amber → red lights up by the
+/// value alone, so the gauge still reads under `NO_COLOR` from the `█`/`░`
+/// count — the shape carries the meter without the color.
 pub(super) fn gauge_spans(theme: &Theme, percent: u8, width: usize) -> Vec<Span<'static>> {
     let percent = percent.min(100);
     let width = width.max(1);
-    let filled = ((percent as usize) * width + 50) / 100;
-    let bar: String = std::iter::repeat_n('▰', filled)
-        .chain(std::iter::repeat_n('▱', width.saturating_sub(filled)))
-        .collect();
+    // Total fill in eighths-of-a-cell, rounded to the nearest eighth.
+    let eighths = ((percent as usize) * width * 8 + 4) / 100;
+    let full = (eighths / 8).min(width);
+    let partial = eighths % 8;
+    let mut fill: String = std::iter::repeat_n('█', full).collect();
+    let mut used = full;
+    if used < width && partial > 0 {
+        fill.push(EIGHTHS[partial]);
+        used += 1;
+    }
+    let track: String = std::iter::repeat_n('░', width - used).collect();
     let color = match percent {
         0..=40 => Color::Green,
         41..=75 => Color::Yellow,
         _ => Color::Red,
     };
     vec![
-        Span::styled(bar, theme.style(color, Modifier::empty())),
+        Span::styled(fill, theme.style(color, Modifier::empty())),
+        Span::styled(track, theme.dim()),
         Span::styled(format!(" {percent}%"), theme.dim()),
     ]
 }
@@ -146,7 +164,7 @@ pub(super) fn diff_spans(theme: &Theme, added: u32, removed: u32) -> Vec<Span<'s
 mod tests {
     use super::*;
 
-    /// `NO_COLOR` strips the green→amber→red ramp but the `▰`/`▱` count
+    /// `NO_COLOR` strips the green→amber→red ramp but the `█`/`░` count
     /// and the numeric label still spell the meter — the shape carries the
     /// reading by itself.
     #[test]
@@ -154,7 +172,7 @@ mod tests {
         let theme = Theme::fixed(true);
         let spans = gauge_spans(&theme, 60, 5);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, "▰▰▰▱▱ 60%");
+        assert_eq!(text, "███░░ 60%");
         for span in &spans {
             assert!(
                 span.style.fg.is_none(),
@@ -163,7 +181,18 @@ mod tests {
         }
     }
 
-    /// Even at 0% the bar still paints the empty cells, so a "no progress"
+    /// The fractional eighth-block resolves sub-cell fill the way ratatui's
+    /// native `Gauge` does: 38% of ten cells is 3.8, so three full `█`, a
+    /// partial edge, then a dim `░` track.
+    #[test]
+    fn gauge_renders_a_fractional_edge_cell() {
+        let theme = Theme::fixed(true);
+        let spans = gauge_spans(&theme, 38, 10);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "███▊░░░░░░ 38%");
+    }
+
+    /// Even at 0% the bar still paints the empty track, so a "no progress"
     /// reading is visibly the same shape as a started one rather than a
     /// blank.
     #[test]
@@ -171,7 +200,7 @@ mod tests {
         let theme = Theme::fixed(true);
         let spans = gauge_spans(&theme, 0, 5);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, "▱▱▱▱▱ 0%");
+        assert_eq!(text, "░░░░░ 0%");
     }
 
     /// Todo dots use the same fill/empty grammar as the gauge — the dot
@@ -200,17 +229,27 @@ mod tests {
         }
     }
 
-    /// The pulse glyph is a pure function of the agent's lifecycle-event
-    /// counter — no clock input, so a wedged agent's frame is fixed until
-    /// the next event lands. Indexing wraps after eight frames so the
-    /// counter can grow without bound.
+    /// A fresh running agent's head advances with the animation phase and
+    /// wraps after four frames so the phase can grow without bound.
     #[test]
-    fn pulse_glyph_is_pure_function_of_event_count() {
-        for (count, expected) in PULSE_FRAMES.iter().enumerate() {
-            assert_eq!(pulse_glyph(count as u64), *expected);
+    fn running_glyph_spins_while_fresh() {
+        for (phase, expected) in RUNNING_FRAMES.iter().enumerate() {
+            assert_eq!(running_glyph(phase as u64, true), *expected);
         }
-        // Wraps after eight frames; the counter can grow without overflow.
-        assert_eq!(pulse_glyph(8), PULSE_FRAMES[0]);
-        assert_eq!(pulse_glyph(u64::MAX), PULSE_FRAMES[(u64::MAX % 8) as usize]);
+        assert_eq!(running_glyph(4, true), RUNNING_FRAMES[0]);
+        assert_eq!(
+            running_glyph(u64::MAX, true),
+            RUNNING_FRAMES[(u64::MAX % 4) as usize]
+        );
+    }
+
+    /// Honesty: a stale (wedged or quiet) agent freezes on the first frame no
+    /// matter how the animation phase advances, so motion never pretends a
+    /// hung agent is working.
+    #[test]
+    fn running_glyph_freezes_when_stale() {
+        for phase in 0..8 {
+            assert_eq!(running_glyph(phase, false), RUNNING_FRAMES[0]);
+        }
     }
 }

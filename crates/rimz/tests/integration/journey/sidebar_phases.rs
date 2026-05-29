@@ -133,7 +133,7 @@ fn phase1_launch_registers_idle_no_prompt() {
 }
 
 /// Phase 2 — prompted and working. `UserPromptSubmit` moves the agent to
-/// `▸ running` with the prompt as its task.
+/// `◐ running` with the prompt as its task.
 #[test]
 fn phase2_prompt_moves_to_running_with_task() {
     let env = Env::new();
@@ -147,7 +147,7 @@ fn phase2_prompt_moves_to_running_with_task() {
 
     let screen = room.wait_for(|s| s.contains("fix auth flow"), SETTLE);
     assert!(
-        screen.contains("▸ codex"),
+        running_row(&screen, "codex"),
         "a prompted agent is running:\n{screen}"
     );
     assert!(
@@ -622,25 +622,35 @@ fn target_agent_exit_reverts_to_shell_or_vanishes() {
     );
 }
 
+/// A running agent's head animates `◐ ◓ ◑ ◒`, so a live capture may show any
+/// frame — match on `<frame> <name>` across the whole cycle plus the frozen
+/// first frame.
+fn running_row(screen: &str, name: &str) -> bool {
+    ['◐', '◓', '◑', '◒']
+        .iter()
+        .any(|frame| screen.contains(&format!("{frame} {name}")))
+}
+
 fn contains_claude_row(screen: &str) -> bool {
-    ["○ claude", "▸ claude", "◆ claude", "✗ claude"]
+    ["○ claude", "◆ claude", "✗ claude"]
         .iter()
         .any(|needle| screen.contains(needle))
+        || running_row(screen, "claude")
 }
 
 fn contains_agent_row(screen: &str) -> bool {
     [
         "○ claude",
-        "▸ claude",
         "◆ claude",
         "✗ claude",
         "○ codex",
-        "▸ codex",
         "◆ codex",
         "✗ codex",
     ]
     .iter()
     .any(|needle| screen.contains(needle))
+        || running_row(screen, "claude")
+        || running_row(screen, "codex")
 }
 
 #[test]

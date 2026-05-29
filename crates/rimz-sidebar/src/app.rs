@@ -4,7 +4,7 @@ use std::io;
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
 use ratatui::Terminal;
@@ -73,7 +73,6 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         path: runtime.sidebar_heartbeat_path(&config.instance_id),
     };
     let tick = tick_for(config.tick_seconds);
-    socket.set_read_timeout(Some(tick))?;
 
     // Redraw the instant the pane is resized — most importantly when a user
     // attaches to a background session and Zellij sizes the pane for the first
@@ -100,6 +99,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             Some(&config.session_name),
             own_pane_id(config.mux),
         );
+        let fetched_at = Instant::now();
 
         let state = compute_next_state(
             &config.workspace_id,
@@ -119,16 +119,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         {
             warn!(reason = %alert.reason, "sidebar refresh degraded");
         }
-        let own_view = own_view_state(&config);
         clamp_selection(&mut ui, &state.snapshot);
-        sync_selection_to_focused_pane(
-            &mut ui,
-            &state.snapshot,
-            own_view
-                .as_ref()
-                .filter(|state| !state.own_is_focused)
-                .and_then(|state| state.focused_pane_id.as_ref()),
-        );
         last_snapshot = state.last_snapshot;
         health = state.health;
         render::draw_to_terminal_with_ui(
@@ -138,6 +129,15 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             &ui,
         )?;
 
+        let own_view = own_view_state(&config);
+        sync_selection_to_focused_pane(
+            &mut ui,
+            &state.snapshot,
+            own_view
+                .as_ref()
+                .filter(|state| !state.own_is_focused)
+                .and_then(|state| state.focused_pane_id.as_ref()),
+        );
         if self_close_decision(
             &mut self_close,
             own_view.as_ref().map(|state| state.sibling_count),
@@ -148,21 +148,49 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             );
             break;
         }
-        let wakeup = wait_for_wakeup(&socket)?;
-        let outcome = handle_wakeup(wakeup, &mut ui, &state.snapshot);
-        if outcome.dismiss {
-            health.alert = None;
-        }
-        if outcome.redraw {
-            render::draw_to_terminal_with_ui(
-                &mut terminal,
-                &state.snapshot,
-                health.alert.as_ref(),
-                &ui,
-            )?;
-        }
-        if let Some(index) = outcome.focus_index {
-            focus_selected_row(&state.snapshot, index, &config);
+        // Wait for the next wakeup. While a running agent is animating, fall
+        // into a fast animation tick that only advances the spin frame and
+        // repaints the *current* snapshot — no `rimz` subprocess per frame. We
+        // leave this inner loop (to re-fetch) on any real wakeup or once the
+        // data tick is due.
+        loop {
+            let animating = render::has_live_animation(&state.snapshot);
+            let timeout = if animating {
+                ANIMATION_FRAME.min(tick)
+            } else {
+                tick
+            };
+            socket.set_read_timeout(Some(timeout))?;
+            match wait_for_wakeup(&socket)? {
+                Wakeup::Tick if animating && fetched_at.elapsed() < tick => {
+                    ui.animation_phase = ui.animation_phase.wrapping_add(1);
+                    render::draw_to_terminal_with_ui(
+                        &mut terminal,
+                        &state.snapshot,
+                        health.alert.as_ref(),
+                        &ui,
+                    )?;
+                }
+                Wakeup::Tick => break,
+                wakeup => {
+                    let outcome = handle_wakeup(wakeup, &mut ui, &state.snapshot);
+                    if outcome.dismiss {
+                        health.alert = None;
+                    }
+                    if outcome.redraw {
+                        render::draw_to_terminal_with_ui(
+                            &mut terminal,
+                            &state.snapshot,
+                            health.alert.as_ref(),
+                            &ui,
+                        )?;
+                    }
+                    if let Some(index) = outcome.focus_index {
+                        focus_selected_row(&state.snapshot, index, &config);
+                    }
+                    break;
+                }
+            }
         }
     }
     Ok(())
@@ -377,6 +405,11 @@ fn next_health(previous: &Health, failure: Option<String>) -> Health {
         }
     }
 }
+
+/// Animation tick: how often a running agent's head advances a spin frame.
+/// Clamped against the data tick so a slow `tick_seconds` never stutters, and
+/// only used while [`render::has_live_animation`] reports something to move.
+const ANIMATION_FRAME: Duration = Duration::from_millis(120);
 
 fn tick_for(seconds: u64) -> Duration {
     Duration::from_secs(seconds.max(1))
@@ -764,9 +797,8 @@ fn row_extra_line_count(row: &rimz::SidebarRow, selected: bool) -> usize {
     if row_has_capability_line(row) {
         lines += 1;
     }
-    if selected && (row.context_pct.is_some() || row.todo_total.unwrap_or(0) > 0) {
-        lines += 1;
-    }
+    // Selection adds only the token-total line; the gauge stays inline on the
+    // capability line whether selected or not (see `render::sections`).
     if selected && row.total_tokens.is_some() {
         lines += 1;
     }
@@ -933,7 +965,6 @@ mod tests {
                     total_tokens: None,
                     todo_done: None,
                     todo_total: None,
-                    last_event_pulse: 0,
                     worktree_path: Some("/repo/main".to_owned()),
                     worktree_branch: Some("main".to_owned()),
                     last_activity: Timestamp::now(),
@@ -966,7 +997,6 @@ mod tests {
             total_tokens: None,
             todo_done: None,
             todo_total: None,
-            last_event_pulse: 0,
             worktree_path: Some("/repo/main".to_owned()),
             worktree_branch: Some("main".to_owned()),
             last_activity: Timestamp::now(),
@@ -1227,6 +1257,7 @@ mod tests {
         let mut ui = UiState {
             selected_index: 0,
             help_visible: false,
+            animation_phase: 0,
         };
 
         sync_selection_to_focused_pane(&mut ui, &snapshot, Some(&focused));
@@ -1247,6 +1278,7 @@ mod tests {
         let mut ui = UiState {
             selected_index: 1,
             help_visible: false,
+            animation_phase: 0,
         };
 
         sync_selection_to_focused_pane(&mut ui, &snapshot, None);
@@ -1305,6 +1337,7 @@ mod tests {
         let mut ui = UiState {
             selected_index: 0,
             help_visible: false,
+            animation_phase: 0,
         };
 
         let outcome = handle_mouse_click(1, 3, &mut ui, &snapshot);
@@ -1326,6 +1359,7 @@ mod tests {
         let mut ui = UiState {
             selected_index: 0,
             help_visible: false,
+            animation_phase: 0,
         };
 
         let outcome = handle_key(KeyAction::Down, &mut ui, &snapshot);
@@ -1362,6 +1396,7 @@ mod tests {
         let mut ui = UiState {
             selected_index: 1,
             help_visible: false,
+            animation_phase: 0,
         };
 
         let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);

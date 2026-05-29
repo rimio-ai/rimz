@@ -138,8 +138,9 @@ pub struct SidebarRow {
     pub task: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
-    /// Context-window % gauge value (0..=100). Mirrors `AgentState.context_pct`
-    /// onto the row so renderers stay pure JSON consumers.
+    /// Context-window % gauge value (0..=100). Agent rows default this to
+    /// `Some(0)` so renderers always draw the started-session gauge; transcript
+    /// usage only upgrades the meter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_pct: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -148,9 +149,6 @@ pub struct SidebarRow {
     pub todo_done: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub todo_total: Option<u32>,
-    /// Event-pulse counter — see `AgentState.last_event_pulse`.
-    #[serde(default)]
-    pub last_event_pulse: u64,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
     pub last_activity: Timestamp,
@@ -537,11 +535,10 @@ fn row_from_agent(agent: &AgentState) -> SidebarRow {
         task: agent.task.clone(),
         model: agent.model.clone(),
         effort: agent.effort.clone(),
-        context_pct: agent.context_pct,
+        context_pct: Some(agent.context_pct.unwrap_or(0)),
         total_tokens: agent.total_tokens,
         todo_done: agent.todo_done,
         todo_total: agent.todo_total,
-        last_event_pulse: agent.last_event_pulse,
         worktree_path: agent.worktree_path.clone(),
         worktree_branch: agent.worktree_branch.clone(),
         last_activity: agent.last_activity,
@@ -573,7 +570,6 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
         total_tokens: None,
         todo_done: None,
         todo_total: None,
-        last_event_pulse: 0,
         worktree_path: pane.cwd.clone(),
         worktree_branch: None,
         last_activity: pane.pane_process_start.unwrap_or_else(Timestamp::now),
@@ -646,11 +642,14 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         task,
         model: matched.and_then(|agent| agent.model.clone()),
         effort: matched.and_then(|agent| agent.effort.clone()),
-        context_pct: matched.and_then(|agent| agent.context_pct),
+        context_pct: if is_agent {
+            Some(matched.and_then(|agent| agent.context_pct).unwrap_or(0))
+        } else {
+            None
+        },
         total_tokens: matched.and_then(|agent| agent.total_tokens),
         todo_done: matched.and_then(|agent| agent.todo_done),
         todo_total: matched.and_then(|agent| agent.todo_total),
-        last_event_pulse: matched.map(|agent| agent.last_event_pulse).unwrap_or(0),
         worktree_path: item
             .worktree_path
             .clone()
@@ -1144,9 +1143,7 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
                 .map(ToOwned::to_owned)
         };
         let param_number = |key: &str| event.params.get(key).and_then(|v| v.as_u64());
-        // Enrichment fields carry forward when an event omits them; the
-        // pulse always advances by 1 so a busy agent's spinner shimmers and a
-        // silent one's freezes. Pulse is event-paced — never timer-driven.
+        // Enrichment fields carry forward when an event omits them.
         let context_pct = param_number("context_pct")
             .map(|v| v.min(100) as u8)
             .or_else(|| prior.and_then(|p| p.context_pct));
@@ -1158,10 +1155,6 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
         let todo_total = param_number("todo_total")
             .map(|v| v.min(u32::MAX as u64) as u32)
             .or_else(|| prior.and_then(|p| p.todo_total));
-        let last_event_pulse = prior
-            .map(|p| p.last_event_pulse)
-            .unwrap_or(0)
-            .wrapping_add(1);
         let establishes_identity = matches!(event_name, Some("SessionStart" | "SubagentStart"));
         let event_worktree_path = param_string("worktree_path");
         let event_worktree_branch = param_string("worktree_branch");
@@ -1230,7 +1223,6 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             total_tokens,
             todo_done,
             todo_total,
-            last_event_pulse,
             last_seen: event.timestamp,
             last_activity: event.timestamp,
         };
@@ -1313,7 +1305,6 @@ mod tests {
             total_tokens: None,
             todo_done: None,
             todo_total: None,
-            last_event_pulse: 0,
             last_seen: timestamp,
             last_activity: timestamp,
         }
@@ -1604,7 +1595,7 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_carries_enrichment_forward_and_advances_pulse_per_event() {
+    fn lifecycle_carries_enrichment_forward() {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let lifecycle = |params: serde_json::Value| {
             EventEnvelope::new(
@@ -1640,10 +1631,7 @@ mod tests {
         assert_eq!(agent.total_tokens, Some(12_400));
         assert_eq!(agent.todo_done, Some(3));
         assert_eq!(agent.todo_total, Some(5));
-        assert_eq!(
-            agent.last_event_pulse, 2,
-            "pulse advances only when lifecycle events are reduced"
-        );
+        assert_eq!(agent.task.as_deref(), Some("fix auth flow"));
     }
 
     #[test]
@@ -1678,38 +1666,6 @@ mod tests {
         assert_eq!(agents.len(), 1);
         let bound = agents[0].pane.as_ref().expect("pane carries forward");
         assert_eq!(bound.pane_id.raw(), "%7");
-    }
-
-    /// Honesty contract for the event-pulse animation: the pulse counter is
-    /// a function of *observed* lifecycle events alone — never wall-clock.
-    /// Re-reducing the same event slice must produce the same counter, so a
-    /// silent agent's pulse glyph freezes and a wedged agent never looks busy.
-    #[test]
-    fn event_pulse_freezes_when_no_lifecycle_events_arrive() {
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let start = EventEnvelope::new(
-            workspace,
-            "session",
-            "claude",
-            "agent-hook",
-            "agent.lifecycle",
-            serde_json::json!({
-                "event_name": "SessionStart",
-                "agent_id": "sess-1",
-                "status": "idle",
-            }),
-        );
-
-        let first = reduce_agent_states(std::slice::from_ref(&start));
-        let second = reduce_agent_states(std::slice::from_ref(&start));
-        let third = reduce_agent_states(std::slice::from_ref(&start));
-
-        assert_eq!(first[0].last_event_pulse, 1);
-        assert_eq!(
-            first[0].last_event_pulse, second[0].last_event_pulse,
-            "no new event must not advance the pulse"
-        );
-        assert_eq!(second[0].last_event_pulse, third[0].last_event_pulse);
     }
 
     #[test]
@@ -2164,7 +2120,6 @@ mod tests {
                 i64::from(u32::MAX),
             );
             a.worktree_path = Some("/repo/main".to_owned());
-            a.last_event_pulse = 7;
             a
         };
 
@@ -2183,7 +2138,6 @@ mod tests {
             .collect();
         assert_eq!(agent_rows.len(), 1, "only the live claude renders");
         assert_eq!(agent_rows[0].id, "live");
-        assert_eq!(agent_rows[0].last_event_pulse, 7);
         assert_eq!(
             agent_rows[0].permission_posture,
             Some(PermissionPosture::Auto)
