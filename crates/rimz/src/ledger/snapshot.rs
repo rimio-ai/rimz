@@ -1208,6 +1208,18 @@ fn agent_tombstones_for_events(events: &[EventEnvelope]) -> BTreeSet<(String, St
     tombstones
 }
 
+/// Strip a trailing capability tag (`claude-opus-4-8[1m]` → `claude-opus-4-8`)
+/// so the sidebar shows one stable model id per agent. The tag rides only on a
+/// fresh-launch SessionStart payload — it is absent after `/clear`, the
+/// transcript records the bare id, and no model env var exposes it — so it can
+/// never be shown reliably. Idempotent on an already-bare id.
+fn canonical_model(model: &str) -> String {
+    match model.split_once('[') {
+        Some((base, _)) => base.trim_end().to_owned(),
+        None => model.to_owned(),
+    }
+}
+
 /// Fold `agent.lifecycle` events into the latest [`AgentState`] per
 /// agent_id, keyed by `(agent_kind, agent_id)`. Anonymous lifecycle events
 /// (no agent_id) collapse to a single rollup keyed by `agent_kind`. Events
@@ -1310,7 +1322,15 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
         // Task is activity-bound, not identity: a fresh event replaces it
         // (idle clears it back to "—"); only capability fields persist.
         let task = param_string("task");
-        let model = param_string("model").or_else(|| prior.and_then(|p| p.model.clone()));
+        // Always store the canonical model id. The agent reports a suffixed id
+        // (`claude-opus-4-8[1m]`) only on a fresh-launch SessionStart; every
+        // other event (and the transcript fallback) carries the bare id, so the
+        // `.or(prior)` carry-forward would otherwise flip the label the first
+        // time a suffix-less event arrived. Canonicalizing at reduce time pins
+        // the label and keeps the event log faithful to the raw payload.
+        let model = param_string("model")
+            .map(|raw| canonical_model(&raw))
+            .or_else(|| prior.and_then(|p| p.model.clone()));
         let effort = param_string("effort").or_else(|| prior.and_then(|p| p.effort.clone()));
         // The hook stamps the mux pane id it ran inside on every lifecycle
         // event; carry it forward when an event omits it so a `Stop` doesn't
@@ -1715,6 +1735,54 @@ mod tests {
         assert_eq!(agent.model.as_deref(), Some("GPT-5.5"));
         assert_eq!(agent.effort.as_deref(), Some("high"));
         assert_eq!(agent.worktree_branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn canonical_model_strips_capability_tag() {
+        assert_eq!(canonical_model("claude-opus-4-8[1m]"), "claude-opus-4-8");
+        // Idempotent on a bare id.
+        assert_eq!(canonical_model("claude-opus-4-8"), "claude-opus-4-8");
+        assert_eq!(canonical_model("gpt-5.5"), "gpt-5.5");
+    }
+
+    #[test]
+    fn model_label_holds_canonical_across_suffix_drop() {
+        // The live flip: SessionStart reports the suffixed id, the prompt omits
+        // model entirely, and the first Stop falls back to the transcript's
+        // bare id. Canonicalizing at reduce time keeps the label stable so the
+        // `[1m]` tag never appears and then vanishes.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let lifecycle = |params: serde_json::Value| {
+            EventEnvelope::new(
+                workspace.clone(),
+                "session",
+                "claude",
+                "agent-hook",
+                "agent.lifecycle",
+                params,
+            )
+        };
+        let start = lifecycle(serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "sess-1",
+            "status": "idle",
+            "model": "claude-opus-4-8[1m]",
+        }));
+        let prompt = lifecycle(serde_json::json!({
+            "event_name": "UserPromptSubmit",
+            "agent_id": "sess-1",
+            "status": "running",
+        }));
+        let stop = lifecycle(serde_json::json!({
+            "event_name": "Stop",
+            "agent_id": "sess-1",
+            "status": "success",
+            "model": "claude-opus-4-8",
+        }));
+
+        let agents = reduce_agent_states(&[start, prompt, stop]);
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].model.as_deref(), Some("claude-opus-4-8"));
     }
 
     #[test]

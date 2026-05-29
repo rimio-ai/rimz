@@ -68,7 +68,7 @@ Each field, where it comes from, and its **lifetime** — the rule the reducer f
 | `status`                            | 5-value rollup (below)            | derived from `event_name` (§ state machine)                       | activity      |
 | `permission_posture`                | `default`/`auto`/`yolo`/`unknown` | `SessionStart` · `permission_mode`/`approval_policy`              | carry-forward |
 | `task`                              | what it's working on              | `UserPromptSubmit` · `prompt`; `SubagentStart` · `agent_type`     | activity      |
-| `model`                             | `Opus`, `GPT-5.5`                 | lifecycle · `model`                                               | carry-forward |
+| `model`                             | `Opus`, `GPT-5.5`                 | lifecycle · `model` (canonicalized — § below)                     | carry-forward |
 | `effort`                            | `xhigh`/`high`/…                  | lifecycle · `thinking_level`/`model_reasoning_effort`             | carry-forward |
 | `context_pct`                       | context-window % gauge            | payload or transcript tail (§ enrichment)                         | carry-forward |
 | `total_tokens`                      | cumulative tokens                 | payload or transcript tail                                        | carry-forward |
@@ -81,6 +81,8 @@ Each field, where it comes from, and its **lifetime** — the rule the reducer f
 | `last_seen`                         | carryover-merge tiebreak          | `event.timestamp`                                                 | activity      |
 
 The catalog turns on one distinction: **identity vs. live-derived**. `worktree_*` and `pane` are *live* facts — the pane knows its current cwd every tick — so they are derived at snapshot time, not pinned at session start. Pinning them is the branch-tracking bug (§ Liveness and presence).
+
+The reducer stores `model` **canonicalized** — a trailing capability tag is stripped (`claude-opus-4-8[1m]` → `claude-opus-4-8`). The tag rides only on a fresh-launch `SessionStart` payload: it is absent after `/clear` (a new `agent_id`), the transcript records the bare id, and no model env var exposes it. So a suffix-less follow-up event plus the `model` carry-forward would flip the label `…[1m]` → `…` the first time it arrived. Canonicalizing at reduce time pins one stable id while the event log stays faithful to the raw payload.
 
 ### The state machine
 
