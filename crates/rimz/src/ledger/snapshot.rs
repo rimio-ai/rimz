@@ -304,18 +304,24 @@ impl SidebarSnapshot {
         }
     }
 
-    /// Record the project root and re-fold groups so a cwd outside it lands in
-    /// the `external` catch-all instead of its own pod. Callers set this from
-    /// the workspace record after construction (the reducer can't read it),
-    /// mirroring how `display_name` is filled.
-    pub fn with_project_root(mut self, project_root: Option<PathBuf>) -> Self {
-        self.project_root = project_root;
+    /// Re-fold the worktree groups from the current agents, attention/working
+    /// sets, and project root. Called after any mutation of `self.agents`.
+    fn rebuild_groups(&mut self) {
         self.worktree_groups = build_worktree_groups(
             &self.agents,
             &self.needs_attention,
             &self.resolver_working,
             self.project_root.as_deref(),
         );
+    }
+
+    /// Record the project root and re-fold groups so a cwd outside it lands in
+    /// the `external` catch-all instead of its own pod. Callers set this from
+    /// the workspace record after construction (the reducer can't read it),
+    /// mirroring how `display_name` is filled.
+    pub fn with_project_root(mut self, project_root: Option<PathBuf>) -> Self {
+        self.project_root = project_root;
+        self.rebuild_groups();
         self
     }
 
@@ -357,12 +363,7 @@ impl SidebarSnapshot {
                 .is_none_or(|pid| is_alive(pid, agent.agent_process_start.as_deref()))
         });
         if self.agents.len() != previous_len {
-            self.worktree_groups = build_worktree_groups(
-                &self.agents,
-                &self.needs_attention,
-                &self.resolver_working,
-                self.project_root.as_deref(),
-            );
+            self.rebuild_groups();
         }
     }
 
@@ -404,12 +405,7 @@ impl SidebarSnapshot {
             !(agent_is_pidless(agent) && session_age_secs(now, agent) > GHOST_SESSION_TTL_SECS)
         });
         if self.agents.len() != previous_len {
-            self.worktree_groups = build_worktree_groups(
-                &self.agents,
-                &self.needs_attention,
-                &self.resolver_working,
-                self.project_root.as_deref(),
-            );
+            self.rebuild_groups();
         }
     }
 
@@ -610,12 +606,14 @@ fn agent_for_pane<'a>(
 ) -> Option<&'a AgentState> {
     agents
         .iter()
-        .filter(|agent| !bound.contains(&(agent.kind.clone(), agent.agent_id.clone())))
+        // Cheap pane match first: only agents stamped on this exact pane reach
+        // the allocating `bound` lookup, so the common miss costs no clones.
         .filter(|agent| {
             agent.pane.as_ref().is_some_and(|stamped| {
                 stamped.pane_id == pane.pane_id && pane_start_matches(stamped, pane)
             })
         })
+        .filter(|agent| !bound.contains(&(agent.kind.clone(), agent.agent_id.clone())))
         .max_by_key(|agent| agent.last_activity)
 }
 
