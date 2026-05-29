@@ -11,10 +11,11 @@
 //! neutral fallback. Context budget is read from the transcript tail.
 //!
 //! Owns hook install / uninstall through a non-destructive merge into
-//! `~/.claude/settings.json` under per-matcher `_rimz_managed` markers.
-//! Blocking events are marked `_rimz_sync = true`; an existing async marker
-//! on a blocking event is a hard install error (see [`BLOCKING_EVENTS`] and
-//! `docs/internals/agent.md`).
+//! `~/.claude/settings.json` under per-matcher `_rimz_managed` markers. The
+//! `PermissionRequest` blocking hook is marked `_rimz_sync = true`; an existing
+//! async marker on it is a hard install error (see [`BLOCKING_EVENTS`] and
+//! `docs/internals/agent.md`). The `PreToolUse` blocking sub-events ride the
+//! broad `PreToolUse` hook and self-classify from `tool_name`.
 
 use std::env;
 use std::io::{Read, Seek, SeekFrom};
@@ -40,12 +41,18 @@ const CLAUDE_HOOK_CAP: Duration = Duration::from_secs(120);
 /// [`CLAUDE_HOOK_CAP`] so the agent and bridge agree on the ceiling.
 const CLAUDE_HOOK_TIMEOUT_SECS: u64 = 120;
 
-/// Installed events. Tuple is `(event_name, optional_matcher)` — the matcher
-/// is `Some(_)` for the blocking `PreToolUse` sub-events, collapsed into one
-/// `|`-list (`ExitPlanMode|AskUserQuestion`) that Claude evaluates as either
-/// tool. The broad `PreToolUse`/`PostToolUse` hooks fire on every tool call;
-/// they keep the sidebar's enrichment current and feed `rimz feed list --audit`
-/// depth, with their payload content gated by `[privacy] payload_mode`.
+/// Installed events. Tuple is `(event_name, optional_matcher)`. Rimz installs
+/// every event as a single broad hook with no matcher: the helper classifies
+/// each call from the payload's `tool_name`, so `PreToolUse: ExitPlanMode` and
+/// `PreToolUse: AskUserQuestion` still route to their blocking feed kinds off
+/// the broad `PreToolUse` hook. A dedicated `ExitPlanMode|AskUserQuestion`
+/// matcher would only double-fire — Claude runs every matching matcher group,
+/// and the broad entry already matches those tools. The broad
+/// `PreToolUse`/`PostToolUse` hooks also keep the sidebar's enrichment current
+/// and feed `rimz feed list --audit` depth, with their payload content gated by
+/// `[privacy] payload_mode`. The matcher slot stays in the tuple because the
+/// reclaim path still reasons about on-disk matchers left by users or older
+/// builds.
 const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
     ("SessionStart", None),
     ("SessionEnd", None),
@@ -53,7 +60,6 @@ const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
     ("Stop", None),
     ("Notification", None),
     ("PermissionRequest", None),
-    ("PreToolUse", Some("ExitPlanMode|AskUserQuestion")),
     ("PreToolUse", None),
     ("PostToolUse", None),
 ];
@@ -62,10 +68,7 @@ const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
 /// Installing one with `_rimz_sync = false` in the existing config is a hard
 /// error — the source of truth for "must block" is this constant, never the
 /// on-disk file.
-const BLOCKING_EVENTS: &[(&str, Option<&str>)] = &[
-    ("PermissionRequest", None),
-    ("PreToolUse", Some("ExitPlanMode|AskUserQuestion")),
-];
+const BLOCKING_EVENTS: &[(&str, Option<&str>)] = &[("PermissionRequest", None)];
 
 const HOOKS_KEY: &str = "hooks";
 const RIMZ_MANAGED_KEY: &str = "_rimz_managed";
@@ -1180,23 +1183,19 @@ mod tests {
         assert!(!report.merged);
         assert_eq!(report.agent, "claude");
         assert!(report.installed_events.contains(&"SessionStart".to_owned()));
-        assert!(
-            report
-                .installed_events
-                .contains(&"PreToolUse:ExitPlanMode|AskUserQuestion".to_owned())
-        );
+        assert!(report.installed_events.contains(&"PreToolUse".to_owned()));
         assert!(
             report
                 .installed_events
                 .contains(&"PermissionRequest".to_owned())
         );
 
-        // Lock the full on-disk shape: event set, matcher ordering, sync
-        // flags, command strings, and the 120 s blocking-hook timeout. Every
-        // command is identical (no `--event`; the helper reads the event from
-        // stdin), and the two blocking PreToolUse matchers collapse into one
-        // `|`-list. The file is deterministic, so the whole settings.json
-        // snapshots cleanly.
+        // Lock the full on-disk shape: event set, sync flags, command strings,
+        // and the 120 s blocking-hook timeout. Every command is identical (no
+        // `--event`; the helper reads the event from stdin), and every event
+        // installs as a single broad hook with no matcher — `PreToolUse`
+        // self-classifies its blocking sub-events from `tool_name`. The file is
+        // deterministic, so the whole settings.json snapshots cleanly.
         let written = std::fs::read_to_string(&path).unwrap();
         insta::assert_snapshot!(written, @r###"
         {
@@ -1241,18 +1240,6 @@ mod tests {
               }
             ],
             "PreToolUse": [
-              {
-                "_rimz_managed": true,
-                "_rimz_sync": true,
-                "hooks": [
-                  {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
-                    "timeout": 120,
-                    "type": "command"
-                  }
-                ],
-                "matcher": "ExitPlanMode|AskUserQuestion"
-              },
               {
                 "_rimz_managed": true,
                 "_rimz_sync": false,
@@ -1352,10 +1339,8 @@ mod tests {
         let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(parsed["model"], "claude-opus-4-7");
         let pre_tool = parsed["hooks"]["PreToolUse"].as_array().unwrap();
-        // user `Bash` matcher + 2 rimz matchers (the combined
-        // `ExitPlanMode|AskUserQuestion` blocking matcher and the broad per-tool
-        // hook).
-        assert_eq!(pre_tool.len(), 3);
+        // user `Bash` matcher + 1 rimz broad per-tool hook (no matcher).
+        assert_eq!(pre_tool.len(), 2);
         assert!(pre_tool.iter().any(|e| e["matcher"] == "Bash"
             && e.get("_rimz_managed").and_then(Value::as_bool) != Some(true)));
         // UserPromptSubmit is state signal, so a default install wires it. The
@@ -1382,8 +1367,9 @@ mod tests {
 
         let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let pre_tool = parsed["hooks"]["PreToolUse"].as_array().unwrap();
-        // 1 combined blocking matcher + 1 broad per-tool hook (no matcher) = 2.
-        assert_eq!(pre_tool.len(), 2);
+        // Exactly 1 broad per-tool hook (no matcher); the blocking sub-events
+        // self-classify off it rather than getting a dedicated matcher entry.
+        assert_eq!(pre_tool.len(), 1);
         // The broad per-tool hook has no matcher key and is non-blocking.
         let broad = pre_tool
             .iter()
@@ -1452,10 +1438,10 @@ mod tests {
         assert!(managed(&notif[0]));
 
         // PreToolUse: the user `Bash` hook survives; the two unmarked legacy
-        // matchers and the old separate managed matcher are gone, replaced by
-        // one combined blocking matcher + the broad hook.
+        // matchers and the old separate managed matcher are all reclaimed,
+        // replaced by the single broad hook.
         let pre_tool = parsed["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(pre_tool.len(), 3);
+        assert_eq!(pre_tool.len(), 2);
         assert!(
             pre_tool
                 .iter()
@@ -1463,21 +1449,13 @@ mod tests {
             "user Bash hook preserved"
         );
         assert!(
-            pre_tool
-                .iter()
-                .any(|e| e["matcher"] == "ExitPlanMode|AskUserQuestion"
-                    && managed(e)
-                    && e["_rimz_sync"] == true),
-            "combined blocking matcher present"
-        );
-        assert!(
             pre_tool.iter().any(|e| managed(e)
                 && !e.as_object().unwrap().contains_key("matcher")
                 && e["_rimz_sync"] == false),
             "broad enrichment hook present"
         );
-        // Exactly the two canonical rimz entries — no stale duplicates.
-        assert_eq!(pre_tool.iter().filter(|e| managed(e)).count(), 2);
+        // Exactly the one canonical rimz entry — no stale duplicates.
+        assert_eq!(pre_tool.iter().filter(|e| managed(e)).count(), 1);
     }
 
     #[test]
@@ -1746,37 +1724,6 @@ mod tests {
                 ..
             }
         ));
-    }
-
-    #[test]
-    fn install_rejects_async_blocking_marker_on_pretooluse_matcher() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-        std::fs::write(
-            &path,
-            r#"{
-              "hooks": {
-                "PreToolUse": [
-                  {
-                    "matcher": "ExitPlanMode|AskUserQuestion",
-                    "_rimz_managed": true,
-                    "_rimz_sync": false,
-                    "hooks": [{ "type": "command", "command": "x" }]
-                  }
-                ]
-              }
-            }"#,
-        )
-        .unwrap();
-        let err = install_into(&path).unwrap_err();
-        let AgentErr::Install { agent, reason } = err else {
-            panic!("expected Install error");
-        };
-        assert_eq!(agent, "claude");
-        assert!(
-            reason.contains("PreToolUse:ExitPlanMode|AskUserQuestion"),
-            "reason should name the violating event: {reason}"
-        );
     }
 
     #[test]

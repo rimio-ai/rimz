@@ -803,7 +803,7 @@ fn claude_install_uninstall_cli_round_trips_into_settings_json() {
     let names: Vec<&str> = events.iter().filter_map(Value::as_str).collect();
     assert!(names.contains(&"SessionStart"));
     assert!(names.contains(&"PermissionRequest"));
-    assert!(names.contains(&"PreToolUse:ExitPlanMode|AskUserQuestion"));
+    assert!(names.contains(&"PreToolUse"));
 
     assert!(
         claude_settings.exists(),
@@ -811,10 +811,10 @@ fn claude_install_uninstall_cli_round_trips_into_settings_json() {
     );
     let on_disk: Value =
         serde_json::from_slice(&std::fs::read(&claude_settings).unwrap()).expect("settings json");
-    // PreToolUse block has the combined blocking matcher plus the broad
-    // per-tool hook.
+    // PreToolUse installs as a single broad hook; its blocking sub-events
+    // (ExitPlanMode/AskUserQuestion) self-classify off it from `tool_name`.
     let pre_tool = on_disk["hooks"]["PreToolUse"].as_array().expect("array");
-    assert_eq!(pre_tool.len(), 2);
+    assert_eq!(pre_tool.len(), 1);
     // The statusLine now points at Rimz and wraps the user's original verbatim.
     assert_eq!(
         on_disk["statusLine"]["command"],
