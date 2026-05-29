@@ -6,6 +6,7 @@
 //! agent, not a stack of one-off widgets. See the
 //! [grammar in docs/internals/sidebar.md](../../../docs/internals/sidebar.md).
 
+use jiff::Timestamp;
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 use rimz::agents::{AgentContext, RateLimitWindow};
@@ -14,7 +15,10 @@ use rimz::{
     SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
 };
 
-use super::fmt::{age_short, clip, dollars, duration_compact, time_remaining, tokens_short};
+use super::fmt::{
+    age_short, clip, dollars, duration_compact, duration_compact_minutes, model_label,
+    time_remaining, tokens_short,
+};
 use super::labels::{
     ResourceKind, agent_glyph, agent_style, diff_spans, gauge_spans, posture_pill, posture_style,
     resolver_glyph, resource_bar_spans, segmented_gauge_spans, status_glyph, status_style,
@@ -330,13 +334,15 @@ fn ctx(row: &SidebarRow) -> Option<&AgentContext> {
     row.context.as_ref()
 }
 
-/// Model name preferred from the statusline (`Opus 4.8`) over the coarser
-/// transcript scalar (`Opus`); shown verbatim, never synthesized.
-fn display_model(row: &SidebarRow) -> Option<&str> {
+/// Model name preferred from the statusline (`Opus 4.8 (1M context)`) over the
+/// coarser transcript scalar (`Opus`), then shortened for the row
+/// (`Opus 4.8 (1M)`); never synthesized.
+fn display_model(row: &SidebarRow) -> Option<String> {
     ctx(row)
         .and_then(|context| context.model_display_name.as_deref())
         .or(row.model.as_deref())
         .filter(|model| !model.is_empty())
+        .map(model_label)
 }
 
 /// Reasoning effort preferred from the statusline over the transcript scalar.
@@ -410,7 +416,7 @@ fn capability_line(
 ) -> Option<Line<'static>> {
     let mut tokens: Vec<CapabilityToken> = Vec::new();
     if let Some(model) = display_model(row) {
-        tokens.push(CapabilityToken::Dim(model.to_owned()));
+        tokens.push(CapabilityToken::Dim(model));
     }
     if let Some(effort) = display_effort(row) {
         tokens.push(CapabilityToken::Dim(effort.to_owned()));
@@ -466,7 +472,12 @@ fn capability_line(
         .saturating_sub(spans_width(&spans) + cost_width)
         .max(1);
     spans.push(Span::raw(" ".repeat(padding)));
-    spans.push(Span::styled(cost, theme.dim()));
+    // Cost reads in money-green — the one non-dim token on the line, so spend
+    // stands out from the dim model/effort chrome around it.
+    spans.push(Span::styled(
+        cost,
+        theme.style(Color::Green, Modifier::empty()),
+    ));
     Some(Line::from(spans))
 }
 
@@ -515,63 +526,70 @@ fn gauge_segments(row: &SidebarRow) -> Option<[(u64, Color); 3]> {
     ])
 }
 
-/// The detail block selection reveals beneath the ambient lines: the two usage
-/// windows as draining stamina/mana bars, then the token split. Falls back to a
-/// bare token total for an agent that published no statusline context.
+/// The detail block selection reveals beneath the ambient lines: the token
+/// split, then the two usage windows as draining stamina/mana bars. The token
+/// totals lead — the per-session number reads first, then the budget meters it
+/// draws down. Falls back to a bare token total for an agent that published no
+/// statusline context.
 fn detail_lines(theme: &Theme, row: &SidebarRow, width: usize) -> Vec<Line<'static>> {
     let Some(context) = ctx(row) else {
         return tokens_line(theme, row, width).into_iter().collect();
     };
     let mut lines = Vec::new();
-    if let Some(limits) = context.rate_limits.as_ref() {
-        if let Some(line) = usage_window_line(
-            theme,
-            "5hr",
-            limits.five_hour.as_ref(),
-            ResourceKind::Stamina,
-            width,
-        ) {
-            lines.push(line);
-        }
-        if let Some(line) = usage_window_line(
-            theme,
-            "wk",
-            limits.seven_day.as_ref(),
-            ResourceKind::Mana,
-            width,
-        ) {
-            lines.push(line);
-        }
-    }
     if let Some(line) = token_split_line(theme, context, width) {
         lines.push(line);
     } else if let Some(line) = tokens_line(theme, row, width) {
         lines.push(line);
     }
+    if let Some(limits) = context.rate_limits.as_ref() {
+        // The 5-hour reset floors to minutes (seconds are noise on it); the
+        // weekly reset keeps the full d/h resolution.
+        if let Some(line) = usage_window_line(
+            theme,
+            "5h",
+            limits.five_hour.as_ref(),
+            ResourceKind::Stamina,
+            duration_compact_minutes,
+            width,
+        ) {
+            lines.push(line);
+        }
+        if let Some(line) = usage_window_line(
+            theme,
+            "7d",
+            limits.seven_day.as_ref(),
+            ResourceKind::Mana,
+            duration_compact,
+            width,
+        ) {
+            lines.push(line);
+        }
+    }
     lines
 }
 
 /// Column width reserved for a usage-window label, so the two bars share one
-/// left edge. Three cells fit `5hr`/`wk` and keep the labels off the bare
-/// `<n>h`/`<n>d` shape that reads as an age elsewhere.
-const WINDOW_LABEL_WIDTH: usize = 3;
+/// left edge. The `5h`/`7d` labels both fit in two cells.
+const WINDOW_LABEL_WIDTH: usize = 2;
 
 /// One usage-limit window as a draining resource bar with a reset countdown:
-/// `5hr ▰▰▰▰▰▰▰▱▱▱ ↻ 3h12m`. The bar fills with budget *remaining*
-/// (`100 - used`) so a full bar means headroom; the countdown says when it
-/// refills. Drawn only when the window reported a usage percentage.
+/// `5h ▰▰▰▰▰▰▰▱▱▱ ↻ 3h12m`. The bar fills with budget *remaining*
+/// (`100 - used`) so a full bar means headroom; `reset_fmt` renders the
+/// countdown beside it — the 5-hour window floors to minutes, the weekly keeps
+/// full resolution. Drawn only when the window reported a usage percentage.
 fn usage_window_line(
     theme: &Theme,
     label: &str,
     window: Option<&RateLimitWindow>,
     kind: ResourceKind,
+    reset_fmt: fn(Timestamp) -> String,
     width: usize,
 ) -> Option<Line<'static>> {
     let window = window?;
     let remaining = 100 - window.used_percentage?;
     let reset = window
         .resets_at
-        .map(|at| format!("{RESET_GLYPH} {}", duration_compact(at)));
+        .map(|at| format!("{RESET_GLYPH} {}", reset_fmt(at)));
     let reset_width = reset.as_ref().map_or(0, |text| text.chars().count());
     // "  " indent + label column + " " + bar + (" " + reset).
     let tail = if reset_width > 0 { reset_width + 1 } else { 0 };

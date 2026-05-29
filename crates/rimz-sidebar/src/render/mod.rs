@@ -471,7 +471,7 @@ mod tests {
             source: "claude".to_owned(),
             session_name: Some("ledger refactor".to_owned()),
             model_id: Some("claude-opus-4-8".to_owned()),
-            model_display_name: Some("Opus 4.8".to_owned()),
+            model_display_name: Some("Opus 4.8 (1M context)".to_owned()),
             effort: Some("high".to_owned()),
             thinking_enabled: Some(false),
             output_style: None,
@@ -588,7 +588,7 @@ mod tests {
             Some("db migrate"),
         );
         // Transcript scalars are the coarse fallback; the statusline context
-        // below supersedes them (`Opus` → `Opus 4.8`, `xhigh` → `high`).
+        // below supersedes them (`Opus` → `Opus 4.8 (1M)`, `xhigh` → `high`).
         claude.model = Some("Opus".to_owned());
         claude.effort = Some("xhigh".to_owned());
         claude.context_pct = Some(38);
@@ -616,16 +616,22 @@ mod tests {
         // Line 1 prefers the user's session name over the task; line 2 prefers
         // the statusline model/effort and pins the cost right.
         assert!(rendered.contains("ledger refactor"));
-        assert!(rendered.contains("Opus 4.8"));
+        // The model display name is shortened — `(1M context)` → `(1M)`.
+        assert!(rendered.contains("Opus 4.8 (1M)"));
+        assert!(!rendered.contains("context"));
         assert!(rendered.contains("high"));
         assert!(rendered.contains("auto"));
-        assert!(rendered.contains("$1.27"));
+        assert!(rendered.contains("$1.3"));
         assert!(rendered.contains("●●●○○ 3/5"));
-        // Selection reveals the usage windows (reset marker) and the token split.
+        // Selection reveals the token split above the usage windows (reset
+        // marker). The window labels are scrubbed in the snapshot — they match
+        // the age filter — so assert the `5h`/`7d` rename on the raw string.
         assert!(rendered.contains('↻'));
         assert!(rendered.contains("76.5k tok"));
         assert!(rendered.contains("↑64.2k"));
         assert!(rendered.contains("↓12.3k"));
+        assert!(rendered.contains("5h "));
+        assert!(rendered.contains("7d "));
         assert_snapshot("enriched_selected_agent_card", rendered);
     }
 

@@ -67,15 +67,46 @@ fn compact_seconds(seconds: i64) -> String {
         .collect()
 }
 
-/// Session spend as a terse dollar amount: cents-precise under `$10`
-/// (`$0.04`, `$3.27`), whole dollars above (`$20`, `$124`). The threshold keeps
-/// a long session's cost from carrying noisy trailing cents.
-pub(super) fn dollars(usd: f64) -> String {
-    if usd < 10.0 {
-        format!("${usd:.2}")
-    } else {
-        format!("${usd:.0}")
+/// Like [`duration_compact`] but never finer than minutes — for the 5-hour
+/// usage window, where a ticking seconds field is just noise. A sub-minute
+/// remainder rounds up to `1m`, so a live window never reads `now` before it
+/// has actually reset.
+pub(super) fn duration_compact_minutes(deadline: Timestamp) -> String {
+    compact_minutes(deadline.duration_since(Timestamp::now()).as_secs())
+}
+
+/// The pure core of [`duration_compact_minutes`]. Rounds up to the next whole
+/// minute, then takes the two highest non-zero units from `d`/`h`/`m`.
+fn compact_minutes(seconds: i64) -> String {
+    if seconds <= 0 {
+        return "now".to_owned();
     }
+    let minutes = (seconds + 59) / 60;
+    let parts = [
+        (minutes / 1_440, 'd'),
+        (minutes % 1_440 / 60, 'h'),
+        (minutes % 60, 'm'),
+    ];
+    parts
+        .into_iter()
+        .filter(|(value, _)| *value > 0)
+        .take(2)
+        .map(|(value, unit)| format!("{value}{unit}"))
+        .collect()
+}
+
+/// Session spend as a fixed one-decimal dollar amount — `$0.0`, `$3.3`, `$21.0`,
+/// `$124.0`. The single decimal never varies, so the cost column aligns across
+/// rows instead of jittering between a cents and a whole-dollar shape.
+pub(super) fn dollars(usd: f64) -> String {
+    format!("${usd:.1}")
+}
+
+/// Shorten a model's statusline display name for the capability line: drop the
+/// `context` qualifier from an extended-window suffix so `Opus 4.8 (1M context)`
+/// reads `Opus 4.8 (1M)`. A name without that suffix passes through unchanged.
+pub(super) fn model_label(display: &str) -> String {
+    display.replace(" context)", ")")
 }
 
 /// A token count as a thin magnitude with no unit suffix — `523`, `76.5k`,
@@ -111,13 +142,29 @@ mod tests {
     }
 
     #[test]
-    fn dollars_switches_precision_at_ten() {
-        assert_eq!(dollars(0.0), "$0.00");
-        assert_eq!(dollars(0.04), "$0.04");
-        assert_eq!(dollars(3.27), "$3.27");
-        assert_eq!(dollars(9.99), "$9.99");
-        assert_eq!(dollars(20.4), "$20");
-        assert_eq!(dollars(124.0), "$124");
+    fn duration_compact_minutes_never_shows_seconds() {
+        assert_eq!(compact_minutes(3 * 3_600 + 12 * 60), "3h12m");
+        assert_eq!(compact_minutes(3 * 86_400 + 4 * 3_600), "3d4h");
+        // A sub-minute remainder rounds up to 1m, never collapsing to "now".
+        assert_eq!(compact_minutes(45), "1m");
+        assert_eq!(compact_minutes(2 * 60 + 30), "3m");
+        assert_eq!(compact_minutes(0), "now");
+    }
+
+    #[test]
+    fn dollars_is_always_one_decimal() {
+        assert_eq!(dollars(0.0), "$0.0");
+        assert_eq!(dollars(0.04), "$0.0");
+        assert_eq!(dollars(3.27), "$3.3");
+        assert_eq!(dollars(20.4), "$20.4");
+        assert_eq!(dollars(124.0), "$124.0");
+    }
+
+    #[test]
+    fn model_label_drops_context_qualifier() {
+        assert_eq!(model_label("Opus 4.8 (1M context)"), "Opus 4.8 (1M)");
+        assert_eq!(model_label("Opus 4.8"), "Opus 4.8");
+        assert_eq!(model_label("GPT-5.5"), "GPT-5.5");
     }
 
     #[test]
