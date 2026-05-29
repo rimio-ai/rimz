@@ -17,7 +17,9 @@ use ratatui::style::{Color, Modifier, Style};
 const GREEN: Color = Color::Indexed(108); // sage — running / low gauge / additions
 const AMBER: Color = Color::Indexed(179); // gold — waiting / mid gauge
 const RED: Color = Color::Indexed(167); // balanced red — failed / high gauge
-const CYAN: Color = Color::Indexed(73); // teal — worktree headers
+const CYAN: Color = Color::Indexed(73); // teal — worktree headers / cache writes
+const BLUE: Color = Color::Indexed(75); // sky — cache reads in the context bar
+const VIOLET: Color = Color::Indexed(141); // soft purple — the weekly "mana" bar
 const DIM: Color = Color::Indexed(244); // mid gray — separators, ages, labels
 
 /// Accent for the selected-row left bar. Brighter than the chrome so the `▎`
@@ -79,6 +81,8 @@ fn resolve(color: Color) -> Color {
         Color::Yellow => AMBER,
         Color::Red => RED,
         Color::Cyan => CYAN,
+        Color::Blue => BLUE,
+        Color::Magenta => VIOLET,
         Color::DarkGray | Color::Gray => DIM,
         other => other,
     }

@@ -1,16 +1,15 @@
 ---
 source: crates/rimz-sidebar/src/render/mod.rs
-assertion_line: 389
 expression: screen
 ---
 ┌ query-engine ──────────────────────────────────────┐
 │▌feature-migration                      +127 -43  1◕│
-│▎○ claude  db migrate                             <t>│
-│▎  Opus · xhigh · auto  ●●●○○ 3/5                   │
+│▎○ claude  ledger refactor                        <t>│
+│▎  Opus 4.8 · high · auto  ●●●○○ 3/5           $1.27│
 │▎  ━━━━━━━━━━━━━━━━━━─────────────────────────────  │
-│▎  12.4k tok                                        │
-│                                                    │
-│                                                    │
+│▎  5hr ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱ ↻ <reset>│
+│▎  wk  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ ↻ <reset>│
+│▎  76.5k tok · ↑64.2k ↓12.3k                        │
 │                                                    │
 │                                                    │
 │                                                    │

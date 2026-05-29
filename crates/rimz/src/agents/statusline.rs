@@ -11,7 +11,8 @@ use jiff::Timestamp;
 use serde::Deserialize;
 
 use super::context::{
-    AgentContext, AgentCost, AgentPullRequest, AgentRateLimits, AgentTokenUsage, RateLimitWindow,
+    AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits, AgentTokenUsage,
+    RateLimitWindow,
 };
 
 /// The statusline payload Claude pipes on stdin. Only the fields Rimz projects
@@ -22,6 +23,8 @@ use super::context::{
 #[serde(default)]
 pub(crate) struct StatuslinePayload {
     pub session_id: Option<String>,
+    /// User-set session name (`--name` / `/rename`); absent until named.
+    session_name: Option<String>,
     model: ModelField,
     cost: CostField,
     context_window: ContextWindowField,
@@ -60,6 +63,18 @@ struct ContextWindowField {
     context_window_size: Option<u64>,
     used_percentage: Option<f64>,
     remaining_percentage: Option<f64>,
+    /// Null before the first API call and right after `/compact`, so it stays
+    /// `Option` even though the surrounding object is present.
+    current_usage: Option<CurrentUsageField>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct CurrentUsageField {
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cache_creation_input_tokens: Option<u64>,
+    cache_read_input_tokens: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -126,6 +141,16 @@ fn rate_window(field: Option<RateWindowField>) -> Option<RateLimitWindow> {
     })
 }
 
+fn current_usage(field: Option<CurrentUsageField>) -> Option<AgentCurrentUsage> {
+    let field = field?;
+    non_empty(AgentCurrentUsage {
+        input_tokens: field.input_tokens,
+        output_tokens: field.output_tokens,
+        cache_creation_input_tokens: field.cache_creation_input_tokens,
+        cache_read_input_tokens: field.cache_read_input_tokens,
+    })
+}
+
 impl StatuslinePayload {
     /// Project the parsed payload onto the agent-agnostic record. `observed_at`
     /// is stamped by the caller so the parser stays pure and deterministic in
@@ -145,6 +170,7 @@ impl StatuslinePayload {
             context_window_size: self.context_window.context_window_size,
             used_percentage: clamp_pct(self.context_window.used_percentage),
             remaining_percentage: clamp_pct(self.context_window.remaining_percentage),
+            current_usage: current_usage(self.context_window.current_usage),
         });
         let rate_limits = non_empty(AgentRateLimits {
             five_hour: rate_window(self.rate_limits.five_hour),
@@ -157,6 +183,7 @@ impl StatuslinePayload {
         });
         AgentContext {
             source: source.to_owned(),
+            session_name: self.session_name,
             model_id: self.model.id,
             model_display_name: self.model.display_name,
             effort: self.effort.level,
@@ -188,6 +215,7 @@ mod tests {
     fn full_payload_projects_every_field() {
         let ctx = parse(json!({
             "session_id": "abc123",
+            "session_name": "ledger-refactor",
             "model": { "id": "claude-opus-4-8", "display_name": "Opus" },
             "cost": {
                 "total_cost_usd": 0.01234,
@@ -201,7 +229,13 @@ mod tests {
                 "total_output_tokens": 1200,
                 "context_window_size": 200000,
                 "used_percentage": 8,
-                "remaining_percentage": 92
+                "remaining_percentage": 92,
+                "current_usage": {
+                    "input_tokens": 8500,
+                    "output_tokens": 1200,
+                    "cache_creation_input_tokens": 5000,
+                    "cache_read_input_tokens": 2000
+                }
             },
             "exceeds_200k_tokens": false,
             "effort": { "level": "high" },
@@ -217,6 +251,7 @@ mod tests {
         }));
 
         assert_eq!(ctx.source, "claude");
+        assert_eq!(ctx.session_name.as_deref(), Some("ledger-refactor"));
         assert_eq!(ctx.model_id.as_deref(), Some("claude-opus-4-8"));
         assert_eq!(ctx.model_display_name.as_deref(), Some("Opus"));
         assert_eq!(ctx.effort.as_deref(), Some("high"));
@@ -235,6 +270,10 @@ mod tests {
         assert_eq!(tokens.context_window_size, Some(200000));
         assert_eq!(tokens.used_percentage, Some(8));
         assert_eq!(tokens.remaining_percentage, Some(92));
+        let usage = tokens.current_usage.unwrap();
+        assert_eq!(usage.input_tokens, Some(8500));
+        assert_eq!(usage.cache_creation_input_tokens, Some(5000));
+        assert_eq!(usage.cache_read_input_tokens, Some(2000));
 
         let rate = ctx.rate_limits.unwrap();
         let five = rate.five_hour.unwrap();
@@ -257,6 +296,28 @@ mod tests {
         assert!(ctx.tokens.is_none());
         assert!(ctx.rate_limits.is_none());
         assert!(ctx.pr.is_none());
+    }
+
+    #[test]
+    fn null_current_usage_drops_only_that_field() {
+        // `current_usage` is null before the first API call; the rest of the
+        // context window still projects.
+        let ctx = parse(json!({
+            "context_window": { "used_percentage": 12, "current_usage": null }
+        }));
+        let tokens = ctx.tokens.unwrap();
+        assert_eq!(tokens.used_percentage, Some(12));
+        assert!(tokens.current_usage.is_none());
+    }
+
+    #[test]
+    fn empty_current_usage_collapses_to_none() {
+        // An all-null usage object carries nothing, so it collapses rather than
+        // serializing as `{}`.
+        let ctx = parse(json!({
+            "context_window": { "used_percentage": 5, "current_usage": {} }
+        }));
+        assert!(ctx.tokens.unwrap().current_usage.is_none());
     }
 
     #[test]

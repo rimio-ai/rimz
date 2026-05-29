@@ -25,7 +25,8 @@ use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution
 use crate::ids::PaneId;
 
 pub use context::{
-    AgentContext, AgentCost, AgentPullRequest, AgentRateLimits, AgentTokenUsage, RateLimitWindow,
+    AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits, AgentTokenUsage,
+    RateLimitWindow,
 };
 
 /// Conservative fallback for adapters that don't override. Claude overrides

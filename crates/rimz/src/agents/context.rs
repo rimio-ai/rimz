@@ -25,6 +25,11 @@ pub struct AgentContext {
     /// Which transport produced this record (`"claude"` today). Stamped from
     /// the ingest `--source` tag, not parsed from the payload.
     pub source: String,
+    /// Human-readable session name the user set (`--name` / `/rename`). Absent
+    /// until named, so a renderer prefers it over the task descriptor only when
+    /// present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -83,6 +88,27 @@ pub struct AgentTokenUsage {
     pub used_percentage: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remaining_percentage: Option<u8>,
+    /// The most-recent API response's token composition. Its input side
+    /// (`input + cache_creation + cache_read`) is exactly what `used_percentage`
+    /// measures, so a renderer can color the context bar by where the window
+    /// went. Absent before the first API call and right after `/compact`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_usage: Option<AgentCurrentUsage>,
+}
+
+/// The token breakdown of the most-recent API response. Cache reads dominate a
+/// long session; cache writes spike on fresh file reads; `input_tokens` is the
+/// live, uncached turn.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AgentCurrentUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
 }
 
 /// Rate-limit windows the agent surfaces, each with a reset instant a renderer

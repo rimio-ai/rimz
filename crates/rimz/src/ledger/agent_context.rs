@@ -106,6 +106,7 @@ mod tests {
     fn ctx(observed_at: Timestamp) -> AgentContext {
         AgentContext {
             source: "claude".to_owned(),
+            session_name: None,
             model_id: Some("claude-opus-4-8".to_owned()),
             model_display_name: None,
             effort: None,

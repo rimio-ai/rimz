@@ -9,6 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use rimz::feed::{AgentStatus, PermissionPosture};
 
+use super::fmt::tokens_short;
 use super::theme::Theme;
 
 /// The static status glyph — used for the legend, the worktree tally, the
@@ -156,6 +157,137 @@ pub(super) fn gauge_spans(theme: &Theme, percent: u8, width: usize) -> Vec<Span<
     spans
 }
 
+/// Like [`gauge_spans`], but the filled run is split into colored segments by
+/// token weight — showing *where* the context window went (fresh input vs cache
+/// writes vs cache reads). `total_pct` sizes the filled run exactly as the
+/// single-color gauge would; the segments apportion that run by their weights
+/// with largest-remainder rounding, so the colored cells always sum to the
+/// filled count and the bar never over- or under-fills. With no breakdown to
+/// draw it falls back to the plain gauge. Under `NO_COLOR` the segments merge
+/// into one heavy run — the split is a color enrichment; the fill level still
+/// reads by shape.
+pub(super) fn segmented_gauge_spans(
+    theme: &Theme,
+    segments: &[(u64, Color)],
+    total_pct: u8,
+    width: usize,
+) -> Vec<Span<'static>> {
+    let width = width.max(1);
+    let total_pct = total_pct.min(100);
+    let filled = ((total_pct as usize) * width + 50) / 100;
+    let weight: u64 = segments.iter().map(|(value, _)| *value).sum();
+    if filled == 0 || weight == 0 {
+        return gauge_spans(theme, total_pct, width);
+    }
+    let cells = apportion(segments.iter().map(|(value, _)| *value), filled);
+    let mut spans = Vec::with_capacity(segments.len() + 1);
+    for ((_, color), count) in segments.iter().zip(cells) {
+        if count > 0 {
+            spans.push(Span::styled(
+                std::iter::repeat_n(BAR_FILLED, count).collect::<String>(),
+                theme.style(*color, Modifier::empty()),
+            ));
+        }
+    }
+    if filled < width {
+        spans.push(Span::styled(
+            std::iter::repeat_n(BAR_TRACK, width - filled).collect::<String>(),
+            theme.dim(),
+        ));
+    }
+    spans
+}
+
+/// Distribute `total` whole cells across `weights` by the largest-remainder
+/// method: floor each share, then hand the leftover cells to the largest
+/// fractional remainders. The result always sums to `total`, so a segmented bar
+/// fills exactly its run with no rounding drift.
+fn apportion(weights: impl IntoIterator<Item = u64>, total: usize) -> Vec<usize> {
+    let weights: Vec<u64> = weights.into_iter().collect();
+    let sum: u128 = weights.iter().map(|w| u128::from(*w)).sum();
+    if sum == 0 {
+        return vec![0; weights.len()];
+    }
+    let mut cells = Vec::with_capacity(weights.len());
+    let mut remainders = Vec::with_capacity(weights.len());
+    let mut assigned = 0usize;
+    for (index, weight) in weights.iter().enumerate() {
+        let exact = u128::from(*weight) * total as u128;
+        let floor = (exact / sum) as usize;
+        cells.push(floor);
+        remainders.push((index, exact % sum));
+        assigned += floor;
+    }
+    // Largest remainder first; the stable sort keeps a tie in index order, so
+    // the leftover cell lands on the earliest (leftmost) segment.
+    remainders.sort_by_key(|&(_, remainder)| std::cmp::Reverse(remainder));
+    for (index, _) in remainders.into_iter().take(total.saturating_sub(assigned)) {
+        cells[index] += 1;
+    }
+    cells
+}
+
+/// A draining resource bar in the game-stamina idiom: `remaining_pct` of the
+/// width is heavy `▰`, the rest an empty `▱` track. Opposite the context gauge,
+/// a full bar means budget *left* — it shortens as the window is spent, and the
+/// reset countdown beside it says when it refills. `kind` picks the palette.
+pub(super) fn resource_bar_spans(
+    theme: &Theme,
+    remaining_pct: u8,
+    kind: ResourceKind,
+    width: usize,
+) -> Vec<Span<'static>> {
+    let remaining = remaining_pct.min(100);
+    let width = width.max(1);
+    let filled = ((remaining as usize) * width + 50) / 100;
+    let mut spans = Vec::with_capacity(2);
+    if filled > 0 {
+        spans.push(Span::styled(
+            std::iter::repeat_n(RESOURCE_FILLED, filled).collect::<String>(),
+            theme.style(kind.color(remaining), Modifier::empty()),
+        ));
+    }
+    if filled < width {
+        spans.push(Span::styled(
+            std::iter::repeat_n(RESOURCE_TRACK, width - filled).collect::<String>(),
+            theme.dim(),
+        ));
+    }
+    spans
+}
+
+/// Heavy/empty squares for the draining resource bars — a different shape from
+/// the context gauge's rules so the two meters never read as the same bar.
+const RESOURCE_FILLED: char = '▰';
+const RESOURCE_TRACK: char = '▱';
+
+/// Which usage window a [`resource_bar_spans`] bar tracks, and thus its palette.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ResourceKind {
+    /// The 5-hour window: a stamina bar, green when full and ramping
+    /// amber → red as it drains.
+    Stamina,
+    /// The weekly window: a mana bar, a calm violet that only reddens when the
+    /// budget is nearly spent.
+    Mana,
+}
+
+impl ResourceKind {
+    fn color(self, remaining: u8) -> Color {
+        match self {
+            ResourceKind::Stamina => match remaining {
+                0..=20 => Color::Red,
+                21..=50 => Color::Yellow,
+                _ => Color::Green,
+            },
+            ResourceKind::Mana => match remaining {
+                0..=20 => Color::Red,
+                _ => Color::Magenta,
+            },
+        }
+    }
+}
+
 /// Todo progress: filled dots for done, hollow dots for remaining, with the
 /// numeric ratio appended. The shape carries it; color stays dim chrome.
 pub(super) fn todo_spans(theme: &Theme, done: u32, total: u32) -> Vec<Span<'static>> {
@@ -183,16 +315,7 @@ pub(super) fn todo_spans(theme: &Theme, done: u32, total: u32) -> Vec<Span<'stat
 /// Total tokens formatted with a thin unit (`12.4k tok`, `523 tok`). Dim
 /// chrome — display-only, never a decision driver.
 pub(super) fn tokens_label(theme: &Theme, total: u64) -> Span<'static> {
-    let text = if total >= 1_000_000 {
-        let m = total as f64 / 1_000_000.0;
-        format!("{m:.1}M tok")
-    } else if total >= 1_000 {
-        let k = total as f64 / 1_000.0;
-        format!("{k:.1}k tok")
-    } else {
-        format!("{total} tok")
-    };
-    Span::styled(text, theme.dim())
+    Span::styled(format!("{} tok", tokens_short(total)), theme.dim())
 }
 
 /// `+127 -43`-style diff stat. Added in green, removed in red, both dim to
@@ -260,6 +383,74 @@ mod tests {
         let spans = gauge_spans(&theme, 100, 5);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "━━━━━");
+    }
+
+    /// The segmented bar fills the same run as the plain gauge, split into
+    /// colored sub-runs whose cell counts sum to the filled total. Under
+    /// `NO_COLOR` the segments merge into one heavy run — the shape still reads.
+    #[test]
+    fn segmented_gauge_sums_to_filled_and_merges_under_no_color() {
+        let theme = Theme::fixed(true);
+        let segments = [
+            (8_000_u64, Color::Green),
+            (5_000, Color::Cyan),
+            (2_000, Color::Blue),
+        ];
+        let spans = segmented_gauge_spans(&theme, &segments, 60, 10);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        // 60% of 10 = 6 filled; segments apportion 6 → 3/2/1; then a 4-cell track.
+        assert_eq!(text, "━━━━━━────");
+        let filled = text.chars().filter(|c| *c == '━').count();
+        assert_eq!(filled, 6);
+        for span in &spans {
+            assert!(span.style.fg.is_none());
+        }
+    }
+
+    /// With nothing to break down (all-zero weights) the segmented bar is just
+    /// the plain single-color gauge.
+    #[test]
+    fn segmented_gauge_falls_back_with_zero_weights() {
+        let theme = Theme::fixed(true);
+        let spans = segmented_gauge_spans(&theme, &[(0, Color::Green), (0, Color::Cyan)], 50, 4);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "━━──");
+    }
+
+    /// Largest-remainder apportionment always sums to the requested total.
+    #[test]
+    fn apportion_sums_to_total() {
+        assert_eq!(apportion([3, 1, 1], 5), vec![3, 1, 1]);
+        assert_eq!(apportion([1, 1, 1], 4).iter().sum::<usize>(), 4);
+        assert_eq!(apportion([0, 0], 3), vec![0, 0]);
+    }
+
+    /// The resource bar drains (filled = remaining) and keeps its squares under
+    /// `NO_COLOR`; its color ramps by how much budget is left.
+    #[test]
+    fn resource_bar_drains_and_ramps() {
+        let plain = Theme::fixed(true);
+        let spans = resource_bar_spans(&plain, 70, ResourceKind::Stamina, 10);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "▰▰▰▰▰▰▰▱▱▱");
+        for span in &spans {
+            assert!(span.style.fg.is_none());
+        }
+
+        let lit = Theme::fixed(false);
+        let fg = |remaining, kind| {
+            resource_bar_spans(&lit, remaining, kind, 10)[0]
+                .style
+                .fg
+                .unwrap()
+        };
+        // Stamina: green when full, amber mid-drain, red nearly spent.
+        assert_eq!(fg(80, ResourceKind::Stamina), Color::Indexed(108));
+        assert_eq!(fg(40, ResourceKind::Stamina), Color::Indexed(179));
+        assert_eq!(fg(10, ResourceKind::Stamina), Color::Indexed(167));
+        // Mana: calm violet, reddening only when nearly spent.
+        assert_eq!(fg(60, ResourceKind::Mana), Color::Indexed(141));
+        assert_eq!(fg(10, ResourceKind::Mana), Color::Indexed(167));
     }
 
     /// Todo dots use the same fill/empty grammar as the gauge — the dot

@@ -12,6 +12,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agent_activity::AgentActivity;
+use crate::agents::AgentContext;
 use crate::feed::{
     AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, PaneRef, PermissionPosture,
     ResolverStepState, RuntimeOwner, RuntimeOwnerKind, Surface,
@@ -190,6 +191,14 @@ pub struct SidebarRow {
     pub todo_done: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub todo_total: Option<u32>,
+    /// The session's rich statusline enrichment (cost, token breakdown,
+    /// rate-limit windows, session name), copied from `AgentState.context` so
+    /// the renderer reads one struct instead of cross-referencing `agents[]`.
+    /// Display-only and Claude-driven today; `None` for process rows and agents
+    /// that publish no statusline (the scalar `model`/`effort`/`context_pct`/
+    /// `total_tokens` carry those a renderer falls back to).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<AgentContext>,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
     pub last_activity: Timestamp,
@@ -333,12 +342,15 @@ impl SidebarSnapshot {
     }
 
     /// Attach each session's rich statusline context to its `AgentState` by
-    /// `(kind, agent_id)`. Capture/store-only: this enriches `agents[]` for
-    /// `sidebar snapshot --json` consumers (and future renderers) without
-    /// changing row rendering, so worktree groups are not rebuilt. A context
-    /// whose session is absent from the (already reaped) rollup is dropped — the
-    /// session is gone, so its context is just history. Records carry no
-    /// identity of their own; the key they're filed under is authority.
+    /// `(kind, agent_id)`, then re-fold groups so the rows carry it for the
+    /// renderer (`SidebarRow.context`). Context is display-only — it never
+    /// changes ranking, since `last_activity` is untouched — but rows are built
+    /// from the agents, so a rebuild is what moves the enrichment onto them. The
+    /// live path also rebuilds again under the pane overlay; this rebuild is
+    /// what carries context in the no-pane fallback. A context whose session is
+    /// absent from the (already reaped) rollup is dropped — the session is gone,
+    /// so its context is just history. Records carry no identity of their own;
+    /// the key they're filed under is authority.
     pub fn with_agent_context(mut self, records: Vec<AgentContextRecord>) -> Self {
         if records.is_empty() {
             return self;
@@ -347,10 +359,15 @@ impl SidebarSnapshot {
             .into_iter()
             .map(|record| ((record.kind, record.agent_id), record.context))
             .collect();
+        let mut changed = false;
         for agent in &mut self.agents {
             if let Some(context) = by_key.remove(&(agent.kind.clone(), agent.agent_id.clone())) {
                 agent.context = Some(context);
+                changed = true;
             }
+        }
+        if changed {
+            self.rebuild_groups();
         }
         self
     }
@@ -852,6 +869,7 @@ fn row_from_agent(agent: &AgentState) -> SidebarRow {
         total_tokens: agent.total_tokens,
         todo_done: agent.todo_done,
         todo_total: agent.todo_total,
+        context: agent.context.clone(),
         worktree_path: agent.worktree_path.clone(),
         worktree_branch: agent.worktree_branch.clone(),
         last_activity: agent.last_activity,
@@ -884,6 +902,7 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
         total_tokens: None,
         todo_done: None,
         todo_total: None,
+        context: None,
         worktree_path: pane.cwd.clone(),
         worktree_branch: None,
         last_activity: pane.pane_process_start.unwrap_or_else(Timestamp::now),
@@ -968,6 +987,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         total_tokens: matched.and_then(|agent| agent.total_tokens),
         todo_done: matched.and_then(|agent| agent.todo_done),
         todo_total: matched.and_then(|agent| agent.todo_total),
+        context: matched.and_then(|agent| agent.context.clone()),
         worktree_path: item
             .worktree_path
             .clone()

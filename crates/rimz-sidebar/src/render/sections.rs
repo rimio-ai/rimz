@@ -8,15 +8,17 @@
 
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
+use rimz::agents::{AgentContext, RateLimitWindow};
 use rimz::feed::{AgentStatus, PermissionPosture};
 use rimz::{
     SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
 };
 
-use super::fmt::{age_short, clip, time_remaining};
+use super::fmt::{age_short, clip, dollars, duration_compact, time_remaining, tokens_short};
 use super::labels::{
-    agent_glyph, agent_style, diff_spans, gauge_spans, posture_pill, posture_style, resolver_glyph,
-    status_glyph, status_style, todo_spans, tokens_label,
+    ResourceKind, agent_glyph, agent_style, diff_spans, gauge_spans, posture_pill, posture_style,
+    resolver_glyph, resource_bar_spans, segmented_gauge_spans, status_glyph, status_style,
+    todo_spans, tokens_label,
 };
 use super::theme::Theme;
 
@@ -237,10 +239,10 @@ fn row_lines(
     animation_phase: u64,
 ) -> Vec<Line<'static>> {
     let cw = content_width(width);
-    // Selecting a row never reshapes it: line 1 and the capability/meter line
-    // render the same whether selected or not. Selection only *adds* lines for
-    // data not already on screen — for now just the token total — so a calm row
-    // stays exactly as tall as its unselected self.
+    // Selecting a row never reshapes its ambient lines: line 1, the capability
+    // line, and the context bar render the same whether selected or not.
+    // Selection only *adds* a detail block beneath them — usage windows and the
+    // token split — so a calm row stays exactly as tall as its unselected self.
     let mut inner = vec![row_line(theme, row, cw, animation_phase)];
     if row.row_kind == SidebarRowKind::Agent {
         // L0 is too narrow for the capability labels; it keeps just identity
@@ -253,8 +255,8 @@ fn row_lines(
         if let Some(line) = gauge_line(theme, row, cw) {
             inner.push(line);
         }
-        if selected && let Some(line) = tokens_line(theme, row, cw) {
-            inner.push(line);
+        if selected {
+            inner.extend(detail_lines(theme, row, cw));
         }
     }
     inner
@@ -305,10 +307,44 @@ fn row_line(theme: &Theme, row: &SidebarRow, width: usize, animation_phase: u64)
             agent_style(theme, status, row.plan_mode),
         ),
         &row.name,
-        row.task.as_deref().unwrap_or("—"),
+        descriptor(row),
         row.last_activity,
         width,
     )
+}
+
+/// The line-1 descriptor: the user's session name when they set one (`--name` /
+/// `/rename`), else the agent's task, else an em dash. The name is what a human
+/// chose to call this session, so it reads better than the first-prompt task
+/// when present.
+fn descriptor(row: &SidebarRow) -> &str {
+    ctx(row)
+        .and_then(|context| context.session_name.as_deref())
+        .filter(|name| !name.is_empty())
+        .or(row.task.as_deref())
+        .unwrap_or("—")
+}
+
+/// The session's statusline enrichment, when it published any.
+fn ctx(row: &SidebarRow) -> Option<&AgentContext> {
+    row.context.as_ref()
+}
+
+/// Model name preferred from the statusline (`Opus 4.8`) over the coarser
+/// transcript scalar (`Opus`); shown verbatim, never synthesized.
+fn display_model(row: &SidebarRow) -> Option<&str> {
+    ctx(row)
+        .and_then(|context| context.model_display_name.as_deref())
+        .or(row.model.as_deref())
+        .filter(|model| !model.is_empty())
+}
+
+/// Reasoning effort preferred from the statusline over the transcript scalar.
+fn display_effort(row: &SidebarRow) -> Option<&str> {
+    ctx(row)
+        .and_then(|context| context.effort.as_deref())
+        .or(row.effort.as_deref())
+        .filter(|effort| !effort.is_empty())
 }
 
 /// Prefix a row line with the one-cell selection gutter: an accent `▎` on the
@@ -373,10 +409,10 @@ fn capability_line(
     width: usize,
 ) -> Option<Line<'static>> {
     let mut tokens: Vec<CapabilityToken> = Vec::new();
-    if let Some(model) = row.model.as_deref().filter(|model| !model.is_empty()) {
+    if let Some(model) = display_model(row) {
         tokens.push(CapabilityToken::Dim(model.to_owned()));
     }
-    if let Some(effort) = row.effort.as_deref().filter(|effort| !effort.is_empty()) {
+    if let Some(effort) = display_effort(row) {
         tokens.push(CapabilityToken::Dim(effort.to_owned()));
     }
     let posture = row.permission_posture.and_then(posture_pill);
@@ -387,57 +423,209 @@ fn capability_line(
         tokens.push(CapabilityToken::Posture(posture, posture_label.to_owned()));
     }
     let has_inline_todo = tier == Tier::L2 && row.todo_total.unwrap_or(0) > 0;
-    if tokens.is_empty() && !has_inline_todo {
+    // Session cost pins to the right edge of the line (`$1.27`); the capability
+    // tokens pack from the left and yield to it when the row is narrow.
+    let cost = ctx(row)
+        .and_then(|context| context.cost.as_ref())
+        .and_then(|cost| cost.total_cost_usd)
+        .map(dollars);
+    if tokens.is_empty() && !has_inline_todo && cost.is_none() {
         return None;
     }
 
-    let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
+    let mut left: Vec<Span<'static>> = vec![Span::raw("  ")];
     let mut printed_any = false;
     for token in tokens {
         if printed_any {
-            spans.push(Span::styled(" · ", theme.dim()));
+            left.push(Span::styled(" · ", theme.dim()));
         }
         match token {
-            CapabilityToken::Dim(value) => spans.push(Span::styled(value, theme.dim())),
+            CapabilityToken::Dim(value) => left.push(Span::styled(value, theme.dim())),
             CapabilityToken::Posture(posture, value) => {
-                spans.push(Span::styled(value, posture_style(theme, posture)));
+                left.push(Span::styled(value, posture_style(theme, posture)));
             }
         }
         printed_any = true;
     }
     if has_inline_todo {
         if printed_any {
-            spans.push(Span::raw("  "));
+            left.push(Span::raw("  "));
         }
         let (done, total) = (row.todo_done.unwrap_or(0), row.todo_total.unwrap_or(0));
-        spans.extend(todo_spans(theme, done, total));
-        printed_any = true;
+        left.extend(todo_spans(theme, done, total));
     }
-    if !printed_any {
-        return None;
-    }
-    Some(Line::from(trim_spans_to_width(spans, width)))
+
+    let Some(cost) = cost else {
+        return Some(Line::from(trim_spans_to_width(left, width)));
+    };
+    // Trim the left chunk to leave room for the cost plus a one-cell gap, then
+    // pad the gap so the cost sits flush right.
+    let cost_width = cost.chars().count();
+    let mut spans = trim_spans_to_width(left, width.saturating_sub(cost_width + 1));
+    let padding = width
+        .saturating_sub(spans_width(&spans) + cost_width)
+        .max(1);
+    spans.push(Span::raw(" ".repeat(padding)));
+    spans.push(Span::styled(cost, theme.dim()));
+    Some(Line::from(spans))
 }
 
 /// Centered context bar, drawn as its own thin line beneath the capability
 /// row. It starts at the same indent as the model name it underlines and leaves
 /// an equal gap at the trailing edge, so every agent's bar shares one left edge
-/// and the bars line up across worktrees with no alignment bookkeeping.
+/// and the bars line up across worktrees with no alignment bookkeeping. When the
+/// statusline reports the per-message token breakdown the fill is split into
+/// colored segments (fresh input / cache writes / cache reads) — the three add
+/// up to exactly the used percentage — otherwise it is a single-color ramp.
 fn gauge_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
-    let percent = row.context_pct?;
-    let mut spans = vec![Span::raw("  ")];
+    let percent = gauge_percent(row)?;
     // Reserve the leading two columns again on the right so the bar sits
     // centered with matching gaps on both ends.
-    spans.extend(gauge_spans(theme, percent, width.saturating_sub(4)));
+    let bar_width = width.saturating_sub(4);
+    let mut spans = vec![Span::raw("  ")];
+    match gauge_segments(row) {
+        Some(segments) => spans.extend(segmented_gauge_spans(theme, &segments, percent, bar_width)),
+        None => spans.extend(gauge_spans(theme, percent, bar_width)),
+    }
     Some(Line::from(trim_spans_to_width(spans, width)))
 }
 
-/// The one line selection adds today: the token total, which never appears on
-/// the ambient capability line. As richer per-agent detail lands it joins here.
+/// The context bar's value: the statusline's authoritative `used_percentage`
+/// when present, else the transcript-derived gauge.
+fn gauge_percent(row: &SidebarRow) -> Option<u8> {
+    ctx(row)
+        .and_then(|context| context.tokens.as_ref())
+        .and_then(|tokens| tokens.used_percentage)
+        .or(row.context_pct)
+}
+
+/// The context bar's color segments, when the per-message breakdown is known:
+/// fresh `input` (green), cache writes (amber), cache reads (blue). `None` when
+/// no breakdown was reported (a fresh session, post-compact, or a non-Claude
+/// agent), so the bar falls back to a single-color ramp.
+fn gauge_segments(row: &SidebarRow) -> Option<[(u64, Color); 3]> {
+    let usage = ctx(row)?.tokens.as_ref()?.current_usage.as_ref()?;
+    let input = usage.input_tokens.unwrap_or(0);
+    let writes = usage.cache_creation_input_tokens.unwrap_or(0);
+    let reads = usage.cache_read_input_tokens.unwrap_or(0);
+    (input + writes + reads > 0).then_some([
+        (input, Color::Green),
+        (writes, Color::Yellow),
+        (reads, Color::Blue),
+    ])
+}
+
+/// The detail block selection reveals beneath the ambient lines: the two usage
+/// windows as draining stamina/mana bars, then the token split. Falls back to a
+/// bare token total for an agent that published no statusline context.
+fn detail_lines(theme: &Theme, row: &SidebarRow, width: usize) -> Vec<Line<'static>> {
+    let Some(context) = ctx(row) else {
+        return tokens_line(theme, row, width).into_iter().collect();
+    };
+    let mut lines = Vec::new();
+    if let Some(limits) = context.rate_limits.as_ref() {
+        if let Some(line) = usage_window_line(
+            theme,
+            "5hr",
+            limits.five_hour.as_ref(),
+            ResourceKind::Stamina,
+            width,
+        ) {
+            lines.push(line);
+        }
+        if let Some(line) = usage_window_line(
+            theme,
+            "wk",
+            limits.seven_day.as_ref(),
+            ResourceKind::Mana,
+            width,
+        ) {
+            lines.push(line);
+        }
+    }
+    if let Some(line) = token_split_line(theme, context, width) {
+        lines.push(line);
+    } else if let Some(line) = tokens_line(theme, row, width) {
+        lines.push(line);
+    }
+    lines
+}
+
+/// Column width reserved for a usage-window label, so the two bars share one
+/// left edge. Three cells fit `5hr`/`wk` and keep the labels off the bare
+/// `<n>h`/`<n>d` shape that reads as an age elsewhere.
+const WINDOW_LABEL_WIDTH: usize = 3;
+
+/// One usage-limit window as a draining resource bar with a reset countdown:
+/// `5hr ▰▰▰▰▰▰▰▱▱▱ ↻ 3h12m`. The bar fills with budget *remaining*
+/// (`100 - used`) so a full bar means headroom; the countdown says when it
+/// refills. Drawn only when the window reported a usage percentage.
+fn usage_window_line(
+    theme: &Theme,
+    label: &str,
+    window: Option<&RateLimitWindow>,
+    kind: ResourceKind,
+    width: usize,
+) -> Option<Line<'static>> {
+    let window = window?;
+    let remaining = 100 - window.used_percentage?;
+    let reset = window
+        .resets_at
+        .map(|at| format!("{RESET_GLYPH} {}", duration_compact(at)));
+    let reset_width = reset.as_ref().map_or(0, |text| text.chars().count());
+    // "  " indent + label column + " " + bar + (" " + reset).
+    let tail = if reset_width > 0 { reset_width + 1 } else { 0 };
+    let bar_width = width
+        .saturating_sub(2 + WINDOW_LABEL_WIDTH + 1 + tail)
+        .max(1);
+    let mut spans = vec![
+        Span::raw("  "),
+        Span::styled(format!("{label:<WINDOW_LABEL_WIDTH$}"), theme.dim()),
+        Span::raw(" "),
+    ];
+    spans.extend(resource_bar_spans(theme, remaining, kind, bar_width));
+    if let Some(reset) = reset {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(reset, theme.dim()));
+    }
+    Some(Line::from(trim_spans_to_width(spans, width)))
+}
+
+/// The selected row's token split: `76.5k tok · ↑64.2k ↓12.3k` — current-context
+/// total, then input and output. Drawn from the statusline token usage.
+fn token_split_line(theme: &Theme, context: &AgentContext, width: usize) -> Option<Line<'static>> {
+    let tokens = context.tokens.as_ref()?;
+    let input = tokens.total_input_tokens;
+    let output = tokens.total_output_tokens;
+    if input.is_none() && output.is_none() {
+        return None;
+    }
+    let (input, output) = (input.unwrap_or(0), output.unwrap_or(0));
+    let spans = vec![
+        Span::raw("  "),
+        tokens_label(theme, input + output),
+        Span::styled(" · ", theme.dim()),
+        Span::styled(format!("↑{}", tokens_short(input)), theme.dim()),
+        Span::raw(" "),
+        Span::styled(format!("↓{}", tokens_short(output)), theme.dim()),
+    ];
+    Some(Line::from(trim_spans_to_width(spans, width)))
+}
+
+/// The bare token total, shown for an agent with no statusline context (today,
+/// Codex) so selection still reveals *something* for every agent.
 fn tokens_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     let total = row.total_tokens?;
     let spans = vec![Span::raw("  "), tokens_label(theme, total)];
     Some(Line::from(trim_spans_to_width(spans, width)))
+}
+
+/// Reset marker beside a usage-window countdown — a single-width refresh arrow.
+const RESET_GLYPH: char = '↻';
+
+/// Total display width of a span run, in terminal cells.
+fn spans_width(spans: &[Span<'static>]) -> usize {
+    spans.iter().map(|span| span.content.chars().count()).sum()
 }
 
 enum CapabilityToken {

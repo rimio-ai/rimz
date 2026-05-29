@@ -330,6 +330,10 @@ fn help_lines() -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use jiff::Timestamp;
+    use rimz::agents::{
+        AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage,
+        RateLimitWindow,
+    };
     use rimz::feed::{AgentState, AgentStatus, FeedKind, PaneRef, PermissionPosture};
     use rimz::ids::{MuxName, PaneId, ViewKind};
     use rimz::{EventEnvelope, FeedItem, FeedStatus, SidebarSnapshot, Surface, WorkspaceId};
@@ -385,6 +389,9 @@ mod tests {
         insta::with_settings!({
             filters => vec![
                 (r"degraded for \d+[smhd]", "degraded for <elapsed>"),
+                // Usage-window resets are a live countdown; scrub the value but
+                // keep the marker so the line shape stays asserted.
+                (r"↻ [0-9dhms]+", "↻ <reset>"),
                 (r"\b\d+[smhd]\b", "<t>"),
             ],
         }, {
@@ -453,6 +460,56 @@ mod tests {
             cwd: Some(cwd.to_owned()),
             pane_pid: None,
             pane_process_start: None,
+        }
+    }
+
+    /// A full Claude statusline enrichment for the rich-row tests. Reset instants
+    /// are placed days/hours ahead so the live countdown renders at a stable
+    /// length (the value itself is scrubbed by `assert_snapshot`).
+    fn claude_context(now: Timestamp) -> AgentContext {
+        AgentContext {
+            source: "claude".to_owned(),
+            session_name: Some("ledger refactor".to_owned()),
+            model_id: Some("claude-opus-4-8".to_owned()),
+            model_display_name: Some("Opus 4.8".to_owned()),
+            effort: Some("high".to_owned()),
+            thinking_enabled: Some(false),
+            output_style: None,
+            vim_mode: None,
+            agent_version: None,
+            exceeds_200k_tokens: Some(false),
+            cost: Some(AgentCost {
+                total_cost_usd: Some(1.27),
+                total_duration_ms: None,
+                total_api_duration_ms: None,
+                total_lines_added: None,
+                total_lines_removed: None,
+            }),
+            tokens: Some(AgentTokenUsage {
+                total_input_tokens: Some(64_200),
+                total_output_tokens: Some(12_300),
+                context_window_size: Some(200_000),
+                used_percentage: Some(38),
+                remaining_percentage: Some(62),
+                current_usage: Some(AgentCurrentUsage {
+                    input_tokens: Some(8_500),
+                    output_tokens: Some(1_200),
+                    cache_creation_input_tokens: Some(20_000),
+                    cache_read_input_tokens: Some(48_000),
+                }),
+            }),
+            rate_limits: Some(AgentRateLimits {
+                five_hour: Some(RateLimitWindow {
+                    used_percentage: Some(30),
+                    resets_at: Some(now + Duration::from_secs(3 * 3_600 + 12 * 60)),
+                }),
+                seven_day: Some(RateLimitWindow {
+                    used_percentage: Some(60),
+                    resets_at: Some(now + Duration::from_secs(3 * 86_400 + 4 * 3_600)),
+                }),
+            }),
+            pr: None,
+            observed_at: now,
         }
     }
 
@@ -530,12 +587,15 @@ mod tests {
             Some("feature-migration"),
             Some("db migrate"),
         );
+        // Transcript scalars are the coarse fallback; the statusline context
+        // below supersedes them (`Opus` → `Opus 4.8`, `xhigh` → `high`).
         claude.model = Some("Opus".to_owned());
         claude.effort = Some("xhigh".to_owned());
         claude.context_pct = Some(38);
         claude.total_tokens = Some(12_400);
         claude.todo_done = Some(3);
         claude.todo_total = Some(5);
+        claude.context = Some(claude_context(fixed_now()));
         let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
         snapshot.worktree_groups[0].diff_added = Some(127);
         snapshot.worktree_groups[0].diff_removed = Some(43);
@@ -553,11 +613,73 @@ mod tests {
         );
 
         assert!(rendered.contains("+127 -43"));
-        assert!(rendered.contains("Opus"));
+        // Line 1 prefers the user's session name over the task; line 2 prefers
+        // the statusline model/effort and pins the cost right.
+        assert!(rendered.contains("ledger refactor"));
+        assert!(rendered.contains("Opus 4.8"));
+        assert!(rendered.contains("high"));
         assert!(rendered.contains("auto"));
+        assert!(rendered.contains("$1.27"));
         assert!(rendered.contains("●●●○○ 3/5"));
-        assert!(rendered.contains("12.4k tok"));
+        // Selection reveals the usage windows (reset marker) and the token split.
+        assert!(rendered.contains('↻'));
+        assert!(rendered.contains("76.5k tok"));
+        assert!(rendered.contains("↑64.2k"));
+        assert!(rendered.contains("↓12.3k"));
         assert_snapshot("enriched_selected_agent_card", rendered);
+    }
+
+    #[test]
+    fn line_one_prefers_session_name_over_task() {
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            Some("/repo/main"),
+            Some("main"),
+            Some("db migrate"),
+        );
+        claude.context = Some(claude_context(fixed_now()));
+        let snapshot = snapshot_with(Vec::new(), vec![claude]);
+        let rendered = snapshot_to_screen(&snapshot, 44, 10);
+
+        assert!(rendered.contains("ledger refactor"));
+        assert!(!rendered.contains("db migrate"));
+    }
+
+    #[test]
+    fn selected_agent_without_context_keeps_bare_token_total() {
+        // An agent that publishes no statusline (today, Codex) degrades to the
+        // simple selected-row token total — no cost, no usage windows.
+        let mut codex = agent(
+            "codex-1",
+            "codex",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            Some("/repo/main"),
+            Some("main"),
+            Some("add tests"),
+        );
+        codex.model = Some("GPT-5.5".to_owned());
+        codex.total_tokens = Some(5_000);
+        assert!(codex.context.is_none());
+        let snapshot = snapshot_with(Vec::new(), vec![codex]);
+        let rendered = snapshot_to_screen_with_alert_and_ui(
+            &snapshot,
+            None,
+            &UiState {
+                selected_index: 0,
+                help_visible: false,
+                animation_phase: 0,
+            },
+            44,
+            12,
+        );
+
+        assert!(rendered.contains("5.0k tok"));
+        assert!(!rendered.contains('↻'));
+        assert!(!rendered.contains('$'));
     }
 
     #[test]
