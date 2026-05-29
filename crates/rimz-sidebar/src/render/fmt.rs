@@ -17,23 +17,6 @@ pub(super) fn age_short(at: Timestamp) -> String {
     }
 }
 
-/// Elapsed time without the trailing "ago" — for banners that already have
-/// their own preposition (e.g. "degraded for 8s").
-pub(super) fn elapsed_short(since: Timestamp) -> String {
-    let seconds = Timestamp::now().duration_since(since).as_secs();
-    if seconds <= 0 {
-        "0s".to_owned()
-    } else if seconds < 60 {
-        format!("{seconds}s")
-    } else if seconds < 60 * 60 {
-        format!("{}m", seconds / 60)
-    } else if seconds < 60 * 60 * 24 {
-        format!("{}h", seconds / 3600)
-    } else {
-        format!("{}d", seconds / 86_400)
-    }
-}
-
 /// How recently an agent must have acted for its row to keep animating. Past
 /// this window the running head freezes, so a wedged or quiet agent never
 /// spins. Sized a few animation frames above the tick so a genuinely-busy

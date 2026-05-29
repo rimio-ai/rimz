@@ -28,7 +28,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use rimz::{SidebarRowKind, SidebarSnapshot};
 
-use self::fmt::elapsed_short;
+use self::fmt::age_short;
 use self::sections::{attention_line, first_run_hint_lines, worktree_group_lines};
 use self::theme::Theme;
 
@@ -120,12 +120,15 @@ fn compose_lines(
     width: u16,
     height: u16,
 ) -> Vec<Line<'static>> {
-    let mut body = snapshot_lines(snapshot, alert, ui, usize::from(width));
+    // `NO_COLOR` can't change mid-process, so read the palette once per frame
+    // and hand the same `Theme` to the body and the alert.
+    let theme = Theme::from_env();
+    let mut body = snapshot_lines(snapshot, alert, ui, usize::from(width), &theme);
     let Some(alert) = alert else {
         return body;
     };
 
-    let alert_block = alert_lines(&Theme::from_env(), alert);
+    let alert_block = alert_lines(&theme, alert);
     let cells = usize::from(width.max(1));
     let height = usize::from(height);
     let alert_height = alert_block
@@ -183,21 +186,21 @@ fn snapshot_lines(
     alert: Option<&Alert>,
     ui: &UiState,
     width: usize,
+    theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let theme = Theme::from_env();
     // An *active* alert means the body is a stale/empty fetch, not a live room:
     // suppress the first-run hint, footer, and help so the alert speaks alone.
     // A recovered alert is just a lingering notice — the room below it is live.
     let active = alert.is_some_and(Alert::is_active);
     let mut lines = Vec::new();
 
-    if let Some(line) = attention_line(&theme, &snapshot.worktree_groups) {
+    if let Some(line) = attention_line(theme, &snapshot.worktree_groups) {
         lines.push(line);
     }
     if snapshot.worktree_groups.is_empty() {
         if !active && should_show_first_run_hint(snapshot) {
             push_section_gap(&mut lines);
-            lines.extend(first_run_hint_lines(&theme, snapshot.agent_hooks_ready));
+            lines.extend(first_run_hint_lines(theme, snapshot.agent_hooks_ready));
         }
         if !active {
             lines.extend(footer_lines(snapshot));
@@ -210,7 +213,7 @@ fn snapshot_lines(
                 lines.push(Line::from(""));
             }
             lines.extend(worktree_group_lines(
-                &theme,
+                theme,
                 group,
                 width,
                 &mut row_index,
@@ -220,7 +223,7 @@ fn snapshot_lines(
         }
         if !active && should_show_first_run_hint(snapshot) {
             lines.push(Line::from(""));
-            lines.extend(first_run_hint_lines(&theme, snapshot.agent_hooks_ready));
+            lines.extend(first_run_hint_lines(theme, snapshot.agent_hooks_ready));
         }
         if ui.help_visible && !active {
             lines.push(Line::from(""));
@@ -236,7 +239,7 @@ fn snapshot_lines(
 
 fn alert_lines(theme: &Theme, alert: &Alert) -> Vec<Line<'static>> {
     if alert.is_active() {
-        let elapsed = elapsed_short(alert.since);
+        let elapsed = age_short(alert.since);
         vec![Line::styled(
             format!("! Sidebar degraded for {elapsed}: {}", alert.reason),
             theme.style(Color::Red, Modifier::BOLD),
@@ -244,7 +247,7 @@ fn alert_lines(theme: &Theme, alert: &Alert) -> Vec<Line<'static>> {
     } else {
         let elapsed = alert
             .recovered_at
-            .map(elapsed_short)
+            .map(age_short)
             .unwrap_or_else(|| "0s".to_owned());
         vec![Line::styled(
             format!("⚠ last alert {elapsed} ago: {}  ·  x dismiss", alert.reason),
