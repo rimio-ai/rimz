@@ -34,6 +34,13 @@ pub const MIN_ZELLIJ_VERSION: (u32, u32, u32) = (0, 41, 0);
 /// whether a live session still carries its sidebar.
 const SIDEBAR_PANE_NAME: &str = "rimz-sidebar";
 
+/// Zellij's action client occasionally answers `list-panes` with an empty
+/// stdout and a success status when the session server is mid-tick — a known
+/// race that a short retry clears. Without this, the sidebar's snapshot loop
+/// flashes a "could not parse mux output: EOF" alert for a single blip.
+const LIST_PANES_ATTEMPTS: u32 = 3;
+const LIST_PANES_RETRY_DELAY: Duration = Duration::from_millis(50);
+
 /// Bundle reported by `rimz doctor` when the active backend is Zellij.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ZellijCapabilities {
@@ -79,10 +86,24 @@ impl ZellijBackend {
             spec = spec.args(["--session".to_owned(), name.to_owned()]);
         }
         spec = spec.args(["action", "list-panes", "-j", "-a"]);
-        let output = spec.run()?;
-        serde_json::from_slice::<Vec<RawPane>>(&output.stdout).map_err(|e| MuxErr::Output {
+        for attempt in 0..LIST_PANES_ATTEMPTS {
+            if attempt > 0 {
+                std::thread::sleep(LIST_PANES_RETRY_DELAY);
+            }
+            let output = spec.run()?;
+            if is_transient_empty(&output.stdout) {
+                continue;
+            }
+            return serde_json::from_slice::<Vec<RawPane>>(&output.stdout).map_err(|e| {
+                MuxErr::Output {
+                    program: "zellij".to_owned(),
+                    reason: format!("parsing list-panes JSON: {e}"),
+                }
+            });
+        }
+        Err(MuxErr::Output {
             program: "zellij".to_owned(),
-            reason: format!("parsing list-panes JSON: {e}"),
+            reason: format!("list-panes returned no output after {LIST_PANES_ATTEMPTS} attempts"),
         })
     }
 
@@ -302,6 +323,14 @@ impl MuxBackend for ZellijBackend {
             })?;
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
     }
+}
+
+/// Whether `list-panes` stdout is the transient empty race rather than a real
+/// answer. Zellij spells "zero panes" as `[]`, so empty (or whitespace-only)
+/// output means the action client raced the session server and is worth a
+/// retry — not an EOF parse error.
+fn is_transient_empty(stdout: &[u8]) -> bool {
+    stdout.iter().all(u8::is_ascii_whitespace)
 }
 
 fn terminal_pane_count(panes: &[RawPane]) -> usize {
@@ -668,6 +697,15 @@ mod tests {
         assert!(parsed[0].is_focused);
         assert!(parsed[1].is_plugin);
         assert!(!parsed[1].is_focused);
+    }
+
+    #[test]
+    fn transient_empty_detects_blank_list_panes_output() {
+        assert!(is_transient_empty(b""));
+        assert!(is_transient_empty(b"  \n\t"));
+        // A real, parseable answer — even an empty pane set — is not transient.
+        assert!(!is_transient_empty(b"[]"));
+        assert!(!is_transient_empty(b"[{\"id\":0}]"));
     }
 
     #[test]
