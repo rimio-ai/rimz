@@ -108,6 +108,14 @@ impl AgentIntegration for CodexIntegration {
         Ok(None)
     }
 
+    fn moves_on(&self, event_name: &str) -> bool {
+        // Same turn-boundary signal as Claude: a fresh prompt or the root Stop
+        // means the agent is past any native_ui ask it raised mid-turn. A
+        // SubagentStop is a child finishing, not the human answering, so it does
+        // not clear the root's asks.
+        matches!(event_name, "Stop" | "UserPromptSubmit")
+    }
+
     fn observe_lifecycle(
         &self,
         event_name: &str,

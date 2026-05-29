@@ -552,3 +552,66 @@ fn expire_agent_session_abandons_only_that_sessions_pending_asks() {
         .expect("expire again");
     assert_eq!(again, 0);
 }
+
+#[test]
+fn moved_on_expiry_clears_native_ui_asks_but_spares_bridge() {
+    let h = crate::common::Harness::new();
+
+    // A live session that just moved on left two native_ui asks pending and one
+    // bridge ask in flight; the bridge ask resolves via its own socket and must
+    // survive the move-on expiry.
+    let mut native_a = FeedItem::new(
+        h.workspace_id.clone(),
+        Surface::NativeUi,
+        FeedKind::Permission,
+        "claude needs attention",
+        "claude",
+        "agent-hook",
+    );
+    native_a.payload = json!({ "session_id": "live" });
+    let mut native_b = FeedItem::new(
+        h.workspace_id.clone(),
+        Surface::NativeUi,
+        FeedKind::Question,
+        "claude needs attention",
+        "claude",
+        "agent-hook",
+    );
+    native_b.payload = json!({ "session_id": "live" });
+    let mut bridge = FeedItem::new(
+        h.workspace_id.clone(),
+        Surface::Bridge,
+        FeedKind::Permission,
+        "claude needs attention",
+        "claude",
+        "agent-hook",
+    );
+    bridge.payload = json!({ "session_id": "live" });
+
+    for item in [&native_a, &native_b, &bridge] {
+        h.ledger.push_feed_item(item, "rimz-test").expect("push");
+    }
+
+    let expired = h
+        .ledger
+        .expire_agent_native_ui_asks("claude", "live", "rimz-test")
+        .expect("expire");
+    assert_eq!(expired, 2, "only the two native_ui asks are expired");
+
+    let by_id = |id: &rimz::RequestId| h.ledger.load_feed_item(id).expect("load").status;
+    assert_eq!(by_id(&native_a.request_id), FeedStatus::Abandoned);
+    assert_eq!(by_id(&native_b.request_id), FeedStatus::Abandoned);
+    assert_eq!(
+        by_id(&bridge.request_id),
+        FeedStatus::Pending,
+        "the in-flight bridge ask keeps resolving through its socket",
+    );
+
+    // The audit trail names the move-on reason, not a session end.
+    let events = h.ledger.read_events().expect("events");
+    assert!(
+        events.iter().any(|event| event.method == "feed.expire"
+            && event.params.get("reason").and_then(|v| v.as_str()) == Some("agent_moved_on")),
+        "expiry is audited as agent_moved_on",
+    );
+}

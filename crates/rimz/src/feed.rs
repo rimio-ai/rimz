@@ -234,6 +234,11 @@ pub enum AbandonReason {
     /// The agent session that raised the ask ended before it was answered; the
     /// pending item is expired so it can't outlive its session.
     AgentSessionEnded,
+    /// The agent moved on from a native_ui ask without answering it through
+    /// Rimz — a new prompt, the end of its turn, or a fresh ask superseding it.
+    /// The agent answered (or dismissed) it in its own UI and will never report
+    /// back, so the pending item is expired before it can pile up as attention.
+    AgentMovedOn,
     /// The process that owned a pending runtime record exited before the item
     /// reached a terminal state.
     OwnerProcessExited,
@@ -249,6 +254,7 @@ impl AbandonReason {
             Self::ScriptWaitTimeout => "wait_timeout_elapsed",
             Self::HookAlreadyReturnedNeutral => "hook_already_returned_neutral",
             Self::AgentSessionEnded => "agent_session_ended",
+            Self::AgentMovedOn => "agent_moved_on",
             Self::OwnerProcessExited => "owner_process_exited",
         }
     }

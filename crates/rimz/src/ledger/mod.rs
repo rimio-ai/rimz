@@ -39,7 +39,7 @@ use serde_json::json;
 use tracing::warn;
 
 use crate::feed::{
-    AbandonReason, FeedItem, FeedStatus, Resolution, ResolutionMethod, ResolverStepState,
+    AbandonReason, FeedItem, FeedStatus, Resolution, ResolutionMethod, ResolverStepState, Surface,
 };
 use crate::ids::{RequestId, ResolverId, WorkspaceId};
 use crate::schema::event::EventEnvelope;
@@ -53,6 +53,34 @@ pub use crate::ledger::snapshot::{
     SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
 };
 pub use crate::ledger::workspace_record::WorkspaceRecord;
+
+/// Why a session's pending agent-hook asks are being expired. The variant
+/// both scopes which surfaces are eligible and supplies the audit reason, so
+/// the two can never drift apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AskExpiry {
+    /// The session ended outright; expire every surface it left pending.
+    SessionEnded,
+    /// A live session moved on; expire only its native_ui asks. Bridge asks
+    /// resolve via their own socket and must stay live.
+    MovedOn,
+}
+
+impl AskExpiry {
+    fn reason(self) -> AbandonReason {
+        match self {
+            Self::SessionEnded => AbandonReason::AgentSessionEnded,
+            Self::MovedOn => AbandonReason::AgentMovedOn,
+        }
+    }
+
+    fn includes(self, surface: Surface) -> bool {
+        match self {
+            Self::SessionEnded => true,
+            Self::MovedOn => surface == Surface::NativeUi,
+        }
+    }
+}
 
 /// High-level handle to a workspace's durable state. Cheap to clone — the
 /// inner state lives behind an `Arc`. Every public method takes the
@@ -718,13 +746,10 @@ impl Ledger {
         Ok(())
     }
 
-    /// Expire every pending agent-hook ask raised by an agent session that has
-    /// just ended. Each match moves to `Abandoned` with an `AgentMovedOn`
-    /// resolution and a `feed.expire` audit event. A dead session can't answer
-    /// its own prompt, so leaving it pending would strand attention on the
-    /// sidebar; this closes the loop deterministically (the snapshot's
-    /// read-side guard self-heals anything that races this write). Returns the
-    /// number of items expired.
+    /// Expire every pending agent-hook ask raised by a session that has *ended*.
+    /// A dead session can't answer its own prompt on any surface, so all of its
+    /// pending asks — native_ui and bridge alike — are expired. See
+    /// [`Self::expire_agent_asks`] for the shared mechanics.
     #[must_use = "durability barrier; check the result"]
     pub fn expire_agent_session(
         &self,
@@ -732,6 +757,39 @@ impl Ledger {
         agent_id: &str,
         session_name: &str,
     ) -> Result<usize> {
+        self.expire_agent_asks(source, agent_id, session_name, AskExpiry::SessionEnded)
+    }
+
+    /// Expire a *live* session's pending native_ui asks because it moved on
+    /// (a new prompt, the end of its turn, or a fresh ask superseding the old).
+    /// Scoped to native_ui: the agent answers those in its own UI and never
+    /// reports back, so they would otherwise pile up as duplicate attention.
+    /// Bridge asks resolve through their own socket and stay untouched.
+    #[must_use = "durability barrier; check the result"]
+    pub fn expire_agent_native_ui_asks(
+        &self,
+        source: &str,
+        agent_id: &str,
+        session_name: &str,
+    ) -> Result<usize> {
+        self.expire_agent_asks(source, agent_id, session_name, AskExpiry::MovedOn)
+    }
+
+    /// Move a session's matching pending agent-hook asks to `Abandoned` with an
+    /// `AgentMovedOn` resolution and a `feed.expire` audit event, then rebuild
+    /// the snapshot and wake sidebars. `expiry` scopes which surfaces are
+    /// eligible and supplies the audit reason. Closing the loop here is
+    /// deterministic; the snapshot's read-side guard self-heals anything that
+    /// races this write. Returns the number of items expired.
+    #[must_use = "durability barrier; check the result"]
+    fn expire_agent_asks(
+        &self,
+        source: &str,
+        agent_id: &str,
+        session_name: &str,
+        expiry: AskExpiry,
+    ) -> Result<usize> {
+        let reason = expiry.reason();
         let mut expired = Vec::new();
         {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
@@ -740,13 +798,14 @@ impl Ledger {
                     || item.source != source
                     || item.status != FeedStatus::Pending
                     || item.agent_session_id() != Some(agent_id)
+                    || !expiry.includes(item.surface)
                 {
                     continue;
                 }
-                item.mark_active_resolver_budget_elapsed(AbandonReason::AgentSessionEnded);
+                item.mark_active_resolver_budget_elapsed(reason);
                 let mut resolution =
                     Resolution::new(json!({ "expired": true }), ResolutionMethod::AgentMovedOn);
-                resolution.reason = Some(AbandonReason::AgentSessionEnded.as_str().to_owned());
+                resolution.reason = Some(reason.as_str().to_owned());
                 item.status = FeedStatus::Abandoned;
                 item.resolution = Some(resolution);
                 item.updated_at = Timestamp::now();
@@ -763,7 +822,7 @@ impl Ledger {
                             "request_id": item.request_id,
                             "source": source,
                             "agent_id": agent_id,
-                            "reason": AbandonReason::AgentSessionEnded.as_str(),
+                            "reason": reason.as_str(),
                         }),
                     ),
                 )?;

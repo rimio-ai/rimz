@@ -136,24 +136,32 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                 );
             }
         }
-        // A session that just ended can no longer answer its own prompts.
-        // Expire the asks it left pending so they don't strand attention on a
-        // dead pane (the sidebar's read-side guard self-heals races).
-        if agent.ends_session(&event_name)
-            && let Some(agent_id) = payload
-                .get("session_id")
-                .or_else(|| payload.get("agent_id"))
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty())
-            && let Err(err) =
-                ledger.expire_agent_session(agent.name(), agent_id, &workspace.session_name)
-        {
-            warn!(
-                agent = agent.name(),
-                event = %event_name,
-                error = %err,
-                "lifecycle: failed to expire pending asks for ended session",
-            );
+        // A lifecycle boundary can strand the session's pending native_ui asks:
+        // the agent answers those in its own UI and never reports back, so they
+        // pile up as duplicate attention. When the session *ends*, expire every
+        // surface it left pending; when it merely *moves on* (a new prompt or
+        // turn end), expire only its native_ui asks so an in-flight bridge ask
+        // keeps resolving. The sidebar's read-side guard self-heals races.
+        if let Some(agent_id) = payload_agent_id(&payload) {
+            let expiry = if agent.ends_session(&event_name) {
+                Some(ledger.expire_agent_session(agent.name(), agent_id, &workspace.session_name))
+            } else if agent.moves_on(&event_name) {
+                Some(ledger.expire_agent_native_ui_asks(
+                    agent.name(),
+                    agent_id,
+                    &workspace.session_name,
+                ))
+            } else {
+                None
+            };
+            if let Some(Err(err)) = expiry {
+                warn!(
+                    agent = agent.name(),
+                    event = %event_name,
+                    error = %err,
+                    "lifecycle: failed to expire the session's pending asks",
+                );
+            }
         }
         emit_neutral(agent.as_ref(), &event_name)?;
         return Ok(());
@@ -317,6 +325,22 @@ fn handle_blocking_feed(
     feed_kind: FeedKind,
     payload: Value,
 ) -> Result<()> {
+    // A fresh ask supersedes any earlier native_ui ask this session left
+    // pending — the agent only ever shows one at a time in its own UI. Expire
+    // the priors before pushing so the sidebar never stacks two rows for one
+    // session. Bridge asks resolve via their socket and are left alone.
+    if let Some(agent_id) = payload_agent_id(&payload)
+        && let Err(err) =
+            ledger.expire_agent_native_ui_asks(agent.name(), agent_id, &workspace.session_name)
+    {
+        warn!(
+            agent = agent.name(),
+            event = %event_name,
+            error = %err,
+            "blocking feed: failed to expire the session's prior native_ui asks",
+        );
+    }
+
     let allowlist = Allowlist::load().context("loading resolver allowlist")?;
     let fresh = fresh_enrolled(ledger.runtime_paths(), &allowlist)
         .context("checking resolver heartbeat freshness")?;
@@ -608,12 +632,21 @@ fn build_item(
     item
 }
 
+/// The agent session id from a hook payload, read in the same order as
+/// [`rimz::feed::FeedItem::agent_session_id`] (`agent_id`, then `session_id`)
+/// so a session resolves to the same key whether read from a lifecycle event
+/// or from a stored ask. Empty ids are filtered out.
+fn payload_agent_id(payload: &Value) -> Option<&str> {
+    ["agent_id", "session_id"].into_iter().find_map(|key| {
+        payload
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+    })
+}
+
 fn agent_runtime_owner(source: &str, payload: &Value) -> Option<rimz::RuntimeOwner> {
-    let subject_id = payload
-        .get("agent_id")
-        .or_else(|| payload.get("session_id"))
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())?;
+    let subject_id = payload_agent_id(payload)?;
     let pid = hook_agent_pid(source)?;
     Some(process_owner(RuntimeOwnerKind::Agent, subject_id, pid))
 }

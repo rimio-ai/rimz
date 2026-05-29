@@ -99,7 +99,7 @@ No fresh enrolled resolver heartbeat at hook fire time:
 5. Hook exits within milliseconds.
 6. Agent's own UI asks the human.
 
-No per-request socket is bound. The agent moves on through `PostToolUse` or `Stop`, and the item transitions to `resolved`; the sidebar clears it and the record stays in `rimz feed list`.
+No per-request socket is bound, and the human answers in the agent's own UI — Rimz never learns the decision, so the item never reaches `resolved`. Instead the next ledger event that proves the session moved on expires it: a fresh ask supersedes it before being pushed, a `Stop`/`UserPromptSubmit` clears it at the turn boundary, and `SessionEnd` clears every surface the session left pending. Each match moves to `abandoned` with an `agent_moved_on` (or `agent_session_ended`) reason, so a session can never stack more than one native_ui row. The broad `PostToolUse` hook is silent on the ledger, so it is *not* a trigger; the read-side snapshot also collapses a session's pending asks to one row as a backstop.
 
 ## Bridge path
 

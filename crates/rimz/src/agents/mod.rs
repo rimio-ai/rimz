@@ -216,6 +216,16 @@ pub trait AgentIntegration: Send + Sync {
         false
     }
 
+    /// Whether this event means a still-live session moved on from any pending
+    /// native_ui ask — a new prompt or the end of its turn. When true the CLI
+    /// expires the session's pending native_ui asks: the agent answered (or
+    /// dismissed) them in its own UI and never reports back, so they would
+    /// otherwise pile up as duplicate attention. Bridge asks are untouched.
+    /// Defaults to `false`; adapters override for their turn-boundary events.
+    fn moves_on(&self, _event_name: &str) -> bool {
+        false
+    }
+
     /// Write or merge the adapter's hook config into the agent's per-user
     /// config file. Defaults to an explicit "not implemented" error until an
     /// adapter owns installation.

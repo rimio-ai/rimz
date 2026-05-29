@@ -156,6 +156,14 @@ impl AgentIntegration for ClaudeIntegration {
         event_name == "SessionEnd"
     }
 
+    fn moves_on(&self, event_name: &str) -> bool {
+        // A new prompt starts a fresh turn; a Stop ends the current one. Either
+        // way the agent is past any native_ui ask it raised mid-turn — Claude
+        // blocks on its own prompt and emits no events until the human answers
+        // it, so by the time one of these arrives the ask is settled in its UI.
+        matches!(event_name, "Stop" | "UserPromptSubmit")
+    }
+
     fn observe_lifecycle(
         &self,
         event_name: &str,
@@ -1687,5 +1695,16 @@ mod tests {
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
         assert!(ClaudeIntegration.ends_session("SessionEnd"));
         assert!(!ClaudeIntegration.ends_session("Stop"));
+    }
+
+    #[test]
+    fn turn_boundaries_move_the_session_on() {
+        // Stop and a fresh prompt clear the session's mid-turn native_ui asks;
+        // SessionStart/SessionEnd and tool events do not.
+        assert!(ClaudeIntegration.moves_on("Stop"));
+        assert!(ClaudeIntegration.moves_on("UserPromptSubmit"));
+        assert!(!ClaudeIntegration.moves_on("SessionStart"));
+        assert!(!ClaudeIntegration.moves_on("SessionEnd"));
+        assert!(!ClaudeIntegration.moves_on("PostToolUse"));
     }
 }
