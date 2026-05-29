@@ -12,8 +12,14 @@ use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 pub(super) enum Wakeup {
     Tick,
     Resize,
+    /// `rimz reload` asks the renderer to re-exec its own binary in place so a
+    /// freshly-installed build takes effect without a session rebirth.
+    Reload,
     Key(KeyAction),
-    MouseClick { column: u16, row: u16 },
+    MouseClick {
+        column: u16,
+        row: u16,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,6 +68,7 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
     }
     match raw {
         "resize" => Wakeup::Resize,
+        "reload" => Wakeup::Reload,
         "key:up" => Wakeup::Key(KeyAction::Up),
         "key:down" => Wakeup::Key(KeyAction::Down),
         "key:enter" => Wakeup::Key(KeyAction::Enter),
@@ -125,6 +132,16 @@ mod tests {
         assert_eq!(
             decode_wakeup(release.as_bytes()),
             Wakeup::MouseClick { column: 4, row: 7 }
+        );
+    }
+
+    #[test]
+    fn reload_control_word_decodes_to_reload() {
+        assert_eq!(decode_wakeup(b"reload"), Wakeup::Reload);
+        // The wakeup sender and decoder share one constant so they cannot drift.
+        assert_eq!(
+            decode_wakeup(rimz::ledger::wakeup::RELOAD_WAKEUP),
+            Wakeup::Reload
         );
     }
 

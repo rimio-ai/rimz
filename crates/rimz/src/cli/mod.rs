@@ -9,6 +9,7 @@ mod hooks;
 mod list;
 mod pane;
 mod parse;
+mod reload;
 mod resolver;
 mod sidebar;
 mod trust;
@@ -40,6 +41,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Event(args)) => event::run(args, &globals),
         Some(Subcmd::Feed(args)) => feed::run(args, &globals),
         Some(Subcmd::Gc(args)) => gc::run(args, &globals),
+        Some(Subcmd::Reload(args)) => reload::run(args, &globals),
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
         Some(Subcmd::Resolver(args)) => resolver::run(args, &globals),
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
@@ -109,6 +111,8 @@ enum Subcmd {
     Feed(feed::FeedArgs),
     /// Remove stale runtime liveness hints.
     Gc(gc::GcArgs),
+    /// Reload running sidebars in place (pick up a freshly-installed build).
+    Reload(reload::ReloadArgs),
     /// Pane primitives backed by the selected mux backend.
     Pane(pane::PaneArgs),
     /// Manage the per-machine resolver allowlist.
@@ -511,9 +515,7 @@ fn renamed_session_to_retire<'a>(
     if recorded == derived {
         return None;
     }
-    live.iter()
-        .any(|name| name == recorded)
-        .then_some(recorded)
+    live.iter().any(|name| name == recorded).then_some(recorded)
 }
 
 /// Retire a live session left behind by a session-name change so the upcoming
@@ -530,7 +532,8 @@ fn retire_renamed_session(backend: &dyn MuxBackend, workspace: &rimz::ResolvedWo
         Err(_) => return, // No prior record: first birth, nothing to retire.
     };
     let live = backend.list_sessions().unwrap_or_default();
-    if let Some(stale) = renamed_session_to_retire(Some(&recorded), &workspace.session_name, &live) {
+    if let Some(stale) = renamed_session_to_retire(Some(&recorded), &workspace.session_name, &live)
+    {
         match backend.kill_session(stale) {
             Ok(()) => tracing::info!(
                 old = %stale,

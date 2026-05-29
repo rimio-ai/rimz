@@ -125,9 +125,43 @@ fn wake_sidebars_inner(
         protocol_version: crate::schema::SIDEBAR_PROTOCOL_VERSION,
     })?;
 
+    let mut piped_zellij_sessions: HashSet<String> = HashSet::new();
+    for hb in collect_fresh_sidebars(rt)? {
+        send_datagram(&payload, &hb.wakeup_socket);
+        if hb.mux == MuxName::Zellij && piped_zellij_sessions.insert(hb.session_name.clone()) {
+            dispatch_zellij_pipe(&hb.session_name, &payload);
+        }
+    }
+    Ok(())
+}
+
+/// Tell every fresh sidebar of this workspace to re-exec its own binary, so it
+/// picks up a freshly-installed renderer in place — no session rebirth, no pane
+/// churn. The per-tick `rimz` snapshot subprocess already reloads on its own;
+/// this covers the long-lived renderer process. Returns how many sidebars were
+/// signaled. A wedged or already-dead sidebar receives nothing; relaunch it via
+/// `rimz start`/`rimz attach` instead.
+pub fn reload_sidebars(rt: &RuntimePaths) -> Result<usize> {
+    let mut signaled = 0;
+    for hb in collect_fresh_sidebars(rt)? {
+        send_datagram(RELOAD_WAKEUP, &hb.wakeup_socket);
+        signaled += 1;
+    }
+    Ok(signaled)
+}
+
+/// Control word the renderer decodes into a re-exec. Shared so the wakeup
+/// sender and the sidebar's decoder cannot drift.
+pub const RELOAD_WAKEUP: &[u8] = b"reload";
+
+/// Walk the runtime heartbeat dir and return every sidebar heartbeat that is
+/// readable, on the current protocol, and fresh (including a TOCTOU re-stat
+/// just before return). Both the ledger wakeup fanout and `reload` share this
+/// so the freshness contract lives in one place.
+fn collect_fresh_sidebars(rt: &RuntimePaths) -> Result<Vec<SidebarHeartbeat>> {
     let entries = match fs::read_dir(&rt.heartbeat_dir) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(source) => {
             return Err(WakeupErr::ReadDir {
                 path: rt.heartbeat_dir.clone(),
@@ -137,7 +171,7 @@ fn wake_sidebars_inner(
     };
 
     let now = Timestamp::now();
-    let mut piped_zellij_sessions: HashSet<String> = HashSet::new();
+    let mut fresh = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if !is_sidebar_heartbeat(&path) {
@@ -172,12 +206,9 @@ fn wake_sidebars_inner(
         if !heartbeat_still_fresh(&path) {
             continue;
         }
-        send_datagram(&payload, &hb.wakeup_socket);
-        if hb.mux == MuxName::Zellij && piped_zellij_sessions.insert(hb.session_name.clone()) {
-            dispatch_zellij_pipe(&hb.session_name, &payload);
-        }
+        fresh.push(hb);
     }
-    Ok(())
+    Ok(fresh)
 }
 
 /// Issue the broadcast `zellij pipe` fast path described in

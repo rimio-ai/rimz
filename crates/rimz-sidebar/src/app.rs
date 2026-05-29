@@ -89,8 +89,9 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     let mut health = Health::default();
     let mut self_close = SelfCloseState::default();
     let mut ui = UiState::default();
+    let mut reload_requested = false;
 
-    loop {
+    'serve: loop {
         let heartbeat_outcome = write_heartbeat(&config, &socket_path);
         let snapshot_outcome = fetch_snapshot_for(
             &config.rimz_bin,
@@ -172,6 +173,14 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     )?;
                 }
                 Wakeup::Tick => break,
+                Wakeup::Reload => {
+                    debug!(
+                        session = %config.session_name,
+                        "reload requested; re-execing the renderer in place",
+                    );
+                    reload_requested = true;
+                    break 'serve;
+                }
                 wakeup => {
                     let outcome = handle_wakeup(wakeup, &mut ui, &state.snapshot);
                     if outcome.dismiss {
@@ -193,7 +202,40 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             }
         }
     }
+    if reload_requested {
+        // Restore the terminal and release this instance's runtime files before
+        // replacing the process image — `exec` never returns, so their RAII
+        // Drop would otherwise be skipped and leak a stale socket + heartbeat.
+        drop(_input_mode);
+        drop(_socket_cleanup);
+        drop(_heartbeat_cleanup);
+        return Err(reexec_self());
+    }
     Ok(())
+}
+
+/// Replace this process with a fresh invocation of its own binary and argv.
+/// After `rimz reload`, the renderer's binary on disk has been updated in
+/// place; re-execing the same command line loads the new code without touching
+/// the pane or session. Only returns on failure — success replaces the image.
+fn reexec_self() -> SidebarAppErr {
+    use std::os::unix::process::CommandExt;
+
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(source) => {
+            return SidebarAppErr::CommandIo {
+                program: "current_exe".to_owned(),
+                source,
+            };
+        }
+    };
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let source = Command::new(&exe).args(&args).exec();
+    SidebarAppErr::CommandIo {
+        program: exe.to_string_lossy().into_owned(),
+        source,
+    }
 }
 
 /// Decide whether the sidebar should exit so its own pane closes. The sidebar
@@ -574,7 +616,9 @@ fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -
         Wakeup::Key(action) => handle_key(action, ui, snapshot),
         Wakeup::MouseClick { column, row } => handle_mouse_click(column, row, ui, snapshot),
         Wakeup::Resize => InputOutcome::redraw(),
-        Wakeup::Tick => InputOutcome::default(),
+        // The serve loop intercepts these before dispatching here: a tick is the
+        // re-fetch trigger, and a reload breaks the loop to re-exec.
+        Wakeup::Tick | Wakeup::Reload => InputOutcome::default(),
     }
 }
 
