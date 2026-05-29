@@ -192,14 +192,13 @@ impl Env {
         }
     }
 
-    /// Wire an agent the way the user does: `rimz hooks install <source>
-    /// --telemetry`. Telemetry wires the full lifecycle (prompt + tool events)
-    /// so the journey can exercise every phase; production install defaults to
-    /// lifecycle + feed only for privacy.
+    /// Wire an agent the way the user does: `rimz hooks install <source>`. The
+    /// install wires the full lifecycle (prompt + tool events) so the journey
+    /// can exercise every phase.
     pub fn install_agent_hooks(&self, source: &str) {
         let out = self
             .rimz()
-            .args(["hooks", "install", source, "--telemetry"])
+            .args(["hooks", "install", source])
             .output()
             .expect("spawn hooks install");
         assert!(

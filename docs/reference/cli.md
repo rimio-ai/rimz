@@ -33,7 +33,7 @@ rimz feed list [--json] [--audit]
 rimz feed show <request-id> [--json]
 ```
 
-`event emit` is fire-and-forget telemetry that lands in the ledger. `feed push` posts a richer audit item without blocking. `feed ask` blocks the script until somebody answers or the timeout fires; while that waiting process is alive, the question lands in runtime views and the sidebar with declared options as answer buttons.
+`event emit` is a fire-and-forget signal that lands in the ledger. `feed push` posts a richer audit item without blocking. `feed ask` blocks the script until somebody answers or the timeout fires; while that waiting process is alive, the question lands in runtime views and the sidebar with declared options as answer buttons.
 
 Default `feed list` is a runtime view: it expels records whose recorded owner process is gone, reused, or missing. `feed list --audit` shows durable feed history exactly as written. `feed show <request-id>` is always an exact audit lookup.
 
@@ -98,7 +98,7 @@ Resolvers form an ordered chain that ends with you. Each entry has its own `--bu
 ## Operate and maintain
 
 ```sh
-rimz hooks install <agent>   [--telemetry]
+rimz hooks install <agent>
 rimz hooks uninstall <agent>
 
 rimz workspace migrate <old-root> <new-root>   # repo moved; rewire the ledger
@@ -113,7 +113,7 @@ rimz reload                                    # reload running sidebars in plac
 
 `workspace migrate` moves the state directory from the workspace ID derived from `<old-root>` to the ID derived from `<new-root>`, then rewrites feed items, event envelopes, snapshots, and `workspace.json` to the new ID. `workspace prune` reaps provably-dead ledgers: a `workspace.json` record whose project root no longer exists, or an abandoned `rimz start` scaffold with no record and no durable history. A directory whose record is unreadable but still holds history is reported and kept, never deleted. `workspace rotate-events` archives the active event log into `events.log.archive/` when it exceeds `--max-bytes` (default `64MiB`), folds the agent rollup into `agents.carryover.json` so it survives the rename, and removes archives older than `--archive-older-than` when provided. `trust status` re-hashes the project's executable surface on every call and reports `trusted`, `stale`, `untrusted`, or `no_config`; `trust grant` pins the current hash and `trust revoke` drops the record. Full contract in [trust.md](../internals/trust.md). `gc` is the global garbage collector: it removes stale runtime liveness hints — stale resolver/sidebar heartbeats and stale sidebar wakeup sockets — abandons pending feed items whose recorded owner process has exited, and prunes provably-dead workspaces under the same rule as `workspace prune`. `reload` tells the cwd workspace's live sidebars to re-exec their own binary in place, so a freshly-installed build (`make install`) takes effect without a session rebirth or pane churn; the per-tick `rimz sidebar snapshot` subprocess already reloads on its own. A wedged or already-dead sidebar receives nothing — relaunch it with `rimz start`/`rimz attach`.
 
-`--telemetry` is opt-in for every agent integration. It adds high-frequency hooks (prompt submit, pre/post tool) and is gated by `[privacy] payload_mode`. See [agent.md](../internals/agent.md).
+`hooks install` wires the full event set for every agent integration, including the high-frequency pre/post-tool hooks that keep the sidebar's enrichment current. Their payload content is gated by `[privacy] payload_mode`. See [agent.md](../internals/agent.md).
 
 ## Internal
 

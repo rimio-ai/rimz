@@ -484,7 +484,7 @@ mod tests {
 
         std::fs::write(
             dir.path().join(".rimz/config.toml"),
-            "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude --telemetry\"\n",
+            "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks codex\"\n",
         )
         .expect("rewrite");
 

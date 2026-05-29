@@ -867,7 +867,7 @@ fn feed_kind_task(kind: FeedKind) -> &'static str {
         FeedKind::NeedsInput => "needs input",
         FeedKind::Completion => "completion",
         FeedKind::Failure => "failure",
-        FeedKind::ToolTelemetry => "tool",
+        FeedKind::ToolEvent => "tool",
         FeedKind::SubAgentStarted => "sub-agent started",
         FeedKind::SubAgentStopped => "sub-agent stopped",
         FeedKind::Generic => "activity",

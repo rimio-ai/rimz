@@ -383,7 +383,6 @@ fn codex_install_uninstall_cli_round_trips_into_codex_config() {
     let report: Value = serde_json::from_slice(&install.stdout).expect("install report json");
     assert_eq!(report["agent"], "codex");
     assert_eq!(report["merged"], false);
-    assert_eq!(report["telemetry"], false);
     let events = report["installed_events"].as_array().expect("events");
     let names: Vec<&str> = events.iter().filter_map(Value::as_str).collect();
     assert!(names.contains(&"SessionStart"));
@@ -792,7 +791,6 @@ fn claude_install_uninstall_cli_round_trips_into_settings_json() {
     let report: Value = serde_json::from_slice(&install.stdout).expect("install report json");
     assert_eq!(report["agent"], "claude");
     assert_eq!(report["merged"], false);
-    assert_eq!(report["telemetry"], false);
     let events = report["installed_events"].as_array().expect("events");
     let names: Vec<&str> = events.iter().filter_map(Value::as_str).collect();
     assert!(names.contains(&"SessionStart"));
@@ -806,9 +804,9 @@ fn claude_install_uninstall_cli_round_trips_into_settings_json() {
     );
     let on_disk: Value =
         serde_json::from_slice(&std::fs::read(&claude_settings).unwrap()).expect("settings json");
-    // PreToolUse block has both managed matchers.
+    // PreToolUse block has both blocking matchers plus the broad per-tool hook.
     let pre_tool = on_disk["hooks"]["PreToolUse"].as_array().expect("array");
-    assert_eq!(pre_tool.len(), 2);
+    assert_eq!(pre_tool.len(), 3);
 
     let uninstall = env
         .rimz()

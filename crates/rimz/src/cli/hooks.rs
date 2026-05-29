@@ -64,9 +64,6 @@ enum HooksSubcmd {
     Install {
         /// Agent name (`claude`, `codex`).
         source: String,
-        /// Also wire telemetry hooks (broad pre/post tool use).
-        #[arg(long)]
-        telemetry: bool,
     },
     /// Remove the adapter's Rimz-managed hook block.
     Uninstall {
@@ -78,7 +75,7 @@ enum HooksSubcmd {
 pub fn run(args: HooksArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         HooksSubcmd::Feed { source, event } => run_feed(source, event, globals),
-        HooksSubcmd::Install { source, telemetry } => run_install(source, telemetry),
+        HooksSubcmd::Install { source } => run_install(source),
         HooksSubcmd::Uninstall { source } => run_uninstall(source),
     }
 }
@@ -288,9 +285,9 @@ fn matches_agent_kind(comm: &str, source: &str) -> bool {
     matches!((source, comm), ("codex", "node"))
 }
 
-fn run_install(source: String, telemetry: bool) -> Result<()> {
+fn run_install(source: String) -> Result<()> {
     let agent = integration_by_name(&source)?;
-    let report = agent.install_hooks(telemetry)?;
+    let report = agent.install_hooks()?;
     // User-facing JSON. Report struct derives Serialize so the shape stays in
     // lockstep with `HookInstallReport`.
     let rendered = serde_json::to_string_pretty(&report)?;

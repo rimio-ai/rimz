@@ -411,7 +411,7 @@ pub fn session_start_at(
     })
 }
 
-/// `UserPromptSubmit` telemetry payload carrying the prompt as the task.
+/// `UserPromptSubmit` lifecycle payload carrying the prompt as the task.
 pub fn user_prompt_submit(session_id: &str, prompt: &str) -> Value {
     json!({
         "hook_event_name": "UserPromptSubmit",

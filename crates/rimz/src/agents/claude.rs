@@ -39,10 +39,13 @@ const CLAUDE_HOOK_CAP: Duration = Duration::from_secs(120);
 /// [`CLAUDE_HOOK_CAP`] so the agent and bridge agree on the ceiling.
 const CLAUDE_HOOK_TIMEOUT_SECS: u64 = 120;
 
-/// Default-install events. Tuple is `(event_name, optional_matcher)` — the
-/// matcher is `Some(_)` for `PreToolUse` sub-events that target a specific
-/// Claude tool (`ExitPlanMode`, `AskUserQuestion`).
-const DEFAULT_EVENTS: &[(&str, Option<&str>)] = &[
+/// Installed events. Tuple is `(event_name, optional_matcher)` — the matcher
+/// is `Some(_)` for `PreToolUse` sub-events that target a specific Claude tool
+/// (`ExitPlanMode`, `AskUserQuestion`). The broad `PreToolUse`/`PostToolUse`
+/// hooks fire on every tool call; they keep the sidebar's enrichment current
+/// and feed `rimz feed list --audit` depth, with their payload content gated by
+/// `[privacy] payload_mode`.
+const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
     ("SessionStart", None),
     ("SessionEnd", None),
     ("UserPromptSubmit", None),
@@ -51,12 +54,9 @@ const DEFAULT_EVENTS: &[(&str, Option<&str>)] = &[
     ("PermissionRequest", None),
     ("PreToolUse", Some("ExitPlanMode")),
     ("PreToolUse", Some("AskUserQuestion")),
+    ("PreToolUse", None),
+    ("PostToolUse", None),
 ];
-
-/// Telemetry-install events (added when `--telemetry` is passed). These are
-/// high-frequency, content-heavy hooks for audit depth — `UserPromptSubmit`
-/// and `Stop` are state signal and live in the default set.
-const TELEMETRY_EVENTS: &[(&str, Option<&str>)] = &[("PreToolUse", None), ("PostToolUse", None)];
 
 /// Events that hold the agent open while the bridge waits for an answer.
 /// Installing one with `_rimz_sync = false` in the existing config is a hard
@@ -233,14 +233,14 @@ impl AgentIntegration for ClaudeIntegration {
         })
     }
 
-    fn install_hooks(&self, telemetry: bool) -> Result<HookInstallReport> {
+    fn install_hooks(&self) -> Result<HookInstallReport> {
         let path = claude_settings_path()?;
-        install_into(&path, telemetry)
+        install_into(&path)
     }
 
-    fn preview_hook_install(&self, telemetry: bool) -> Result<HookInstallPreview> {
+    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
         let path = claude_settings_path()?;
-        preview_install_at(&path, telemetry)
+        preview_install_at(&path)
     }
 
     fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
@@ -484,9 +484,9 @@ fn claude_settings_path() -> Result<PathBuf> {
     Ok(home.join(".claude").join("settings.json"))
 }
 
-fn install_into(path: &Path, telemetry: bool) -> Result<HookInstallReport> {
+fn install_into(path: &Path) -> Result<HookInstallReport> {
     let existed = path.exists();
-    let (root, installed) = install_candidate(path, telemetry)?;
+    let (root, installed) = install_candidate(path)?;
     write_json(path, &root)?;
 
     Ok(HookInstallReport {
@@ -494,14 +494,13 @@ fn install_into(path: &Path, telemetry: bool) -> Result<HookInstallReport> {
         config_path: path.to_path_buf(),
         installed_events: installed,
         merged: existed,
-        telemetry,
     })
 }
 
-fn preview_install_at(path: &Path, telemetry: bool) -> Result<HookInstallPreview> {
+fn preview_install_at(path: &Path) -> Result<HookInstallPreview> {
     let existed = path.exists();
     let original_config = original_text(path)?;
-    let (root, installed) = install_candidate(path, telemetry)?;
+    let (root, installed) = install_candidate(path)?;
     Ok(HookInstallPreview {
         agent: "claude",
         config_path: path.to_path_buf(),
@@ -509,11 +508,10 @@ fn preview_install_at(path: &Path, telemetry: bool) -> Result<HookInstallPreview
         original_config,
         candidate_config: render_json(&root)?,
         merged: existed,
-        telemetry,
     })
 }
 
-fn install_candidate(path: &Path, telemetry: bool) -> Result<(Map<String, Value>, Vec<String>)> {
+fn install_candidate(path: &Path) -> Result<(Map<String, Value>, Vec<String>)> {
     let mut root = read_existing_json(path)?;
 
     // Defensive: a tampered or stale Rimz write may carry a `_rimz_sync =
@@ -526,15 +524,9 @@ fn install_candidate(path: &Path, telemetry: bool) -> Result<(Map<String, Value>
     let _ = strip_rimz_matchers(&mut root);
 
     let mut installed = Vec::new();
-    for &(event, matcher) in DEFAULT_EVENTS {
+    for &(event, matcher) in INSTALLED_EVENTS {
         upsert_rimz_matcher(&mut root, event, matcher);
         installed.push(event_label(event, matcher));
-    }
-    if telemetry {
-        for &(event, matcher) in TELEMETRY_EVENTS {
-            upsert_rimz_matcher(&mut root, event, matcher);
-            installed.push(event_label(event, matcher));
-        }
     }
 
     Ok((root, installed))
@@ -967,7 +959,7 @@ mod tests {
     fn install_into_empty_dir_creates_managed_entries() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        let report = install_into(&path, false).unwrap();
+        let report = install_into(&path).unwrap();
         assert!(!report.merged);
         assert_eq!(report.agent, "claude");
         assert!(report.installed_events.contains(&"SessionStart".to_owned()));
@@ -1021,6 +1013,19 @@ mod tests {
                 ]
               }
             ],
+            "PostToolUse": [
+              {
+                "_rimz_managed": true,
+                "_rimz_sync": false,
+                "hooks": [
+                  {
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event PostToolUse",
+                    "timeout": 120,
+                    "type": "command"
+                  }
+                ]
+              }
+            ],
             "PreToolUse": [
               {
                 "_rimz_managed": true,
@@ -1045,6 +1050,17 @@ mod tests {
                   }
                 ],
                 "matcher": "AskUserQuestion"
+              },
+              {
+                "_rimz_managed": true,
+                "_rimz_sync": false,
+                "hooks": [
+                  {
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude --event PreToolUse",
+                    "timeout": 120,
+                    "type": "command"
+                  }
+                ]
               }
             ],
             "SessionEnd": [
@@ -1123,14 +1139,15 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let report = install_into(&path, false).unwrap();
+        let report = install_into(&path).unwrap();
         assert!(report.merged);
 
         let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(parsed["model"], "claude-opus-4-7");
         let pre_tool = parsed["hooks"]["PreToolUse"].as_array().unwrap();
-        // user `Bash` matcher + 2 rimz matchers (ExitPlanMode, AskUserQuestion).
-        assert_eq!(pre_tool.len(), 3);
+        // user `Bash` matcher + 3 rimz matchers (ExitPlanMode, AskUserQuestion,
+        // and the broad per-tool hook).
+        assert_eq!(pre_tool.len(), 4);
         assert!(pre_tool.iter().any(|e| e["matcher"] == "Bash"
             && e.get("_rimz_managed").and_then(Value::as_bool) != Some(true)));
         // UserPromptSubmit is state signal, so a default install wires it. The
@@ -1148,39 +1165,33 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_install_adds_broad_pre_post_tool_use() {
+    fn install_wires_non_blocking_per_tool_hooks() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        let report = install_into(&path, true).unwrap();
-        assert!(report.telemetry);
-        assert!(
-            report
-                .installed_events
-                .contains(&"UserPromptSubmit".to_owned())
-        );
+        let report = install_into(&path).unwrap();
         assert!(report.installed_events.contains(&"PreToolUse".to_owned()));
         assert!(report.installed_events.contains(&"PostToolUse".to_owned()));
 
         let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let pre_tool = parsed["hooks"]["PreToolUse"].as_array().unwrap();
-        // 2 blocking matchers + 1 telemetry (no matcher) = 3.
+        // 2 blocking matchers + 1 broad per-tool hook (no matcher) = 3.
         assert_eq!(pre_tool.len(), 3);
-        // Telemetry entry has no matcher key and sync = false.
-        let telemetry_entry = pre_tool
+        // The broad per-tool hook has no matcher key and is non-blocking.
+        let broad = pre_tool
             .iter()
             .find(|e| !e.as_object().unwrap().contains_key("matcher"))
             .unwrap();
-        assert_eq!(telemetry_entry["_rimz_managed"], true);
-        assert_eq!(telemetry_entry["_rimz_sync"], false);
+        assert_eq!(broad["_rimz_managed"], true);
+        assert_eq!(broad["_rimz_sync"], false);
     }
 
     #[test]
     fn install_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        install_into(&path, true).unwrap();
+        install_into(&path).unwrap();
         let first = std::fs::read_to_string(&path).unwrap();
-        install_into(&path, true).unwrap();
+        install_into(&path).unwrap();
         let second = std::fs::read_to_string(&path).unwrap();
         assert_eq!(
             first, second,
@@ -1204,7 +1215,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        install_into(&path, true).unwrap();
+        install_into(&path).unwrap();
         let report = uninstall_from(&path).unwrap();
         assert!(report.existed);
         assert!(!report.removed_events.is_empty());
@@ -1235,7 +1246,7 @@ mod tests {
             !hooks_installed_at(&path),
             "a missing settings file reads as not installed"
         );
-        install_into(&path, false).unwrap();
+        install_into(&path).unwrap();
         assert!(
             hooks_installed_at(&path),
             "an installed settings file reads as installed"
@@ -1284,7 +1295,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let err = install_into(&path, false).unwrap_err();
+        let err = install_into(&path).unwrap_err();
         assert!(matches!(
             err,
             AgentErr::Install {
@@ -1314,7 +1325,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let err = install_into(&path, false).unwrap_err();
+        let err = install_into(&path).unwrap_err();
         let AgentErr::Install { agent, reason } = err else {
             panic!("expected Install error");
         };
@@ -1330,7 +1341,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         std::fs::write(&path, "[]").unwrap();
-        let err = install_into(&path, false).unwrap_err();
+        let err = install_into(&path).unwrap_err();
         assert!(matches!(
             err,
             AgentErr::Install {

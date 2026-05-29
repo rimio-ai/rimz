@@ -219,7 +219,7 @@ fn ensure_detected_agent_hooks() -> Result<()> {
         }
 
         if !agent.hooks_installed() {
-            missing.push(agent.preview_hook_install(false)?);
+            missing.push(agent.preview_hook_install()?);
         }
     }
 
@@ -234,7 +234,7 @@ fn ensure_detected_agent_hooks() -> Result<()> {
 
     for name in approve_hook_install(&missing)? {
         let agent = rimz::agents::integration_by_name(name)?;
-        let report = agent.install_hooks(false)?;
+        let report = agent.install_hooks()?;
         let mut stderr = std::io::stderr().lock();
         writeln!(
             stderr,

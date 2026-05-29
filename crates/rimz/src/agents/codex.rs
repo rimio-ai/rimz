@@ -33,20 +33,21 @@ use crate::ledger::atomic;
 /// before tightening.
 const CODEX_HOOK_CAP: Duration = Duration::from_secs(60);
 
-/// Default-install events (always wired). `UserPromptSubmit` is state signal —
-/// it moves the root agent to running and carries the task — so it is default,
-/// not telemetry.
-const DEFAULT_EVENTS: &[&str] = &[
+/// Installed events (always wired). `UserPromptSubmit` is state signal — it
+/// moves the root agent to running and carries the task. The broad
+/// `PreToolUse`/`PostToolUse` hooks fire on every tool call; they keep the
+/// sidebar's enrichment current and feed `rimz feed list --audit` depth, with
+/// their payload content gated by `[privacy] payload_mode`.
+const INSTALLED_EVENTS: &[&str] = &[
     "SessionStart",
     "UserPromptSubmit",
     "SubagentStart",
     "SubagentStop",
     "Stop",
     "PermissionRequest",
+    "PreToolUse",
+    "PostToolUse",
 ];
-/// Telemetry-install events (added when `--telemetry` is passed): high-frequency
-/// per-tool hooks for audit depth.
-const TELEMETRY_EVENTS: &[&str] = &["PreToolUse", "PostToolUse"];
 
 /// Legacy config block written by older Rimz builds. Codex ignores this block;
 /// uninstall still removes it so users can clean up stale config.
@@ -174,14 +175,14 @@ impl AgentIntegration for CodexIntegration {
         })
     }
 
-    fn install_hooks(&self, telemetry: bool) -> Result<HookInstallReport> {
+    fn install_hooks(&self) -> Result<HookInstallReport> {
         let path = codex_config_path()?;
-        install_into(&path, telemetry)
+        install_into(&path)
     }
 
-    fn preview_hook_install(&self, telemetry: bool) -> Result<HookInstallPreview> {
+    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
         let path = codex_config_path()?;
-        preview_install_at(&path, telemetry)
+        preview_install_at(&path)
     }
 
     fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
@@ -432,9 +433,9 @@ fn codex_config_path() -> Result<PathBuf> {
     Ok(home.join(".codex").join("config.toml"))
 }
 
-fn install_into(path: &std::path::Path, telemetry: bool) -> Result<HookInstallReport> {
+fn install_into(path: &std::path::Path) -> Result<HookInstallReport> {
     let existed = path.exists();
-    let (root, installed) = install_candidate(path, telemetry)?;
+    let (root, installed) = install_candidate(path)?;
     write_table(path, &root)?;
 
     Ok(HookInstallReport {
@@ -442,14 +443,13 @@ fn install_into(path: &std::path::Path, telemetry: bool) -> Result<HookInstallRe
         config_path: path.to_path_buf(),
         installed_events: installed,
         merged: existed,
-        telemetry,
     })
 }
 
-fn preview_install_at(path: &std::path::Path, telemetry: bool) -> Result<HookInstallPreview> {
+fn preview_install_at(path: &std::path::Path) -> Result<HookInstallPreview> {
     let existed = path.exists();
     let original_config = original_text(path)?;
-    let (root, installed) = install_candidate(path, telemetry)?;
+    let (root, installed) = install_candidate(path)?;
     Ok(HookInstallPreview {
         agent: "codex",
         config_path: path.to_path_buf(),
@@ -457,30 +457,18 @@ fn preview_install_at(path: &std::path::Path, telemetry: bool) -> Result<HookIns
         original_config,
         candidate_config: render_table(&root)?,
         merged: existed,
-        telemetry,
     })
 }
 
-fn install_candidate(
-    path: &std::path::Path,
-    telemetry: bool,
-) -> Result<(toml::Table, Vec<String>)> {
+fn install_candidate(path: &std::path::Path) -> Result<(toml::Table, Vec<String>)> {
     let mut root = read_existing_table(path)?;
 
-    let mut removed = strip_rimz_hook_commands(&mut root);
-    removed.extend(remove_rimz_block(&mut root));
-    removed.sort();
-    removed.dedup();
+    // Strip any prior Rimz-managed hooks (and the legacy block) before writing
+    // the fresh set — installer constants are the single source of truth.
+    strip_rimz_hook_commands(&mut root);
+    remove_rimz_block(&mut root);
 
-    let installed = if telemetry {
-        DEFAULT_EVENTS
-            .iter()
-            .chain(TELEMETRY_EVENTS.iter())
-            .map(|s| (*s).to_owned())
-            .collect::<Vec<_>>()
-    } else {
-        DEFAULT_EVENTS.iter().map(|s| (*s).to_owned()).collect()
-    };
+    let installed: Vec<String> = INSTALLED_EVENTS.iter().map(|s| (*s).to_owned()).collect();
 
     for event in &installed {
         insert_rimz_hook_group(&mut root, event);
@@ -519,7 +507,7 @@ fn hooks_installed_at(path: &std::path::Path) -> bool {
     let Ok(root) = read_existing_table(path) else {
         return false;
     };
-    DEFAULT_EVENTS
+    INSTALLED_EVENTS
         .iter()
         .all(|event| has_rimz_hook_command(&root, event))
 }
@@ -951,10 +939,10 @@ mod tests {
     fn install_into_empty_dir_creates_documented_inline_hooks() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        let report = install_into(&path, false).unwrap();
+        let report = install_into(&path).unwrap();
         assert!(!report.merged);
         assert_eq!(report.agent, "codex");
-        assert_eq!(report.installed_events, DEFAULT_EVENTS);
+        assert_eq!(report.installed_events, INSTALLED_EVENTS);
         assert!(hooks_installed_at(&path));
 
         let text = std::fs::read_to_string(&path).unwrap();
@@ -965,6 +953,24 @@ mod tests {
         [[hooks.PermissionRequest.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex --event PermissionRequest"
         statusMessage = "Routing PermissionRequest through Rimz"
+        timeout = 60
+        type = "command"
+
+        [[hooks.PostToolUse]]
+        matcher = ".*"
+
+        [[hooks.PostToolUse.hooks]]
+        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex --event PostToolUse"
+        statusMessage = "Routing PostToolUse through Rimz"
+        timeout = 60
+        type = "command"
+
+        [[hooks.PreToolUse]]
+        matcher = ".*"
+
+        [[hooks.PreToolUse.hooks]]
+        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex --event PreToolUse"
+        statusMessage = "Routing PreToolUse through Rimz"
         timeout = 60
         type = "command"
 
@@ -1014,7 +1020,7 @@ mod tests {
     }
 
     #[test]
-    fn install_preserves_user_hooks_and_adds_telemetry() {
+    fn install_preserves_user_hooks_and_wires_per_tool() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(
@@ -1031,10 +1037,10 @@ command = "echo user"
         )
         .unwrap();
 
-        let report = install_into(&path, true).unwrap();
+        let report = install_into(&path).unwrap();
         assert!(report.merged);
-        for telemetry_event in TELEMETRY_EVENTS {
-            assert!(report.installed_events.iter().any(|e| e == telemetry_event));
+        for per_tool_event in ["PreToolUse", "PostToolUse"] {
+            assert!(report.installed_events.iter().any(|e| e == per_tool_event));
         }
 
         let parsed: toml::Table = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -1068,7 +1074,7 @@ command = "echo user"
         );
         assert!(
             has_rimz_hook_command(&parsed, "PreToolUse"),
-            "telemetry install wires PreToolUse"
+            "install wires the broad PreToolUse hook"
         );
     }
 
@@ -1101,7 +1107,7 @@ command = "echo user"
     fn uninstall_removes_rimz_hook_commands_and_preserves_user_hooks() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        install_into(&path, true).unwrap();
+        install_into(&path).unwrap();
         std::fs::write(
             &path,
             format!(
@@ -1153,7 +1159,7 @@ command = "rimz hooks feed --source codex --event PermissionRequest"
             !hooks_installed_at(&path),
             "legacy commands lack the PID wrapper and must be reinstalled"
         );
-        install_into(&path, false).unwrap();
+        install_into(&path).unwrap();
         assert!(hooks_installed_at(&path));
     }
 

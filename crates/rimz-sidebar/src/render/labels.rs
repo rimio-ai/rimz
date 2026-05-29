@@ -130,7 +130,7 @@ pub(super) fn todo_spans(theme: &Theme, done: u32, total: u32) -> Vec<Span<'stat
 }
 
 /// Total tokens formatted with a thin unit (`12.4k tok`, `523 tok`). Dim
-/// chrome — telemetry, never a decision driver.
+/// chrome — display-only, never a decision driver.
 pub(super) fn tokens_label(theme: &Theme, total: u64) -> Span<'static> {
     let text = if total >= 1_000_000 {
         let m = total as f64 / 1_000_000.0;

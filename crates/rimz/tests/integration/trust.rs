@@ -52,7 +52,7 @@ fn trust_auto_revokes_when_executable_surface_drifts() {
     // Mutate the hook command — a command-running field.
     env.write_config(
         &env.project_root,
-        "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude --telemetry\"\n",
+        "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks codex\"\n",
     );
 
     env.rimz()

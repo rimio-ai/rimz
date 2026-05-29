@@ -122,7 +122,7 @@ When a payload carries no session id, the adapter keys on the captured `runtime_
 
 `task`, `context_pct`, `total_tokens`, and the todo counts are **enrichment**: display-only, redactable, and they never drive routing, ranking, or a decision (the no-transcript-correctness rule). The reduced agent state keeps missing context as "the agent didn't report it"; the sidebar row projects that missing value to a visible 0% baseline so every observed agent has a context bar.
 
-Context budget is the one field no agent puts directly in its hook JSON — usage lives in the transcript. Capture reads the **transcript tail** only after the agent payload supplies a `session_id`, on the low-frequency events Rimz already fires (`SessionStart`, `UserPromptSubmit`, `Stop`), takes the most recent assistant usage record, and scales it against the model's context window, so the gauge upgrades without a per-tool hook. These are bare token counts (metadata); `payload_mode` gates the *content* of telemetry events, never these gauges or the *state transition* they ride on.
+Context budget is the one field no agent puts directly in its hook JSON — usage lives in the transcript. Capture reads the **transcript tail** only after the agent payload supplies a `session_id`, on the low-frequency events Rimz already fires (`SessionStart`, `UserPromptSubmit`, `Stop`), takes the most recent assistant usage record, and scales it against the model's context window, so the gauge upgrades without a per-tool hook. These are bare token counts (metadata); `payload_mode` gates the *content* of high-frequency event payloads, never these gauges or the *state transition* they ride on.
 
 ## Liveness and presence
 
@@ -144,16 +144,15 @@ Pane binding and jump are the snapshot's job, documented in [sidebar.md → Jump
 
 Hook install is a security surface. `rimz start` detects installed, supported agents each run, previews the additive per-user config change, installs missing hooks when approved, and continues without installing when the user skips or declines. `rimz hooks install <agent>` is the manual entry point. An agent run before hooks are installed fires no hook and registers nothing. `hooks_installed()` makes that state observable: `rimz doctor` reports it per agent, and the sidebar's first-run hint points at `rimz hooks install` until an agent is wired (see [sidebar.md → Empty-room hint](./sidebar.md#empty-room-hint)).
 
-### Default vs. telemetry install
+### What install wires
 
-The default install wires every event the **state machine** needs; telemetry adds high-frequency, content-heavy hooks for audit depth.
+Install wires every event the **state machine** needs plus the high-frequency, content-heavy per-tool hooks that keep the sidebar's enrichment current.
 
 ```sh
-rimz hooks install claude                  # lifecycle + feed: drives the full state machine
-rimz hooks install claude --telemetry      # add per-tool hooks for audit depth
+rimz hooks install claude
 ```
 
-The split is **state signal vs. payload depth**, not "some transitions are optional". `UserPromptSubmit` and `Stop` are state signal — without them an agent never enters `running` and never carries a task — so they are default. `PostToolUse` and broad `PreToolUse` fire on every tool call and carry tool inputs, prompts, file paths, and outputs; they are telemetry, useful for `rimz feed list --audit` depth. Gate telemetry payloads against `[privacy] payload_mode`:
+`UserPromptSubmit` and `Stop` are state signal — without them an agent never enters `running` and never carries a task. `PostToolUse` and broad `PreToolUse` fire on every tool call and carry tool inputs, prompts, file paths, and outputs; they drive real-time enrichment and `rimz feed list --audit` depth. Gate their payload content against `[privacy] payload_mode`:
 
 - `payload_mode = "metadata"` — strips inputs, prompts, args, errors. Smallest footprint.
 - `payload_mode = "redacted"` — keeps bounded payloads with built-in redaction. Default.
@@ -175,18 +174,18 @@ The mapping from Claude's native protocol onto the unified interface. The append
 
 Native event → unified mapping:
 
-| Native event                  | Install   | Channel       | `observe_lifecycle` → status        | Normalized fields                           |
-| ----------------------------- | --------- | ------------- | ----------------------------------- | ------------------------------------------- |
-| `SessionStart`                | default   | lifecycle     | `idle`                              | posture, model, context/tokens (transcript) |
-| `UserPromptSubmit`            | default   | lifecycle     | `running`                           | `task` = prompt; refresh context/tokens     |
-| `Stop`                        | default   | lifecycle     | `success` (error → `failed`; in-flight `background_tasks` → `running`) | `task` = background work else clear; refresh context/tokens |
-| `SessionEnd`                  | default   | lifecycle     | removed                             | —                                           |
-| `Notification`                | default   | lifecycle     | none (silent)                       | —                                           |
-| `PermissionRequest`           | default   | blocking-feed | `waiting`                           | —                                           |
-| `PreToolUse: ExitPlanMode`    | default   | blocking-feed | `waiting`                           | plan approval                               |
-| `PreToolUse: AskUserQuestion` | default   | blocking-feed | `waiting`                           | user question                               |
-| `PostToolUse`                 | telemetry | lifecycle     | none                                | `TodoWrite` todos; context/tokens           |
-| `PreToolUse` (broad)          | telemetry | lifecycle     | none                                | audit depth                                 |
+| Native event                  | Channel       | `observe_lifecycle` → status        | Normalized fields                           |
+| ----------------------------- | ------------- | ----------------------------------- | ------------------------------------------- |
+| `SessionStart`                | lifecycle     | `idle`                              | posture, model, context/tokens (transcript) |
+| `UserPromptSubmit`            | lifecycle     | `running`                           | `task` = prompt; refresh context/tokens     |
+| `Stop`                        | lifecycle     | `success` (error → `failed`; in-flight `background_tasks` → `running`) | `task` = background work else clear; refresh context/tokens |
+| `SessionEnd`                  | lifecycle     | removed                             | —                                           |
+| `Notification`                | lifecycle     | none (silent)                       | —                                           |
+| `PermissionRequest`           | blocking-feed | `waiting`                           | —                                           |
+| `PreToolUse: ExitPlanMode`    | blocking-feed | `waiting`                           | plan approval                               |
+| `PreToolUse: AskUserQuestion` | blocking-feed | `waiting`                           | user question                               |
+| `PostToolUse`                 | lifecycle     | none                                | `TodoWrite` todos; context/tokens           |
+| `PreToolUse` (broad)          | lifecycle     | none                                | audit depth                                 |
 
 Decision shapes — Claude requires `hookSpecificOutput`:
 
@@ -202,15 +201,15 @@ Decision shapes — Claude requires `hookSpecificOutput`:
 
 ## Appendix — Codex
 
-| Native event                                          | Install   | Channel       | `observe_lifecycle` → status | Normalized fields                                |
-| ----------------------------------------------------- | --------- | ------------- | ---------------------------- | ------------------------------------------------ |
-| `SessionStart`                                        | default   | lifecycle     | `idle`                       | posture, model, effort                           |
-| `UserPromptSubmit`                                    | default   | lifecycle     | `running`                    | `task` = prompt                                  |
-| `SubagentStart`                                       | default   | lifecycle     | `running`                    | keyed by child `agent_id`; `task` = `agent_type` |
-| `SubagentStop`                                        | default   | lifecycle     | `idle`                       | child row; clear task                            |
-| `Stop`                                                | default   | lifecycle     | `success` (error → `failed`) | clear task                                       |
-| `PermissionRequest`                                   | default   | blocking-feed | `waiting`                    | —                                                |
-| `PreToolUse`/`PostToolUse` (broad)                    | telemetry | lifecycle     | none                         | audit depth                                      |
+| Native event                                          | Channel       | `observe_lifecycle` → status | Normalized fields                                |
+| ----------------------------------------------------- | ------------- | ---------------------------- | ------------------------------------------------ |
+| `SessionStart`                                        | lifecycle     | `idle`                       | posture, model, effort                           |
+| `UserPromptSubmit`                                    | lifecycle     | `running`                    | `task` = prompt                                  |
+| `SubagentStart`                                       | lifecycle     | `running`                    | keyed by child `agent_id`; `task` = `agent_type` |
+| `SubagentStop`                                        | lifecycle     | `idle`                       | child row; clear task                            |
+| `Stop`                                                | lifecycle     | `success` (error → `failed`) | clear task                                       |
+| `PermissionRequest`                                   | blocking-feed | `waiting`                    | —                                                |
+| `PreToolUse`/`PostToolUse` (broad)                    | lifecycle     | none                         | audit depth                                      |
 
 Decision shape — Codex permission hooks emit only `hookSpecificOutput.decision`:
 
@@ -232,7 +231,7 @@ Codex 0.134 routes thread-spawned subagents through `SubagentStart`/`SubagentSto
 
 The contract above is implemented. The history below is kept so the rationale for each fix stays discoverable.
 
-1. **`UserPromptSubmit` is default-install** in both adapters (it was telemetry-only), so a default install reaches `running` and carries the prompt as its task. `Stop` was already default.
+1. **`UserPromptSubmit` is wired** in both adapters, so an install reaches `running` and carries the prompt as its task. `Stop` was already wired.
 2. **`Stop` maps to `success`/`failed`** via a shared `stop_status_from_payload` — clean completion is `success`, an explicit error signal is `failed`. `idle` is owned by `SessionStart`/`SubagentStop`, never a `Stop` outcome.
 3. **Context budget is captured** from the Claude transcript tail on `SessionStart`/`UserPromptSubmit`/`Stop`.
 4. **Agent visibility no longer requires a pid.** `RuntimeScope::Runtime` applies the owner-required filter to `Surface::Script` items only; agents and bridge asks are kept unless a known owner is known-dead, so a pid-less agent is carried by pane corroboration instead of vanishing.

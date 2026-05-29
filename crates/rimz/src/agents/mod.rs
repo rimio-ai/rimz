@@ -87,8 +87,7 @@ pub enum AgentHookClass {
     /// Non-blocking event that may carry a status/mode/task transition for
     /// the agent rollup (`SessionStart`, `UserPromptSubmit`, `Stop`, …). Per
     /// `docs/internals/agent.md` there are two runtime channels — lifecycle
-    /// and feed; "telemetry" is only an install-time privacy grouping, not a
-    /// channel. Whether a lifecycle event records anything is decided by
+    /// and feed. Whether a lifecycle event records anything is decided by
     /// [`AgentIntegration::observe_lifecycle`] returning `Some`.
     Lifecycle,
     BlockingFeed,
@@ -135,7 +134,7 @@ pub struct AgentLifecycleObservation {
     pub model: Option<String>,
     pub effort: Option<String>,
     /// Context-window utilization in percent reported by the agent (0..=100).
-    /// Enrich-only / telemetry-gated — the no-transcript-correctness rule.
+    /// Enrich-only / privacy-gated — the no-transcript-correctness rule.
     pub context_pct: Option<u8>,
     /// Cumulative token usage for this agent session.
     pub total_tokens: Option<u64>,
@@ -162,8 +161,6 @@ pub struct HookInstallReport {
     /// True when the installer wrote into an existing config (merge), false
     /// when the file was created fresh.
     pub merged: bool,
-    /// True when telemetry hooks were included.
-    pub telemetry: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -174,7 +171,6 @@ pub struct HookInstallPreview {
     pub original_config: Option<String>,
     pub candidate_config: String,
     pub merged: bool,
-    pub telemetry: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -221,10 +217,9 @@ pub trait AgentIntegration: Send + Sync {
     }
 
     /// Write or merge the adapter's hook config into the agent's per-user
-    /// config file. Telemetry hooks are included when `telemetry` is true.
-    /// Defaults to an explicit "not implemented" error until an adapter
-    /// owns installation.
-    fn install_hooks(&self, _telemetry: bool) -> Result<HookInstallReport> {
+    /// config file. Defaults to an explicit "not implemented" error until an
+    /// adapter owns installation.
+    fn install_hooks(&self) -> Result<HookInstallReport> {
         Err(AgentErr::Install {
             agent: self.name(),
             reason: "install not implemented for this adapter".to_owned(),
@@ -233,7 +228,7 @@ pub trait AgentIntegration: Send + Sync {
 
     /// Preview the exact per-user config write the installer would make,
     /// without touching disk. Used by the first-run consent gate.
-    fn preview_hook_install(&self, _telemetry: bool) -> Result<HookInstallPreview> {
+    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
         Err(AgentErr::Install {
             agent: self.name(),
             reason: "install preview not implemented for this adapter".to_owned(),
