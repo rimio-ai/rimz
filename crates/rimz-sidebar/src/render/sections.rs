@@ -383,14 +383,16 @@ fn capability_line(
     Some(Line::from(trim_spans_to_width(spans, width)))
 }
 
-/// Full-width context bar, drawn as its own thin line beneath the capability
-/// row. It starts at the same indent as the model name it underlines and spans
-/// the rest of the width, so every agent's bar shares one left edge and the
-/// bars line up across worktrees with no alignment bookkeeping.
+/// Centered context bar, drawn as its own thin line beneath the capability
+/// row. It starts at the same indent as the model name it underlines and leaves
+/// an equal gap at the trailing edge, so every agent's bar shares one left edge
+/// and the bars line up across worktrees with no alignment bookkeeping.
 fn gauge_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     let percent = row.context_pct?;
     let mut spans = vec![Span::raw("  ")];
-    spans.extend(gauge_spans(theme, percent, width.saturating_sub(2)));
+    // Reserve the leading two columns again on the right so the bar sits
+    // centered with matching gaps on both ends.
+    spans.extend(gauge_spans(theme, percent, width.saturating_sub(4)));
     Some(Line::from(trim_spans_to_width(spans, width)))
 }
 
