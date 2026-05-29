@@ -252,7 +252,15 @@ impl AgentIntegration for ClaudeIntegration {
             agent_process_start: None,
             runtime_owner: None,
             permission_posture: posture,
-            plan_mode: plan_mode_from_payload(payload),
+            // A completed turn is not read-only plan mode: a `Stop` that omits
+            // the mode clears the thinking signal rather than carrying a stale
+            // `plan` forward (after a plan-approval the agent runs auto mode and
+            // fires only per-tool hooks, so no later event would otherwise reset
+            // it). Every other event reports the mode as the payload gives it.
+            plan_mode: match event_name {
+                "Stop" => plan_mode_from_payload(payload).or(Some(false)),
+                _ => plan_mode_from_payload(payload),
+            },
             worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
             worktree_branch: optional_payload_string(payload, &["worktree_branch"]),
             task: background_task_label(&pending_background)
@@ -1760,6 +1768,27 @@ mod tests {
             .observe_lifecycle("UserPromptSubmit", &json!({ "session_id": "sess-1" }))
             .unwrap();
         assert_eq!(silent.plan_mode, None);
+    }
+
+    #[test]
+    fn stop_without_mode_clears_plan_mode() {
+        // A completed turn is not read-only plan mode. After a plan-approval the
+        // agent runs auto mode firing only per-tool hooks, so a mode-less `Stop`
+        // must report `Some(false)` — otherwise the carried-forward `plan` keeps
+        // the thinking sparkle on a working (or background-parked) agent.
+        let done = ClaudeIntegration
+            .observe_lifecycle("Stop", &json!({ "session_id": "sess-1" }))
+            .unwrap();
+        assert_eq!(done.plan_mode, Some(false));
+
+        // A turn that explicitly ends still in plan mode keeps the signal.
+        let still_planning = ClaudeIntegration
+            .observe_lifecycle(
+                "Stop",
+                &json!({ "session_id": "sess-1", "permission_mode": "plan" }),
+            )
+            .unwrap();
+        assert_eq!(still_planning.plan_mode, Some(true));
     }
 
     #[test]

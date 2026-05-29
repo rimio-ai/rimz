@@ -67,7 +67,7 @@ Each field, where it comes from, and its **lifetime** — the rule the reducer f
 | `kind`                              | `claude` / `codex`                | `--source` on the hook                                            | identity      |
 | `status`                            | 5-value rollup (below)            | derived from `event_name` (§ state machine)                       | activity      |
 | `permission_posture`                | `default`/`auto`/`yolo`/`unknown` | `SessionStart` · `permission_mode`/`approval_policy`              | carry-forward |
-| `plan_mode`                         | read-only plan mode (→ thinking)  | `SessionStart`/`UserPromptSubmit` · `permission_mode == "plan"`   | carry-forward |
+| `plan_mode`                         | read-only plan mode (→ thinking)  | set by `SessionStart`/`UserPromptSubmit` · `permission_mode == "plan"`; cleared by a mode-less `Stop` and by an approved plan (§ Leaving plan mode) | carry-forward |
 | `task`                              | what it's working on              | `UserPromptSubmit` · `prompt`; `SubagentStart` · `agent_type`     | activity      |
 | `model`                             | `Opus`, `GPT-5.5`                 | lifecycle · `model` (canonicalized — § below)                     | carry-forward |
 | `effort`                            | `xhigh`/`high`/…                  | lifecycle · `thinking_level`/`model_reasoning_effort`             | carry-forward |
@@ -116,6 +116,13 @@ The displayed cell refines `running` two ways without changing the rollup: a `ru
 `Stop` only fires after a turn ran, so it resolves the turn — `success`, or `failed` on an explicit error signal — never back to `idle`. One exception keeps it `running`: a `Stop` whose payload carries in-flight `background_tasks` (Claude Code v2.1.145+) is the main thread parking, not a turn end — it reawakens when the background work reports back — so the row stays `running` and labels itself with that work rather than painting a false `success`. An error still wins (the failure is the attention signal). `idle` is the resting state `SessionStart` establishes and a finished `SubagentStop` child returns to; `success`/`failed`/`idle` all re-enter `running` on the next prompt.
 
 The agent owns status and posture; Rimz observes and renders. `yolo` is observed from the agent's own bypass flag (`claude --dangerously-skip-permissions`, `codex --ask-for-approval never`). Workflow words such as `plan` and `interactive` fold into `default` because they are posture-neutral. The vocabulary is defined once in [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape).
+
+#### Leaving plan mode
+
+`thinking` is `running` joined to the `plan_mode` flag, so it must clear the moment the agent stops planning — otherwise the sparkle outlives the plan. The hard case is plan **approval**: the agent presents a plan via `ExitPlanMode`, the human approves, and the agent runs the plan in auto mode firing only per-tool hooks. Per-tool hooks carry no lifecycle observation (the event log is turn-grained), so no later event reports the now-non-`plan` mode, and a naive carry-forward keeps `plan_mode` true for the whole execution turn. Two clears close that gap:
+
+- **A finished turn is not planning.** A `Stop` (or Codex `SubagentStop`) that omits the mode reports `plan_mode = false` rather than carrying the stale `plan` forward — this covers the background-tasks `Stop` that stays `running`.
+- **An approved plan exits plan mode.** The plan-approval *resolution* is the "left plan mode" signal, and it lives in the feed channel, not the lifecycle log — so the snapshot applies it at projection time (`clear_exited_plan_modes`), not in the reducer. An allow-resolved `ExitPlanMode` ask bound to the agent and newer than its last lifecycle event (`last_seen`, which the activity heartbeat never advances) clears `plan_mode`. A **denial** leaves the agent planning, so the sparkle stays; a **prior turn's** approval is older than a fresh plan-mode prompt, so a new planning phase still sparkles.
 
 ### Instance identity and age
 
@@ -204,7 +211,7 @@ Native event → unified mapping:
 | ----------------------------- | ------------- | ----------------------------------- | ------------------------------------------- |
 | `SessionStart`                | lifecycle     | `idle`                              | posture, model, context/tokens (transcript) |
 | `UserPromptSubmit`            | lifecycle     | `running`                           | `task` = prompt; refresh context/tokens     |
-| `Stop`                        | lifecycle     | `success` (error → `failed`; in-flight `background_tasks` → `running`) | `task` = background work else clear; refresh context/tokens |
+| `Stop`                        | lifecycle     | `success` (error → `failed`; in-flight `background_tasks` → `running`) | `task` = background work else clear; clear plan mode unless still `plan`; refresh context/tokens |
 | `SessionEnd`                  | lifecycle     | removed                             | —                                           |
 | `Notification`                | lifecycle     | none (silent)                       | —                                           |
 | `PermissionRequest`           | blocking-feed | `waiting`                           | —                                           |

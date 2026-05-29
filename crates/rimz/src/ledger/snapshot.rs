@@ -255,7 +255,7 @@ impl SidebarSnapshot {
         workspace_id: WorkspaceId,
         mut items: Vec<FeedItem>,
         events: Vec<EventEnvelope>,
-        agents: Vec<AgentState>,
+        mut agents: Vec<AgentState>,
     ) -> Self {
         items.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
 
@@ -297,6 +297,13 @@ impl SidebarSnapshot {
                 }),
         );
         recent_activity.sort_by_key(|activity| std::cmp::Reverse(activity.timestamp()));
+
+        // The lifecycle log can't carry the "left read-only plan mode" signal:
+        // after a plan-approval the agent runs auto mode firing only per-tool
+        // hooks, so `plan_mode` would stay true and keep the thinking sparkle on
+        // a working agent. The approval lives in the feed store, not the event
+        // log, so clear it here from the resolved asks.
+        clear_exited_plan_modes(&mut agents, &recently_answered);
 
         let display_name = workspace_id.as_str().to_owned();
         // The pure reducer has no project root, so every cwd keeps per-path
@@ -699,6 +706,39 @@ fn most_relevant_ask<'a>(
 /// emits no progress while it waits and this never fires for one mid-flight.
 fn agent_moved_past_ask(agent: &AgentState, ask: &FeedItem) -> bool {
     agent.last_activity > ask.updated_at
+}
+
+/// Clear `plan_mode` on any agent that has *approved its plan this turn*. An
+/// `ExitPlanMode` plan-approval is the "left read-only plan mode" signal the
+/// lifecycle log can't carry — after approval the agent runs auto mode firing
+/// only per-tool hooks, so the carried-forward `plan_mode` would keep the
+/// thinking sparkle on a working agent. The approval is a resolved feed item,
+/// visible only here at projection time.
+///
+/// `updated_at > last_seen` scopes the approval to the current planning episode:
+/// `last_seen` is the timestamp of the agent's latest *lifecycle* event (the
+/// activity heartbeat advances `last_activity`, never `last_seen`), so during a
+/// planning phase it equals the plan-mode `UserPromptSubmit` time. A prior
+/// turn's approval is older than a fresh plan-mode prompt and is ignored, so a
+/// new planning phase still sparkles. A denied approval leaves the agent
+/// planning, so only an allow clears the signal.
+fn clear_exited_plan_modes(agents: &mut [AgentState], resolved: &[FeedItem]) {
+    for agent in agents.iter_mut().filter(|agent| agent.plan_mode) {
+        let approved_this_turn = resolved.iter().any(|item| {
+            item.kind == FeedKind::PlanApproval
+                && item.source_kind == "agent-hook"
+                && item.source == agent.kind
+                && item.agent_session_id() == Some(agent.agent_id.as_str())
+                && item.updated_at > agent.last_seen
+                && item
+                    .resolution
+                    .as_ref()
+                    .is_some_and(crate::agents::choice_is_allow)
+        });
+        if approved_this_turn {
+            agent.plan_mode = false;
+        }
+    }
 }
 
 /// Overlay a pending ask onto its agent's pane row: the row keeps the agent's
@@ -1687,6 +1727,81 @@ mod tests {
         assert_eq!(snap.worktree_groups[0].kind, SidebarWorktreeKind::Workspace);
         assert_eq!(snap.worktree_groups[0].label, "external");
         assert_eq!(snap.worktree_groups[0].rows.len(), 2);
+    }
+
+    /// A resolved `ExitPlanMode` plan-approval bound to `session`, decided
+    /// `allow`/deny, `secs_after_last_seen` seconds after the agent's last
+    /// lifecycle event (negative = before).
+    fn resolved_plan_approval(session: &str, allow: bool, secs_after_last_seen: i64) -> FeedItem {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut item = FeedItem::new(
+            workspace,
+            Surface::NativeUi,
+            FeedKind::PlanApproval,
+            "plan approval",
+            "claude",
+            "agent-hook",
+        );
+        item.payload = serde_json::json!({ "session_id": session });
+        item.status = FeedStatus::Resolved;
+        // `planning_agent` anchors `last_seen` at rank 50_000 → now − 50s; place
+        // the resolution that many seconds to either side of it.
+        let last_seen = Timestamp::now() - std::time::Duration::from_secs(50);
+        item.updated_at = if secs_after_last_seen >= 0 {
+            last_seen + std::time::Duration::from_secs(secs_after_last_seen as u64)
+        } else {
+            last_seen - std::time::Duration::from_secs((-secs_after_last_seen) as u64)
+        };
+        item.resolution = Some(crate::feed::Resolution::new(
+            serde_json::json!({ "choice": if allow { "allow" } else { "deny" } }),
+            crate::feed::ResolutionMethod::Sidebar,
+        ));
+        item
+    }
+
+    fn planning_agent(session: &str) -> AgentState {
+        // Rank 50_000 → last_seen at now − 50s, the plan-mode prompt time.
+        let mut agent = agent(
+            "claude",
+            session,
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            50_000,
+        );
+        agent.plan_mode = true;
+        agent
+    }
+
+    fn plan_mode_after_approval(item: FeedItem, agent: AgentState) -> bool {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let snap =
+            SidebarSnapshot::build_with_agents(workspace, vec![item], Vec::new(), vec![agent]);
+        snap.agents[0].plan_mode
+    }
+
+    #[test]
+    fn approving_a_plan_clears_thinking() {
+        // The reported bug: after the plan is approved the agent runs auto mode,
+        // but `plan_mode` was carried forward, so the thinking sparkle never
+        // quit. An allow-resolved plan-approval newer than `last_seen` clears it.
+        let item = resolved_plan_approval("sess-1", true, 10);
+        assert!(!plan_mode_after_approval(item, planning_agent("sess-1")));
+    }
+
+    #[test]
+    fn thinking_survives_deny_prior_turn_and_foreign_approval() {
+        // Deny: the agent keeps planning, so the sparkle stays.
+        let denied = resolved_plan_approval("sess-1", false, 10);
+        assert!(plan_mode_after_approval(denied, planning_agent("sess-1")));
+
+        // Prior turn: an approval older than this planning episode's `last_seen`
+        // belongs to a finished turn and must not silence a fresh plan prompt.
+        let stale = resolved_plan_approval("sess-1", true, -10);
+        assert!(plan_mode_after_approval(stale, planning_agent("sess-1")));
+
+        // Another session's approval never touches this agent.
+        let foreign = resolved_plan_approval("sess-other", true, 10);
+        assert!(plan_mode_after_approval(foreign, planning_agent("sess-1")));
     }
 
     #[test]
