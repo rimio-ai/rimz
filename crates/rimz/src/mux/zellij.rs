@@ -118,9 +118,7 @@ impl ZellijBackend {
         Self::list_panes_with_session(Some(name))
             .map(|panes| {
                 let mut found = false;
-                for pane in panes.iter().filter(|pane| {
-                    !pane.is_plugin && pane.title.as_deref() == Some(SIDEBAR_PANE_NAME)
-                }) {
+                for pane in panes.iter().filter(|pane| is_sidebar_pane(pane)) {
                     found = true;
                     if pane.is_held {
                         return false;
@@ -177,7 +175,7 @@ impl MuxBackend for ZellijBackend {
         let session_name = opts.session_name.unwrap_or_default();
         Ok(raws
             .into_iter()
-            .filter(|p| !p.is_plugin && !p.is_suppressed)
+            .filter(|p| p.is_terminal())
             .map(|p| PaneRef {
                 pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", p.id)),
                 session_name: session_name.clone(),
@@ -295,7 +293,7 @@ impl MuxBackend for ZellijBackend {
         let panes = Self::list_panes_with_session(Some(&opts.session_name))?;
         let classified: Vec<(String, bool)> = panes
             .iter()
-            .filter(|pane| !pane.is_plugin && !pane.is_suppressed)
+            .filter(|pane| pane.is_terminal())
             .map(|pane| (pane.tab_id.to_string(), is_sidebar_pane(pane)))
             .collect();
         let missing = super::views_missing_sidebar(&classified);
@@ -389,10 +387,7 @@ fn is_transient_empty(stdout: &[u8]) -> bool {
 }
 
 fn terminal_pane_count(panes: &[RawPane]) -> usize {
-    panes
-        .iter()
-        .filter(|pane| !pane.is_plugin && !pane.is_suppressed)
-        .count()
+    panes.iter().filter(|pane| pane.is_terminal()).count()
 }
 
 /// Liveness of a Zellij session, as reported by `zellij list-sessions`.
@@ -656,7 +651,7 @@ fn sidebar_and_tab_cols(session: &str, tab_id: u64, target_raw: u64) -> Option<(
     let mut current = None;
     for pane in panes
         .iter()
-        .filter(|pane| !pane.is_plugin && !pane.is_suppressed && pane.tab_id == tab_id)
+        .filter(|pane| pane.is_terminal() && pane.tab_id == tab_id)
     {
         let cols = pane.pane_columns?;
         total += cols;
@@ -725,6 +720,13 @@ struct RawPane {
 }
 
 impl RawPane {
+    /// A real terminal pane: not a plugin and not suppressed (floating/hidden).
+    /// The single definition of "counts as a pane" shared by the pane listing,
+    /// sidebar recovery, and column math.
+    fn is_terminal(&self) -> bool {
+        !self.is_plugin && !self.is_suppressed
+    }
+
     fn command(&self) -> Option<String> {
         self.pane_command
             .clone()
