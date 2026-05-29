@@ -51,8 +51,8 @@ Agent status is a five-value rollup the agent owns (`running`/`waiting`/`idle`/`
 | `waiting`          | `?`   | —                      | yellow bold | yes       |
 | `failed`           | `!`   | —                      | red bold    | yes       |
 | stalled (≥10 min)  | `!`   | —                      | red bold    | yes       |
-| `running` working  | `◕`   | fill `○ ◔ ◑ ◕ ●`       | green       | no        |
-| `running` thinking | `✽`   | sparkle `· ✢ ✳ ✶ ✻ ✽`  | cyan        | no        |
+| `running` working  | `⢿`   | spin `⣾⣽⣻⢿⡿⣟⣯⣷`        | Claude clay | no        |
+| `running` thinking | `✽`   | sparkle `· ✢ ✳ ✶ ✻ ✽`  | Claude clay | no        |
 | resolver answering | `⠋`   | braille spin           | yellow      | yes       |
 | `idle`             | `◌`   | —                      | gray / dim  | no        |
 | `success`          | `✓`   | —                      | green dim   | no        |
@@ -65,7 +65,7 @@ Agent permission postures (observed from the agent, not set by Rimz) render as c
 default   auto   yolo   unknown
 ```
 
-Live enrichments use one grammar. Context-window % renders as a smooth `Gauge`-style fill bar, todo progress as dots, and worktree diff stats as paired numeric tokens; they enrich display only and never drive a decision. A running agent's leading cell animates continuously on a wall-clock tick — a filling circle while working, a sparkle while thinking — so motion tracks live work; silence no longer freezes the spinner but escalates to `!` once the agent crosses the stall window. Color is a garnish layer over the same glyph grammar, and `NO_COLOR` keeps every shape readable.
+Live enrichments use one grammar. Context-window % renders as a smooth `Gauge`-style fill bar, todo progress as dots, and worktree diff stats as paired numeric tokens; they enrich display only and never drive a decision. A running agent's leading cell animates continuously on a wall-clock tick — a braille spinner while working, a sparkle while thinking, both in Claude clay — so motion tracks live work; silence no longer freezes the spinner but escalates to `!` once the agent crosses the stall window. Color is a garnish layer over the same glyph grammar, and `NO_COLOR` keeps every shape readable.
 
 Renderer details — the two-line row anatomy, attention ranking, and the jump interaction — live in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
 

@@ -133,7 +133,7 @@ fn phase1_launch_registers_idle_no_prompt() {
 }
 
 /// Phase 2 — prompted and working. `UserPromptSubmit` moves the agent to
-/// `◕ running` with the prompt as its task.
+/// `⢿ running` with the prompt as its task.
 #[test]
 fn phase2_prompt_moves_to_running_with_task() {
     let env = Env::new();
@@ -637,11 +637,11 @@ fn target_agent_exit_reverts_to_shell_or_vanishes() {
     );
 }
 
-/// A running agent's head animates the working fill `○ ◔ ◑ ◕ ●`, so a live
-/// capture may show any frame — match on `<frame> <name>` across the whole
-/// cycle (the static fallback `◕` is one of these frames).
+/// A running agent's head animates the working spinner, so a live capture may
+/// show any frame — match on `<frame> <name>` across the whole cycle (the
+/// static fallback `⢿` is one of these frames).
 fn running_row(screen: &str, name: &str) -> bool {
-    ['○', '◔', '◑', '◕', '●']
+    ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
         .iter()
         .any(|frame| screen.contains(&format!("{frame} {name}")))
 }

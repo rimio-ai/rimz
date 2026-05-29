@@ -93,11 +93,11 @@ The five-value status set, in ranking order (most attention-hungry first), per [
 | --------- | ----- | --------------------------- | ---------------- |
 | `waiting` | `?`   | blocked on a human decision | yes              |
 | `failed`  | `!`   | the last turn errored       | yes              |
-| `running` | `◕`   | actively working a task     | no               |
+| `running` | `⢿`   | actively working a task     | no               |
 | `idle`    | `◌`   | wired in, nothing in flight | no               |
 | `success` | `✓`   | last turn completed cleanly | no               |
 
-The displayed cell refines `running` two ways without changing the rollup: a `running` agent in read-only plan mode renders as **thinking** (`✽`, a sparkle animation — the `plan_mode` flag below), and a `running` agent silent past the stall window escalates to the attention **`!`** (see [Liveness and presence](#liveness-and-presence)). A working `running` agent animates a filling circle; the resolver-mid-flight overlay animates a braille spinner. Only these active states animate — `?`, `!`, `◌`, `✓` are static so attention stays scannable.
+The displayed cell refines `running` two ways without changing the rollup: a `running` agent in read-only plan mode renders as **thinking** (`✽`, a sparkle animation — the `plan_mode` flag below), and a `running` agent silent past the stall window escalates to the attention **`!`** (see [Liveness and presence](#liveness-and-presence)). A working `running` agent animates a braille spinner; the resolver-mid-flight overlay animates a braille spinner. Only these active states animate — `?`, `!`, `◌`, `✓` are static so attention stays scannable.
 
 `waiting` is **not** a lifecycle transition. It is the presence of a pending blocking feed item joined to the agent (the feed channel, not the lifecycle channel). The lifecycle machine drives the other four:
 

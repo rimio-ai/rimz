@@ -322,7 +322,7 @@ fn help_lines() -> Vec<Line<'static>> {
         Line::styled("keys & legend", dim),
         Line::styled("↑/↓ select   1-9 jump   ↵ jump", dim),
         Line::styled("␣ next ?!   x dismiss   r reload   ? close", dim),
-        Line::styled("◕ working   ✽ thinking   ? waiting", dim),
+        Line::styled("⢿ working   ✽ thinking   ? waiting", dim),
         Line::styled("! attention   ◌ idle   ✓ done   · process", dim),
     ]
 }
@@ -903,8 +903,8 @@ mod tests {
         let rendered = snapshot_to_screen(&snapshot, 24, 8);
 
         assert!(
-            // phase 0 of the working fill is the first frame `○`.
-            rendered.contains("○ codex"),
+            // phase 0 of the working spinner is the first frame `⣾`.
+            rendered.contains("⣾ codex"),
             "L0 keeps status glyph + name:\n{rendered}"
         );
         assert!(

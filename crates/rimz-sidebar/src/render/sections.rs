@@ -308,7 +308,7 @@ fn row_line(theme: &Theme, row: &SidebarRow, width: usize, animation_phase: u64)
         theme,
         Span::styled(
             agent_glyph(status, row.plan_mode, animation_phase),
-            agent_style(theme, status, row.plan_mode),
+            agent_style(theme, status),
         ),
         &row.name,
         descriptor(row),

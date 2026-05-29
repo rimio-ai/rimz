@@ -1,15 +1,14 @@
 ---
 source: crates/rimz-sidebar/src/render/mod.rs
-assertion_line: 389
 expression: screen
 ---
 ┌ query-engine ──────────────────────┐
 │?2                                  │
 │                                    │
-│▌main                          1? 1◕│
+│▌main                          1? 1⢿│
 │▎? claude  permission            <t>│
 │▎  ───────────────────────────────  │
-│ ○ codex   add tests              <t>│
+│ ⣾ codex   add tests              <t>│
 │   GPT-5.5 · high                   │
 │   ───────────────────────────────  │
 │                                    │

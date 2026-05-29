@@ -10,13 +10,13 @@ use ratatui::text::Span;
 use rimz::feed::{AgentStatus, PermissionPosture};
 
 use super::fmt::tokens_short;
-use super::theme::Theme;
+use super::theme::{ORANGE, Theme};
 
 /// The static status glyph — used for the legend, the worktree tally, the
 /// attention line, and as the leading cell for every non-animated state. The
 /// shape carries the status under `NO_COLOR`; color reinforces it. `Running`
-/// returns its mid-fill frame `◕` as the still fallback (distinct from idle
-/// `◌`, a todo `●`, and a todo `○`); the *animated* working/thinking cells live
+/// returns a representative working frame `⢿` as the still fallback (distinct
+/// from idle `◌`, a todo `●`, and a todo `○`); the *animated* working/thinking cells live
 /// in [`working_glyph`]/[`thinking_glyph`]. A `running` agent that has gone
 /// silent past the stall window is projected to `Failed` upstream, so it reads
 /// here as the attention `!` — there is no separate stalled glyph.
@@ -32,10 +32,10 @@ pub(super) fn status_glyph(status: AgentStatus) -> &'static str {
     }
 }
 
-/// Working: a circle filling and emptying. Spans the most time of any state, so
-/// it is the calm motion the eye learns to ignore until something changes. The
-/// fill never settles on idle `◌`, so a frozen frame still reads as "working".
-const WORKING_FRAMES: [&str; 8] = ["○", "◔", "◑", "◕", "●", "◕", "◑", "◔"];
+/// Working: a braille spinner cycling its dots. Spans the most time of any
+/// state, so it is the steady motion the eye learns to ignore until something
+/// changes. No frame matches idle `◌`, so a frozen frame still reads as "working".
+const WORKING_FRAMES: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 
 /// Thinking: a sparkle that grows and fades. Reserved for read-only plan mode —
 /// the agent is reasoning, not writing — so its motion reads as lighter than the
@@ -90,11 +90,12 @@ pub(super) fn status_style(theme: &Theme, status: AgentStatus) -> Style {
     }
 }
 
-/// Style for an agent row's leading cell: plan-mode thinking is cyan to set it
-/// apart from the green working fill; everything else takes its [`status_style`].
-pub(super) fn agent_style(theme: &Theme, status: AgentStatus, plan_mode: bool) -> Style {
-    if status == AgentStatus::Running && plan_mode {
-        return theme.style(Color::Cyan, Modifier::empty());
+/// Style for an agent row's leading cell. A running agent's working spinner and
+/// its plan-mode thinking sparkle both paint in Claude clay, so the live head
+/// aligns with the agent's own UI; every other state takes its [`status_style`].
+pub(super) fn agent_style(theme: &Theme, status: AgentStatus) -> Style {
+    if status == AgentStatus::Running {
+        return theme.style(ORANGE, Modifier::empty());
     }
     status_style(theme, status)
 }
