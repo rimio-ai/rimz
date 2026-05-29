@@ -131,6 +131,25 @@ impl MuxBackend for TmuxBackend {
             .map(|_| ())
     }
 
+    fn kill_session(&self, name: &str) -> Result<()> {
+        // A session that is already gone (or no server at all) is the goal
+        // state, so the "can't find session" / "no server" errors are success.
+        match self.cmd().args(["kill-session", "-t", name]).run() {
+            Ok(_) => Ok(()),
+            Err(MuxErr::Command { stderr, .. })
+                if {
+                    let lower = stderr.to_ascii_lowercase();
+                    lower.contains("can't find session")
+                        || lower.contains("no server running")
+                        || lower.contains("error connecting")
+                } =>
+            {
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     fn list_sessions(&self) -> Result<Vec<String>> {
         // tmux exits 1 with `error connecting to ...` (or `no server
         // running`) on stderr when no server has been started yet. That is

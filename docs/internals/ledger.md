@@ -51,7 +51,7 @@ locks/workspace.lock
 
 Rules:
 
-- `workspace.json` records the last known project root and session name for maintenance commands; feed files and the event log remain the request source of truth.
+- `workspace.json` records the last known project root and session name for maintenance commands; feed files and the event log remain the request source of truth. Launch reads the prior record before overwriting it: when the derived session name diverges from the recorded one and a session still answers to the recorded name, launch retires that session and rebirths the workspace under the new name, so a changed derivation never strands a live session or its sidebar.
 - Feed files are written temp-file + rename.
 - Resolutions take the workspace lock, then CAS on `status = pending`. First valid writer wins.
 - `events.log.jsonl` uses length-prefixed framing with `fsync` per record.

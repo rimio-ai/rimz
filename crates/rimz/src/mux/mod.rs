@@ -153,6 +153,10 @@ pub trait MuxBackend: Send + Sync {
     fn ensure_session(&self, opts: &SessionOptions) -> Result<()>;
     fn attach_command(&self, name: &str) -> CommandSpec;
     fn detach(&self, name: &str) -> Result<()>;
+    /// Force-remove a session by name. A missing session is success — the goal
+    /// state is "no session by that name", so callers can retire a stale or
+    /// renamed session idempotently.
+    fn kill_session(&self, name: &str) -> Result<()>;
     fn list_sessions(&self) -> Result<Vec<String>>;
     fn list_panes(&self, opts: PaneListOptions) -> Result<Vec<PaneRef>>;
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()>;

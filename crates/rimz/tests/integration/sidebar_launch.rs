@@ -168,6 +168,10 @@ impl MuxBackend for FakeBackend {
         Ok(())
     }
 
+    fn kill_session(&self, _name: &str) -> rimz::mux::Result<()> {
+        Ok(())
+    }
+
     fn list_sessions(&self) -> rimz::mux::Result<Vec<String>> {
         Ok(Vec::new())
     }

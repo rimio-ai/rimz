@@ -134,6 +134,10 @@ impl MuxBackend for ZellijBackend {
             .map(|_| ())
     }
 
+    fn kill_session(&self, name: &str) -> Result<()> {
+        delete_session(name)
+    }
+
     fn list_sessions(&self) -> Result<Vec<String>> {
         let output = CommandSpec::new("zellij").arg("list-sessions").run()?;
         // Output lines look like `name [Created Ns ago]`; the bare name
