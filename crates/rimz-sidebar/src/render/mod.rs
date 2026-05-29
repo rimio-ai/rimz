@@ -317,7 +317,7 @@ fn help_lines() -> Vec<Line<'static>> {
     vec![
         Line::styled("keys & legend", dim),
         Line::styled("↑/↓ select   1-9 jump   ↵ jump", dim),
-        Line::styled("␣ next ◆/✗   x dismiss   ? close", dim),
+        Line::styled("␣ next ◆/✗   x dismiss   r reload   ? close", dim),
         Line::styled("◆ waiting   ✗ failed   ◐ running", dim),
         Line::styled("○ idle      · process", dim),
     ]

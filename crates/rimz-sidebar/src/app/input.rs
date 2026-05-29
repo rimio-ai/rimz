@@ -46,6 +46,9 @@ pub(super) fn encode_key(code: KeyCode) -> Option<String> {
         KeyCode::Char('?') => "key:help",
         KeyCode::Char('x') => "key:dismiss",
         KeyCode::Char(c @ '1'..='9') => return Some(format!("key:digit:{c}")),
+        // `r` rides the very `reload` control word `rimz reload` posts, so a
+        // keypress and the CLI converge on the one re-exec path in `super`.
+        KeyCode::Char('r') => "reload",
         _ => return None,
     };
     Some(wire.to_owned())
@@ -156,6 +159,14 @@ mod tests {
     }
 
     #[test]
+    fn r_key_triggers_a_reload() {
+        // Pressing `r` re-execs the renderer in place by riding the same
+        // `reload` control word the CLI's wakeup posts.
+        let encoded = encode_key(KeyCode::Char('r')).expect("r is bound");
+        assert_eq!(decode_wakeup(encoded.as_bytes()), Wakeup::Reload);
+    }
+
+    #[test]
     fn ledger_delta_envelope_decodes_to_ledger() {
         // The real wire shape `wake_sidebars` posts is a JSON object.
         let envelope =
@@ -180,6 +191,7 @@ mod tests {
             KeyCode::Char(' '),
             KeyCode::Char('?'),
             KeyCode::Char('x'),
+            KeyCode::Char('r'),
             KeyCode::Char('1'),
         ] {
             if let Some(w) = encode_key(code) {
