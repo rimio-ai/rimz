@@ -618,12 +618,8 @@ fn step_budget_remaining(item: &FeedItem) -> Option<Duration> {
     if span.is_negative() {
         return Some(Duration::ZERO);
     }
-    let secs = span.as_secs();
-    let nanos = span.subsec_nanos();
-    if secs < 0 || nanos < 0 {
-        return Some(Duration::ZERO);
-    }
-    Some(Duration::new(secs as u64, nanos as u32))
+    // Past the negative guard the span is non-negative, so both components are too.
+    Some(Duration::new(span.as_secs() as u64, span.subsec_nanos() as u32))
 }
 
 fn build_item(
