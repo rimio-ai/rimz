@@ -437,12 +437,24 @@ fn enrich_worktree_groups(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::
         if group.kind != rimz::SidebarWorktreeKind::Worktree {
             continue;
         }
-        let worktree = Path::new(&group.key);
+        // Git facts are per worktree *path*. The group key may carry a branch
+        // suffix (a path that holds more than one), so read the path from the
+        // rows — every row in a group shares it — and key the cache on it so
+        // two branch-split groups for one dir share a single git read.
+        let Some(path) = group
+            .rows
+            .iter()
+            .find_map(|row| row.worktree_path.as_deref())
+            .filter(|path| !path.is_empty())
+        else {
+            continue;
+        };
+        let worktree = Path::new(path);
         if !worktree.is_dir() {
             continue;
         }
 
-        let entry = match cache.entries.get(&group.key).filter(|e| e.is_fresh(now_ms)) {
+        let entry = match cache.entries.get(path).filter(|e| e.is_fresh(now_ms)) {
             Some(entry) => entry.clone(),
             None => {
                 let entry = DiffStatsCacheEntry::new(
@@ -450,7 +462,7 @@ fn enrich_worktree_groups(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::
                     worktree_diff_stats(worktree),
                     worktree_branch(worktree),
                 );
-                cache.entries.insert(group.key.clone(), entry.clone());
+                cache.entries.insert(path.to_owned(), entry.clone());
                 changed = true;
                 entry
             }

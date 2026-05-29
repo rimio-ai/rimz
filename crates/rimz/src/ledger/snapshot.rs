@@ -571,26 +571,44 @@ fn build_worktree_groups_from_rows(
     rows: Vec<SidebarRow>,
     project_root: Option<&Path>,
 ) -> Vec<SidebarWorktreeGroup> {
+    // A worktree dir holds one branch at a time, so rows under one path
+    // normally share a branch and group together — the agent and its shell
+    // panes alike. Only when stale ledger rows put two distinct branches under
+    // one path do we split that path by branch, so a mislabeled cross-branch
+    // section can't form while the common "agent + its shell" case stays whole.
+    let mut branches_per_path: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for row in &rows {
+        if let (Some(path), Some(branch)) = (
+            row.worktree_path.as_deref().filter(|path| !path.is_empty()),
+            row.worktree_branch
+                .as_deref()
+                .filter(|branch| !branch.is_empty()),
+        ) {
+            branches_per_path.entry(path).or_default().insert(branch);
+        }
+    }
+    let multi_branch_paths: BTreeSet<String> = branches_per_path
+        .into_iter()
+        .filter(|(_, branches)| branches.len() > 1)
+        .map(|(path, _)| path.to_owned())
+        .collect();
+
     let mut by_group: BTreeMap<String, (String, SidebarWorktreeKind, Vec<SidebarRow>)> =
         BTreeMap::new();
     for row in rows {
+        let split_by_branch = row
+            .worktree_path
+            .as_deref()
+            .is_some_and(|path| multi_branch_paths.contains(path));
         let (kind, key, label) = worktree_group_key(
             row.worktree_path.as_deref(),
             row.worktree_branch.as_deref(),
+            split_by_branch,
             project_root,
         );
         by_group
             .entry(key)
-            .and_modify(|(label, _, rows)| {
-                if let Some(branch) = row
-                    .worktree_branch
-                    .as_deref()
-                    .filter(|branch| !branch.is_empty())
-                {
-                    *label = branch.to_owned();
-                }
-                rows.push(row.clone());
-            })
+            .and_modify(|(_, _, rows)| rows.push(row.clone()))
             .or_insert_with(|| (label, kind, vec![row]));
     }
 
@@ -598,6 +616,12 @@ fn build_worktree_groups_from_rows(
         .into_iter()
         .map(|(key, (label, kind, mut rows))| {
             rows.sort_by(compare_rows);
+            // Prefer a branch label over the path-basename seed: a group can mix
+            // a branched agent row with a branchless process/attention row, and
+            // every branched row in a group shares one branch (a path with two
+            // is split above), so any branch is the right, order-independent
+            // label.
+            let label = group_branch_label(&rows).unwrap_or(label);
             let status_counts = status_counts(&rows);
             let total = rows.len();
             rows = capped_rows(rows);
@@ -969,11 +993,21 @@ fn feed_kind_task(kind: FeedKind) -> &'static str {
     }
 }
 
+/// The branch shared by a group's branched rows, if any. Returns `None` for a
+/// group with no branch information, leaving the caller's path-basename seed.
+fn group_branch_label(rows: &[SidebarRow]) -> Option<String> {
+    rows.iter()
+        .find_map(|row| row.worktree_branch.as_deref().filter(|b| !b.is_empty()))
+        .map(ToOwned::to_owned)
+}
+
 fn worktree_group_key(
     path: Option<&str>,
     branch: Option<&str>,
+    split_by_branch: bool,
     project_root: Option<&Path>,
 ) -> (SidebarWorktreeKind, String, String) {
+    let branch = branch.filter(|branch| !branch.is_empty());
     if let Some(path) = path.filter(|path| !path.is_empty()) {
         // A cwd outside the project root is not one of the project's worktrees
         // (a home shell, `/tmp`), so it folds into the `external` catch-all
@@ -981,21 +1015,27 @@ fn worktree_group_key(
         // per-path grouping.
         let in_project = project_root.is_none_or(|root| is_within(root, Path::new(path)));
         if in_project {
-            let label = branch
-                .filter(|branch| !branch.is_empty())
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| {
-                    Path::new(path)
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .filter(|name| !name.is_empty())
-                        .unwrap_or(path)
-                        .to_owned()
-                });
-            return (SidebarWorktreeKind::Worktree, path.to_owned(), label);
+            let label = branch.map(ToOwned::to_owned).unwrap_or_else(|| {
+                Path::new(path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(path)
+                    .to_owned()
+            });
+            // Disambiguate the key by branch only for a path that holds more
+            // than one — a newline can appear in neither a path nor a branch, so
+            // it is an unambiguous separator. `enrich_worktree_groups` recovers
+            // the bare path from the rows, not the key, so the split never
+            // breaks git reads.
+            let key = match branch.filter(|_| split_by_branch) {
+                Some(branch) => format!("{path}\n{branch}"),
+                None => path.to_owned(),
+            };
+            return (SidebarWorktreeKind::Worktree, key, label);
         }
     }
-    if let Some(branch) = branch.filter(|branch| !branch.is_empty()) {
+    if let Some(branch) = branch {
         return (
             SidebarWorktreeKind::Worktree,
             format!("branch:{branch}"),
@@ -1614,6 +1654,93 @@ mod tests {
             "two pending asks for one session collapse to one row: {rows:?}"
         );
         assert_eq!(agent_rows[0].status, Some(AgentStatus::Waiting));
+    }
+
+    #[test]
+    fn agents_on_different_branches_in_one_path_form_two_groups() {
+        // Root cause 5: stale rows put two branches under one path, collapsing
+        // into a single mislabeled section. Keying on branch splits them into
+        // two correctly-labeled groups.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut feature = agent(
+            "claude",
+            "sess-a",
+            AgentStatus::Idle,
+            PermissionPosture::Default,
+            1_000,
+        );
+        feature.worktree_path = Some("/repo/shared".to_owned());
+        feature.worktree_branch = Some("feature".to_owned());
+        let mut main = agent(
+            "claude",
+            "sess-b",
+            AgentStatus::Idle,
+            PermissionPosture::Default,
+            1_100,
+        );
+        main.worktree_path = Some("/repo/shared".to_owned());
+        main.worktree_branch = Some("main".to_owned());
+
+        let snapshot = SidebarSnapshot::build_with_carryover(
+            workspace,
+            Vec::new(),
+            Vec::new(),
+            vec![feature, main],
+        );
+
+        assert_eq!(
+            snapshot.worktree_groups.len(),
+            2,
+            "two branches under one path split into two groups"
+        );
+        for group in &snapshot.worktree_groups {
+            assert_eq!(group.rows.len(), 1);
+            assert_eq!(
+                group.rows[0].worktree_branch.as_deref(),
+                Some(group.label.as_str()),
+                "each group's label matches its branch"
+            );
+        }
+    }
+
+    #[test]
+    fn one_branch_path_keeps_agent_and_shell_in_one_group() {
+        // The common case must not fragment: a process/shell row carries no
+        // branch, so it stays with the single-branch agent in its worktree.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut claude = agent(
+            "claude",
+            "sess-a",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            1_000,
+        );
+        claude.worktree_path = Some("/repo/main".to_owned());
+        claude.worktree_branch = Some("main".to_owned());
+
+        let snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![claude])
+                .with_live_panes(
+                    vec![
+                        pane("%1", "claude", "/repo/main"),
+                        pane("%2", "zsh", "/repo/main"),
+                    ],
+                    None,
+                );
+
+        assert_eq!(
+            snapshot.worktree_groups.len(),
+            1,
+            "agent and its shell share one worktree group: {:?}",
+            snapshot.worktree_groups,
+        );
+        assert_eq!(snapshot.worktree_groups[0].label, "main");
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert!(rows.iter().any(|row| row.row_kind == SidebarRowKind::Agent));
+        assert!(
+            rows.iter()
+                .any(|row| row.row_kind == SidebarRowKind::Process && row.name == "zsh")
+        );
     }
 
     #[test]
