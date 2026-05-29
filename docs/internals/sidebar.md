@@ -2,7 +2,7 @@
 
 > See [DESIGN.md](../../DESIGN.md) for the commitments this doc operationalizes.
 
-The sidebar is the product surface. It's a UI client over the workspace ledger; it owns no durable state. Read the ledger through `rimz sidebar snapshot`, write liveness through `rimz sidebar heartbeat`, and never import a ledger-writer module.
+The sidebar is the product surface. It's a UI client over the workspace ledger; it owns no durable state. Read the ledger through `rimz sidebar snapshot`, write liveness in-process through the `rimz::sidebar::write_heartbeat` helper (a runtime-file write), and never import a ledger-writer module.
 
 ## Renderers
 
@@ -85,15 +85,13 @@ With nothing waiting or failed the attention line is omitted and the body is nev
 
 ## State access
 
-On load and tick:
+On load and tick, the renderer fetches the snapshot through the CLI:
 
 ```text
-rimz sidebar snapshot --workspace-id <id>
-rimz sidebar heartbeat --workspace-id <id> --instance-id <id> \
-  --mux <zellij|tmux> --session-name <name> --wakeup-socket <path>
+rimz sidebar snapshot --workspace-id <id> --exclude-pane-id <own>
 ```
 
-The heartbeat binds `sock/sidebar.<instance_id>.sock` and writes:
+It refreshes its own liveness heartbeat **in process** — no `rimz` fork per tick — through the `rimz::sidebar::write_heartbeat` liveness helper (a runtime-file write, never a ledger-writer import). The renderer binds `sock/sidebar.<instance_id>.sock` and the heartbeat carries:
 
 - workspace ID,
 - session name,
@@ -107,7 +105,7 @@ On wakeup, the sidebar refetches the snapshot. Missed wakeups are closed by poll
 
 ## Reload recovery
 
-The sidebar process keeps the last successful snapshot across iterations. When `rimz sidebar snapshot` or `rimz sidebar heartbeat` fails — the binary is missing, the ledger directory is gone, pane discovery hit a transient mux hiccup — the loop:
+The sidebar process keeps the last successful snapshot across iterations. When the `rimz sidebar snapshot` fetch or the in-process heartbeat write fails — the binary is missing, the ledger directory is gone, pane discovery hit a transient mux hiccup — the loop:
 
 1. Reuses the last snapshot for the current draw, falling back to an empty placeholder when nothing has loaded yet (sidebar started cold after a workspace move).
 2. Counts the consecutive failures. A single flaky fetch is absorbed silently — the last good frame already covers it, so one blip never flashes a banner.

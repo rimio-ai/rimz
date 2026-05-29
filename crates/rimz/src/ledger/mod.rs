@@ -49,8 +49,8 @@ pub use crate::ledger::feed_store::FeedStoreErr;
 pub use crate::ledger::paths::{RuntimePaths, StatePaths};
 pub use crate::ledger::runtime::{RuntimeProjection, RuntimeScope};
 pub use crate::ledger::snapshot::{
-    SidebarActivity, SidebarResolverState, SidebarRow, SidebarRowKind, SidebarSnapshot,
-    SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
+    SidebarActivity, SidebarOwnView, SidebarResolverState, SidebarRow, SidebarRowKind,
+    SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
 };
 pub use crate::ledger::workspace_record::WorkspaceRecord;
 

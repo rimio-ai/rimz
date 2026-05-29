@@ -11,6 +11,10 @@ use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Wakeup {
     Tick,
+    /// A ledger mutation posted a `ledger_delta` datagram. Distinct from `Tick`
+    /// (the poll timeout) so the loop can coalesce a burst of deltas from one
+    /// mutation into a single refetch instead of one refetch per event.
+    Ledger,
     Resize,
     /// `rimz reload` asks the renderer to re-exec its own binary in place so a
     /// freshly-installed build takes effect without a session rebirth.
@@ -57,6 +61,12 @@ pub(super) fn encode_mouse(kind: MouseEventKind, column: u16, row: u16) -> Optio
 }
 
 pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
+    // The ledger posts a JSON `ledger_delta` envelope; no control or input wire
+    // word starts with `{` (asserted by `control_words_never_start_with_brace`),
+    // so the leading brace is an unambiguous, allocation-free discriminator.
+    if bytes.first() == Some(&b'{') {
+        return Wakeup::Ledger;
+    }
     let raw = std::str::from_utf8(bytes).unwrap_or_default();
     if let Some(mouse) = decode_mouse_click(raw) {
         return mouse;
@@ -143,6 +153,47 @@ mod tests {
             decode_wakeup(rimz::ledger::wakeup::RELOAD_WAKEUP),
             Wakeup::Reload
         );
+    }
+
+    #[test]
+    fn ledger_delta_envelope_decodes_to_ledger() {
+        // The real wire shape `wake_sidebars` posts is a JSON object.
+        let envelope =
+            br#"{"kind":"ledger_delta","workspace_id":"ws_x","protocol_version":"rimz.plugin.v2"}"#;
+        assert_eq!(decode_wakeup(envelope), Wakeup::Ledger);
+        assert_eq!(decode_wakeup(b"{}"), Wakeup::Ledger);
+    }
+
+    #[test]
+    fn control_words_never_start_with_brace() {
+        // The leading-brace discriminator (ledger delta vs control/input) holds
+        // only while no control or input wire word can begin with `{`.
+        let mut words = vec![
+            "resize".to_owned(),
+            "reload".to_owned(),
+            String::from_utf8(rimz::ledger::wakeup::RELOAD_WAKEUP.to_vec()).unwrap(),
+        ];
+        for code in [
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Enter,
+            KeyCode::Char(' '),
+            KeyCode::Char('?'),
+            KeyCode::Char('x'),
+            KeyCode::Char('1'),
+        ] {
+            if let Some(w) = encode_key(code) {
+                words.push(w);
+            }
+        }
+        words.push(encode_mouse(MouseEventKind::Down(MouseButton::Left), 1, 2).unwrap());
+        for word in words {
+            assert_ne!(
+                word.as_bytes().first(),
+                Some(&b'{'),
+                "{word:?} must not collide with the ledger-delta discriminator"
+            );
+        }
     }
 
     #[test]

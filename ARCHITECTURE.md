@@ -138,7 +138,7 @@ Native terminal sidebar renderer — the default on both backends.
 Crate-local rules:
 
 - Read state through `rimz sidebar snapshot`. Never import ledger writer modules from `crates/rimz`.
-- Write liveness through `rimz sidebar heartbeat`.
+- Write liveness in-process through the `rimz::sidebar::write_heartbeat` helper (a runtime-file write, not a ledger-writer import).
 - Default-mode (`native_ui`) items show focus/dismiss, never approve/deny.
 
 ### `crates/rimz-sidebar-zellij`

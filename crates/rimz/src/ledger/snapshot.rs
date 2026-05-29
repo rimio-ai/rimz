@@ -78,6 +78,27 @@ pub struct SidebarSnapshot {
     /// `false`, where the renderer suppresses the hint anyway.
     #[serde(default)]
     pub agent_hooks_ready: bool,
+    /// The calling sidebar's own-view summary: how many sibling panes share its
+    /// tab/window, whether its own pane holds focus, and which sibling is
+    /// focused. The renderer's self-close and selection-sync read it instead of
+    /// spawning a second `pane list` per tick. Computed by the `rimz sidebar
+    /// snapshot` CLI from the live pane list when `--exclude-pane-id` names the
+    /// caller's pane; the pure reducer and the placeholder/persisted snapshot
+    /// leave it `None` (meaning "unknown" — the renderer never self-closes on a
+    /// `None`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub own_view: Option<SidebarOwnView>,
+}
+
+/// One sidebar's view of the panes sharing its tab/window. `None` on the
+/// snapshot means the count could not be determined (no `--exclude-pane-id`, or
+/// the caller's pane was absent from the live list); the renderer treats that
+/// as "never self-close".
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidebarOwnView {
+    pub sibling_count: usize,
+    pub own_is_focused: bool,
+    pub focused_pane_id: Option<PaneId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -262,6 +283,7 @@ impl SidebarSnapshot {
             recent_activity,
             agents,
             agent_hooks_ready: false,
+            own_view: None,
         }
     }
 
@@ -305,6 +327,31 @@ impl SidebarSnapshot {
             &panes,
         );
         self
+    }
+}
+
+impl SidebarOwnView {
+    /// Summarize the panes sharing `own`'s view (tab/window) from a live pane
+    /// list. Pure and backend-agnostic: callers own pane discovery and pass the
+    /// result in. Returns `None` when `own` is absent from `panes` — the caller
+    /// cannot reason about a view it cannot find itself in, so it must not
+    /// self-close.
+    pub fn from_panes(own: &PaneId, panes: &[PaneRef]) -> Option<Self> {
+        let own_pane = panes.iter().find(|pane| pane.pane_id == *own)?;
+        let own_view = own_pane.view_id.as_deref();
+        let siblings = panes
+            .iter()
+            .filter(|pane| pane.pane_id != *own && pane.view_id.as_deref() == own_view)
+            .collect::<Vec<_>>();
+        let focused_pane_id = siblings
+            .iter()
+            .find(|pane| pane.is_focused)
+            .map(|pane| pane.pane_id.clone());
+        Some(Self {
+            sibling_count: siblings.len(),
+            own_is_focused: own_pane.is_focused,
+            focused_pane_id,
+        })
     }
 }
 
@@ -2311,5 +2358,59 @@ mod tests {
             rows.iter()
                 .any(|row| row.row_kind == SidebarRowKind::Process && row.name == "git"),
         );
+    }
+
+    fn view_pane(raw: &str, view: &str, focused: bool) -> PaneRef {
+        PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
+            session_name: "rimz-test".to_owned(),
+            view_id: Some(view.to_owned()),
+            view_kind: Some(crate::ids::ViewKind::Tab),
+            is_focused: focused,
+            command: Some("zsh".to_owned()),
+            cwd: Some("/repo/main".to_owned()),
+            pane_pid: None,
+            pane_process_start: None,
+        }
+    }
+
+    #[test]
+    fn own_view_counts_only_siblings_sharing_the_view() {
+        let own = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let focused_here = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let panes = vec![
+            view_pane("terminal_1", "tab_0", false),
+            view_pane("terminal_2", "tab_0", true),
+            view_pane("terminal_3", "tab_1", true), // another tab — not a sibling
+        ];
+
+        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane is present");
+
+        assert_eq!(view.sibling_count, 1);
+        assert!(!view.own_is_focused);
+        assert_eq!(view.focused_pane_id, Some(focused_here));
+    }
+
+    #[test]
+    fn own_view_marks_when_the_sidebar_itself_is_focused() {
+        let own = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let panes = vec![
+            view_pane("terminal_1", "tab_0", true),
+            view_pane("terminal_2", "tab_0", false),
+        ];
+
+        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane is present");
+
+        assert!(view.own_is_focused);
+        assert_eq!(view.focused_pane_id, None);
+    }
+
+    #[test]
+    fn own_view_is_none_when_own_pane_is_absent() {
+        // A view the caller cannot find itself in is unknowable — never close.
+        let own = PaneId::from_parts(MuxName::Zellij, "terminal_404");
+        let panes = vec![view_pane("terminal_1", "tab_0", true)];
+
+        assert!(SidebarOwnView::from_panes(&own, &panes).is_none());
     }
 }

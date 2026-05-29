@@ -8,11 +8,10 @@ use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 
 use super::{GlobalFlags, open_ledger};
-use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
+use rimz::ids::{MuxName, WorkspaceId};
 use rimz::ledger::atomic;
 use rimz::ledger::workspace_record;
 use rimz::mux::PaneListOptions;
-use rimz::schema::heartbeat::SidebarHeartbeat;
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, RuntimePaths, StatePaths};
 
@@ -36,19 +35,6 @@ enum SidebarSubcmd {
         exclude_pane_id: Option<String>,
         #[arg(long)]
         json: bool,
-    },
-    /// Record sidebar liveness for wakeup fanout.
-    Heartbeat {
-        #[arg(long)]
-        workspace_id: String,
-        #[arg(long)]
-        instance_id: String,
-        #[arg(long)]
-        mux: MuxName,
-        #[arg(long)]
-        session_name: String,
-        #[arg(long)]
-        wakeup_socket: PathBuf,
     },
     /// Run the terminal sidebar renderer.
     Serve {
@@ -81,7 +67,6 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     open_ledger(&workspace)
                 }
             }?;
-            let mut snapshot = ledger.snapshot()?;
             // The serve loop names its session explicitly; a bare CLI/inspection
             // call resolves it from the record. Only the former treats a
             // pane-discovery failure as fatal (see the match below).
@@ -93,35 +78,53 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 .as_deref()
                 .map(rimz::ids::PaneId::parse)
                 .transpose()?;
-            if let Some(session_name) = session_name {
-                if let Some(panes) = pane_list_fixture()? {
-                    snapshot = snapshot.with_live_panes(panes, exclude.as_ref());
-                } else {
-                    let mux = mux.or(globals.mux);
-                    if let Some(mux) = mux.or_else(|| rimz::mux::auto_detect_backend(None).ok()) {
-                        let backend = rimz::mux::backend_for(mux);
-                        match backend.list_panes(PaneListOptions {
-                            session_name: Some(session_name),
-                        }) {
-                            Ok(panes) => {
-                                snapshot = snapshot.with_live_panes(panes, exclude.as_ref());
-                            }
-                            // The serve loop owns a live session, so a discovery
-                            // failure there is real: fail hard and let the loop
-                            // hold its last good frame via the degraded path,
-                            // rather than flashing the raw ledger rollup (every
-                            // agent the log ever saw) for a single tick.
-                            Err(err) if explicit_session => {
-                                return Err(err).context("sidebar snapshot pane discovery");
-                            }
-                            // A bare inspection call has no live session to
-                            // trust; fall back to the ledger rollup.
-                            Err(err) => {
-                                tracing::warn!(error = %err, "sidebar snapshot pane discovery failed; showing ledger rollup");
-                            }
+
+            // Resolve the ledger rollup and the live pane list. The heavy work
+            // (ledger projection + `list-panes`) is identical for every sidebar
+            // pinned to one session, so it rides a short-lived single-flight
+            // shared cache: the first sidebar to miss produces and writes it,
+            // and the rest within the coalescing window read it back instead of
+            // each spawning their own `list-panes` against the mux server. Only
+            // the cheap per-sidebar projection (own-pane exclusion + own-view)
+            // stays local.
+            let (mut snapshot, panes): (rimz::SidebarSnapshot, Option<Vec<rimz::feed::PaneRef>>) =
+                match (&session_name, pane_list_fixture()?) {
+                    // A test fixture stands in for the mux; never touch the shared
+                    // cache so deterministic tests can neither poison nor read it.
+                    (Some(_), Some(fixture)) => (ledger.snapshot()?, Some(fixture)),
+                    (Some(session), None) => {
+                        let mux = mux
+                            .or(globals.mux)
+                            .or_else(|| rimz::mux::auto_detect_backend(None).ok());
+                        match mux {
+                            Some(mux) => match cached_base_or_produce(&ledger, mux, session) {
+                                Ok((rollup, panes)) => (rollup, Some(panes)),
+                                // The serve loop owns a live session, so a
+                                // discovery failure there is real: fail hard and
+                                // let the loop hold its last good frame via the
+                                // degraded path, rather than flashing the raw
+                                // ledger rollup (every agent the log ever saw).
+                                Err(err) if explicit_session => {
+                                    return Err(err).context("sidebar snapshot pane discovery");
+                                }
+                                // A bare inspection call has no live session to
+                                // trust; fall back to the ledger rollup.
+                                Err(err) => {
+                                    tracing::warn!(error = %err, "sidebar snapshot pane discovery failed; showing ledger rollup");
+                                    (ledger.snapshot()?, None)
+                                }
+                            },
+                            None => (ledger.snapshot()?, None),
                         }
                     }
+                    (None, _) => (ledger.snapshot()?, None),
+                };
+
+            if let Some(panes) = panes {
+                if let Some(own) = exclude.as_ref() {
+                    snapshot.own_view = rimz::SidebarOwnView::from_panes(own, &panes);
                 }
+                snapshot = snapshot.with_live_panes(panes, exclude.as_ref());
             }
             // Hook-install state is environment, not ledger, so the reducer
             // can't know it — fill it here so the renderer's first-run hint
@@ -161,34 +164,6 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     println!("Waiting:         {waiting}");
                     println!("Failed:          {failed}");
                 }
-            }
-            Ok(())
-        }
-        SidebarSubcmd::Heartbeat {
-            workspace_id,
-            instance_id,
-            mux,
-            session_name,
-            wakeup_socket,
-        } => {
-            let workspace_id: WorkspaceId = workspace_id.parse()?;
-            let instance_id: SidebarInstanceId = instance_id.parse()?;
-            let runtime =
-                RuntimePaths::for_workspace(workspace_id.clone()).context("runtime paths")?;
-            runtime.ensure_dirs().context("preparing runtime dirs")?;
-            let heartbeat = SidebarHeartbeat::new(
-                workspace_id,
-                instance_id.clone(),
-                mux,
-                session_name,
-                wakeup_socket,
-            );
-            let path = runtime.sidebar_heartbeat_path(&instance_id);
-            atomic::write_temp_then_rename(&path, &heartbeat)
-                .with_context(|| format!("writing sidebar heartbeat {}", path.display()))?;
-            #[expect(clippy::print_stdout, reason = "stable interface for sidebar process")]
-            {
-                println!("heartbeat-ok");
             }
             Ok(())
         }
@@ -271,6 +246,133 @@ fn pane_list_fixture() -> Result<Option<Vec<rimz::feed::PaneRef>>> {
     let bytes = std::fs::read(&path)
         .with_context(|| format!("reading RIMZ_TEST_PANE_LIST {}", path.display()))?;
     Ok(Some(serde_json::from_slice(&bytes)?))
+}
+
+/// Coalescing window for the shared snapshot cache. Well under the default 2s
+/// data tick: when one ledger-delta wakeup wakes every sidebar at once, the
+/// first produces the heavy snapshot and the rest read it back within this
+/// window instead of each spawning their own `list-panes`. Short enough that
+/// live pane/git drift (which fires no ledger delta) still surfaces inside one
+/// tick — the same staleness budget the diff-stats cache already accepts.
+const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
+
+/// How a non-producing sidebar waits for the single producer's cache write
+/// before giving up and producing locally. ~200ms total (10 × 20ms).
+const SNAPSHOT_CACHE_WAIT_STEP: Duration = Duration::from_millis(20);
+const SNAPSHOT_CACHE_WAIT_STEPS: u32 = 10;
+
+/// Shared, single-flight snapshot cache. Holds the ledger rollup plus the live
+/// pane list keyed to one `(workspace, session)` — the per-workspace runtime
+/// root scopes the workspace; `session_name` guards against serving one
+/// session's panes (which the Zellij backend stamps from the requested session,
+/// not the true owner) to a sidebar pinned to another during a detach or
+/// session-rotation handoff. Per-sidebar exclusion and own-view are applied by
+/// the reader, so the cached snapshot is pre-pane-fold.
+#[derive(Serialize, Deserialize)]
+struct SnapshotCache {
+    produced_at_ms: u64,
+    session_name: String,
+    panes: Vec<rimz::feed::PaneRef>,
+    snapshot: rimz::SidebarSnapshot,
+}
+
+/// Return a same-session cache entry younger than [`SNAPSHOT_CACHE_TTL`], or
+/// `None` when it is absent, stale, for another session, or unreadable.
+fn fresh_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotCache> {
+    let bytes = std::fs::read(cache_path).ok()?;
+    let cache: SnapshotCache = serde_json::from_slice(&bytes).ok()?;
+    let fresh = cache.session_name == session
+        && unix_now_ms().saturating_sub(cache.produced_at_ms)
+            <= SNAPSHOT_CACHE_TTL.as_millis() as u64;
+    fresh.then_some(cache)
+}
+
+/// Open the single-flight lock file. `None` (e.g. the runtime dir is missing)
+/// means "cannot coordinate" — the caller produces directly without caching.
+fn open_snapshot_cache_lock(path: &Path) -> Option<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .ok()
+}
+
+/// Do the heavy work: project the ledger rollup and enumerate the session's
+/// live panes. The `(workspace, session)`-shared result of this is what the
+/// cache amortizes across sidebars.
+fn produce_snapshot_base(
+    ledger: &Ledger,
+    mux: MuxName,
+    session: &str,
+) -> Result<(rimz::SidebarSnapshot, Vec<rimz::feed::PaneRef>)> {
+    let rollup = ledger.snapshot()?;
+    let panes = rimz::mux::backend_for(mux).list_panes(PaneListOptions {
+        session_name: Some(session.to_owned()),
+    })?;
+    Ok((rollup, panes))
+}
+
+/// Return the ledger rollup + live pane list for `session`, sharing one heavy
+/// production across every sidebar via a short-lived single-flight cache.
+///
+/// Fast path: a fresh same-session cache is read back with no ledger or mux
+/// work. Slow path: a non-blocking `try_lock` elects one producer; losers poll
+/// briefly for its write, then fall back to producing locally so a wedged
+/// producer never strands them.
+fn cached_base_or_produce(
+    ledger: &Ledger,
+    mux: MuxName,
+    session: &str,
+) -> Result<(rimz::SidebarSnapshot, Vec<rimz::feed::PaneRef>)> {
+    let runtime = ledger.runtime_paths();
+    let cache_path = runtime.root.join("snapshot.json");
+
+    if let Some(cache) = fresh_snapshot_cache(&cache_path, session) {
+        return Ok((cache.snapshot, cache.panes));
+    }
+
+    let lock_path = runtime.root.join("snapshot.lock");
+    let Some(lock_file) = open_snapshot_cache_lock(&lock_path) else {
+        // No place to coordinate (runtime dir missing on a bare call): just do
+        // the work without caching it.
+        return produce_snapshot_base(ledger, mux, session);
+    };
+
+    match fs4::FileExt::try_lock(&lock_file) {
+        // We are the single producer. The `lock_file` flock releases when it
+        // drops at end of scope (its fd closes).
+        Ok(()) => {
+            // A peer may have written a fresh entry between our miss and the
+            // lock — re-check before doing the heavy work.
+            if let Some(cache) = fresh_snapshot_cache(&cache_path, session) {
+                return Ok((cache.snapshot, cache.panes));
+            }
+            let (rollup, panes) = produce_snapshot_base(ledger, mux, session)?;
+            let cache = SnapshotCache {
+                produced_at_ms: unix_now_ms(),
+                session_name: session.to_owned(),
+                panes: panes.clone(),
+                snapshot: rollup.clone(),
+            };
+            if let Err(err) = atomic::write_temp_then_rename(&cache_path, &cache) {
+                tracing::warn!(path = %cache_path.display(), error = %err, "sidebar snapshot cache write failed");
+            }
+            Ok((rollup, panes))
+        }
+        // Another sidebar is producing: wait briefly for its write, then fall
+        // back to producing locally rather than blocking on a wedged producer.
+        Err(_) => {
+            for _ in 0..SNAPSHOT_CACHE_WAIT_STEPS {
+                std::thread::sleep(SNAPSHOT_CACHE_WAIT_STEP);
+                if let Some(cache) = fresh_snapshot_cache(&cache_path, session) {
+                    return Ok((cache.snapshot, cache.panes));
+                }
+            }
+            produce_snapshot_base(ledger, mux, session)
+        }
+    }
 }
 
 const DIFF_STATS_TTL: Duration = Duration::from_secs(2);
@@ -558,5 +660,75 @@ mod tests {
             })
         );
         assert_eq!(entry.branch.as_deref(), Some("feature-migration"));
+    }
+
+    fn write_snapshot_cache(path: &Path, session: &str, produced_at_ms: u64) {
+        let ws = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let cache = SnapshotCache {
+            produced_at_ms,
+            session_name: session.to_owned(),
+            panes: Vec::new(),
+            snapshot: rimz::SidebarSnapshot::build(ws, Vec::new(), Vec::new()),
+        };
+        atomic::write_temp_then_rename(path, &cache).expect("write snapshot cache");
+    }
+
+    #[test]
+    fn snapshot_cache_serves_a_fresh_same_session_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.json");
+        write_snapshot_cache(&path, "rimz-query-engine", unix_now_ms());
+        assert!(fresh_snapshot_cache(&path, "rimz-query-engine").is_some());
+    }
+
+    #[test]
+    fn snapshot_cache_misses_a_different_session() {
+        // One session's panes must never be served to a sidebar pinned to
+        // another — the Zellij backend stamps PaneRef.session_name from the
+        // requested session, so a cross-session hit would mislabel panes.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.json");
+        write_snapshot_cache(&path, "rimz-query-engine", unix_now_ms());
+        assert!(fresh_snapshot_cache(&path, "rimz-other").is_none());
+    }
+
+    #[test]
+    fn snapshot_cache_misses_a_stale_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.json");
+        let stale = unix_now_ms().saturating_sub(SNAPSHOT_CACHE_TTL.as_millis() as u64 + 1);
+        write_snapshot_cache(&path, "rimz-query-engine", stale);
+        assert!(fresh_snapshot_cache(&path, "rimz-query-engine").is_none());
+    }
+
+    #[test]
+    fn snapshot_cache_misses_when_absent_or_unreadable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.json");
+        assert!(fresh_snapshot_cache(&path, "rimz-query-engine").is_none());
+        std::fs::write(&path, b"{ not json").unwrap();
+        assert!(fresh_snapshot_cache(&path, "rimz-query-engine").is_none());
+    }
+
+    #[test]
+    fn snapshot_cache_lock_is_exclusive_then_releases_on_drop() {
+        // The single-flight lock elects exactly one producer; a second try while
+        // it is held fails, and once the holder drops, the lock is free again.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.lock");
+        {
+            let held = open_snapshot_cache_lock(&path).expect("open lock");
+            assert!(fs4::FileExt::try_lock(&held).is_ok(), "first producer wins");
+            let contender = open_snapshot_cache_lock(&path).expect("open lock again");
+            assert!(
+                fs4::FileExt::try_lock(&contender).is_err(),
+                "a second sidebar must not also become the producer"
+            );
+        }
+        let after = open_snapshot_cache_lock(&path).expect("open lock after release");
+        assert!(
+            fs4::FileExt::try_lock(&after).is_ok(),
+            "the lock frees once the producer drops it"
+        );
     }
 }

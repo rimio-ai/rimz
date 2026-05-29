@@ -14,7 +14,6 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal;
-use rimz::feed::PaneRef;
 use rimz::ids::PaneId;
 use rimz::ledger::paths::PathErr;
 use rimz::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
@@ -23,7 +22,7 @@ use tracing::{debug, warn};
 use crate::render::{self, Alert, UiState};
 
 mod input;
-use input::{KeyAction, Wakeup, encode_key, encode_mouse, wait_for_wakeup};
+use input::{KeyAction, Wakeup, decode_wakeup, encode_key, encode_mouse, wait_for_wakeup};
 
 #[derive(Clone, Debug)]
 pub struct ServeConfig {
@@ -51,8 +50,8 @@ pub enum SidebarAppErr {
     },
     #[error("snapshot command failed: {stderr}")]
     SnapshotCommand { stderr: String },
-    #[error("heartbeat command failed: {stderr}")]
-    HeartbeatCommand { stderr: String },
+    #[error("heartbeat write failed: {0}")]
+    Heartbeat(String),
 }
 
 pub type Result<T> = std::result::Result<T, SidebarAppErr>;
@@ -92,7 +91,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     let mut reload_requested = false;
 
     'serve: loop {
-        let heartbeat_outcome = write_heartbeat(&config, &socket_path);
+        let heartbeat_outcome = write_heartbeat(&config, &runtime, &socket_path);
         let snapshot_outcome = fetch_snapshot_for(
             &config.rimz_bin,
             &config.workspace_id,
@@ -130,19 +129,19 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             &ui,
         )?;
 
-        let own_view = own_view_state(&config);
+        // Own-view (sibling count, focus) now rides in on the snapshot itself —
+        // the `rimz sidebar snapshot` CLI computes it from the same pane list it
+        // already enumerated, so the renderer no longer spawns a second `pane
+        // list` per tick.
+        let own_view = state.snapshot.own_view.as_ref();
         sync_selection_to_focused_pane(
             &mut ui,
             &state.snapshot,
             own_view
-                .as_ref()
-                .filter(|state| !state.own_is_focused)
-                .and_then(|state| state.focused_pane_id.as_ref()),
+                .filter(|view| !view.own_is_focused)
+                .and_then(|view| view.focused_pane_id.as_ref()),
         );
-        if self_close_decision(
-            &mut self_close,
-            own_view.as_ref().map(|state| state.sibling_count),
-        ) {
+        if self_close_decision(&mut self_close, own_view.map(|view| view.sibling_count)) {
             debug!(
                 session = %config.session_name,
                 "sidebar tab emptied; exiting so the pane closes itself",
@@ -152,8 +151,10 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         // Wait for the next wakeup. While a running agent is animating, fall
         // into a fast animation tick that only advances the spin frame and
         // repaints the *current* snapshot — no `rimz` subprocess per frame. We
-        // leave this inner loop (to re-fetch) on any real wakeup or once the
-        // data tick is due.
+        // leave this inner loop (to re-fetch) on the data tick or a ledger
+        // delta. Input only mutates local UI, so it is handled in place and
+        // never re-runs the snapshot burst — that per-keystroke refetch was the
+        // input lag.
         loop {
             let animating = render::has_live_animation(&state.snapshot);
             let timeout = if animating {
@@ -172,7 +173,27 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                         &ui,
                     )?;
                 }
+                // The poll timeout: re-fetch to catch pane/git drift that fires
+                // no ledger delta.
                 Wakeup::Tick => break,
+                // A ledger delta: drain any sibling deltas the same mutation
+                // burst queued so a streaming agent triggers one re-fetch, not
+                // one per event. Queued input is applied in place during the
+                // drain; a queued reload still wins.
+                Wakeup::Ledger => {
+                    if drain_coalescing(
+                        &socket,
+                        &mut ui,
+                        &mut health,
+                        &mut terminal,
+                        &state.snapshot,
+                        &config,
+                    )? {
+                        reload_requested = true;
+                        break 'serve;
+                    }
+                    break;
+                }
                 Wakeup::Reload => {
                     debug!(
                         session = %config.session_name,
@@ -182,22 +203,14 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     break 'serve;
                 }
                 wakeup => {
-                    let outcome = handle_wakeup(wakeup, &mut ui, &state.snapshot);
-                    if outcome.dismiss {
-                        health.alert = None;
-                    }
-                    if outcome.redraw {
-                        render::draw_to_terminal_with_ui(
-                            &mut terminal,
-                            &state.snapshot,
-                            health.alert.as_ref(),
-                            &ui,
-                        )?;
-                    }
-                    if let Some(index) = outcome.focus_index {
-                        focus_selected_row(&state.snapshot, index, &config);
-                    }
-                    break;
+                    apply_input(
+                        wakeup,
+                        &mut ui,
+                        &mut health,
+                        &mut terminal,
+                        &state.snapshot,
+                        &config,
+                    )?;
                 }
             }
         }
@@ -246,9 +259,10 @@ fn reexec_self() -> SidebarAppErr {
 /// sidebar can run before Zellij materializes the terminal sibling, but a tab
 /// born permanently sidebar-only must still clean itself up.
 ///
-/// `sibling_count` is `None` when the count could not be determined (no mux
-/// pane env var, a failed `pane list`, or our own pane missing from the list);
-/// in that case we never close.
+/// `sibling_count` is `None` when the count could not be determined (the
+/// snapshot carries no `own_view` — no mux pane env var, so no
+/// `--exclude-pane-id`, or our own pane was missing from the live list); in
+/// that case we never close.
 fn self_close_decision(state: &mut SelfCloseState, sibling_count: Option<usize>) -> bool {
     state.should_close(sibling_count)
 }
@@ -278,67 +292,6 @@ impl SelfCloseState {
 }
 
 const EMPTY_STARTUP_OBSERVATIONS_BEFORE_CLOSE: u8 = 2;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct OwnViewState {
-    sibling_count: usize,
-    own_is_focused: bool,
-    focused_pane_id: Option<PaneId>,
-}
-
-/// Summarize the panes that share this sidebar's view (tab/window). Best-effort
-/// and backend-agnostic: it shells out to the normalized `rimz pane list`, the
-/// same read-only discovery primitive a resolver uses. Returns `None` on any
-/// failure so the caller never self-closes or moves selection on bad data.
-fn own_view_state(config: &ServeConfig) -> Option<OwnViewState> {
-    let own = own_pane_id(config.mux)?;
-    let output = Command::new(&config.rimz_bin)
-        .args(["pane", "list", "--json", "--session-name"])
-        .arg(&config.session_name)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        debug!(
-            stderr = %String::from_utf8_lossy(&output.stderr),
-            "sidebar pane-list probe failed; staying open",
-        );
-        return None;
-    }
-    let panes: Vec<PaneRef> = serde_json::from_slice(&output.stdout).ok()?;
-    let own_view = panes
-        .iter()
-        .find(|pane| pane.pane_id == own)?
-        .view_id
-        .clone();
-    own_view_state_from_panes(&own, &panes, own_view.as_deref())
-}
-
-fn own_view_state_from_panes(
-    own: &PaneId,
-    panes: &[PaneRef],
-    own_view: Option<&str>,
-) -> Option<OwnViewState> {
-    if !panes.iter().any(|pane| pane.pane_id == *own) {
-        return None;
-    }
-    let siblings = panes
-        .iter()
-        .filter(|pane| pane.pane_id != *own && pane.view_id.as_deref() == own_view)
-        .collect::<Vec<_>>();
-    let own_is_focused = panes
-        .iter()
-        .find(|pane| pane.pane_id == *own)
-        .is_some_and(|pane| pane.is_focused);
-    let focused_pane_id = siblings
-        .iter()
-        .find(|pane| pane.is_focused)
-        .map(|pane| pane.pane_id.clone());
-    Some(OwnViewState {
-        sibling_count: siblings.len(),
-        own_is_focused,
-        focused_pane_id,
-    })
-}
 
 /// This process's normalized pane id, read from the multiplexer's per-pane env
 /// var. Zellij exposes a bare integer in `ZELLIJ_PANE_ID` (normalized as
@@ -470,6 +423,7 @@ fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
         recent_activity: Vec::new(),
         agents: Vec::new(),
         agent_hooks_ready: false,
+        own_view: None,
     }
 }
 
@@ -516,29 +470,20 @@ fn fetch_snapshot_for(
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
-fn write_heartbeat(config: &ServeConfig, socket_path: &Path) -> Result<()> {
-    let output = Command::new(&config.rimz_bin)
-        .args(["sidebar", "heartbeat", "--workspace-id"])
-        .arg(config.workspace_id.as_str())
-        .arg("--instance-id")
-        .arg(config.instance_id.as_str())
-        .arg("--mux")
-        .arg(config.mux.as_str())
-        .arg("--session-name")
-        .arg(&config.session_name)
-        .arg("--wakeup-socket")
-        .arg(socket_path)
-        .output()
-        .map_err(|source| SidebarAppErr::CommandIo {
-            program: config.rimz_bin.display().to_string(),
-            source,
-        })?;
-    if !output.status.success() {
-        return Err(SidebarAppErr::HeartbeatCommand {
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        });
-    }
-    Ok(())
+/// Refresh this instance's liveness heartbeat. Written in-process — no `rimz
+/// sidebar heartbeat` fork per tick — through the shared liveness helper, which
+/// keeps the JSON shape and atomic write identical to what the ledger wakeup
+/// fanout and launch freshness gate expect.
+fn write_heartbeat(config: &ServeConfig, runtime: &RuntimePaths, socket_path: &Path) -> Result<()> {
+    rimz::sidebar::write_heartbeat(
+        runtime,
+        config.workspace_id.clone(),
+        &config.instance_id,
+        config.mux,
+        &config.session_name,
+        socket_path,
+    )
+    .map_err(|err| SidebarAppErr::Heartbeat(err.to_string()))
 }
 
 fn sidebar_socket_path(runtime: &RuntimePaths, instance_id: &SidebarInstanceId) -> PathBuf {
@@ -611,14 +556,76 @@ fn spawn_event_waker(wake_path: PathBuf) {
     });
 }
 
+/// Apply an input wakeup (key/mouse/resize) to the local UI in place. Input
+/// never changes ledger data, so it redraws the *current* snapshot and may jump
+/// focus, but it never re-runs the snapshot burst — that per-keystroke refetch
+/// was the input lag.
+fn apply_input(
+    wakeup: Wakeup,
+    ui: &mut UiState,
+    health: &mut Health,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    snapshot: &SidebarSnapshot,
+    config: &ServeConfig,
+) -> Result<()> {
+    let outcome = handle_wakeup(wakeup, ui, snapshot);
+    if outcome.dismiss {
+        health.alert = None;
+    }
+    if outcome.redraw {
+        render::draw_to_terminal_with_ui(terminal, snapshot, health.alert.as_ref(), ui)?;
+    }
+    if let Some(index) = outcome.focus_index {
+        focus_selected_row(snapshot, index, config);
+    }
+    Ok(())
+}
+
+/// Drain every datagram already queued on the wakeup socket without blocking.
+/// Queued ledger deltas and ticks fold into the single re-fetch the caller is
+/// about to do; queued input is applied in place; a queued reload is reported
+/// so the caller can re-exec. Returns whether a reload was seen. The socket is
+/// always restored to blocking mode before returning.
+fn drain_coalescing(
+    socket: &UnixDatagram,
+    ui: &mut UiState,
+    health: &mut Health,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    snapshot: &SidebarSnapshot,
+    config: &ServeConfig,
+) -> Result<bool> {
+    socket.set_nonblocking(true)?;
+    let mut reload = false;
+    let mut buf = [0_u8; 4096];
+    loop {
+        match socket.recv(&mut buf) {
+            Ok(n) => match decode_wakeup(&buf[..n]) {
+                Wakeup::Ledger | Wakeup::Tick => {}
+                Wakeup::Reload => {
+                    reload = true;
+                    break;
+                }
+                input => apply_input(input, ui, health, terminal, snapshot, config)?,
+            },
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+            Err(err) => {
+                let _ = socket.set_nonblocking(false);
+                return Err(err.into());
+            }
+        }
+    }
+    socket.set_nonblocking(false)?;
+    Ok(reload)
+}
+
 fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -> InputOutcome {
     match wakeup {
         Wakeup::Key(action) => handle_key(action, ui, snapshot),
         Wakeup::MouseClick { column, row } => handle_mouse_click(column, row, ui, snapshot),
         Wakeup::Resize => InputOutcome::redraw(),
-        // The serve loop intercepts these before dispatching here: a tick is the
-        // re-fetch trigger, and a reload breaks the loop to re-exec.
-        Wakeup::Tick | Wakeup::Reload => InputOutcome::default(),
+        // The serve loop intercepts these before dispatching here: a tick or a
+        // ledger delta is the re-fetch trigger, and a reload re-execs.
+        Wakeup::Tick | Wakeup::Ledger | Wakeup::Reload => InputOutcome::default(),
     }
 }
 
@@ -961,6 +968,7 @@ impl Drop for RuntimeFileGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rimz::feed::PaneRef;
 
     fn workspace() -> WorkspaceId {
         WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap()
@@ -1251,40 +1259,6 @@ mod tests {
             state.seen_sibling,
             "an unknown count must not clear the latch"
         );
-    }
-
-    #[test]
-    fn own_view_state_tracks_focused_sibling_in_own_view() {
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let focused_here = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let focused_elsewhere = PaneId::from_parts(MuxName::Zellij, "terminal_3");
-        let panes = vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", true),
-            pane("terminal_3", "tab_1", true),
-        ];
-
-        let state =
-            own_view_state_from_panes(&own, &panes, Some("tab_0")).expect("own pane is present");
-
-        assert_eq!(state.sibling_count, 1);
-        assert_eq!(state.focused_pane_id, Some(focused_here));
-        assert_ne!(state.focused_pane_id, Some(focused_elsewhere));
-    }
-
-    #[test]
-    fn own_view_state_marks_when_sidebar_itself_is_focused() {
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let panes = vec![
-            pane("terminal_1", "tab_0", true),
-            pane("terminal_2", "tab_0", false),
-        ];
-
-        let state =
-            own_view_state_from_panes(&own, &panes, Some("tab_0")).expect("own pane is present");
-
-        assert!(state.own_is_focused);
-        assert_eq!(state.focused_pane_id, None);
     }
 
     #[test]

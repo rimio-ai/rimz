@@ -4,12 +4,14 @@
 //! protocol-mismatched heartbeat never blocks a fresh launch.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use tracing::debug;
 
+use crate::ids::{MuxName, SidebarInstanceId, WorkspaceId};
 use crate::ledger::RuntimePaths;
+use crate::ledger::atomic;
 use crate::ledger::wakeup::SIDEBAR_HEARTBEAT_TTL;
 use crate::mux::{MuxBackend, SidebarPaneOptions};
 use crate::schema::SIDEBAR_PROTOCOL_VERSION;
@@ -20,6 +22,42 @@ pub enum SidebarLaunchOutcome {
     SkippedFresh,
     Opened,
     Failed,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("writing sidebar heartbeat {path}: {source}")]
+pub struct HeartbeatWriteErr {
+    pub path: PathBuf,
+    #[source]
+    pub source: atomic::AtomicErr,
+}
+
+/// Write this sidebar instance's liveness heartbeat in-process.
+///
+/// The heartbeat is a runtime liveness file, not ledger truth, so the renderer
+/// owns it directly rather than forking `rimz sidebar heartbeat` once per tick.
+/// The JSON shape and the atomic temp-then-rename are identical to the CLI path
+/// they replace, so the ledger wakeup fanout and the launch freshness gate that
+/// read it are unchanged. The renderer ensures the runtime dirs at startup, so
+/// this only does the write.
+pub fn write_heartbeat(
+    runtime: &RuntimePaths,
+    workspace_id: WorkspaceId,
+    instance_id: &SidebarInstanceId,
+    mux: MuxName,
+    session_name: &str,
+    wakeup_socket: &Path,
+) -> Result<(), HeartbeatWriteErr> {
+    let heartbeat = SidebarHeartbeat::new(
+        workspace_id,
+        instance_id.clone(),
+        mux,
+        session_name,
+        wakeup_socket.to_path_buf(),
+    );
+    let path = runtime.sidebar_heartbeat_path(instance_id);
+    atomic::write_temp_then_rename(&path, &heartbeat)
+        .map_err(|source| HeartbeatWriteErr { path, source })
 }
 
 pub fn fresh_sidebar_present(rt: &RuntimePaths) -> bool {
@@ -194,5 +232,33 @@ mod tests {
         )
         .expect("write invalid heartbeat");
         assert!(!fresh_sidebar_present(&h.runtime));
+    }
+
+    #[test]
+    fn in_process_write_heartbeat_is_fresh_and_round_trips() {
+        // The renderer writes its heartbeat in-process now; it must land in the
+        // same shape and freshness the ledger wakeup fanout and launch gate read.
+        let h = Harness::new();
+        h.ensure_runtime();
+        let instance = SidebarInstanceId::new();
+        let socket = h.runtime.sock_dir.join("sidebar.test.sock");
+
+        write_heartbeat(
+            &h.runtime,
+            h.workspace_id.clone(),
+            &instance,
+            MuxName::Zellij,
+            "rimz-test",
+            &socket,
+        )
+        .expect("write heartbeat");
+
+        assert!(fresh_sidebar_present(&h.runtime));
+        let path = h.runtime.sidebar_heartbeat_path(&instance);
+        let hb = read_sidebar_heartbeat(&path).expect("read back");
+        assert_eq!(hb.instance_id, instance);
+        assert_eq!(hb.protocol_version, SIDEBAR_PROTOCOL_VERSION);
+        assert_eq!(hb.mux, MuxName::Zellij);
+        assert_eq!(hb.wakeup_socket, socket);
     }
 }

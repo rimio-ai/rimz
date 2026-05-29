@@ -121,10 +121,7 @@ These commands are called by hooks, the sidebar, or other Rimz processes. You ge
 
 ```sh
 rimz ping
-rimz sidebar snapshot --workspace-id <id> [--json]
-rimz sidebar heartbeat --workspace-id <id> --instance-id <id> \
-                       --mux <zellij|tmux> --session-name <name> \
-                       --wakeup-socket <path>
+rimz sidebar snapshot --workspace-id <id> [--exclude-pane-id <own>] [--json]
 rimz sidebar serve [--workspace-id <id>] [--mux <zellij|tmux>] \
                    [--session-name <name>] [--tick-seconds N]
 rimz hooks feed --source <agent> [--event <event>]
