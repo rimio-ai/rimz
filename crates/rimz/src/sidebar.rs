@@ -72,13 +72,13 @@ pub fn fresh_sidebar_present(rt: &RuntimePaths) -> bool {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if !is_sidebar_heartbeat(&path) {
+        if !SidebarHeartbeat::is_heartbeat_file(&path) {
             continue;
         }
         if !heartbeat_mtime_fresh(&path) {
             continue;
         }
-        let heartbeat = match read_sidebar_heartbeat(&path) {
+        let heartbeat = match SidebarHeartbeat::read_from(&path) {
             Ok(heartbeat) => heartbeat,
             Err(err) => {
                 debug!(path = %path.display(), error = %err, "sidebar heartbeat unreadable");
@@ -115,17 +115,6 @@ pub fn launch_sidebar_if_needed(
             SidebarLaunchOutcome::Failed
         }
     }
-}
-
-fn is_sidebar_heartbeat(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("sidebar.") && name.ends_with(".json"))
-}
-
-fn read_sidebar_heartbeat(path: &Path) -> std::io::Result<SidebarHeartbeat> {
-    let bytes = fs::read(path)?;
-    serde_json::from_slice(&bytes).map_err(std::io::Error::other)
 }
 
 fn heartbeat_mtime_fresh(path: &Path) -> bool {
@@ -255,7 +244,7 @@ mod tests {
 
         assert!(fresh_sidebar_present(&h.runtime));
         let path = h.runtime.sidebar_heartbeat_path(&instance);
-        let hb = read_sidebar_heartbeat(&path).expect("read back");
+        let hb = SidebarHeartbeat::read_from(&path).expect("read back");
         assert_eq!(hb.instance_id, instance);
         assert_eq!(hb.protocol_version, SIDEBAR_PROTOCOL_VERSION);
         assert_eq!(hb.mux, MuxName::Zellij);

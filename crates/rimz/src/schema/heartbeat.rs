@@ -1,6 +1,6 @@
 //! Liveness heartbeats: sidebar instances and resolver clients.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,22 @@ impl SidebarHeartbeat {
             wakeup_socket,
             last_seen: Timestamp::now(),
         }
+    }
+
+    /// Whether `path` is a sidebar heartbeat file (`sidebar.<id>.json`). The
+    /// naming convention is owned here so the wakeup walk and the launch
+    /// freshness gate agree on which files are heartbeats.
+    pub fn is_heartbeat_file(path: &Path) -> bool {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("sidebar.") && name.ends_with(".json"))
+    }
+
+    /// Decode a heartbeat from its on-disk JSON. A parse failure maps to an IO
+    /// error so callers handle read and decode uniformly.
+    pub fn read_from(path: &Path) -> std::io::Result<Self> {
+        let bytes = std::fs::read(path)?;
+        serde_json::from_slice(&bytes).map_err(std::io::Error::other)
     }
 }
 

@@ -174,10 +174,10 @@ fn collect_fresh_sidebars(rt: &RuntimePaths) -> Result<Vec<SidebarHeartbeat>> {
     let mut fresh = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if !is_sidebar_heartbeat(&path) {
+        if !SidebarHeartbeat::is_heartbeat_file(&path) {
             continue;
         }
-        let hb = match read_sidebar_heartbeat(&path) {
+        let hb = match SidebarHeartbeat::read_from(&path) {
             Ok(hb) => hb,
             Err(e) => {
                 debug!(?path, error = %e, "wakeup: skipping unreadable sidebar heartbeat");
@@ -225,18 +225,6 @@ fn dispatch_zellij_pipe(session_name: &str, payload: &[u8]) {
             "wakeup: zellij pipe broadcast failed (UDP wakeup already sent)"
         );
     }
-}
-
-fn is_sidebar_heartbeat(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .map(|n| n.starts_with("sidebar.") && n.ends_with(".json"))
-        .unwrap_or(false)
-}
-
-fn read_sidebar_heartbeat(path: &Path) -> std::result::Result<SidebarHeartbeat, io::Error> {
-    let bytes = fs::read(path)?;
-    serde_json::from_slice(&bytes).map_err(io::Error::other)
 }
 
 /// Re-stat the heartbeat file to confirm it's still on disk and its mtime
