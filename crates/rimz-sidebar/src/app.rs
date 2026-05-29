@@ -93,7 +93,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     'serve: loop {
         let heartbeat_outcome = write_heartbeat(&config, &runtime, &socket_path);
         let snapshot_outcome = fetch_snapshot_for(
-            &config.rimz_bin,
+            &resolve_snapshot_bin(&config.rimz_bin),
             &config.workspace_id,
             Some(config.mux),
             Some(&config.session_name),
@@ -280,6 +280,24 @@ fn resolve_reexec_target(exe: PathBuf) -> Option<PathBuf> {
         return Some(exe);
     }
     strip_deleted_suffix(&exe).filter(|path| path.is_file())
+}
+
+/// Resolve the `rimz` binary that drives `sidebar snapshot` this tick.
+///
+/// `cached` is the path captured at launch — the sibling `rimz` beside this
+/// renderer, or `RIMZ_BIN`. A long-lived sidebar can outlive it: removing the
+/// dev worktree it was built in deletes that binary out from under the still
+/// running renderer, and every snapshot fork then fails with ENOENT, degrading
+/// the sidebar with no way back (a reload cannot rescue it either, since the
+/// renderer binary in that worktree is gone too). Keep the cached path while it
+/// is a real file; once it vanishes, fall back to the installed `rimz` on `PATH`
+/// so the sidebar heals itself instead of degrading until it is killed.
+fn resolve_snapshot_bin(cached: &Path) -> PathBuf {
+    if cached.is_file() {
+        return cached.to_path_buf();
+    }
+    // A bare name; `Command::new` resolves it against `PATH`.
+    PathBuf::from(format!("rimz{}", std::env::consts::EXE_SUFFIX))
 }
 
 /// Strip the kernel's " (deleted)" annotation from a `/proc/self/exe` path.
@@ -1292,6 +1310,27 @@ mod tests {
         let deleted = PathBuf::from(format!("{} (deleted)", missing.display()));
         assert_eq!(resolve_reexec_target(deleted), None);
         assert_eq!(resolve_reexec_target(missing), None);
+    }
+
+    #[test]
+    fn snapshot_bin_uses_the_cached_path_while_it_exists() {
+        // The sibling `rimz` captured at launch is still on disk — drive the
+        // snapshot with exactly that build, so a dev worktree's changes apply.
+        let dir = tempfile::tempdir().unwrap();
+        let cached = dir.path().join("rimz");
+        std::fs::write(&cached, b"x").unwrap();
+        assert_eq!(resolve_snapshot_bin(&cached), cached);
+    }
+
+    #[test]
+    fn snapshot_bin_falls_back_to_path_when_the_cached_binary_vanished() {
+        // The dev worktree this sidebar launched from was removed, deleting the
+        // sibling `rimz` it cached. Recover via the installed binary on `PATH`
+        // rather than forking a path that no longer exists every tick.
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("rimz");
+        assert!(!gone.is_file(), "the cached path must not exist");
+        assert_eq!(resolve_snapshot_bin(&gone), PathBuf::from("rimz"));
     }
 
     #[test]
