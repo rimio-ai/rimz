@@ -67,6 +67,7 @@ Each field, where it comes from, and its **lifetime** — the rule the reducer f
 | `kind`                              | `claude` / `codex`                | `--source` on the hook                                            | identity      |
 | `status`                            | 5-value rollup (below)            | derived from `event_name` (§ state machine)                       | activity      |
 | `permission_posture`                | `default`/`auto`/`yolo`/`unknown` | `SessionStart` · `permission_mode`/`approval_policy`              | carry-forward |
+| `plan_mode`                         | read-only plan mode (→ thinking)  | `SessionStart`/`UserPromptSubmit` · `permission_mode == "plan"`   | carry-forward |
 | `task`                              | what it's working on              | `UserPromptSubmit` · `prompt`; `SubagentStart` · `agent_type`     | activity      |
 | `model`                             | `Opus`, `GPT-5.5`                 | lifecycle · `model` (canonicalized — § below)                     | carry-forward |
 | `effort`                            | `xhigh`/`high`/…                  | lifecycle · `thinking_level`/`model_reasoning_effort`             | carry-forward |
@@ -77,7 +78,7 @@ Each field, where it comes from, and its **lifetime** — the rule the reducer f
 | `runtime_owner`                     | owner-process identity            | built from `agent_pid` + start token                              | identity      |
 | `worktree_path` / `worktree_branch` | grouping spine                    | live pane cwd → worktree (ledger value is detached-only fallback) | live-derived  |
 | `pane`                              | jump target                       | bound live at snapshot from the pane list                         | live-derived  |
-| `last_activity`                     | age + ranking key                 | `event.timestamp` of the agent's own latest event                 | activity      |
+| `last_activity`                     | age + ranking key                 | `event.timestamp`, advanced per tool by the activity heartbeat    | activity      |
 | `last_seen`                         | carryover-merge tiebreak          | `event.timestamp`                                                 | activity      |
 
 The catalog turns on one distinction: **identity vs. live-derived**. `worktree_*` and `pane` are *live* facts — the pane knows its current cwd every tick — so they are derived at snapshot time, not pinned at session start. Pinning them is the branch-tracking bug (§ Liveness and presence).
@@ -86,15 +87,17 @@ The reducer stores `model` **canonicalized** — a trailing capability tag is st
 
 ### The state machine
 
-The five-value status set, in ranking order (most attention-hungry first), per [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape):
+The five-value status set, in ranking order (most attention-hungry first), per [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape), which owns the full glyph/animation/color table:
 
 | Status    | Glyph | Meaning                     | Raises attention |
 | --------- | ----- | --------------------------- | ---------------- |
-| `waiting` | `◆`   | blocked on a human decision | yes              |
-| `failed`  | `✗`   | the last turn errored       | yes              |
-| `running` | `◐`   | actively working a task     | no               |
-| `idle`    | `○`   | wired in, nothing in flight | no               |
+| `waiting` | `?`   | blocked on a human decision | yes              |
+| `failed`  | `!`   | the last turn errored       | yes              |
+| `running` | `◕`   | actively working a task     | no               |
+| `idle`    | `◌`   | wired in, nothing in flight | no               |
 | `success` | `✓`   | last turn completed cleanly | no               |
+
+The displayed cell refines `running` two ways without changing the rollup: a `running` agent in read-only plan mode renders as **thinking** (`✽`, a sparkle animation — the `plan_mode` flag below), and a `running` agent silent past the stall window escalates to the attention **`!`** (see [Liveness and presence](#liveness-and-presence)). A working `running` agent animates a filling circle; the resolver-mid-flight overlay animates a braille spinner. Only these active states animate — `?`, `!`, `◌`, `✓` are static so attention stays scannable.
 
 `waiting` is **not** a lifecycle transition. It is the presence of a pending blocking feed item joined to the agent (the feed channel, not the lifecycle channel). The lifecycle machine drives the other four:
 
@@ -141,6 +144,8 @@ Presence comes from the live pane list, not from a session-exit hook (see [sideb
 The captured pid is **not** a render gate — stamped-pane binding already keeps a stale agent off a stranger's pane. It feeds the rollup's hygiene instead: on a lifecycle event Rimz records the agent's pid best-effort (`RIMZ_AGENT_PID=$PPID`, falling back to a `/proc` ancestor walk, plus the Linux process-start token to defeat pid reuse), and the reaper below reads *pidless* as one of its ghost signals.
 
 There is no `offline` status — a dead agent is a reverted shell row or no row at all, never a retracted ledger fact.
+
+**Per-tool activity is a heartbeat, not an event.** The durable event log is turn-grained — `last_activity` would otherwise advance only on `SessionStart`/`UserPromptSubmit`/`Stop` — so the hook touches a per-agent activity heartbeat (`runtime/agent-activity/`, the [`agent_activity`](../../crates/rimz/src/agent_activity.rs) module) on every progress-proving event (`PostToolUse`, the turn boundaries, subagent start/stop), and the snapshot folds the freshest touch into `last_activity`. It is **not** touched on `PreToolUse` (which can fire in the same tool call as a blocking ask) or while the agent is blocked. This per-tool signal does three things: it keeps a busy agent's row animating (the spinner tracks real work, not a stale 4-second window), it escalates a `running` agent silent past the ~10-minute stall window to the `!` attention state, and it recovers an answered `native_ui` ask — the snapshot stops folding an ask onto the row once `last_activity` passes the ask, so an agent that answered in its own UI and kept working returns to `running` without waiting for the next turn boundary. Like every heartbeat, it is latency, not truth: a missing or stale file just leaves the event-log timestamp.
 
 **The rollup reaps its own ghosts.** A session that never captured a pid and never fired `SessionEnd` would otherwise pin a stale row forever, and relaunch-in-place or shared-pid sessions stack duplicates. At snapshot time the derived rollup (never the event log) drops two classes, both safe for one-pane-one-row: a *pidless* session past a few-hours TTL, and an *older* session superseded by a strictly-newer same-kind session on the same `(worktree_path, worktree_branch)` when the older holds no live pane the newer doesn't already occupy. An agent holding its own distinct pane is always kept. This is workspace-local and complements the cross-workspace `rimz gc`.
 

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::agent_activity::AgentActivity;
 use crate::feed::{
     AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, PaneRef, PermissionPosture,
     ResolverStepState, RuntimeOwner, RuntimeOwnerKind, Surface,
@@ -166,6 +167,10 @@ pub struct SidebarRow {
     /// Replaces the older `mode` field — mode/posture were conflated in a way
     /// that didn't cross backends cleanly.
     pub permission_posture: Option<PermissionPosture>,
+    /// True while the agent is in read-only plan mode. With `status == Running`
+    /// the renderer paints the "thinking" state instead of the working spinner.
+    #[serde(default)]
+    pub plan_mode: bool,
     pub pane: Option<PaneRef>,
     pub request_id: Option<RequestId>,
     pub surface: Option<Surface>,
@@ -431,6 +436,34 @@ impl SidebarSnapshot {
         );
         self
     }
+
+    /// Fold per-agent activity heartbeats into the rollup. The agent's hook
+    /// touches its heartbeat on every progress-proving event, so the freshest
+    /// touch is a truer `last_activity` than the turn-grained event log — it
+    /// advances per tool call, which is what keeps a busy agent's row animated,
+    /// recovers an answered ask, and dates a genuine stall. Latency, not truth:
+    /// a missing or older heartbeat leaves the event-log value untouched.
+    ///
+    /// Apply this before [`Self::with_live_panes`] so age, ranking, the
+    /// ask-fold guard, and the stall window all read the accurate value.
+    pub fn with_agent_activity(mut self, activity: &[AgentActivity]) -> Self {
+        let mut changed = false;
+        for agent in &mut self.agents {
+            if let Some(touch) = activity
+                .iter()
+                .filter(|a| a.kind == agent.kind && a.agent_id == agent.agent_id)
+                .max_by_key(|a| a.at)
+                && touch.at > agent.last_activity
+            {
+                agent.last_activity = touch.at;
+                changed = true;
+            }
+        }
+        if changed {
+            self.rebuild_groups();
+        }
+        self
+    }
 }
 
 impl SidebarOwnView {
@@ -618,9 +651,10 @@ fn agent_for_pane<'a>(
 }
 
 /// The agent's single most-relevant pending ask: the newest agent-hook ask that
-/// names this session. Asks arrive newest-first, so the first match wins.
-/// Folding only one ask onto the row is the read-side guarantee that a session
-/// never stacks more than one attention row.
+/// names this session and that the agent has not already moved past. Asks
+/// arrive newest-first, so the first match wins. Folding only one ask onto the
+/// row is the read-side guarantee that a session never stacks more than one
+/// attention row.
 fn most_relevant_ask<'a>(
     agent: &AgentState,
     needs_attention: &'a [FeedItem],
@@ -633,7 +667,19 @@ fn most_relevant_ask<'a>(
             item.source_kind == "agent-hook"
                 && item.source == agent.kind
                 && agent_id_from_item(item).as_deref() == Some(agent.agent_id.as_str())
+                && !agent_moved_past_ask(agent, item)
         })
+}
+
+/// True when the agent recorded progress activity *after* raising this ask — it
+/// answered in its own UI and kept working, so the ask is settled and must not
+/// re-raise the row to `waiting`. This is the read-side recovery for a native_ui
+/// ask the agent never reports back through Rimz: the per-tool activity
+/// heartbeat advances `last_activity` past the ask's `updated_at` as soon as the
+/// agent runs its next tool. A bridge ask keeps the hook blocked, so the agent
+/// emits no progress while it waits and this never fires for one mid-flight.
+fn agent_moved_past_ask(agent: &AgentState, ask: &FeedItem) -> bool {
+    agent.last_activity > ask.updated_at
 }
 
 /// Overlay a pending ask onto its agent's pane row: the row keeps the agent's
@@ -664,6 +710,16 @@ fn rows_from_ledger(
         // process-dead agent after classification, and this rebuild runs
         // against the reduced set.
         if agent_hook_session_stale(item, agents) {
+            continue;
+        }
+        // The agent kept working after raising this ask (answered in its own
+        // UI), so it has un-blocked — don't re-raise its calm row to waiting.
+        // Mirrors the pane path's `most_relevant_ask` guard; a bridge ask keeps
+        // the hook blocked, so no progress is recorded and this never fires for
+        // one mid-flight.
+        if let Some(matched) = matching_agent(item, agents)
+            && agent_moved_past_ask(matched, item)
+        {
             continue;
         }
         // One row per session. Items arrive newest-first, so the first ask for
@@ -767,12 +823,23 @@ fn build_worktree_groups_from_rows(
 }
 
 fn row_from_agent(agent: &AgentState) -> SidebarRow {
+    // `SidebarRow.status` is the *displayed* status, not the raw rollup (a
+    // pending ask folds it to `waiting` below). A `running` agent silent past
+    // the stall window is likely wedged, so project it to the attention bucket
+    // here: it then surfaces as `!`, joins the attention tally, and rises in the
+    // ranking. The rollup in `snapshot.agents` keeps the true `running` status.
+    let status = if crate::feed::is_stalled(agent.status, agent.last_activity, Timestamp::now()) {
+        AgentStatus::Failed
+    } else {
+        agent.status
+    };
     SidebarRow {
         row_kind: SidebarRowKind::Agent,
         id: agent.agent_id.clone(),
         name: agent.kind.clone(),
-        status: Some(agent.status),
+        status: Some(status),
         permission_posture: Some(agent.permission_posture),
+        plan_mode: agent.plan_mode,
         pane: agent.pane.clone(),
         request_id: None,
         surface: None,
@@ -804,6 +871,7 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
         name,
         status: None,
         permission_posture: None,
+        plan_mode: false,
         pane: Some(pane.clone()),
         request_id: None,
         surface: None,
@@ -880,6 +948,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         name: item.source.clone(),
         status: Some(AgentStatus::Waiting),
         permission_posture: matched.map(|agent| agent.permission_posture),
+        plan_mode: matched.is_some_and(|agent| agent.plan_mode),
         pane: item
             .pane
             .clone()
@@ -1317,6 +1386,16 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .or_else(|| prior.map(|p| p.permission_posture))
             .unwrap_or(PermissionPosture::Default);
+        // Plan mode carries forward like posture: an event that omits it (the
+        // prompt/stop turn boundaries report no mode) keeps the prior value, so
+        // toggling plan mode mid-session persists until the agent reports a new
+        // one.
+        let plan_mode: bool = event
+            .params
+            .get("plan_mode")
+            .and_then(serde_json::Value::as_bool)
+            .or_else(|| prior.map(|p| p.plan_mode))
+            .unwrap_or(false);
         let param_string = |key: &str| {
             event
                 .params
@@ -1400,6 +1479,7 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             kind: kind.clone(),
             status,
             permission_posture,
+            plan_mode,
             pane,
             agent_pid,
             agent_process_start,
@@ -1487,12 +1567,19 @@ mod tests {
         posture: PermissionPosture,
         last_seen: i64,
     ) -> AgentState {
-        let timestamp = Timestamp::from_second(last_seen).unwrap();
+        // The `last_seen` arg is a recency rank, not an absolute epoch: anchor it
+        // to recent wall-clock (larger rank = more recent, all within ~100s of
+        // now) so a `running` test agent is never falsely flagged stalled by the
+        // real-time stall window. Tests that exercise the stall/ghost windows
+        // override `last_activity` explicitly after construction.
+        let offset_ms = (100_000 - last_seen).max(0) as u64;
+        let timestamp = Timestamp::now() - std::time::Duration::from_millis(offset_ms);
         AgentState {
             agent_id: id.into(),
             kind: kind.into(),
             status,
             permission_posture: posture,
+            plan_mode: false,
             pane: None,
             agent_pid: None,
             agent_process_start: None,
@@ -2283,6 +2370,177 @@ mod tests {
         assert_eq!(row.name, "claude");
         assert_eq!(row.status, Some(AgentStatus::Waiting));
         assert_eq!(row.pane.as_ref().unwrap().pane_id.raw(), "%1");
+    }
+
+    #[test]
+    fn answered_native_ui_ask_returns_to_running() {
+        // The live bug: a native_ui ask is answered in the agent's own UI and
+        // the agent keeps working the same turn. The ask stays pending in the
+        // ledger, but the activity heartbeat has advanced `last_activity` past
+        // the ask, so the row must read `running`, not stay folded to `waiting`.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut item = FeedItem::new(
+            workspace.clone(),
+            Surface::NativeUi,
+            FeedKind::Question,
+            "claude needs attention",
+            "claude",
+            "agent-hook",
+        );
+        item.worktree_path = Some("/repo/main".to_owned());
+        item.payload = serde_json::json!({ "session_id": "live-claude" });
+        // Ask raised at t=1000.
+        item.updated_at = Timestamp::from_second(1_000).unwrap();
+
+        // The agent recorded progress at t=2000 — after the ask — so it has
+        // un-blocked and moved on.
+        let mut session = agent(
+            "claude",
+            "live-claude",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            2_000,
+        );
+        session.worktree_path = Some("/repo/main".to_owned());
+        session.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+
+        let snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, vec![item], Vec::new(), vec![session])
+                .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+
+        let row = &snapshot.worktree_groups[0].rows[0];
+        assert_eq!(row.row_kind, SidebarRowKind::Agent);
+        assert_eq!(
+            row.status,
+            Some(AgentStatus::Running),
+            "an answered ask the agent moved past must not pin the row to waiting"
+        );
+    }
+
+    #[test]
+    fn answered_native_ui_ask_returns_to_running_without_panes() {
+        // The same recovery as the pane path, but on the ledger-rollup fallback
+        // (`rimz sidebar snapshot` with no live mux). The moved-past guard must
+        // apply here too, or the answered ask falsely pins the row to waiting.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut item = FeedItem::new(
+            workspace.clone(),
+            Surface::NativeUi,
+            FeedKind::Question,
+            "claude needs attention",
+            "claude",
+            "agent-hook",
+        );
+        item.worktree_path = Some("/repo/main".to_owned());
+        item.payload = serde_json::json!({ "session_id": "live-claude" });
+        // Ask raised long ago; the agent recorded progress since (recent
+        // `last_activity` via the `agent` helper), so it has moved past it.
+        item.updated_at = Timestamp::from_second(1_000).unwrap();
+        let mut session = agent(
+            "claude",
+            "live-claude",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            2_000,
+        );
+        session.worktree_path = Some("/repo/main".to_owned());
+
+        // No `with_live_panes`: the snapshot stays on the ledger-rollup path.
+        let snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, vec![item], Vec::new(), vec![session]);
+
+        let row = &snapshot.worktree_groups[0].rows[0];
+        assert_eq!(
+            row.status,
+            Some(AgentStatus::Running),
+            "the moved-past recovery must also apply on the no-pane ledger fallback"
+        );
+    }
+
+    #[test]
+    fn stalled_running_agent_recovers_when_activity_resumes() {
+        // The stall escalation is self-healing: once the agent's next completed
+        // tool touches the activity heartbeat, the fold readvances
+        // `last_activity`, `is_stalled` goes false, and the row drops back out
+        // of attention with no human action.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut session = agent(
+            "claude",
+            "live-claude",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            0,
+        );
+        session.worktree_path = Some("/repo/main".to_owned());
+        session.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+        // Silent past the stall window.
+        session.last_activity = Timestamp::now()
+            - std::time::Duration::from_secs(crate::feed::STALL_WINDOW_SECS as u64 + 60);
+
+        // A fresh heartbeat lands (the agent's next tool completed).
+        let touch = AgentActivity {
+            kind: "claude".to_owned(),
+            agent_id: "live-claude".to_owned(),
+            at: Timestamp::now(),
+        };
+        let snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![session])
+                .with_agent_activity(&[touch])
+                .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+
+        let row = &snapshot.worktree_groups[0].rows[0];
+        assert_eq!(
+            row.status,
+            Some(AgentStatus::Running),
+            "a fresh heartbeat readvances last_activity, so the stalled row recovers"
+        );
+    }
+
+    #[test]
+    fn stalled_running_agent_escalates_to_attention() {
+        // A running agent that records no activity past the stall window is
+        // likely wedged; the displayed row escalates to the attention bucket
+        // (`!`) and the rollup keeps the true `running` status.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut session = agent(
+            "claude",
+            "live-claude",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            0,
+        );
+        session.worktree_path = Some("/repo/main".to_owned());
+        session.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+        session.last_activity = Timestamp::now()
+            - std::time::Duration::from_secs(crate::feed::STALL_WINDOW_SECS as u64 + 60);
+
+        let snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![session])
+                .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+
+        let row = &snapshot.worktree_groups[0].rows[0];
+        assert_eq!(
+            row.status,
+            Some(AgentStatus::Failed),
+            "a long-silent running agent escalates to the attention bucket"
+        );
+        assert!(
+            snapshot.worktree_groups[0]
+                .status_counts
+                .iter()
+                .any(|count| count.status == AgentStatus::Failed && count.count == 1),
+            "the stalled agent counts in the attention tally"
+        );
+        let rolled_up = snapshot
+            .agents
+            .iter()
+            .find(|a| a.agent_id == "live-claude")
+            .expect("agent in rollup");
+        assert_eq!(
+            rolled_up.status,
+            AgentStatus::Running,
+            "the rollup keeps the true running status; only the display row escalates"
+        );
     }
 
     #[test]

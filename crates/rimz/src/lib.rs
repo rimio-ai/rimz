@@ -8,6 +8,7 @@
 #![deny(clippy::print_stdout)]
 #![deny(clippy::print_stderr)]
 
+pub mod agent_activity;
 pub mod agents;
 pub mod bridge;
 pub mod feed;

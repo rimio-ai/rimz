@@ -27,7 +27,8 @@ use super::{
     AgentContext, AgentErr, AgentHookClass, AgentIntegration, AgentLifecycleObservation,
     ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
     StatusLineChange, agent_config_path, choice_is_allow, optional_payload_string,
-    permission_decision, read_optional_file, read_transcript_tail, stop_status_from_payload,
+    permission_decision, plan_mode_from_payload, read_optional_file, read_transcript_tail,
+    stop_status_from_payload,
 };
 use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution};
 use crate::ledger::atomic;
@@ -251,6 +252,7 @@ impl AgentIntegration for ClaudeIntegration {
             agent_process_start: None,
             runtime_owner: None,
             permission_posture: posture,
+            plan_mode: plan_mode_from_payload(payload),
             worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
             worktree_branch: optional_payload_string(payload, &["worktree_branch"]),
             task: background_task_label(&pending_background)
@@ -1737,6 +1739,27 @@ mod tests {
             .observe_lifecycle("SessionStart", &json!({ "permission_mode": "plan" }))
             .unwrap();
         assert_eq!(obs.permission_posture, Some(PermissionPosture::Default));
+    }
+
+    #[test]
+    fn plan_mode_observed_from_permission_mode() {
+        // `permission_mode == "plan"` is the read-only "thinking" signal the
+        // sidebar renders as a sparkle; any other concrete mode clears it, and
+        // an absent mode reports `None` so the reducer carries the prior value.
+        let plan = ClaudeIntegration
+            .observe_lifecycle("SessionStart", &json!({ "permission_mode": "plan" }))
+            .unwrap();
+        assert_eq!(plan.plan_mode, Some(true));
+
+        let acting = ClaudeIntegration
+            .observe_lifecycle("SessionStart", &json!({ "permission_mode": "acceptEdits" }))
+            .unwrap();
+        assert_eq!(acting.plan_mode, Some(false));
+
+        let silent = ClaudeIntegration
+            .observe_lifecycle("UserPromptSubmit", &json!({ "session_id": "sess-1" }))
+            .unwrap();
+        assert_eq!(silent.plan_mode, None);
     }
 
     #[test]

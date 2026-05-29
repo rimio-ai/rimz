@@ -73,10 +73,12 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Al
     draw_with_ui(frame, snapshot, alert, &UiState::default());
 }
 
-/// Whether any visible row is a running agent that acted recently enough to
-/// keep its head spinning. The serve loop uses this to switch to the fast
-/// animation tick only while there is live motion to paint — a calm sidebar
-/// keeps idling on the slow data tick.
+/// Whether any visible row is in an animated state — a running agent (working
+/// or plan-mode thinking) or a resolver mid-flight. The serve loop uses this to
+/// switch to the fast animation tick only while there is live motion to paint;
+/// a calm sidebar (only idle/waiting/done/failed rows, all static) keeps idling
+/// on the slow data tick. A stalled agent is projected to `failed` upstream, so
+/// it reads as static `!` and never keeps the fast tick alive.
 pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {
     snapshot
         .worktree_groups
@@ -84,8 +86,7 @@ pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {
         .flat_map(|group| &group.rows)
         .any(|row| {
             row.row_kind == SidebarRowKind::Agent
-                && row.status == Some(rimz::feed::AgentStatus::Running)
-                && self::fmt::is_fresh(row.last_activity)
+                && (row.resolver.is_some() || row.status == Some(rimz::feed::AgentStatus::Running))
         })
 }
 
@@ -307,7 +308,7 @@ fn footer_lines(snapshot: &SidebarSnapshot) -> Vec<Line<'static>> {
     if attention.len() > 1 || jumpable > 0 {
         return vec![
             Line::from(""),
-            Line::styled("↵ jump   ␣ next ◆   ? keys", dim),
+            Line::styled("↵ jump   ␣ next ?!   ? keys", dim),
         ];
     }
     Vec::new()
@@ -320,9 +321,9 @@ fn help_lines() -> Vec<Line<'static>> {
     vec![
         Line::styled("keys & legend", dim),
         Line::styled("↑/↓ select   1-9 jump   ↵ jump", dim),
-        Line::styled("␣ next ◆/✗   x dismiss   r reload   ? close", dim),
-        Line::styled("◆ waiting   ✗ failed   ◐ running", dim),
-        Line::styled("○ idle      · process", dim),
+        Line::styled("␣ next ?!   x dismiss   r reload   ? close", dim),
+        Line::styled("◕ working   ✽ thinking   ? waiting", dim),
+        Line::styled("! attention   ◌ idle   ✓ done   · process", dim),
     ]
 }
 
@@ -421,6 +422,7 @@ mod tests {
             kind: kind.to_owned(),
             status,
             permission_posture,
+            plan_mode: false,
             pane: None,
             agent_pid: None,
             agent_process_start: None,
@@ -699,8 +701,8 @@ mod tests {
             18,
         );
         assert!(help.contains("keys & legend"));
-        assert!(help.contains("◆ waiting"));
-        assert!(help.contains("○ idle"));
+        assert!(help.contains("? waiting"));
+        assert!(help.contains("◌ idle"));
         assert!(help.contains("· process"));
     }
 
@@ -773,7 +775,8 @@ mod tests {
         let rendered = snapshot_to_screen(&snapshot, 24, 8);
 
         assert!(
-            rendered.contains("◐ codex"),
+            // phase 0 of the working fill is the first frame `○`.
+            rendered.contains("○ codex"),
             "L0 keeps status glyph + name:\n{rendered}"
         );
         assert!(
@@ -795,11 +798,11 @@ mod tests {
         }
     }
 
-    /// Honesty test: a stale running agent (no recent activity) must freeze —
-    /// advancing the animation phase must not change its head, so motion never
-    /// pretends a wedged agent is working.
+    /// Honesty test: a running agent silent past the stall window is projected
+    /// to the attention bucket, so it reads as a static `!` and its cell does
+    /// not animate — a wedged agent stops spinning and asks for a look.
     #[test]
-    fn render_running_head_freezes_when_agent_is_stale() {
+    fn render_stalled_agent_reads_as_static_attention() {
         let mut claude = agent(
             "claude-1",
             "claude",
@@ -809,17 +812,24 @@ mod tests {
             Some("main"),
             Some("waiting on tools"),
         );
-        claude.last_activity = fixed_now() - Duration::from_secs(30);
+        claude.last_activity =
+            fixed_now() - Duration::from_secs(rimz::feed::STALL_WINDOW_SECS as u64 + 60);
         let snapshot = snapshot_with(Vec::new(), vec![claude]);
         let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 8);
         let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 40, 8);
 
-        assert_eq!(first, second, "a stale agent's head must not spin");
+        assert_eq!(first, second, "a stalled agent's cell must not spin");
+        assert!(
+            first.contains("! claude"),
+            "stalled reads as attention:\n{first}"
+        );
     }
 
-    /// A fresh running agent animates: advancing the phase advances the head.
+    /// A running agent animates: advancing the phase advances the working fill,
+    /// regardless of how recently it last reported (the freshness freeze is
+    /// gone — staleness escalates to `!` instead of stopping the spinner).
     #[test]
-    fn render_running_head_spins_when_agent_is_fresh() {
+    fn render_running_head_spins_with_the_phase() {
         let mut claude = agent(
             "claude-1",
             "claude",
@@ -829,14 +839,14 @@ mod tests {
             Some("main"),
             Some("compiling"),
         );
-        claude.last_activity = fixed_now();
+        claude.last_activity = fixed_now() - Duration::from_secs(30);
         let snapshot = snapshot_with(Vec::new(), vec![claude]);
         let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 8);
         let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 40, 8);
 
         assert_ne!(
             first, second,
-            "a fresh agent's head must advance with the phase"
+            "a running agent's head must advance with the phase"
         );
     }
 }

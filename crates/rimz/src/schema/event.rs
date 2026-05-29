@@ -80,6 +80,7 @@ impl EventEnvelope {
             "agent_id": observation.agent_id,
             "status": observation.status,
             "permission_posture": observation.permission_posture,
+            "plan_mode": observation.plan_mode,
             "agent_pid": observation.agent_pid,
             "agent_process_start": observation.agent_process_start,
             "runtime_owner": observation.runtime_owner,

@@ -97,6 +97,9 @@ pub struct RuntimePaths {
     /// statusline enrichment). Written by the feed process, read by the
     /// snapshot CLI — never the sidebar.
     pub agent_context_dir: PathBuf,
+    /// Per-agent activity heartbeats (see [`crate::agent_activity`]). Latency
+    /// hints the snapshot folds into each agent's `last_activity`.
+    pub agent_activity_dir: PathBuf,
 }
 
 impl RuntimePaths {
@@ -111,12 +114,14 @@ impl RuntimePaths {
         let sock_dir = root.join("sock");
         let heartbeat_dir = root.join("heartbeat");
         let agent_context_dir = root.join("agent_context");
+        let agent_activity_dir = root.join("agent-activity");
         Ok(Self {
             workspace_id,
             root,
             sock_dir,
             heartbeat_dir,
             agent_context_dir,
+            agent_activity_dir,
         })
     }
 
@@ -146,6 +151,7 @@ impl RuntimePaths {
         mkdir_p(&self.sock_dir)?;
         mkdir_p(&self.heartbeat_dir)?;
         mkdir_p(&self.agent_context_dir)?;
+        mkdir_p(&self.agent_activity_dir)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

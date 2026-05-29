@@ -17,17 +17,6 @@ pub(super) fn age_short(at: Timestamp) -> String {
     }
 }
 
-/// How recently an agent must have acted for its row to keep animating. Past
-/// this window the running head freezes, so a wedged or quiet agent never
-/// spins. Sized a few animation frames above the tick so a genuinely-busy
-/// agent — which emits lifecycle events continuously — stays in motion.
-const FRESH_WINDOW_SECS: i64 = 4;
-
-/// Whether `at` is recent enough that animating the row reflects real work.
-pub(super) fn is_fresh(at: Timestamp) -> bool {
-    Timestamp::now().duration_since(at).as_secs() < FRESH_WINDOW_SECS
-}
-
 pub(super) fn time_remaining(deadline: Timestamp) -> String {
     let seconds = deadline.duration_since(Timestamp::now()).as_secs();
     if seconds <= 0 {

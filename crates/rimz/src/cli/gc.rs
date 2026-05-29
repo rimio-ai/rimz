@@ -39,6 +39,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         println!("  runtime roots : {}", report.runtime_roots_scanned);
         println!("  heartbeats    : {}", report.heartbeat_files_removed);
         println!("  sidebar socks : {}", report.sidebar_sockets_removed);
+        println!("  sidecars      : {}", report.sidecar_files_removed);
         println!("  dirs removed  : {}", report.dirs_removed);
         println!("  bytes removed : {}", report.bytes_removed);
         println!("  workspaces    : {}", prune.removed.len());

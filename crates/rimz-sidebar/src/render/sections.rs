@@ -13,10 +13,10 @@ use rimz::{
     SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
 };
 
-use super::fmt::{age_short, clip, is_fresh, time_remaining};
+use super::fmt::{age_short, clip, time_remaining};
 use super::labels::{
-    diff_spans, gauge_spans, posture_pill, posture_style, running_glyph, status_glyph,
-    status_style, todo_spans, tokens_label,
+    agent_glyph, agent_style, diff_spans, gauge_spans, posture_pill, posture_style, resolver_glyph,
+    status_glyph, status_style, todo_spans, tokens_label,
 };
 use super::theme::Theme;
 
@@ -277,9 +277,15 @@ fn row_line(theme: &Theme, row: &SidebarRow, width: usize, animation_phase: u64)
             .budget_until
             .map(time_remaining)
             .unwrap_or_else(|| "?".to_owned());
+        // A resolver mid-flight is the one "waiting for an answer" motion: a
+        // braille spinner while the resolver composes the decision, bounded by
+        // its budget.
         return composed_row(
             theme,
-            Span::styled("⟳", status_style(theme, AgentStatus::Waiting)),
+            Span::styled(
+                resolver_glyph(animation_phase),
+                status_style(theme, AgentStatus::Waiting),
+            ),
             &row.name,
             &format!("{resolver_name} {remaining}"),
             row.last_activity,
@@ -288,17 +294,16 @@ fn row_line(theme: &Theme, row: &SidebarRow, width: usize, animation_phase: u64)
     }
 
     let status = row.status.unwrap_or(AgentStatus::Idle);
-    // A running agent's head is the only animated cell — it rotates while the
-    // agent is fresh and freezes when it goes quiet, so motion never implies a
-    // wedged agent is working.
-    let glyph = if status == AgentStatus::Running {
-        running_glyph(animation_phase, is_fresh(row.last_activity))
-    } else {
-        status_glyph(status)
-    };
+    // The leading cell animates only when the agent is actively doing something:
+    // a running agent fills (working) or sparkles (plan-mode thinking). A
+    // waiting `?`, a failed/stalled `!`, idle `◌`, and success `✓` stay still —
+    // attention markers must be scannable, not jittery.
     composed_row(
         theme,
-        Span::styled(glyph, status_style(theme, status)),
+        Span::styled(
+            agent_glyph(status, row.plan_mode, animation_phase),
+            agent_style(theme, status, row.plan_mode),
+        ),
         &row.name,
         row.task.as_deref().unwrap_or("—"),
         row.last_activity,

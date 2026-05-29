@@ -135,6 +135,7 @@ mod tests {
             kind: "claude".to_owned(),
             status: AgentStatus::Idle,
             permission_posture: PermissionPosture::Default,
+            plan_mode: false,
             pane: None,
             agent_pid: owner.as_ref().map(|owner| owner.pid),
             agent_process_start: owner.as_ref().and_then(|owner| owner.process_start.clone()),

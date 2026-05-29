@@ -44,23 +44,28 @@ The sidebar is a **worktree-keyed presence and attention map**, not a feed reade
 
 **Presence is a live view; the ledger is truth.** Row presence is read live from the multiplexer's pane list — a pane running `zsh` is a row, and it becomes the agent's row when that pane runs an agent. The ledger stays the source of attention and of every durable fact; the pane list never decides correctness. A hook-driven agent that exits is gone the moment its pane reverts to a shell or closes — liveness is the live process, not a status the ledger has to retract.
 
-Agent statuses (exactly five), highest attention first. Each maps to one glyph and color — the canonical vocabulary every renderer paints. The glyph carries the status by **shape** (so it survives `NO_COLOR`); color reinforces it. A pane running a non-agent process (a bare shell, an editor) renders as a dim process row with no status glyph and never counts as attention.
+Agent status is a five-value rollup the agent owns (`running`/`waiting`/`idle`/`success`/`failed`); Rimz observes it and paints one glyph + color per *displayed* state. The glyph carries the state by **shape** (so it survives `NO_COLOR`); color reinforces it. Two symbols carry every attention state — `?` *needs your answer*, `!` *needs a look* — and only genuinely-active states animate. A pane running a non-agent process (a bare shell, an editor) renders as a dim process row with no status glyph and never counts as attention.
 
-| rank | status    | glyph | color       |
-|------|-----------|-------|-------------|
-| 1    | `waiting` | `◆`   | yellow bold |
-| 2    | `failed`  | `✗`   | red bold    |
-| 3    | `running` | `◐`   | green       |
-| 4    | `idle`    | `○`   | gray / dim  |
-| 5    | `success` | `✓`   | green dim   |
+| state              | glyph | animation              | color       | attention |
+|--------------------|-------|------------------------|-------------|-----------|
+| `waiting`          | `?`   | —                      | yellow bold | yes       |
+| `failed`           | `!`   | —                      | red bold    | yes       |
+| stalled (≥10 min)  | `!`   | —                      | red bold    | yes       |
+| `running` working  | `◕`   | fill `○ ◔ ◑ ◕ ●`       | green       | no        |
+| `running` thinking | `✽`   | sparkle `· ✢ ✳ ✶ ✻ ✽`  | cyan        | no        |
+| resolver answering | `⠋`   | braille spin           | yellow      | yes       |
+| `idle`             | `◌`   | —                      | gray / dim  | no        |
+| `success`          | `✓`   | —                      | green dim   | no        |
 
-Agent permission postures (observed from the agent, not set by Rimz) render as capability tokens; `default` and `unknown` are omitted, `auto` is dim, and `yolo` is warn-colored. Workflow words such as `plan` and `interactive` are not posture and do not render.
+`waiting` is a pending human ask folded onto the agent's row; "thinking" is `running` in read-only plan mode; "stalled" is a `running` agent silent past Claude Code's ~10-minute operation timeout, escalated to `!` so a wedged agent becomes actionable rather than a frozen spinner. Both "thinking" and "stalled" are display projections — the rollup keeps the true `running` status.
+
+Agent permission postures (observed from the agent, not set by Rimz) render as capability tokens; `default` and `unknown` are omitted, `auto` is dim, and `yolo` is warn-colored. Workflow words such as `plan` and `interactive` are not posture and do not render — `plan` surfaces as the "thinking" state above, not as a posture pill.
 
 ```text
 default   auto   yolo   unknown
 ```
 
-Live enrichments use one grammar. Context-window % renders as a smooth `Gauge`-style fill bar, todo progress as dots, and worktree diff stats as paired numeric tokens; they enrich display only and never drive a decision. A running agent's leading head animates (`◐ ◓ ◑ ◒`) while the agent is *fresh* and freezes once it goes quiet, so silence stops the motion instead of pretending work continues. Color is a garnish layer over the same glyph grammar, and `NO_COLOR` keeps every shape readable.
+Live enrichments use one grammar. Context-window % renders as a smooth `Gauge`-style fill bar, todo progress as dots, and worktree diff stats as paired numeric tokens; they enrich display only and never drive a decision. A running agent's leading cell animates continuously on a wall-clock tick — a filling circle while working, a sparkle while thinking — so motion tracks live work; silence no longer freezes the spinner but escalates to `!` once the agent crosses the stall window. Color is a garnish layer over the same glyph grammar, and `NO_COLOR` keeps every shape readable.
 
 Renderer details — the two-line row anatomy, attention ranking, and the jump interaction — live in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
 

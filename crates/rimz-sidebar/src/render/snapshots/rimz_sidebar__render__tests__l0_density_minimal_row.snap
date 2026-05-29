@@ -1,11 +1,11 @@
 ---
 source: crates/rimz-sidebar/src/render/mod.rs
-assertion_line: 387
+assertion_line: 389
 expression: screen
 ---
 ┌ query-engine ────────┐
-│▌main               1◐│
-│▎◐ codex   compile  <t>│
+│▌main               1◕│
+│▎○ codex   compile  <t>│
 │▎  ─────────────────  │
 │                      │
 │                      │

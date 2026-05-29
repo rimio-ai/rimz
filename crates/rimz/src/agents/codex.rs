@@ -21,8 +21,8 @@ use serde_json::Value;
 use super::{
     AgentErr, AgentHookClass, AgentIntegration, AgentLifecycleObservation, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, Result, agent_config_path,
-    optional_payload_string, permission_decision, read_optional_file, read_transcript_tail,
-    stop_status_from_payload,
+    optional_payload_string, permission_decision, plan_mode_from_payload, read_optional_file,
+    read_transcript_tail, stop_status_from_payload,
 };
 use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution};
 use crate::ledger::atomic;
@@ -172,6 +172,7 @@ impl AgentIntegration for CodexIntegration {
             agent_process_start: None,
             runtime_owner: None,
             permission_posture: posture,
+            plan_mode: plan_mode_from_payload(payload),
             worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
             worktree_branch: optional_payload_string(payload, &["worktree_branch"]),
             task: task_from_payload(event_name, payload),
@@ -424,7 +425,11 @@ fn usage_from_transcript(path: &Path) -> TranscriptUsage {
 fn codex_config_path() -> Result<PathBuf> {
     // Honour an explicit override (`RIMZ_CODEX_CONFIG`) so tests and tooling
     // can point the installer at a tempdir without touching real config.
-    agent_config_path("codex", "RIMZ_CODEX_CONFIG", Path::new(".codex/config.toml"))
+    agent_config_path(
+        "codex",
+        "RIMZ_CODEX_CONFIG",
+        Path::new(".codex/config.toml"),
+    )
 }
 
 fn install_into(path: &std::path::Path) -> Result<HookInstallReport> {
@@ -814,6 +819,35 @@ mod tests {
         // The prompt carries no policy field, so it reports no posture: the
         // reducer keeps the posture SessionStart established.
         assert_eq!(obs.permission_posture, None);
+    }
+
+    #[test]
+    fn plan_mode_observed_from_permission_mode() {
+        // Plan mode renders as "thinking"; any other concrete mode clears it,
+        // and an absent mode reports `None` for carry-forward.
+        let plan = CodexIntegration
+            .observe_lifecycle(
+                "SessionStart",
+                &json!({ "session_id": "sess-1", "permission_mode": "plan" }),
+            )
+            .unwrap();
+        assert_eq!(plan.plan_mode, Some(true));
+
+        let acting = CodexIntegration
+            .observe_lifecycle(
+                "SessionStart",
+                &json!({ "session_id": "sess-1", "permission_mode": "acceptEdits" }),
+            )
+            .unwrap();
+        assert_eq!(acting.plan_mode, Some(false));
+
+        let silent = CodexIntegration
+            .observe_lifecycle(
+                "UserPromptSubmit",
+                &json!({ "session_id": "sess-1", "prompt": "go" }),
+            )
+            .unwrap();
+        assert_eq!(silent.plan_mode, None);
     }
 
     #[test]

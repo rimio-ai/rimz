@@ -45,7 +45,7 @@ fn phase0_empty_snapshot_shows_first_run_hint() {
 /// Phase 0 → 1 onboarding. Running an agent before wiring its hooks is not
 /// invisible: the pane is live, so it shows as a dim `· codex` process row, and
 /// because a known agent is visible the first-run hint steps aside. But no
-/// `○ codex` *agent* row registers — without an installed hook nothing reaches
+/// `◌ codex` *agent* row registers — without an installed hook nothing reaches
 /// the ledger, so the agent carries no status, model, or task. Only after
 /// `rimz hooks install` does a fresh `SessionStart` light up the agent row. The
 /// room is deliberately correct to require `rimz hooks install` (Rimz never
@@ -74,7 +74,7 @@ fn phase0_onboarding_hint_then_wire_then_agent_appears() {
 
     // The user runs codex before wiring it. The pane is live, so it shows as a
     // process row and the first-run hint steps aside — but with no installed
-    // hook nothing reaches the ledger, so no `○ codex` agent row registers.
+    // hook nothing reaches the ledger, so no `◌ codex` agent row registers.
     room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
     let screen = room.wait_for(|s| s.contains("· codex"), SETTLE);
     assert!(
@@ -82,7 +82,7 @@ fn phase0_onboarding_hint_then_wire_then_agent_appears() {
         "an un-onboarded codex is still a live pane, so it shows as a process row:\n{screen}"
     );
     assert!(
-        !screen.contains("○ codex"),
+        !screen.contains("◌ codex"),
         "with no installed hook nothing reaches the ledger, so no agent row registers:\n{screen}"
     );
 
@@ -91,15 +91,15 @@ fn phase0_onboarding_hint_then_wire_then_agent_appears() {
     // into an idle agent row.
     room.onboard(&["codex"]);
     room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
-    let screen = room.wait_for(|s| s.contains("○ codex"), SETTLE);
+    let screen = room.wait_for(|s| s.contains("◌ codex"), SETTLE);
     assert!(
-        screen.contains("○ codex"),
+        screen.contains("◌ codex"),
         "a wired agent registers idle the moment its SessionStart lands:\n{screen}"
     );
 }
 
 /// Phase 1 — launched, no prompt. `SessionStart` registers the agent as
-/// `○ idle` with no task; no attention summary is rendered.
+/// `◌ idle` with no task; no attention summary is rendered.
 #[test]
 fn phase1_launch_registers_idle_no_prompt() {
     let env = Env::new();
@@ -110,16 +110,16 @@ fn phase1_launch_registers_idle_no_prompt() {
     room.onboard(&["codex"]);
     room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
 
-    // Wait for the agent *row* (`○ codex`), never the bare substring "codex" —
+    // Wait for the agent *row* (`◌ codex`), never the bare substring "codex" —
     // the first-run hint "run claude or codex" contains it, so a loose
     // predicate would return the empty room before the row paints.
-    let screen = room.wait_for(|s| s.contains("○ codex"), SETTLE);
+    let screen = room.wait_for(|s| s.contains("◌ codex"), SETTLE);
     assert!(
         screen.contains("▌main"),
         "the agent groups under its worktree:\n{screen}"
     );
     assert!(
-        screen.contains("○ codex"),
+        screen.contains("◌ codex"),
         "a launched-but-unprompted agent is idle:\n{screen}"
     );
     assert!(
@@ -133,7 +133,7 @@ fn phase1_launch_registers_idle_no_prompt() {
 }
 
 /// Phase 2 — prompted and working. `UserPromptSubmit` moves the agent to
-/// `◐ running` with the prompt as its task.
+/// `◕ running` with the prompt as its task.
 #[test]
 fn phase2_prompt_moves_to_running_with_task() {
     let env = Env::new();
@@ -157,7 +157,7 @@ fn phase2_prompt_moves_to_running_with_task() {
 }
 
 /// Phase 3 — a question waits on you. A `PermissionRequest` (no resolver) writes
-/// a feed item: the row flips to `◆ waiting`, the attention line counts it, and
+/// a feed item: the row flips to `? waiting`, the attention line counts it, and
 /// the sidebar never reproduces the question. (Implemented.)
 #[test]
 fn phase3_question_waits_and_counts_attention() {
@@ -172,15 +172,15 @@ fn phase3_question_waits_and_counts_attention() {
     room.agent_hook("codex", &permission_request("sess-1", "DO_NOT_RENDER_ME"));
 
     let screen = room.wait_for(
-        |s| s.contains("◆ codex") && s.contains("fix auth flow"),
+        |s| s.contains("? codex") && s.contains("fix auth flow"),
         SETTLE,
     );
     assert!(
-        screen.contains("◆ codex"),
+        screen.contains("? codex"),
         "a permission prompt makes the agent wait:\n{screen}"
     );
     assert!(
-        screen.contains("◆1"),
+        screen.contains("?1"),
         "the attention line counts the waiting agent:\n{screen}"
     );
     assert!(
@@ -198,8 +198,8 @@ fn phase3_question_waits_and_counts_attention() {
 }
 
 /// Phase 3b — a resolver in front. With a fresh enrolled resolver the same
-/// waiting row shows the chain working (`⟳ <resolver> <budget>`) instead of
-/// `◆`, and still counts in the attention tally. (Implemented; stretch.)
+/// waiting row shows the chain working (braille `⠋ <resolver> <budget>`) instead
+/// of a static `?`, and still counts in the attention tally. (Implemented; stretch.)
 #[test]
 fn phase3b_resolver_in_front_shows_chain() {
     let env = Env::new();
@@ -218,20 +218,23 @@ fn phase3b_resolver_in_front_shows_chain() {
     // while we observe the mid-flight render.
     let mut child = room.spawn_agent("codex", &permission_request("sess-1", "DO_NOT_RENDER_ME"));
 
-    let screen = room.wait_for(|s| s.contains("⟳"), SETTLE);
+    // Wait on the resolver name — it is stable, while the leading braille cell
+    // animates — so the capture lands on the engaged frame instead of timing
+    // out past the bridge's budget.
+    let screen = room.wait_for(|s| s.contains("opus-policy"), SETTLE);
     let _ = child.kill();
     let _ = child.wait();
 
     assert!(
-        screen.contains("⟳"),
-        "a resolver in front replaces ◆ with ⟳ on the row:\n{screen}"
+        resolver_spinner(&screen),
+        "a resolver in front leads the row with the braille spinner:\n{screen}"
     );
     assert!(
         screen.contains("opus-policy"),
         "the row names the active resolver:\n{screen}"
     );
     assert!(
-        screen.contains("◆1"),
+        screen.contains("?1"),
         "a delegated item is still pending, so it still counts in the tally:\n{screen}"
     );
 }
@@ -279,7 +282,7 @@ fn phase4_fleet_groups_and_tallies() {
         "the script's ask shows its title:\n{screen}"
     );
     assert!(
-        screen.contains("◆1"),
+        screen.contains("?1"),
         "exactly one item waits across the room:\n{screen}"
     );
 }
@@ -307,7 +310,7 @@ fn phase4_waiting_rises_within_worktree() {
     );
 
     let screen = room.wait_for(
-        |s| s.contains("approve deploy?") && s.contains("○ codex"),
+        |s| s.contains("approve deploy?") && s.contains("◌ codex"),
         SETTLE,
     );
     let waiting_at = screen
@@ -335,17 +338,17 @@ fn phase6_reattach_reconstructs_from_ledger() {
         let room = RoomHarness::launch(&env, MuxName::Tmux);
         room.onboard(&["codex"]);
         room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
-        room.wait_for(|s| s.contains("○ codex"), SETTLE);
+        room.wait_for(|s| s.contains("◌ codex"), SETTLE);
     } // walk away — the renderer drops, the ledger stays.
 
     let room = RoomHarness::launch(&env, MuxName::Tmux);
-    let screen = room.wait_for(|s| s.contains("○ codex"), SETTLE);
+    let screen = room.wait_for(|s| s.contains("◌ codex"), SETTLE);
     assert!(
         screen.contains("▌main"),
         "reattach reconstructs the worktree group:\n{screen}"
     );
     assert!(
-        screen.contains("○ codex"),
+        screen.contains("◌ codex"),
         "every agent returns where you left it:\n{screen}"
     );
 }
@@ -359,8 +362,23 @@ fn phase9_degraded_loop_shows_banner_not_first_run_hint() {
     if env.skip_if_sandboxed() {
         return;
     }
-    let fake_rimz = env.project_root.join("missing-rimz-bin");
-    let room = RoomHarness::launch_with_rimz_bin(&env, MuxName::Tmux, fake_rimz);
+    // A present-but-failing `rimz`: the renderer resolves the snapshot binary
+    // per tick and keeps a launch path that still exists (so it never heals to
+    // the installed `rimz` on PATH), then forks it and sees every snapshot
+    // fail — the degraded loop a *vanished* binary now heals out of.
+    let broken_rimz = env.project_root.join("broken-rimz");
+    std::fs::write(&broken_rimz, "#!/bin/sh\nexit 1\n").expect("write broken rimz stub");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut perms = std::fs::metadata(&broken_rimz)
+            .expect("broken rimz metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&broken_rimz, perms).expect("chmod broken rimz stub");
+    }
+    let room = RoomHarness::launch_with_rimz_bin(&env, MuxName::Tmux, broken_rimz);
 
     let screen = room.wait_for(|s| s.contains("Sidebar degraded"), SETTLE);
     assert!(
@@ -478,7 +496,7 @@ fn target_empty_room_ignores_stale_agent_attention_without_live_pane() {
         "a pending agent item without a live agent pane must not render as an agent row:\n{screen}"
     );
     assert!(
-        !screen.contains("◆"),
+        !screen.contains("?1"),
         "stale agent attention must not count against the room:\n{screen}"
     );
 }
@@ -514,13 +532,13 @@ fn target_live_codex_process_does_not_inherit_stale_claude_attention() {
         ),
     );
 
-    let screen = room.wait_for(|s| s.contains("· codex") || s.contains("◆ claude"), SETTLE);
+    let screen = room.wait_for(|s| s.contains("· codex") || s.contains("? claude"), SETTLE);
     assert!(
         screen.contains("· codex"),
         "an unwired live codex pane should remain a codex process row:\n{screen}"
     );
     assert!(
-        !screen.contains("◆ claude"),
+        !screen.contains("? claude"),
         "a stale claude ask must not steal the live codex pane:\n{screen}"
     );
     assert!(
@@ -553,14 +571,14 @@ fn target_live_codex_process_does_not_reuse_ambiguous_old_codex_rollup() {
         ),
     );
 
-    let screen = room.wait_for(|s| s.contains("· codex") || s.contains("○ codex"), SETTLE);
+    let screen = room.wait_for(|s| s.contains("· codex") || s.contains("◌ codex"), SETTLE);
     assert!(
         screen.contains("· codex"),
         "when multiple old codex sessions could claim one pane, the fresh \
          unwired pane should stay a process row:\n{screen}"
     );
     assert!(
-        !screen.contains("○ codex"),
+        !screen.contains("◌ codex"),
         "the sidebar must not choose an arbitrary old codex rollup:\n{screen}"
     );
     assert!(
@@ -585,7 +603,7 @@ fn target_unwired_agent_stays_process_row_not_idle_agent() {
         "an unwired running codex process should show as a plain process row:\n{screen}"
     );
     assert!(
-        !screen.contains("○ codex"),
+        !screen.contains("◌ codex"),
         "an unwired agent must not look like a hooked idle agent:\n{screen}"
     );
 }
@@ -601,7 +619,7 @@ fn target_agent_exit_reverts_to_shell_or_vanishes() {
     room.onboard(&["claude"]);
 
     room.agent_hook("claude", &session_start("sess-1", "Opus", "xhigh", "main"));
-    room.wait_for(|s| s.contains("○ claude"), SETTLE);
+    room.wait_for(|s| s.contains("◌ claude"), SETTLE);
     room.agent_hook("claude", &session_end("sess-1"));
 
     let screen = room.wait_for(|s| !contains_claude_row(s), SETTLE);
@@ -619,17 +637,25 @@ fn target_agent_exit_reverts_to_shell_or_vanishes() {
     );
 }
 
-/// A running agent's head animates `◐ ◓ ◑ ◒`, so a live capture may show any
-/// frame — match on `<frame> <name>` across the whole cycle plus the frozen
-/// first frame.
+/// A running agent's head animates the working fill `○ ◔ ◑ ◕ ●`, so a live
+/// capture may show any frame — match on `<frame> <name>` across the whole
+/// cycle (the static fallback `◕` is one of these frames).
 fn running_row(screen: &str, name: &str) -> bool {
-    ['◐', '◓', '◑', '◒']
+    ['○', '◔', '◑', '◕', '●']
         .iter()
         .any(|frame| screen.contains(&format!("{frame} {name}")))
 }
 
+/// A resolver-in-front row leads with an animated braille spinner, so a live
+/// capture may show any frame — confirm the leading cell is one of them.
+fn resolver_spinner(screen: &str) -> bool {
+    ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+        .iter()
+        .any(|frame| screen.contains(*frame))
+}
+
 fn contains_claude_row(screen: &str) -> bool {
-    ["○ claude", "◆ claude", "✗ claude"]
+    ["◌ claude", "? claude", "! claude"]
         .iter()
         .any(|needle| screen.contains(needle))
         || running_row(screen, "claude")
@@ -637,12 +663,12 @@ fn contains_claude_row(screen: &str) -> bool {
 
 fn contains_agent_row(screen: &str) -> bool {
     [
-        "○ claude",
-        "◆ claude",
-        "✗ claude",
-        "○ codex",
-        "◆ codex",
-        "✗ codex",
+        "◌ claude",
+        "? claude",
+        "! claude",
+        "◌ codex",
+        "? codex",
+        "! codex",
     ]
     .iter()
     .any(|needle| screen.contains(needle))
@@ -665,14 +691,14 @@ fn target_native_footer_keys_and_help_legend_render() {
 
     let screen = room.wait_for(|s| s.contains("↵ jump"), SETTLE);
     assert!(
-        screen.contains("↵ jump") && screen.contains("␣ next ◆") && screen.contains("?"),
+        screen.contains("↵ jump") && screen.contains("␣ next ?!") && screen.contains("?"),
         "the native footer should advertise jump, next-attention, and help keys:\n{screen}"
     );
 
     room.send_keys("?");
     let help = room.wait_for(|s| s.contains("keys & legend"), SETTLE);
     assert!(
-        help.contains("◆ waiting") && help.contains("✗ failed") && help.contains("○ idle"),
+        help.contains("? waiting") && help.contains("! attention") && help.contains("◌ idle"),
         "the `?` key should open the in-place legend:\n{help}"
     );
 }
@@ -704,11 +730,11 @@ fn target_full_fleet_tallies_script_gate_and_never_caps_attention_rows() {
     push_failed_agent_fixture(&env, "failed-1", "feature-migration");
 
     let screen = room.wait_for(
-        |s| s.contains("◆2") && s.contains("✗1") && s.contains("+"),
+        |s| s.contains("?2") && s.contains("!1") && s.contains("+"),
         SETTLE,
     );
     assert!(
-        screen.contains("◆2") && screen.contains("✗1"),
+        screen.contains("?2") && screen.contains("!1"),
         "the attention line should count waiting and failed rows across all groups:\n{screen}"
     );
     assert!(

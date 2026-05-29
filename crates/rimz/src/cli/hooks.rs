@@ -178,6 +178,21 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                     "lifecycle: failed to remove the session's context sidecar",
                 );
             }
+            // Refresh the agent's activity heartbeat on progress-proving events
+            // so the sidebar's `last_activity` advances per tool call, not just
+            // per turn. A latency hint, never correctness — log and continue on
+            // failure.
+            if event_records_activity(&event_name)
+                && let Err(err) =
+                    rimz::agent_activity::touch(ledger.runtime_paths(), agent.name(), agent_id)
+            {
+                warn!(
+                    agent = agent.name(),
+                    event = %event_name,
+                    error = %err,
+                    "lifecycle: failed to touch the agent activity heartbeat",
+                );
+            }
         }
         emit_neutral(agent.as_ref(), &event_name)?;
         return Ok(());
@@ -619,7 +634,10 @@ fn step_budget_remaining(item: &FeedItem) -> Option<Duration> {
         return Some(Duration::ZERO);
     }
     // Past the negative guard the span is non-negative, so both components are too.
-    Some(Duration::new(span.as_secs() as u64, span.subsec_nanos() as u32))
+    Some(Duration::new(
+        span.as_secs() as u64,
+        span.subsec_nanos() as u32,
+    ))
 }
 
 fn build_item(
@@ -642,6 +660,24 @@ fn build_item(
     item.worktree_path = Some(workspace.worktree_root.display().to_string());
     item.worktree_branch = workspace.worktree_branch.clone();
     item
+}
+
+/// Lifecycle events that prove the agent is actively making progress — a tool
+/// completed, a turn started or ended, a subagent spawned or finished. These
+/// refresh the per-agent activity heartbeat. `PreToolUse` is deliberately
+/// excluded: it can fire in the same tool call as a blocking ask, so touching
+/// on it would race the ask creation and instantly un-block the row. A
+/// `Notification` means the agent is idle awaiting input, so it is excluded too.
+fn event_records_activity(event_name: &str) -> bool {
+    matches!(
+        event_name,
+        "PostToolUse"
+            | "Stop"
+            | "UserPromptSubmit"
+            | "SessionStart"
+            | "SubagentStart"
+            | "SubagentStop"
+    )
 }
 
 /// The agent session id from a hook payload, read in the same order as

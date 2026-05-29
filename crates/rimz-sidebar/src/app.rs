@@ -89,6 +89,10 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     let mut self_close = SelfCloseState::default();
     let mut ui = UiState::default();
     let mut reexec_to: Option<PathBuf> = None;
+    // Monotonic base for the animation frame. Deriving the phase from elapsed
+    // wall-clock (rather than a per-tick counter) keeps the spin continuous
+    // across re-fetches and ledger deltas, so no redraw path can stall it.
+    let anim_start = Instant::now();
 
     'serve: loop {
         let heartbeat_outcome = write_heartbeat(&config, &runtime, &socket_path);
@@ -122,6 +126,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         clamp_selection(&mut ui, &state.snapshot);
         last_snapshot = state.last_snapshot;
         health = state.health;
+        ui.animation_phase = wall_clock_phase(anim_start);
         render::draw_to_terminal_with_ui(
             &mut terminal,
             &state.snapshot,
@@ -186,7 +191,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             socket.set_read_timeout(Some(timeout))?;
             match wait_for_wakeup(&socket)? {
                 Wakeup::Tick if animating && fetched_at.elapsed() < tick => {
-                    ui.animation_phase = ui.animation_phase.wrapping_add(1);
+                    ui.animation_phase = wall_clock_phase(anim_start);
                     render::draw_to_terminal_with_ui(
                         &mut terminal,
                         &state.snapshot,
@@ -508,6 +513,14 @@ fn next_health(previous: &Health, failure: Option<String>) -> Health {
 /// Clamped against the data tick so a slow `tick_seconds` never stutters, and
 /// only used while [`render::has_live_animation`] reports something to move.
 const ANIMATION_FRAME: Duration = Duration::from_millis(120);
+
+/// The animation frame index for `now`, derived from elapsed wall-clock since
+/// the serve loop's monotonic base. Every redraw path sets the phase from this,
+/// so the spin advances on real time and survives re-fetches and ledger deltas
+/// without a per-tick counter that a break-and-refetch could reset.
+fn wall_clock_phase(start: Instant) -> u64 {
+    (start.elapsed().as_millis() / ANIMATION_FRAME.as_millis()) as u64
+}
 
 fn tick_for(seconds: u64) -> Duration {
     Duration::from_secs(seconds.max(1))
@@ -1114,6 +1127,7 @@ mod tests {
                     name: pane.command.clone().unwrap_or_else(|| "process".to_owned()),
                     status: None,
                     permission_posture: None,
+                    plan_mode: false,
                     pane: Some(pane),
                     request_id: None,
                     surface: None,
@@ -1146,6 +1160,7 @@ mod tests {
             name: "claude".to_owned(),
             status: Some(rimz::feed::AgentStatus::Idle),
             permission_posture: Some(rimz::feed::PermissionPosture::Default),
+            plan_mode: false,
             pane: Some(pane("terminal_9", "tab_0", false)),
             request_id: None,
             surface: None,

@@ -509,6 +509,28 @@ pub enum AgentStatus {
     Failed,
 }
 
+/// How long a `running` agent may record no activity before the sidebar treats
+/// it as stalled — likely wedged on a hung tool or awaiting an off-screen
+/// prompt — and escalates it to an attention `!`. Mirrors Claude Code's default
+/// 10-minute operation timeout. "Activity" is the per-tool heartbeat the
+/// snapshot folds into `last_activity` (see [`crate::agent_activity`]): it
+/// advances on every *completed* tool call, so a busy multi-tool turn stays
+/// live. An agent that completes no tool and crosses no turn boundary for the
+/// whole window — one long-running tool, or a genuine wedge — is surfaced as
+/// `!` so it becomes actionable. The escalation self-heals: the next heartbeat
+/// readvances `last_activity`, [`is_stalled`] goes false, and the row leaves
+/// attention on the following snapshot with no human action.
+pub const STALL_WINDOW_SECS: i64 = 10 * 60;
+
+/// Whether a `running` agent has gone silent past [`STALL_WINDOW_SECS`]. Only
+/// `running` can stall: every other status is terminal, idle, or already an
+/// attention state. The sidebar projects a stalled agent to the attention
+/// bucket so a wedged agent becomes actionable instead of a frozen spinner.
+pub fn is_stalled(status: AgentStatus, last_activity: Timestamp, now: Timestamp) -> bool {
+    status == AgentStatus::Running
+        && now.duration_since(last_activity).as_secs() >= STALL_WINDOW_SECS
+}
+
 /// Permission posture pill: how much the human is in the loop for this agent's
 /// tool calls. The agent owns this; Rimz observes and surfaces it.
 ///
@@ -538,6 +560,11 @@ pub struct AgentState {
     pub kind: String,
     pub status: AgentStatus,
     pub permission_posture: PermissionPosture,
+    /// Whether the agent is in read-only plan mode. Posture-neutral (the pill
+    /// stays `Default`); combined with `status == Running` the sidebar renders
+    /// it as the "thinking" state. Carry-forward in the reducer, like posture.
+    #[serde(default)]
+    pub plan_mode: bool,
     pub pane: Option<PaneRef>,
     #[serde(default)]
     pub agent_pid: Option<u32>,

@@ -117,6 +117,13 @@ pub struct AgentLifecycleObservation {
     /// can never demote a `yolo` agent to default (a security surface must
     /// stay visible).
     pub permission_posture: Option<PermissionPosture>,
+    /// Whether the agent is in read-only plan mode this event. `Some(true)`
+    /// while planning, `Some(false)` once it leaves; `None` means "this event
+    /// does not report a mode" and the reducer carries the prior value forward.
+    /// Plan mode is posture-neutral (it still folds to `Default` in
+    /// `permission_posture`); this flag is the separate signal the sidebar
+    /// renders as the "thinking" state while the agent is also `running`.
+    pub plan_mode: Option<bool>,
     /// Optional absolute worktree path observed from the agent payload or
     /// filled by the CLI from the current Rimz workspace.
     pub worktree_path: Option<String>,
@@ -376,6 +383,19 @@ pub(crate) fn read_transcript_tail(path: &Path) -> Option<String> {
     let mut buf = Vec::new();
     file.read_to_end(&mut buf).ok()?;
     Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Whether a payload's `permission_mode`/`mode` field names read-only plan
+/// mode. `None` when the field is absent — the reducer then carries the prior
+/// plan-mode value forward, so a turn-boundary event that reports no mode never
+/// flips it. Plan mode stays posture-neutral (it folds to `Default` in the
+/// posture pill); this is the separate signal the sidebar renders as "thinking".
+pub(crate) fn plan_mode_from_payload(payload: &Value) -> Option<bool> {
+    payload
+        .get("permission_mode")
+        .or_else(|| payload.get("mode"))
+        .and_then(Value::as_str)
+        .map(|raw| raw == "plan")
 }
 
 pub(crate) fn optional_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {

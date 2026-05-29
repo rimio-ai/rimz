@@ -44,6 +44,7 @@ pub type Result<T> = std::result::Result<T, GcErr>;
 pub struct GcReport {
     pub runtime_roots_scanned: usize,
     pub heartbeat_files_removed: usize,
+    pub sidecar_files_removed: usize,
     pub sidebar_sockets_removed: usize,
     pub dirs_removed: usize,
     pub bytes_removed: u64,
@@ -97,10 +98,53 @@ fn collect_workspace_runtime(
 ) -> Result<()> {
     let heartbeat_dir = workspace_root.join("heartbeat");
     let sock_dir = workspace_root.join("sock");
+    let activity_dir = workspace_root.join("agent-activity");
+    let context_dir = workspace_root.join("agent_context");
     collect_heartbeats(&heartbeat_dir, &sock_dir, older_than, report)?;
+    collect_stale_sidecars(&activity_dir, older_than, report)?;
+    collect_stale_sidecars(&context_dir, older_than, report)?;
     remove_dir_if_empty(&heartbeat_dir, report)?;
     remove_dir_if_empty(&sock_dir, report)?;
+    remove_dir_if_empty(&activity_dir, report)?;
+    remove_dir_if_empty(&context_dir, report)?;
     remove_dir_if_empty(workspace_root, report)?;
+    Ok(())
+}
+
+/// Reap stale per-session sidecar files — the activity heartbeats and the
+/// statusline context sidecars. These are latency hints, not ledger truth, so a
+/// file an ended session left behind is aged out like the other runtime liveness
+/// files; reaping them also lets the workspace root be removed once the workspace
+/// goes quiet. Any orphaned atomic-write `.tmp` sibling ages out the same way.
+fn collect_stale_sidecars(dir: &Path, older_than: Duration, report: &mut GcReport) -> Result<()> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(GcErr::ReadDir {
+                path: dir.to_path_buf(),
+                source,
+            });
+        }
+    };
+
+    for entry in entries {
+        let entry = entry.map_err(|source| GcErr::ReadDir {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        if !is_older_than(&path, older_than)? {
+            continue;
+        }
+        remove_file_if_exists(
+            &path,
+            |report| {
+                report.sidecar_files_removed += 1;
+            },
+            report,
+        )?;
+    }
     Ok(())
 }
 
@@ -416,6 +460,47 @@ mod tests {
     use crate::schema::heartbeat::{ResolverHeartbeat, SidebarHeartbeat};
     use std::time::SystemTime;
     use tempfile::tempdir;
+
+    #[test]
+    fn runtime_gc_reaps_sidecars_and_unblocks_the_workspace_root() {
+        // Before the sweep covered them, a leftover per-session sidecar (an
+        // activity heartbeat or a statusline context file) kept the workspace
+        // root non-empty forever, so the root never reaped.
+        let temp = tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(temp.path());
+        let rt = RuntimePaths::under(workspace_id, temp.path()).unwrap();
+        rt.ensure_dirs().unwrap();
+
+        let stale_activity = rt.agent_activity_dir.join("deadbeefdeadbeef.json");
+        fs::write(
+            &stale_activity,
+            br#"{"kind":"claude","agent_id":"sess-1","at":"1970-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let stale_context = rt.agent_context_dir.join("cafef00dcafef00d.json");
+        fs::write(&stale_context, b"{}").unwrap();
+        let old = SystemTime::now() - Duration::from_secs(7200);
+        for path in [&stale_activity, &stale_context] {
+            fs::File::open(path).unwrap().set_modified(old).unwrap();
+        }
+
+        let report =
+            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600)).unwrap();
+
+        assert_eq!(report.sidecar_files_removed, 2);
+        assert!(
+            !rt.agent_activity_dir.exists(),
+            "the emptied activity dir is removed"
+        );
+        assert!(
+            !rt.agent_context_dir.exists(),
+            "the emptied context dir is removed"
+        );
+        assert!(
+            !rt.agent_activity_dir.parent().unwrap().exists(),
+            "with no runtime files left, the workspace root is reaped too"
+        );
+    }
 
     #[test]
     fn runtime_gc_removes_stale_heartbeats_and_sidebar_socket_only() {

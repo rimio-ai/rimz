@@ -11,32 +11,72 @@ use rimz::feed::{AgentStatus, PermissionPosture};
 
 use super::theme::Theme;
 
+/// The static status glyph — used for the legend, the worktree tally, the
+/// attention line, and as the leading cell for every non-animated state. The
+/// shape carries the status under `NO_COLOR`; color reinforces it. `Running`
+/// returns its mid-fill frame `◕` as the still fallback (distinct from idle
+/// `◌`, a todo `●`, and a todo `○`); the *animated* working/thinking cells live
+/// in [`working_glyph`]/[`thinking_glyph`]. A `running` agent that has gone
+/// silent past the stall window is projected to `Failed` upstream, so it reads
+/// here as the attention `!` — there is no separate stalled glyph.
 pub(super) fn status_glyph(status: AgentStatus) -> &'static str {
     match status {
-        AgentStatus::Waiting => "◆",
-        AgentStatus::Failed => "✗",
-        // A running agent's head is the only animated cell; see `running_glyph`.
-        // The static fallback is the first spin frame, so a frozen running row
-        // still reads distinctly from idle `○` and from todo `●`.
-        AgentStatus::Running => RUNNING_FRAMES[0],
-        AgentStatus::Idle => "○",
+        // `?` needs your answer; `!` needs a look (a failed turn or a wedged
+        // agent). These two carry every attention state.
+        AgentStatus::Waiting => "?",
+        AgentStatus::Failed => "!",
+        AgentStatus::Running => WORKING_FRAMES[3],
+        AgentStatus::Idle => "◌",
         AgentStatus::Success => "✓",
     }
 }
 
-/// Leading glyph for a running agent's row. The head rotates `◐ ◓ ◑ ◒` so the
-/// eye lands on motion, but only while the agent is *fresh* — `fresh` is gated
-/// on the agent's last activity (see [`super::sections`]). A stale (wedged or
-/// quiet) agent freezes on the first frame, so motion never lies about a hung
-/// agent. The rotating set is chosen over a filling circle so no spin frame
-/// ever collides with idle `○` or a todo `●`.
-const RUNNING_FRAMES: [&str; 4] = ["◐", "◓", "◑", "◒"];
+/// Working: a circle filling and emptying. Spans the most time of any state, so
+/// it is the calm motion the eye learns to ignore until something changes. The
+/// fill never settles on idle `◌`, so a frozen frame still reads as "working".
+const WORKING_FRAMES: [&str; 8] = ["○", "◔", "◑", "◕", "●", "◕", "◑", "◔"];
 
-pub(super) fn running_glyph(animation_phase: u64, fresh: bool) -> &'static str {
-    if !fresh {
-        return RUNNING_FRAMES[0];
+/// Thinking: a sparkle that grows and fades. Reserved for read-only plan mode —
+/// the agent is reasoning, not writing — so its motion reads as lighter than the
+/// working fill.
+const THINKING_FRAMES: [&str; 8] = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶"];
+
+/// Resolver answering: a braille spinner while a resolver composes the answer on
+/// the bridge. This is the one "waiting for an answer" motion — it is genuinely
+/// active and time-bounded by the resolver budget, unlike a human-blocked `?`,
+/// which stays still.
+const RESOLVER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+fn frame(frames: &[&'static str], animation_phase: u64) -> &'static str {
+    frames[(animation_phase as usize) % frames.len()]
+}
+
+pub(super) fn working_glyph(animation_phase: u64) -> &'static str {
+    frame(&WORKING_FRAMES, animation_phase)
+}
+
+pub(super) fn thinking_glyph(animation_phase: u64) -> &'static str {
+    frame(&THINKING_FRAMES, animation_phase)
+}
+
+pub(super) fn resolver_glyph(animation_phase: u64) -> &'static str {
+    frame(&RESOLVER_FRAMES, animation_phase)
+}
+
+/// The leading cell for an agent row, animated when the agent is actively doing
+/// something. A `running` agent fills (working) or sparkles (thinking, in plan
+/// mode); every other state is the static [`status_glyph`]. Stall is already
+/// folded into `Failed` upstream, so it falls through to the static `!`.
+pub(super) fn agent_glyph(
+    status: AgentStatus,
+    plan_mode: bool,
+    animation_phase: u64,
+) -> &'static str {
+    match status {
+        AgentStatus::Running if plan_mode => thinking_glyph(animation_phase),
+        AgentStatus::Running => working_glyph(animation_phase),
+        other => status_glyph(other),
     }
-    RUNNING_FRAMES[(animation_phase as usize) % RUNNING_FRAMES.len()]
 }
 
 pub(super) fn status_style(theme: &Theme, status: AgentStatus) -> Style {
@@ -47,6 +87,15 @@ pub(super) fn status_style(theme: &Theme, status: AgentStatus) -> Style {
         AgentStatus::Idle => theme.dim(),
         AgentStatus::Success => theme.style(Color::Green, Modifier::DIM),
     }
+}
+
+/// Style for an agent row's leading cell: plan-mode thinking is cyan to set it
+/// apart from the green working fill; everything else takes its [`status_style`].
+pub(super) fn agent_style(theme: &Theme, status: AgentStatus, plan_mode: bool) -> Style {
+    if status == AgentStatus::Running && plan_mode {
+        return theme.style(Color::Cyan, Modifier::empty());
+    }
+    status_style(theme, status)
 }
 
 /// Human label for the permission posture. `Default` is the omitted baseline,
@@ -239,27 +288,48 @@ mod tests {
         }
     }
 
-    /// A fresh running agent's head advances with the animation phase and
-    /// wraps after four frames so the phase can grow without bound.
+    /// Each animation cycles through its frames and wraps, so the phase can grow
+    /// without bound.
     #[test]
-    fn running_glyph_spins_while_fresh() {
-        for (phase, expected) in RUNNING_FRAMES.iter().enumerate() {
-            assert_eq!(running_glyph(phase as u64, true), *expected);
+    fn animations_cycle_and_wrap() {
+        for (phase, expected) in WORKING_FRAMES.iter().enumerate() {
+            assert_eq!(working_glyph(phase as u64), *expected);
         }
-        assert_eq!(running_glyph(4, true), RUNNING_FRAMES[0]);
         assert_eq!(
-            running_glyph(u64::MAX, true),
-            RUNNING_FRAMES[(u64::MAX % 4) as usize]
+            working_glyph(WORKING_FRAMES.len() as u64),
+            WORKING_FRAMES[0]
+        );
+        assert_eq!(
+            thinking_glyph(THINKING_FRAMES.len() as u64),
+            THINKING_FRAMES[0]
+        );
+        assert_eq!(
+            resolver_glyph(RESOLVER_FRAMES.len() as u64),
+            RESOLVER_FRAMES[0]
+        );
+        // The phase can grow without bound and still indexes a frame.
+        assert_eq!(
+            working_glyph(u64::MAX),
+            WORKING_FRAMES[(u64::MAX % WORKING_FRAMES.len() as u64) as usize]
         );
     }
 
-    /// Honesty: a stale (wedged or quiet) agent freezes on the first frame no
-    /// matter how the animation phase advances, so motion never pretends a
-    /// hung agent is working.
+    /// A running agent animates the working fill; in plan mode it sparkles; a
+    /// stalled agent (folded to `Failed` upstream) and every other state takes
+    /// the static glyph, regardless of phase.
     #[test]
-    fn running_glyph_freezes_when_stale() {
-        for phase in 0..8 {
-            assert_eq!(running_glyph(phase, false), RUNNING_FRAMES[0]);
-        }
+    fn agent_glyph_animates_only_active_states() {
+        assert_eq!(
+            agent_glyph(AgentStatus::Running, false, 2),
+            WORKING_FRAMES[2]
+        );
+        assert_eq!(
+            agent_glyph(AgentStatus::Running, true, 2),
+            THINKING_FRAMES[2]
+        );
+        assert_eq!(agent_glyph(AgentStatus::Waiting, false, 2), "?");
+        assert_eq!(agent_glyph(AgentStatus::Failed, false, 2), "!");
+        assert_eq!(agent_glyph(AgentStatus::Idle, false, 2), "◌");
+        assert_eq!(agent_glyph(AgentStatus::Success, false, 2), "✓");
     }
 }

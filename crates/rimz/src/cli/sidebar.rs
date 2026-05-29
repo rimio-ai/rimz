@@ -131,6 +131,12 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     ledger.runtime_paths(),
                 ));
             }
+            // Fold per-tool activity heartbeats into `last_activity` before the
+            // pane overlay, so age, ranking, the ask-fold guard, and the stall
+            // window all see the truer per-tool value rather than the
+            // turn-grained event-log timestamp.
+            let activity = rimz::agent_activity::read_all(ledger.runtime_paths());
+            snapshot = snapshot.with_agent_activity(&activity);
 
             if let Some(panes) = panes {
                 if let Some(own) = exclude.as_ref() {
@@ -566,7 +572,8 @@ pub(crate) fn sidebar_renderer_program() -> PathBuf {
     if let Some(path) = sibling_bin("rimz-sidebar").filter(|path| path.is_file()) {
         return path;
     }
-    which::which(bin_name("rimz-sidebar")).unwrap_or_else(|_| PathBuf::from(bin_name("rimz-sidebar")))
+    which::which(bin_name("rimz-sidebar"))
+        .unwrap_or_else(|_| PathBuf::from(bin_name("rimz-sidebar")))
 }
 
 pub(crate) fn sidebar_renderer_present() -> bool {
