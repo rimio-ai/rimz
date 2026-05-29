@@ -7,10 +7,10 @@ expression: screen
 │                                │
 │▌feature-migration            1✗│
 │▎✗ claude  db migrate         <t>│
-│▎  Opus · xhigh · yolo  ░░░░░░░░│
+│▎  Opus · xhigh · yolo          │
+│▎  ─────────────────────────────│
 │                                │
 │↵ jump to claude                │
-│                                │
 │                                │
 │                                │
 └────────────────────────────────┘

@@ -12,17 +12,22 @@ Rimz gives every project one room — a Zellij or tmux session with a sidebar �
 │                            │
 │ ▌main             2◐ 1◆    │
 │ ◆ claude  fix auth flow 12m│
-│   Opus · xhigh █▉░░░ 38%  │
+│   Opus · xhigh             │
+│   ━━━━━━━━━━───────────────│
 │ ◐ claude  add tests     8s │
 │   Sonnet · high            │
+│   ━━━━━────────────────────│
 │ ◐ codex   refactor api 30s │
 │   GPT-5.5 · high           │
+│   ━━━━━━━━━━━━━━━──────────│
 │                            │
 │ ▌feature-migration 1✗ 1○   │
 │ ✗ claude  db migrate    4m │
 │   Opus · xhigh · yolo      │
+│   ━━━━━━━━━━━━━━━━━━━━━────│
 │ ○ codex   —             1h │
 │   GPT-5.5 · low            │
+│   ━━━──────────────────────│
 │                            │
 │ ▌workspace         1◆      │
 │ ◆ deploy  promote?      5m │

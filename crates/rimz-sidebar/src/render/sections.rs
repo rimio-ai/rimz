@@ -18,9 +18,6 @@ use super::labels::{
 };
 use super::theme::Theme;
 
-/// Fixed width of the inline context gauge.
-const GAUGE_WIDTH: usize = 10;
-
 /// Glyph for the selected row's left accent bar; lives in a one-cell gutter
 /// reserved on every row so selecting one never shifts the columns.
 const SELECTION_BAR: &str = "▎";
@@ -215,7 +212,14 @@ fn row_lines(
     // stays exactly as tall as its unselected self.
     let mut inner = vec![row_line(theme, row, cw, animation_phase)];
     if row.row_kind == SidebarRowKind::Agent {
-        if let Some(line) = capability_line(theme, row, tier, cw) {
+        // L0 is too narrow for the capability labels; it keeps just identity
+        // and the bar beneath it.
+        if tier != Tier::L0
+            && let Some(line) = capability_line(theme, row, tier, cw)
+        {
+            inner.push(line);
+        }
+        if let Some(line) = gauge_line(theme, row, cw) {
             inner.push(line);
         }
         if selected && let Some(line) = tokens_line(theme, row, cw) {
@@ -346,9 +350,8 @@ fn capability_line(
             .expect("posture is Some when its label is Some");
         tokens.push(CapabilityToken::Posture(posture, posture_label.to_owned()));
     }
-    let has_inline_gauge = row.context_pct.is_some();
     let has_inline_todo = tier == Tier::L2 && row.todo_total.unwrap_or(0) > 0;
-    if tokens.is_empty() && !has_inline_gauge && !has_inline_todo {
+    if tokens.is_empty() && !has_inline_todo {
         return None;
     }
 
@@ -366,23 +369,28 @@ fn capability_line(
         }
         printed_any = true;
     }
-    if has_inline_gauge {
+    if has_inline_todo {
         if printed_any {
             spans.push(Span::raw("  "));
         }
-        let percent = row.context_pct.unwrap_or(0);
-        spans.extend(gauge_spans(theme, percent, GAUGE_WIDTH));
-        printed_any = true;
-    }
-    if has_inline_todo {
         let (done, total) = (row.todo_done.unwrap_or(0), row.todo_total.unwrap_or(0));
-        spans.push(Span::raw("  "));
         spans.extend(todo_spans(theme, done, total));
         printed_any = true;
     }
     if !printed_any {
         return None;
     }
+    Some(Line::from(trim_spans_to_width(spans, width)))
+}
+
+/// Full-width context bar, drawn as its own thin line beneath the capability
+/// row. It starts at the same indent as the model name it underlines and spans
+/// the rest of the width, so every agent's bar shares one left edge and the
+/// bars line up across worktrees with no alignment bookkeeping.
+fn gauge_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
+    let percent = row.context_pct?;
+    let mut spans = vec![Span::raw("  ")];
+    spans.extend(gauge_spans(theme, percent, width.saturating_sub(2)));
     Some(Line::from(trim_spans_to_width(spans, width)))
 }
 

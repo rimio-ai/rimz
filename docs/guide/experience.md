@@ -125,6 +125,7 @@ The reader types `claude` in the shell pane and just looks at its input box — 
 │ ▌main                  1○  │
 │ ○ claude  —             4s │
 │   Opus · xhigh             │
+│   ━────────────────────────│
 └────────────────────────────┘
 ```
 
@@ -148,6 +149,7 @@ The reader gives Claude a task. `UserPromptSubmit` then `PreToolUse` move the ro
 │ ▌main                  1◐  │
 │ ◐ claude  fix auth flow  8s│
 │   Opus · xhigh             │
+│   ━━━━─────────────────────│
 └────────────────────────────┘
 ```
 
@@ -171,6 +173,7 @@ Claude hits a permission prompt — it wants to run something. A feed item is wr
 │ ▌main                  1◆  │
 │ ◆ claude  fix auth flow  1m│
 │   Opus · xhigh             │
+│   ━━━━━━───────────────────│
 │                            │
 │ ↵ jump to claude           │
 └────────────────────────────┘
@@ -218,17 +221,22 @@ The reader does exactly what they said they would: spins up four more agents acr
 │                            │
 │ ▌main             2◐ 1◆    │
 │ ◆ claude  fix auth flow 12m│
-│   Opus · xhigh █▉░░░ 38%  │
+│   Opus · xhigh             │
+│   ━━━━━━━━━━───────────────│
 │ ◐ claude  add tests     8s │
 │   Sonnet · high            │
+│   ━━━━━────────────────────│
 │ ◐ codex   refactor api 30s │
 │   GPT-5.5 · high           │
+│   ━━━━━━━━━━━━━━━──────────│
 │                            │
 │ ▌feature-migration 1✗ 1○   │
 │ ✗ claude  db migrate    4m │
 │   Opus · xhigh · yolo      │
+│   ━━━━━━━━━━━━━━━━━━━━━────│
 │ ○ codex   —             1h │
 │   GPT-5.5 · low            │
+│   ━━━──────────────────────│
 │                            │
 │ ▌workspace         1◆      │
 │ ◆ deploy  promote?      5m │
@@ -327,6 +335,7 @@ The product's honesty law gets tested when a fetch fails — the binary moved, t
 │ ▌main                  1◐  │
 │ ◐ claude  fix auth flow  2m│
 │   Opus · xhigh             │
+│   ━━━━━━━━━────────────────│
 └────────────────────────────┘
 ```
 

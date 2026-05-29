@@ -7,15 +7,15 @@ expression: screen
 │                                    │
 │▌main                          1◆ 1◐│
 │▎◆ claude  permission            <t>│
-│▎  ░░░░░░░░░░ 0%                    │
+│▎  ─────────────────────────────────│
 │ ◐ codex   add tests              <t>│
-│   GPT-5.5 · high  ░░░░░░░░░░ 0%    │
+│   GPT-5.5 · high                   │
+│   ─────────────────────────────────│
 │                                    │
 │▌workspace                        1◆│
 │ ◆ depl... Deploy staging?        <t>│
 │                                    │
 │↵ jump   ␣ next ◆   ? keys          │
-│                                    │
 │                                    │
 │                                    │
 │                                    │

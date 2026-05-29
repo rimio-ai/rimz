@@ -549,7 +549,6 @@ mod tests {
         assert!(rendered.contains("+127 -43"));
         assert!(rendered.contains("Opus"));
         assert!(rendered.contains("auto"));
-        assert!(rendered.contains("38%"));
         assert!(rendered.contains("●●●○○ 3/5"));
         assert!(rendered.contains("12.4k tok"));
         assert_snapshot("enriched_selected_agent_card", rendered);

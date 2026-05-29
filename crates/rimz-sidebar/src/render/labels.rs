@@ -69,40 +69,42 @@ pub(super) fn posture_style(theme: &Theme, posture: PermissionPosture) -> Style 
     }
 }
 
-/// Fractional cell glyphs (1/8 steps) for the gauge's leading edge, the same
-/// trick ratatui's native `Gauge` uses for sub-cell resolution. Index `0` is an
-/// empty edge (no partial); `1..=7` are the eighth blocks.
-const EIGHTHS: [char; 8] = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
+/// Heavy `━` for the bar's filled run, light `─` for the remaining track. The
+/// weight difference — not just the color — carries the meter, so the bar still
+/// reads with color off.
+const BAR_FILLED: char = '━';
+const BAR_TRACK: char = '─';
 
-/// Smooth fixed-width gauge, modeled on ratatui's `Gauge`: solid `█` cells plus
-/// a fractional eighth-block at the fill edge, over a dim `░` track, with the
-/// `38%` label in dim chrome. The ramp green → amber → red lights up by the
-/// value alone, so the gauge still reads under `NO_COLOR` from the `█`/`░`
-/// count — the shape carries the meter without the color.
+/// Full-width context bar: a thin rule whose filled run grows left-to-right and
+/// ramps green → amber → red by value. Drawn as its own line that underlines
+/// the model name, it starts at the same column on every agent, so the bars
+/// line up with no alignment bookkeeping. There is no label — the heavy run
+/// against the light track is the whole meter, and the weight split keeps it
+/// legible under `NO_COLOR`.
 pub(super) fn gauge_spans(theme: &Theme, percent: u8, width: usize) -> Vec<Span<'static>> {
     let percent = percent.min(100);
     let width = width.max(1);
-    // Total fill in eighths-of-a-cell, rounded to the nearest eighth.
-    let eighths = ((percent as usize) * width * 8 + 4) / 100;
-    let full = (eighths / 8).min(width);
-    let partial = eighths % 8;
-    let mut fill: String = std::iter::repeat_n('█', full).collect();
-    let mut used = full;
-    if used < width && partial > 0 {
-        fill.push(EIGHTHS[partial]);
-        used += 1;
-    }
-    let track: String = std::iter::repeat_n('░', width - used).collect();
+    // Nearest-cell fill: 0% stays an unbroken track, 100% fills the whole width.
+    let filled = ((percent as usize) * width + 50) / 100;
     let color = match percent {
         0..=40 => Color::Green,
         41..=75 => Color::Yellow,
         _ => Color::Red,
     };
-    vec![
-        Span::styled(fill, theme.style(color, Modifier::empty())),
-        Span::styled(track, theme.dim()),
-        Span::styled(format!(" {percent}%"), theme.dim()),
-    ]
+    let mut spans = Vec::with_capacity(2);
+    if filled > 0 {
+        spans.push(Span::styled(
+            std::iter::repeat_n(BAR_FILLED, filled).collect::<String>(),
+            theme.style(color, Modifier::empty()),
+        ));
+    }
+    if filled < width {
+        spans.push(Span::styled(
+            std::iter::repeat_n(BAR_TRACK, width - filled).collect::<String>(),
+            theme.dim(),
+        ));
+    }
+    spans
 }
 
 /// Todo progress: filled dots for done, hollow dots for remaining, with the
@@ -164,15 +166,15 @@ pub(super) fn diff_spans(theme: &Theme, added: u32, removed: u32) -> Vec<Span<'s
 mod tests {
     use super::*;
 
-    /// `NO_COLOR` strips the green→amber→red ramp but the `█`/`░` count
-    /// and the numeric label still spell the meter — the shape carries the
-    /// reading by itself.
+    /// `NO_COLOR` strips the green→amber→red ramp, but the heavy/light weight
+    /// split still spells the meter — the `━`/`─` shape carries the reading by
+    /// itself, without any label.
     #[test]
-    fn gauge_under_no_color_reads_by_shape_and_label() {
+    fn gauge_under_no_color_reads_by_shape() {
         let theme = Theme::fixed(true);
         let spans = gauge_spans(&theme, 60, 5);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, "███░░ 60%");
+        assert_eq!(text, "━━━──");
         for span in &spans {
             assert!(
                 span.style.fg.is_none(),
@@ -181,26 +183,34 @@ mod tests {
         }
     }
 
-    /// The fractional eighth-block resolves sub-cell fill the way ratatui's
-    /// native `Gauge` does: 38% of ten cells is 3.8, so three full `█`, a
-    /// partial edge, then a dim `░` track.
+    /// Fill rounds to the nearest whole cell: 38% of ten cells is 3.8, so four
+    /// heavy cells then a light track. At full width the bar has cells to spare,
+    /// so whole-cell resolution reads smoothly without a fractional edge.
     #[test]
-    fn gauge_renders_a_fractional_edge_cell() {
+    fn gauge_rounds_fill_to_whole_cells() {
         let theme = Theme::fixed(true);
         let spans = gauge_spans(&theme, 38, 10);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, "███▊░░░░░░ 38%");
+        assert_eq!(text, "━━━━──────");
     }
 
-    /// Even at 0% the bar still paints the empty track, so a "no progress"
-    /// reading is visibly the same shape as a started one rather than a
-    /// blank.
+    /// At 0% the bar is an unbroken light track, so a "no progress" reading is
+    /// the same full-width shape as a started one rather than a blank.
     #[test]
-    fn gauge_zero_percent_keeps_empty_cells() {
+    fn gauge_zero_percent_is_all_track() {
         let theme = Theme::fixed(true);
         let spans = gauge_spans(&theme, 0, 5);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, "░░░░░ 0%");
+        assert_eq!(text, "─────");
+    }
+
+    /// At 100% the heavy rule fills the whole width and leaves no track.
+    #[test]
+    fn gauge_full_has_no_track() {
+        let theme = Theme::fixed(true);
+        let spans = gauge_spans(&theme, 100, 5);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "━━━━━");
     }
 
     /// Todo dots use the same fill/empty grammar as the gauge — the dot

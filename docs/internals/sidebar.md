@@ -144,11 +144,12 @@ Each worktree shows at most N rows (default ~6, configurable) with a dim `+K mor
 
 ## Agent rows
 
-Each agent is a two-line cell — line 1 is *what's happening*, line 2 (dim) is *what it is*. Non-agent jobs (scripts, CI) and bare process rows (below) have no model and stay a single line.
+Each agent is a small stacked cell — line 1 is *what's happening*, the dim capability line below is *what it is*, and a thin full-width bar underlines them with the context meter. Non-agent jobs (scripts, CI) and bare process rows (below) have no model or meter and stay a single line.
 
 ```
 ◐ claude  fix auth flow  12m       line 1 — status (running head animates) · name · task · age
-  Opus · xhigh ███▊░░ 38%          line 2 — model · effort · context gauge · posture when non-default
+  Opus · xhigh · yolo              line 2 — model · effort · posture when non-default
+  ━━━━━━━━━━──────────────         context bar — full-width, underlines the model name
 ```
 
 Line 1:
@@ -159,7 +160,7 @@ Line 1:
 - **Age** — right-aligned, dim: time since the agent's last activity on its task. It doubles as the ranking signal (the most-overdue waiting row shows the largest age) and flags a stalled `running` agent.
 - **Running head** — a `running` agent's leading status glyph is the row's one animated cell: it rotates `◐ ◓ ◑ ◒` on a wall-clock animation tick *while the agent is fresh* (acted within a few seconds), and freezes on the first frame once it goes quiet — so a wedged agent visibly stops and motion never pretends a hung agent is working. Every other status (`◆`/`✗`/`○`/`✓`) is static; attention cues do not jitter.
 
-Line 2 — the capability and meter line: model (`Opus`, `GPT-5.5`), effort/thinking (`xhigh`/`high`/…), non-default permission posture (`auto` dim, `yolo` warn-colored), and the inline context gauge when reported. The default posture is omitted. With no capability or meter data the line is dropped and the agent renders single-line. At wider widths the same line may include todo progress (`●●●○○ 3/5`). Selection never reshapes a row: the gauge stays inline and line 2 is identical to its unselected self — selection only *adds* lines for data not already shown (today, total tokens `12.4k tok`) and marks the row with a left accent bar `▎` in a reserved one-cell gutter. A calm agent with nothing extra to show keeps its exact shape when selected.
+Line 2 — the capability line: model (`Opus`, `GPT-5.5`), effort/thinking (`xhigh`/`high`/…), and non-default permission posture (`auto` dim, `yolo` warn-colored); the default posture is omitted. At wider widths it also inlines todo progress (`●●●○○ 3/5`). The context bar (next section) renders on its own thin line directly below, underlining the model name. With no capability data the capability line is dropped, but the agent still shows its identity line and bar. Selection never reshapes a row: line 2 and the bar are identical to their unselected selves — selection only *adds* lines for data not already shown (today, total tokens `12.4k tok`) and marks the row with a left accent bar `▎` in a reserved one-cell gutter. A calm agent with nothing extra to show keeps its exact shape when selected.
 
 A resolver mid-flight replaces `◆ waiting` on its row with `⟳ <resolver> <budget>` (the agent name stays; the budget fills the task slot), and still counts in the attention tally — the item is pending, just being handled. When the chain exhausts it flips back to `◆ waiting`. Override a slow chain with `rimz feed resolve --override-chain`.
 
@@ -188,13 +189,13 @@ On every refresh, the native pane mirrors selection to the focused working pane 
 
 ### Live enrichments and density
 
-Every enrichment follows the same grammar: line 1 is the cue, and line 2+ are meters. Context-window percent renders as a smooth ratatui-`Gauge`-style bar — solid `█` cells plus a fractional eighth-block edge over a dim `░` track (`███▊░░ 38%`), todo progress renders as a bounded dot shape (`●●●○○ 3/5`), total tokens render as a compact selected-row token (`12.4k tok`), and worktree diff stats render on the group header (`+127 -43`). All are display-only and privacy-gated; a missing field means "agent did not report it", never zero, and none drives attention counts or routing.
+Every enrichment follows the same grammar: line 1 is the cue, and the lines below are meters. Context-window percent renders as a thin full-width rule on its own line — a heavy `━` filled run that ramps green → amber → red over a light `─` track, with no label (`━━━━━━━━━━──────────────`); todo progress renders as a bounded dot shape (`●●●○○ 3/5`), total tokens render as a compact selected-row token (`12.4k tok`), and worktree diff stats render on the group header (`+127 -43`). All are display-only and privacy-gated; a missing field means "agent did not report it", never zero, and none drives attention counts or routing.
 
-Width controls ambient density: narrow rows keep identity and bare gauges, the default width shows model/effort plus the context gauge, and wider rows inline todo progress. Selection is orthogonal and light: a reserved one-cell gutter carries the accent bar `▎` on the focused row, and selection adds detail lines (total tokens today) only when there is data not already on screen — it never moves the inline gauge. Color is the muted 256-color palette by default; `NO_COLOR` suppresses color only, and the glyph count, fill, and the bar's shape still carry the meaning.
+Width controls ambient density: narrow rows keep identity and the bar, the default width adds model/effort, and wider rows inline todo progress. Because the bar spans the full width and starts at the left edge, every agent's bar shares one column — the bars line up across worktrees with no alignment work. Selection is orthogonal and light: a reserved one-cell gutter carries the accent bar `▎` on the focused row, and selection adds detail lines (total tokens today) only when there is data not already on screen. Color is the muted 256-color palette by default; `NO_COLOR` suppresses color only, and the bar's heavy/light shape still carries the meaning.
 
 ### View-model fields the rows use
 
-The rows read `SidebarRow.{row_kind, name, status, permission_posture, pane, task, model, effort, context_pct, total_tokens, todo_done, todo_total, worktree_path, worktree_branch, last_activity, resolver, options}` plus the per-group `status_counts` and `diff_added`/`diff_removed`. `row_kind` is `agent`, `item`, or `process`; a process row carries its command in `name` and leaves `status` unset (it never enters `status_counts`). Agent rows always carry `context_pct`, defaulting to `0` until transcript usage is known, so every observed agent paints the same gauge shape from its first frame. Pane presence reaches the reducer through `PaneRef.{command, cwd}`, resolved to `worktree_path`/`worktree_branch` before grouping. Age, ranking, and the running-head freshness gate all come from `last_activity`.
+The rows read `SidebarRow.{row_kind, name, status, permission_posture, pane, task, model, effort, context_pct, total_tokens, todo_done, todo_total, worktree_path, worktree_branch, last_activity, resolver, options}` plus the per-group `status_counts` and `diff_added`/`diff_removed`. `row_kind` is `agent`, `item`, or `process`; a process row carries its command in `name` and leaves `status` unset (it never enters `status_counts`). Agent rows always carry `context_pct`, defaulting to `0` until transcript usage is known, so every observed agent paints the same context bar from its first frame. Pane presence reaches the reducer through `PaneRef.{command, cwd}`, resolved to `worktree_path`/`worktree_branch` before grouping. Age, ranking, and the running-head freshness gate all come from `last_activity`.
 
 `SidebarSnapshot` still carries `recently_answered` and `recent_activity`, but the sidebar renderer ignores them — it paints only `worktree_groups` and the attention line. Full history surfaces through `rimz feed list --audit`. If no renderer ever consumes those two fields, drop them from the sidebar view-model; they restate ledger queries.
 
