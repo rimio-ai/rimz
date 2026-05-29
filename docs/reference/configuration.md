@@ -56,23 +56,27 @@ projects/<sha256(project_root)>/    per-project, per-machine state
 
 `config.toml` may define:
 
-- remote-control auto-launch (`[remote_control] auto`),
+- remote-control auto-launch, per agent (`[remote_control] claude` / `codex`),
 - local workspace display name,
 - sound profile,
 - hook install state,
 - local agent binary paths,
 - per-machine mux preference (overrides project `auto`).
 
-### Remote Control auto-launch
+### Remote control auto-launch
 
 ```toml
 [remote_control]
-auto = true            # off when unset
+claude = true          # off when unset
+codex  = true          # off when unset
 ```
 
-When `auto` is set and `claude` is on PATH, `rimz start` launches `claude remote-control --spawn worktree` in a dedicated background view — a `rimz-rc` tab on Zellij, a `rimz-rc` window on tmux — out of your working pane and idempotent on that name (a second `rimz` start is a no-op). It runs from the project root (the main checkout), so on-demand remote sessions get isolated worktrees off the canonical repo rather than the current worktree.
+Each toggle is independent: when it is set *and* that agent is on PATH, `rimz start` launches its remote-control host into one shared background view — a `rimz-rc` tab on Zellij, a `rimz-rc` window on tmux — out of your working pane and idempotent on that name (a second `rimz start` is a no-op). Both hosts live in that one view, side by side in separate panes.
 
-This is per-machine on purpose: Remote Control links *your* Claude account and accepts remote spawn commands, so a clone never inherits it and it never enters the project trust hash. The host pane is ambient infrastructure, not a coding agent — the sidebar shows it as a pinned, specially-coloured `remote control` row, never as an idle Claude agent.
+- **Claude** runs `claude remote-control --spawn worktree`: a long-lived foreground host. It runs from the project root (the main checkout), so on-demand remote sessions get isolated worktrees off the canonical repo rather than the current worktree.
+- **Codex** runs `codex remote-control start`, which brings up the Codex app-server daemon with remote control enabled, then returns — so its pane is kept open on its start receipt (or, if your Codex install can't manage the daemon, the error telling you how to fix it). That daemon is the one Codex enrichment re-uses: `rimz codex refresh-context` prefers the running daemon's control socket (`codex app-server proxy`) over cold-spawning a throwaway `codex app-server`, and always falls back to a cold-spawn so enrichment never depends on the daemon being up. Set `RIMZ_CODEX_APP_SERVER_SOCK=` (empty) to force the cold-spawn path.
+
+This tier is per-machine on purpose: remote control links *your* agent accounts and accepts remote spawn commands, so a clone never inherits it and it never enters the project trust hash. Neither host pane is a coding agent — the sidebar shows each as a pinned, specially-coloured row (`remote control` for Claude, `codex remote` for Codex), never as an idle agent.
 
 ## Merge order
 

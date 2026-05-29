@@ -45,15 +45,21 @@ pub struct MachineConfig {
     pub remote_control: RemoteControlConfig,
 }
 
-/// Claude Code Remote Control auto-launch policy. Off unless explicitly enabled
+/// Remote-control auto-launch policy, per agent. Off unless explicitly enabled
 /// — Rimz never links your account or starts a remote-control host without
-/// opt-in, so the absence of this section reads as "do nothing".
+/// opt-in, so the absence of this section reads as "do nothing". Each agent has
+/// its own toggle because each links a different account and is detected
+/// independently on PATH.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct RemoteControlConfig {
-    /// Auto-launch `claude remote-control` in a managed background view when
-    /// Claude is detected and a Rimz workspace starts.
-    pub auto: bool,
+    /// Auto-launch `claude remote-control` (the worktree spawn mode) in the
+    /// managed background view when Claude is on PATH and a workspace starts.
+    pub claude: bool,
+    /// Auto-launch `codex remote-control start` — the Codex app-server daemon
+    /// with remote control enabled — in the same view, when Codex is on PATH.
+    /// The daemon it brings up is the one Codex enrichment re-uses.
+    pub codex: bool,
 }
 
 impl MachineConfig {
@@ -101,36 +107,48 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let config = MachineConfig::load_from(&dir.path().join("absent.toml")).expect("load");
         assert_eq!(config, MachineConfig::default());
-        assert!(!config.remote_control.auto);
+        assert!(!config.remote_control.claude);
+        assert!(!config.remote_control.codex);
     }
 
     #[test]
     fn empty_file_keeps_remote_control_off() {
         let dir = tempdir().expect("tempdir");
         let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
-        assert!(!config.remote_control.auto);
+        assert!(!config.remote_control.claude);
+        assert!(!config.remote_control.codex);
     }
 
     #[test]
-    fn auto_true_parses() {
+    fn per_agent_toggles_parse_independently() {
         let dir = tempdir().expect("tempdir");
-        let config = MachineConfig::load_from(&write(&dir, "[remote_control]\nauto = true\n"))
+        let config = MachineConfig::load_from(&write(&dir, "[remote_control]\nclaude = true\n"))
             .expect("load");
-        assert!(config.remote_control.auto);
+        assert!(config.remote_control.claude);
+        assert!(!config.remote_control.codex, "codex stays off when unset");
+
+        let both = MachineConfig::load_from(&write(
+            &dir,
+            "[remote_control]\nclaude = true\ncodex = true\n",
+        ))
+        .expect("load");
+        assert!(both.remote_control.claude);
+        assert!(both.remote_control.codex);
     }
 
     #[test]
     fn unknown_keys_are_ignored() {
         let dir = tempdir().expect("tempdir");
-        let text = "sound_profile = \"chime\"\n\n[remote_control]\nauto = true\ncapacity = 16\n";
+        let text = "sound_profile = \"chime\"\n\n[remote_control]\ncodex = true\ncapacity = 16\n";
         let config = MachineConfig::load_from(&write(&dir, text)).expect("load");
-        assert!(config.remote_control.auto);
+        assert!(config.remote_control.codex);
+        assert!(!config.remote_control.claude);
     }
 
     #[test]
     fn malformed_toml_surfaces_an_error() {
         let dir = tempdir().expect("tempdir");
-        let err = MachineConfig::load_from(&write(&dir, "[remote_control]\nauto = \"yes\"\n"))
+        let err = MachineConfig::load_from(&write(&dir, "[remote_control]\nclaude = \"yes\"\n"))
             .expect_err("type mismatch should fail");
         assert!(matches!(err, ConfigErr::Parse { .. }));
     }

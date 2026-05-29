@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, MuxBackend, MuxErr, PaneCapture,
-    PaneListOptions, Result, SessionOptions, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions,
-    ensure_pane_backend,
+    BackgroundViewLaunch, BackgroundViewOptions, BackgroundViewPane, CommandSpec, MuxBackend,
+    MuxErr, PaneCapture, PaneListOptions, Result, SessionOptions, SidebarPaneOptions,
+    SidebarRecovery, SplitPaneOptions, ensure_pane_backend,
 };
 use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
@@ -352,11 +352,11 @@ impl MuxBackend for ZellijBackend {
         if session_has_named_tab(&opts.session_name, &opts.name)? {
             return Ok(BackgroundViewLaunch::AlreadyRunning);
         }
-        // `--layout` gives the tab exactly one pane running the command, bypassing
-        // the session's sidebar-carrying default tab template. `new-tab` is
-        // synchronous (it prints the new tab id), so the temp layout file can drop
-        // as soon as the call returns.
-        let layout = TempLayoutFile::new(render_command_layout(&opts.command)?)?;
+        // `--layout` gives the tab exactly the view's panes running their
+        // commands, bypassing the session's sidebar-carrying default tab
+        // template. `new-tab` is synchronous (it prints the new tab id), so the
+        // temp layout file can drop as soon as the call returns.
+        let layout = TempLayoutFile::new(render_command_layout(&opts.panes)?)?;
         zellij_action(&opts.session_name)
             .args([
                 "new-tab".to_owned(),
@@ -904,14 +904,32 @@ fn session_has_named_tab(session: &str, tab_name: &str) -> Result<bool> {
         .any(|line| line.trim() == tab_name))
 }
 
-/// A one-pane tab layout that runs `command` (program first) immediately and
-/// closes when it exits. Supplying this as `new-tab --layout` overrides the
-/// session's sidebar-carrying default tab template, so a background view's tab
-/// holds only this pane.
-fn render_command_layout(command: &[String]) -> Result<String> {
-    let (program, args) = command.split_first().ok_or_else(|| MuxErr::Output {
+/// A tab layout that runs each pane's command immediately, side by side.
+/// Supplying this as `new-tab --layout` overrides the session's
+/// sidebar-carrying default tab template, so a background view's tab holds only
+/// these panes. A `keep_open` pane stays after its command exits
+/// (`close_on_exit false`) — for a launcher like Codex that starts a daemon and
+/// returns; the rest close with their process (`close_on_exit true`).
+fn render_command_layout(panes: &[BackgroundViewPane]) -> Result<String> {
+    if panes.is_empty() {
+        return Err(MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: "background view has no panes".to_owned(),
+        });
+    }
+    let rendered = panes
+        .iter()
+        .map(render_command_pane)
+        .collect::<Result<Vec<_>>>()?
+        .join("\n");
+    Ok(format!("layout {{\n{rendered}\n}}\n"))
+}
+
+/// One `pane { … }` node for [`render_command_layout`].
+fn render_command_pane(pane: &BackgroundViewPane) -> Result<String> {
+    let (program, args) = pane.command.split_first().ok_or_else(|| MuxErr::Output {
         program: "zellij".to_owned(),
-        reason: "background view command is empty".to_owned(),
+        reason: "background view pane command is empty".to_owned(),
     })?;
     let program = kdl_string(program)?;
     let args_line = if args.is_empty() {
@@ -924,15 +942,13 @@ fn render_command_layout(command: &[String]) -> Result<String> {
             .join(" ");
         format!("\n        args {rendered}")
     };
+    let close_on_exit = !pane.keep_open;
     Ok(format!(
-        r#"layout {{
-    pane {{
+        r#"    pane {{
         command {program}{args_line}
         start_suspended false
-        close_on_exit true
-    }}
-}}
-"#,
+        close_on_exit {close_on_exit}
+    }}"#,
     ))
 }
 
@@ -1138,12 +1154,15 @@ mod tests {
 
     #[test]
     fn command_layout_runs_program_with_args_unsuspended() {
-        let layout = render_command_layout(&[
-            "claude".to_owned(),
-            "remote-control".to_owned(),
-            "--spawn".to_owned(),
-            "worktree".to_owned(),
-        ])
+        let layout = render_command_layout(&[BackgroundViewPane {
+            command: vec![
+                "claude".to_owned(),
+                "remote-control".to_owned(),
+                "--spawn".to_owned(),
+                "worktree".to_owned(),
+            ],
+            keep_open: false,
+        }])
         .expect("render command layout");
         assert!(layout.contains(r#"command "claude""#), "{layout}");
         assert!(
@@ -1151,13 +1170,50 @@ mod tests {
             "{layout}",
         );
         // A command pane is held at a run prompt unless the layout opts out, and
-        // a background view should vanish with its process rather than linger.
+        // a non-`keep_open` host should vanish with its process rather than linger.
         assert!(layout.contains("start_suspended false"), "{layout}");
         assert!(layout.contains("close_on_exit true"), "{layout}");
     }
 
     #[test]
-    fn command_layout_rejects_an_empty_command() {
+    fn command_layout_lays_out_one_pane_per_command_with_keep_open() {
+        // Claude (foreground host, closes on exit) beside Codex (daemon
+        // launcher, kept open on its receipt) in one tab.
+        let layout = render_command_layout(&[
+            BackgroundViewPane {
+                command: vec!["claude".to_owned(), "remote-control".to_owned()],
+                keep_open: false,
+            },
+            BackgroundViewPane {
+                command: vec![
+                    "codex".to_owned(),
+                    "remote-control".to_owned(),
+                    "start".to_owned(),
+                ],
+                keep_open: true,
+            },
+        ])
+        .expect("render command layout");
+        assert_eq!(
+            layout.matches("pane {").count(),
+            2,
+            "one pane per command:\n{layout}"
+        );
+        assert!(layout.contains(r#"command "claude""#), "{layout}");
+        assert!(layout.contains(r#"command "codex""#), "{layout}");
+        // close_on_exit tracks !keep_open: claude false→closes, codex true→lingers.
+        assert!(
+            layout.contains("close_on_exit true"),
+            "claude closes:\n{layout}"
+        );
+        assert!(
+            layout.contains("close_on_exit false"),
+            "codex lingers:\n{layout}"
+        );
+    }
+
+    #[test]
+    fn command_layout_rejects_empty_panes() {
         assert!(render_command_layout(&[]).is_err());
     }
 

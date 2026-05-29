@@ -1152,8 +1152,9 @@ fn assert_sidebar_is_left_thirty_percent(session: &str) {
     );
 }
 
-/// `open_background_view` opens a dedicated, named tab for a managed command
-/// and is idempotent on that tab name: a second call is a no-op.
+/// `open_background_view` opens a dedicated, named tab laying out every pane of
+/// a managed view, and is idempotent on that tab name: a second call is a no-op.
+/// Two panes (one `keep_open`) exercise the real Zellij multi-pane layout.
 #[test]
 fn open_background_view_creates_named_tab_idempotently() {
     require_zellij!();
@@ -1165,7 +1166,16 @@ fn open_background_view_creates_named_tab_idempotently() {
         session_name: name.clone(),
         cwd: std::env::temp_dir(),
         name: "rimz-rc".to_owned(),
-        command: vec!["sleep".to_owned(), "120".to_owned()],
+        panes: vec![
+            rimz::mux::BackgroundViewPane {
+                command: vec!["sleep".to_owned(), "120".to_owned()],
+                keep_open: false,
+            },
+            rimz::mux::BackgroundViewPane {
+                command: vec!["sleep".to_owned(), "121".to_owned()],
+                keep_open: true,
+            },
+        ],
     };
 
     let first = ZellijBackend

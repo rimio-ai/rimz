@@ -119,6 +119,18 @@ impl TmuxBackend {
             .map(|_| ())
     }
 
+    /// Keep `pane_id`'s pane on screen after its command exits. Targeted by pane
+    /// id (`-p -t`) so the option never touches the window's other panes — the
+    /// long-lived host beside it or a hook-added sidebar. Set right after the
+    /// pane is created; best-effort, since a command that exits in the gap
+    /// before this lands just closes as usual.
+    fn set_remain_on_exit(&self, pane_id: &str) -> Result<()> {
+        self.cmd()
+            .args(["set-option", "-p", "-t", pane_id, "remain-on-exit", "on"])
+            .run()
+            .map(|_| ())
+    }
+
     /// Whether `session` already holds a window named `name`. A Rimz background
     /// view is idempotent on its window name, so a relaunch into a session that
     /// already carries it is skipped.
@@ -442,22 +454,63 @@ impl MuxBackend for TmuxBackend {
         if self.session_has_window(&opts.session_name, &opts.name)? {
             return Ok(BackgroundViewLaunch::AlreadyRunning);
         }
+        let (first, rest) = opts.panes.split_first().ok_or_else(|| MuxErr::Output {
+            program: "tmux".to_owned(),
+            reason: "background view has no panes".to_owned(),
+        })?;
+        let cwd = opts.cwd.to_string_lossy().into_owned();
+
         // `-d` opens the window without pulling the user's focus to it; the
-        // command runs as the window's process.
-        self.cmd()
+        // first command runs as the window's process. `-P -F` prints the new
+        // window and pane ids so later splits target this window precisely and
+        // each `keep_open` pane gets `remain-on-exit` set on it by id.
+        let output = self
+            .cmd()
             .args([
                 "new-window".to_owned(),
                 "-d".to_owned(),
+                "-P".to_owned(),
+                "-F".to_owned(),
+                "#{window_id}\t#{pane_id}".to_owned(),
                 "-t".to_owned(),
                 opts.session_name.clone(),
                 "-n".to_owned(),
                 opts.name.clone(),
                 "-c".to_owned(),
-                opts.cwd.to_string_lossy().into_owned(),
+                cwd.clone(),
             ])
-            .args(opts.command.clone())
-            .run()
-            .map(|_| BackgroundViewLaunch::Launched)
+            .args(first.command.clone())
+            .run()?;
+        let (window_id, first_pane) = parse_window_and_pane(&output.stdout)?;
+        if first.keep_open {
+            self.set_remain_on_exit(&first_pane)?;
+        }
+
+        // Additional panes split the same window. `-d` keeps the user's focus
+        // where it was; a `keep_open` pane (a daemon launcher like Codex that
+        // returns) gets `remain-on-exit` so it lingers on its receipt.
+        for pane in rest {
+            let output = self
+                .cmd()
+                .args([
+                    "split-window".to_owned(),
+                    "-d".to_owned(),
+                    "-P".to_owned(),
+                    "-F".to_owned(),
+                    "#{pane_id}".to_owned(),
+                    "-t".to_owned(),
+                    window_id.clone(),
+                    "-c".to_owned(),
+                    cwd.clone(),
+                ])
+                .args(pane.command.clone())
+                .run()?;
+            if pane.keep_open {
+                let pane_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                self.set_remain_on_exit(&pane_id)?;
+            }
+        }
+        Ok(BackgroundViewLaunch::Launched)
     }
 
     fn wake_sidebar(&self, _session_name: &str, _bytes: &[u8]) -> Result<()> {
@@ -483,9 +536,37 @@ impl MuxBackend for TmuxBackend {
     }
 }
 
+/// Parse the `#{window_id}\t#{pane_id}` line `new-window -P -F` prints, e.g.
+/// `@7\t%12`. Both ids are needed: the window id targets later splits, the pane
+/// id sets `remain-on-exit` on the first pane.
+fn parse_window_and_pane(stdout: &[u8]) -> Result<(String, String)> {
+    let text = String::from_utf8_lossy(stdout);
+    let line = text.trim();
+    let mut parts = line.split('\t');
+    match (parts.next(), parts.next()) {
+        (Some(window), Some(pane)) if !window.is_empty() && !pane.is_empty() => {
+            Ok((window.to_owned(), pane.to_owned()))
+        }
+        _ => Err(MuxErr::Output {
+            program: "tmux".to_owned(),
+            reason: format!("new-window printed no window/pane id: {line:?}"),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_window_and_pane_ids() {
+        assert_eq!(
+            parse_window_and_pane(b"@7\t%12\n").unwrap(),
+            ("@7".to_owned(), "%12".to_owned()),
+        );
+        assert!(parse_window_and_pane(b"@7").is_err(), "needs both ids");
+        assert!(parse_window_and_pane(b"").is_err());
+    }
 
     #[test]
     fn version_parser_strips_letter_suffix() {

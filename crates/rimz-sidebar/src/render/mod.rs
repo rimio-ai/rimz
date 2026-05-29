@@ -431,6 +431,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn codex_remote_host_renders_as_a_distinct_pinned_row() {
+        // The Codex host gets the same treatment as Claude's, attributed
+        // "codex remote" with the `⇅` mark — never an agent card.
+        let snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(
+            vec![
+                pane("%1", "zsh", "/repo/main"),
+                pane("%2", "codex remote-control start", "/repo/main"),
+            ],
+            None,
+        );
+        let screen = snapshot_to_screen(&snapshot, 32, 24);
+        assert!(screen.contains("codex remote"), "screen:\n{screen}");
+        assert!(
+            screen.contains('⇅'),
+            "remote-control glyph missing:\n{screen}"
+        );
+    }
+
     fn snapshot_with(items: Vec<FeedItem>, agents: Vec<AgentState>) -> SidebarSnapshot {
         let mut snapshot =
             SidebarSnapshot::build_with_carryover(fixed_workspace(), items, Vec::new(), agents);

@@ -188,21 +188,36 @@ pub struct SplitPaneOptions {
     pub env: BTreeMap<String, String>,
 }
 
-/// Options for launching a managed command into a dedicated, named *view* of a
-/// session — a tmux window or a Zellij tab — out of the user's focus. Generic
-/// on purpose: the mux layer never names the command it hosts, so this serves
-/// any "run this alongside the room, tucked aside, exactly once" need (today,
-/// the Claude Remote Control host).
+/// One pane within a [`BackgroundViewOptions`] view.
+#[derive(Clone, Debug)]
+pub struct BackgroundViewPane {
+    /// Full argv (program first) to run in this pane.
+    pub command: Vec<String>,
+    /// Keep the pane after its command exits. A long-lived foreground host
+    /// (Claude Remote Control) sets `false`: an exit means the host is gone and
+    /// the pane should close. A launcher that starts a daemon and returns
+    /// (Codex `remote-control start`) sets `true`, so the pane lingers on its
+    /// start receipt — or its error — instead of vanishing instantly.
+    pub keep_open: bool,
+}
+
+/// Options for launching one or more managed commands into a single dedicated,
+/// named *view* of a session — a tmux window or a Zellij tab — out of the
+/// user's focus. Generic on purpose: the mux layer never names the commands it
+/// hosts, so this serves any "run these alongside the room, tucked aside,
+/// exactly once" need (today, the Claude and Codex remote-control hosts, side
+/// by side in one view).
 #[derive(Clone, Debug)]
 pub struct BackgroundViewOptions {
     pub session_name: String,
-    /// Working directory the view's command runs in.
+    /// Working directory the view's panes run in.
     pub cwd: PathBuf,
     /// View name. Doubles as the idempotency key: a live view by this name in
     /// the session suppresses a relaunch.
     pub name: String,
-    /// Full argv (program first) to run in the view.
-    pub command: Vec<String>,
+    /// Panes to lay out in the view, in order (at least one). All share the
+    /// view's [`cwd`](Self::cwd).
+    pub panes: Vec<BackgroundViewPane>,
 }
 
 /// Outcome of [`MuxBackend::open_background_view`].
@@ -238,10 +253,11 @@ pub trait MuxBackend: Send + Sync {
     /// and skipped — never retried, never a session rebirth. Unlike
     /// [`Self::open_sidebar`], this never deletes or recreates the session.
     fn recover_sidebars(&self, opts: &SidebarPaneOptions) -> Result<SidebarRecovery>;
-    /// Launch `command` in a dedicated, named background view (tmux window /
-    /// Zellij tab) of an existing session, out of the user's focus. Idempotent:
-    /// a second call while a view of that name is present is a no-op. The view
-    /// never gates correctness — a failure here leaves the room intact.
+    /// Launch the `opts.panes` commands in one dedicated, named background view
+    /// (tmux window / Zellij tab) of an existing session, out of the user's
+    /// focus. Idempotent: a second call while a view of that name is present is
+    /// a no-op (and never adds panes to it). The view never gates correctness —
+    /// a failure here leaves the room intact.
     fn open_background_view(&self, opts: &BackgroundViewOptions) -> Result<BackgroundViewLaunch>;
     /// Best-effort wakeup; sockets are the channel of record per the docs.
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()>;

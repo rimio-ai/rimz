@@ -217,8 +217,10 @@ fn list_panes_with_session_returns_terminals() {
     );
 }
 
-/// `open_background_view` opens a dedicated, named window for a managed command
-/// and is idempotent on that window name: a second call is a no-op.
+/// `open_background_view` opens a dedicated, named window laying out every pane
+/// of a managed view, and is idempotent on that window name: a second call is a
+/// no-op. Two panes (one `keep_open`) exercise the real tmux new-window +
+/// split-window path.
 #[test]
 fn open_background_view_creates_named_window_idempotently() {
     require_tmux!();
@@ -230,7 +232,16 @@ fn open_background_view_creates_named_window_idempotently() {
         session_name: "rimz-bgview".to_owned(),
         cwd: std::env::temp_dir(),
         name: "rimz-rc".to_owned(),
-        command: vec!["sleep".to_owned(), "120".to_owned()],
+        panes: vec![
+            rimz::mux::BackgroundViewPane {
+                command: vec!["sleep".to_owned(), "120".to_owned()],
+                keep_open: false,
+            },
+            rimz::mux::BackgroundViewPane {
+                command: vec!["sleep".to_owned(), "121".to_owned()],
+                keep_open: true,
+            },
+        ],
     };
 
     let first = server
@@ -246,6 +257,17 @@ fn open_background_view_creates_named_window_idempotently() {
         "expected a rimz-rc window after launch, got {:?}",
         server.window_names("rimz-bgview"),
     );
+    // The split landed: the rimz-rc window holds both panes.
+    let rc_panes = server
+        .backend
+        .list_panes(rimz::mux::PaneListOptions {
+            session_name: Some("rimz-bgview".to_owned()),
+        })
+        .expect("list panes")
+        .into_iter()
+        .filter(|pane| pane.view_name.as_deref() == Some("rimz-rc"))
+        .count();
+    assert_eq!(rc_panes, 2, "rimz-rc window should hold both panes");
 
     let second = server
         .backend

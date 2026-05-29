@@ -10,6 +10,14 @@
 //! ([`crate::ledger::agent_context`]) and the snapshot fold-in are
 //! transport-agnostic, exactly as for Claude.
 //!
+//! Daemon re-use: when a Codex app-server daemon is running — the one
+//! `codex remote-control start` brings up, which [`crate::remote_control`] can
+//! auto-launch — its control socket is preferred via `codex app-server proxy`,
+//! re-using that daemon instead of cold-spawning a throwaway server. A fresh
+//! `codex app-server` is always tried as the fallback, so enrichment never
+//! depends on the daemon being up; set `RIMZ_CODEX_APP_SERVER_SOCK` to an empty
+//! value to force the cold-spawn path.
+//!
 //! Why no token gauge here: as of the pinned Codex app-server, token /
 //! context-window usage is exposed only on the live `thread/tokenUsage/updated`
 //! notification (requires a subscribing `thread/resume`), never on a read-only
@@ -38,8 +46,17 @@ use super::context::{AgentContext, AgentRateLimits, RateLimitWindow};
 /// wedged app-server is killed rather than lingering.
 const APP_SERVER_DEADLINE: Duration = Duration::from_secs(6);
 
+/// Shorter budget for the daemon `proxy` probe. The proxy either bridges to a
+/// live daemon promptly or it does not; a tight bound means a stale socket
+/// costs little before the cold-spawn fallback takes over.
+const PROXY_PROBE_DEADLINE: Duration = Duration::from_secs(2);
+
 /// Override for the `codex` binary path (tests/tooling point this at a stub).
 const CODEX_BIN_ENV: &str = "RIMZ_CODEX_BIN";
+
+/// Override for the daemon control socket. A path re-uses that daemon via
+/// `proxy`; an empty value forces the cold-spawn path (tests, opt-out).
+const CODEX_APP_SERVER_SOCK_ENV: &str = "RIMZ_CODEX_APP_SERVER_SOCK";
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum AppServerErr {
@@ -74,10 +91,11 @@ fn codex_bin() -> PathBuf {
     which::which("codex").unwrap_or_else(|_| PathBuf::from("codex"))
 }
 
-/// stdio transport over a spawned `codex app-server`. A background thread drains
-/// stdout into a channel so each request can wait with the remaining deadline
-/// and skip server-initiated frames (notifications / requests carry no `id` of
-/// ours).
+/// stdio transport over a spawned `codex` app-server invocation (`app-server`
+/// cold-spawn, or `app-server proxy --sock …` bridged to a running daemon). A
+/// background thread drains stdout into a channel so each request can wait with
+/// the remaining deadline and skip server-initiated frames (notifications /
+/// requests carry no `id` of ours).
 pub(crate) struct StdioTransport {
     child: Child,
     stdin: ChildStdin,
@@ -87,9 +105,12 @@ pub(crate) struct StdioTransport {
 }
 
 impl StdioTransport {
-    fn spawn(bin: &Path, total: Duration) -> Result<Self, AppServerErr> {
+    /// Spawn `bin` with `args` (e.g. `["app-server"]` or
+    /// `["app-server", "proxy", "--sock", <path>]`), giving the handshake +
+    /// reads `total` wall-clock.
+    fn spawn(bin: &Path, args: &[String], total: Duration) -> Result<Self, AppServerErr> {
         let mut child = Command::new(bin)
-            .arg("app-server")
+            .args(args)
             // stdin/stdout are the JSON-RPC channel; stderr is diagnostics we
             // never want — null it (the fresh-stdio invariant for helpers).
             .stdin(Stdio::piped())
@@ -257,15 +278,77 @@ pub(crate) struct CodexAppServer<T: JsonRpcTransport> {
 }
 
 impl CodexAppServer<StdioTransport> {
-    /// Spawn `codex app-server` and complete the initialize handshake. `None` on
-    /// any spawn / handshake failure (codex missing, not runnable, protocol
-    /// mismatch) — best-effort enrichment.
+    /// Connect to a Codex app-server and complete the initialize handshake,
+    /// trying each invocation in preference order — a running daemon's control
+    /// socket via `proxy` first, then a fresh cold-spawned `app-server`. The
+    /// first that handshakes wins. `None` when none do (codex missing, not
+    /// runnable, protocol mismatch) — best-effort enrichment.
     pub(crate) fn connect() -> Option<Self> {
-        let transport = StdioTransport::spawn(&codex_bin(), APP_SERVER_DEADLINE).ok()?;
-        let mut client = Self::new(transport);
-        client.handshake().ok()?;
-        Some(client)
+        let bin = codex_bin();
+        for (args, deadline) in app_server_invocations() {
+            let Ok(transport) = StdioTransport::spawn(&bin, &args, deadline) else {
+                continue;
+            };
+            let mut client = Self::new(transport);
+            if client.handshake().is_ok() {
+                return Some(client);
+            }
+        }
+        None
     }
+}
+
+/// The app-server invocations [`CodexAppServer::connect`] tries, in preference
+/// order, each paired with its wall-clock budget.
+fn app_server_invocations() -> Vec<(Vec<String>, Duration)> {
+    invocations_for(daemon_socket().filter(|path| path.exists()).as_deref())
+}
+
+/// Pure core of [`app_server_invocations`]: given a reachable daemon control
+/// `socket` (when one exists), prefer `proxy` to re-use that daemon, always
+/// followed by a cold-spawned `app-server` fallback.
+fn invocations_for(socket: Option<&Path>) -> Vec<(Vec<String>, Duration)> {
+    let mut invocations = Vec::new();
+    if let Some(socket) = socket {
+        invocations.push((
+            vec![
+                "app-server".to_owned(),
+                "proxy".to_owned(),
+                "--sock".to_owned(),
+                socket.to_string_lossy().into_owned(),
+            ],
+            PROXY_PROBE_DEADLINE,
+        ));
+    }
+    invocations.push((vec!["app-server".to_owned()], APP_SERVER_DEADLINE));
+    invocations
+}
+
+/// The daemon control socket to prefer: an explicit `RIMZ_CODEX_APP_SERVER_SOCK`
+/// path, or the default `$CODEX_HOME/app-server-control/app-server-control.sock`
+/// (`~/.codex/...`). An empty override means "no daemon" — cold-spawn only.
+fn daemon_socket() -> Option<PathBuf> {
+    match std::env::var_os(CODEX_APP_SERVER_SOCK_ENV) {
+        Some(value) if value.is_empty() => None,
+        Some(value) => Some(PathBuf::from(value)),
+        None => Some(
+            codex_home()?
+                .join("app-server-control")
+                .join("app-server-control.sock"),
+        ),
+    }
+}
+
+/// Codex's home directory: `CODEX_HOME` when set, else `~/.codex`. Mirrors the
+/// resolution Codex itself uses, so the control socket is found where the daemon
+/// places it.
+fn codex_home() -> Option<PathBuf> {
+    if let Some(raw) = std::env::var_os("CODEX_HOME").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(raw));
+    }
+    std::env::var_os("HOME")
+        .filter(|v| !v.is_empty())
+        .map(|home| PathBuf::from(home).join(".codex"))
 }
 
 impl<T: JsonRpcTransport> CodexAppServer<T> {
@@ -643,5 +726,34 @@ mod tests {
         );
         assert_eq!(codex_version_from_user_agent("nogap").as_deref(), None);
         assert_eq!(codex_version_from_user_agent("trailing/").as_deref(), None);
+    }
+
+    #[test]
+    fn invocations_cold_spawn_only_without_a_daemon_socket() {
+        let invocations = invocations_for(None);
+        assert_eq!(invocations.len(), 1, "no daemon → cold-spawn only");
+        assert_eq!(invocations[0].0, vec!["app-server".to_owned()]);
+        assert_eq!(invocations[0].1, APP_SERVER_DEADLINE);
+    }
+
+    #[test]
+    fn invocations_prefer_proxy_then_cold_spawn_with_a_socket() {
+        let sock = Path::new("/run/codex/app-server-control.sock");
+        let invocations = invocations_for(Some(sock));
+        assert_eq!(invocations.len(), 2, "daemon → proxy then fallback");
+        // Proxy first, on the short probe budget, carrying the socket path.
+        assert_eq!(
+            invocations[0].0,
+            vec![
+                "app-server".to_owned(),
+                "proxy".to_owned(),
+                "--sock".to_owned(),
+                sock.to_string_lossy().into_owned(),
+            ],
+        );
+        assert_eq!(invocations[0].1, PROXY_PROBE_DEADLINE);
+        // Cold-spawn fallback always trails, on the full budget.
+        assert_eq!(invocations[1].0, vec!["app-server".to_owned()]);
+        assert_eq!(invocations[1].1, APP_SERVER_DEADLINE);
     }
 }
