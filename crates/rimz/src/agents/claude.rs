@@ -4,7 +4,9 @@
 //! ExitPlanMode`, `PreToolUse: AskUserQuestion`) and the lifecycle events
 //! (`SessionStart` registers idle, `UserPromptSubmit` moves to running with
 //! the prompt as task, `Stop` completes the turn — success, or failed on an
-//! error signal, `SessionEnd` exits, `Notification` silent); renders the
+//! error signal, or back to running when the payload's `background_tasks`
+//! still has work in flight, `SessionEnd` exits, `Notification` silent);
+//! renders the
 //! Claude-shaped `hookSpecificOutput` / `updatedInput` decision payload and the
 //! neutral fallback. Context budget is read from the transcript tail.
 //!
@@ -167,10 +169,23 @@ impl AgentIntegration for ClaudeIntegration {
         // established posture. SessionEnd records the exit so the reducer drops
         // the agent from the rollup (posture carries no meaning on exit);
         // `ends_session` then expires any asks the dead session left pending.
+        // A Claude `Stop` carries `background_tasks` (Claude Code v2.1.145+):
+        // the main thread has parked and will reawaken when its background work
+        // reports back. While any task is in flight the turn is not over, so we
+        // label the row with the background work and (below) keep it running —
+        // never paint a false `success` on an agent that is still busy.
+        let pending_background = if event_name == "Stop" {
+            pending_background_tasks(payload)
+        } else {
+            Vec::new()
+        };
         let (status, posture) = match event_name {
             "SessionStart" => (AgentStatus::Idle, Some(posture_from_payload(payload))),
             "UserPromptSubmit" => (AgentStatus::Running, None),
-            "Stop" => (stop_status_from_payload(payload), None),
+            "Stop" => (
+                stop_status_with_background(payload, &pending_background),
+                None,
+            ),
             "SessionEnd" => (AgentStatus::Idle, None),
             _ => return None,
         };
@@ -206,7 +221,8 @@ impl AgentIntegration for ClaudeIntegration {
             permission_posture: posture,
             worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
             worktree_branch: optional_payload_string(payload, &["worktree_branch"]),
-            task: optional_payload_string(payload, &["task", "prompt"]),
+            task: background_task_label(&pending_background)
+                .or_else(|| optional_payload_string(payload, &["task", "prompt"])),
             model: optional_payload_string(payload, &["model"]).or(usage.model),
             effort: optional_payload_string(payload, &["thinking_level", "effort"]),
             context_pct,
@@ -261,6 +277,59 @@ fn hooks_installed_at(path: &Path) -> bool {
                 })
             })
         })
+}
+
+/// In-flight background tasks reported on a Claude `Stop` payload
+/// (`background_tasks`, Claude Code v2.1.145+), as display labels. A `Stop`
+/// with pending background work is the main thread parking, not a turn end —
+/// it reawakens when the work reports back — so the row must stay live. Each
+/// in-flight entry's label is its `description`, else `command`, else `id`; an
+/// entry with a terminal `status` (`completed`/`failed`) is no longer in
+/// flight and is skipped. An absent or all-terminal array yields an empty vec:
+/// a genuine turn end. Older Claude builds omit the field entirely, which
+/// degrades to the same empty vec.
+fn pending_background_tasks(payload: &Value) -> Vec<String> {
+    let Some(tasks) = payload.get("background_tasks").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    tasks
+        .iter()
+        .filter(|task| {
+            task.get("status")
+                .and_then(Value::as_str)
+                .is_none_or(|status| !matches!(status, "completed" | "failed"))
+        })
+        .map(|task| {
+            ["description", "command", "id"]
+                .into_iter()
+                .find_map(|key| task.get(key).and_then(Value::as_str))
+                .filter(|label| !label.is_empty())
+                .unwrap_or("background task")
+                .to_owned()
+        })
+        .collect()
+}
+
+/// Status for a Claude `Stop`. An explicit error wins — the failure is the
+/// attention signal — otherwise pending background work upgrades the clean
+/// stop to `running` so the sidebar keeps the row live instead of painting a
+/// false `success`.
+fn stop_status_with_background(payload: &Value, pending: &[String]) -> AgentStatus {
+    match stop_status_from_payload(payload) {
+        AgentStatus::Success if !pending.is_empty() => AgentStatus::Running,
+        other => other,
+    }
+}
+
+/// Concise task label for a `Stop` parked on background work: the single
+/// task's label, or a count when several are in flight. `None` when nothing is
+/// pending, so the caller falls back to the payload's own task/prompt.
+fn background_task_label(pending: &[String]) -> Option<String> {
+    match pending {
+        [] => None,
+        [one] => Some(one.clone()),
+        many => Some(format!("{} background tasks", many.len())),
+    }
 }
 
 /// Translate a Claude payload's mode/permission hints onto the four-value
@@ -1369,6 +1438,91 @@ mod tests {
     fn errored_stop_observes_failed() {
         let obs = ClaudeIntegration
             .observe_lifecycle("Stop", &json!({ "session_id": "sess-1", "is_error": true }))
+            .unwrap();
+        assert_eq!(obs.status, AgentStatus::Failed);
+    }
+
+    #[test]
+    fn stop_with_pending_background_tasks_observes_running() {
+        // Claude Code v2.1.145+ reports in-flight `background_tasks` on Stop.
+        // The main thread has parked waiting for that work to reawaken it — the
+        // turn is not over, so the row stays running (never a false success)
+        // and is labelled with the single task's description.
+        let obs = ClaudeIntegration
+            .observe_lifecycle(
+                "Stop",
+                &json!({
+                    "session_id": "sess-1",
+                    "background_tasks": [
+                        {
+                            "id": "task-1",
+                            "type": "command",
+                            "command": "npm run build",
+                            "status": "running",
+                            "description": "Build process"
+                        }
+                    ]
+                }),
+            )
+            .unwrap();
+        assert_eq!(obs.status, AgentStatus::Running);
+        assert_eq!(obs.task.as_deref(), Some("Build process"));
+    }
+
+    #[test]
+    fn stop_with_multiple_pending_background_tasks_labels_count() {
+        // Several in-flight tasks collapse to a count — the row says it is busy
+        // without trying to render every label.
+        let obs = ClaudeIntegration
+            .observe_lifecycle(
+                "Stop",
+                &json!({
+                    "session_id": "sess-1",
+                    "background_tasks": [
+                        { "id": "a", "status": "running", "description": "lint" },
+                        { "id": "b", "status": "running", "description": "test" }
+                    ]
+                }),
+            )
+            .unwrap();
+        assert_eq!(obs.status, AgentStatus::Running);
+        assert_eq!(obs.task.as_deref(), Some("2 background tasks"));
+    }
+
+    #[test]
+    fn stop_with_only_completed_background_tasks_observes_success() {
+        // A registry that reports only terminal tasks has nothing in flight —
+        // this is a genuine turn end, so the clean stop stays success.
+        let obs = ClaudeIntegration
+            .observe_lifecycle(
+                "Stop",
+                &json!({
+                    "session_id": "sess-1",
+                    "background_tasks": [
+                        { "id": "task-1", "status": "completed", "description": "Build process" }
+                    ]
+                }),
+            )
+            .unwrap();
+        assert_eq!(obs.status, AgentStatus::Success);
+        assert_eq!(obs.task, None);
+    }
+
+    #[test]
+    fn errored_stop_with_pending_background_tasks_still_observes_failed() {
+        // The failure is the attention signal: an errored turn stays failed
+        // even while background work is still in flight.
+        let obs = ClaudeIntegration
+            .observe_lifecycle(
+                "Stop",
+                &json!({
+                    "session_id": "sess-1",
+                    "is_error": true,
+                    "background_tasks": [
+                        { "id": "task-1", "status": "running", "description": "Build process" }
+                    ]
+                }),
+            )
             .unwrap();
         assert_eq!(obs.status, AgentStatus::Failed);
     }

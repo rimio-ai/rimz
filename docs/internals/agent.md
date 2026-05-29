@@ -108,7 +108,7 @@ The five-value status set, in ranking order (most attention-hungry first), per [
    any state ── SessionEnd / pid dead / pane reverted to shell ──► removed (no row)
 ```
 
-`Stop` only fires after a turn ran, so it resolves the turn — `success`, or `failed` on an explicit error signal — never back to `idle`. `idle` is the resting state `SessionStart` establishes and a finished `SubagentStop` child returns to; `success`/`failed`/`idle` all re-enter `running` on the next prompt.
+`Stop` only fires after a turn ran, so it resolves the turn — `success`, or `failed` on an explicit error signal — never back to `idle`. One exception keeps it `running`: a `Stop` whose payload carries in-flight `background_tasks` (Claude Code v2.1.145+) is the main thread parking, not a turn end — it reawakens when the background work reports back — so the row stays `running` and labels itself with that work rather than painting a false `success`. An error still wins (the failure is the attention signal). `idle` is the resting state `SessionStart` establishes and a finished `SubagentStop` child returns to; `success`/`failed`/`idle` all re-enter `running` on the next prompt.
 
 The agent owns status and posture; Rimz observes and renders. `yolo` is observed from the agent's own bypass flag (`claude --dangerously-skip-permissions`, `codex --ask-for-approval never`). Workflow words such as `plan` and `interactive` fold into `default` because they are posture-neutral. The vocabulary is defined once in [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape).
 
@@ -179,7 +179,7 @@ Native event → unified mapping:
 | ----------------------------- | --------- | ------------- | ----------------------------------- | ------------------------------------------- |
 | `SessionStart`                | default   | lifecycle     | `idle`                              | posture, model, context/tokens (transcript) |
 | `UserPromptSubmit`            | default   | lifecycle     | `running`                           | `task` = prompt; refresh context/tokens     |
-| `Stop`                        | default   | lifecycle     | `success` (error → `failed`)        | clear task; refresh context/tokens          |
+| `Stop`                        | default   | lifecycle     | `success` (error → `failed`; in-flight `background_tasks` → `running`) | `task` = background work else clear; refresh context/tokens |
 | `SessionEnd`                  | default   | lifecycle     | removed                             | —                                           |
 | `Notification`                | default   | lifecycle     | none (silent)                       | —                                           |
 | `PermissionRequest`           | default   | blocking-feed | `waiting`                           | —                                           |
@@ -238,3 +238,4 @@ The contract above is implemented. The history below is kept so the rationale fo
 4. **Agent visibility no longer requires a pid.** `RuntimeScope::Runtime` applies the owner-required filter to `Surface::Script` items only; agents and bridge asks are kept unless a known owner is known-dead, so a pid-less agent is carried by pane corroboration instead of vanishing.
 5. **The branch label is re-derived live** from each worktree group's path by the snapshot CLI (cached under the diff-stats TTL), so the header follows a `git checkout`; the pinned ledger branch is the fallback when no live worktree resolves.
 6. **The loose pane match requires a known launcher** (`node`, `bun`, `deno`, `python`), so a `git`/`vim` pane never hosts a stale agent overlay. *Remaining:* the pid-ancestry refinement (agent pid an ancestor of the pane pid when both are known) needs a `/proc` walk in the snapshot CLI and is not yet wired.
+7. **A `Stop` parked on background work stays `running`.** When the main thread spawns background tasks/agents and parks (`✻ Waiting for N background agents to finish`), Claude fires `Stop` while the work is still in flight and reawakens the thread when it reports back. The adapter reads the `Stop` payload's `background_tasks` (Claude Code v2.1.145+): any in-flight entry upgrades the clean stop to `running` and labels the row with the background work, so the sidebar no longer paints `✓` on a busy agent. An absent or all-terminal array (older builds, genuine turn end) keeps the prior `success`/`failed` behaviour.
