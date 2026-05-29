@@ -138,6 +138,48 @@ pub struct SidebarPaneOptions {
     pub replace_existing: bool,
 }
 
+/// Tally of one in-place sidebar recovery pass ([`MuxBackend::recover_sidebars`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SidebarRecovery {
+    /// Views (Zellij tabs / tmux windows) that had lost their sidebar and got
+    /// one re-added in place this pass.
+    pub recovered: usize,
+    /// Views that needed a sidebar but whose in-place add failed — logged and
+    /// skipped, never retried.
+    pub failed: usize,
+}
+
+/// Group `(view_id, is_sidebar)` pane classifications and return the view ids
+/// that hold at least one working (non-sidebar) pane but no sidebar pane — the
+/// views whose sidebar was lost and should gain one in place. First-seen order,
+/// each view once. Shared by both backends so the "which views lost a sidebar"
+/// rule lives in exactly one place.
+pub(crate) fn views_missing_sidebar(classified: &[(String, bool)]) -> Vec<String> {
+    use std::collections::HashMap;
+
+    let mut order: Vec<String> = Vec::new();
+    // view -> (has_working_pane, has_sidebar_pane)
+    let mut state: HashMap<String, (bool, bool)> = HashMap::new();
+    for (view, is_sidebar) in classified {
+        let entry = state.entry(view.clone()).or_insert_with(|| {
+            order.push(view.clone());
+            (false, false)
+        });
+        if *is_sidebar {
+            entry.1 = true;
+        } else {
+            entry.0 = true;
+        }
+    }
+    order
+        .into_iter()
+        .filter(|view| {
+            let (has_work, has_sidebar) = state[view];
+            has_work && !has_sidebar
+        })
+        .collect()
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct SplitPaneOptions {
     pub target_pane_id: Option<PaneId>,
@@ -164,6 +206,12 @@ pub trait MuxBackend: Send + Sync {
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture>;
     fn send_keys(&self, pane: &PaneId, text: &str) -> Result<()>;
     fn open_sidebar(&self, opts: &SidebarPaneOptions) -> Result<()>;
+    /// Re-add a sidebar to every view (Zellij tab / tmux window) that holds
+    /// working panes but lost its sidebar, in place and without disturbing
+    /// existing panes. One best-effort pass: a view whose add fails is logged
+    /// and skipped — never retried, never a session rebirth. Unlike
+    /// [`Self::open_sidebar`], this never deletes or recreates the session.
+    fn recover_sidebars(&self, opts: &SidebarPaneOptions) -> Result<SidebarRecovery>;
     /// Best-effort wakeup; sockets are the channel of record per the docs.
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()>;
     fn version(&self) -> Result<String>;
@@ -192,6 +240,38 @@ pub(crate) fn ensure_pane_backend(pane: &PaneId, expected: MuxName) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn views_missing_sidebar_flags_only_worked_views_without_one() {
+        let classified = vec![
+            // tab 12: a working pane, no sidebar -> needs recovery.
+            ("12".to_owned(), false),
+            // tab 15: sidebar + working pane -> healthy.
+            ("15".to_owned(), true),
+            ("15".to_owned(), false),
+            // tab 16: sidebar only (no working pane) -> nothing to serve, skip.
+            ("16".to_owned(), true),
+            // tab 17: two working panes, no sidebar -> needs recovery, listed once.
+            ("17".to_owned(), false),
+            ("17".to_owned(), false),
+        ];
+        assert_eq!(
+            views_missing_sidebar(&classified),
+            vec!["12".to_owned(), "17".to_owned()],
+            "only views with work but no sidebar, in first-seen order, deduped"
+        );
+    }
+
+    #[test]
+    fn views_missing_sidebar_is_empty_when_every_view_is_healthy() {
+        let classified = vec![
+            ("a".to_owned(), true),
+            ("a".to_owned(), false),
+            ("b".to_owned(), false),
+            ("b".to_owned(), true),
+        ];
+        assert!(views_missing_sidebar(&classified).is_empty());
+    }
 
     #[test]
     fn pane_backend_mismatch_is_rejected_before_running_mux_command() {

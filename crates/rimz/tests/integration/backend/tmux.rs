@@ -297,6 +297,57 @@ fn open_sidebar_split_window_succeeds() {
     );
 }
 
+/// `recover_sidebars` re-adds a sidebar in place to a window that still has a
+/// working pane but lost its sidebar — without tearing the session down. The
+/// tmux path mirrors the initial left split (`-b -l <pct>% -d`), so it just
+/// gains a second pane while the original survives.
+#[test]
+fn recover_sidebars_adds_one_to_a_sidebarless_window() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    server.ensure_with_shell("room"); // one `sh` pane, no sidebar
+    let (_stub_dir, stub) = sidebar_command_stub();
+
+    let before = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some("room".to_owned()),
+        })
+        .expect("list_panes before")
+        .len();
+    assert_eq!(before, 1, "the room starts with just its working pane");
+
+    let report = server
+        .backend
+        .recover_sidebars(&SidebarPaneOptions {
+            session_name: "room".to_owned(),
+            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-recover")),
+            cwd: std::env::current_dir().expect("cwd"),
+            width_percent: 30,
+            rimz_bin: stub,
+            replace_existing: false,
+        })
+        .expect("recover_sidebars");
+
+    assert_eq!(
+        report.recovered, 1,
+        "the sidebarless window gains a sidebar"
+    );
+    assert_eq!(report.failed, 0);
+    let after = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some("room".to_owned()),
+        })
+        .expect("list_panes after")
+        .len();
+    assert_eq!(
+        after, 2,
+        "recovery splits a sidebar beside the working pane"
+    );
+}
+
 fn sidebar_command_stub() -> (TempDir, PathBuf) {
     let dir = TempDir::new().expect("stub dir");
     let path = dir.path().join("rimz-stub");

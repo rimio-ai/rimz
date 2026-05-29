@@ -50,6 +50,8 @@ Both backends run the same native renderer through `rimz sidebar serve`:
 
 Launch is idempotent by heartbeat. Before opening a pane, Rimz scans `runtime/heartbeat/sidebar.*.json` and treats only readable, current-protocol files whose mtime is within the sidebar heartbeat TTL as live. Stale, unreadable, or old-protocol heartbeats are ignored so a crashed sidebar or upgraded protocol does not suppress relaunch.
 
+`rimz reload` recovers in place. Beyond signalling live sidebars to re-exec a freshly-installed binary, it re-adds a sidebar to any tab/window that still has working panes but lost its own — without rebirthing the session, so the user's panes survive. tmux re-runs the same left split (`-b -l <pct>% -d`) against the bare window; Zellij, which docks left only at session birth, reaches a live tab by splitting a `rimz-sidebar` pane to the right, moving it left, and resizing it toward the layout width, then restores the caller's focus. The pass is per-view and run-once: a view that fails to gain a sidebar is logged and left alone, never retried in a loop.
+
 ### Self-close
 
 A sidebar shares its tab with the user's working pane(s) and has no reason to outlive them. Each tick the renderer lists its session's panes via `rimz pane list` (read-only discovery — never `pane capture`/`send`), identifies its own pane from the mux env var (`ZELLIJ_PANE_ID` / `TMUX_PANE`), and counts the other panes in its view. Once it has seen at least one sibling, a later drop to zero means the last working pane exited: the renderer exits, its `close_on_exit` pane closes, and the lone sidebar is gone. The startup latch keeps it from exiting before the terminal pane first appears. This is backend-agnostic — tmux self-closes through the same normalized `rimz pane list`.
@@ -174,6 +176,7 @@ You don't read where to go; you go. Selecting a row focuses that agent's pane vi
 - `1`–`9` jump by the row's visible ordinal (its position in the column, not a mux pane id).
 - `␣` jumps to the *next item that needs you* — the next `waiting`/`failed` row in ranking order — without first selecting it. This is the fleet-scale triage key (Phase 4): one keystroke to the oldest blocked pane, again for the next. It is bound only inside the Rimz session, so it never touches the user's global mux config.
 - `x` dismisses the sticky [health alert](#reload-recovery) once it has recovered; an active failure re-arms it.
+- `r` re-execs the renderer in place, picking up a freshly-installed build without leaving the pane — the keypress scope of `rimz reload`, which the renderer reaches by riding the same `reload` wakeup word the CLI posts.
 - `?` toggles a legend-and-keys overlay, so the glyph vocabulary and the key model are learnable in place without leaving the room.
 
 Per renderer this is the same model over different input plumbing:

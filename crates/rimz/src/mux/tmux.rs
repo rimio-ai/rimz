@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     CommandSpec, MuxBackend, MuxErr, PaneCapture, PaneListOptions, Result, SessionOptions,
-    SidebarPaneOptions, SplitPaneOptions, ensure_pane_backend,
+    SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, ensure_pane_backend,
 };
 use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
@@ -96,6 +96,52 @@ impl TmuxBackend {
         }
         spec
     }
+
+    /// Split a left sidebar into a specific window in place, mirroring the
+    /// initial-window split: `-b` (before/left), `-l <pct>%` (width), `-d`
+    /// (keep the caller's focus). The `-t <window_id>` target leaves every other
+    /// window untouched.
+    fn add_sidebar_to_window(&self, opts: &SidebarPaneOptions, window_id: &str) -> Result<()> {
+        self.cmd()
+            .args([
+                "split-window".to_owned(),
+                "-d".to_owned(),
+                "-h".to_owned(),
+                "-b".to_owned(),
+                "-l".to_owned(),
+                format!("{}%", opts.width_percent),
+                "-t".to_owned(),
+                window_id.to_owned(),
+            ])
+            .args(sidebar_serve_command(opts))
+            .run()
+            .map(|_| ())
+    }
+}
+
+/// Binary name a tmux sidebar pane runs in the foreground. The launching `rimz
+/// sidebar serve` parent waits on the `rimz-sidebar` child, so that child is
+/// what `pane_current_command` reports.
+const SIDEBAR_BIN_NAME: &str = "rimz-sidebar";
+
+/// The `rimz sidebar serve …` argv a tmux sidebar pane runs. Shared by initial
+/// launch and in-place recovery so the two cannot drift.
+fn sidebar_serve_command(opts: &SidebarPaneOptions) -> Vec<String> {
+    vec![
+        opts.rimz_bin.to_string_lossy().into_owned(),
+        "sidebar".to_owned(),
+        "serve".to_owned(),
+        "--mux".to_owned(),
+        "tmux".to_owned(),
+        "--workspace-id".to_owned(),
+        opts.workspace_id.as_str().to_owned(),
+        "--session-name".to_owned(),
+        opts.session_name.clone(),
+    ]
+}
+
+fn is_tmux_sidebar(pane: &PaneRef) -> bool {
+    pane.command.as_deref() == Some(SIDEBAR_BIN_NAME)
 }
 
 impl MuxBackend for TmuxBackend {
@@ -298,17 +344,7 @@ impl MuxBackend for TmuxBackend {
         // `-b` places the new pane before the target so the sidebar sits
         // on the left. Workspace identity is passed directly to the spawned
         // renderer command.
-        let command = vec![
-            opts.rimz_bin.to_string_lossy().into_owned(),
-            "sidebar".to_owned(),
-            "serve".to_owned(),
-            "--mux".to_owned(),
-            "tmux".to_owned(),
-            "--workspace-id".to_owned(),
-            opts.workspace_id.as_str().to_owned(),
-            "--session-name".to_owned(),
-            opts.session_name.clone(),
-        ];
+        let command = sidebar_serve_command(opts);
         self.cmd()
             .args([
                 "split-window".to_owned(),
@@ -344,6 +380,39 @@ impl MuxBackend for TmuxBackend {
             ])
             .run()
             .map(|_| ())
+    }
+
+    fn recover_sidebars(&self, opts: &SidebarPaneOptions) -> Result<SidebarRecovery> {
+        // tmux re-adds a sidebar in place with the same left split the initial
+        // window got — `-d` keeps the user's focus, `-l <pct>%` sets the width —
+        // so no move/resize/refocus dance and no session teardown is needed.
+        let panes = self.list_panes(PaneListOptions {
+            session_name: Some(opts.session_name.clone()),
+        })?;
+        let classified: Vec<(String, bool)> = panes
+            .iter()
+            .filter_map(|pane| {
+                pane.view_id
+                    .clone()
+                    .map(|view| (view, is_tmux_sidebar(pane)))
+            })
+            .collect();
+        let mut report = SidebarRecovery::default();
+        for window in &super::views_missing_sidebar(&classified) {
+            match self.add_sidebar_to_window(opts, window) {
+                Ok(()) => report.recovered += 1,
+                Err(err) => {
+                    tracing::warn!(
+                        session = %opts.session_name,
+                        window = %window,
+                        error = %err,
+                        "sidebar recovery: in-place add failed; leaving the window without a sidebar",
+                    );
+                    report.failed += 1;
+                }
+            }
+        }
+        Ok(report)
     }
 
     fn wake_sidebar(&self, _session_name: &str, _bytes: &[u8]) -> Result<()> {

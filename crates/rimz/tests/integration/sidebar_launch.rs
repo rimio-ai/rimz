@@ -231,6 +231,13 @@ impl MuxBackend for FakeBackend {
         Ok(())
     }
 
+    fn recover_sidebars(
+        &self,
+        _opts: &SidebarPaneOptions,
+    ) -> rimz::mux::Result<rimz::mux::SidebarRecovery> {
+        Ok(rimz::mux::SidebarRecovery::default())
+    }
+
     fn wake_sidebar(&self, _session_name: &str, _bytes: &[u8]) -> rimz::mux::Result<()> {
         Ok(())
     }

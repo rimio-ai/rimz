@@ -20,7 +20,7 @@ use serde_json::Value;
 
 use super::{
     CommandSpec, MuxBackend, MuxErr, PaneCapture, PaneListOptions, Result, SessionOptions,
-    SidebarPaneOptions, SplitPaneOptions, ensure_pane_backend,
+    SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, ensure_pane_backend,
 };
 use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
@@ -287,6 +287,61 @@ impl MuxBackend for ZellijBackend {
         }
     }
 
+    fn recover_sidebars(&self, opts: &SidebarPaneOptions) -> Result<SidebarRecovery> {
+        // Zellij docks the sidebar left only at session birth, but a left pane
+        // can still be reached in a live session: split a new pane to the right,
+        // move it left, and resize it to the layout width. This never rebirths
+        // the session, so the user's working panes survive.
+        let panes = Self::list_panes_with_session(Some(&opts.session_name))?;
+        let classified: Vec<(String, bool)> = panes
+            .iter()
+            .filter(|pane| !pane.is_plugin && !pane.is_suppressed)
+            .map(|pane| (pane.tab_id.to_string(), is_sidebar_pane(pane)))
+            .collect();
+        let missing = super::views_missing_sidebar(&classified);
+        if missing.is_empty() {
+            return Ok(SidebarRecovery::default());
+        }
+
+        // The new pane steals focus, so remember each tab's focused (working)
+        // pane to restore afterwards, and the user's own invoking pane to return
+        // the visible tab to where they ran `rimz reload`.
+        let focused_in_tab: std::collections::HashMap<u64, u64> = panes
+            .iter()
+            .filter(|pane| pane.is_focused && !pane.is_plugin)
+            .map(|pane| (pane.tab_id, pane.id))
+            .collect();
+
+        let mut report = SidebarRecovery::default();
+        for tab in &missing {
+            let Ok(tab_id) = tab.parse::<u64>() else {
+                report.failed += 1;
+                continue;
+            };
+            match add_sidebar_to_tab(opts, tab_id) {
+                Ok(()) => {
+                    report.recovered += 1;
+                    if let Some(work) = focused_in_tab.get(&tab_id) {
+                        let _ = focus_terminal(&opts.session_name, *work);
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        session = %opts.session_name,
+                        tab = tab_id,
+                        error = %err,
+                        "sidebar recovery: in-place add failed; leaving the tab without a sidebar",
+                    );
+                    report.failed += 1;
+                }
+            }
+        }
+        if let Some(own) = own_zellij_pane_id() {
+            let _ = focus_terminal(&opts.session_name, own);
+        }
+        Ok(report)
+    }
+
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()> {
         // Per-instance socket fanout is the channel of record. The broadcast
         // `zellij pipe` here is a latency optimization on top.
@@ -454,6 +509,168 @@ fn create_session_with_sidebar(opts: &SidebarPaneOptions) -> Result<()> {
     Ok(())
 }
 
+/// A live, non-plugin sidebar pane is one Zellij still titles with the layout's
+/// [`SIDEBAR_PANE_NAME`] — the same signal `session_has_healthy_sidebar` trusts.
+fn is_sidebar_pane(pane: &RawPane) -> bool {
+    !pane.is_plugin && pane.title.as_deref() == Some(SIDEBAR_PANE_NAME)
+}
+
+/// `ZELLIJ_PANE_ID` is the bare integer of the pane the caller runs in. `rimz
+/// reload` runs in the user's pane, so refocusing it restores their visible tab.
+fn own_zellij_pane_id() -> Option<u64> {
+    env::var("ZELLIJ_PANE_ID").ok()?.trim().parse().ok()
+}
+
+/// `zellij --session <name> action <verb> …` — the same session-scoped action
+/// form the pane listing and wakeup fanout use, so recovery works whether or not
+/// the caller is attached.
+fn zellij_action(session: &str) -> CommandSpec {
+    CommandSpec::new("zellij").args([
+        "--session".to_owned(),
+        session.to_owned(),
+        "action".to_owned(),
+    ])
+}
+
+fn focus_terminal(session: &str, raw_id: u64) -> Result<()> {
+    zellij_action(session)
+        .args(["focus-pane-id".to_owned(), format!("terminal_{raw_id}")])
+        .run()
+        .map(|_| ())
+}
+
+/// Inject a left-docked sidebar into a live tab without a rebirth: split a pane
+/// to the right, move it left, then resize it toward the layout width.
+fn add_sidebar_to_tab(opts: &SidebarPaneOptions, tab_id: u64) -> Result<()> {
+    let new_pane = new_sidebar_pane(opts, tab_id)?;
+    zellij_action(&opts.session_name)
+        .args([
+            "move-pane".to_owned(),
+            "left".to_owned(),
+            "--pane-id".to_owned(),
+            new_pane.clone(),
+        ])
+        .run()?;
+    resize_sidebar_toward(&opts.session_name, tab_id, &new_pane, opts.width_percent);
+    Ok(())
+}
+
+/// `new-pane` to the right of the tab's focus, titled and `close_on_exit` to
+/// match the layout, running the same `rimz sidebar serve` command. Returns the
+/// created pane id Zellij prints (e.g. `terminal_58`).
+fn new_sidebar_pane(opts: &SidebarPaneOptions, tab_id: u64) -> Result<String> {
+    let args: Vec<String> = vec![
+        "new-pane".to_owned(),
+        "--direction".to_owned(),
+        "right".to_owned(),
+        "--tab-id".to_owned(),
+        tab_id.to_string(),
+        "--name".to_owned(),
+        SIDEBAR_PANE_NAME.to_owned(),
+        "--close-on-exit".to_owned(),
+        "--cwd".to_owned(),
+        opts.cwd.to_string_lossy().into_owned(),
+        "--".to_owned(),
+        opts.rimz_bin.to_string_lossy().into_owned(),
+        "sidebar".to_owned(),
+        "serve".to_owned(),
+        "--mux".to_owned(),
+        "zellij".to_owned(),
+        "--workspace-id".to_owned(),
+        opts.workspace_id.as_str().to_owned(),
+        "--session-name".to_owned(),
+        opts.session_name.clone(),
+    ];
+    let output = zellij_action(&opts.session_name).args(args).run()?;
+    let pane_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if pane_id.is_empty() {
+        return Err(MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: "new-pane returned no pane id".to_owned(),
+        });
+    }
+    Ok(pane_id)
+}
+
+/// Shrink a freshly-split sidebar (born at ~50%) toward the layout's width
+/// percentage, landing on the width *closest* to the target. The resize step is
+/// coarse, so the target usually falls between two reachable widths; stopping at
+/// the first width at or below it can overshoot, so when the prior (above-target)
+/// width was closer we step back up one. Bounded and best-effort: it stops at
+/// the target, when a step makes no progress (hit a minimum), or after
+/// [`RESIZE_MAX_STEPS`] — never a dead loop. Width is cosmetic, so any failure
+/// just leaves the wider pane.
+fn resize_sidebar_toward(session: &str, tab_id: u64, pane_id: &str, width_percent: u16) {
+    const RESIZE_MAX_STEPS: u32 = 16;
+    let Some(target_raw) = parse_terminal_id(pane_id) else {
+        return;
+    };
+    let mut last_cols = u64::MAX;
+    for _ in 0..RESIZE_MAX_STEPS {
+        let Some((cols, total)) = sidebar_and_tab_cols(session, tab_id, target_raw) else {
+            return;
+        };
+        if total == 0 {
+            return;
+        }
+        let target = (total * u64::from(width_percent.clamp(10, 90)) / 100).max(1);
+        if cols <= target {
+            // Reached/overshot the target. If the previous, above-target width
+            // was closer than this one, the last decrease overshot — step back.
+            if last_cols != u64::MAX
+                && last_cols.saturating_sub(target) < target.saturating_sub(cols)
+            {
+                let _ = resize_sidebar_step(session, pane_id, "increase");
+            }
+            return;
+        }
+        if cols >= last_cols {
+            return; // no progress (hit a minimum) — stop rather than spin.
+        }
+        last_cols = cols;
+        if resize_sidebar_step(session, pane_id, "decrease").is_err() {
+            return;
+        }
+    }
+}
+
+fn resize_sidebar_step(session: &str, pane_id: &str, direction: &str) -> Result<()> {
+    zellij_action(session)
+        .args([
+            "resize".to_owned(),
+            direction.to_owned(),
+            "right".to_owned(),
+            "--pane-id".to_owned(),
+            pane_id.to_owned(),
+        ])
+        .run()
+        .map(|_| ())
+}
+
+/// Current column width of `target_raw` and the total columns of its tab (the
+/// sum across the tab's panes — exact for the sidebar-plus-terminal row the
+/// recovery produces). `None` when the pane has vanished or carries no geometry.
+fn sidebar_and_tab_cols(session: &str, tab_id: u64, target_raw: u64) -> Option<(u64, u64)> {
+    let panes = ZellijBackend::list_panes_with_session(Some(session)).ok()?;
+    let mut total = 0;
+    let mut current = None;
+    for pane in panes
+        .iter()
+        .filter(|pane| !pane.is_plugin && !pane.is_suppressed && pane.tab_id == tab_id)
+    {
+        let cols = pane.pane_columns?;
+        total += cols;
+        if pane.id == target_raw {
+            current = Some(cols);
+        }
+    }
+    Some((current?, total))
+}
+
+fn parse_terminal_id(pane_id: &str) -> Option<u64> {
+    pane_id.strip_prefix("terminal_")?.parse().ok()
+}
+
 /// Block until Zellij has materialized the sidebar + terminal panes the layout
 /// describes, so the caller's temp layout file stays on disk long enough to be
 /// read. Bounded and best-effort: a slow or failed materialization just means
@@ -483,6 +700,10 @@ struct RawPane {
     #[serde(default)]
     is_focused: bool,
     tab_id: u64,
+    /// Column width of the pane, used by in-place sidebar recovery to resize a
+    /// freshly-split sidebar toward the layout's width percentage.
+    #[serde(default)]
+    pane_columns: Option<u64>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]

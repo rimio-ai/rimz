@@ -29,7 +29,7 @@ use rimz::mux::{MuxBackend, SessionOptions, SidebarPaneOptions};
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, RuntimePaths, StatePaths, WorkspaceRecord};
 
-const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
+pub(crate) const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
 
 /// Entry point used by `main.rs`.
 pub fn dispatch() -> Result<()> {
