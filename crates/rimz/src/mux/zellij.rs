@@ -175,7 +175,7 @@ impl MuxBackend for ZellijBackend {
         let session_name = opts.session_name.unwrap_or_default();
         Ok(raws
             .into_iter()
-            .filter(|p| p.is_terminal())
+            .filter(RawPane::is_live_terminal)
             .map(|p| PaneRef {
                 pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", p.id)),
                 session_name: session_name.clone(),
@@ -690,6 +690,10 @@ struct RawPane {
     is_plugin: bool,
     #[serde(default)]
     is_held: bool,
+    /// Command has exited but Zellij still shows the pane (e.g. hold-on-close).
+    /// A dead pane, not a live process — excluded from the pane listing.
+    #[serde(default)]
+    exited: bool,
     #[serde(default)]
     is_suppressed: bool,
     #[serde(default)]
@@ -725,6 +729,15 @@ impl RawPane {
     /// sidebar recovery, and column math.
     fn is_terminal(&self) -> bool {
         !self.is_plugin && !self.is_suppressed
+    }
+
+    /// A terminal pane hosting a live command. Excludes held/exited corpses so a
+    /// dead command never renders a row, and so that — since a live pane always
+    /// reports a command — a missing command reads unambiguously as a raced
+    /// (degraded) `list-panes` answer the caller can hold the last good list
+    /// against rather than flashing an anonymous process row.
+    fn is_live_terminal(&self) -> bool {
+        self.is_terminal() && !self.is_held && !self.exited
     }
 
     fn command(&self) -> Option<String> {
@@ -920,6 +933,26 @@ mod tests {
         assert!(parsed[0].is_focused);
         assert!(parsed[1].is_plugin);
         assert!(!parsed[1].is_focused);
+    }
+
+    #[test]
+    fn live_terminal_excludes_plugin_suppressed_and_dead_panes() {
+        let json = r#"[
+          {"id": 0, "is_plugin": false, "is_suppressed": false, "tab_id": 0},
+          {"id": 1, "is_plugin": true,  "is_suppressed": false, "tab_id": 0},
+          {"id": 2, "is_plugin": false, "is_suppressed": true,  "tab_id": 0},
+          {"id": 3, "is_plugin": false, "is_suppressed": false, "is_held": true, "tab_id": 0},
+          {"id": 4, "is_plugin": false, "is_suppressed": false, "exited": true, "tab_id": 0}
+        ]"#;
+        let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
+        let live: Vec<u64> = parsed
+            .iter()
+            .filter(|p| p.is_live_terminal())
+            .map(|p| p.id)
+            .collect();
+        // Only the plain live terminal pane survives; plugin, suppressed, held,
+        // and exited panes are all dropped.
+        assert_eq!(live, vec![0]);
     }
 
     #[test]
