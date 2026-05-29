@@ -9,7 +9,9 @@
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 use rimz::feed::{AgentStatus, PermissionPosture};
-use rimz::{SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarWorktreeGroup};
+use rimz::{
+    SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
+};
 
 use super::fmt::{age_short, clip, is_fresh, time_remaining};
 use super::labels::{
@@ -145,6 +147,11 @@ fn status_total(groups: &[SidebarWorktreeGroup], status: AgentStatus) -> usize {
 }
 
 fn group_header(theme: &Theme, group: &SidebarWorktreeGroup, width: usize) -> Line<'static> {
+    // The catch-all is not a worktree — render it as a dim divider, not a bold
+    // `▌` pod header, so out-of-project sessions read as "outside the project."
+    if group.kind == SidebarWorktreeKind::Workspace {
+        return workspace_divider(theme, group, width);
+    }
     let label = format!("▌{}", group.label);
     let tally = tally_text(&group.status_counts);
     let diff_text = group
@@ -185,6 +192,30 @@ fn group_header(theme: &Theme, group: &SidebarWorktreeGroup, width: usize) -> Li
     }
     if !tally.is_empty() {
         spans.push(Span::styled(tally, theme.dim()));
+    }
+    Line::from(spans)
+}
+
+/// The `workspace` catch-all (untethered scripts/CI and out-of-project shells)
+/// renders as a dim `┄ external ┄┄┄` divider rather than a bold `▌` pod header.
+/// The right-aligned tally is kept so a waiting script ask still surfaces.
+fn workspace_divider(theme: &Theme, group: &SidebarWorktreeGroup, width: usize) -> Line<'static> {
+    let tally = tally_text(&group.status_counts);
+    let head = format!("┄ {} ", group.label);
+    let tail = if tally.is_empty() {
+        String::new()
+    } else {
+        format!(" {tally}")
+    };
+    let fill = width
+        .saturating_sub(head.chars().count() + tail.chars().count())
+        .max(1);
+    let mut spans = vec![
+        Span::styled(head, theme.dim()),
+        Span::styled("┄".repeat(fill), theme.dim()),
+    ];
+    if !tally.is_empty() {
+        spans.push(Span::styled(tail, theme.dim()));
     }
     Line::from(spans)
 }

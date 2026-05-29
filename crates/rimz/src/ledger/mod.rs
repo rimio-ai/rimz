@@ -789,6 +789,7 @@ impl Ledger {
             projection.agents,
         );
         snapshot.display_name = snapshot::display_name_for(&self.inner.paths);
+        let snapshot = snapshot.with_project_root(snapshot::project_root_for(&self.inner.paths));
         Ok(snapshot)
     }
 

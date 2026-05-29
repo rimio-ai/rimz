@@ -241,18 +241,19 @@ fn phase3b_resolver_in_front_shows_chain() {
 }
 
 /// Phase 4 — a fleet across worktrees. Agents spread across `main` and
-/// `feature-migration`, plus a `workspace` script paused at a gate. Grouping
-/// and the worktree headers are implemented; the script lands in the
-/// `workspace` group because it is not tied to a worktree.
+/// `feature-migration`, plus a script paused at a gate. Grouping and the
+/// worktree headers are implemented; the script lands in the `external`
+/// catch-all (a dim `┄ external ┄┄┄` divider) because it is not tied to a
+/// worktree.
 #[test]
 fn phase4_fleet_groups_and_tallies() {
     let env = Env::new();
     if env.skip_if_sandboxed() {
         return;
     }
-    // A workspace-group script paused at a gate. The CLI always attaches the
-    // cwd worktree, so push straight to the ledger with no worktree to land it
-    // in the `workspace` group (scripts not tied to a worktree render there).
+    // A catch-all script paused at a gate. The CLI always attaches the cwd
+    // worktree, so push straight to the ledger with no worktree to land it in
+    // the `external` catch-all (scripts not tied to a worktree render there).
     push_workspace_script_ask_fixture(&env, "promote release?");
 
     let room = RoomHarness::launch(&env, MuxName::Tmux);
@@ -274,8 +275,8 @@ fn phase4_fleet_groups_and_tallies() {
         "the feature-migration worktree group renders:\n{screen}"
     );
     assert!(
-        screen.contains("▌workspace"),
-        "scripts not tied to a worktree live in the workspace group:\n{screen}"
+        screen.contains("┄ external"),
+        "scripts not tied to a worktree live in the external catch-all:\n{screen}"
     );
     assert!(
         screen.contains("promote release?"),

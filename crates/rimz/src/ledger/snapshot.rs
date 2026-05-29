@@ -88,6 +88,15 @@ pub struct SidebarSnapshot {
     /// `None`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub own_view: Option<SidebarOwnView>,
+    /// The project's canonical root. Grouping uses it to tell a project
+    /// worktree (the main checkout, or `<root>/.claude/worktrees/*`) from a
+    /// pane whose cwd sits outside the project entirely (a home shell, `/tmp`),
+    /// which folds into the `external` catch-all instead of minting its own
+    /// pod. Like `display_name`, this is workspace identity the reducer can't
+    /// read from the ledger, so the pure path leaves it `None` (every cwd keeps
+    /// per-path grouping) and the `rimz sidebar snapshot` CLI fills it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<PathBuf>,
 }
 
 /// One sidebar's view of the panes sharing its tab/window. `None` on the
@@ -270,7 +279,10 @@ impl SidebarSnapshot {
         recent_activity.sort_by_key(|activity| std::cmp::Reverse(activity.timestamp()));
 
         let display_name = workspace_id.as_str().to_owned();
-        let worktree_groups = build_worktree_groups(&agents, &needs_attention, &resolver_working);
+        // The pure reducer has no project root, so every cwd keeps per-path
+        // grouping here; callers that know the root re-fold via `with_project_root`.
+        let worktree_groups =
+            build_worktree_groups(&agents, &needs_attention, &resolver_working, None);
 
         Self {
             workspace_id,
@@ -284,7 +296,23 @@ impl SidebarSnapshot {
             agents,
             agent_hooks_ready: false,
             own_view: None,
+            project_root: None,
         }
+    }
+
+    /// Record the project root and re-fold groups so a cwd outside it lands in
+    /// the `external` catch-all instead of its own pod. Callers set this from
+    /// the workspace record after construction (the reducer can't read it),
+    /// mirroring how `display_name` is filled.
+    pub fn with_project_root(mut self, project_root: Option<PathBuf>) -> Self {
+        self.project_root = project_root;
+        self.worktree_groups = build_worktree_groups(
+            &self.agents,
+            &self.needs_attention,
+            &self.resolver_working,
+            self.project_root.as_deref(),
+        );
+        self
     }
 
     /// Apply best-effort process liveness to agent overlays that published a
@@ -302,8 +330,12 @@ impl SidebarSnapshot {
                 .is_none_or(|pid| is_alive(pid, agent.agent_process_start.as_deref()))
         });
         if self.agents.len() != previous_len {
-            self.worktree_groups =
-                build_worktree_groups(&self.agents, &self.needs_attention, &self.resolver_working);
+            self.worktree_groups = build_worktree_groups(
+                &self.agents,
+                &self.needs_attention,
+                &self.resolver_working,
+                self.project_root.as_deref(),
+            );
         }
     }
 
@@ -325,6 +357,7 @@ impl SidebarSnapshot {
             &self.needs_attention,
             &self.resolver_working,
             &panes,
+            self.project_root.as_deref(),
         );
         self
     }
@@ -395,9 +428,10 @@ fn build_worktree_groups(
     agents: &[AgentState],
     needs_attention: &[FeedItem],
     resolver_working: &[FeedItem],
+    project_root: Option<&Path>,
 ) -> Vec<SidebarWorktreeGroup> {
     let rows = rows_from_ledger(agents, needs_attention, resolver_working);
-    build_worktree_groups_from_rows(rows)
+    build_worktree_groups_from_rows(rows, project_root)
 }
 
 fn build_worktree_groups_with_panes(
@@ -405,6 +439,7 @@ fn build_worktree_groups_with_panes(
     needs_attention: &[FeedItem],
     resolver_working: &[FeedItem],
     panes: &[PaneRef],
+    project_root: Option<&Path>,
 ) -> Vec<SidebarWorktreeGroup> {
     let mut rows = Vec::new();
     let mut used_panes = BTreeSet::new();
@@ -475,7 +510,7 @@ fn build_worktree_groups_with_panes(
         rows.push(row_from_process(pane));
     }
 
-    build_worktree_groups_from_rows(rows)
+    build_worktree_groups_from_rows(rows, project_root)
 }
 
 fn push_agent_row(
@@ -525,12 +560,18 @@ fn rows_from_ledger(
     rows
 }
 
-fn build_worktree_groups_from_rows(rows: Vec<SidebarRow>) -> Vec<SidebarWorktreeGroup> {
+fn build_worktree_groups_from_rows(
+    rows: Vec<SidebarRow>,
+    project_root: Option<&Path>,
+) -> Vec<SidebarWorktreeGroup> {
     let mut by_group: BTreeMap<String, (String, SidebarWorktreeKind, Vec<SidebarRow>)> =
         BTreeMap::new();
     for row in rows {
-        let (kind, key, label) =
-            worktree_group_key(row.worktree_path.as_deref(), row.worktree_branch.as_deref());
+        let (kind, key, label) = worktree_group_key(
+            row.worktree_path.as_deref(),
+            row.worktree_branch.as_deref(),
+            project_root,
+        );
         by_group
             .entry(key)
             .and_modify(|(label, _, rows)| {
@@ -924,20 +965,28 @@ fn feed_kind_task(kind: FeedKind) -> &'static str {
 fn worktree_group_key(
     path: Option<&str>,
     branch: Option<&str>,
+    project_root: Option<&Path>,
 ) -> (SidebarWorktreeKind, String, String) {
     if let Some(path) = path.filter(|path| !path.is_empty()) {
-        let label = branch
-            .filter(|branch| !branch.is_empty())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| {
-                std::path::Path::new(path)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or(path)
-                    .to_owned()
-            });
-        return (SidebarWorktreeKind::Worktree, path.to_owned(), label);
+        // A cwd outside the project root is not one of the project's worktrees
+        // (a home shell, `/tmp`), so it folds into the `external` catch-all
+        // rather than minting its own pod. With no known root, every path keeps
+        // per-path grouping.
+        let in_project = project_root.is_none_or(|root| is_within(root, Path::new(path)));
+        if in_project {
+            let label = branch
+                .filter(|branch| !branch.is_empty())
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| {
+                    Path::new(path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or(path)
+                        .to_owned()
+                });
+            return (SidebarWorktreeKind::Worktree, path.to_owned(), label);
+        }
     }
     if let Some(branch) = branch.filter(|branch| !branch.is_empty()) {
         return (
@@ -946,11 +995,30 @@ fn worktree_group_key(
             branch.to_owned(),
         );
     }
+    // Catch-all: untethered scripts/CI and out-of-project shells. The stable
+    // grouping key stays `workspace`; the header reads `external` so it reads
+    // as "outside the project."
     (
         SidebarWorktreeKind::Workspace,
         "workspace".to_owned(),
-        "workspace".to_owned(),
+        "external".to_owned(),
     )
+}
+
+/// True when `path` is `root` itself or nested under it, compared by path
+/// components so `/home/marvinX` is not treated as under `/home/marvin`. This
+/// is a lexical test on the raw cwd the mux reported — no filesystem
+/// canonicalization — keeping the reducer pure, consistent with `worktree_matches`.
+fn is_within(root: &Path, path: &Path) -> bool {
+    let mut root_components = root.components();
+    let mut path_components = path.components();
+    loop {
+        match (root_components.next(), path_components.next()) {
+            (Some(r), Some(p)) if r == p => continue,
+            (Some(_), _) => return false,
+            (None, _) => return true,
+        }
+    }
 }
 
 fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
@@ -1302,6 +1370,7 @@ pub fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
         carryover.agents,
     );
     snapshot.display_name = display_name_for(paths);
+    let snapshot = snapshot.with_project_root(project_root_for(paths));
     Ok(snapshot)
 }
 
@@ -1319,12 +1388,18 @@ pub(crate) fn display_name_for(paths: &StatePaths) -> String {
         .unwrap_or_else(|| paths.workspace_id.as_str().to_owned())
 }
 
+pub(crate) fn project_root_for(paths: &StatePaths) -> Option<PathBuf> {
+    workspace_record::read(&paths.workspace_record)
+        .ok()
+        .map(|record| record.project_root)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::feed::FeedKind;
     use crate::ids::{MuxName, PaneId, WorkspaceId};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     fn agent(
         kind: &str,
@@ -1420,7 +1495,8 @@ mod tests {
         assert_eq!(snap.recently_answered.len(), 1);
         assert_eq!(snap.recent_activity.len(), 1);
         assert_eq!(snap.worktree_groups.len(), 1);
-        assert_eq!(snap.worktree_groups[0].label, "workspace");
+        assert_eq!(snap.worktree_groups[0].kind, SidebarWorktreeKind::Workspace);
+        assert_eq!(snap.worktree_groups[0].label, "external");
         assert_eq!(snap.worktree_groups[0].rows.len(), 2);
     }
 
@@ -1727,6 +1803,90 @@ mod tests {
         assert_eq!(row.name, "zsh");
         assert_eq!(row.status, None);
         assert!(snapshot.worktree_groups[0].status_counts.is_empty());
+    }
+
+    #[test]
+    fn is_within_compares_path_components() {
+        let root = Path::new("/home/marvin");
+        assert!(is_within(root, root));
+        assert!(is_within(root, Path::new("/home/marvin/")));
+        assert!(is_within(root, Path::new("/home/marvin/sub/dir")));
+        // A shared string prefix that is not a component boundary is outside.
+        assert!(!is_within(root, Path::new("/home/marvinX")));
+        assert!(!is_within(root, Path::new("/home/other")));
+        assert!(!is_within(root, Path::new("/")));
+    }
+
+    #[test]
+    fn out_of_project_process_folds_into_external_catch_all() {
+        let root = "/home/marvin/workspace/project-rimz/rimz";
+        let workspace = WorkspaceId::from_project_root(Path::new(root));
+        let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new())
+            .with_project_root(Some(PathBuf::from(root)))
+            .with_live_panes(vec![pane("%1", "zsh", "/home/marvin")], None);
+
+        assert_eq!(snapshot.worktree_groups.len(), 1);
+        let group = &snapshot.worktree_groups[0];
+        assert_eq!(group.kind, SidebarWorktreeKind::Workspace);
+        assert_eq!(group.key, "workspace");
+        assert_eq!(group.label, "external");
+        assert_eq!(group.rows[0].name, "zsh");
+    }
+
+    #[test]
+    fn in_project_worktree_pane_keeps_its_own_group() {
+        let root = "/repo/rimz";
+        let workspace = WorkspaceId::from_project_root(Path::new(root));
+        let worktree = "/repo/rimz/.claude/worktrees/featureX";
+        let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new())
+            .with_project_root(Some(PathBuf::from(root)))
+            .with_live_panes(vec![pane("%1", "zsh", worktree)], None);
+
+        assert_eq!(snapshot.worktree_groups.len(), 1);
+        let group = &snapshot.worktree_groups[0];
+        assert_eq!(group.kind, SidebarWorktreeKind::Worktree);
+        assert_eq!(group.key, worktree);
+        assert_eq!(group.label, "featureX");
+    }
+
+    #[test]
+    fn main_checkout_pane_is_in_project() {
+        let root = "/repo/rimz";
+        let workspace = WorkspaceId::from_project_root(Path::new(root));
+        let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new())
+            .with_project_root(Some(PathBuf::from(root)))
+            .with_live_panes(vec![pane("%1", "zsh", root)], None);
+
+        let group = &snapshot.worktree_groups[0];
+        assert_eq!(group.kind, SidebarWorktreeKind::Worktree);
+        assert_eq!(group.label, "rimz");
+    }
+
+    #[test]
+    fn component_boundary_pane_is_external() {
+        // cwd shares a string prefix with the root but not a component boundary.
+        let workspace = WorkspaceId::from_project_root(Path::new("/home/marvin"));
+        let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new())
+            .with_project_root(Some(PathBuf::from("/home/marvin")))
+            .with_live_panes(vec![pane("%1", "zsh", "/home/marvinX/repo")], None);
+
+        let group = &snapshot.worktree_groups[0];
+        assert_eq!(group.kind, SidebarWorktreeKind::Workspace);
+        assert_eq!(group.label, "external");
+    }
+
+    #[test]
+    fn no_project_root_preserves_per_path_grouping() {
+        // With no known root, an outside cwd still gets its own worktree group —
+        // the prior behavior, preserved as the safe default.
+        let workspace = WorkspaceId::from_project_root(Path::new("/repo/rimz"));
+        let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new())
+            .with_live_panes(vec![pane("%1", "zsh", "/home/marvin")], None);
+
+        let group = &snapshot.worktree_groups[0];
+        assert_eq!(group.kind, SidebarWorktreeKind::Worktree);
+        assert_eq!(group.key, "/home/marvin");
+        assert_eq!(group.label, "marvin");
     }
 
     #[test]
