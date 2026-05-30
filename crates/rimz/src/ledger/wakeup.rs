@@ -111,6 +111,15 @@ pub fn wake_sidebars_for_event(
     wake_sidebars_inner(rt, workspace_id, None, Some(event_id))
 }
 
+/// Wake every fresh sidebar after a context-sidecar write (Claude's statusline
+/// `$`/token/rate-limit update). The sidecar is not the ledger, so it fires no
+/// request/event delta on its own; this posts the same `ledger_delta` envelope
+/// the renderer folds into one refetch, so a cost change repaints within a
+/// wakeup instead of waiting for the renderer's next poll tick.
+pub fn wake_sidebars_for_context(rt: &RuntimePaths, workspace_id: &WorkspaceId) -> Result<()> {
+    wake_sidebars_inner(rt, workspace_id, None, None)
+}
+
 fn wake_sidebars_inner(
     rt: &RuntimePaths,
     workspace_id: &WorkspaceId,

@@ -95,11 +95,16 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
         return Ok(());
     };
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
+    let workspace_id = workspace.workspace_id.clone();
     let runtime =
         RuntimePaths::for_workspace(workspace.workspace_id).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
     rimz::ledger::agent_context::write(&runtime, agent.name(), session_id, &context)
         .context("writing agent-context sidecar")?;
+    // Push the update so the `$`/token figure repaints within a wakeup rather
+    // than waiting for the sidebar's next poll tick. Best-effort, like every
+    // other wakeup: a send failure never fails the statusline render.
+    let _ = rimz::ledger::wakeup::wake_sidebars_for_context(&runtime, &workspace_id);
     Ok(())
 }
 
