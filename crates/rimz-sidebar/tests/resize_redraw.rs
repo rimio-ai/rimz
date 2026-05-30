@@ -27,9 +27,10 @@ const TICK_SECONDS: u64 = 5;
 const REDRAW_BUDGET: Duration = Duration::from_secs(2);
 
 /// A throwaway `rimz` whose `sidebar snapshot`/`heartbeat` calls fail fast, so
-/// the serve loop renders its degraded placeholder. That frame still carries
-/// the degraded banner we scan for — no real ledger needed to prove the loop
-/// redrew at the new size.
+/// the serve loop keeps rendering its placeholder snapshot — no real ledger or
+/// mux needed to prove the loop redrew at the new size. The placeholder's
+/// top-border title is the workspace name ([`WORKSPACE_ID`]), which is the
+/// marker we scan for.
 fn failing_rimz_stub(dir: &std::path::Path) -> PathBuf {
     let path = dir.join("rimz-stub");
     std::fs::write(&path, "#!/bin/sh\nexit 1\n").expect("write stub");
@@ -45,6 +46,15 @@ fn failing_rimz_stub(dir: &std::path::Path) -> PathBuf {
 /// (ratatui interleaves control codes between glyphs).
 const GRID_ROWS: u16 = 40;
 const GRID_COLS: u16 = 120;
+
+/// The workspace name the sidebar paints into its top-border title on *every*
+/// frame — before any `sidebar snapshot` fetch resolves and regardless of fetch
+/// health. We scan for this rather than the degraded alert banner: the banner is
+/// debounced behind several consecutive failures and so can't appear until a
+/// later tick, whereas the title proves the loop repainted at the new size the
+/// instant the resize redraw runs. At the 1x1 start size it can't fit in the
+/// border, so it stays absent until the resize.
+const WORKSPACE_ID: &str = "ws_0123456789abcdef01234567";
 
 #[test]
 fn sidebar_redraws_at_new_size_on_resize() {
@@ -80,7 +90,7 @@ fn sidebar_redraws_at_new_size_on_resize() {
         "--mux",
         "zellij",
         "--workspace-id",
-        "ws_0123456789abcdef01234567",
+        WORKSPACE_ID,
         "--session-name",
         "rimz-resize-test",
         "--tick-seconds",
@@ -116,8 +126,8 @@ fn sidebar_redraws_at_new_size_on_resize() {
             .unwrap()
             .screen()
             .contents()
-            .contains("Sidebar degraded"),
-        "content should not be visible before the pane is given a usable size",
+            .contains(WORKSPACE_ID),
+        "the title should not fit before the pane is given a usable size",
     );
 
     // Attach: Zellij sizes the pane. Measure how long until the full frame shows.
@@ -139,7 +149,7 @@ fn sidebar_redraws_at_new_size_on_resize() {
             .unwrap()
             .screen()
             .contents()
-            .contains("Sidebar degraded")
+            .contains(WORKSPACE_ID)
         {
             latency = Some(resized_at.elapsed());
             break;
