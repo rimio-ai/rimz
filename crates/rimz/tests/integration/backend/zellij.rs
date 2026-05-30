@@ -1138,9 +1138,27 @@ fn assert_sidebar_is_left_thirty_percent(xdg: &Path, session: &str) {
     );
 }
 
-/// `open_background_view` opens a dedicated, named tab laying out every pane of
-/// a managed view, and is idempotent on that tab name: a second call is a no-op.
-/// Two panes (one `keep_open`) exercise the real Zellij multi-pane layout.
+/// A `BackgroundViewOptions` for a session whose host is a long-lived `sleep`
+/// and whose sidebar runs the alive-keeping `stub`, so the launched tab is a
+/// faithful `sidebar | host`.
+fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundViewOptions {
+    rimz::mux::BackgroundViewOptions {
+        name: "rimz-rc".to_owned(),
+        host: vec!["sleep".to_owned(), "120".to_owned()],
+        host_cwd: std::env::temp_dir(),
+        sidebar: SidebarPaneOptions {
+            session_name: session.to_owned(),
+            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgview")),
+            cwd: std::env::temp_dir(),
+            width_percent: 30,
+            rimz_bin: stub.to_path_buf(),
+            replace_existing: false,
+        },
+    }
+}
+
+/// `open_background_view` opens a dedicated, named tab born `sidebar | host`, and
+/// is idempotent on that tab name: a second call launches nothing.
 #[test]
 fn open_background_view_creates_named_tab_idempotently() {
     require_zellij!();
@@ -1148,22 +1166,9 @@ fn open_background_view_creates_named_tab_idempotently() {
     let name = unique_session_name("bgview");
     let session = ZellijSession::spawn(&name);
     let backend = ZellijBackend::with_runtime_dir(session.xdg.path());
+    let (_stub_dir, stub) = sidebar_command_stub();
 
-    let opts = rimz::mux::BackgroundViewOptions {
-        session_name: name.clone(),
-        cwd: std::env::temp_dir(),
-        name: "rimz-rc".to_owned(),
-        panes: vec![
-            rimz::mux::BackgroundViewPane {
-                command: vec!["sleep".to_owned(), "120".to_owned()],
-                keep_open: false,
-            },
-            rimz::mux::BackgroundViewPane {
-                command: vec!["sleep".to_owned(), "121".to_owned()],
-                keep_open: true,
-            },
-        ],
-    };
+    let opts = background_view_opts(&name, &stub);
 
     let first = backend.open_background_view(&opts).expect("first launch");
     assert_eq!(first, rimz::mux::BackgroundViewLaunch::Launched);
@@ -1192,18 +1197,10 @@ fn open_background_view_keeps_focus_off_the_host_tab() {
 
     let name = unique_session_name("bgfocus");
     let session = ZellijSession::spawn(&name);
+    let (_stub_dir, stub) = sidebar_command_stub();
 
-    let opts = rimz::mux::BackgroundViewOptions {
-        session_name: name.clone(),
-        cwd: std::env::temp_dir(),
-        name: "rimz-rc".to_owned(),
-        panes: vec![rimz::mux::BackgroundViewPane {
-            command: vec!["sleep".to_owned(), "120".to_owned()],
-            keep_open: false,
-        }],
-    };
     ZellijBackend::with_runtime_dir(session.xdg.path())
-        .open_background_view(&opts)
+        .open_background_view(&background_view_opts(&name, &stub))
         .expect("open_background_view");
     assert!(
         wait_for_tab_named(session.xdg.path(), &name, "rimz-rc"),

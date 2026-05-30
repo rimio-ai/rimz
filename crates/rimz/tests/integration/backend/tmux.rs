@@ -217,31 +217,35 @@ fn list_panes_with_session_returns_terminals() {
     );
 }
 
-/// `open_background_view` opens a dedicated, named window laying out every pane
-/// of a managed view, and is idempotent on that window name: a second call is a
-/// no-op. Two panes (one `keep_open`) exercise the real tmux new-window +
-/// split-window path.
+/// `open_background_view` opens a dedicated, named window for the host; the
+/// session's `after-new-window` hook (installed by `open_sidebar`, as `rimz
+/// start` does) docks the global sidebar on its left, so the window is born
+/// `sidebar | host`. Idempotent on the window name: a second call launches
+/// nothing.
 #[test]
 fn open_background_view_creates_named_window_idempotently() {
     require_tmux!();
 
     let server = TmuxServer::new();
     server.ensure_with_shell("rimz-bgview");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = SidebarPaneOptions {
+        session_name: "rimz-bgview".to_owned(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgview")),
+        cwd: std::env::temp_dir(),
+        width_percent: 30,
+        rimz_bin: stub,
+        replace_existing: false,
+    };
+    // Install the `after-new-window` sidebar hook the way `rimz start` does
+    // before launching the host.
+    server.backend.open_sidebar(&sidebar).expect("open_sidebar");
 
     let opts = rimz::mux::BackgroundViewOptions {
-        session_name: "rimz-bgview".to_owned(),
-        cwd: std::env::temp_dir(),
         name: "rimz-rc".to_owned(),
-        panes: vec![
-            rimz::mux::BackgroundViewPane {
-                command: vec!["sleep".to_owned(), "120".to_owned()],
-                keep_open: false,
-            },
-            rimz::mux::BackgroundViewPane {
-                command: vec!["sleep".to_owned(), "121".to_owned()],
-                keep_open: true,
-            },
-        ],
+        host: vec!["sleep".to_owned(), "120".to_owned()],
+        host_cwd: std::env::temp_dir(),
+        sidebar,
     };
 
     let first = server
@@ -257,7 +261,7 @@ fn open_background_view_creates_named_window_idempotently() {
         "expected a rimz-rc window after launch, got {:?}",
         server.window_names("rimz-bgview"),
     );
-    // The split landed: the rimz-rc window holds both panes.
+    // Born `sidebar | host`: the hook-docked sidebar beside the host pane.
     let rc_panes = server
         .backend
         .list_panes(rimz::mux::PaneListOptions {
@@ -267,7 +271,7 @@ fn open_background_view_creates_named_window_idempotently() {
         .into_iter()
         .filter(|pane| pane.view_name.as_deref() == Some("rimz-rc"))
         .count();
-    assert_eq!(rc_panes, 2, "rimz-rc window should hold both panes");
+    assert_eq!(rc_panes, 2, "rimz-rc window should be born sidebar | host");
 
     let second = server
         .backend

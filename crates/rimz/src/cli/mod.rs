@@ -28,8 +28,7 @@ use rimz::ids::MuxName;
 use rimz::ledger::paths::workspaces_dir;
 use rimz::ledger::workspace_record;
 use rimz::mux::{
-    BackgroundViewLaunch, BackgroundViewOptions, BackgroundViewPane, MuxBackend, SessionOptions,
-    SidebarPaneOptions,
+    BackgroundViewLaunch, BackgroundViewOptions, MuxBackend, SessionOptions, SidebarPaneOptions,
 };
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, RuntimePaths, StatePaths, WorkspaceRecord};
@@ -690,22 +689,40 @@ fn maybe_launch_remote_control(
 ) {
     rimz::remote_control::ensure_codex_daemon(config);
 
-    let panes = remote_control_panes(config, which::which("claude").is_ok());
-    if panes.is_empty() {
+    let Some(host) = remote_control_host(config, which::which("claude").is_ok()) else {
         return;
-    }
-    let host_count = panes.len();
+    };
+    // The background view is born `sidebar | host`, so it carries the same global
+    // sidebar the working view runs (same session, workspace, and `rimz` bin).
+    // The sidebar renders from the worktree, the host from the project root.
+    let rimz_bin = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(err) => {
+            tracing::warn!(
+                session = %workspace.session_name,
+                error = %err,
+                "remote-control auto-launch skipped because current executable is unavailable",
+            );
+            return;
+        }
+    };
     let opts = BackgroundViewOptions {
-        session_name: workspace.session_name.clone(),
-        cwd: workspace.project_root.clone(),
         name: rimz::remote_control::VIEW_NAME.to_owned(),
-        panes,
+        host,
+        host_cwd: workspace.project_root.clone(),
+        sidebar: SidebarPaneOptions {
+            session_name: workspace.session_name.clone(),
+            workspace_id: workspace.workspace_id.clone(),
+            cwd: workspace.worktree_root.clone(),
+            width_percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
+            rimz_bin,
+            replace_existing: false,
+        },
     };
     match backend.open_background_view(&opts) {
         Ok(BackgroundViewLaunch::Launched) => tracing::info!(
             session = %workspace.session_name,
             view = rimz::remote_control::VIEW_NAME,
-            hosts = host_count,
             "launched remote-control host in a background view",
         ),
         Ok(BackgroundViewLaunch::AlreadyRunning) => tracing::debug!(
@@ -720,23 +737,17 @@ fn maybe_launch_remote_control(
     }
 }
 
-/// The remote-control panes to launch into the [`rimz::remote_control::VIEW_NAME`]
-/// view — split out pure for testing. Only Claude is a pane: a long-lived
-/// foreground host (`keep_open=false`), contributed when the `claude` toggle is
-/// on *and* `claude` is on PATH. Codex is not a pane — it is a per-user daemon
-/// ensured by [`rimz::remote_control::ensure_codex_daemon`].
-fn remote_control_panes(
+/// The remote-control host argv to launch into the
+/// [`rimz::remote_control::VIEW_NAME`] view, or `None` when nothing is enabled —
+/// split out pure for testing. Only Claude is a host: a long-lived foreground
+/// process, contributed when the `claude` toggle is on *and* `claude` is on
+/// PATH. Codex is never a host — it is a per-user daemon ensured by
+/// [`rimz::remote_control::ensure_codex_daemon`].
+fn remote_control_host(
     config: &rimz::config::RemoteControlConfig,
     claude_present: bool,
-) -> Vec<BackgroundViewPane> {
-    let mut panes = Vec::new();
-    if config.claude && claude_present {
-        panes.push(BackgroundViewPane {
-            command: rimz::remote_control::claude_command(),
-            keep_open: false,
-        });
-    }
-    panes
+) -> Option<Vec<String>> {
+    (config.claude && claude_present).then(rimz::remote_control::claude_command)
 }
 
 fn run_attach_action(spec: &rimz::mux::CommandSpec, mode: AttachMode, mux: MuxName) -> Result<()> {
@@ -877,41 +888,39 @@ mod tests {
     }
 
     #[test]
-    fn remote_control_panes_carry_only_claude_when_opted_in_and_present() {
+    fn remote_control_host_is_only_claude_when_opted_in_and_present() {
         use rimz::config::RemoteControlConfig;
-        let cmds = |panes: &[BackgroundViewPane]| {
-            panes
-                .iter()
-                .map(|p| p.command.first().cloned().unwrap_or_default())
-                .collect::<Vec<_>>()
-        };
+        let program = |host: Option<Vec<String>>| host.and_then(|argv| argv.into_iter().next());
 
-        // Both off → no panes. Codex never contributes a pane (it is a per-user
+        // Both off → no host. Codex never contributes a host (it is a per-user
         // daemon, ensured separately), so the codex toggle alone yields nothing.
-        assert!(remote_control_panes(&RemoteControlConfig::default(), true).is_empty());
+        assert!(remote_control_host(&RemoteControlConfig::default(), true).is_none());
         let codex_only = RemoteControlConfig {
             claude: false,
             codex: true,
         };
-        assert!(remote_control_panes(&codex_only, true).is_empty());
+        assert!(remote_control_host(&codex_only, true).is_none());
 
-        // Claude needs both the toggle and `claude` on PATH; then one pane that
-        // closes with its process.
+        // Claude needs both the toggle and `claude` on PATH.
         let claude_only = RemoteControlConfig {
             claude: true,
             codex: false,
         };
-        assert!(remote_control_panes(&claude_only, false).is_empty());
-        let panes = remote_control_panes(&claude_only, true);
-        assert_eq!(cmds(&panes), vec!["claude"]);
-        assert!(!panes[0].keep_open, "claude host closes with its process");
+        assert!(remote_control_host(&claude_only, false).is_none());
+        assert_eq!(
+            program(remote_control_host(&claude_only, true)).as_deref(),
+            Some("claude"),
+        );
 
-        // Both toggles on → still just the Claude pane.
+        // Both toggles on → still just the Claude host.
         let both = RemoteControlConfig {
             claude: true,
             codex: true,
         };
-        assert_eq!(cmds(&remote_control_panes(&both, true)), vec!["claude"]);
+        assert_eq!(
+            program(remote_control_host(&both, true)).as_deref(),
+            Some("claude"),
+        );
     }
 
     #[test]

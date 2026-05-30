@@ -188,36 +188,28 @@ pub struct SplitPaneOptions {
     pub env: BTreeMap<String, String>,
 }
 
-/// One pane within a [`BackgroundViewOptions`] view.
-#[derive(Clone, Debug)]
-pub struct BackgroundViewPane {
-    /// Full argv (program first) to run in this pane.
-    pub command: Vec<String>,
-    /// Keep the pane after its command exits. A long-lived foreground host
-    /// (Claude Remote Control) sets `false`: an exit means the host is gone and
-    /// the pane should close. A launcher that starts a daemon and returns sets
-    /// `true`, so the pane lingers on its start receipt — or its error — instead
-    /// of vanishing instantly.
-    pub keep_open: bool,
-}
-
-/// Options for launching one or more managed commands into a single dedicated,
-/// named *view* of a session — a tmux window or a Zellij tab — out of the
-/// user's focus. Generic on purpose: the mux layer never names the commands it
-/// hosts, so this serves any "run these alongside the room, tucked aside,
-/// exactly once" need (today, the Claude and Codex remote-control hosts, side
-/// by side in one view).
+/// Options for launching the managed remote-control host into a single
+/// dedicated, named *view* of a session — a tmux window or a Zellij tab — out of
+/// the user's focus. The view is born with the global sidebar docked on its left
+/// and the host on its right, mirroring the working tab's `sidebar | shell`
+/// shape, so the host is always reachable and never traps the user in a bare
+/// pane. Today this hosts the Claude Remote Control host; Codex is a per-user
+/// daemon, never a pane.
 #[derive(Clone, Debug)]
 pub struct BackgroundViewOptions {
-    pub session_name: String,
-    /// Working directory the view's panes run in.
-    pub cwd: PathBuf,
     /// View name. Doubles as the idempotency key: a live view by this name in
     /// the session suppresses a relaunch.
     pub name: String,
-    /// Panes to lay out in the view, in order (at least one). All share the
-    /// view's [`cwd`](Self::cwd).
-    pub panes: Vec<BackgroundViewPane>,
+    /// Host argv (program first) — the command the view hosts on its right.
+    pub host: Vec<String>,
+    /// Working directory the host runs in. The Claude host runs from the project
+    /// root so `--spawn=worktree` carves new sessions off the canonical repo, not
+    /// the current worktree — so this differs from the sidebar's worktree cwd.
+    pub host_cwd: PathBuf,
+    /// The global sidebar docked on the view's left. Carries the session name
+    /// (which is also the view's session), the workspace identity, the width, and
+    /// the `rimz` bin the sidebar renderer runs.
+    pub sidebar: SidebarPaneOptions,
 }
 
 /// Outcome of [`MuxBackend::open_background_view`].
@@ -253,11 +245,12 @@ pub trait MuxBackend: Send + Sync {
     /// and skipped — never retried, never a session rebirth. Unlike
     /// [`Self::open_sidebar`], this never deletes or recreates the session.
     fn recover_sidebars(&self, opts: &SidebarPaneOptions) -> Result<SidebarRecovery>;
-    /// Launch the `opts.panes` commands in one dedicated, named background view
-    /// (tmux window / Zellij tab) of an existing session, out of the user's
-    /// focus. Idempotent: a second call while a view of that name is present is
-    /// a no-op (and never adds panes to it). The view never gates correctness —
-    /// a failure here leaves the room intact.
+    /// Launch the `opts.host` command in one dedicated, named background view
+    /// (tmux window / Zellij tab) of an existing session, born `sidebar | host`
+    /// and out of the user's focus. Idempotent: a second call while a view of
+    /// that name is present launches nothing, but still returns the user's focus
+    /// to the working view so a relaunch never strands them on the host. The view
+    /// never gates correctness — a failure here leaves the room intact.
     fn open_background_view(&self, opts: &BackgroundViewOptions) -> Result<BackgroundViewLaunch>;
     /// Best-effort wakeup; sockets are the channel of record per the docs.
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()>;
