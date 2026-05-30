@@ -68,6 +68,15 @@ pretty_assertions = "1"
 portable-pty = "0.9"
 regex = "1"
 
+# Full debuginfo is the bulk of link time and on-disk artifact size for our own
+# crates, which relink constantly. `line-tables-only` keeps backtraces with
+# file/line while dropping the variable/type debuginfo a CLI never inspects;
+# `unpacked` keeps that debuginfo out of the linked image so the linker moves
+# less. Both cut the dev loop without touching correctness.
+[profile.dev]
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+
 # The integration suite spawns the `rimz` / `rimz-sidebar` binaries hundreds of
 # times; an unoptimized dependency tree (serde, clap, jiff, ratatui) dominates
 # per-spawn startup. Optimize dependencies even in dev/test builds — they

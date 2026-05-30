@@ -11,7 +11,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
+  # `-D warnings` is the deny-warnings gate. The link-arg picks mold: a
+  # `RUSTFLAGS` env overrides `[target.*].rustflags` from .cargo/config.toml
+  # (the `linker = "clang"` key there survives), so the link-arg is re-added
+  # here. mold + clang are installed per job below.
+  RUSTFLAGS: -D warnings -Clink-arg=-fuse-ld=mold
   RUST_BACKTRACE: 1
 
 jobs:
@@ -33,14 +37,17 @@ jobs:
         with:
           shared-key: rimz-ci
 
-      - name: Install cargo plugins
+      - name: Install fast linker (mold + clang)
         run: |
-          cargo install --locked cargo-nextest
-          cargo install --locked cargo-deny
-          cargo install --locked cargo-machete
-          cargo install --locked cargo-vet
-          cargo install --locked cargo-llvm-cov
-          cargo install --locked cargo-semver-checks
+          sudo apt-get update
+          sudo apt-get install -y mold clang
+
+      # Prebuilt binaries — avoids compiling six plugins from source on every
+      # cache miss (rust-cache does not cache ~/.cargo/bin).
+      - name: Install cargo plugins
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-deny,cargo-machete,cargo-vet,cargo-llvm-cov,cargo-semver-checks
 
       - name: cargo xtask ci
         run: cargo xtask ci
@@ -61,12 +68,17 @@ jobs:
         with:
           shared-key: rimz-mux
 
-      - name: Install tmux and Zellij
+      - name: Install tmux, Zellij, and the fast linker
         run: |
           sudo apt-get update
-          sudo apt-get install -y tmux
+          sudo apt-get install -y tmux mold clang
           curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz \
             | sudo tar -xz -C /usr/local/bin
+
+      - name: Install cargo-nextest (prebuilt)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
 
       - name: cargo xtask test
         run: cargo xtask test

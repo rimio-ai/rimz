@@ -210,19 +210,23 @@ Rules:
 
 The stable channel is pinned in `rust-toolchain.toml`. No Cargo.toml carries `rust-version`. Required components: `rustfmt`, `clippy`, `llvm-tools-preview`.
 
+A fast linker is required and configured per target in `.cargo/config.toml`: `clang` + `mold` on Linux, `clang` + `lld` on macOS. mold replaces the default bfd linker on the link-heavy integration-test binary, which relinks on every incremental change; it is a build-time tool only — no runtime or transitive footprint — and is the SOTA Unix linker. CI re-adds the mold link-arg to `RUSTFLAGS` because a `RUSTFLAGS` env overrides `[target.*].rustflags` while leaving the `linker` key intact.
+
 ### Quality gates
 
 Every gate runs in CI with warnings treated as errors. Local equivalent is `cargo xtask <task>`.
 
 - `cargo fmt --all -- --check` — formatting.
 - `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` — lint.
-- `cargo nextest run --workspace --all-features --locked` — test runner.
-- `cargo test --workspace --doc --locked` — doctests.
+- `cargo nextest run --workspace --all-features --locked` — test runner (the `test` task; the standalone fast signal and the mux-backend job).
+- `cargo test --workspace --doc --all-features --locked` — doctests.
 - `cargo deny check` — licence, advisory, and ban check.
 - `cargo machete` — unused dependency check.
 - `cargo vet` — supply-chain audit.
-- `cargo llvm-cov` — coverage.
+- `cargo llvm-cov nextest --workspace --all-features --locked` — coverage. This *is* the suite run inside `ci`: the tests run once, under instrumentation, instead of building and running a second uninstrumented pass.
 - `cargo semver-checks` — release-time API check.
+
+Inside `ci` the gates are ordered for speed, not listed order: the instant text gates (`fmt`, `invariants`) run first and fail fast; the metadata-only audits (`deny`, `deps`, `vet`) overlap the compile gates on their own threads; the compile gates run sequentially (`lint → coverage → doctest → semver`) because concurrent cargo builds only serialize on the target-dir lock. `ci` prints a per-gate timing summary to stderr.
 
 ### Contributor command surface
 

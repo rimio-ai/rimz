@@ -1,2 +1,27 @@
 [alias]
 xtask = "run --package xtask --"
+
+# Fast linking. The ~9k-line integration-test binary and the two bins re-link on
+# every incremental change, so the linker dominates the dev loop. mold is the
+# SOTA Unix linker (Linux); lld covers macOS, where mold is unavailable. Both
+# are build-time tools only — no runtime or transitive footprint.
+#
+# Requires `clang` + `mold` on Linux (`lld` on macOS). See
+# docs/contributing/rust-conventions.md. The `linker` key survives a `RUSTFLAGS`
+# env override (CI sets one); the link-arg here does not, so CI re-adds it to
+# `RUSTFLAGS` in .github/workflows/ci.yml.
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.aarch64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.aarch64-apple-darwin]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.x86_64-apple-darwin]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]

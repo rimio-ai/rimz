@@ -4,7 +4,7 @@
 
 The contract this suite enforces is in [DESIGN.md](../../DESIGN.md). Tests prove it before real agent integrations ship.
 
-Local runner: `cargo xtask test` (wraps `cargo nextest run`). Doctests run separately via `cargo test --workspace --doc --locked`. The full gate stack is in [rust-conventions.md](./rust-conventions.md).
+Local runner: `cargo xtask test` (wraps `cargo nextest run`). Doctests run separately via `cargo test --workspace --doc --all-features --locked`. Inside `cargo xtask ci` the suite runs once under coverage (`cargo llvm-cov nextest`), not as a second uninstrumented pass. The full gate stack is in [rust-conventions.md](./rust-conventions.md).
 
 ## M0 synthetic matrix
 
