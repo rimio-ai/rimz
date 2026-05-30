@@ -42,6 +42,14 @@ const SIDEBAR_PANE_NAME: &str = "rimz-sidebar";
 const LIST_PANES_ATTEMPTS: u32 = 3;
 const LIST_PANES_RETRY_DELAY: Duration = Duration::from_millis(50);
 
+/// Ceiling on how long `create_session_with_sidebar` holds the temp layout file
+/// on disk while waiting for Zellij to parse it (Zellij reads `--default-layout`
+/// asynchronously, after the create call returns). A *ceiling*, not a fixed
+/// wait: a healthy birth materializes the sidebar sub-second and returns at
+/// once; this only bounds the pathological case where the layout never parses,
+/// where deleting the file early births a sidebar-less session.
+const SIDEBAR_LAYOUT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Bundle reported by `rimz doctor` when the active backend is Zellij.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ZellijCapabilities {
@@ -418,10 +426,6 @@ fn is_transient_empty(stdout: &[u8]) -> bool {
     stdout.iter().all(u8::is_ascii_whitespace)
 }
 
-fn terminal_pane_count(panes: &[RawPane]) -> usize {
-    panes.iter().filter(|pane| pane.is_terminal()).count()
-}
-
 /// Liveness of a Zellij session, as reported by `zellij list-sessions`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SessionState {
@@ -531,7 +535,13 @@ fn create_session_with_sidebar(opts: &SidebarPaneOptions) -> Result<()> {
             });
         }
     }
-    wait_for_sidebar_layout(&opts.session_name);
+    if !wait_for_sidebar_layout(&opts.session_name) {
+        tracing::warn!(
+            session = %opts.session_name,
+            "sidebar layout did not materialize within the ceiling; dropping the temp \
+             layout may leave the session sidebar-less — it self-heals on the next open_sidebar",
+        );
+    }
     drop(layout);
     Ok(())
 }
@@ -698,20 +708,27 @@ fn parse_terminal_id(pane_id: &str) -> Option<u64> {
     pane_id.strip_prefix("terminal_")?.parse().ok()
 }
 
-/// Block until Zellij has materialized the sidebar + terminal panes the layout
-/// describes, so the caller's temp layout file stays on disk long enough to be
-/// read. Bounded and best-effort: a slow or failed materialization just means
-/// an earlier drop of the file.
-fn wait_for_sidebar_layout(session_name: &str) {
-    let deadline = Instant::now() + Duration::from_secs(3);
+/// Block until Zellij has materialized the layout's sidebar pane alongside a
+/// second live terminal, so the caller's temp layout file stays on disk until
+/// Zellij has demonstrably parsed it. Returns `true` once that signal appears,
+/// `false` if the [`SIDEBAR_LAYOUT_TIMEOUT`] ceiling elapses first.
+///
+/// The predicate gates on *our* `rimz-sidebar` pane (a default/fallback birth
+/// carries none) counted with the same `is_live_terminal` filter `list_panes`
+/// applies, so "materialized" here provably implies the caller's next
+/// `list_panes` returns the two panes — no held/exited pane slips the gate.
+fn wait_for_sidebar_layout(session_name: &str) -> bool {
+    let deadline = Instant::now() + SIDEBAR_LAYOUT_TIMEOUT;
     while Instant::now() < deadline {
         if let Ok(panes) = ZellijBackend::list_panes_with_session(Some(session_name))
-            && terminal_pane_count(&panes) >= 2
+            && panes.iter().any(is_sidebar_pane)
+            && panes.iter().filter(|pane| pane.is_live_terminal()).count() >= 2
         {
-            return;
+            return true;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+    false
 }
 
 /// Subset of fields `zellij action list-panes -j -a` emits. We deserialize
