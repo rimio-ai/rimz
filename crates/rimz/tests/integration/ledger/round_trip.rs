@@ -615,3 +615,79 @@ fn moved_on_expiry_clears_native_ui_asks_but_spares_bridge() {
         "expiry is audited as agent_moved_on",
     );
 }
+
+#[test]
+fn runtime_projection_reads_under_the_workspace_lock() {
+    // The sidebar's read projection must take the workspace lock for its read,
+    // so a concurrent writer's half-written trailing event-log record is never
+    // observed as a torn record and silently dropped — the race that flashed a
+    // live agent as a bare `process` row that vanished next tick. Proven by
+    // holding the lock and confirming the projection blocks until it frees: a
+    // second flock acquire conflicts even within one process.
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let h = crate::common::Harness::new();
+
+    // One committed agent, so a clean projection has an agent to lose.
+    let obs = rimz::agents::AgentLifecycleObservation {
+        agent_id: Some("agent-1".to_owned()),
+        status: rimz::feed::AgentStatus::Idle,
+        permission_posture: Some(rimz::feed::PermissionPosture::Default),
+        plan_mode: None,
+        agent_pid: None,
+        agent_process_start: None,
+        runtime_owner: None,
+        worktree_path: Some("/repo/main".to_owned()),
+        worktree_branch: Some("main".to_owned()),
+        task: None,
+        model: None,
+        effort: None,
+        context_pct: None,
+        total_tokens: None,
+        todo_done: None,
+        todo_total: None,
+        pane_id: None,
+    };
+    let envelope = EventEnvelope::agent_lifecycle(
+        h.workspace_id.clone(),
+        "rimz-test",
+        "claude",
+        "SessionStart",
+        &obs,
+    );
+    h.ledger.append_event(&envelope).expect("append agent");
+
+    // Hold the lock; the projection cannot acquire it until we release.
+    let guard = rimz::ledger::lock::WorkspaceLock::acquire(h.ledger.workspace_lock_path())
+        .expect("hold workspace lock");
+
+    let ledger = h.ledger.clone();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (result_tx, result_rx) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal start");
+        let projection = ledger.runtime_projection(rimz::RuntimeScope::Runtime);
+        let _ = result_tx.send(projection.map(|p| p.agents.len()));
+    });
+
+    // Once the reader is running, the projection must stay blocked behind the
+    // held lock; a lock-free regression would deliver a (possibly torn) result.
+    started_rx.recv().expect("reader started");
+    assert!(
+        result_rx.recv_timeout(Duration::from_millis(300)).is_err(),
+        "runtime_projection returned while the workspace lock was held — it is reading lock-free",
+    );
+
+    // Release; the projection completes and still sees the committed agent.
+    drop(guard);
+    let agents = result_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("projection completes once the lock frees")
+        .expect("projection succeeds");
+    assert_eq!(
+        agents, 1,
+        "the committed agent survives the serialized read"
+    );
+    reader.join().expect("reader thread");
+}

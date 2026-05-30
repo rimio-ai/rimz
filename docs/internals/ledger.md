@@ -56,6 +56,7 @@ Rules:
 - Resolutions take the workspace lock, then CAS on `status = pending`. First valid writer wins.
 - `events.log.jsonl` uses length-prefixed framing with `fsync` per record.
 - A torn trailing record at SIGKILL is skipped on rebuild and logged.
+- Rollup reads serialize against writers: `runtime_projection` (behind `rimz sidebar snapshot`, `feed list`, and `doctor`) takes the workspace lock for its read, so a writer's half-written trailing frame is never observed as a torn record and dropped. The torn-trailing skip then fires only for a genuine crash corpse, never a live concurrent append — which would otherwise blink an agent out of the rollup for one tick and flash its live pane as a bare `process` row.
 - `rimz workspace rotate-events` archives the active log into `events.log.archive/events.<uuidv7>.jsonl` once it exceeds the operator-supplied byte threshold (default `64MiB`); UUIDv7 filenames sort chronologically. The same command prunes archives older than `--archive-older-than`.
 - Before rename, the agent rollup of the rotating log is merged into `agents.carryover.json`. The snapshot reducer loads carryover and lets newer in-log observations override; this keeps the sidebar's agent panel correct across rotations without rescanning archives.
 - Every feed file carries `workspace_id`, `request_id`, nonce, resolver id, and timestamps.

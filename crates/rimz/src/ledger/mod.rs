@@ -341,10 +341,26 @@ impl Ledger {
         Ok(abandoned.len())
     }
 
+    /// Project the live runtime state (feed items + event-log agent rollup).
+    ///
+    /// Reads under the workspace lock. Every writer appends a framed event-log
+    /// record while holding this lock, and a record is one `write_all` of
+    /// `len ' ' json '\n'`. A lock-free reader could observe the length prefix
+    /// before the body and newline land, so `event_log::read_all` would treat
+    /// the in-flight record as a torn trailing record and silently skip it —
+    /// momentarily dropping an agent's only/latest lifecycle event from the
+    /// rollup, which un-links its live pane and flashes it as a bare `process`
+    /// row until the next read. Holding the lock serializes against writers, so
+    /// the reader only ever sees committed records and the torn-trailing skip
+    /// fires solely for genuine crash corpses (a SIGKILLed writer's flock
+    /// auto-releases). Callers are top-level read entry points (`snapshot`,
+    /// `cli::doctor`, `cli::feed list`) that hold no lock, so this never
+    /// re-enters the non-reentrant flock.
     pub fn runtime_projection(
         &self,
         scope: runtime::RuntimeScope,
     ) -> Result<runtime::RuntimeProjection> {
+        let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
         let items = feed_store::list(&self.inner.paths.feed_dir)?;
         let events = event_log::read_all(&self.inner.paths.events_log)?;
         let carryover = snapshot::read_carryover(&self.inner.paths.agents_carryover)?;

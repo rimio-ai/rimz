@@ -1,5 +1,6 @@
 //! Runtime loop for the native sidebar process.
 
+use std::collections::HashSet;
 use std::io;
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
@@ -87,6 +88,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     let mut last_snapshot: Option<SidebarSnapshot> = None;
     let mut current = placeholder_snapshot(config.workspace_id.clone());
     let mut health = Health::default();
+    let mut gate = GateState::default();
     let mut self_close = SelfCloseState::default();
     let mut ui = UiState::default();
     let mut reexec_to: Option<PathBuf> = None;
@@ -115,17 +117,22 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // First frame synchronously: nothing animates yet, so there is no loop to
     // stall, and it avoids a placeholder flash before the worker's first result.
     let mut fetched_at = Instant::now();
+    // First frame: `prev_good` is the empty placeholder, so the gate always
+    // accepts and there is no loop yet to fire a self-heal refetch — ignore
+    // `rejected` here.
     let mut should_exit = apply_fetch_outcome(
         &config,
         run_fetch(&config, &runtime, &socket_path),
         &mut last_snapshot,
         &mut current,
         &mut health,
+        &mut gate,
         &mut self_close,
         &mut ui,
         &mut terminal,
         anim_start,
-    )?;
+    )?
+    .should_exit;
 
     // One event loop. It blocks only in `recv`; the spinner advances on the
     // animation tick, input is applied in place, and a finished background fetch
@@ -150,22 +157,34 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 while let Ok(outcome) = result_rx.try_recv() {
                     latest = Some(outcome);
                 }
+                let mut rejected = false;
                 if let Some(outcome) = latest {
                     fetched_at = Instant::now();
-                    should_exit = apply_fetch_outcome(
+                    let applied = apply_fetch_outcome(
                         &config,
                         outcome,
                         &mut last_snapshot,
                         &mut current,
                         &mut health,
+                        &mut gate,
                         &mut self_close,
                         &mut ui,
                         &mut terminal,
                         anim_start,
                     )?;
+                    should_exit = applied.should_exit;
+                    rejected = applied.rejected;
                 }
                 if !should_exit && refetch_pending {
                     refetch_pending = false;
+                    request_fetch(&request_tx, &mut in_flight, &mut refetch_pending, false);
+                }
+                // A held transient regression: ask for one more read so the
+                // last-known-good cache heals to the next good frame. Single-
+                // flight bounds this to one extra run; once the escape hatch
+                // opens, the fetch is accepted and `rejected` clears, so this
+                // never spins.
+                if !should_exit && rejected {
                     request_fetch(&request_tx, &mut in_flight, &mut refetch_pending, false);
                 }
             }
@@ -397,6 +416,144 @@ const ALERT_AFTER_FAILURES: u32 = 2;
 pub struct Health {
     pub failure_streak: u32,
     pub alert: Option<Alert>,
+}
+
+/// Sticky state for the last-known-good commit gate, kept beside [`Health`] but
+/// deliberately orthogonal to it: `Health` tracks a *failed fetch*, this tracks
+/// a fetch that *succeeded but regressed transiently* and was held. `Gate`
+/// never feeds `failure_streak`/`degraded_too_long`, so a sub-second binding
+/// glitch neither flashes the degraded banner nor counts toward self-close.
+/// `reject_streak` and `rejecting_since` bound how long a regression may be held
+/// before the escape hatch releases it (see [`escape_hatch_open`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GateState {
+    pub reject_streak: u32,
+    pub rejecting_since: Option<Timestamp>,
+}
+
+/// Consecutive holds before the escape hatch accepts a regression anyway. Each
+/// reject fires one immediate self-heal refetch, so a transient rollup drop
+/// clears in a few fetch round-trips — well inside the wall-clock ceiling below
+/// — while a *genuine* agent exit (its shell pane survives) still demotes
+/// promptly.
+const ACCEPT_REGRESSION_AFTER_REJECTS: u32 = 4;
+
+/// Hard wall-clock ceiling on a hold episode — the load-bearing hatch, since a
+/// slow poll cadence could otherwise stretch the count out. Kept well under
+/// [`GIVE_UP_AFTER_DEGRADED`] so a stuck demotion surfaces long before the
+/// sidebar would consider self-closing.
+const ACCEPT_REGRESSION_AFTER: Duration = Duration::from_secs(3);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CommitDecision {
+    /// Replace the cache with the incoming snapshot.
+    Accept,
+    /// Keep the prior good snapshot; the incoming one is a transient regression.
+    KeepPrior,
+}
+
+/// Decide whether `incoming` may replace the last-known-good `prev`. Pure: the
+/// clock and the streak arrive as arguments so the escape hatch is
+/// deterministic in tests. A regression is held only while the *panel set is
+/// unchanged* and a pane that `prev` rendered as an agent (or remote-control)
+/// host now renders as a bare process — exactly the phantom-`process` flicker.
+/// Persistence, not the rollup's `agents` list, distinguishes a transient drop
+/// (recovers next read) from a genuine exit (persists until the hatch opens),
+/// because the root-cause race is the agent momentarily *leaving* that list.
+fn gate_commit(
+    prev: &SidebarSnapshot,
+    incoming: &SidebarSnapshot,
+    gate: &GateState,
+    now: Timestamp,
+) -> CommitDecision {
+    if pane_id_set(prev) != pane_id_set(incoming) {
+        // The room genuinely changed (a pane opened or closed); never hold.
+        return CommitDecision::Accept;
+    }
+    if !demotes_agentish_to_process(prev, incoming) {
+        return CommitDecision::Accept;
+    }
+    if escape_hatch_open(gate, now) {
+        return CommitDecision::Accept;
+    }
+    CommitDecision::KeepPrior
+}
+
+/// The set of live pane ids a snapshot renders a row for.
+fn pane_id_set(snapshot: &SidebarSnapshot) -> HashSet<&PaneId> {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter_map(|row| row.pane.as_ref().map(|pane| &pane.pane_id))
+        .collect()
+}
+
+/// True when some pane that `prev` rendered as an agent or remote-control host
+/// is a bare process row in `incoming` — the Agent→Process demotion the gate
+/// protects against.
+fn demotes_agentish_to_process(prev: &SidebarSnapshot, incoming: &SidebarSnapshot) -> bool {
+    let agentish: HashSet<&PaneId> = prev
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter(|row| {
+            matches!(
+                row.row_kind,
+                rimz::SidebarRowKind::Agent | rimz::SidebarRowKind::RemoteControl
+            )
+        })
+        .filter_map(|row| row.pane.as_ref().map(|pane| &pane.pane_id))
+        .collect();
+    incoming
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter(|row| row.row_kind == rimz::SidebarRowKind::Process)
+        .filter_map(|row| row.pane.as_ref().map(|pane| &pane.pane_id))
+        .any(|pane_id| agentish.contains(pane_id))
+}
+
+/// Whether a hold episode has run long enough — by count or wall-clock — to
+/// accept the regression and stop holding. Mirrors [`degraded_too_long`]'s
+/// "never freeze forever" rule for the gate.
+fn escape_hatch_open(gate: &GateState, now: Timestamp) -> bool {
+    gate.reject_streak >= ACCEPT_REGRESSION_AFTER_REJECTS
+        || gate.rejecting_since.is_some_and(|since| {
+            now.duration_since(since).as_secs() >= ACCEPT_REGRESSION_AFTER.as_secs() as i64
+        })
+}
+
+/// Overlay the last-known-good gate on a freshly computed [`RenderState`].
+///
+/// A *failed* fetch already fell back to the prior snapshot inside
+/// [`compute_next_state`], so it is never gated here. A *successful* fetch that
+/// [`gate_commit`] judges a transient regression is held: the prior good frame
+/// becomes both the rendered snapshot and the next-tick baseline
+/// (`last_snapshot`), so the cache never advances onto bad data and the next
+/// comparison is still against the last good frame. Returns the possibly-held
+/// state, the next gate state, and whether this fetch was rejected (the loop
+/// fires one self-heal refetch on a reject).
+fn apply_gate(
+    mut state: RenderState,
+    fetch_was_ok: bool,
+    prev_good: &SidebarSnapshot,
+    gate: &GateState,
+    now: Timestamp,
+) -> (RenderState, GateState, bool) {
+    if fetch_was_ok
+        && gate_commit(prev_good, &state.snapshot, gate, now) == CommitDecision::KeepPrior
+    {
+        state.snapshot = prev_good.clone();
+        state.last_snapshot = Some(prev_good.clone());
+        let next = GateState {
+            reject_streak: gate.reject_streak.saturating_add(1),
+            rejecting_since: gate.rejecting_since.or(Some(now)),
+        };
+        (state, next, true)
+    } else {
+        (state, GateState::default(), false)
+    }
 }
 
 /// Decide what to render next given the latest heartbeat + snapshot outcomes.
@@ -637,11 +794,20 @@ fn request_fetch(
     }
 }
 
-/// Fold one fetch outcome into the render state: update health, snapshot, and
-/// selection, draw the frame, and report whether the loop should exit — give up
-/// after sustained degradation, or self-close once the tab has emptied. Shared
-/// by the first synchronous frame and every background-fetch result so the
-/// recovery rules live in one place.
+/// What [`apply_fetch_outcome`] reports back to the loop: whether to exit, and
+/// whether this fetch was held as a transient regression (the loop fires one
+/// self-heal refetch so the cache reaches the next good frame).
+struct ApplyOutcome {
+    should_exit: bool,
+    rejected: bool,
+}
+
+/// Fold one fetch outcome into the render state: gate it against the
+/// last-known-good frame, update health, snapshot, and selection, draw the
+/// frame, and report whether the loop should exit — give up after sustained
+/// degradation, or self-close once the tab has emptied. Shared by the first
+/// synchronous frame and every background-fetch result so the recovery rules
+/// live in one place.
 #[allow(clippy::too_many_arguments)]
 fn apply_fetch_outcome(
     config: &ServeConfig,
@@ -649,18 +815,26 @@ fn apply_fetch_outcome(
     last_snapshot: &mut Option<SidebarSnapshot>,
     current: &mut SidebarSnapshot,
     health: &mut Health,
+    gate: &mut GateState,
     self_close: &mut SelfCloseState,
     ui: &mut UiState,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     anim_start: Instant,
-) -> Result<bool> {
-    let state = compute_next_state(
+) -> Result<ApplyOutcome> {
+    // The gate compares the incoming snapshot against the last frame we actually
+    // committed; `current` still holds it until we overwrite it below.
+    let fetch_was_ok = outcome.snapshot.is_ok();
+    let prev_good = current.clone();
+    let computed = compute_next_state(
         &config.workspace_id,
         outcome.heartbeat_err,
         outcome.snapshot,
         last_snapshot.take(),
         health,
     );
+    let (state, next_gate, rejected) =
+        apply_gate(computed, fetch_was_ok, &prev_good, gate, Timestamp::now());
+    *gate = next_gate;
     if let Some(alert) = state
         .health
         .alert
@@ -687,7 +861,10 @@ fn apply_fetch_outcome(
             reason = health.alert.as_ref().map(|alert| alert.reason.as_str()),
             "sidebar degraded too long; exiting so the pane closes and reload/attach can rebuild it",
         );
-        return Ok(true);
+        return Ok(ApplyOutcome {
+            should_exit: true,
+            rejected,
+        });
     }
 
     // Own-view (sibling count, focus) rides in on the snapshot — the CLI
@@ -706,9 +883,15 @@ fn apply_fetch_outcome(
             session = %config.session_name,
             "sidebar tab emptied; exiting so the pane closes itself",
         );
-        return Ok(true);
+        return Ok(ApplyOutcome {
+            should_exit: true,
+            rejected,
+        });
     }
-    Ok(false)
+    Ok(ApplyOutcome {
+        should_exit: false,
+        rejected,
+    })
 }
 
 /// Refresh this instance's liveness heartbeat. Written in-process — no `rimz
@@ -1773,5 +1956,187 @@ mod tests {
 
         assert_eq!(outcome, InputOutcome::focus(1));
         assert_eq!(ui.selected_index, 1);
+    }
+
+    // ---- last-known-good commit gate -------------------------------------
+
+    fn gate_now() -> Timestamp {
+        Timestamp::from_second(1_700_000_000).unwrap()
+    }
+
+    /// A snapshot whose single pane renders as a bare process row.
+    fn process_on(ws: &WorkspaceId, raw: &str) -> SidebarSnapshot {
+        snapshot_with_panes(ws, vec![pane(raw, "tab_0", false)])
+    }
+
+    #[test]
+    fn gate_accepts_first_frame_against_placeholder() {
+        let ws = workspace();
+        // The placeholder prev has no panes; the first real frame is never a
+        // regression to hold.
+        assert_eq!(
+            gate_commit(
+                &snapshot(&ws),
+                &agent_snapshot(&ws),
+                &GateState::default(),
+                gate_now()
+            ),
+            CommitDecision::Accept
+        );
+    }
+
+    #[test]
+    fn gate_holds_transient_agent_to_process_demotion() {
+        let ws = workspace();
+        // Same pane set {terminal_9}, but the agent row became a bare process —
+        // the phantom flicker. Held until the escape hatch opens.
+        assert_eq!(
+            gate_commit(
+                &agent_snapshot(&ws),
+                &process_on(&ws, "terminal_9"),
+                &GateState::default(),
+                gate_now()
+            ),
+            CommitDecision::KeepPrior
+        );
+    }
+
+    #[test]
+    fn gate_releases_demotion_after_reject_count() {
+        let ws = workspace();
+        let gate = GateState {
+            reject_streak: ACCEPT_REGRESSION_AFTER_REJECTS,
+            rejecting_since: Some(gate_now()),
+        };
+        assert_eq!(
+            gate_commit(
+                &agent_snapshot(&ws),
+                &process_on(&ws, "terminal_9"),
+                &gate,
+                gate_now()
+            ),
+            CommitDecision::Accept,
+            "a stuck demotion must surface, not freeze forever"
+        );
+    }
+
+    #[test]
+    fn gate_releases_demotion_after_timeout_but_holds_while_brief() {
+        let ws = workspace();
+        let base = 1_700_000_000;
+        let gate = GateState {
+            reject_streak: 1,
+            rejecting_since: Some(Timestamp::from_second(base).unwrap()),
+        };
+        let ceiling = ACCEPT_REGRESSION_AFTER.as_secs() as i64;
+        // Still brief: held.
+        assert_eq!(
+            gate_commit(
+                &agent_snapshot(&ws),
+                &process_on(&ws, "terminal_9"),
+                &gate,
+                Timestamp::from_second(base + ceiling - 1).unwrap()
+            ),
+            CommitDecision::KeepPrior
+        );
+        // Past the ceiling: released.
+        assert_eq!(
+            gate_commit(
+                &agent_snapshot(&ws),
+                &process_on(&ws, "terminal_9"),
+                &gate,
+                Timestamp::from_second(base + ceiling).unwrap()
+            ),
+            CommitDecision::Accept
+        );
+    }
+
+    #[test]
+    fn gate_accepts_when_the_panel_set_changes() {
+        let ws = workspace();
+        // A pane closed (the demotion is on a different id): the room genuinely
+        // changed, so accept rather than hold against a stale baseline.
+        assert_eq!(
+            gate_commit(
+                &agent_snapshot(&ws),
+                &process_on(&ws, "terminal_8"),
+                &GateState::default(),
+                gate_now()
+            ),
+            CommitDecision::Accept
+        );
+    }
+
+    #[test]
+    fn gate_accepts_a_non_regression() {
+        let ws = workspace();
+        assert_eq!(
+            gate_commit(
+                &agent_snapshot(&ws),
+                &agent_snapshot(&ws),
+                &GateState::default(),
+                gate_now()
+            ),
+            CommitDecision::Accept
+        );
+    }
+
+    #[test]
+    fn reject_holds_prior_frame_as_render_and_baseline() {
+        let ws = workspace();
+        let prior = agent_snapshot(&ws);
+        // A fresh fetch that demoted the agent on terminal_9 to a process row.
+        let computed = compute_next_state(
+            &ws,
+            None,
+            Ok(process_on(&ws, "terminal_9")),
+            Some(prior.clone()),
+            &Health::default(),
+        );
+        let (state, gate, rejected) =
+            apply_gate(computed, true, &prior, &GateState::default(), gate_now());
+        assert!(rejected);
+        // Both the rendered frame AND the next-tick baseline stay the good
+        // frame, so the cache never advances onto the demotion.
+        assert!(matches!(
+            state.snapshot.worktree_groups[0].rows[0].row_kind,
+            rimz::SidebarRowKind::Agent
+        ));
+        let baseline = state.last_snapshot.expect("baseline retained");
+        assert!(matches!(
+            baseline.worktree_groups[0].rows[0].row_kind,
+            rimz::SidebarRowKind::Agent
+        ));
+        assert_eq!(gate.reject_streak, 1);
+        assert!(gate.rejecting_since.is_some());
+        // Orthogonal to Health: a held regression is a *successful* fetch, so it
+        // never arms the degraded alert nor counts toward self-close.
+        assert!(state.health.alert.is_none());
+        assert_eq!(state.health.failure_streak, 0);
+    }
+
+    #[test]
+    fn accept_resets_the_gate() {
+        let ws = workspace();
+        let prior = agent_snapshot(&ws);
+        let computed = compute_next_state(
+            &ws,
+            None,
+            Ok(agent_snapshot(&ws)),
+            Some(prior.clone()),
+            &Health::default(),
+        );
+        // Carry a prior reject episode in; a clean accept clears it.
+        let prev_gate = GateState {
+            reject_streak: 2,
+            rejecting_since: Some(gate_now()),
+        };
+        let (state, gate, rejected) = apply_gate(computed, true, &prior, &prev_gate, gate_now());
+        assert!(!rejected);
+        assert_eq!(gate, GateState::default());
+        assert!(matches!(
+            state.snapshot.worktree_groups[0].rows[0].row_kind,
+            rimz::SidebarRowKind::Agent
+        ));
     }
 }

@@ -276,13 +276,6 @@ const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
 const SNAPSHOT_CACHE_WAIT_STEP: Duration = Duration::from_millis(20);
 const SNAPSHOT_CACHE_WAIT_STEPS: u32 = 10;
 
-/// How long a degraded `list-panes` read may reuse the last good pane list
-/// before serving the degraded read anyway. ~2 data ticks: long enough to ride
-/// out a mid-tick race that drops a live pane's command, short enough that a
-/// genuinely closed pane's row clears promptly and a persistently degraded
-/// backend self-heals rather than freezing on a stale list.
-const PANE_HOLD_MAX: Duration = Duration::from_secs(4);
-
 /// Shared, single-flight snapshot cache. Holds the ledger rollup plus the live
 /// pane list keyed to one `(workspace, session)` — the per-workspace runtime
 /// root scopes the workspace; `session_name` guards against serving one
@@ -293,13 +286,6 @@ const PANE_HOLD_MAX: Duration = Duration::from_secs(4);
 #[derive(Serialize, Deserialize)]
 struct SnapshotCache {
     produced_at_ms: u64,
-    /// When `panes` were captured. Distinct from `produced_at_ms` (the
-    /// coalescing stamp): a held-last-good read reuses an earlier list, so this
-    /// keeps the *original* capture time. Only trusted as a hold source while
-    /// `panes` are themselves non-degraded (see [`choose_panes`]). Defaulted so
-    /// a pre-field cache file still deserializes.
-    #[serde(default)]
-    panes_good_at_ms: u64,
     session_name: String,
     panes: Vec<rimz::feed::PaneRef>,
     snapshot: rimz::SidebarSnapshot,
@@ -350,36 +336,30 @@ fn produce_snapshot_base(
     Ok((rollup, panes))
 }
 
-/// A pane reading is degraded when a live terminal pane reports no command. The
-/// backends list only live panes (the Zellij backend drops held/exited panes),
-/// and a live pane always reports its command, so a missing one is a mid-tick
-/// `list-panes` race rather than a real state — the signal to hold the last good
-/// list instead of folding an anonymous process row.
-fn panes_degraded(panes: &[rimz::feed::PaneRef]) -> bool {
-    panes.iter().any(|pane| pane.command.is_none())
-}
-
-/// Pick the pane list to serve, with the capture time of the chosen list. A good
-/// fresh read always wins. A degraded fresh read falls back to a recently good
-/// cached list — one that is itself non-degraded and captured within
-/// [`PANE_HOLD_MAX`] — smoothing the race into a steady row. With no such
-/// fallback the fresh (degraded) read is served so a persistently degraded
-/// backend self-heals rather than freezing on a stale list.
-fn choose_panes(
-    fresh: Vec<rimz::feed::PaneRef>,
-    prev_good: Option<(&[rimz::feed::PaneRef], u64)>,
-    now_ms: u64,
-) -> (Vec<rimz::feed::PaneRef>, u64) {
-    if !panes_degraded(&fresh) {
-        return (fresh, now_ms);
+/// Fill any field a fresh `list-panes` read dropped, from the last good read of
+/// the same pane id. A mid-tick race occasionally returns a live pane with a
+/// null `command`/`cwd`/`pane_process_start`; left as-is that relabels a known
+/// pane as a bare `process` row or regroups it under `external` until the next
+/// read. Carrying the missing fields forward by pane id keeps the row steady,
+/// and is unbounded while the pane persists — where a whole-list hold would
+/// also mask genuinely changed panes. Scoped to the exact pane id, so a reused
+/// id (a relaunch reports its own fresh fields) is never backfilled from the
+/// prior tenant.
+fn carry_forward_pane_fields(fresh: &mut [rimz::feed::PaneRef], prev: &[rimz::feed::PaneRef]) {
+    for pane in fresh.iter_mut() {
+        let Some(prior) = prev.iter().find(|prior| prior.pane_id == pane.pane_id) else {
+            continue;
+        };
+        if pane.command.is_none() {
+            pane.command = prior.command.clone();
+        }
+        if pane.cwd.is_none() {
+            pane.cwd = prior.cwd.clone();
+        }
+        if pane.pane_process_start.is_none() {
+            pane.pane_process_start = prior.pane_process_start;
+        }
     }
-    if let Some((prev_panes, prev_good_at)) = prev_good
-        && !panes_degraded(prev_panes)
-        && now_ms.saturating_sub(prev_good_at) <= PANE_HOLD_MAX.as_millis() as u64
-    {
-        return (prev_panes.to_vec(), prev_good_at);
-    }
-    (fresh, now_ms)
 }
 
 /// Return the ledger rollup + live pane list for `session`, sharing one heavy
@@ -417,20 +397,16 @@ fn cached_base_or_produce(
             if let Some(cache) = fresh_snapshot_cache(&cache_path, session) {
                 return Ok((cache.snapshot, cache.panes));
             }
-            let (rollup, fresh) = produce_snapshot_base(ledger, mux, session)?;
-            // A mid-tick `list-panes` race can drop a live pane's command;
-            // rather than fold an anonymous `external`/`process` row that blinks
-            // out next tick, hold the last good pane list (bounded by
-            // PANE_HOLD_MAX) while still serving the fresh rollup.
-            let now_ms = unix_now_ms();
-            let prev = read_snapshot_cache(&cache_path, session);
-            let prev_good = prev
-                .as_ref()
-                .map(|cache| (cache.panes.as_slice(), cache.panes_good_at_ms));
-            let (panes, panes_good_at_ms) = choose_panes(fresh, prev_good, now_ms);
+            let (rollup, mut panes) = produce_snapshot_base(ledger, mux, session)?;
+            // A mid-tick `list-panes` race can drop a live pane's command/cwd/
+            // process-start; rather than fold an anonymous `external`/`process`
+            // row that blinks out next tick, backfill the missing fields from
+            // the last good read of the same pane id.
+            if let Some(prev) = read_snapshot_cache(&cache_path, session) {
+                carry_forward_pane_fields(&mut panes, &prev.panes);
+            }
             let cache = SnapshotCache {
-                produced_at_ms: now_ms,
-                panes_good_at_ms,
+                produced_at_ms: unix_now_ms(),
                 session_name: session.to_owned(),
                 panes: panes.clone(),
                 snapshot: rollup.clone(),
@@ -709,73 +685,55 @@ fn rimz_cli_program() -> PathBuf {
 mod tests {
     use super::*;
 
-    /// A pane with the given (optional) command; other fields are irrelevant to
-    /// the degraded/hold logic under test.
-    fn pane(command: Option<&str>) -> rimz::feed::PaneRef {
+    /// A pane with the given id, command, and cwd; other fields are irrelevant
+    /// to the carry-forward logic under test.
+    fn pane(id: &str, command: Option<&str>, cwd: Option<&str>) -> rimz::feed::PaneRef {
         rimz::feed::PaneRef {
-            pane_id: rimz::ids::PaneId::from_parts(MuxName::Zellij, "terminal_1"),
+            pane_id: rimz::ids::PaneId::from_parts(MuxName::Zellij, id),
             session_name: "s".to_owned(),
             view_id: None,
             view_kind: None,
             view_name: None,
             is_focused: false,
             command: command.map(ToOwned::to_owned),
-            cwd: Some("/tmp".to_owned()),
+            cwd: cwd.map(ToOwned::to_owned),
             pane_pid: None,
             pane_process_start: None,
         }
     }
 
     #[test]
-    fn panes_degraded_flags_any_missing_command() {
-        assert!(!panes_degraded(&[pane(Some("zsh")), pane(Some("claude"))]));
-        assert!(!panes_degraded(&[]));
-        assert!(panes_degraded(&[pane(Some("zsh")), pane(None)]));
+    fn pane_fields_carry_forward_by_pane_id() {
+        // A degraded read drops command and cwd; the last good read of the same
+        // pane id backfills them so the row keeps its agent label and worktree
+        // group instead of flashing a bare `process` under `external`.
+        let mut fresh = vec![pane("terminal_1", None, None)];
+        let prev = vec![pane("terminal_1", Some("claude"), Some("/repo"))];
+        carry_forward_pane_fields(&mut fresh, &prev);
+        assert_eq!(fresh[0].command.as_deref(), Some("claude"));
+        assert_eq!(fresh[0].cwd.as_deref(), Some("/repo"));
     }
 
     #[test]
-    fn choose_panes_keeps_a_good_fresh_read() {
-        let fresh = vec![pane(Some("claude"))];
-        let prev = vec![pane(Some("zsh"))];
-        let (chosen, at) = choose_panes(fresh, Some((prev.as_slice(), 1_000)), 5_000);
-        assert_eq!(chosen, vec![pane(Some("claude"))]);
-        assert_eq!(at, 5_000, "a good fresh read stamps the current time");
+    fn carry_forward_does_not_cross_pane_id() {
+        // A different (e.g. reused) pane id reports its own fresh fields and is
+        // never backfilled from a stranger's last-good read.
+        let mut fresh = vec![pane("terminal_2", None, None)];
+        let prev = vec![pane("terminal_1", Some("claude"), Some("/repo"))];
+        carry_forward_pane_fields(&mut fresh, &prev);
+        assert_eq!(fresh[0].command, None);
+        assert_eq!(fresh[0].cwd, None);
     }
 
     #[test]
-    fn choose_panes_holds_recent_good_over_degraded_fresh() {
-        let fresh = vec![pane(None)];
-        let prev = vec![pane(Some("claude"))];
-        let hold_ms = PANE_HOLD_MAX.as_millis() as u64;
-        // Within the hold window: serve the good list, keeping its capture time.
-        let (chosen, at) = choose_panes(fresh, Some((prev.as_slice(), 1_000)), 1_000 + hold_ms);
-        assert_eq!(chosen, vec![pane(Some("claude"))]);
-        assert_eq!(at, 1_000);
-    }
-
-    #[test]
-    fn choose_panes_drops_stale_or_degraded_fallback() {
-        let hold_ms = PANE_HOLD_MAX.as_millis() as u64;
-        // Stale good fallback (past the window) → serve the fresh degraded read.
-        let good_but_stale = vec![pane(Some("claude"))];
-        let (chosen, at) = choose_panes(
-            vec![pane(None)],
-            Some((good_but_stale.as_slice(), 1_000)),
-            1_000 + hold_ms + 1,
-        );
-        assert!(panes_degraded(&chosen));
-        assert_eq!(at, 1_000 + hold_ms + 1);
-        // Degraded fallback → never held; serve the fresh degraded read.
-        let degraded_prev = vec![pane(None)];
-        let (chosen, _) = choose_panes(
-            vec![pane(None)],
-            Some((degraded_prev.as_slice(), 4_900)),
-            5_000,
-        );
-        assert!(panes_degraded(&chosen));
-        // No fallback at all → serve the fresh degraded read.
-        let (chosen, _) = choose_panes(vec![pane(None)], None, 5_000);
-        assert!(panes_degraded(&chosen));
+    fn fresh_pane_field_wins_when_present() {
+        // A genuine handoff (claude → zsh) is a real fresh value, not a dropped
+        // field, so it is never overwritten by the prior tenant's command.
+        let mut fresh = vec![pane("terminal_1", Some("zsh"), Some("/now"))];
+        let prev = vec![pane("terminal_1", Some("claude"), Some("/repo"))];
+        carry_forward_pane_fields(&mut fresh, &prev);
+        assert_eq!(fresh[0].command.as_deref(), Some("zsh"));
+        assert_eq!(fresh[0].cwd.as_deref(), Some("/now"));
     }
 
     #[test]
@@ -915,7 +873,6 @@ mod tests {
         let ws = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let cache = SnapshotCache {
             produced_at_ms,
-            panes_good_at_ms: produced_at_ms,
             session_name: session.to_owned(),
             panes: Vec::new(),
             snapshot: rimz::SidebarSnapshot::build(ws, Vec::new(), Vec::new()),

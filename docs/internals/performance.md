@@ -24,7 +24,7 @@ The rules every performance change here follows. They are ordered: an earlier ru
 3. **Push over poll.** A change that a writer knows about posts a wakeup; the loop folds it within one wakeup. Polling is the missed-wakeup backstop, never the primary channel. When a datasource feeds the UI but is not the ledger (the statusline sidecar), give it a wakeup of its own rather than waiting for the next tick.
 4. **Cache the disposable; fsync the durable.** Crash-durability is for the event log alone (per-record `sync_data` — the correctness contract). Runtime caches — the snapshot cache, diff-stats cache, agent-context sidecar — are rebuilt next tick, so they rename atomically *without* fsync (`write_temp_then_rename_cache`). A torn read is impossible either way; only "survives a power cut" is traded, and for a next-tick-rebuilt file that buys nothing while costing two fsyncs on a path the UI waits on.
 5. **Single-flight, then coalesce.** One outstanding fetch at a time. A burst of deltas collapses to one fetch (`in_flight`); a delta that races an in-flight fetch defers exactly one follow-up (`refetch_pending`), never a queue. The same single-flight guard sits on the cache producer (`SNAPSHOT_CACHE_TTL`, 750ms) so concurrent sidebars across a fleet share one rebuild instead of stampeding.
-6. **Pay the round-trip once per window.** `list-panes` and the git probes are the snapshot's cost; bound them with a short TTL cache and reuse the last good result. A degraded read (an empty body, a live pane missing its command) holds the last good pane list rather than flashing a corrupt frame — see [sidebar.md → Degraded reads](./sidebar.md#presence-model).
+6. **Pay the round-trip once per window.** `list-panes` and the git probes are the snapshot's cost; bound them with a short TTL cache and reuse the last good result. A degraded read (an empty body, a live pane missing its command/cwd) backfills the missing fields per pane id from the last good read rather than flashing a corrupt frame, and the renderer holds the last good frame rather than commit a regression while the pane set is unchanged — see [sidebar.md → Presence model](./sidebar.md#presence-model).
 7. **Cheapest correct read.** The snapshot rebuild is O(active-events + items), never O(history); archives are touched only at rotation. Skip work that cannot matter — an idle room with no agents skips both sidecar directory scans entirely.
 
 ## Cost map
@@ -33,7 +33,7 @@ Where the milliseconds are, and what bounds each. Treat the figures as orders of
 
 | Operation | Rough cost | Bound |
 | --- | --- | --- |
-| `list-panes` (Zellij/tmux IPC) | 200–680ms, occasionally degraded mid-tick | snapshot cache (750ms TTL, single-flight); last-good hold (`PANE_HOLD_MAX`, 4s) |
+| `list-panes` (Zellij/tmux IPC) | 200–680ms, occasionally degraded mid-tick | snapshot cache (750ms TTL, single-flight); per-pane field carry-forward; render-side last-known-good gate |
 | git diff-stats per worktree | 4 sequential `git` forks (trunk ref → merge-base → branch → numstat) | diff-stats cache (`DIFF_STATS_TTL`, 5s), keyed on worktree + session |
 | snapshot rebuild | O(active-events + items) | event-log rotation caps the active log; carryover preserves the rollup |
 | `rimz pane focus` (a jump) | process spawn + mux IPC, tens–hundreds ms | off the render thread (detached); fire-and-forget |
