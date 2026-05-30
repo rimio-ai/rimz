@@ -176,16 +176,16 @@ impl MuxBackend for ZellijBackend {
         Ok(raws
             .into_iter()
             .filter(RawPane::is_live_terminal)
-            .map(|p| PaneRef {
+            .map(|mut p| PaneRef {
                 pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", p.id)),
                 session_name: session_name.clone(),
                 view_id: Some(format!("tab_{}", p.tab_id)),
                 view_kind: Some(ViewKind::Tab),
                 is_focused: p.is_focused,
-                command: p.command(),
-                cwd: p.cwd(),
                 pane_pid: p.pid(),
                 pane_process_start: p.process_start(),
+                command: p.take_command(),
+                cwd: p.take_cwd(),
             })
             .collect())
     }
@@ -740,17 +740,22 @@ impl RawPane {
         self.is_terminal() && !self.is_held && !self.exited
     }
 
-    fn command(&self) -> Option<String> {
+    /// Move the command out of the owned `RawPane` (consumed once, during
+    /// `list_panes`) rather than cloning it — `pane_command` wins, falling back
+    /// to `command`.
+    fn take_command(&mut self) -> Option<String> {
         self.pane_command
-            .clone()
-            .or_else(|| self.command.clone())
+            .take()
+            .or_else(|| self.command.take())
             .filter(|value| !value.is_empty())
     }
 
-    fn cwd(&self) -> Option<String> {
+    /// Move the cwd out of the owned `RawPane`; `pane_cwd` wins, falling back
+    /// to `cwd`.
+    fn take_cwd(&mut self) -> Option<String> {
         self.pane_cwd
-            .clone()
-            .or_else(|| self.cwd.clone())
+            .take()
+            .or_else(|| self.cwd.take())
             .filter(|value| !value.is_empty())
     }
 
