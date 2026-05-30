@@ -340,9 +340,10 @@ fn daemon_socket() -> Option<PathBuf> {
 }
 
 /// Codex's home directory: `CODEX_HOME` when set, else `~/.codex`. Mirrors the
-/// resolution Codex itself uses, so the control socket is found where the daemon
-/// places it.
-fn codex_home() -> Option<PathBuf> {
+/// resolution Codex itself uses, so the control socket — and the managed
+/// standalone install [`crate::remote_control::codex_standalone_bin`] looks for —
+/// are found where Codex places them.
+pub(crate) fn codex_home() -> Option<PathBuf> {
     if let Some(raw) = std::env::var_os("CODEX_HOME").filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(raw));
     }

@@ -7,6 +7,7 @@ use clap::Args;
 use jiff::Timestamp;
 
 use super::{GlobalFlags, open_ledger};
+use rimz::config::MachineConfig;
 use rimz::feed::AgentState;
 use rimz::ids::{MuxName, ResolverId};
 use rimz::ledger::event_log;
@@ -73,6 +74,7 @@ pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
         }
         report_sidebar_renderer();
         report_agent_hooks();
+        report_remote_control();
 
         if let Ok(ws) = &workspace {
             report_protocol_versions(ws);
@@ -351,6 +353,54 @@ impl AgentHookDoctorStatus {
             Self::NotInstalled => "not installed",
             Self::Unsupported(_) => "unsupported",
         }
+    }
+}
+
+/// Report the per-machine remote-control auto-launch posture. Codex's host has a
+/// hard precondition — the managed standalone install — that `rimz start`
+/// enforces fail-fast, so doctor surfaces the same gap and the same fix ahead of
+/// time. Claude's host is best-effort (gated on PATH), so it only warns.
+#[expect(
+    clippy::print_stdout,
+    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
+)]
+fn report_remote_control() {
+    let config = match MachineConfig::load() {
+        Ok(config) => config.remote_control,
+        Err(err) => {
+            println!("  remote control: config unavailable ({err})");
+            return;
+        }
+    };
+    if !config.claude && !config.codex {
+        println!("  remote control: off");
+        return;
+    }
+
+    let codex_standalone_missing =
+        config.codex && rimz::remote_control::codex_standalone_bin().is_none();
+    let mut parts = Vec::new();
+    if config.claude {
+        parts.push(if which::which("claude").is_ok() {
+            "claude ready".to_owned()
+        } else {
+            "claude enabled, not on PATH".to_owned()
+        });
+    }
+    if config.codex {
+        parts.push(if codex_standalone_missing {
+            "codex enabled, standalone install missing".to_owned()
+        } else {
+            "codex ready".to_owned()
+        });
+    }
+    println!("  remote control: {}", parts.join("; "));
+
+    if codex_standalone_missing {
+        println!(
+            "  remote control: `rimz start` refuses until the managed standalone Codex install exists — {}",
+            rimz::remote_control::CODEX_INSTALL_COMMAND,
+        );
     }
 }
 

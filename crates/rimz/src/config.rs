@@ -49,7 +49,7 @@ pub struct MachineConfig {
 /// — Rimz never links your account or starts a remote-control host without
 /// opt-in, so the absence of this section reads as "do nothing". Each agent has
 /// its own toggle because each links a different account and is detected
-/// independently on PATH.
+/// independently — Claude on PATH, Codex by its managed standalone install.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct RemoteControlConfig {
@@ -57,8 +57,11 @@ pub struct RemoteControlConfig {
     /// managed background view when Claude is on PATH and a workspace starts.
     pub claude: bool,
     /// Auto-launch `codex remote-control start` — the Codex app-server daemon
-    /// with remote control enabled — in the same view, when Codex is on PATH.
-    /// The daemon it brings up is the one Codex enrichment re-uses.
+    /// with remote control enabled — in the same view. `remote-control start`
+    /// boots its daemon from the managed standalone install, so when this is on
+    /// that install must be present (a `codex` on PATH alone won't do); otherwise
+    /// `rimz start` refuses fail-fast with the fix. The daemon it brings up is
+    /// the one Codex enrichment re-uses.
     pub codex: bool,
 }
 

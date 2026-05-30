@@ -18,6 +18,7 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 - **Strong types** for workspace, request, resolver, and pane IDs, and for surfaces, statuses, and protocol versions.
 - **Structured parsers** for TOML, JSON, KDL, and agent payloads.
 - **Ledger durability.** File-state writes use temp-file plus rename. Event-log writes follow the durability contract in [docs/internals/ledger.md](./docs/internals/ledger.md).
+- **Fail-fast as a precondition, not best-effort.** A configured capability that cannot work fails at the entry point with the fix — `rimz start` refuses rather than launching a degraded surface that errors downstream. Best-effort is for latency and enrichment (sidebar wakeups, app-server context), never for a precondition the user switched on.
 
 ## Product invariants
 

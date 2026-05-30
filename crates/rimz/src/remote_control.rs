@@ -1,15 +1,22 @@
 //! Remote-control auto-launch behaviour, shared by Claude and Codex.
 //!
-//! When a [`crate::config::RemoteControlConfig`] toggle is set and that agent is
-//! on PATH, `rimz start` launches its remote-control host in a single dedicated,
-//! named background view of the workspace session (a tmux window / Zellij tab):
+//! When a [`crate::config::RemoteControlConfig`] toggle is set and that agent
+//! can start its host, `rimz start` launches it in a single dedicated, named
+//! background view of the workspace session (a tmux window / Zellij tab):
 //!
 //! - **Claude** runs `claude remote-control --spawn worktree`, a long-lived
 //!   foreground host. It runs from the project root so `--spawn=worktree` carves
 //!   new on-demand sessions off the canonical repo, not the current worktree.
-//! - **Codex** runs `codex remote-control start`, which brings up the Codex
-//!   app-server daemon with remote control enabled and returns. That daemon is
-//!   the one Codex enrichment re-uses (see [`crate::agents::codex_app_server`]).
+//! - **Codex** runs `remote-control start` from the *managed standalone install*
+//!   ([`codex_standalone_bin`]), which brings up the Codex app-server daemon
+//!   with remote control enabled and returns. That daemon is the one Codex
+//!   enrichment re-uses (see [`crate::agents::codex_app_server`]).
+//!
+//! `remote-control start` boots and updates its daemon from the standalone's
+//! fixed path, so a `codex` merely on PATH (a different binary) is not enough.
+//! When the `codex` toggle is on but that install is absent, [`preflight`]
+//! refuses the start with the fix — fail-fast, rather than launching a host that
+//! only prints an install error.
 //!
 //! Both share the one [`VIEW_NAME`] view, in separate panes. Neither host is a
 //! coding agent — they have no Rimz hooks and never stamp a pane — so the
@@ -17,6 +24,10 @@
 //! host pane and [`host_label`] names it, so the snapshot reducer can give it a
 //! dedicated, pinned row instead.
 
+use std::path::{Path, PathBuf};
+
+use crate::agents::codex_app_server::codex_home;
+use crate::config::RemoteControlConfig;
 use crate::feed::PaneRef;
 
 /// View name for the managed remote-control hosts. Shared by the launcher (the
@@ -44,15 +55,95 @@ pub fn claude_command() -> Vec<String> {
     ]
 }
 
-/// The Codex remote-control argv (program first). `start` brings up the
-/// app-server daemon with remote control enabled, then returns — so the pane
+/// The Codex remote-control argv (program first), invoked through `bin` — the
+/// managed standalone install from [`codex_standalone_bin`]. `start` brings up
+/// the app-server daemon with remote control enabled, then returns — so the pane
 /// that runs it is launched `keep_open` to keep its start receipt on screen.
-pub fn codex_command() -> Vec<String> {
+/// Invoking the standalone path directly means the launch never depends on a
+/// `codex` being on PATH, and runs exactly the binary the daemon updates from.
+pub fn codex_command(bin: &Path) -> Vec<String> {
     vec![
-        "codex".to_owned(),
+        bin.to_string_lossy().into_owned(),
         "remote-control".to_owned(),
         "start".to_owned(),
     ]
+}
+
+/// The managed standalone Codex install `codex remote-control start` boots its
+/// daemon from: `$CODEX_HOME/packages/standalone/current/codex` (CODEX_HOME
+/// defaults to `~/.codex`). Returns the path only when it exists, so callers can
+/// gate on a host that can actually start. A `codex` on PATH is a different
+/// binary and does not satisfy this — see [`preflight`].
+pub fn codex_standalone_bin() -> Option<PathBuf> {
+    standalone_bin_under(&codex_home()?)
+}
+
+/// [`codex_standalone_bin`] rooted at an explicit Codex home — split out pure so
+/// tests can point at a tempdir without touching `CODEX_HOME` or `HOME`.
+fn standalone_bin_under(codex_home: &Path) -> Option<PathBuf> {
+    let bin = codex_home
+        .join("packages")
+        .join("standalone")
+        .join("current")
+        .join("codex");
+    bin.is_file().then_some(bin)
+}
+
+/// The official one-liner that installs the managed standalone Codex. Surfaced
+/// verbatim by [`PreflightError`] and `rimz doctor`, so the guidance never
+/// drifts from one place to the other.
+pub const CODEX_INSTALL_COMMAND: &str = "curl -fsSL https://chatgpt.com/codex/install.sh | sh";
+
+/// A configured remote-control host cannot start. Returned by [`preflight`] so
+/// `rimz start` refuses up front with the fix, instead of launching a doomed
+/// host. Fail-fast precondition, not best-effort: sidebar wakeups and app-server
+/// enrichment degrade silently, but a capability the user switched on does not.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PreflightError {
+    /// `[remote_control] codex = true` but the managed standalone install is
+    /// absent. The `Display` carries the full, user-facing fix.
+    CodexStandaloneMissing,
+}
+
+impl std::fmt::Display for PreflightError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CodexStandaloneMissing => write!(
+                f,
+                "Codex remote-control is enabled (`[remote_control] codex = true`) but the \
+                 managed standalone Codex install is missing.\n\
+                 `codex remote-control start` boots its app-server daemon from \
+                 `$CODEX_HOME/packages/standalone/current/codex` (CODEX_HOME defaults to \
+                 `~/.codex`); a `codex` on PATH is a different binary and does not satisfy it.\n\n\
+                 Install it with:\n    {CODEX_INSTALL_COMMAND}\n\n\
+                 then re-run, or set `[remote_control] codex = false` to disable the Codex host."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PreflightError {}
+
+/// Refuse `rimz start` when a configured remote-control host cannot possibly
+/// start, so the user gets the fix instead of a workspace built around a host
+/// that only errors. Codex's `remote-control start` requires the managed
+/// standalone install ([`codex_standalone_bin`]); when `codex` is enabled that
+/// install must exist. Claude has no such precondition — a missing `claude` is
+/// skipped at launch (best-effort), so it never blocks a start.
+pub fn preflight(config: &RemoteControlConfig) -> Result<(), PreflightError> {
+    preflight_decision(config.codex, codex_standalone_bin().is_some())
+}
+
+/// The pure preflight decision, split from [`preflight`] so the full matrix is
+/// unit-testable without touching the filesystem.
+fn preflight_decision(
+    codex_enabled: bool,
+    codex_standalone_present: bool,
+) -> Result<(), PreflightError> {
+    if codex_enabled && !codex_standalone_present {
+        return Err(PreflightError::CodexStandaloneMissing);
+    }
+    Ok(())
 }
 
 /// Whether `pane` hosts a remote-control server (Claude or Codex).
@@ -112,8 +203,59 @@ mod tests {
     }
 
     #[test]
-    fn codex_command_starts_the_daemon() {
-        assert_eq!(codex_command(), vec!["codex", "remote-control", "start"]);
+    fn codex_command_runs_the_standalone_bin() {
+        let bin = Path::new("/home/u/.codex/packages/standalone/current/codex");
+        assert_eq!(
+            codex_command(bin),
+            vec![
+                "/home/u/.codex/packages/standalone/current/codex",
+                "remote-control",
+                "start",
+            ],
+        );
+    }
+
+    #[test]
+    fn standalone_bin_resolves_only_when_the_install_exists() {
+        let home = tempfile::tempdir().expect("tempdir");
+        // Absent install → no host: `remote-control start` would only error.
+        assert!(standalone_bin_under(home.path()).is_none());
+
+        let bin = home
+            .path()
+            .join("packages")
+            .join("standalone")
+            .join("current")
+            .join("codex");
+        std::fs::create_dir_all(bin.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&bin, b"#!/bin/sh\n").expect("write");
+        assert_eq!(standalone_bin_under(home.path()), Some(bin));
+    }
+
+    #[test]
+    fn preflight_blocks_only_codex_without_its_standalone() {
+        // codex off → never blocks, install present or not.
+        assert!(preflight_decision(false, false).is_ok());
+        assert!(preflight_decision(false, true).is_ok());
+        // codex on → blocks iff the standalone install is absent.
+        assert_eq!(
+            preflight_decision(true, false),
+            Err(PreflightError::CodexStandaloneMissing),
+        );
+        assert!(preflight_decision(true, true).is_ok());
+    }
+
+    #[test]
+    fn preflight_error_carries_the_official_install_command() {
+        let msg = PreflightError::CodexStandaloneMissing.to_string();
+        assert!(
+            msg.contains(CODEX_INSTALL_COMMAND),
+            "guidance names the installer"
+        );
+        assert!(
+            msg.contains("[remote_control] codex"),
+            "guidance names the toggle"
+        );
     }
 
     #[test]
