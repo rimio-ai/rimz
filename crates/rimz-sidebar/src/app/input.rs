@@ -15,6 +15,10 @@ pub(super) enum Wakeup {
     /// (the poll timeout) so the loop can coalesce a burst of deltas from one
     /// mutation into a single refetch instead of one refetch per event.
     Ledger,
+    /// The background fetch worker finished a snapshot and posted
+    /// [`SNAPSHOT_WAKEUP`]; the loop folds the result waiting on its result
+    /// channel. Keeps the fetch subprocess off the render thread.
+    Snapshot,
     Resize,
     /// `rimz reload` asks the renderer to re-exec its own binary in place so a
     /// freshly-installed build takes effect without a session rebirth.
@@ -36,6 +40,11 @@ pub(super) enum KeyAction {
     Dismiss,
     Digit(u8),
 }
+
+/// The control word the background fetch worker sends to the loop's wakeup
+/// socket once a snapshot is ready to fold. Riding the same socket every other
+/// wakeup uses keeps the loop blocking in exactly one place.
+pub(super) const SNAPSHOT_WAKEUP: &[u8] = b"snapshot";
 
 pub(super) fn encode_key(code: KeyCode) -> Option<String> {
     let wire = match code {
@@ -80,6 +89,7 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         return Wakeup::Key(KeyAction::Digit(n));
     }
     match raw {
+        "snapshot" => Wakeup::Snapshot,
         "resize" => Wakeup::Resize,
         "reload" => Wakeup::Reload,
         "key:up" => Wakeup::Key(KeyAction::Up),
@@ -182,6 +192,7 @@ mod tests {
         let mut words = vec![
             "resize".to_owned(),
             "reload".to_owned(),
+            String::from_utf8(SNAPSHOT_WAKEUP.to_vec()).unwrap(),
             String::from_utf8(rimz::ledger::wakeup::RELOAD_WAKEUP.to_vec()).unwrap(),
         ];
         for code in [

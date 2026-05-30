@@ -22,7 +22,7 @@ use tracing::{debug, warn};
 use crate::render::{self, Alert, UiState};
 
 mod input;
-use input::{KeyAction, Wakeup, decode_wakeup, encode_key, encode_mouse, wait_for_wakeup};
+use input::{KeyAction, SNAPSHOT_WAKEUP, Wakeup, encode_key, encode_mouse, wait_for_wakeup};
 
 #[derive(Clone, Debug)]
 pub struct ServeConfig {
@@ -85,6 +85,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     terminal.clear()?;
 
     let mut last_snapshot: Option<SidebarSnapshot> = None;
+    let mut current = placeholder_snapshot(config.workspace_id.clone());
     let mut health = Health::default();
     let mut self_close = SelfCloseState::default();
     let mut ui = UiState::default();
@@ -94,167 +95,135 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // across re-fetches and ledger deltas, so no redraw path can stall it.
     let anim_start = Instant::now();
 
-    'serve: loop {
-        let heartbeat_outcome = write_heartbeat(&config, &runtime, &socket_path);
-        let snapshot_outcome = fetch_snapshot_for(
-            &resolve_snapshot_bin(&config.rimz_bin),
-            &config.workspace_id,
-            Some(config.mux),
-            Some(&config.session_name),
-            own_pane_id(config.mux),
-        );
-        let fetched_at = Instant::now();
+    // The snapshot subprocess (workspace resolve + `list-panes` + git) and the
+    // heartbeat write run on a background worker, so animation and input never
+    // block on them. The worker posts `SNAPSHOT_WAKEUP` when a result is ready;
+    // `in_flight`/`refetch_pending` coalesce requests so a ledger-delta storm or
+    // a slow fetch can never queue more than one extra run.
+    let (request_tx, request_rx) = std::sync::mpsc::channel::<()>();
+    let (result_tx, result_rx) = std::sync::mpsc::channel::<FetchOutcome>();
+    spawn_fetch_worker(
+        config.clone(),
+        runtime.clone(),
+        socket_path.clone(),
+        request_rx,
+        result_tx,
+    );
+    let mut in_flight = false;
+    let mut refetch_pending = false;
 
-        let state = compute_next_state(
-            &config.workspace_id,
-            heartbeat_outcome.as_ref().err().map(|e| e.to_string()),
-            snapshot_outcome.map_err(|e| e.to_string()),
-            last_snapshot.take(),
-            &health,
-        );
-        if let Err(err) = &heartbeat_outcome {
-            warn!(error = %err, "sidebar heartbeat failed");
-        }
-        if let Some(alert) = state
-            .health
-            .alert
-            .as_ref()
-            .filter(|alert| alert.is_active())
-        {
-            warn!(reason = %alert.reason, "sidebar refresh degraded");
-        }
-        clamp_selection(&mut ui, &state.snapshot);
-        last_snapshot = state.last_snapshot;
-        health = state.health;
-        ui.animation_phase = wall_clock_phase(anim_start);
-        render::draw_to_terminal_with_ui(
-            &mut terminal,
-            &state.snapshot,
-            health.alert.as_ref(),
-            &ui,
-        )?;
+    // First frame synchronously: nothing animates yet, so there is no loop to
+    // stall, and it avoids a placeholder flash before the worker's first result.
+    let mut fetched_at = Instant::now();
+    let mut should_exit = apply_fetch_outcome(
+        &config,
+        run_fetch(&config, &runtime, &socket_path),
+        &mut last_snapshot,
+        &mut current,
+        &mut health,
+        &mut self_close,
+        &mut ui,
+        &mut terminal,
+        anim_start,
+    )?;
 
-        // A renderer that has been degraded this long is non-functional and,
-        // with a now-stale heartbeat, unreachable by `rimz reload` — so it gives
-        // up rather than lingering as a zombie showing a frozen frame. The
-        // common deleted-binary snapshot failure already self-heals in place
-        // (`resolve_snapshot_bin` falls back to the installed `rimz` each tick);
-        // give-up is the backstop for what that cannot cure — a failing
-        // heartbeat write, a vanished ledger, or no `rimz` on `PATH` at all.
-        // Exiting closes its `close_on_exit` pane; reload/attach recovery then
-        // rebuilds a current-build sidebar against the live panes, and a lone
-        // orphan with no working pane simply disappears. This is the degraded
-        // twin of self-close: self-close fires when the view empties, give-up
-        // fires when the view can no longer be read at all.
-        if degraded_too_long(&health, Timestamp::now()) {
-            warn!(
-                session = %config.session_name,
-                reason = health.alert.as_ref().map(|alert| alert.reason.as_str()),
-                "sidebar degraded too long; exiting so the pane closes and reload/attach can rebuild it",
-            );
-            break;
-        }
-
-        // Own-view (sibling count, focus) now rides in on the snapshot itself —
-        // the `rimz sidebar snapshot` CLI computes it from the same pane list it
-        // already enumerated, so the renderer no longer spawns a second `pane
-        // list` per tick.
-        let own_view = state.snapshot.own_view.as_ref();
-        sync_selection_to_focused_pane(
-            &mut ui,
-            &state.snapshot,
-            own_view
-                .filter(|view| !view.own_is_focused)
-                .and_then(|view| view.focused_pane_id.as_ref()),
-        );
-        if self_close_decision(&mut self_close, own_view.map(|view| view.sibling_count)) {
-            debug!(
-                session = %config.session_name,
-                "sidebar tab emptied; exiting so the pane closes itself",
-            );
-            break;
-        }
-        // Wait for the next wakeup. While a running agent is animating, fall
-        // into a fast animation tick that only advances the spin frame and
-        // repaints the *current* snapshot — no `rimz` subprocess per frame. We
-        // leave this inner loop (to re-fetch) on the data tick or a ledger
-        // delta. Input only mutates local UI, so it is handled in place and
-        // never re-runs the snapshot burst — that per-keystroke refetch was the
-        // input lag.
-        loop {
-            let animating = render::has_live_animation(&state.snapshot);
-            let timeout = if animating {
-                ANIMATION_FRAME.min(tick)
-            } else {
-                tick
-            };
-            socket.set_read_timeout(Some(timeout))?;
-            match wait_for_wakeup(&socket)? {
-                Wakeup::Tick if animating && fetched_at.elapsed() < tick => {
+    // One event loop. It blocks only in `recv`; the spinner advances on the
+    // animation tick, input is applied in place, and a finished background fetch
+    // arrives as `Wakeup::Snapshot` to be folded in — so no path forks a
+    // subprocess on the render thread, and a busy fetch never freezes the spin
+    // or swallows a keypress.
+    while !should_exit {
+        let animating = render::has_live_animation(&current);
+        let timeout = if animating {
+            ANIMATION_FRAME.min(tick)
+        } else {
+            tick
+        };
+        socket.set_read_timeout(Some(timeout))?;
+        match wait_for_wakeup(&socket)? {
+            // A background fetch finished. Take the most recent result (drop any
+            // older queued ones), fold it, then fire the deferred refetch a
+            // ledger delta asked for while this one was in flight.
+            Wakeup::Snapshot => {
+                in_flight = false;
+                let mut latest = None;
+                while let Ok(outcome) = result_rx.try_recv() {
+                    latest = Some(outcome);
+                }
+                if let Some(outcome) = latest {
+                    fetched_at = Instant::now();
+                    should_exit = apply_fetch_outcome(
+                        &config,
+                        outcome,
+                        &mut last_snapshot,
+                        &mut current,
+                        &mut health,
+                        &mut self_close,
+                        &mut ui,
+                        &mut terminal,
+                        anim_start,
+                    )?;
+                }
+                if !should_exit && refetch_pending {
+                    refetch_pending = false;
+                    request_fetch(&request_tx, &mut in_flight, &mut refetch_pending, false);
+                }
+            }
+            // The poll timeout. While a running agent animates, advance the spin
+            // frame on the current snapshot but refetch every `ACTIVE_REFRESH` so
+            // its $/tokens track in near-real-time; an idle room refetches only
+            // once per `tick` to catch pane/git drift that fires no ledger delta.
+            Wakeup::Tick => {
+                let refresh_after = if animating {
+                    ACTIVE_REFRESH.min(tick)
+                } else {
+                    tick
+                };
+                if animating && fetched_at.elapsed() < refresh_after {
                     ui.animation_phase = wall_clock_phase(anim_start);
                     render::draw_to_terminal_with_ui(
                         &mut terminal,
-                        &state.snapshot,
+                        &current,
                         health.alert.as_ref(),
                         &ui,
                     )?;
+                } else {
+                    request_fetch(&request_tx, &mut in_flight, &mut refetch_pending, false);
                 }
-                // The poll timeout: re-fetch to catch pane/git drift that fires
-                // no ledger delta.
-                Wakeup::Tick => break,
-                // A ledger delta: drain any sibling deltas the same mutation
-                // burst queued so a streaming agent triggers one re-fetch, not
-                // one per event. Queued input is applied in place during the
-                // drain; a queued reload still wins.
-                Wakeup::Ledger => {
-                    if drain_coalescing(
-                        &socket,
-                        &mut ui,
-                        &mut health,
-                        &mut terminal,
-                        &state.snapshot,
-                        &config,
-                    )? {
-                        if let Some(target) = reexec_target() {
-                            reexec_to = Some(target);
-                            break 'serve;
-                        }
-                        warn!(
-                            session = %config.session_name,
-                            "reload requested but no renderer binary is on disk; keeping the current build",
-                        );
-                    }
-                    break;
-                }
-                Wakeup::Reload => {
-                    if let Some(target) = reexec_target() {
-                        debug!(
-                            session = %config.session_name,
-                            target = %target.display(),
-                            "reload requested; re-execing the renderer in place",
-                        );
-                        reexec_to = Some(target);
-                        break 'serve;
-                    }
-                    // A reload that cannot find its replacement (a partial or
-                    // in-flight install) must never make the sidebar vanish —
-                    // keep serving the current build and re-fetch.
-                    warn!(
+            }
+            // A ledger delta means new committed data: refetch, forcing one more
+            // run if a fetch is already in flight so the delta is never lost. A
+            // burst of deltas collapses to a single fetch via `in_flight`.
+            Wakeup::Ledger => {
+                request_fetch(&request_tx, &mut in_flight, &mut refetch_pending, true);
+            }
+            Wakeup::Reload => {
+                if let Some(target) = reexec_target() {
+                    debug!(
                         session = %config.session_name,
-                        "reload requested but no renderer binary is on disk; keeping the current build",
+                        target = %target.display(),
+                        "reload requested; re-execing the renderer in place",
                     );
+                    reexec_to = Some(target);
                     break;
                 }
-                wakeup => {
-                    apply_input(
-                        wakeup,
-                        &mut ui,
-                        &mut health,
-                        &mut terminal,
-                        &state.snapshot,
-                        &config,
-                    )?;
-                }
+                // A reload that cannot find its replacement (a partial or
+                // in-flight install) must never make the sidebar vanish — keep
+                // serving the current build.
+                warn!(
+                    session = %config.session_name,
+                    "reload requested but no renderer binary is on disk; keeping the current build",
+                );
+            }
+            wakeup => {
+                apply_input(
+                    wakeup,
+                    &mut ui,
+                    &mut health,
+                    &mut terminal,
+                    &current,
+                    &config,
+                )?;
             }
         }
     }
@@ -514,6 +483,14 @@ fn next_health(previous: &Health, failure: Option<String>) -> Health {
 /// only used while [`render::has_live_animation`] reports something to move.
 const ANIMATION_FRAME: Duration = Duration::from_millis(120);
 
+/// How often to refetch while an agent is actively working — far tighter than
+/// the idle data tick so its `$`/tokens/context climb in near-real-time. The
+/// fetch is off-thread and request-coalesced, and the heavy ledger+`list-panes`
+/// work is cache-amortized while the cost sidecar is re-read fresh each time, so
+/// this cadence costs little and never stalls the spin. An idle room ignores it
+/// and keeps the slow `tick`.
+const ACTIVE_REFRESH: Duration = Duration::from_millis(500);
+
 /// The animation frame index for `now`, derived from elapsed wall-clock since
 /// the serve loop's monotonic base. Every redraw path sets the phase from this,
 /// so the spin advances on real time and survives re-fetches and ledger deltas
@@ -585,6 +562,156 @@ fn fetch_snapshot_for(
         });
     }
     Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+/// One refresh cycle's result: the liveness-write error (if any) and the
+/// snapshot fetch, kept separate so [`compute_next_state`] can tell a
+/// heartbeat-only failure apart from a snapshot failure.
+struct FetchOutcome {
+    heartbeat_err: Option<String>,
+    snapshot: std::result::Result<SidebarSnapshot, String>,
+}
+
+/// Write the heartbeat and fetch the snapshot. Runs on the fetch worker thread
+/// (and once inline for the first frame), keeping the `rimz sidebar snapshot`
+/// subprocess — workspace resolve + `list-panes` + git — off the render/input
+/// loop so animation never stalls on it.
+fn run_fetch(config: &ServeConfig, runtime: &RuntimePaths, socket_path: &Path) -> FetchOutcome {
+    let heartbeat_err = write_heartbeat(config, runtime, socket_path)
+        .err()
+        .map(|err| err.to_string());
+    let snapshot = fetch_snapshot_for(
+        &resolve_snapshot_bin(&config.rimz_bin),
+        &config.workspace_id,
+        Some(config.mux),
+        Some(&config.session_name),
+        own_pane_id(config.mux),
+    )
+    .map_err(|err| err.to_string());
+    FetchOutcome {
+        heartbeat_err,
+        snapshot,
+    }
+}
+
+/// Spawn the background fetch worker. It blocks for a request, coalesces any
+/// that piled up (a ledger-delta storm collapses to one fetch), runs one
+/// [`run_fetch`], hands the result back over `result_tx`, and pokes the loop's
+/// wakeup socket so it folds the result without polling. The thread ends when
+/// the loop drops `request_tx`.
+fn spawn_fetch_worker(
+    config: ServeConfig,
+    runtime: RuntimePaths,
+    socket_path: PathBuf,
+    request_rx: std::sync::mpsc::Receiver<()>,
+    result_tx: std::sync::mpsc::Sender<FetchOutcome>,
+) {
+    std::thread::spawn(move || {
+        let waker = UnixDatagram::unbound().ok();
+        while request_rx.recv().is_ok() {
+            while request_rx.try_recv().is_ok() {}
+            let outcome = run_fetch(&config, &runtime, &socket_path);
+            if result_tx.send(outcome).is_err() {
+                return;
+            }
+            if let Some(waker) = &waker {
+                let _ = waker.send_to(SNAPSHOT_WAKEUP, &socket_path);
+            }
+        }
+    });
+}
+
+/// Ask the fetch worker for a fresh snapshot. `in_flight` collapses redundant
+/// requests while one is already running; `force_after` (set by a ledger delta,
+/// i.e. new committed data) guarantees one more fetch once the in-flight one
+/// returns, so a delta that races an in-flight fetch is never lost.
+fn request_fetch(
+    request_tx: &std::sync::mpsc::Sender<()>,
+    in_flight: &mut bool,
+    refetch_pending: &mut bool,
+    force_after: bool,
+) {
+    if !*in_flight {
+        if request_tx.send(()).is_ok() {
+            *in_flight = true;
+        }
+    } else if force_after {
+        *refetch_pending = true;
+    }
+}
+
+/// Fold one fetch outcome into the render state: update health, snapshot, and
+/// selection, draw the frame, and report whether the loop should exit — give up
+/// after sustained degradation, or self-close once the tab has emptied. Shared
+/// by the first synchronous frame and every background-fetch result so the
+/// recovery rules live in one place.
+#[allow(clippy::too_many_arguments)]
+fn apply_fetch_outcome(
+    config: &ServeConfig,
+    outcome: FetchOutcome,
+    last_snapshot: &mut Option<SidebarSnapshot>,
+    current: &mut SidebarSnapshot,
+    health: &mut Health,
+    self_close: &mut SelfCloseState,
+    ui: &mut UiState,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    anim_start: Instant,
+) -> Result<bool> {
+    let state = compute_next_state(
+        &config.workspace_id,
+        outcome.heartbeat_err,
+        outcome.snapshot,
+        last_snapshot.take(),
+        health,
+    );
+    if let Some(alert) = state
+        .health
+        .alert
+        .as_ref()
+        .filter(|alert| alert.is_active())
+    {
+        warn!(reason = %alert.reason, "sidebar refresh degraded");
+    }
+    clamp_selection(ui, &state.snapshot);
+    *last_snapshot = state.last_snapshot;
+    *health = state.health;
+    *current = state.snapshot;
+    ui.animation_phase = wall_clock_phase(anim_start);
+    render::draw_to_terminal_with_ui(terminal, current, health.alert.as_ref(), ui)?;
+
+    // A renderer degraded this long is non-functional and, with a now-stale
+    // heartbeat, unreachable by `rimz reload` — so it gives up rather than
+    // lingering as a zombie showing a frozen frame. Exiting closes its
+    // `close_on_exit` pane; reload/attach recovery then rebuilds a current
+    // sidebar against the live panes.
+    if degraded_too_long(health, Timestamp::now()) {
+        warn!(
+            session = %config.session_name,
+            reason = health.alert.as_ref().map(|alert| alert.reason.as_str()),
+            "sidebar degraded too long; exiting so the pane closes and reload/attach can rebuild it",
+        );
+        return Ok(true);
+    }
+
+    // Own-view (sibling count, focus) rides in on the snapshot — the CLI
+    // computes it from the same pane list it already enumerated, so the renderer
+    // never spawns a second `pane list`.
+    let own_view = current.own_view.as_ref();
+    sync_selection_to_focused_pane(
+        ui,
+        current,
+        own_view
+            .filter(|view| !view.own_is_focused)
+            .and_then(|view| view.focused_pane_id.as_ref()),
+    );
+    if self_close_decision(self_close, own_view.map(|view| view.sibling_count)) {
+        debug!(
+            session = %config.session_name,
+            "sidebar tab emptied; exiting so the pane closes itself",
+        );
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 /// Refresh this instance's liveness heartbeat. Written in-process — no `rimz
@@ -701,51 +828,17 @@ fn apply_input(
     Ok(())
 }
 
-/// Drain every datagram already queued on the wakeup socket without blocking.
-/// Queued ledger deltas and ticks fold into the single re-fetch the caller is
-/// about to do; queued input is applied in place; a queued reload is reported
-/// so the caller can re-exec. Returns whether a reload was seen. The socket is
-/// always restored to blocking mode before returning.
-fn drain_coalescing(
-    socket: &UnixDatagram,
-    ui: &mut UiState,
-    health: &mut Health,
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    snapshot: &SidebarSnapshot,
-    config: &ServeConfig,
-) -> Result<bool> {
-    socket.set_nonblocking(true)?;
-    let mut reload = false;
-    let mut buf = [0_u8; 4096];
-    loop {
-        match socket.recv(&mut buf) {
-            Ok(n) => match decode_wakeup(&buf[..n]) {
-                Wakeup::Ledger | Wakeup::Tick => {}
-                Wakeup::Reload => {
-                    reload = true;
-                    break;
-                }
-                input => apply_input(input, ui, health, terminal, snapshot, config)?,
-            },
-            Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
-            Err(err) => {
-                let _ = socket.set_nonblocking(false);
-                return Err(err.into());
-            }
-        }
-    }
-    socket.set_nonblocking(false)?;
-    Ok(reload)
-}
-
 fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -> InputOutcome {
     match wakeup {
         Wakeup::Key(action) => handle_key(action, ui, snapshot),
         Wakeup::MouseClick { column, row } => handle_mouse_click(column, row, ui, snapshot),
         Wakeup::Resize => InputOutcome::redraw(),
         // The serve loop intercepts these before dispatching here: a tick or a
-        // ledger delta is the re-fetch trigger, and a reload re-execs.
-        Wakeup::Tick | Wakeup::Ledger | Wakeup::Reload => InputOutcome::default(),
+        // ledger delta is the re-fetch trigger, a finished fetch is folded, and
+        // a reload re-execs.
+        Wakeup::Tick | Wakeup::Ledger | Wakeup::Reload | Wakeup::Snapshot => {
+            InputOutcome::default()
+        }
     }
 }
 
@@ -1025,25 +1118,48 @@ fn focus_selected_row(snapshot: &SidebarSnapshot, selected: usize, config: &Serv
     let Some(pane) = &row.pane else {
         return;
     };
-    let mut command = Command::new(&config.rimz_bin);
-    command.args(["pane", "focus", pane.pane_id.as_str(), "--session-name"]);
-    command.arg(&pane.session_name);
-    if let Some(start) = pane.pane_process_start {
-        command.arg("--pane-process-start").arg(start.to_string());
-    }
-    match command.output() {
-        Ok(output) if output.status.success() => {}
-        Ok(output) => warn!(
-            pane = %pane.pane_id,
-            stderr = %String::from_utf8_lossy(&output.stderr),
-            "sidebar pane focus failed",
-        ),
-        Err(err) => warn!(
-            pane = %pane.pane_id,
-            error = %err,
-            "sidebar pane focus command failed",
-        ),
-    }
+    // Jump off the render thread. `rimz pane focus` forks a child that talks to
+    // the multiplexer (process spawn + mux IPC, routinely tens to hundreds of
+    // ms); running it inline froze the loop so the selection bar moved but the
+    // sidebar then stalled — the "click feels slow" symptom. The highlight has
+    // already been redrawn by the caller, so the jump itself is fire-and-forget.
+    spawn_pane_focus(
+        config.rimz_bin.clone(),
+        pane.pane_id.as_str().to_owned(),
+        pane.session_name.clone(),
+        pane.pane_process_start,
+    );
+}
+
+/// Run `rimz pane focus` on a detached thread so the user's keypress/click
+/// returns instantly. Errors are logged, not surfaced — a missed jump is a
+/// retriable annoyance, never a reason to block the UI.
+fn spawn_pane_focus(
+    rimz_bin: PathBuf,
+    pane_id: String,
+    session_name: String,
+    pane_process_start: Option<Timestamp>,
+) {
+    std::thread::spawn(move || {
+        let mut command = Command::new(&rimz_bin);
+        command.args(["pane", "focus", &pane_id, "--session-name", &session_name]);
+        if let Some(start) = pane_process_start {
+            command.arg("--pane-process-start").arg(start.to_string());
+        }
+        match command.output() {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => warn!(
+                pane = %pane_id,
+                stderr = %String::from_utf8_lossy(&output.stderr),
+                "sidebar pane focus failed",
+            ),
+            Err(err) => warn!(
+                pane = %pane_id,
+                error = %err,
+                "sidebar pane focus command failed",
+            ),
+        }
+    });
 }
 
 struct InputModeGuard;
