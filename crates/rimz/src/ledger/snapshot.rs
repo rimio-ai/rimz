@@ -23,6 +23,7 @@ use crate::ledger::atomic::{self, write_temp_then_rename};
 use crate::ledger::event_log::{self, EventLogErr};
 use crate::ledger::feed_store::{self, FeedStoreErr};
 use crate::ledger::paths::StatePaths;
+use crate::ledger::runtime::{RuntimeProjection, RuntimeScope};
 use crate::ledger::workspace_record;
 use crate::schema::event::EventEnvelope;
 
@@ -1809,11 +1810,19 @@ pub fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
     let items = feed_store::list(&paths.feed_dir)?;
     let events = event_log::read_all(&paths.events_log)?;
     let carryover = read_carryover(&paths.agents_carryover)?;
-    let mut snapshot = SidebarSnapshot::build_with_carryover(
+    let agents = agent_rollup_with_carryover(&events, carryover.agents);
+    // Apply the same runtime liveness expel the live read does
+    // (`Ledger::snapshot` → `runtime_projection(Runtime)`), so the persisted
+    // `latest.json` matches what a reader would have projected — never
+    // resurrecting a dead-pid agent or an ownerless-script ask. Pure here: the
+    // write paths that call `rebuild` already hold the workspace lock, so this
+    // re-filters in memory rather than re-locking.
+    let projection = RuntimeProjection::from_parts(items, events, agents, RuntimeScope::Runtime);
+    let mut snapshot = SidebarSnapshot::build_with_agents(
         paths.workspace_id.clone(),
-        items,
-        events,
-        carryover.agents,
+        projection.items,
+        projection.events,
+        projection.agents,
     );
     snapshot.reap_stale_sessions(Timestamp::now());
     snapshot.display_name = display_name_for(paths);
@@ -2650,6 +2659,62 @@ mod tests {
         write_carryover(&path, &carryover).unwrap();
         let loaded = read_carryover(&path).unwrap();
         assert_eq!(loaded, carryover);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn build_from_expels_dead_pid_agent_like_the_live_read() {
+        // `latest.json` is written by `build_from`; it must apply the same
+        // runtime liveness expel as `Ledger::snapshot` (`runtime_projection`),
+        // or serving it O(1) would resurrect a dead-pid agent the live read
+        // suppresses. A live (ownerless, abstaining) agent must survive, so the
+        // filter expels without over-filtering.
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+
+        let lifecycle = |params: serde_json::Value| {
+            EventEnvelope::new(
+                workspace.clone(),
+                "session",
+                "claude",
+                "agent-hook",
+                "agent.lifecycle",
+                params,
+            )
+        };
+        // No captured pid: the owner is unknown, so the agent abstains and stays.
+        let alive = lifecycle(serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "sess-live",
+            "status": "idle",
+        }));
+        // A pid that cannot be live (u32::MAX): the rollup derives a dead owner,
+        // which the runtime expel must suppress.
+        let dead = lifecycle(serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "sess-dead",
+            "status": "idle",
+            "agent_pid": u32::MAX,
+        }));
+        event_log::append(&paths.events_log, &alive).unwrap();
+        event_log::append(&paths.events_log, &dead).unwrap();
+
+        let snapshot = build_from(&paths).unwrap();
+        let ids: Vec<&str> = snapshot
+            .agents
+            .iter()
+            .map(|a| a.agent_id.as_str())
+            .collect();
+        assert!(
+            ids.contains(&"sess-live"),
+            "an ownerless (abstaining) agent must survive: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"sess-dead"),
+            "a dead-pid agent must be expelled so latest.json matches the live read: {ids:?}"
+        );
     }
 
     #[test]
