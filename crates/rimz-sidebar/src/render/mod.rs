@@ -324,6 +324,7 @@ fn help_lines() -> Vec<Line<'static>> {
         Line::styled("␣ next ?!   x dismiss   r reload   ? close", dim),
         Line::styled("⢿ working   ✽ thinking   ? waiting", dim),
         Line::styled("! attention   ◌ idle   ✓ done   · process", dim),
+        Line::styled("posture: auto · yolo", dim),
     ]
 }
 
@@ -918,6 +919,7 @@ mod tests {
         assert!(help.contains("? waiting"));
         assert!(help.contains("◌ idle"));
         assert!(help.contains("· process"));
+        assert!(help.contains("posture: auto · yolo"));
     }
 
     #[test]
