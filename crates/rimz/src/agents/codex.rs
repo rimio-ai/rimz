@@ -184,13 +184,15 @@ impl AgentIntegration for CodexIntegration {
             agent_process_start: None,
             runtime_owner: None,
             permission_posture: posture,
-            // A completed turn (or finished subagent) is not read-only plan
-            // mode: a turn-ending event that omits the mode clears the thinking
-            // signal rather than carrying a stale `plan` forward. Every other
-            // event reports the mode as the payload gives it. Parity with the
-            // Claude adapter.
+            // `permission_mode` is a sticky session-slider setting, not a
+            // per-turn "currently planning" signal: it rides every hook of a
+            // plan-slider session, turn-ending events included. So a turn
+            // boundary (`Stop`/`SubagentStop`) asserts the end of the planning
+            // phase unconditionally rather than trusting the slider value the
+            // payload still carries; every other event reads the slider as
+            // given. Parity with the Claude adapter.
             plan_mode: match event_name {
-                "Stop" | "SubagentStop" => plan_mode_from_payload(payload).or(Some(false)),
+                "Stop" | "SubagentStop" => Some(false),
                 _ => plan_mode_from_payload(payload),
             },
             worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
@@ -882,7 +884,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_end_without_mode_clears_plan_mode() {
+    fn turn_end_always_clears_plan_mode() {
         // A completed turn (or finished subagent) is not planning: a mode-less
         // turn-ending event reports `Some(false)` so the reducer drops the
         // thinking signal instead of carrying a stale `plan` forward.
@@ -893,14 +895,16 @@ mod tests {
             assert_eq!(obs.plan_mode, Some(false), "{event} should clear plan mode");
         }
 
-        // A turn that explicitly ends still in plan mode keeps the signal.
-        let still_planning = CodexIntegration
+        // `permission_mode` is the sticky session slider, present on every hook
+        // including the turn-ending ones. A `Stop` still carrying `plan` reports
+        // the slider position, not a planning turn, so it clears too.
+        let slider_still_plan = CodexIntegration
             .observe_lifecycle(
                 "Stop",
                 &json!({ "session_id": "sess-1", "permission_mode": "plan" }),
             )
             .unwrap();
-        assert_eq!(still_planning.plan_mode, Some(true));
+        assert_eq!(slider_still_plan.plan_mode, Some(false));
     }
 
     #[test]

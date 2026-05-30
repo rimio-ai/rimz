@@ -390,9 +390,14 @@ pub(crate) fn read_transcript_tail(path: &Path) -> Option<String> {
 
 /// Whether a payload's `permission_mode`/`mode` field names read-only plan
 /// mode. `None` when the field is absent — the reducer then carries the prior
-/// plan-mode value forward, so a turn-boundary event that reports no mode never
-/// flips it. Plan mode stays posture-neutral (it folds to `Default` in the
-/// posture pill); this is the separate signal the sidebar renders as "thinking".
+/// plan-mode value forward, so a session-start/prompt event that reports no
+/// mode never flips it. `permission_mode` is the *session slider*, sticky
+/// across turns and present on every hook (including `Stop`), so it reflects
+/// the slider's current position, not "the agent is planning right now": turn
+/// boundaries (`Stop`/`SubagentStop`) therefore assert `Some(false)` in the
+/// adapter rather than reading this helper. Plan mode stays posture-neutral (it
+/// folds to `Default` in the posture pill); this is the separate signal the
+/// sidebar renders as "thinking".
 pub(crate) fn plan_mode_from_payload(payload: &Value) -> Option<bool> {
     payload
         .get("permission_mode")

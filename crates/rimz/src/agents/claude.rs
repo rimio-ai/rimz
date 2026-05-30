@@ -252,13 +252,16 @@ impl AgentIntegration for ClaudeIntegration {
             agent_process_start: None,
             runtime_owner: None,
             permission_posture: posture,
-            // A completed turn is not read-only plan mode: a `Stop` that omits
-            // the mode clears the thinking signal rather than carrying a stale
-            // `plan` forward (after a plan-approval the agent runs auto mode and
-            // fires only per-tool hooks, so no later event would otherwise reset
-            // it). Every other event reports the mode as the payload gives it.
+            // `permission_mode` is a sticky session-slider setting, not a
+            // per-turn "currently planning" signal: Claude reports `plan` on
+            // every hook of a plan-slider session, `Stop` included. So a turn
+            // boundary asserts the end of the planning phase unconditionally —
+            // a finished turn is never read-only planning — rather than trusting
+            // the slider value the payload still carries. Mid-turn, an approved
+            // `ExitPlanMode` (carried on the feed channel) is what re-arms
+            // thinking; every other event reads the slider the payload gives it.
             plan_mode: match event_name {
-                "Stop" => plan_mode_from_payload(payload).or(Some(false)),
+                "Stop" => Some(false),
                 _ => plan_mode_from_payload(payload),
             },
             worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
@@ -1771,7 +1774,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_without_mode_clears_plan_mode() {
+    fn stop_always_clears_plan_mode() {
         // A completed turn is not read-only plan mode. After a plan-approval the
         // agent runs auto mode firing only per-tool hooks, so a mode-less `Stop`
         // must report `Some(false)` — otherwise the carried-forward `plan` keeps
@@ -1781,14 +1784,16 @@ mod tests {
             .unwrap();
         assert_eq!(done.plan_mode, Some(false));
 
-        // A turn that explicitly ends still in plan mode keeps the signal.
-        let still_planning = ClaudeIntegration
+        // `permission_mode` is the sticky session slider, present on every hook
+        // including `Stop`. A `Stop` still carrying `plan` means the slider is
+        // set, not that the finished turn was planning — so it clears too.
+        let slider_still_plan = ClaudeIntegration
             .observe_lifecycle(
                 "Stop",
                 &json!({ "session_id": "sess-1", "permission_mode": "plan" }),
             )
             .unwrap();
-        assert_eq!(still_planning.plan_mode, Some(true));
+        assert_eq!(slider_still_plan.plan_mode, Some(false));
     }
 
     #[test]

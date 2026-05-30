@@ -308,8 +308,12 @@ impl SidebarSnapshot {
         // after a plan-approval the agent runs auto mode firing only per-tool
         // hooks, so `plan_mode` would stay true and keep the thinking sparkle on
         // a working agent. The approval lives in the feed store, not the event
-        // log, so clear it here from the resolved asks.
-        clear_exited_plan_modes(&mut agents, &recently_answered);
+        // log, so clear it here. This is the pure path: only the allow-resolved
+        // branch can bite (the native-UI moved-past branch needs the heartbeat
+        // `last_activity`, folded later in `with_agent_activity`).
+        let plan_asks =
+            plan_approval_candidates(&needs_attention, &recently_answered, &recent_activity);
+        clear_exited_plan_modes(&mut agents, &plan_asks);
 
         let display_name = workspace_id.as_str().to_owned();
         // The pure reducer has no project root, so every cwd keeps per-path
@@ -491,7 +495,20 @@ impl SidebarSnapshot {
                 changed = true;
             }
         }
-        if changed {
+        // The heartbeat just advanced `last_activity`, which is the native-UI
+        // plan-approval exit signal: an agent that ran a tool after its
+        // `ExitPlanMode` ask has left read-only planning even though Rimz never
+        // resolved the ask (the human approved in the agent's own UI). Re-run
+        // the plan-mode clear with the fresh value so the working agent drops
+        // the thinking sparkle; the reducer already covered the allow-resolved
+        // branch. Disjoint field borrows: `agents` vs the three feed buckets.
+        let plan_asks = plan_approval_candidates(
+            &self.needs_attention,
+            &self.recently_answered,
+            &self.recent_activity,
+        );
+        let cleared = clear_exited_plan_modes(&mut self.agents, &plan_asks);
+        if changed || cleared {
             self.rebuild_groups();
         }
         self
@@ -717,37 +734,91 @@ fn agent_moved_past_ask(agent: &AgentState, ask: &FeedItem) -> bool {
     agent.last_activity > ask.updated_at
 }
 
-/// Clear `plan_mode` on any agent that has *approved its plan this turn*. An
-/// `ExitPlanMode` plan-approval is the "left read-only plan mode" signal the
-/// lifecycle log can't carry — after approval the agent runs auto mode firing
-/// only per-tool hooks, so the carried-forward `plan_mode` would keep the
-/// thinking sparkle on a working agent. The approval is a resolved feed item,
-/// visible only here at projection time.
+/// Whether a plan-approval's resolution is an explicit allow.
+fn resolution_is_allow(item: &FeedItem) -> bool {
+    item.resolution
+        .as_ref()
+        .is_some_and(crate::agents::choice_is_allow)
+}
+
+/// Whether a plan-approval was explicitly *denied*. A deny is an actual refusal
+/// (a `choice` that is not an allow); an expiry/moved-on resolution carries
+/// `{"expired": true}` with no `choice` and is therefore not a deny — the human
+/// didn't refuse, the ask was reclaimed because the session moved on.
+fn resolution_is_deny(item: &FeedItem) -> bool {
+    item.resolution.as_ref().is_some_and(|resolution| {
+        resolution.decision.get("choice").is_some() && !crate::agents::choice_is_allow(resolution)
+    })
+}
+
+/// Plan-approval feed items visible across the snapshot's buckets, regardless of
+/// terminal status: a within-turn native-UI approval is still `Pending` (in
+/// `needs_attention`), a Rimz-resolved one lands in `recently_answered`, and a
+/// moved-on/abandoned one rode into `recent_activity`. The "left plan mode"
+/// signal can sit in any of them, so [`clear_exited_plan_modes`] scans all three.
+fn plan_approval_candidates<'a>(
+    needs_attention: &'a [FeedItem],
+    recently_answered: &'a [FeedItem],
+    recent_activity: &'a [SidebarActivity],
+) -> Vec<&'a FeedItem> {
+    needs_attention
+        .iter()
+        .chain(recently_answered.iter())
+        .chain(
+            recent_activity
+                .iter()
+                .filter_map(|activity| match activity {
+                    SidebarActivity::Feed { item } => Some(item.as_ref()),
+                    SidebarActivity::Event { .. } => None,
+                }),
+        )
+        .filter(|item| item.kind == FeedKind::PlanApproval)
+        .collect()
+}
+
+/// Clear `plan_mode` on any agent that has *left its read-only planning phase*.
+/// An `ExitPlanMode` plan-approval is the "left plan mode" signal the lifecycle
+/// log can't carry — after approval the agent runs auto mode firing only
+/// per-tool hooks, so the carried-forward `plan_mode` would keep the thinking
+/// sparkle on a working agent. The approval is a feed item, visible only here at
+/// projection time. Two independent signals close the gap:
 ///
-/// `updated_at > last_seen` scopes the approval to the current planning episode:
-/// `last_seen` is the timestamp of the agent's latest *lifecycle* event (the
-/// activity heartbeat advances `last_activity`, never `last_seen`), so during a
-/// planning phase it equals the plan-mode `UserPromptSubmit` time. A prior
-/// turn's approval is older than a fresh plan-mode prompt and is ignored, so a
-/// new planning phase still sparkles. A denied approval leaves the agent
-/// planning, so only an allow clears the signal.
-fn clear_exited_plan_modes(agents: &mut [AgentState], resolved: &[FeedItem]) {
+/// - **Approved through Rimz.** An allow-resolved approval clears it outright.
+/// - **Approved in the agent's own UI.** Rimz does not answer plan approvals by
+///   default, so the common case never produces an allow resolution — the human
+///   approves in the agent's UI and it runs the plan. The per-tool activity
+///   heartbeat advances `last_activity` past the ask's `updated_at` on the next
+///   tool, so "the agent moved past its own plan-approval ask" is the native-UI
+///   exit signal ([`agent_moved_past_ask`]). This branch only bites once
+///   `last_activity` has been folded from the heartbeat (see
+///   [`SidebarSnapshot::with_agent_activity`]).
+///
+/// A *denied* plan leaves the agent planning, so a deny never clears — even if
+/// the agent then ran read-only tools. `updated_at > last_seen` scopes the
+/// approval to the current planning episode: `last_seen` is the timestamp of the
+/// agent's latest *lifecycle* event (the heartbeat advances `last_activity`,
+/// never `last_seen`), so a prior turn's approval is older than a fresh
+/// plan-mode prompt and is ignored — a new planning phase still sparkles.
+///
+/// Returns whether any agent's `plan_mode` flipped, so callers can rebuild rows.
+fn clear_exited_plan_modes(agents: &mut [AgentState], plan_asks: &[&FeedItem]) -> bool {
+    let mut cleared = false;
     for agent in agents.iter_mut().filter(|agent| agent.plan_mode) {
-        let approved_this_turn = resolved.iter().any(|item| {
+        let exited_plan_mode = plan_asks.iter().any(|item| {
             item.kind == FeedKind::PlanApproval
                 && item.source_kind == "agent-hook"
                 && item.source == agent.kind
                 && item.agent_session_id() == Some(agent.agent_id.as_str())
                 && item.updated_at > agent.last_seen
-                && item
-                    .resolution
-                    .as_ref()
-                    .is_some_and(crate::agents::choice_is_allow)
+                && !resolution_is_deny(item)
+                && (resolution_is_allow(item) || agent_moved_past_ask(agent, item))
         });
-        if approved_this_turn {
+        if exited_plan_mode {
             agent.plan_mode = false;
+            cleared = true;
         }
     }
+    cleared
 }
 
 /// Overlay a pending ask onto its agent's pane row: the row keeps the agent's
@@ -1850,6 +1921,72 @@ mod tests {
         // Another session's approval never touches this agent.
         let foreign = resolved_plan_approval("sess-other", true, 10);
         assert!(plan_mode_after_approval(foreign, planning_agent("sess-1")));
+    }
+
+    /// A still-pending native-UI plan approval (the human approves in the
+    /// agent's own UI, so Rimz never resolves it), `secs_after_last_seen`
+    /// seconds after the agent's last lifecycle event.
+    fn pending_plan_approval(session: &str, secs_after_last_seen: i64) -> FeedItem {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut item = FeedItem::new(
+            workspace,
+            Surface::NativeUi,
+            FeedKind::PlanApproval,
+            "plan approval",
+            "claude",
+            "agent-hook",
+        );
+        item.payload = serde_json::json!({ "session_id": session });
+        // Pending — no resolution. `planning_agent` anchors `last_seen` at now − 50s.
+        let last_seen = Timestamp::now() - std::time::Duration::from_secs(50);
+        item.updated_at = last_seen + std::time::Duration::from_secs(secs_after_last_seen as u64);
+        item
+    }
+
+    /// Build the snapshot, then fold a heartbeat touch `touch_secs_after_last_seen`
+    /// seconds after the agent's last lifecycle event — the per-tool activity
+    /// that advances `last_activity` and signals the agent moved past its ask.
+    fn plan_mode_after_activity(item: FeedItem, agent: AgentState, touch_secs: i64) -> bool {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let last_seen = Timestamp::now() - std::time::Duration::from_secs(50);
+        let touch = AgentActivity {
+            kind: agent.kind.clone(),
+            agent_id: agent.agent_id.clone(),
+            at: last_seen + std::time::Duration::from_secs(touch_secs as u64),
+        };
+        let snap =
+            SidebarSnapshot::build_with_agents(workspace, vec![item], Vec::new(), vec![agent])
+                .with_agent_activity(&[touch]);
+        snap.agents[0].plan_mode
+    }
+
+    #[test]
+    fn native_ui_approval_clears_thinking_via_activity() {
+        // The reported bug: a plan-slider agent approves its plan in the agent's
+        // own UI, so Rimz never resolves the ask. The per-tool heartbeat advances
+        // `last_activity` past the still-pending ask, which is the "left plan
+        // mode" signal — the now-working agent must drop the thinking sparkle.
+        // (At reducer time the turn-grained `last_activity` hasn't advanced yet;
+        // only the heartbeat fold in `with_agent_activity` clears it.)
+        let pending = pending_plan_approval("sess-1", 5);
+        assert!(!plan_mode_after_activity(
+            pending,
+            planning_agent("sess-1"),
+            10
+        ));
+    }
+
+    #[test]
+    fn denied_plan_keeps_thinking_even_after_activity() {
+        // A denied plan keeps the agent planning. Even if it then runs read-only
+        // tools — advancing `last_activity` past the ask — the deny dominates the
+        // moved-past branch, so the sparkle stays.
+        let denied = resolved_plan_approval("sess-1", false, 5);
+        assert!(plan_mode_after_activity(
+            denied,
+            planning_agent("sess-1"),
+            10
+        ));
     }
 
     #[test]
