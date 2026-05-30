@@ -173,7 +173,7 @@ Both helpers live next to the durability contract they enforce. No module hand-r
 
 ## Tests
 
-Local default: `cargo xtask test` (wraps `cargo nextest run`). `cargo test` still works but isn't the contributor path.
+Local runner: `cargo xtask test` (wraps `cargo nextest run`). nextest is the only suite runner — install it with `cargo install cargo-nextest --locked`. Doctests, which nextest does not run, go through `cargo test --workspace --doc` in the `doctest` task.
 
 Three tiers, each with a clear discipline:
 

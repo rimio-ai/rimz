@@ -4,7 +4,7 @@
 use std::env;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Command, ExitStatus};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -203,51 +203,34 @@ fn deps(root: &Path) -> Result<()> {
 }
 
 fn test(root: &Path) -> Result<()> {
-    if cargo_subcommand_available("nextest") {
-        run(
-            root,
-            "cargo",
-            [
-                "nextest",
-                "run",
-                "--workspace",
-                "--all-features",
-                "--locked",
-            ],
-        )
-    } else {
-        run(
-            root,
-            "cargo",
-            ["test", "--workspace", "--all-features", "--locked"],
-        )
-    }
+    run(
+        root,
+        "cargo",
+        [
+            "nextest",
+            "run",
+            "--workspace",
+            "--all-features",
+            "--locked",
+        ],
+    )
 }
 
 // Coverage is the *only* test run in `ci`: `llvm-cov nextest` runs the suite
 // under instrumentation, so there is no separate uninstrumented `test` pass to
-// build and execute the workspace a second time. Falls back to `llvm-cov`'s
-// built-in `cargo test` driver when nextest is absent, mirroring `test`.
+// build and execute the workspace a second time.
 fn coverage(root: &Path) -> Result<()> {
-    if cargo_subcommand_available("nextest") {
-        run(
-            root,
-            "cargo",
-            [
-                "llvm-cov",
-                "nextest",
-                "--workspace",
-                "--all-features",
-                "--locked",
-            ],
-        )
-    } else {
-        run(
-            root,
-            "cargo",
-            ["llvm-cov", "--workspace", "--all-features", "--locked"],
-        )
-    }
+    run(
+        root,
+        "cargo",
+        [
+            "llvm-cov",
+            "nextest",
+            "--workspace",
+            "--all-features",
+            "--locked",
+        ],
+    )
 }
 
 fn run<I, S>(root: &Path, program: &str, args: I) -> Result<()>
@@ -274,15 +257,6 @@ fn ensure_success<S: AsRef<OsStr>>(program: &str, args: &[S], status: ExitStatus
         .collect::<Vec<_>>()
         .join(" ");
     bail!("command failed: {program} {rendered_args}");
-}
-
-fn cargo_subcommand_available(name: &str) -> bool {
-    Command::new("cargo")
-        .args([name, "--version"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
 }
 
 fn workspace_root() -> Result<PathBuf> {
