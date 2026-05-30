@@ -122,6 +122,16 @@ impl Fixture {
             .expect("spawn rimz sidebar snapshot")
     }
 
+    /// A read-only consumer snapshot: the same command plus `--no-produce`, the
+    /// flag a younger per-tab renderer passes so it renders from the elder's
+    /// published cache and never forks `list-panes`/git.
+    fn run_no_produce_snapshot(&self) -> Output {
+        let mut cmd = self.snapshot_command();
+        cmd.arg("--no-produce");
+        cmd.output()
+            .expect("spawn rimz sidebar snapshot --no-produce")
+    }
+
     /// Trace-log lines mentioning the per-worktree `git` forks, by marker.
     fn git_forks(&self, marker: &str) -> usize {
         std::fs::read_to_string(&self.git_log)
@@ -230,6 +240,61 @@ fn repeat_snapshot_within_ttl_forks_no_git() {
         after_cold,
         "a repeat snapshot within the TTL must fork zero git (log unchanged):\n{}",
         std::fs::read_to_string(&fixture.git_log).unwrap_or_default(),
+    );
+}
+
+/// A `--no-produce` consumer (a younger per-tab renderer) forks zero git: it
+/// projects the elder's published `diff-stats.json` and never runs the
+/// per-worktree probes. Warm the cache with one producing snapshot, then assert
+/// a `--no-produce` run adds no git-trace lines yet still carries the cached +2.
+/// This is the read-side of "one producer per workspace, one renderer per tab":
+/// every extra tab costs a cache read, not a `list-panes`/git round-trip.
+#[test]
+fn no_produce_consumer_forks_no_git_and_reads_cache() {
+    let Some(fixture) = Fixture::new() else {
+        return;
+    };
+
+    // Warm: a producing snapshot forks git and publishes the diff-stats cache.
+    let warm = fixture.run_snapshot();
+    assert!(
+        warm.status.success(),
+        "warm snapshot failed:\n{}",
+        String::from_utf8_lossy(&warm.stderr),
+    );
+    assert!(
+        fixture.git_forks("merge-base") >= 1,
+        "the warm run must fork git to publish the cache:\n{}",
+        std::fs::read_to_string(&fixture.git_log).unwrap_or_default(),
+    );
+    let after_warm = fixture.git_log_len();
+
+    // Consumer: `--no-produce` must fork zero git (log unchanged) and still
+    // render the cached worktree group with its +2 over trunk.
+    let consumer = fixture.run_no_produce_snapshot();
+    assert!(
+        consumer.status.success(),
+        "no-produce snapshot failed:\n{}",
+        String::from_utf8_lossy(&consumer.stderr),
+    );
+    assert_eq!(
+        fixture.git_log_len(),
+        after_warm,
+        "a --no-produce consumer must fork zero git (log unchanged):\n{}",
+        std::fs::read_to_string(&fixture.git_log).unwrap_or_default(),
+    );
+    let parsed: Value = serde_json::from_slice(&consumer.stdout).expect("snapshot json");
+    let group = parsed["worktree_groups"]
+        .as_array()
+        .and_then(|groups| {
+            groups
+                .iter()
+                .find(|group| group["label"] == "feature-migration")
+        })
+        .unwrap_or_else(|| panic!("expected a feature-migration worktree group:\n{parsed:#}"));
+    assert_eq!(
+        group["diff_added"], 2,
+        "the consumer renders the cached +2 without forking git"
     );
 }
 

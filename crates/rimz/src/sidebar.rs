@@ -3,11 +3,13 @@
 //! The sidebar heartbeat remains a latency hint. A stale, unreadable, or
 //! protocol-mismatched heartbeat never blocks a fresh launch.
 //!
-//! The invariant is one live sidebar per workspace. Two paths enforce it: a
-//! launch lock so concurrent attaches don't each spawn a daemon, and — the
-//! definitive backstop — a runtime election where every younger duplicate
-//! yields to the eldest live instance (UUIDv7 ids sort by birth), so any
-//! stampede that slips the lock collapses to one within a tick.
+//! The invariant is one *producer* per workspace, one *renderer* per tab. Every
+//! tab runs its own renderer; the eldest live instance is elected the producer
+//! (UUIDv7 ids sort by birth) and forks `list-panes`/git, while younger
+//! renderers read its published cache read-only. So the mux/git round-trip is
+//! paid once per workspace without any per-tab renderer going dark. A launch
+//! lock keeps concurrent attaches from each spawning a daemon, and the orphan
+//! sweep reaps a SIGKILLed instance's runtime files.
 
 use std::collections::HashSet;
 use std::fs;
@@ -118,12 +120,12 @@ pub fn fresh_sidebar_present(rt: &RuntimePaths) -> bool {
 }
 
 /// True when a live sidebar holds an older instance id than `own_id`. UUIDv7
-/// ids sort by birth time, so the lowest id is the eldest; every younger
-/// duplicate yields to it (see [`crate::sidebar`] module docs), collapsing a
-/// launch-race stampede to one live sidebar per workspace. The eldest finds no
-/// elder and never yields, so exactly one survives. The handoff trusts the same
-/// heartbeat TTL as the launch gate, so a just-SIGKILLed elder is honoured for
-/// at most one TTL before the gate relaunches.
+/// ids sort by birth time, so the lowest id is the eldest. The eldest is the
+/// sole producer (it finds no elder); every younger renderer reads its
+/// published cache rather than forking its own `list-panes`/git (see
+/// [`crate::sidebar`] module docs). The election trusts the same heartbeat TTL
+/// as the launch gate, so a just-SIGKILLed elder is honoured for at most one
+/// TTL before the next-eldest renderer takes over production.
 pub fn elder_sidebar_present(rt: &RuntimePaths, own_id: &SidebarInstanceId) -> bool {
     fresh_sidebar_instances(rt)
         .iter()
@@ -180,13 +182,14 @@ pub fn launch_sidebar_if_needed(
     // the lock until its daemon publishes one. No lock dir or a wedged producer
     // falls to a local launch, and the runtime election reaps the loser.
     let lock_path = runtime.root.join("sidebar-launch.lock");
-    let _guard = match single_flight::coalesce(&lock_path, LAUNCH_WAIT_STEP, LAUNCH_WAIT_STEPS, || {
-        fresh_sidebar_present(runtime).then_some(())
-    }) {
-        Coalesced::Shared(()) => return SidebarLaunchOutcome::SkippedFresh,
-        Coalesced::Produce(guard) => Some(guard),
-        Coalesced::ProduceLocal => None,
-    };
+    let _guard =
+        match single_flight::coalesce(&lock_path, LAUNCH_WAIT_STEP, LAUNCH_WAIT_STEPS, || {
+            fresh_sidebar_present(runtime).then_some(())
+        }) {
+            Coalesced::Shared(()) => return SidebarLaunchOutcome::SkippedFresh,
+            Coalesced::Produce(guard) => Some(guard),
+            Coalesced::ProduceLocal => None,
+        };
     let mut opts = opts.clone();
     opts.replace_existing = true;
     match backend.open_sidebar(&opts) {
@@ -236,7 +239,9 @@ fn remove_orphan(path: &Path) {
     match fs::remove_file(path) {
         Ok(()) => debug!(path = %path.display(), "swept orphaned sidebar runtime file"),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => debug!(path = %path.display(), error = %err, "sweeping orphaned runtime file failed"),
+        Err(err) => {
+            debug!(path = %path.display(), error = %err, "sweeping orphaned runtime file failed")
+        }
     }
 }
 

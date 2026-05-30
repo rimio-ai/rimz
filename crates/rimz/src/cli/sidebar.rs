@@ -37,6 +37,12 @@ enum SidebarSubcmd {
         exclude_pane_id: Option<String>,
         #[arg(long)]
         json: bool,
+        /// Render read-only from the producer's published cache: never fork
+        /// `list-panes` or git. A non-producer renderer (one whose workspace
+        /// already has an elder producer) passes this so the per-tab fleet
+        /// pays the mux/git round-trip exactly once, on the elder.
+        #[arg(long)]
+        no_produce: bool,
     },
     /// Run the terminal sidebar renderer.
     Serve {
@@ -59,7 +65,12 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             session_name,
             exclude_pane_id,
             json,
+            no_produce,
         } => {
+            // A producer forks `list-panes`/git and publishes the shared cache;
+            // a non-producer renders read-only from that cache. Default is to
+            // produce, so bare CLI calls and the plugin rail are unchanged.
+            let produce = !no_produce;
             let mut resolved_session = None;
             let ledger = match workspace_id {
                 Some(raw) => open_ledger_by_workspace_id(raw.parse()?),
@@ -94,6 +105,16 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     // A test fixture stands in for the mux; never touch the shared
                     // cache so deterministic tests can neither poison nor read it.
                     (Some(_), Some(fixture)) => (ledger.snapshot()?, Some(fixture)),
+                    // A non-producer renders from the producer's published
+                    // cache and never forks `list-panes`. A cold miss (the
+                    // producer has not published yet) shows the bare rollup
+                    // until the next tick — never a `list-panes` of its own.
+                    (Some(session), None) if !produce => {
+                        match read_published_base(&ledger, session) {
+                            Some((rollup, panes)) => (rollup, Some(panes)),
+                            None => (ledger.snapshot()?, None),
+                        }
+                    }
                     (Some(session), None) => {
                         let mux = mux
                             .or(globals.mux)
@@ -127,7 +148,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             // `external`. The git probe is cached under the diff-stats TTL and
             // runs on this fetch worker, never the render thread.
             if let Some(root) = snapshot.project_root.clone() {
-                let roots = project_worktree_roots(&root, ledger.runtime_paths());
+                let roots = project_worktree_roots(&root, ledger.runtime_paths(), produce);
                 snapshot = snapshot.with_worktree_roots(roots);
             }
 
@@ -171,7 +192,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             snapshot.sidebar = rimz::config::MachineConfig::load()
                 .map(|config| config.sidebar)
                 .unwrap_or_default();
-            enrich_worktree_groups(&mut snapshot, ledger.runtime_paths());
+            enrich_worktree_groups(&mut snapshot, ledger.runtime_paths(), produce);
             if json {
                 let rendered = serde_json::to_string_pretty(&snapshot)?;
                 #[expect(clippy::print_stdout, reason = "json emitter for sidebar")]
@@ -325,6 +346,20 @@ fn fresh_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotCach
     let fresh =
         unix_now_ms().saturating_sub(cache.produced_at_ms) <= SNAPSHOT_CACHE_TTL.as_millis() as u64;
     fresh.then_some(cache)
+}
+
+/// The producer's last published base (ledger rollup + live pane list) for a
+/// read-only (`--no-produce`) renderer. Returns the same-session cache
+/// regardless of freshness — a non-producer holds the last good frame rather
+/// than forking its own `list-panes`; the elder's next publish refreshes it.
+/// `None` when no same-session cache exists yet, so the caller falls back to the
+/// bare ledger rollup until the producer's first publish.
+fn read_published_base(
+    ledger: &Ledger,
+    session: &str,
+) -> Option<(rimz::SidebarSnapshot, Vec<rimz::feed::PaneRef>)> {
+    let cache_path = ledger.runtime_paths().root.join("snapshot.json");
+    read_snapshot_cache(&cache_path, session).map(|cache| (cache.snapshot, cache.panes))
 }
 
 /// Do the heavy work: project the ledger rollup and enumerate the session's
@@ -510,7 +545,11 @@ impl DiffStatsCacheEntry {
 /// settles the shared-worktree "whose branch?" ambiguity. The live branch
 /// overrides the reducer's pinned label so the header tracks `git checkout` in
 /// the linked pane.
-fn enrich_worktree_groups(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::RuntimePaths) {
+fn enrich_worktree_groups(
+    snapshot: &mut rimz::SidebarSnapshot,
+    runtime: &rimz::RuntimePaths,
+    produce: bool,
+) {
     let cache_path = runtime.root.join("diff-stats.json");
     let now_ms = unix_now_ms();
 
@@ -532,8 +571,10 @@ fn enrich_worktree_groups(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::
     }
 
     // Refresh the diff stats those paths need — single-flighted across the
-    // fleet — then project the resulting cache onto the groups.
-    let cache = refresh_diff_stats(&cache_path, runtime, &needed, now_ms);
+    // fleet — then project the resulting cache onto the groups. A non-producer
+    // skips the git forks entirely and projects whatever the elder last
+    // published.
+    let cache = refresh_diff_stats(&cache_path, runtime, &needed, now_ms, produce);
     for group in &mut snapshot.worktree_groups {
         if group.kind != rimz::SidebarWorktreeKind::Worktree {
             continue;
@@ -582,6 +623,7 @@ fn refresh_diff_stats(
     runtime: &rimz::RuntimePaths,
     needed: &[String],
     now_ms: u64,
+    produce: bool,
 ) -> DiffStatsCache {
     let stale = |cache: &DiffStatsCache| -> Vec<String> {
         needed
@@ -597,6 +639,11 @@ fn refresh_diff_stats(
     };
 
     let cache = read_diff_stats_cache(cache_path);
+    // A non-producer never forks git: it projects whatever the elder published,
+    // even when stale. The elder's next refresh heals the column.
+    if !produce {
+        return cache;
+    }
     // Fast path: nothing stale — no lock, no git, as the all-fresh tick already
     // behaved before the single-flight.
     if stale(&cache).is_empty() {
@@ -723,12 +770,22 @@ fn trunk_ref(worktree: &Path) -> Option<String> {
 /// worktree add/remove`, so re-forking `git worktree list` every tick would be
 /// pure overhead. Empty on a non-git project or a git probe failure, which
 /// leaves the reducer's `project_root` prefix test to stand alone.
-fn project_worktree_roots(project_root: &Path, runtime: &RuntimePaths) -> Vec<PathBuf> {
+fn project_worktree_roots(
+    project_root: &Path,
+    runtime: &RuntimePaths,
+    produce: bool,
+) -> Vec<PathBuf> {
     let cache_path = runtime.root.join("diff-stats.json");
     let mut cache = read_diff_stats_cache(&cache_path);
     let now_ms = unix_now_ms();
     if let Some(cached) = cache.worktrees.as_ref().filter(|w| w.is_fresh(now_ms)) {
         return cached.roots.clone();
+    }
+    // A non-producer never forks `git worktree list`: it reuses whatever roots
+    // the elder last published (even stale), and an empty set on a cold start
+    // simply leaves the reducer's project-root prefix test to stand alone.
+    if !produce {
+        return cache.worktrees.map(|w| w.roots).unwrap_or_default();
     }
     let roots = list_worktree_roots(project_root);
     cache.worktrees = Some(WorktreeRootsCache {
@@ -1133,5 +1190,60 @@ mod tests {
         assert!(fresh_snapshot_cache(&path, "rimz-query-engine").is_none());
         std::fs::write(&path, b"{ not json").unwrap();
         assert!(fresh_snapshot_cache(&path, "rimz-query-engine").is_none());
+    }
+
+    #[test]
+    fn read_only_consumer_serves_a_stale_same_session_base() {
+        // A `--no-produce` renderer holds the producer's last published base even
+        // past the freshness TTL — it renders the last good frame rather than
+        // forking its own `list-panes`. The fresh-only read (the producer's fast
+        // path) misses the stale entry; the TTL-agnostic read still serves it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.json");
+        let stale = unix_now_ms().saturating_sub(SNAPSHOT_CACHE_TTL.as_millis() as u64 + 1);
+        write_snapshot_cache(&path, "rimz-query-engine", stale);
+        assert!(
+            fresh_snapshot_cache(&path, "rimz-query-engine").is_none(),
+            "the producer's fresh-only fast path skips a stale entry"
+        );
+        assert!(
+            read_snapshot_cache(&path, "rimz-query-engine").is_some(),
+            "the consumer's read serves the stale entry as last-good"
+        );
+    }
+
+    #[test]
+    fn read_only_diff_stats_forks_no_git_and_leaves_cache_intact() {
+        // A non-producer projects whatever the elder last published and never
+        // forks git: a stale/missing needed path adds no entry and mutates
+        // nothing, so the read-only path can never spawn a `git` per worktree.
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace_id, dir.path()).expect("runtime");
+        runtime.ensure_dirs().expect("runtime dirs");
+        let cache_path = runtime.root.join("diff-stats.json");
+
+        let now = unix_now_ms();
+        let mut seed = DiffStatsCache::default();
+        seed.entries.insert(
+            "/repo/wt".to_owned(),
+            DiffStatsCacheEntry::new(
+                now,
+                Some(DiffStats {
+                    added: 7,
+                    removed: 2,
+                }),
+                Some("feature-migration".to_owned()),
+            ),
+        );
+        atomic::write_temp_then_rename_cache(&cache_path, &seed).expect("seed diff-stats cache");
+
+        // The consumer needs a path the cache does not hold (stale on its side):
+        // read-only must return the on-disk cache verbatim, never producing.
+        let needed = vec!["/repo/other".to_owned()];
+        let got = refresh_diff_stats(&cache_path, &runtime, &needed, now, false);
+        assert_eq!(got.entries.len(), 1, "read-only adds no produced entry");
+        assert!(got.entries.contains_key("/repo/wt"));
+        assert!(!got.entries.contains_key("/repo/other"));
     }
 }
