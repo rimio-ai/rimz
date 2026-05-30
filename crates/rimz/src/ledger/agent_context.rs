@@ -17,7 +17,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::context::AgentContext;
-use crate::ledger::atomic::{self, write_temp_then_rename};
+use crate::ledger::atomic::{self, write_temp_then_rename_cache};
 use crate::ledger::paths::RuntimePaths;
 
 /// A session's context sidecar: the normalized record plus the
@@ -36,8 +36,8 @@ pub struct AgentContextRecord {
 const CONTEXT_TTL_SECS: i64 = 3 * 60 * 60;
 
 /// Persist (latest-wins) one session's context. WRITER = the feed process.
-/// Atomic temp+fsync+rename via [`write_temp_then_rename`].
-#[must_use = "durability barrier; check the result"]
+/// Atomic temp+rename (no fsync — disposable sidecar) via
+/// [`write_temp_then_rename_cache`].
 pub fn write(
     runtime: &RuntimePaths,
     kind: &str,
@@ -49,7 +49,7 @@ pub fn write(
         agent_id: agent_id.to_owned(),
         context: context.clone(),
     };
-    write_temp_then_rename(&runtime.agent_context_path(kind, agent_id), &record)
+    write_temp_then_rename_cache(&runtime.agent_context_path(kind, agent_id), &record)
 }
 
 /// Read every live session's context. Tolerant: an unreadable, malformed, or

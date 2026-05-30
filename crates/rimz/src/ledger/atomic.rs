@@ -62,11 +62,36 @@ pub fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Whether a temp+rename write fsyncs before it becomes observable.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fsync {
+    /// fsync the temp file and the parent dir — survives power loss. The default
+    /// for durable ledger state (feed files, snapshots, records, heartbeats).
+    Durable,
+    /// Skip both fsyncs. The rename stays atomic (a reader never sees a torn
+    /// file), but the write is not crash-durable. Disposable caches only.
+    Skip,
+}
+
 /// Write `value` as pretty JSON to `path` via a same-directory temp file
 /// followed by an atomic rename. fsync is applied to the temp file before
 /// the rename. Caller has already created `path.parent()`.
 #[must_use = "durability barrier; check the result"]
 pub fn write_temp_then_rename<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    write_temp_then_rename_with(path, value, Fsync::Durable)
+}
+
+/// Like [`write_temp_then_rename`] but skips the temp-file and parent-dir
+/// fsyncs. For disposable runtime caches — the sidebar snapshot/diff-stats
+/// caches and the agent-context sidecar — that are rebuilt on the next tick:
+/// durability there buys nothing, and the two fsyncs per write add disk latency
+/// to a path the UI (or a hook) waits on. The rename is still atomic, so a
+/// reader never sees a torn file; only "survives a power cut" is traded away.
+pub fn write_temp_then_rename_cache<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    write_temp_then_rename_with(path, value, Fsync::Skip)
+}
+
+fn write_temp_then_rename_with<T: Serialize>(path: &Path, value: &T, fsync: Fsync) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| AtomicErr::Io {
             path: parent.to_path_buf(),
@@ -84,16 +109,20 @@ pub fn write_temp_then_rename<T: Serialize>(path: &Path, value: &T) -> Result<()
             path: tmp.clone(),
             source: e,
         })?;
-        file.sync_all().map_err(|e| AtomicErr::Io {
-            path: tmp.clone(),
-            source: e,
-        })?;
+        if fsync == Fsync::Durable {
+            file.sync_all().map_err(|e| AtomicErr::Io {
+                path: tmp.clone(),
+                source: e,
+            })?;
+        }
     }
     std::fs::rename(&tmp, path).map_err(|e| AtomicErr::Io {
         path: path.to_path_buf(),
         source: e,
     })?;
-    sync_parent_dir(path)?;
+    if fsync == Fsync::Durable {
+        sync_parent_dir(path)?;
+    }
     Ok(())
 }
 

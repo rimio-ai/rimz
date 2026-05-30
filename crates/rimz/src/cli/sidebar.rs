@@ -124,19 +124,19 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             // Fold each session's rich statusline context onto its agent state
             // (read-only; the feed process is the writer). This enriches the
             // snapshot's `agents[]` for `--json` consumers without changing row
-            // rendering. An empty room has nothing to enrich, so skip the
-            // sidecar directory scan entirely — the common idle case.
+            // rendering. Both the context sidecar and the per-tool activity
+            // heartbeats fold only onto existing agents, so an empty room skips
+            // both directory scans entirely — the common idle case. Activity
+            // lands before the pane overlay so age, ranking, the ask-fold guard,
+            // and the stall window all see the truer per-tool value rather than
+            // the turn-grained event-log timestamp.
             if !snapshot.agents.is_empty() {
                 snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(
                     ledger.runtime_paths(),
                 ));
+                let activity = rimz::agent_activity::read_all(ledger.runtime_paths());
+                snapshot = snapshot.with_agent_activity(&activity);
             }
-            // Fold per-tool activity heartbeats into `last_activity` before the
-            // pane overlay, so age, ranking, the ask-fold guard, and the stall
-            // window all see the truer per-tool value rather than the
-            // turn-grained event-log timestamp.
-            let activity = rimz::agent_activity::read_all(ledger.runtime_paths());
-            snapshot = snapshot.with_agent_activity(&activity);
 
             if let Some(panes) = panes {
                 if let Some(own) = exclude.as_ref() {
@@ -435,7 +435,7 @@ fn cached_base_or_produce(
                 panes: panes.clone(),
                 snapshot: rollup.clone(),
             };
-            if let Err(err) = atomic::write_temp_then_rename(&cache_path, &cache) {
+            if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &cache) {
                 tracing::warn!(path = %cache_path.display(), error = %err, "sidebar snapshot cache write failed");
             }
             Ok((rollup, panes))
@@ -556,7 +556,7 @@ fn enrich_worktree_groups(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::
         }
     }
 
-    if changed && let Err(err) = atomic::write_temp_then_rename(&cache_path, &cache) {
+    if changed && let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &cache) {
         tracing::warn!(path = %cache_path.display(), error = %err, "sidebar diff-stats cache write failed");
     }
 }
