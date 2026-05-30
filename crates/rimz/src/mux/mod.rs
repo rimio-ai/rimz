@@ -267,7 +267,7 @@ pub trait MuxBackend: Send + Sync {
 /// Construct a boxed backend for the named multiplexer.
 pub fn backend_for(mux: MuxName) -> Box<dyn MuxBackend> {
     match mux {
-        MuxName::Zellij => Box::new(ZellijBackend),
+        MuxName::Zellij => Box::new(ZellijBackend::new()),
         MuxName::Tmux => Box::new(TmuxBackend::new()),
     }
 }

@@ -60,7 +60,7 @@ pub struct ZellijCapabilities {
 
 /// Probe the installed Zellij. Cheap: one `zellij --version` call.
 pub fn capabilities() -> Result<ZellijCapabilities> {
-    let raw = ZellijBackend.version()?;
+    let raw = ZellijBackend::default().version()?;
     let parsed = parse_version(&raw);
     Ok(ZellijCapabilities {
         meets_min_version: parsed.is_some_and(|v| v >= MIN_ZELLIJ_VERSION),
@@ -86,11 +86,45 @@ fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct ZellijBackend;
+pub struct ZellijBackend {
+    /// Override for `XDG_RUNTIME_DIR`, where Zellij locates its server socket.
+    /// `None` inherits the process env (production); integration tests set a
+    /// private tempdir so each test drives its own Zellij server — the
+    /// isolation that lets them run in parallel and across worktrees with no
+    /// shared lock. Mirrors [`super::TmuxBackend`]'s `with_socket` seam.
+    runtime_dir: Option<PathBuf>,
+}
 
 impl ZellijBackend {
-    fn list_panes_with_session(session: Option<&str>) -> Result<Vec<RawPane>> {
-        let mut spec = CommandSpec::new("zellij");
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Pin every Zellij command this backend runs to `dir` as `XDG_RUNTIME_DIR`,
+    /// so a test's server, sessions, and sockets never touch the user's.
+    pub fn with_runtime_dir(dir: impl Into<PathBuf>) -> Self {
+        Self {
+            runtime_dir: Some(dir.into()),
+        }
+    }
+
+    /// Base `CommandSpec` for every Zellij invocation — the single chokepoint.
+    /// The program honors `RIMZ_ZELLIJ_BIN` (the binary override the wakeup walk
+    /// may point at a test shim; see `tests/fixtures/zellij-trace`), and the
+    /// optional `XDG_RUNTIME_DIR` env scopes the server socket. Threading
+    /// isolation through one field this way keeps it impossible for a stray
+    /// command to escape to the user's default server.
+    fn cmd(&self) -> CommandSpec {
+        let program = env::var("RIMZ_ZELLIJ_BIN").unwrap_or_else(|_| "zellij".to_owned());
+        let mut spec = CommandSpec::new(program);
+        if let Some(dir) = &self.runtime_dir {
+            spec = spec.env("XDG_RUNTIME_DIR", dir.to_string_lossy().into_owned());
+        }
+        spec
+    }
+
+    fn list_panes_with_session(&self, session: Option<&str>) -> Result<Vec<RawPane>> {
+        let mut spec = self.cmd();
         if let Some(name) = session {
             spec = spec.args(["--session".to_owned(), name.to_owned()]);
         }
@@ -123,8 +157,8 @@ impl ZellijBackend {
     ///
     /// Best-effort: a failed listing reads as "unhealthy" so the caller heals
     /// rather than trusts a session it cannot inspect.
-    fn session_has_healthy_sidebar(name: &str) -> bool {
-        Self::list_panes_with_session(Some(name))
+    fn session_has_healthy_sidebar(&self, name: &str) -> bool {
+        self.list_panes_with_session(Some(name))
             .map(|panes| {
                 let mut found = false;
                 for pane in panes.iter().filter(|pane| is_sidebar_pane(pane)) {
@@ -136,6 +170,294 @@ impl ZellijBackend {
                 found
             })
             .unwrap_or(false)
+    }
+
+    /// Classify `name`'s liveness from `zellij list-sessions`. A present session
+    /// always lists with exit code 0; the command only fails ("No active zellij
+    /// sessions found.", exit 1) when there are none, so any failure here means
+    /// the session is absent and a fresh birth should proceed.
+    fn session_state(&self, name: &str) -> SessionState {
+        let Ok(output) = self.cmd().args(["list-sessions", "--no-formatting"]).run() else {
+            return SessionState::Absent;
+        };
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| session_state_from_line(line, name))
+            .unwrap_or(SessionState::Absent)
+    }
+
+    /// Force-delete a session (exited or live) so the next create births a clean
+    /// one from the layout rather than resurrecting a stale serialized layout or
+    /// attaching to a sidebar-less leftover. `--force` also kills a live session.
+    /// A session that vanished between the liveness check and here is already in
+    /// the state we want, so "not found" is success.
+    fn delete_session(&self, name: &str) -> Result<()> {
+        match self.cmd().args(["delete-session", name, "--force"]).run() {
+            Ok(_) => Ok(()),
+            Err(MuxErr::Command { stderr, .. })
+                if stderr.to_ascii_lowercase().contains("not found") =>
+            {
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Create the background session from a layout that puts the `rimz-sidebar`
+    /// pane on the left and focuses the user's terminal on the right. The layout
+    /// doubles as the default tab template, so new tabs are born with a sidebar
+    /// too. The sidebar pane is `close_on_exit`, so when its own process exits
+    /// the pane closes — see the self-close loop in `crates/rimz-sidebar`.
+    ///
+    /// Zellij parses `--default-layout` asynchronously, after the
+    /// `--create-background` client returns, so the temp layout file must
+    /// outlive the call. We hold it through a bounded wait for the sidebar pane
+    /// to appear, then let it drop.
+    fn create_session_with_sidebar(&self, opts: &SidebarPaneOptions) -> Result<()> {
+        let layout = TempLayoutFile::new(render_sidebar_layout(opts)?)?;
+        let spec = self.cmd().args([
+            "attach".to_owned(),
+            "--create-background".to_owned(),
+            opts.session_name.clone(),
+            "options".to_owned(),
+            "--default-cwd".to_owned(),
+            opts.cwd.to_string_lossy().into_owned(),
+            "--default-layout".to_owned(),
+            layout.path().to_string_lossy().into_owned(),
+        ]);
+        let mut command = spec.to_command();
+        command.current_dir(&opts.cwd);
+        let output = command.output().map_err(|err| match err.kind() {
+            std::io::ErrorKind::NotFound => MuxErr::NotInstalled {
+                program: spec.program.clone(),
+            },
+            _ => MuxErr::Io(err),
+        })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let lower = stderr.to_ascii_lowercase();
+            // A racing `rimz` may have created the session first; treat that as
+            // success rather than re-injecting.
+            if !(lower.contains("already exists")
+                || (lower.contains("session") && lower.contains("exists")))
+            {
+                return Err(MuxErr::Command {
+                    program: spec.program,
+                    args: spec.args.join(" "),
+                    stderr,
+                });
+            }
+        }
+        if !self.wait_for_sidebar_layout(&opts.session_name) {
+            tracing::warn!(
+                session = %opts.session_name,
+                "sidebar layout did not materialize within the ceiling; dropping the temp \
+                 layout may leave the session sidebar-less — it self-heals on the next open_sidebar",
+            );
+        }
+        drop(layout);
+        Ok(())
+    }
+
+    /// `zellij --session <name> action <verb> …` — the session-scoped action
+    /// form the pane listing and wakeup fanout use, so recovery works whether or
+    /// not the caller is attached.
+    fn zellij_action(&self, session: &str) -> CommandSpec {
+        self.cmd().args([
+            "--session".to_owned(),
+            session.to_owned(),
+            "action".to_owned(),
+        ])
+    }
+
+    fn focus_terminal(&self, session: &str, raw_id: u64) -> Result<()> {
+        self.zellij_action(session)
+            .args(["focus-pane-id".to_owned(), format!("terminal_{raw_id}")])
+            .run()
+            .map(|_| ())
+    }
+
+    /// `zellij --session <name> action go-to-tab <index>` (1-based). A
+    /// background view's working tab is the session's first, so this returns
+    /// focus there after `new-tab` steals it.
+    fn go_to_tab(&self, session: &str, index: u32) -> Result<()> {
+        self.zellij_action(session)
+            .args(["go-to-tab".to_owned(), index.to_string()])
+            .run()
+            .map(|_| ())
+    }
+
+    /// Inject a left-docked sidebar into a live tab without a rebirth: split a
+    /// pane to the right, move it left, then resize it toward the layout width.
+    fn add_sidebar_to_tab(&self, opts: &SidebarPaneOptions, tab_id: u64) -> Result<()> {
+        let new_pane = self.new_sidebar_pane(opts, tab_id)?;
+        self.zellij_action(&opts.session_name)
+            .args([
+                "move-pane".to_owned(),
+                "left".to_owned(),
+                "--pane-id".to_owned(),
+                new_pane.clone(),
+            ])
+            .run()?;
+        self.resize_sidebar_toward(&opts.session_name, tab_id, &new_pane, opts.width_percent);
+        Ok(())
+    }
+
+    /// `new-pane` to the right of the tab's focus, titled and `close_on_exit` to
+    /// match the layout, running the same `rimz sidebar serve` command. Returns
+    /// the created pane id Zellij prints (e.g. `terminal_58`).
+    fn new_sidebar_pane(&self, opts: &SidebarPaneOptions, tab_id: u64) -> Result<String> {
+        let args: Vec<String> = vec![
+            "new-pane".to_owned(),
+            "--direction".to_owned(),
+            "right".to_owned(),
+            "--tab-id".to_owned(),
+            tab_id.to_string(),
+            "--name".to_owned(),
+            SIDEBAR_PANE_NAME.to_owned(),
+            "--close-on-exit".to_owned(),
+            "--cwd".to_owned(),
+            opts.cwd.to_string_lossy().into_owned(),
+            "--".to_owned(),
+            opts.rimz_bin.to_string_lossy().into_owned(),
+            "sidebar".to_owned(),
+            "serve".to_owned(),
+            "--mux".to_owned(),
+            "zellij".to_owned(),
+            "--workspace-id".to_owned(),
+            opts.workspace_id.as_str().to_owned(),
+            "--session-name".to_owned(),
+            opts.session_name.clone(),
+        ];
+        let output = self.zellij_action(&opts.session_name).args(args).run()?;
+        let pane_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if pane_id.is_empty() {
+            return Err(MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: "new-pane returned no pane id".to_owned(),
+            });
+        }
+        Ok(pane_id)
+    }
+
+    /// Shrink a freshly-split sidebar (born at ~50%) toward the layout's width
+    /// percentage, landing on the width *closest* to the target. The resize step
+    /// is coarse, so the target usually falls between two reachable widths;
+    /// stopping at the first width at or below it can overshoot, so when the
+    /// prior (above-target) width was closer we step back up one. Bounded and
+    /// best-effort: it stops at the target, when a step makes no progress (hit a
+    /// minimum), or after [`RESIZE_MAX_STEPS`] — never a dead loop. Width is
+    /// cosmetic, so any failure just leaves the wider pane.
+    fn resize_sidebar_toward(&self, session: &str, tab_id: u64, pane_id: &str, width_percent: u16) {
+        const RESIZE_MAX_STEPS: u32 = 16;
+        let Some(target_raw) = parse_terminal_id(pane_id) else {
+            return;
+        };
+        let mut last_cols = u64::MAX;
+        for _ in 0..RESIZE_MAX_STEPS {
+            let Some((cols, total)) = self.sidebar_and_tab_cols(session, tab_id, target_raw) else {
+                return;
+            };
+            if total == 0 {
+                return;
+            }
+            let target = (total * u64::from(width_percent.clamp(10, 90)) / 100).max(1);
+            if cols <= target {
+                // Reached/overshot the target. If the previous, above-target
+                // width was closer than this one, the last decrease overshot —
+                // step back.
+                if last_cols != u64::MAX
+                    && last_cols.saturating_sub(target) < target.saturating_sub(cols)
+                {
+                    let _ = self.resize_sidebar_step(session, pane_id, "increase");
+                }
+                return;
+            }
+            if cols >= last_cols {
+                return; // no progress (hit a minimum) — stop rather than spin.
+            }
+            last_cols = cols;
+            if self
+                .resize_sidebar_step(session, pane_id, "decrease")
+                .is_err()
+            {
+                return;
+            }
+        }
+    }
+
+    fn resize_sidebar_step(&self, session: &str, pane_id: &str, direction: &str) -> Result<()> {
+        self.zellij_action(session)
+            .args([
+                "resize".to_owned(),
+                direction.to_owned(),
+                "right".to_owned(),
+                "--pane-id".to_owned(),
+                pane_id.to_owned(),
+            ])
+            .run()
+            .map(|_| ())
+    }
+
+    /// Current column width of `target_raw` and the total columns of its tab
+    /// (the sum across the tab's panes — exact for the sidebar-plus-terminal row
+    /// the recovery produces). `None` when the pane has vanished or carries no
+    /// geometry.
+    fn sidebar_and_tab_cols(
+        &self,
+        session: &str,
+        tab_id: u64,
+        target_raw: u64,
+    ) -> Option<(u64, u64)> {
+        let panes = self.list_panes_with_session(Some(session)).ok()?;
+        let mut total = 0;
+        let mut current = None;
+        for pane in panes
+            .iter()
+            .filter(|pane| pane.is_terminal() && pane.tab_id == tab_id)
+        {
+            let cols = pane.pane_columns?;
+            total += cols;
+            if pane.id == target_raw {
+                current = Some(cols);
+            }
+        }
+        Some((current?, total))
+    }
+
+    /// Block until Zellij has materialized the layout's sidebar pane alongside a
+    /// second live terminal, so the caller's temp layout file stays on disk
+    /// until Zellij has demonstrably parsed it. Returns `true` once that signal
+    /// appears, `false` if the [`SIDEBAR_LAYOUT_TIMEOUT`] ceiling elapses first.
+    ///
+    /// The predicate gates on *our* `rimz-sidebar` pane (a default/fallback
+    /// birth carries none) counted with the same `is_live_terminal` filter
+    /// `list_panes` applies, so "materialized" here provably implies the
+    /// caller's next `list_panes` returns the two panes — no held/exited pane
+    /// slips the gate.
+    fn wait_for_sidebar_layout(&self, session_name: &str) -> bool {
+        let deadline = Instant::now() + SIDEBAR_LAYOUT_TIMEOUT;
+        while Instant::now() < deadline {
+            if let Ok(panes) = self.list_panes_with_session(Some(session_name))
+                && panes.iter().any(is_sidebar_pane)
+                && panes.iter().filter(|pane| pane.is_live_terminal()).count() >= 2
+            {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
+    /// Whether `session` already holds a tab named `tab_name`. `query-tab-names`
+    /// prints one tab name per line; a Rimz background view is idempotent on its
+    /// name, so a relaunch into a session that already carries it is skipped.
+    fn session_has_named_tab(&self, session: &str, tab_name: &str) -> Result<bool> {
+        let output = self.zellij_action(session).arg("query-tab-names").run()?;
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(strip_ansi)
+            .any(|line| line.trim() == tab_name))
     }
 }
 
@@ -152,22 +474,19 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn attach_command(&self, name: &str) -> CommandSpec {
-        CommandSpec::new("zellij").args(["attach", "--create", name])
+        self.cmd().args(["attach", "--create", name])
     }
 
     fn detach(&self, _name: &str) -> Result<()> {
-        CommandSpec::new("zellij")
-            .args(["action", "detach"])
-            .run()
-            .map(|_| ())
+        self.cmd().args(["action", "detach"]).run().map(|_| ())
     }
 
     fn kill_session(&self, name: &str) -> Result<()> {
-        delete_session(name)
+        self.delete_session(name)
     }
 
     fn list_sessions(&self) -> Result<Vec<String>> {
-        let output = CommandSpec::new("zellij").arg("list-sessions").run()?;
+        let output = self.cmd().arg("list-sessions").run()?;
         // Output lines look like `name [Created Ns ago]`; the bare name
         // appears as a leading whitespace-separated token. Strip ANSI escapes
         // defensively in case `list-sessions` colorizes its output.
@@ -180,7 +499,7 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn list_panes(&self, opts: PaneListOptions) -> Result<Vec<PaneRef>> {
-        let raws = Self::list_panes_with_session(opts.session_name.as_deref())?;
+        let raws = self.list_panes_with_session(opts.session_name.as_deref())?;
         let session_name = opts.session_name.unwrap_or_default();
         Ok(raws
             .into_iter()
@@ -204,7 +523,7 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()> {
-        let mut spec = CommandSpec::new("zellij").args(["action", "new-pane"]);
+        let mut spec = self.cmd().args(["action", "new-pane"]);
         if let Some(target) = opts.target_pane_id {
             ensure_pane_backend(&target, MuxName::Zellij)?;
             // Zellij's CLI opens relative to the current focus and does not
@@ -228,7 +547,7 @@ impl MuxBackend for ZellijBackend {
         // Zellij 0.41+: `focus-pane-id <raw>`. The earlier `focus-pane-with-id`
         // name was removed; the stub that referenced it never reached a
         // running binary.
-        CommandSpec::new("zellij")
+        self.cmd()
             .args(["action", "focus-pane-id", pane.raw()])
             .run()
             .map(|_| ())
@@ -236,7 +555,7 @@ impl MuxBackend for ZellijBackend {
 
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
-        let mut spec = CommandSpec::new("zellij").args(["action", "dump-screen"]);
+        let mut spec = self.cmd().args(["action", "dump-screen"]);
         if ansi {
             spec = spec.arg("-a");
         }
@@ -259,7 +578,7 @@ impl MuxBackend for ZellijBackend {
 
     fn send_keys(&self, pane: &PaneId, text: &str) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
-        CommandSpec::new("zellij")
+        self.cmd()
             .args(["action", "write-chars", "--pane-id", pane.raw(), text])
             .run()
             .map(|_| ())
@@ -279,21 +598,21 @@ impl MuxBackend for ZellijBackend {
         //             was skipped and the session was born by a plain `attach
         //             --create`). A sidebar-less rimz session is non-functional
         //             and cannot gain a left pane in place, so rebirth it.
-        match session_state(&opts.session_name) {
-            SessionState::Absent => create_session_with_sidebar(opts),
+        match self.session_state(&opts.session_name) {
+            SessionState::Absent => self.create_session_with_sidebar(opts),
             SessionState::Exited => {
-                delete_session(&opts.session_name)?;
-                create_session_with_sidebar(opts)
+                self.delete_session(&opts.session_name)?;
+                self.create_session_with_sidebar(opts)
             }
             SessionState::Live
-                if Self::session_has_healthy_sidebar(&opts.session_name)
+                if self.session_has_healthy_sidebar(&opts.session_name)
                     && !opts.replace_existing =>
             {
                 Ok(())
             }
             SessionState::Live => {
-                delete_session(&opts.session_name)?;
-                create_session_with_sidebar(opts)
+                self.delete_session(&opts.session_name)?;
+                self.create_session_with_sidebar(opts)
             }
         }
     }
@@ -303,7 +622,7 @@ impl MuxBackend for ZellijBackend {
         // can still be reached in a live session: split a new pane to the right,
         // move it left, and resize it to the layout width. This never rebirths
         // the session, so the user's working panes survive.
-        let panes = Self::list_panes_with_session(Some(&opts.session_name))?;
+        let panes = self.list_panes_with_session(Some(&opts.session_name))?;
         let classified: Vec<(String, bool)> = panes
             .iter()
             .filter(|pane| pane.is_terminal())
@@ -329,11 +648,11 @@ impl MuxBackend for ZellijBackend {
                 report.failed += 1;
                 continue;
             };
-            match add_sidebar_to_tab(opts, tab_id) {
+            match self.add_sidebar_to_tab(opts, tab_id) {
                 Ok(()) => {
                     report.recovered += 1;
                     if let Some(work) = focused_in_tab.get(&tab_id) {
-                        let _ = focus_terminal(&opts.session_name, *work);
+                        let _ = self.focus_terminal(&opts.session_name, *work);
                     }
                 }
                 Err(err) => {
@@ -348,7 +667,7 @@ impl MuxBackend for ZellijBackend {
             }
         }
         if let Some(own) = own_zellij_pane_id() {
-            let _ = focus_terminal(&opts.session_name, own);
+            let _ = self.focus_terminal(&opts.session_name, own);
         }
         Ok(report)
     }
@@ -358,7 +677,7 @@ impl MuxBackend for ZellijBackend {
         // the view is a no-op. A failed query propagates rather than risk a
         // duplicate launch. Short-circuiting here also means the focus restore
         // below only runs when a tab was actually created.
-        if session_has_named_tab(&opts.session_name, &opts.name)? {
+        if self.session_has_named_tab(&opts.session_name, &opts.name)? {
             return Ok(BackgroundViewLaunch::AlreadyRunning);
         }
         // `--layout` gives the tab exactly the view's panes running their
@@ -366,7 +685,7 @@ impl MuxBackend for ZellijBackend {
         // template. `new-tab` is synchronous (it prints the new tab id), so the
         // temp layout file can drop as soon as the call returns.
         let layout = TempLayoutFile::new(render_command_layout(&opts.panes)?)?;
-        zellij_action(&opts.session_name)
+        self.zellij_action(&opts.session_name)
             .args([
                 "new-tab".to_owned(),
                 "--layout".to_owned(),
@@ -387,7 +706,7 @@ impl MuxBackend for ZellijBackend {
         // plain shell or a *different* mux session, so the caller's own pane is
         // not a focus target here — the working tab always is. Best-effort: a
         // focus hiccup never sinks an otherwise-launched view.
-        if let Err(err) = go_to_tab(&opts.session_name, 1) {
+        if let Err(err) = self.go_to_tab(&opts.session_name, 1) {
             tracing::warn!(
                 session = %opts.session_name,
                 error = %err,
@@ -399,14 +718,11 @@ impl MuxBackend for ZellijBackend {
 
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()> {
         // Per-instance socket fanout is the channel of record. The broadcast
-        // `zellij pipe` here is a latency optimization on top.
-        //
-        // The ledger wakeup walk may set `RIMZ_ZELLIJ_BIN` to point at a test
-        // shim binary (see `tests/fixtures/zellij-trace`); honor it so the
-        // wiring is testable end-to-end.
-        let program = env::var("RIMZ_ZELLIJ_BIN").unwrap_or_else(|_| "zellij".to_owned());
+        // `zellij pipe` here is a latency optimization on top. Program (and any
+        // `RIMZ_ZELLIJ_BIN` test-shim override) and runtime dir both come from
+        // `self.cmd()`, the single chokepoint.
         let payload = String::from_utf8_lossy(bytes).to_string();
-        CommandSpec::new(program)
+        self.cmd()
             .args([
                 "--session",
                 session_name,
@@ -421,16 +737,13 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn version(&self) -> Result<String> {
-        let output = CommandSpec::new("zellij")
-            .arg("--version")
-            .to_command()
-            .output()
-            .map_err(|err| match err.kind() {
-                std::io::ErrorKind::NotFound => MuxErr::NotInstalled {
-                    program: "zellij".to_owned(),
-                },
-                _ => MuxErr::Io(err),
-            })?;
+        let spec = self.cmd().arg("--version");
+        let output = spec.to_command().output().map_err(|err| match err.kind() {
+            std::io::ErrorKind::NotFound => MuxErr::NotInstalled {
+                program: spec.program.clone(),
+            },
+            _ => MuxErr::Io(err),
+        })?;
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
     }
 }
@@ -454,23 +767,6 @@ enum SessionState {
     Exited,
 }
 
-/// Classify `name`'s liveness from `zellij list-sessions`. A present session
-/// always lists with exit code 0; the command only fails ("No active zellij
-/// sessions found.", exit 1) when there are none, so any failure here means the
-/// session is absent and a fresh birth should proceed.
-fn session_state(name: &str) -> SessionState {
-    let Ok(output) = CommandSpec::new("zellij")
-        .args(["list-sessions", "--no-formatting"])
-        .run()
-    else {
-        return SessionState::Absent;
-    };
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .find_map(|line| session_state_from_line(line, name))
-        .unwrap_or(SessionState::Absent)
-}
-
 /// Parse one `list-sessions` line for `name`. Lines look like
 /// `name [Created 6m ago]` (live) or
 /// `name [Created 6m ago] (EXITED - attach to resurrect)`. `strip_ansi` guards
@@ -487,82 +783,6 @@ fn session_state_from_line(line: &str, name: &str) -> Option<SessionState> {
     })
 }
 
-/// Force-delete a session (exited or live) so the next create births a clean
-/// one from the layout rather than resurrecting a stale serialized layout or
-/// attaching to a sidebar-less leftover. `--force` also kills a live session.
-/// A session that vanished between the liveness check and here is already in
-/// the state we want, so "not found" is success.
-fn delete_session(name: &str) -> Result<()> {
-    match CommandSpec::new("zellij")
-        .args(["delete-session", name, "--force"])
-        .run()
-    {
-        Ok(_) => Ok(()),
-        Err(MuxErr::Command { stderr, .. })
-            if stderr.to_ascii_lowercase().contains("not found") =>
-        {
-            Ok(())
-        }
-        Err(err) => Err(err),
-    }
-}
-
-/// Create the background session from a layout that puts the `rimz-sidebar`
-/// pane on the left and focuses the user's terminal on the right. The layout
-/// doubles as the default tab template, so new tabs are born with a sidebar
-/// too. The sidebar pane is `close_on_exit`, so when its own process exits the
-/// pane closes — see the self-close loop in `crates/rimz-sidebar`.
-///
-/// Zellij parses `--default-layout` asynchronously, after the
-/// `--create-background` client returns, so the temp layout file must outlive
-/// the call. We hold it through a bounded wait for the sidebar pane to appear,
-/// then let it drop.
-fn create_session_with_sidebar(opts: &SidebarPaneOptions) -> Result<()> {
-    let layout = TempLayoutFile::new(render_sidebar_layout(opts)?)?;
-    let spec = CommandSpec::new("zellij").args([
-        "attach".to_owned(),
-        "--create-background".to_owned(),
-        opts.session_name.clone(),
-        "options".to_owned(),
-        "--default-cwd".to_owned(),
-        opts.cwd.to_string_lossy().into_owned(),
-        "--default-layout".to_owned(),
-        layout.path().to_string_lossy().into_owned(),
-    ]);
-    let mut command = spec.to_command();
-    command.current_dir(&opts.cwd);
-    let output = command.output().map_err(|err| match err.kind() {
-        std::io::ErrorKind::NotFound => MuxErr::NotInstalled {
-            program: spec.program.clone(),
-        },
-        _ => MuxErr::Io(err),
-    })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let lower = stderr.to_ascii_lowercase();
-        // A racing `rimz` may have created the session first; treat that as
-        // success rather than re-injecting.
-        if !(lower.contains("already exists")
-            || (lower.contains("session") && lower.contains("exists")))
-        {
-            return Err(MuxErr::Command {
-                program: spec.program,
-                args: spec.args.join(" "),
-                stderr,
-            });
-        }
-    }
-    if !wait_for_sidebar_layout(&opts.session_name) {
-        tracing::warn!(
-            session = %opts.session_name,
-            "sidebar layout did not materialize within the ceiling; dropping the temp \
-             layout may leave the session sidebar-less — it self-heals on the next open_sidebar",
-        );
-    }
-    drop(layout);
-    Ok(())
-}
-
 /// A live, non-plugin sidebar pane is one Zellij still titles with the layout's
 /// [`SIDEBAR_PANE_NAME`] — the same signal `session_has_healthy_sidebar` trusts.
 fn is_sidebar_pane(pane: &RawPane) -> bool {
@@ -575,187 +795,8 @@ fn own_zellij_pane_id() -> Option<u64> {
     env::var("ZELLIJ_PANE_ID").ok()?.trim().parse().ok()
 }
 
-/// `zellij --session <name> action <verb> …` — the same session-scoped action
-/// form the pane listing and wakeup fanout use, so recovery works whether or not
-/// the caller is attached.
-fn zellij_action(session: &str) -> CommandSpec {
-    CommandSpec::new("zellij").args([
-        "--session".to_owned(),
-        session.to_owned(),
-        "action".to_owned(),
-    ])
-}
-
-fn focus_terminal(session: &str, raw_id: u64) -> Result<()> {
-    zellij_action(session)
-        .args(["focus-pane-id".to_owned(), format!("terminal_{raw_id}")])
-        .run()
-        .map(|_| ())
-}
-
-/// `zellij --session <name> action go-to-tab <index>` (1-based). A background
-/// view's working tab is the session's first, so this returns focus there after
-/// `new-tab` steals it.
-fn go_to_tab(session: &str, index: u32) -> Result<()> {
-    zellij_action(session)
-        .args(["go-to-tab".to_owned(), index.to_string()])
-        .run()
-        .map(|_| ())
-}
-
-/// Inject a left-docked sidebar into a live tab without a rebirth: split a pane
-/// to the right, move it left, then resize it toward the layout width.
-fn add_sidebar_to_tab(opts: &SidebarPaneOptions, tab_id: u64) -> Result<()> {
-    let new_pane = new_sidebar_pane(opts, tab_id)?;
-    zellij_action(&opts.session_name)
-        .args([
-            "move-pane".to_owned(),
-            "left".to_owned(),
-            "--pane-id".to_owned(),
-            new_pane.clone(),
-        ])
-        .run()?;
-    resize_sidebar_toward(&opts.session_name, tab_id, &new_pane, opts.width_percent);
-    Ok(())
-}
-
-/// `new-pane` to the right of the tab's focus, titled and `close_on_exit` to
-/// match the layout, running the same `rimz sidebar serve` command. Returns the
-/// created pane id Zellij prints (e.g. `terminal_58`).
-fn new_sidebar_pane(opts: &SidebarPaneOptions, tab_id: u64) -> Result<String> {
-    let args: Vec<String> = vec![
-        "new-pane".to_owned(),
-        "--direction".to_owned(),
-        "right".to_owned(),
-        "--tab-id".to_owned(),
-        tab_id.to_string(),
-        "--name".to_owned(),
-        SIDEBAR_PANE_NAME.to_owned(),
-        "--close-on-exit".to_owned(),
-        "--cwd".to_owned(),
-        opts.cwd.to_string_lossy().into_owned(),
-        "--".to_owned(),
-        opts.rimz_bin.to_string_lossy().into_owned(),
-        "sidebar".to_owned(),
-        "serve".to_owned(),
-        "--mux".to_owned(),
-        "zellij".to_owned(),
-        "--workspace-id".to_owned(),
-        opts.workspace_id.as_str().to_owned(),
-        "--session-name".to_owned(),
-        opts.session_name.clone(),
-    ];
-    let output = zellij_action(&opts.session_name).args(args).run()?;
-    let pane_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    if pane_id.is_empty() {
-        return Err(MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: "new-pane returned no pane id".to_owned(),
-        });
-    }
-    Ok(pane_id)
-}
-
-/// Shrink a freshly-split sidebar (born at ~50%) toward the layout's width
-/// percentage, landing on the width *closest* to the target. The resize step is
-/// coarse, so the target usually falls between two reachable widths; stopping at
-/// the first width at or below it can overshoot, so when the prior (above-target)
-/// width was closer we step back up one. Bounded and best-effort: it stops at
-/// the target, when a step makes no progress (hit a minimum), or after
-/// [`RESIZE_MAX_STEPS`] — never a dead loop. Width is cosmetic, so any failure
-/// just leaves the wider pane.
-fn resize_sidebar_toward(session: &str, tab_id: u64, pane_id: &str, width_percent: u16) {
-    const RESIZE_MAX_STEPS: u32 = 16;
-    let Some(target_raw) = parse_terminal_id(pane_id) else {
-        return;
-    };
-    let mut last_cols = u64::MAX;
-    for _ in 0..RESIZE_MAX_STEPS {
-        let Some((cols, total)) = sidebar_and_tab_cols(session, tab_id, target_raw) else {
-            return;
-        };
-        if total == 0 {
-            return;
-        }
-        let target = (total * u64::from(width_percent.clamp(10, 90)) / 100).max(1);
-        if cols <= target {
-            // Reached/overshot the target. If the previous, above-target width
-            // was closer than this one, the last decrease overshot — step back.
-            if last_cols != u64::MAX
-                && last_cols.saturating_sub(target) < target.saturating_sub(cols)
-            {
-                let _ = resize_sidebar_step(session, pane_id, "increase");
-            }
-            return;
-        }
-        if cols >= last_cols {
-            return; // no progress (hit a minimum) — stop rather than spin.
-        }
-        last_cols = cols;
-        if resize_sidebar_step(session, pane_id, "decrease").is_err() {
-            return;
-        }
-    }
-}
-
-fn resize_sidebar_step(session: &str, pane_id: &str, direction: &str) -> Result<()> {
-    zellij_action(session)
-        .args([
-            "resize".to_owned(),
-            direction.to_owned(),
-            "right".to_owned(),
-            "--pane-id".to_owned(),
-            pane_id.to_owned(),
-        ])
-        .run()
-        .map(|_| ())
-}
-
-/// Current column width of `target_raw` and the total columns of its tab (the
-/// sum across the tab's panes — exact for the sidebar-plus-terminal row the
-/// recovery produces). `None` when the pane has vanished or carries no geometry.
-fn sidebar_and_tab_cols(session: &str, tab_id: u64, target_raw: u64) -> Option<(u64, u64)> {
-    let panes = ZellijBackend::list_panes_with_session(Some(session)).ok()?;
-    let mut total = 0;
-    let mut current = None;
-    for pane in panes
-        .iter()
-        .filter(|pane| pane.is_terminal() && pane.tab_id == tab_id)
-    {
-        let cols = pane.pane_columns?;
-        total += cols;
-        if pane.id == target_raw {
-            current = Some(cols);
-        }
-    }
-    Some((current?, total))
-}
-
 fn parse_terminal_id(pane_id: &str) -> Option<u64> {
     pane_id.strip_prefix("terminal_")?.parse().ok()
-}
-
-/// Block until Zellij has materialized the layout's sidebar pane alongside a
-/// second live terminal, so the caller's temp layout file stays on disk until
-/// Zellij has demonstrably parsed it. Returns `true` once that signal appears,
-/// `false` if the [`SIDEBAR_LAYOUT_TIMEOUT`] ceiling elapses first.
-///
-/// The predicate gates on *our* `rimz-sidebar` pane (a default/fallback birth
-/// carries none) counted with the same `is_live_terminal` filter `list_panes`
-/// applies, so "materialized" here provably implies the caller's next
-/// `list_panes` returns the two panes — no held/exited pane slips the gate.
-fn wait_for_sidebar_layout(session_name: &str) -> bool {
-    let deadline = Instant::now() + SIDEBAR_LAYOUT_TIMEOUT;
-    while Instant::now() < deadline {
-        if let Ok(panes) = ZellijBackend::list_panes_with_session(Some(session_name))
-            && panes.iter().any(is_sidebar_pane)
-            && panes.iter().filter(|pane| pane.is_live_terminal()).count() >= 2
-        {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    false
 }
 
 /// Subset of fields `zellij action list-panes -j -a` emits. We deserialize
@@ -935,17 +976,6 @@ fn kdl_string(value: &str) -> Result<String> {
         program: "zellij".to_owned(),
         reason: format!("escaping layout string: {err}"),
     })
-}
-
-/// Whether `session` already holds a tab named `tab_name`. `query-tab-names`
-/// prints one tab name per line; a Rimz background view is idempotent on its
-/// name, so a relaunch into a session that already carries it is skipped.
-fn session_has_named_tab(session: &str, tab_name: &str) -> Result<bool> {
-    let output = zellij_action(session).arg("query-tab-names").run()?;
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(strip_ansi)
-        .any(|line| line.trim() == tab_name))
 }
 
 /// A tab layout that runs each pane's command immediately, side by side.

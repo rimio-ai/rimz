@@ -1,0 +1,28 @@
+# Nextest configuration.
+#
+# Live Zellij tests each spawn a real `zellij` server, isolated on a per-test
+# `XDG_RUNTIME_DIR` (see crates/rimz/tests/integration/backend/zellij.rs and
+# journey/deep.rs). That per-test runtime dir is what removed the old
+# machine-global flock and lets separate worktrees run these tests with zero
+# shared state — no lock to serialize on, no cross-worktree starvation.
+#
+# Real zellij servers are heavy, though. Empirically ~8 concurrent on an 8-core
+# host starve each other's startup, while ~4 stay healthy. The cap is per *run*
+# (each nextest process gets its own budget), so two worktrees running the suite
+# at once put ~2× the cap of servers on the machine. Capping at 2 lands that
+# headline two-worktree scenario at the safe ~4-server level rather than 8, and
+# still beats the old flock, which serialized these tests to one at a time even
+# within a single run. This is per-run accounting, NOT a shared lock: the
+# worktrees never block on each other.
+#
+# Retries absorb the occasional startup race that still slips through under load
+# (a different test each time — momentary contention, not a real failure); the
+# `query-tab-names` / command-metadata spawn waits in the tests keep them rare.
+# The deep journey zellij smoke joins the group so the cap bounds the total.
+[test-groups]
+live-zellij = { max-threads = 2 }
+
+[[profile.default.overrides]]
+filter = 'package(rimz) & (test(/^backend::zellij::/) | test(/^journey::deep::zellij/))'
+test-group = 'live-zellij'
+retries = { backoff = "fixed", count = 2, delay = "3s" }

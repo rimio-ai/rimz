@@ -1,21 +1,22 @@
 //! Live Zellij backend tests for the M0b spike.
 //!
-//! Each test spawns a real `zellij` session in a portable-pty and runs the
-//! `ZellijBackend` against it. The whole file becomes a no-op (early-return
-//! per test, message printed once) when the `zellij` binary is not on PATH.
-//! The trace-shim wakeup-walk test that verifies the broadcast `zellij
-//! pipe` invocation lives in a separate file (`wakeup_pipe.rs`) so its env
-//! mutation does not race with these tests.
+//! Each test spawns a real `zellij` server under its own throwaway
+//! `XDG_RUNTIME_DIR` (Zellij locates its server socket there) and drives the
+//! `ZellijBackend` against it via [`ZellijBackend::with_runtime_dir`]. The
+//! per-test runtime dir is the isolation seam — it gives every test a private
+//! server, so the file runs in parallel and concurrently across git worktrees
+//! with no shared lock. Mirrors the tmux backend's `with_socket` isolation.
+//! The whole file becomes a no-op (early-return per test, message printed once)
+//! when the `zellij` binary is not on PATH. The trace-shim wakeup-walk test
+//! that verifies the broadcast `zellij pipe` invocation lives in a separate
+//! file (`wakeup_pipe.rs`).
 
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
-use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use fs4::FileExt;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, WorkspaceId};
@@ -34,12 +35,38 @@ macro_rules! require_zellij {
     };
 }
 
-/// Owns a live Zellij session for the duration of one test. Spawned via a
-/// portable-pty so the child has the terminal it expects; the master is
-/// kept alive (and silently drained) to avoid SIGHUP'ing the session.
+/// A short-prefixed throwaway `XDG_RUNTIME_DIR` for one test. Zellij locates its
+/// server socket there, so a private dir gives each test its own server — the
+/// isolation that lets these tests run in parallel and across worktrees with no
+/// shared lock. The `rz` prefix + 6 random bytes keeps the socket path (and
+/// rimz's own per-instance wakeup socket beneath it) under the 108-byte AF_UNIX
+/// limit; `TempDir::new`'s long default prefix would not.
+fn scoped_runtime_dir() -> TempDir {
+    tempfile::Builder::new()
+        .prefix("rz")
+        .rand_bytes(6)
+        .tempdir()
+        .expect("xdg runtime tempdir")
+}
+
+/// A `zellij` command pinned to `xdg` as `XDG_RUNTIME_DIR`. Every raw `zellij`
+/// call a test makes goes through this one path to stay on the test's private
+/// server — the test-side counterpart to `ZellijBackend::cmd`. The single
+/// chokepoint, so no stray command can leak to the user's default server.
+fn scoped_zellij(xdg: &Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new("zellij");
+    cmd.env("XDG_RUNTIME_DIR", xdg);
+    cmd
+}
+
+/// Owns a live Zellij session for the duration of one test, on its own private
+/// `XDG_RUNTIME_DIR`. Spawned via a portable-pty so the child has the terminal
+/// it expects; the master is kept alive (and silently drained) to avoid
+/// SIGHUP'ing the session. The runtime dir is held here so it outlives the
+/// session and the `Drop` teardown below.
 struct ZellijSession {
     name: String,
-    _serial: ZellijTestGuard,
+    xdg: TempDir,
     _master: Box<dyn portable_pty::MasterPty + Send>,
     _child: Box<dyn portable_pty::Child + Send + Sync>,
     _reader_thread: Option<std::thread::JoinHandle<()>>,
@@ -47,9 +74,7 @@ struct ZellijSession {
 
 impl ZellijSession {
     fn spawn(name: impl Into<String>) -> Self {
-        let serial = zellij_test_lock()
-            .lock()
-            .expect("zellij test lock poisoned");
+        let xdg = scoped_runtime_dir();
         let name = name.into();
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -61,6 +86,10 @@ impl ZellijSession {
             })
             .expect("openpty");
         let mut cmd = CommandBuilder::new("zellij");
+        // Pin the attaching client to the test's private server. `CommandBuilder`
+        // seeds its env from the current process, so this overrides one var and
+        // leaves PATH and friends intact.
+        cmd.env("XDG_RUNTIME_DIR", xdg.path());
         cmd.args(["attach", "--create", &name]);
         let child = pair.slave.spawn_command(cmd).expect("spawn zellij");
         drop(pair.slave);
@@ -81,93 +110,59 @@ impl ZellijSession {
 
         let session = Self {
             name,
-            _serial: serial,
+            xdg,
             _master: pair.master,
             _child: child,
             _reader_thread: Some(reader_thread),
         };
-        wait_until_session_listed(&session.name);
+        wait_until_session_ready(session.xdg.path(), &session.name);
         session
     }
 }
 
-struct ZellijTestLock;
-
-struct ZellijTestGuard {
-    file: File,
-}
-
-impl ZellijTestLock {
-    fn lock(&self) -> std::io::Result<ZellijTestGuard> {
-        let path = std::env::temp_dir().join("rimz-zellij-integration.lock");
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(path)?;
-        file.lock()?;
-        Ok(ZellijTestGuard { file })
-    }
-}
-
-impl Drop for ZellijTestGuard {
-    fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.file);
-    }
-}
-
-fn zellij_test_lock() -> &'static ZellijTestLock {
-    static LOCK: OnceLock<ZellijTestLock> = OnceLock::new();
-    LOCK.get_or_init(|| ZellijTestLock)
-}
-
 impl Drop for ZellijSession {
     fn drop(&mut self) {
-        let _ = std::process::Command::new("zellij")
+        let _ = scoped_zellij(self.xdg.path())
             .args(["delete-session", &self.name, "--force"])
             .output();
     }
 }
 
-struct ZellijSessionCleanup {
+/// Tear down a runtime-scoped session even if an assertion panics first. Used by
+/// tests that birth a background session directly (no attached PTY client). The
+/// test owns the `XDG_RUNTIME_DIR` tempdir; this only needs its path.
+struct ScopedSessionCleanup {
     name: String,
+    xdg: PathBuf,
 }
 
-impl ZellijSessionCleanup {
-    fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into() }
-    }
-}
-
-impl Drop for ZellijSessionCleanup {
+impl Drop for ScopedSessionCleanup {
     fn drop(&mut self) {
-        let _ = std::process::Command::new("zellij")
+        let _ = scoped_zellij(&self.xdg)
             .args(["delete-session", &self.name, "--force"])
             .output();
     }
 }
 
-/// Poll `zellij list-sessions` until our name appears. Sessions take
-/// 300–800 ms to register on a quiet host; we give it 30 s for slow
-/// CI machines. We grep with `contains` because the line is wrapped in
-/// ANSI color codes on Zellij 0.41+.
-fn wait_until_session_listed(name: &str) {
+/// Poll until `session` is active enough to answer `action` commands, not just
+/// listed. A freshly `attach --create`d session can appear in `list-sessions` a
+/// beat before its server accepts actions; under the parallelism this file now
+/// enables, that gap is real, so gate on a lightweight action (`query-tab-names`,
+/// which a default session always answers) succeeding rather than on the bare
+/// listing. Sessions take 300–800 ms to come up on a quiet host; we give it 30 s
+/// for slow/loaded CI machines.
+fn wait_until_session_ready(xdg: &Path, name: &str) {
     let deadline = Instant::now() + SPAWN_TIMEOUT;
     loop {
-        if Instant::now() > deadline {
-            panic!("zellij session {name} never appeared in list-sessions");
+        let ready = scoped_zellij(xdg)
+            .args(["--session", name, "action", "query-tab-names"])
+            .output()
+            .is_ok_and(|out| out.status.success());
+        if ready {
+            return;
         }
-        let listed = std::process::Command::new("zellij")
-            .arg("list-sessions")
-            .output();
-        if let Ok(out) = listed
-            && out.status.success()
-        {
-            let text = String::from_utf8_lossy(&out.stdout);
-            if text.contains(name) {
-                return;
-            }
+        if Instant::now() > deadline {
+            panic!("zellij session {name} never became ready for actions");
         }
         std::thread::sleep(Duration::from_millis(150));
     }
@@ -215,9 +210,9 @@ fn ensure_and_list_sessions_round_trip() {
     require_zellij!();
 
     let name = unique_session_name("list");
-    let _session = ZellijSession::spawn(&name);
+    let session = ZellijSession::spawn(&name);
 
-    let listed = ZellijBackend
+    let listed = ZellijBackend::with_runtime_dir(session.xdg.path())
         .list_sessions()
         .expect("list_sessions succeeds against a live zellij");
     assert!(
@@ -233,15 +228,16 @@ fn ensure_and_list_sessions_round_trip() {
 fn open_sidebar_creates_native_pane() {
     require_zellij!();
 
-    let _serial = zellij_test_lock()
-        .lock()
-        .expect("zellij test lock poisoned");
+    let xdg = scoped_runtime_dir();
     let name = unique_session_name("sidebar");
-    let _cleanup = ZellijSessionCleanup::new(&name);
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
     let cwd = TempDir::new().expect("cwd tempdir");
 
     let (_stub_dir, stub) = sidebar_command_stub();
-    ZellijBackend
+    ZellijBackend::with_runtime_dir(xdg.path())
         .open_sidebar(&SidebarPaneOptions {
             session_name: name.clone(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-test")),
@@ -252,13 +248,13 @@ fn open_sidebar_creates_native_pane() {
         })
         .expect("open_sidebar");
 
-    let panes = wait_for_pane_count(&name, 2);
+    let panes = wait_for_pane_count(xdg.path(), &name, 2);
     assert!(
         panes.len() >= 2,
         "layout should create a sidebar + terminal pane in {name}: {panes:?}",
     );
-    assert_sidebar_is_left_thirty_percent(&name);
-    assert_session_has_bottom_bar(&name);
+    assert_sidebar_is_left_thirty_percent(xdg.path(), &name);
+    assert_session_has_bottom_bar(xdg.path(), &name);
 }
 
 /// `dump-layout` exposes the template Zellij will use for future user-created
@@ -268,15 +264,16 @@ fn open_sidebar_creates_native_pane() {
 fn open_sidebar_installs_a_right_terminal_in_the_new_tab_template() {
     require_zellij!();
 
-    let _serial = zellij_test_lock()
-        .lock()
-        .expect("zellij test lock poisoned");
+    let xdg = scoped_runtime_dir();
     let name = unique_session_name("template");
-    let _cleanup = ZellijSessionCleanup::new(&name);
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_command_stub();
 
-    ZellijBackend
+    ZellijBackend::with_runtime_dir(xdg.path())
         .open_sidebar(&SidebarPaneOptions {
             session_name: name.clone(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-template")),
@@ -286,9 +283,9 @@ fn open_sidebar_installs_a_right_terminal_in_the_new_tab_template() {
             replace_existing: false,
         })
         .expect("open_sidebar");
-    wait_for_pane_count(&name, 2);
+    wait_for_pane_count(xdg.path(), &name, 2);
 
-    let template = new_tab_template_dump(&name);
+    let template = new_tab_template_dump(xdg.path(), &name);
     assert!(
         template.contains("rimz-sidebar"),
         "new tab template should carry the sidebar pane:\n{template}",
@@ -306,15 +303,16 @@ fn open_sidebar_installs_a_right_terminal_in_the_new_tab_template() {
 fn open_sidebar_starts_sidebar_without_a_run_prompt() {
     require_zellij!();
 
-    let _serial = zellij_test_lock()
-        .lock()
-        .expect("zellij test lock poisoned");
+    let xdg = scoped_runtime_dir();
     let name = unique_session_name("runprompt");
-    let _cleanup = ZellijSessionCleanup::new(&name);
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_command_stub();
 
-    ZellijBackend
+    ZellijBackend::with_runtime_dir(xdg.path())
         .open_sidebar(&SidebarPaneOptions {
             session_name: name.clone(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-runprompt")),
@@ -324,20 +322,20 @@ fn open_sidebar_starts_sidebar_without_a_run_prompt() {
             replace_existing: false,
         })
         .expect("open_sidebar");
-    wait_for_pane_count(&name, 2);
+    wait_for_pane_count(xdg.path(), &name, 2);
 
-    assert_sidebars_not_held(&name, "initial tab");
+    assert_sidebars_not_held(xdg.path(), &name, "initial tab");
 
-    open_new_tab(&name);
-    wait_for_tab_count(&name, 2);
-    assert_sidebars_not_held(&name, "new tab");
+    open_new_tab(xdg.path(), &name);
+    wait_for_tab_count(xdg.path(), &name, 2);
+    assert_sidebars_not_held(xdg.path(), &name, "new tab");
 }
 
 /// The sidebar layout replaces Zellij's default tab template, so it must re-add
 /// the bottom bar plugin itself. Assert the born session actually carries it —
 /// not just that the layout string mentions it.
-fn assert_session_has_bottom_bar(session: &str) {
-    let output = std::process::Command::new("zellij")
+fn assert_session_has_bottom_bar(xdg: &Path, session: &str) {
+    let output = scoped_zellij(xdg)
         .args(["--session", session, "action", "list-panes", "-j", "-a"])
         .output()
         .expect("list-panes for bar check");
@@ -366,11 +364,12 @@ fn assert_session_has_bottom_bar(session: &str) {
 fn open_sidebar_on_live_session_is_idempotent() {
     require_zellij!();
 
-    let _serial = zellij_test_lock()
-        .lock()
-        .expect("zellij test lock poisoned");
+    let xdg = scoped_runtime_dir();
     let name = unique_session_name("idem");
-    let _cleanup = ZellijSessionCleanup::new(&name);
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_command_stub();
     let opts = SidebarPaneOptions {
@@ -382,26 +381,23 @@ fn open_sidebar_on_live_session_is_idempotent() {
         replace_existing: false,
     };
 
-    ZellijBackend
-        .open_sidebar(&opts)
-        .expect("first open_sidebar");
-    let first = wait_for_pane_count(&name, 2);
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    backend.open_sidebar(&opts).expect("first open_sidebar");
+    let first = wait_for_pane_count(xdg.path(), &name, 2);
     assert!(
         first.len() >= 2,
         "first birth should create a sidebar + terminal pane: {first:?}",
     );
 
     // Second call sees a live session and must leave it untouched.
-    ZellijBackend
-        .open_sidebar(&opts)
-        .expect("second open_sidebar");
-    let second = wait_for_pane_count(&name, 2);
+    backend.open_sidebar(&opts).expect("second open_sidebar");
+    let second = wait_for_pane_count(xdg.path(), &name, 2);
     assert_eq!(
         second.len(),
         first.len(),
         "re-opening a live session must not add or drop panes: {second:?}",
     );
-    assert_sidebar_is_left_thirty_percent(&name);
+    assert_sidebar_is_left_thirty_percent(xdg.path(), &name);
 }
 
 /// A session with a `rimz-sidebar` pane is still broken if that pane is held at
@@ -411,17 +407,18 @@ fn open_sidebar_on_live_session_is_idempotent() {
 fn open_sidebar_heals_a_live_session_with_a_held_sidebar() {
     require_zellij!();
 
-    let _serial = zellij_test_lock()
-        .lock()
-        .expect("zellij test lock poisoned");
+    let xdg = scoped_runtime_dir();
     let name = unique_session_name("heldsidebar");
-    let _cleanup = ZellijSessionCleanup::new(&name);
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_command_stub();
     let layout = cwd.path().join("held-sidebar.kdl");
     std::fs::write(&layout, held_sidebar_layout(&stub)).expect("write held layout");
 
-    let output = std::process::Command::new("zellij")
+    let output = scoped_zellij(xdg.path())
         .args(["attach", "--create-background", &name, "options"])
         .arg("--default-cwd")
         .arg(cwd.path())
@@ -434,13 +431,13 @@ fn open_sidebar_heals_a_live_session_with_a_held_sidebar() {
         "spawn held-sidebar session failed: {}",
         String::from_utf8_lossy(&output.stderr),
     );
-    wait_for_pane_count(&name, 2);
+    wait_for_pane_count(xdg.path(), &name, 2);
     assert!(
-        session_has_held_sidebar(&name),
+        session_has_held_sidebar(xdg.path(), &name),
         "test setup should produce a held sidebar pane",
     );
 
-    ZellijBackend
+    ZellijBackend::with_runtime_dir(xdg.path())
         .open_sidebar(&SidebarPaneOptions {
             session_name: name.clone(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-held-sidebar")),
@@ -450,12 +447,12 @@ fn open_sidebar_heals_a_live_session_with_a_held_sidebar() {
             replace_existing: false,
         })
         .expect("open_sidebar");
-    wait_for_pane_count(&name, 2);
+    wait_for_pane_count(xdg.path(), &name, 2);
 
-    assert_sidebars_not_held(&name, "recreated session");
-    open_new_tab(&name);
-    wait_for_tab_count(&name, 2);
-    assert_sidebars_not_held(&name, "new tab after recreate");
+    assert_sidebars_not_held(xdg.path(), &name, "recreated session");
+    open_new_tab(xdg.path(), &name);
+    wait_for_tab_count(xdg.path(), &name, 2);
+    assert_sidebars_not_held(xdg.path(), &name, "new tab after recreate");
 }
 
 /// A *live* session that has no sidebar (the renderer self-closed or crashed
@@ -469,11 +466,12 @@ fn open_sidebar_heals_a_live_session_with_a_held_sidebar() {
 fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
     require_zellij!();
 
-    let _serial = zellij_test_lock()
-        .lock()
-        .expect("zellij test lock poisoned");
+    let xdg = scoped_runtime_dir();
     let name = unique_session_name("nosb");
-    let _cleanup = ZellijSessionCleanup::new(&name);
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
     let cwd = TempDir::new().expect("cwd tempdir");
 
     // Birth a live session with a plain, sidebar-less layout. The pane runs a
@@ -484,7 +482,7 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
         "layout {\n    pane command=\"sleep\" {\n        args \"60\"\n    }\n}\n",
     )
     .expect("write plain layout");
-    let created = std::process::Command::new("zellij")
+    let created = scoped_zellij(xdg.path())
         .args(["attach", "--create-background", &name, "options"])
         .arg("--default-cwd")
         .arg(cwd.path())
@@ -493,7 +491,7 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
         .status()
         .expect("create plain session");
     assert!(created.success(), "create-background failed for {name}");
-    let plain = wait_for_pane_count(&name, 1);
+    let plain = wait_for_pane_count(xdg.path(), &name, 1);
     assert!(
         !plain.is_empty(),
         "plain session should have a pane before open_sidebar: {plain:?}",
@@ -502,7 +500,7 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
     // `open_sidebar` must heal it: tear the sidebar-less session down and
     // rebirth one that carries the sidebar.
     let (_stub_dir, stub) = sidebar_command_stub();
-    ZellijBackend
+    ZellijBackend::with_runtime_dir(xdg.path())
         .open_sidebar(&SidebarPaneOptions {
             session_name: name.clone(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-nosb")),
@@ -513,12 +511,12 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
         })
         .expect("open_sidebar");
 
-    let healed = wait_for_pane_count(&name, 2);
+    let healed = wait_for_pane_count(xdg.path(), &name, 2);
     assert!(
         healed.len() >= 2,
         "open_sidebar should rebirth a sidebar-less live session with a sidebar: {healed:?}",
     );
-    assert_sidebar_is_left_thirty_percent(&name);
+    assert_sidebar_is_left_thirty_percent(xdg.path(), &name);
 }
 
 /// Every tab born from the sidebar layout — the initial one *and* any the user
@@ -530,15 +528,16 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
 fn new_tab_is_born_with_a_right_terminal() {
     require_zellij!();
 
-    let _serial = zellij_test_lock()
-        .lock()
-        .expect("zellij test lock poisoned");
+    let xdg = scoped_runtime_dir();
     let name = unique_session_name("newtabpane");
-    let _cleanup = ZellijSessionCleanup::new(&name);
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_command_stub();
 
-    ZellijBackend
+    ZellijBackend::with_runtime_dir(xdg.path())
         .open_sidebar(&SidebarPaneOptions {
             session_name: name.clone(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-newtab-pane")),
@@ -548,14 +547,14 @@ fn new_tab_is_born_with_a_right_terminal() {
             replace_existing: false,
         })
         .expect("open_sidebar");
-    wait_for_pane_count(&name, 2);
+    wait_for_pane_count(xdg.path(), &name, 2);
 
-    open_new_tab(&name);
-    wait_for_tab_count(&name, 2);
+    open_new_tab(xdg.path(), &name);
+    wait_for_tab_count(xdg.path(), &name, 2);
 
     // Every tab must have a sidebar *and* at least one terminal beside it.
-    for tab in tab_ids(&name) {
-        let terminals = nonplugin_titles_in_tab(&name, tab);
+    for tab in tab_ids(xdg.path(), &name) {
+        let terminals = nonplugin_titles_in_tab(xdg.path(), &name, tab);
         let has_sidebar = terminals.iter().any(|t| t == "rimz-sidebar");
         let has_terminal = terminals.iter().any(|t| t != "rimz-sidebar");
         assert!(
@@ -574,15 +573,16 @@ fn new_tab_is_born_with_a_right_terminal() {
 fn tabs_focus_the_terminal_not_the_sidebar() {
     require_zellij!();
 
-    let _serial = zellij_test_lock()
-        .lock()
-        .expect("zellij test lock poisoned");
+    let xdg = scoped_runtime_dir();
     let name = unique_session_name("focusterm");
-    let _cleanup = ZellijSessionCleanup::new(&name);
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_command_stub();
 
-    ZellijBackend
+    ZellijBackend::with_runtime_dir(xdg.path())
         .open_sidebar(&SidebarPaneOptions {
             session_name: name.clone(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-focus-term")),
@@ -592,14 +592,14 @@ fn tabs_focus_the_terminal_not_the_sidebar() {
             replace_existing: false,
         })
         .expect("open_sidebar");
-    wait_for_pane_count(&name, 2);
+    wait_for_pane_count(xdg.path(), &name, 2);
 
-    open_new_tab(&name);
-    wait_for_tab_count(&name, 2);
+    open_new_tab(xdg.path(), &name);
+    wait_for_tab_count(xdg.path(), &name, 2);
 
     // Each tab tracks its own focused pane; none may be the sidebar.
-    for tab in tab_ids(&name) {
-        let focused = focused_nonplugin_title_in_tab(&name, tab)
+    for tab in tab_ids(xdg.path(), &name) {
+        let focused = focused_nonplugin_title_in_tab(xdg.path(), &name, tab)
             .unwrap_or_else(|| panic!("tab {tab} has no focused terminal pane"));
         assert_ne!(
             focused, "rimz-sidebar",
@@ -609,8 +609,8 @@ fn tabs_focus_the_terminal_not_the_sidebar() {
 }
 
 /// Open a second tab the way a user would, from the default tab template.
-fn open_new_tab(session: &str) {
-    let output = std::process::Command::new("zellij")
+fn open_new_tab(xdg: &Path, session: &str) {
+    let output = scoped_zellij(xdg)
         .args(["--session", session, "action", "new-tab"])
         .output()
         .expect("new-tab");
@@ -622,8 +622,8 @@ fn open_new_tab(session: &str) {
 }
 
 /// Parsed `list-panes -j -a` for `session`, or an empty array on any failure.
-fn list_panes_json(session: &str) -> serde_json::Value {
-    std::process::Command::new("zellij")
+fn list_panes_json(xdg: &Path, session: &str) -> serde_json::Value {
+    scoped_zellij(xdg)
         .args(["--session", session, "action", "list-panes", "-j", "-a"])
         .output()
         .ok()
@@ -632,8 +632,8 @@ fn list_panes_json(session: &str) -> serde_json::Value {
         .unwrap_or_else(|| serde_json::Value::Array(Vec::new()))
 }
 
-fn assert_sidebars_not_held(session: &str, context: &str) {
-    let panes = list_panes_json(session);
+fn assert_sidebars_not_held(xdg: &Path, session: &str, context: &str) {
+    let panes = list_panes_json(xdg, session);
     let sidebars: Vec<&serde_json::Value> = panes
         .as_array()
         .expect("pane array")
@@ -656,8 +656,8 @@ fn assert_sidebars_not_held(session: &str, context: &str) {
     }
 }
 
-fn session_has_held_sidebar(session: &str) -> bool {
-    list_panes_json(session)
+fn session_has_held_sidebar(xdg: &Path, session: &str) -> bool {
+    list_panes_json(xdg, session)
         .as_array()
         .map(|panes| {
             panes.iter().any(|pane| {
@@ -670,8 +670,8 @@ fn session_has_held_sidebar(session: &str) -> bool {
 }
 
 /// Dump just the `new_tab_template` section for readable assertions.
-fn new_tab_template_dump(session: &str) -> String {
-    let output = std::process::Command::new("zellij")
+fn new_tab_template_dump(xdg: &Path, session: &str) -> String {
+    let output = scoped_zellij(xdg)
         .args(["--session", session, "action", "dump-layout"])
         .output()
         .expect("dump-layout");
@@ -688,8 +688,8 @@ fn new_tab_template_dump(session: &str) -> String {
 }
 
 /// Distinct tab ids that currently hold a non-plugin pane.
-fn tab_ids(session: &str) -> Vec<u64> {
-    let panes = list_panes_json(session);
+fn tab_ids(xdg: &Path, session: &str) -> Vec<u64> {
+    let panes = list_panes_json(xdg, session);
     let mut ids: Vec<u64> = panes
         .as_array()
         .map(|panes| {
@@ -706,8 +706,8 @@ fn tab_ids(session: &str) -> Vec<u64> {
 }
 
 /// Titles of the non-plugin panes in `tab`.
-fn nonplugin_titles_in_tab(session: &str, tab: u64) -> Vec<String> {
-    let panes = list_panes_json(session);
+fn nonplugin_titles_in_tab(xdg: &Path, session: &str, tab: u64) -> Vec<String> {
+    let panes = list_panes_json(xdg, session);
     panes
         .as_array()
         .map(|panes| {
@@ -722,8 +722,8 @@ fn nonplugin_titles_in_tab(session: &str, tab: u64) -> Vec<String> {
 }
 
 /// Title of the focused non-plugin pane in `tab`, if any.
-fn focused_nonplugin_title_in_tab(session: &str, tab: u64) -> Option<String> {
-    let panes = list_panes_json(session);
+fn focused_nonplugin_title_in_tab(xdg: &Path, session: &str, tab: u64) -> Option<String> {
+    let panes = list_panes_json(xdg, session);
     panes.as_array()?.iter().find_map(|p| {
         (p.get("is_plugin").and_then(|v| v.as_bool()) == Some(false)
             && p.get("tab_id").and_then(|v| v.as_u64()) == Some(tab)
@@ -738,10 +738,10 @@ fn focused_nonplugin_title_in_tab(session: &str, tab: u64) -> Option<String> {
 }
 
 /// Poll until at least `want` distinct tabs hold a non-plugin pane, or time out.
-fn wait_for_tab_count(session: &str, want: usize) -> Vec<u64> {
+fn wait_for_tab_count(xdg: &Path, session: &str, want: usize) -> Vec<u64> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let ids = tab_ids(session);
+        let ids = tab_ids(xdg, session);
         if ids.len() >= want || Instant::now() >= deadline {
             return ids;
         }
@@ -766,21 +766,12 @@ fn sidebar_self_closes_when_its_tab_empties() {
         return;
     }
 
-    let _serial = zellij_test_lock()
-        .lock()
-        .expect("zellij test lock poisoned");
     let name = unique_session_name("selfclose");
     let cwd = TempDir::new().expect("cwd tempdir");
-    // One short XDG_RUNTIME_DIR for everything: zellij's *server* socket and
+    // One private XDG_RUNTIME_DIR for everything: zellij's *server* socket and
     // rimz's *wakeup* socket both live under it, so every zellij call touching
-    // this session must share it — and it must stay short enough that the
-    // workspace + 35-char instance id keep the socket under the 108-byte
-    // AF_UNIX limit. A `prefix("rz")` tempdir buys that headroom.
-    let xdg = tempfile::Builder::new()
-        .prefix("rz")
-        .rand_bytes(6)
-        .tempdir()
-        .expect("xdg tempdir");
+    // this session shares it.
+    let xdg = scoped_runtime_dir();
     let _cleanup = ScopedSessionCleanup {
         name: name.clone(),
         xdg: xdg.path().to_path_buf(),
@@ -841,16 +832,9 @@ fn sidebar_self_closes_when_its_tab_starts_empty() {
         return;
     }
 
-    let _serial = zellij_test_lock()
-        .lock()
-        .expect("zellij test lock poisoned");
     let name = unique_session_name("emptytab");
     let cwd = TempDir::new().expect("cwd tempdir");
-    let xdg = tempfile::Builder::new()
-        .prefix("rz")
-        .rand_bytes(6)
-        .tempdir()
-        .expect("xdg tempdir");
+    let xdg = scoped_runtime_dir();
     let _cleanup = ScopedSessionCleanup {
         name: name.clone(),
         xdg: xdg.path().to_path_buf(),
@@ -983,12 +967,37 @@ fn sidebar_serve_command(session: &str, rimz: &Path, sidebar: &Path, xdg: &Path)
     )
 }
 
+/// Poll `list_panes` until a terminal pane reports its command metadata, then
+/// return the listing (bounded). A pane can surface in `list-panes` a beat
+/// before Zellij fills in command/cwd/pid — under load that window widens — so a
+/// test that asserts on that metadata waits for it here rather than for the bare
+/// pane to exist.
+fn wait_for_pane_with_command(xdg: &Path, session: &str) -> Vec<PaneRef> {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let panes = ZellijBackend::with_runtime_dir(xdg)
+            .list_panes(PaneListOptions {
+                session_name: Some(session.to_owned()),
+            })
+            .unwrap_or_default();
+        let ready = panes.iter().any(|pane| {
+            pane.command
+                .as_deref()
+                .is_some_and(|command| !command.is_empty())
+        });
+        if ready || Instant::now() >= deadline {
+            return panes;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// Poll `list_panes` until at least `want` panes appear (bounded). Returns the
 /// last observation either way so the caller can assert and print it.
-fn wait_for_pane_count(session: &str, want: usize) -> Vec<PaneRef> {
+fn wait_for_pane_count(xdg: &Path, session: &str, want: usize) -> Vec<PaneRef> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let panes = ZellijBackend
+        let panes = ZellijBackend::with_runtime_dir(xdg)
             .list_panes(PaneListOptions {
                 session_name: Some(session.to_owned()),
             })
@@ -997,29 +1006,6 @@ fn wait_for_pane_count(session: &str, want: usize) -> Vec<PaneRef> {
             return panes;
         }
         std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-/// A `zellij` command pinned to a specific `XDG_RUNTIME_DIR`. Zellij locates
-/// its server socket there, so the self-close test creates, inspects, and
-/// tears down its session through this one runtime dir.
-fn scoped_zellij(xdg: &Path) -> std::process::Command {
-    let mut cmd = std::process::Command::new("zellij");
-    cmd.env("XDG_RUNTIME_DIR", xdg);
-    cmd
-}
-
-/// Tear down a runtime-scoped session even if an assertion panics first.
-struct ScopedSessionCleanup {
-    name: String,
-    xdg: PathBuf,
-}
-
-impl Drop for ScopedSessionCleanup {
-    fn drop(&mut self) {
-        let _ = scoped_zellij(&self.xdg)
-            .args(["delete-session", &self.name, "--force"])
-            .output();
     }
 }
 
@@ -1106,8 +1092,8 @@ fn wait_for_nonplugin_panes_in_tab(
     }
 }
 
-fn assert_sidebar_is_left_thirty_percent(session: &str) {
-    let output = std::process::Command::new("zellij")
+fn assert_sidebar_is_left_thirty_percent(xdg: &Path, session: &str) {
+    let output = scoped_zellij(xdg)
         .args(["--session", session, "action", "list-panes", "-j", "-a"])
         .output()
         .expect("list-panes geometry");
@@ -1160,7 +1146,8 @@ fn open_background_view_creates_named_tab_idempotently() {
     require_zellij!();
 
     let name = unique_session_name("bgview");
-    let _session = ZellijSession::spawn(&name);
+    let session = ZellijSession::spawn(&name);
+    let backend = ZellijBackend::with_runtime_dir(session.xdg.path());
 
     let opts = rimz::mux::BackgroundViewOptions {
         session_name: name.clone(),
@@ -1178,18 +1165,14 @@ fn open_background_view_creates_named_tab_idempotently() {
         ],
     };
 
-    let first = ZellijBackend
-        .open_background_view(&opts)
-        .expect("first launch");
+    let first = backend.open_background_view(&opts).expect("first launch");
     assert_eq!(first, rimz::mux::BackgroundViewLaunch::Launched);
     assert!(
-        wait_for_tab_named(&name, "rimz-rc"),
+        wait_for_tab_named(session.xdg.path(), &name, "rimz-rc"),
         "expected a rimz-rc tab after launch",
     );
 
-    let second = ZellijBackend
-        .open_background_view(&opts)
-        .expect("second launch");
+    let second = backend.open_background_view(&opts).expect("second launch");
     assert_eq!(
         second,
         rimz::mux::BackgroundViewLaunch::AlreadyRunning,
@@ -1208,7 +1191,7 @@ fn open_background_view_keeps_focus_off_the_host_tab() {
     require_zellij!();
 
     let name = unique_session_name("bgfocus");
-    let _session = ZellijSession::spawn(&name);
+    let session = ZellijSession::spawn(&name);
 
     let opts = rimz::mux::BackgroundViewOptions {
         session_name: name.clone(),
@@ -1219,16 +1202,16 @@ fn open_background_view_keeps_focus_off_the_host_tab() {
             keep_open: false,
         }],
     };
-    ZellijBackend
+    ZellijBackend::with_runtime_dir(session.xdg.path())
         .open_background_view(&opts)
         .expect("open_background_view");
     assert!(
-        wait_for_tab_named(&name, "rimz-rc"),
+        wait_for_tab_named(session.xdg.path(), &name, "rimz-rc"),
         "expected a rimz-rc tab after launch",
     );
 
-    let focused =
-        wait_for_focused_tab_off_rc(&name).expect("an attached client should report a focused tab");
+    let focused = wait_for_focused_tab_off_rc(session.xdg.path(), &name)
+        .expect("an attached client should report a focused tab");
     assert_ne!(
         focused, "rimz-rc",
         "focus was left on the rimz-rc host tab; an attach would dump the user into a host pane",
@@ -1238,8 +1221,8 @@ fn open_background_view_keeps_focus_off_the_host_tab() {
 /// The name of the tab Zellij marks `focus=true` in `dump-layout` — the active
 /// tab an attaching client lands on. `None` until an attached client has
 /// realized one (the marker only renders for a live client).
-fn focused_tab_name(session: &str) -> Option<String> {
-    let out = std::process::Command::new("zellij")
+fn focused_tab_name(xdg: &Path, session: &str) -> Option<String> {
+    let out = scoped_zellij(xdg)
         .args(["--session", session, "action", "dump-layout"])
         .output()
         .ok()?;
@@ -1262,11 +1245,11 @@ fn focused_tab_name(session: &str) -> Option<String> {
 /// out. Returns the last focused tab seen so the caller can assert on it: the
 /// fix settles it on the working tab quickly; the unfixed code leaves it pinned
 /// to `rimz-rc` until the deadline.
-fn wait_for_focused_tab_off_rc(session: &str) -> Option<String> {
+fn wait_for_focused_tab_off_rc(xdg: &Path, session: &str) -> Option<String> {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut last = None;
     loop {
-        if let Some(tab) = focused_tab_name(session) {
+        if let Some(tab) = focused_tab_name(xdg, session) {
             if tab != "rimz-rc" {
                 return Some(tab);
             }
@@ -1280,10 +1263,10 @@ fn wait_for_focused_tab_off_rc(session: &str) -> Option<String> {
 }
 
 /// Poll `query-tab-names` until a tab named `tab_name` appears, or time out.
-fn wait_for_tab_named(session: &str, tab_name: &str) -> bool {
+fn wait_for_tab_named(xdg: &Path, session: &str, tab_name: &str) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let listed = std::process::Command::new("zellij")
+        let listed = scoped_zellij(xdg)
             .args(["--session", session, "action", "query-tab-names"])
             .output();
         if let Ok(out) = listed
@@ -1309,10 +1292,10 @@ fn wake_sidebar_pipe_invocation_succeeds() {
     require_zellij!();
 
     let name = unique_session_name("pipe");
-    let _session = ZellijSession::spawn(&name);
+    let session = ZellijSession::spawn(&name);
 
     let payload = br#"{"kind":"ledger_delta","workspace_id":"ws_test","request_id":"req_test","protocol_version":"rimz.plugin.v2"}"#;
-    ZellijBackend
+    ZellijBackend::with_runtime_dir(session.xdg.path())
         .wake_sidebar(&name, payload)
         .expect("wake_sidebar succeeds against a live zellij session");
 }
@@ -1324,11 +1307,13 @@ fn list_panes_with_session_returns_terminals() {
     require_zellij!();
 
     let name = unique_session_name("panes");
-    let _session = ZellijSession::spawn(&name);
+    let session = ZellijSession::spawn(&name);
 
-    // Poll until the fresh session exposes its implicit shell pane instead of
-    // guessing a fixed settle delay.
-    let panes = wait_for_pane_count(&name, 1);
+    // Poll until the implicit shell pane reports its command metadata, not just
+    // until it exists: a pane can surface in `list-panes` a beat before Zellij
+    // fills in command/cwd/pid, and under load that window widens. This test
+    // asserts on that metadata, so it must wait for it.
+    let panes = wait_for_pane_with_command(session.xdg.path(), &name);
     assert!(
         !panes.is_empty(),
         "expected ≥1 terminal pane in fresh session {name}, got {panes:?}",
