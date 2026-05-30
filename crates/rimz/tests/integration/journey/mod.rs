@@ -67,7 +67,7 @@ pub const SETTLE_SHORT: Duration = Duration::from_secs(3);
 /// dir is harmless.
 pub struct RoomHarness<'a> {
     env: &'a Env,
-    screen: Arc<Mutex<Vec<u8>>>,
+    parser: Arc<Mutex<vt100::Parser>>,
     input: Arc<Mutex<Box<dyn Write + Send>>>,
     pane_file: PathBuf,
     pane_roster: Arc<Mutex<PaneRoster>>,
@@ -147,23 +147,26 @@ impl<'a> RoomHarness<'a> {
         let child = pair.slave.spawn_command(cmd).expect("spawn rimz-sidebar");
         drop(pair.slave);
 
-        let screen = Arc::new(Mutex::new(Vec::<u8>::new()));
+        // Feed one long-lived parser incrementally from the reader thread, so
+        // each `screen()` poll is O(grid) instead of re-parsing the whole
+        // accumulated byte stream (which is O(n²) over a 15 s wait loop).
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(ROWS, COLS, 0)));
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
         let input = Arc::new(Mutex::new(pair.master.take_writer().expect("pty writer")));
-        let sink = Arc::clone(&screen);
+        let sink = Arc::clone(&parser);
         let reader = std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => return,
-                    Ok(n) => sink.lock().expect("sink").extend_from_slice(&buf[..n]),
+                    Ok(n) => sink.lock().expect("parser").process(&buf[..n]),
                 }
             }
         });
 
         Self {
             env,
-            screen,
+            parser,
             input,
             pane_file,
             pane_roster,
@@ -178,10 +181,7 @@ impl<'a> RoomHarness<'a> {
     /// Plain-text contents of the current pane — glyphs only, control codes
     /// collapsed by the vt100 grid (so we match what the pane *shows*).
     pub fn screen(&self) -> String {
-        let bytes = self.screen.lock().expect("screen");
-        let mut parser = vt100::Parser::new(ROWS, COLS, 0);
-        parser.process(&bytes);
-        parser.screen().contents()
+        self.parser.lock().expect("parser").screen().contents()
     }
 
     /// Poll the pane until `pred` holds or `budget` elapses; return the final

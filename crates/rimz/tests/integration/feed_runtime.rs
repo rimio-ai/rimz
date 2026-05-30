@@ -101,7 +101,8 @@ fn poll_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
         if predicate() {
             return true;
         }
-        std::thread::sleep(Duration::from_millis(25));
+        // The predicate spawns `rimz feed list`; back off above the spawn cost.
+        std::thread::sleep(Duration::from_millis(100));
     }
     false
 }

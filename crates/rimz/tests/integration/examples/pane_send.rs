@@ -7,7 +7,7 @@
 //! heartbeat protocol, and the `feed abstain` CLI integrate.
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -16,72 +16,18 @@ use rimz::feed::RuntimeOwnerKind;
 use rimz::ledger::runtime::current_process_owner;
 
 use crate::common::{
-    Env, permission_payload, python3_present, skip_preconditions, wait_for_heartbeat,
+    Env, example_resolver_script, permission_payload, python3_present, skip_preconditions,
+    spawn_example_resolver, wait_for_heartbeat,
 };
 
 /// Isolated `TMUX_TMPDIR` so the live-pane happy path never collides with the
-/// user's tmux server. The production `rimz` binary the resolver shells out to
-/// uses the default tmux socket, so isolation flows through the environment
-/// rather than a `-S` flag.
+/// user's tmux server. Mirrors the path [`spawn_example_resolver`] points the
+/// resolver's `rimz` at; the production binary uses the default tmux socket, so
+/// isolation flows through the environment rather than a `-S` flag.
 fn tmux_tmpdir(env: &Env) -> PathBuf {
     let dir = env.project_root.join("tmux");
     std::fs::create_dir_all(&dir).expect("mkdir tmux");
     dir
-}
-
-/// Spawn the reference resolver. When `tmux_pane` is `Some`, point the
-/// resolver's `rimz` invocations at the isolated tmux server: `TMUX_PANE`
-/// selects tmux for backend auto-detection, `TMUX_TMPDIR` pins the socket, and
-/// every other mux-detection variable is dropped. `auto_detect_backend` checks
-/// `ZELLIJ`/`ZELLIJ_PANE_ID` before `TMUX_PANE`, so a suite run from inside a
-/// Zellij session would otherwise capture the wrong backend; clearing those
-/// (and ambient `TMUX`) leaves tmux the only detectable mux.
-fn spawn_python_resolver(
-    env: &Env,
-    resolver_id: &str,
-    run_seconds: f32,
-    tmux_pane: Option<&str>,
-) -> Child {
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crates/")
-        .parent()
-        .expect("workspace root")
-        .join("examples/resolvers/pane_send_resolver.py");
-    assert!(script.exists(), "resolver script missing: {script:?}");
-
-    let mut cmd = Command::new("python3");
-    cmd.arg(&script)
-        .args([
-            "--workspace-id",
-            env.workspace_id.as_str(),
-            "--resolver-id",
-            resolver_id,
-            "--rimz-bin",
-            &env.rimz_bin().display().to_string(),
-            "--tick-seconds",
-            "0.1",
-            "--run-seconds",
-            &run_seconds.to_string(),
-        ])
-        .env("XDG_STATE_HOME", env.state_root())
-        .env("XDG_RUNTIME_DIR", &env.runtime_root)
-        .env("XDG_CONFIG_HOME", env.config_root())
-        .env("HOME", &env.project_root)
-        .env_remove("RUST_LOG")
-        .current_dir(&env.project_root);
-    if let Some(pane) = tmux_pane {
-        cmd.env("TMUX_TMPDIR", tmux_tmpdir(env))
-            .env("TMUX_PANE", pane)
-            .env_remove("TMUX")
-            .env_remove("ZELLIJ")
-            .env_remove("ZELLIJ_PANE_ID")
-            .env_remove("ZELLIJ_SESSION_NAME");
-    }
-    cmd.stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn python resolver")
 }
 
 #[test]
@@ -94,7 +40,8 @@ fn pane_send_resolver_abstains_when_item_has_no_pane() {
     // the resolver abstains: chain exhausts and the hook emits neutral.
     env.enrol("pane-demo", 10, "1s");
 
-    let mut resolver = spawn_python_resolver(&env, "pane-demo", 8.0, None);
+    let mut resolver =
+        spawn_example_resolver(&env, "pane_send_resolver.py", "pane-demo", 8.0, None);
     wait_for_heartbeat(&env, "pane-demo", Instant::now() + Duration::from_secs(3));
 
     let output = env.run_hook("claude", &permission_payload("Bash"));
@@ -136,12 +83,7 @@ fn pane_send_resolver_match_prompt_recognises_bounded_patterns() {
         tracing::warn!("skipping: python3 not on PATH");
         return;
     }
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crates/")
-        .parent()
-        .expect("workspace root")
-        .join("examples/resolvers/pane_send_resolver.py");
+    let script = example_resolver_script("pane_send_resolver.py");
     let import_dir = script
         .parent()
         .expect("script parent")
@@ -190,12 +132,7 @@ fn pane_send_resolver_help_is_well_formed() {
         tracing::warn!("skipping: python3 not on PATH");
         return;
     }
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crates/")
-        .parent()
-        .expect("workspace root")
-        .join("examples/resolvers/pane_send_resolver.py");
+    let script = example_resolver_script("pane_send_resolver.py");
     let out = Command::new("python3")
         .arg(&script)
         .arg("--help")
@@ -368,7 +305,13 @@ fn pane_send_resolver_completes_full_round_trip() {
     let resolver_id = "pane-happy";
     let request_id = stage_bridge_item_with_pane(&env, resolver_id, &pane_raw, session);
 
-    let mut resolver = spawn_python_resolver(&env, resolver_id, 10.0, Some(&pane_raw));
+    let mut resolver = spawn_example_resolver(
+        &env,
+        "pane_send_resolver.py",
+        resolver_id,
+        10.0,
+        Some(&pane_raw),
+    );
     wait_for_heartbeat(&env, resolver_id, Instant::now() + Duration::from_secs(3));
 
     let resolved = poll_until_resolved(&env, &request_id, Instant::now() + Duration::from_secs(10));

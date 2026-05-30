@@ -67,3 +67,11 @@ vt100 = "0.16"
 pretty_assertions = "1"
 portable-pty = "0.9"
 regex = "1"
+
+# The integration suite spawns the `rimz` / `rimz-sidebar` binaries hundreds of
+# times; an unoptimized dependency tree (serde, clap, jiff, ratatui) dominates
+# per-spawn startup. Optimize dependencies even in dev/test builds — they
+# compile once and cache — while leaving our own crates at opt-level 0 so
+# incremental rebuilds and debugging stay fast.
+[profile.dev.package."*"]
+opt-level = 2

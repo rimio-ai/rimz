@@ -40,14 +40,11 @@ fn failing_rimz_stub(dir: &std::path::Path) -> PathBuf {
     path
 }
 
-/// Render the accumulated byte stream into a `cols`x`rows` grid and return its
-/// plain text, so we match on what the pane *shows* rather than on raw escape
-/// bytes (ratatui interleaves control codes between glyphs).
-fn screen_text(bytes: &[u8], rows: u16, cols: u16) -> String {
-    let mut parser = vt100::Parser::new(rows, cols, 0);
-    parser.process(bytes);
-    parser.screen().contents()
-}
+/// The grid we render the renderer's byte stream into — the post-resize size,
+/// so we match on what the pane *shows* rather than on raw escape bytes
+/// (ratatui interleaves control codes between glyphs).
+const GRID_ROWS: u16 = 40;
+const GRID_COLS: u16 = 120;
 
 #[test]
 fn sidebar_redraws_at_new_size_on_resize() {
@@ -95,15 +92,18 @@ fn sidebar_redraws_at_new_size_on_resize() {
     let mut child = pair.slave.spawn_command(cmd).expect("spawn rimz-sidebar");
     drop(pair.slave);
 
-    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    // The reader thread feeds one persistent parser, so each grid read is
+    // O(grid) rather than re-parsing the whole growing stream per poll, and it
+    // never contends with the reader for a separate buffer lock.
+    let parser = Arc::new(Mutex::new(vt100::Parser::new(GRID_ROWS, GRID_COLS, 0)));
     let mut reader = pair.master.try_clone_reader().expect("clone reader");
-    let sink = Arc::clone(&output);
+    let sink = Arc::clone(&parser);
     let reader_thread = std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => return,
-                Ok(n) => sink.lock().expect("sink").extend_from_slice(&buf[..n]),
+                Ok(n) => sink.lock().expect("parser").process(&buf[..n]),
             }
         }
     });
@@ -111,7 +111,12 @@ fn sidebar_redraws_at_new_size_on_resize() {
     // Let the first (1x1) frame land and the loop settle into its wait.
     std::thread::sleep(Duration::from_millis(500));
     assert!(
-        !screen_text(&output.lock().unwrap(), 40, 120).contains("Sidebar degraded"),
+        !parser
+            .lock()
+            .unwrap()
+            .screen()
+            .contents()
+            .contains("Sidebar degraded"),
         "content should not be visible before the pane is given a usable size",
     );
 
@@ -129,7 +134,13 @@ fn sidebar_redraws_at_new_size_on_resize() {
     let deadline = resized_at + Duration::from_secs(TICK_SECONDS + 3);
     let mut latency = None;
     while Instant::now() < deadline {
-        if screen_text(&output.lock().unwrap(), 40, 120).contains("Sidebar degraded") {
+        if parser
+            .lock()
+            .unwrap()
+            .screen()
+            .contents()
+            .contains("Sidebar degraded")
+        {
             latency = Some(resized_at.elapsed());
             break;
         }

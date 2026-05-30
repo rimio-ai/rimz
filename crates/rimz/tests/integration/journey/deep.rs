@@ -260,15 +260,17 @@ fn attach_and_read_until(runtime: &Path, session: &str, needle: &str, budget: Du
     let mut child = pair.slave.spawn_command(cmd).expect("attach zellij");
     drop(pair.slave);
 
-    let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+    // One persistent parser fed as bytes arrive — the poll loop then reads the
+    // current grid in O(grid) instead of re-parsing the whole buffer each tick.
+    let parser = Arc::new(Mutex::new(vt100::Parser::new(ROWS, COLS, 0)));
     let mut reader = pair.master.try_clone_reader().expect("clone reader");
-    let sink = Arc::clone(&buf);
+    let sink = Arc::clone(&parser);
     let reader = std::thread::spawn(move || {
         let mut chunk = [0u8; 4096];
         loop {
             match reader.read(&mut chunk) {
                 Ok(0) | Err(_) => return,
-                Ok(n) => sink.lock().expect("sink").extend_from_slice(&chunk[..n]),
+                Ok(n) => sink.lock().expect("parser").process(&chunk[..n]),
             }
         }
     });
@@ -276,9 +278,7 @@ fn attach_and_read_until(runtime: &Path, session: &str, needle: &str, budget: Du
     let deadline = Instant::now() + budget;
     let mut text = String::new();
     while Instant::now() < deadline {
-        let mut parser = vt100::Parser::new(ROWS, COLS, 0);
-        parser.process(&buf.lock().expect("buf"));
-        text = parser.screen().contents();
+        text = parser.lock().expect("parser").screen().contents();
         if text.contains(needle) {
             break;
         }

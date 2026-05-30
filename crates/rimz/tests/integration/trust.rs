@@ -6,13 +6,15 @@ use predicates::str::contains;
 
 use crate::common::Env;
 
+/// A minimal project config carrying one command-executing hook field — the
+/// fixture the trust-surface tests grant against.
+const CLAUDE_HOOK_CONFIG: &str =
+    "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n";
+
 #[test]
 fn trust_status_grant_revoke_lifecycle() {
     let env = Env::new();
-    env.write_config(
-        &env.project_root,
-        "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
-    );
+    env.write_config(&env.project_root, CLAUDE_HOOK_CONFIG);
 
     env.rimz()
         .args(["trust", "status"])
@@ -42,10 +44,7 @@ fn trust_status_grant_revoke_lifecycle() {
 #[test]
 fn trust_auto_revokes_when_executable_surface_drifts() {
     let env = Env::new();
-    env.write_config(
-        &env.project_root,
-        "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
-    );
+    env.write_config(&env.project_root, CLAUDE_HOOK_CONFIG);
 
     env.rimz().args(["trust", "grant"]).assert().success();
 

@@ -11,14 +11,39 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use rimz::ids::{MuxName, WorkspaceId};
+use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::tmux::{self, MIN_TMUX_VERSION};
 use rimz::mux::{
     MuxBackend, PaneListOptions, SessionOptions, SidebarPaneOptions, SplitPaneOptions, TmuxBackend,
 };
 use tempfile::TempDir;
+
+/// Poll `capture_pane` on `pane_id` until its text contains `needle` or the
+/// budget elapses; returns the last capture seen either way. Faster than a flat
+/// settle sleep on the common path and more robust when the shell is slow.
+fn capture_pane_until(
+    backend: &TmuxBackend,
+    pane_id: &PaneId,
+    needle: &str,
+    budget: Duration,
+) -> String {
+    let deadline = Instant::now() + budget;
+    let mut last = String::new();
+    loop {
+        if let Ok(capture) = backend.capture_pane(pane_id, None, false) {
+            last = capture.raw_text;
+            if last.contains(needle) {
+                return last;
+            }
+        }
+        if Instant::now() >= deadline {
+            return last;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
 
 /// Skip the test (return) if the host has no `tmux` binary on PATH.
 macro_rules! require_tmux {
@@ -198,8 +223,6 @@ fn split_pane_injects_env_vars() {
         })
         .expect("split_pane");
 
-    thread::sleep(Duration::from_millis(400));
-
     let panes = server
         .backend
         .list_panes(PaneListOptions {
@@ -216,14 +239,15 @@ fn split_pane_injects_env_vars() {
         .iter()
         .find(|p| p.pane_id.raw() != "%0")
         .expect("split created a new pane id");
-    let capture = server
-        .backend
-        .capture_pane(&new_pane.pane_id, None, false)
-        .expect("capture_pane");
+    let capture = capture_pane_until(
+        &server.backend,
+        &new_pane.pane_id,
+        "marker-rimz-env",
+        Duration::from_secs(2),
+    );
     assert!(
-        capture.raw_text.contains("marker-rimz-env"),
-        "split-pane should expose RIMZ_TEST_VAR; capture was: {:?}",
-        capture.raw_text,
+        capture.contains("marker-rimz-env"),
+        "split-pane should expose RIMZ_TEST_VAR; capture was: {capture:?}",
     );
 }
 
@@ -247,16 +271,16 @@ fn capture_and_send_keys_round_trip() {
         .backend
         .send_keys(&pane_id, "printf rimz-marker-io\n")
         .expect("send_keys");
-    thread::sleep(Duration::from_millis(400));
 
-    let capture = server
-        .backend
-        .capture_pane(&pane_id, None, false)
-        .expect("capture");
+    let capture = capture_pane_until(
+        &server.backend,
+        &pane_id,
+        "rimz-marker-io",
+        Duration::from_secs(2),
+    );
     assert!(
-        capture.raw_text.contains("rimz-marker-io"),
-        "expected marker in capture, got: {:?}",
-        capture.raw_text,
+        capture.contains("rimz-marker-io"),
+        "expected marker in capture, got: {capture:?}",
     );
 }
 

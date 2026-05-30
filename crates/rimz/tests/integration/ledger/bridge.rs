@@ -30,8 +30,7 @@ fn expected_from(item: &FeedItem) -> ExpectedFrame {
 #[tokio::test(flavor = "current_thread")]
 async fn script_surface_resolves_via_bridge_wakeup() {
     let h = crate::common::Harness::new();
-    if crate::common::af_unix_bind_sandboxed(&h.runtime_paths.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+    if h.skip_if_sandboxed() {
         return;
     }
     let item = fresh_script_item(h.workspace_id.clone());
@@ -43,8 +42,9 @@ async fn script_surface_resolves_via_bridge_wakeup() {
 
     let ledger = h.ledger.clone();
     let req_for_task = request_id.clone();
+    // No sleep: the waiter parks on `recv` before this runs, and the resolve's
+    // datagram is buffered on the bound socket regardless of ordering.
     let resolver = tokio::task::spawn_blocking(move || {
-        std::thread::sleep(Duration::from_millis(50));
         ledger.resolve_feed_item(
             &req_for_task,
             Resolution::new(json!({ "choice": "yes" }), ResolutionMethod::Cli),
@@ -68,8 +68,7 @@ async fn script_surface_resolves_via_bridge_wakeup() {
 #[tokio::test(flavor = "current_thread")]
 async fn cap_timeout_returns_neutral() {
     let h = crate::common::Harness::new();
-    if crate::common::af_unix_bind_sandboxed(&h.runtime_paths.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+    if h.skip_if_sandboxed() {
         return;
     }
     let item = fresh_script_item(h.workspace_id.clone());
@@ -98,8 +97,7 @@ async fn mismatched_nonce_is_dropped_real_resolve_wins() {
     use tokio::net::UnixDatagram;
 
     let h = crate::common::Harness::new();
-    if crate::common::af_unix_bind_sandboxed(&h.runtime_paths.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+    if h.skip_if_sandboxed() {
         return;
     }
     let item = fresh_script_item(h.workspace_id.clone());
@@ -124,8 +122,9 @@ async fn mismatched_nonce_is_dropped_real_resolve_wins() {
 
     let ledger = h.ledger.clone();
     let req_for_task = request_id.clone();
+    // The bad frame above is already enqueued; the resolve's real frame lands
+    // behind it in the socket buffer, so no sleep is needed to order them.
     let resolver = tokio::task::spawn_blocking(move || {
-        std::thread::sleep(Duration::from_millis(50));
         ledger.resolve_feed_item(
             &req_for_task,
             Resolution::new(json!({ "choice": "yes" }), ResolutionMethod::Cli),
@@ -146,8 +145,7 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
     use std::os::unix::net::UnixDatagram;
 
     let h = crate::common::Harness::new();
-    if crate::common::af_unix_bind_sandboxed(&h.runtime_paths.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+    if h.skip_if_sandboxed() {
         return;
     }
 
@@ -171,8 +169,11 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
 
     let stale_sock_path = h.runtime_paths.sock_dir.join("sidebar.stale.sock");
     let stale_recv = UnixDatagram::bind(&stale_sock_path).expect("bind stale");
+    // The wakeup walk runs synchronously inside `push_feed_item`, so a wrongly
+    // sent datagram would already be buffered by the time we read — a short
+    // timeout proves the negative just as well as a long one.
     stale_recv
-        .set_read_timeout(Some(Duration::from_millis(200)))
+        .set_read_timeout(Some(Duration::from_millis(50)))
         .expect("set read timeout stale");
     let mut stale_hb = SidebarHeartbeat::new(
         h.workspace_id.clone(),
@@ -192,7 +193,7 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
     let wrong_protocol_recv =
         UnixDatagram::bind(&wrong_protocol_sock_path).expect("bind wrong protocol");
     wrong_protocol_recv
-        .set_read_timeout(Some(Duration::from_millis(200)))
+        .set_read_timeout(Some(Duration::from_millis(50)))
         .expect("set read timeout wrong protocol");
     let mut wrong_protocol_hb = SidebarHeartbeat::new(
         h.workspace_id.clone(),
@@ -256,14 +257,15 @@ fn wake_sidebars_restat_skips_when_mtime_aged_past_ttl() {
     use std::time::SystemTime;
 
     let h = crate::common::Harness::new();
-    if crate::common::af_unix_bind_sandboxed(&h.runtime_paths.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+    if h.skip_if_sandboxed() {
         return;
     }
 
     let sock_path = h.runtime_paths.sock_dir.join("sidebar.toctou.sock");
     let recv = UnixDatagram::bind(&sock_path).expect("bind toctou");
-    recv.set_read_timeout(Some(Duration::from_millis(200)))
+    // Synchronous walk (see the stale/wrong-protocol test): a short timeout is
+    // enough to prove the re-stat blocked the send.
+    recv.set_read_timeout(Some(Duration::from_millis(50)))
         .expect("set read timeout");
     let hb = SidebarHeartbeat::new(
         h.workspace_id.clone(),

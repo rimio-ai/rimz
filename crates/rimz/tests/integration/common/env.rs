@@ -460,7 +460,9 @@ impl Env {
                     }
                 }
             }
-            std::thread::sleep(Duration::from_millis(20));
+            // Each iteration spawns a fresh `rimz`, so back off well above the
+            // spawn cost rather than hammering process creation every 20 ms.
+            std::thread::sleep(Duration::from_millis(50));
         }
         None
     }
@@ -478,7 +480,9 @@ impl Env {
                     return true;
                 }
             }
-            std::thread::sleep(Duration::from_millis(50));
+            // Spawns `rimz feed show` per iteration; the chain only re-evaluates
+            // on the producer's ~1 s tick, so 100 ms loses no real responsiveness.
+            std::thread::sleep(Duration::from_millis(100));
         }
         false
     }

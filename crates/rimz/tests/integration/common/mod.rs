@@ -23,6 +23,7 @@ mod payloads;
 pub use env::{Env, af_unix_bind_sandboxed, canonical};
 pub use harness::Harness;
 pub use payloads::{
-    claude_pre_tool_use_payload, codex_permission_payload, permission_payload, python3_present,
-    skip_preconditions, wait_for_heartbeat,
+    claude_pre_tool_use_payload, codex_permission_payload, example_resolver_script,
+    permission_payload, python3_present, skip_preconditions, spawn_example_resolver,
+    wait_for_heartbeat,
 };

@@ -5,49 +5,13 @@
 //!
 //! Self-skips when `python3` is not on PATH or the sandbox forbids AF_UNIX.
 
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::common::{Env, permission_payload, skip_preconditions, wait_for_heartbeat};
-
-/// Spawn the reference hook-bridge resolver, pointed at the harness workspace.
-fn spawn_python_resolver(env: &Env, resolver_id: &str, run_seconds: f32) -> Child {
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crates/")
-        .parent()
-        .expect("workspace root")
-        .join("examples/resolvers/hook_bridge_resolver.py");
-    assert!(script.exists(), "resolver script missing: {script:?}");
-
-    Command::new("python3")
-        .arg(&script)
-        .args([
-            "--workspace-id",
-            env.workspace_id.as_str(),
-            "--resolver-id",
-            resolver_id,
-            "--rimz-bin",
-            &env.rimz_bin().display().to_string(),
-            "--tick-seconds",
-            "0.1",
-            "--run-seconds",
-            &run_seconds.to_string(),
-        ])
-        .env("XDG_STATE_HOME", env.state_root())
-        .env("XDG_RUNTIME_DIR", &env.runtime_root)
-        .env("XDG_CONFIG_HOME", env.config_root())
-        .env("HOME", &env.project_root)
-        .env_remove("RUST_LOG")
-        .current_dir(&env.project_root)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn python resolver")
-}
+use crate::common::{
+    Env, permission_payload, skip_preconditions, spawn_example_resolver, wait_for_heartbeat,
+};
 
 #[test]
 fn python_resolver_allow_path_renders_claude_decision() {
@@ -57,7 +21,7 @@ fn python_resolver_allow_path_renders_claude_decision() {
     }
     env.enrol("demo", 10, "30s");
 
-    let mut resolver = spawn_python_resolver(&env, "demo", 8.0);
+    let mut resolver = spawn_example_resolver(&env, "hook_bridge_resolver.py", "demo", 8.0, None);
 
     // Give the resolver a beat to lay down its first heartbeat. The hook
     // bridge engages on the first fresh sample, so without this beat the
@@ -92,7 +56,7 @@ fn python_resolver_abstain_path_exhausts_chain_to_neutral() {
     // out (the resolver abstains on tool_name=Bash; chain has one link).
     env.enrol("demo", 10, "1s");
 
-    let mut resolver = spawn_python_resolver(&env, "demo", 8.0);
+    let mut resolver = spawn_example_resolver(&env, "hook_bridge_resolver.py", "demo", 8.0, None);
     wait_for_heartbeat(&env, "demo", Instant::now() + Duration::from_secs(3));
 
     let output = env.run_hook("claude", &permission_payload("Bash"));

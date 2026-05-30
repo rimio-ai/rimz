@@ -1,7 +1,8 @@
 //! Agent hook-payload fixtures and the environment probes the example-resolver
 //! tests lean on (`python3` availability, resolver heartbeat liveness).
 
-use std::process::{Command, Stdio};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
@@ -43,6 +44,70 @@ pub fn claude_pre_tool_use_payload(tool_name: &str) -> String {
         "session_id": "sess-claude-pretool",
     }))
     .expect("payload")
+}
+
+/// Absolute path to a reference resolver script under `examples/resolvers/`.
+/// One place owns the `crates/<crate>` → workspace-root climb that every
+/// example-resolver test would otherwise hand-roll.
+pub fn example_resolver_script(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates/")
+        .parent()
+        .expect("workspace root")
+        .join("examples/resolvers")
+        .join(name)
+}
+
+/// Spawn a reference Python resolver pointed at the harness workspace, stdio
+/// piped. When `tmux_pane` is `Some`, route the resolver's `rimz` invocations
+/// at an isolated tmux server: `TMUX_PANE` selects tmux for backend detection,
+/// `TMUX_TMPDIR` pins the socket, and every other mux-detection variable is
+/// dropped so tmux is the only mux detected.
+pub fn spawn_example_resolver(
+    env: &Env,
+    script_name: &str,
+    resolver_id: &str,
+    run_seconds: f32,
+    tmux_pane: Option<&str>,
+) -> Child {
+    let script = example_resolver_script(script_name);
+    assert!(script.exists(), "resolver script missing: {script:?}");
+
+    let mut cmd = Command::new("python3");
+    cmd.arg(&script)
+        .args([
+            "--workspace-id",
+            env.workspace_id.as_str(),
+            "--resolver-id",
+            resolver_id,
+            "--rimz-bin",
+            &env.rimz_bin().display().to_string(),
+            "--tick-seconds",
+            "0.1",
+            "--run-seconds",
+            &run_seconds.to_string(),
+        ])
+        .env("XDG_STATE_HOME", env.state_root())
+        .env("XDG_RUNTIME_DIR", &env.runtime_root)
+        .env("XDG_CONFIG_HOME", env.config_root())
+        .env("HOME", &env.project_root)
+        .env_remove("RUST_LOG")
+        .current_dir(&env.project_root);
+    if let Some(pane) = tmux_pane {
+        let tmpdir = env.project_root.join("tmux");
+        std::fs::create_dir_all(&tmpdir).expect("mkdir tmux tmpdir");
+        cmd.env("TMUX_TMPDIR", tmpdir)
+            .env("TMUX_PANE", pane)
+            .env_remove("TMUX")
+            .env_remove("ZELLIJ")
+            .env_remove("ZELLIJ_PANE_ID")
+            .env_remove("ZELLIJ_SESSION_NAME");
+    }
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn python resolver")
 }
 
 /// Whether `python3` is on PATH — example-resolver tests self-skip without it.

@@ -1,27 +1,21 @@
 //! Round-trip integration tests for `rimz resolver` against a tempdir-rooted
 //! `$XDG_CONFIG_HOME/rimz/resolvers.toml`.
 
-use assert_cmd::Command;
+use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
-use tempfile::TempDir;
 
-fn rimz(home: &TempDir) -> Command {
-    let mut cmd = Command::cargo_bin("rimz").expect("cargo-bin");
-    cmd.env("XDG_CONFIG_HOME", home.path())
-        .env_remove("RUST_LOG");
-    cmd
-}
+use crate::common::Env;
 
 #[test]
 fn add_list_remove_round_trip() {
-    let home = TempDir::new().expect("tempdir");
-    rimz(&home)
+    let env = Env::new();
+    env.rimz()
         .args(["resolver", "list", "--json"])
         .assert()
         .success()
         .stdout(contains("\"resolvers\": []"));
 
-    rimz(&home)
+    env.rimz()
         .args([
             "resolver",
             "add",
@@ -34,7 +28,7 @@ fn add_list_remove_round_trip() {
         .assert()
         .success();
 
-    rimz(&home)
+    env.rimz()
         .args([
             "resolver",
             "add",
@@ -47,7 +41,8 @@ fn add_list_remove_round_trip() {
         .assert()
         .success();
 
-    let output = rimz(&home)
+    let output = env
+        .rimz()
         .args(["resolver", "list", "--json"])
         .output()
         .expect("list");
@@ -60,12 +55,13 @@ fn add_list_remove_round_trip() {
     assert_eq!(rows[1]["id"], "slack-on-call");
     assert_eq!(rows[1]["budget_seconds"], 300);
 
-    rimz(&home)
+    env.rimz()
         .args(["resolver", "remove", "opus-policy"])
         .assert()
         .success();
 
-    let output = rimz(&home)
+    let output = env
+        .rimz()
         .args(["resolver", "list", "--json"])
         .output()
         .expect("list2");
@@ -78,12 +74,12 @@ fn add_list_remove_round_trip() {
 
 #[test]
 fn add_rejects_duplicate_id() {
-    let home = TempDir::new().expect("tempdir");
-    rimz(&home)
+    let env = Env::new();
+    env.rimz()
         .args(["resolver", "add", "opus", "--budget", "30s"])
         .assert()
         .success();
-    rimz(&home)
+    env.rimz()
         .args(["resolver", "add", "opus", "--budget", "60s"])
         .assert()
         .failure()
@@ -92,18 +88,19 @@ fn add_rejects_duplicate_id() {
 
 #[test]
 fn reorder_before_swaps_chain_position() {
-    let home = TempDir::new().expect("tempdir");
+    let env = Env::new();
     for (id, order) in [("opus", "10"), ("slack", "20"), ("pager", "30")] {
-        rimz(&home)
+        env.rimz()
             .args(["resolver", "add", id, "--order", order, "--budget", "30s"])
             .assert()
             .success();
     }
-    rimz(&home)
+    env.rimz()
         .args(["resolver", "reorder", "pager", "--before", "slack"])
         .assert()
         .success();
-    let output = rimz(&home)
+    let output = env
+        .rimz()
         .args(["resolver", "list", "--json"])
         .output()
         .expect("list");

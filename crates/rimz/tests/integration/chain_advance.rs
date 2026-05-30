@@ -7,6 +7,8 @@
 //! ledger from the outside: emulate resolver heartbeats, watch the chain
 //! advance, resolve from the second link, and assert the audit trail.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
@@ -30,25 +32,48 @@ fn chain_elapse_reasons(env: &Env) -> Vec<String> {
 }
 
 /// Keep `resolver_id` heartbeating fresh on a background thread until the
-/// deadline, so the hook's restat after a chain advance still sees it alive.
-fn keep_heartbeat_fresh(env: &Env, resolver_id: &'static str) -> std::thread::JoinHandle<()> {
+/// returned guard is dropped, so the hook's restat after a chain advance still
+/// sees it alive. The guard stops the thread the moment the test is done with
+/// it — joining it does not block on a fixed timer.
+fn keep_heartbeat_fresh(env: &Env, resolver_id: &'static str) -> HeartbeatKeepalive {
     let workspace_id = env.workspace_id.clone();
     let runtime_root = env.runtime_root.clone();
-    std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let handle = std::thread::spawn(move || {
         let path = runtime_root
             .join("rimz")
             .join(workspace_id.as_str())
             .join("heartbeat")
             .join(format!("resolver.{resolver_id}.json"));
-        while Instant::now() < deadline {
+        while !thread_stop.load(Ordering::Relaxed) {
             let parsed = resolver_id.parse().expect("resolver id parse");
             let mut hb = ResolverHeartbeat::new(workspace_id.clone(), parsed);
             hb.last_seen = Timestamp::now();
             let _ = std::fs::write(&path, serde_json::to_vec(&hb).expect("hb"));
             std::thread::sleep(Duration::from_millis(250));
         }
-    })
+    });
+    HeartbeatKeepalive {
+        stop,
+        handle: Some(handle),
+    }
+}
+
+/// Drop-to-stop guard for [`keep_heartbeat_fresh`]: signals the writer thread
+/// and joins it, so a test stops paying for the keepalive as soon as it returns.
+struct HeartbeatKeepalive {
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for HeartbeatKeepalive {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 #[test]
@@ -95,7 +120,7 @@ fn chain_advances_on_budget_elapse() {
     );
 
     let output = child.wait_with_output().expect("wait child");
-    let _ = heartbeat_keepalive.join();
+    drop(heartbeat_keepalive);
     assert!(
         output.status.success(),
         "hook stderr: {}",
@@ -159,7 +184,7 @@ fn chain_advances_on_heartbeat_stale() {
     );
 
     let output = child.wait_with_output().expect("wait child");
-    let _ = heartbeat_keepalive.join();
+    drop(heartbeat_keepalive);
     assert!(
         output.status.success(),
         "hook stderr: {}",

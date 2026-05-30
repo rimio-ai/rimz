@@ -27,8 +27,11 @@ fn main() {
         let Some(id) = value.get("id") else { continue };
         let method = value.get("method").and_then(Value::as_str).unwrap_or("");
         let frame = json!({ "id": id, "result": response_for(method) });
-        let _ = writeln!(stdout, "{frame}");
-        let _ = stdout.flush();
+        // Exit promptly when the client closes the pipe rather than spinning on
+        // stdin until EOF with every write silently dropped.
+        if writeln!(stdout, "{frame}").is_err() || stdout.flush().is_err() {
+            break;
+        }
     }
 }
 

@@ -1177,14 +1177,9 @@ fn list_panes_with_session_returns_terminals() {
     let name = unique_session_name("panes");
     let _session = ZellijSession::spawn(&name);
 
-    // Zellij needs a beat between session-ready and a queryable layout.
-    std::thread::sleep(Duration::from_millis(400));
-
-    let panes = ZellijBackend
-        .list_panes(PaneListOptions {
-            session_name: Some(name.clone()),
-        })
-        .expect("list_panes against a live zellij");
+    // Poll until the fresh session exposes its implicit shell pane instead of
+    // guessing a fixed settle delay.
+    let panes = wait_for_pane_count(&name, 1);
     assert!(
         !panes.is_empty(),
         "expected ≥1 terminal pane in fresh session {name}, got {panes:?}",
