@@ -8,6 +8,8 @@
 //! green→red ramp). Powerline / truecolor are reserved as a future "garnish"
 //! tier that only swaps chrome characters and color depth — never the grammar.
 
+use std::sync::OnceLock;
+
 use ratatui::style::{Color, Modifier, Style};
 
 /// Muted 256-color palette. The renderer's callers speak in semantic ANSI
@@ -40,9 +42,16 @@ impl Theme {
     /// Read the environment once. The shell sets `NO_COLOR` when the user
     /// opts out of ANSI color (the [no-color.org](https://no-color.org/)
     /// convention); the renderer honors any non-empty value.
+    ///
+    /// `NO_COLOR` cannot change mid-process, so the result is cached — the
+    /// render path asks for it on every frame (≈8×/s while a spinner animates),
+    /// and an env lookup per frame is pure waste.
     pub(crate) fn from_env() -> Self {
-        let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
-        Self { no_color }
+        static CACHED: OnceLock<Theme> = OnceLock::new();
+        *CACHED.get_or_init(|| {
+            let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+            Self { no_color }
+        })
     }
 
     /// Build a constant theme — used by tests to assert the NO_COLOR shape
