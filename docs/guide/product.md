@@ -8,31 +8,31 @@ Rimz gives every project one room — a Zellij or tmux session with a sidebar �
 
 ```
 ┌ query-engine ──────────────┐
-│ ◆2  ✗1                     │
+│ ?2  !1                     │
 │                            │
-│ ▌main             2◐ 1◆    │
-│ ◆ claude  fix auth flow 12m│
+│ ▌main                 2⢿ 1?│
+│ ? claude  fix auth flow 12m│
 │   Opus · xhigh             │
 │   ━━━━━━━━━━───────────────│
-│ ◐ claude  add tests     8s │
+│ ⢿ claude  add tests     8s │
 │   Sonnet · high            │
 │   ━━━━━────────────────────│
-│ ◐ codex   refactor api 30s │
+│ ⢿ codex   refactor api 30s │
 │   GPT-5.5 · high           │
 │   ━━━━━━━━━━━━━━━──────────│
 │                            │
-│ ▌feature-migration 1✗ 1○   │
-│ ✗ claude  db migrate    4m │
+│ ▌feature-migration    1! 1◌│
+│ ! claude  db migrate    4m │
 │   Opus · xhigh · yolo      │
 │   ━━━━━━━━━━━━━━━━━━━━━────│
-│ ○ codex   —             1h │
+│ ◌ codex   —             1h │
 │   GPT-5.5 · low            │
 │   ━━━──────────────────────│
 │                            │
-│ ▌workspace         1◆      │
-│ ◆ deploy  promote?      5m │
+│ ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄ 1?│
+│ ? deploy  promote?      5m │
 │                            │
-│ ↵ focus                    │
+│ ↵ jump   ␣ next ?!   ? keys│
 └────────────────────────────┘
 ```
 
@@ -73,13 +73,13 @@ rimz feed list
 rimz feed resolve <request-id> --decision '{"choice":"yes"}'
 
 # 5. Detach. Everything keeps running.
-#    Zellij: Ctrl-O then d. tmux: prefix then d. Or: rimz detach.
+#    Zellij: Ctrl-O then d. tmux: prefix then d.
 
 # 6. Come back later from anywhere
 ssh dev-box rimz attach query-engine
 
-# 7. Launch a coding agent in a new view
-rimz pane split --view new
+# 7. Launch a coding agent in a new pane
+rimz pane split
 claude   # or: codex
 ```
 

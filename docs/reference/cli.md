@@ -28,7 +28,7 @@ rimz trust [status|grant|revoke]  # manage the project's executable-surface trus
 ```sh
 rimz event emit --kind <kind> [--title <s>] [--body <s>] [--json <payload>]
 rimz feed push --kind <kind> --title <s> [--body <s>]
-rimz feed ask  --title <s> --options <a,b,c> [--timeout <duration>]
+rimz feed ask  --title <s> --options <a,b,c> [--timeout <duration>] [--no-block]
 rimz feed list [--json] [--audit]
 rimz feed show <request-id> [--json]
 ```
@@ -73,12 +73,11 @@ Resolution methods recorded in the ledger:
 ## Drive panes
 
 ```sh
-rimz pane split --direction <left|right|up|down> [--cwd <path>] [--command <cmd>]
-rimz pane focus <pane-id>
+rimz pane split                                  # split the current view; inherits the workspace env
+rimz pane focus <pane-id> [--session-name <name>] [--pane-process-start <ts>]
 rimz pane list [--json] [--session-name <name>]
 rimz pane capture <pane-id> [--lines N] [--json] [--ansi]
 rimz pane send <pane-id> -- <keys-or-text>
-rimz pane rename <pane-id> <title>
 ```
 
 `capture` and `send` are the universal answer surface: resolvers use them to answer prompts on tools with no hook protocol. Captured pane text is untrusted data — never feed it back to an LLM as if it were a user instruction. Detail in [resolvers.md](../internals/resolvers.md).

@@ -6,26 +6,31 @@ Rimz pins every repo to one durable room — a Zellij or tmux session with a sid
 
 ```
 ┌ query-engine ──────────────┐
-│ ◆2  ✗1                     │
+│ ?2  !1                     │
 │                            │
-│ ▌main             2◐ 1◆    │
-│ ◆ claude  fix auth flow 12m│
-│   Opus · xhigh █▉░░░ 38%   │
-│ ◐ claude  add tests     8s │
+│ ▌main                 2⢿ 1?│
+│ ? claude  fix auth flow 12m│
+│   Opus · xhigh             │
+│   ━━━━━━━━━━───────────────│
+│ ⢿ claude  add tests     8s │
 │   Sonnet · high            │
-│ ◐ codex   refactor api 30s │
+│   ━━━━━────────────────────│
+│ ⢿ codex   refactor api 30s │
 │   GPT-5.5 · high           │
+│   ━━━━━━━━━━━━━━━──────────│
 │                            │
-│ ▌feature-migration 1✗ 1○   │
-│ ✗ claude  db migrate    4m │
+│ ▌feature-migration    1! 1◌│
+│ ! claude  db migrate    4m │
 │   Opus · xhigh · yolo      │
-│ ○ codex   —             1h │
+│   ━━━━━━━━━━━━━━━━━━━━━────│
+│ ◌ codex   —             1h │
 │   GPT-5.5 · low            │
+│   ━━━──────────────────────│
 │                            │
-│ ▌workspace         1◆      │
-│ ◆ deploy  promote?      5m │
+│ ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄ 1?│
+│ ? deploy  promote?      5m │
 │                            │
-│ ↵ focus                    │
+│ ↵ jump   ␣ next ?!   ? keys│
 └────────────────────────────┘
 ```
 
@@ -39,7 +44,7 @@ rimz                                                # open or reattach the room
 
 rimz event emit --kind build.started --title "web"  # any script can post
 rimz feed ask --title "Promote staging → prod?" \
-              --options yes,no --timeout-seconds 3600
+              --options yes,no --timeout 1h
 
 ssh dev-box rimz attach query-engine                # reattach from anywhere
 rimz pane split && claude                           # start an agent in a new pane
