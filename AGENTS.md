@@ -78,6 +78,7 @@ Every other document is a leaf from here. The `docs/` tree groups by audience: *
 - [trust.md](./docs/internals/trust.md) — executable-surface hash, trust states, auto-revoke.
 - [agent.md](./docs/internals/agent.md) — unified hook interface, agent state machine, and liveness for Claude, Codex, and later agents.
 - [web.md](./docs/internals/web.md) — Zellij-only browser access and session-route design.
+- [performance.md](./docs/internals/performance.md) — render-thread hot path, the cost map, and the rules a performance change follows.
 
 **Contributing** — `docs/contributing/`
 - [rust-conventions.md](./docs/contributing/rust-conventions.md) — Rust shape: CLI, errors, stdout discipline, actor pattern, test taxonomy, dependency snapshot, toolchain, quality gates.
