@@ -1339,6 +1339,10 @@ fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
     .collect()
 }
 
+/// Trim a group's calm tail to `WORKTREE_ROW_CAP`, always keeping the rows that
+/// need you (`waiting`/`failed`) and the focused pane. Because `running` now
+/// ranks last among agents, it is the first calm bucket trimmed behind
+/// `+K more` — by design: a working agent is the least attention-hungry.
 fn capped_rows(rows: Vec<SidebarRow>) -> Vec<SidebarRow> {
     let mut visible = Vec::new();
     for row in rows {
@@ -1356,41 +1360,75 @@ fn capped_rows(rows: Vec<SidebarRow>) -> Vec<SidebarRow> {
 fn compare_rows(left: &SidebarRow, right: &SidebarRow) -> Ordering {
     row_rank(left)
         .cmp(&row_rank(right))
-        .then_with(|| compare_activity(left.status, left.last_activity, right.last_activity))
+        .then_with(|| within_bucket(left, right))
         .then_with(|| left.name.cmp(&right.name))
         .then_with(|| left.id.cmp(&right.id))
 }
 
-fn compare_activity(status: Option<AgentStatus>, left: Timestamp, right: Timestamp) -> Ordering {
-    if matches!(status, Some(AgentStatus::Waiting | AgentStatus::Failed)) {
-        left.cmp(&right)
+/// Tiebreak two rows that share a status bucket (their ranks already tied).
+///
+/// Attention rows (`waiting`/`failed`) sort longest-overdue-first: a blocked or
+/// failed agent's `last_activity` is frozen, so this is both stable and the
+/// triage order the `␣` "next attention" key promises. Calm rows (`idle`,
+/// `success`, `running`) and bare process rows hold a stable spawn order keyed
+/// on `pane_process_start` — untouched by the activity heartbeat — so a working
+/// agent never jumps just because it finished a tool, and new agents append at
+/// the bottom of their bucket.
+fn within_bucket(left: &SidebarRow, right: &SidebarRow) -> Ordering {
+    if is_attention(left.status) {
+        left.last_activity.cmp(&right.last_activity)
     } else {
-        right.cmp(&left)
+        cmp_start_asc(pane_start(left), pane_start(right))
     }
 }
 
-fn compare_groups(left: &SidebarWorktreeGroup, right: &SidebarWorktreeGroup) -> Ordering {
-    workspace_tail(left)
-        .cmp(&workspace_tail(right))
-        .then_with(|| compare_group_top(left, right))
-        .then_with(|| left.label.cmp(&right.label))
+fn is_attention(status: Option<AgentStatus>) -> bool {
+    matches!(status, Some(AgentStatus::Waiting | AgentStatus::Failed))
 }
 
-fn workspace_tail(group: &SidebarWorktreeGroup) -> bool {
-    group.kind == SidebarWorktreeKind::Workspace
-        && !group
-            .rows
-            .iter()
-            .any(|row| row.status == Some(AgentStatus::Waiting))
+fn pane_start(row: &SidebarRow) -> Option<Timestamp> {
+    row.pane.as_ref().and_then(|pane| pane.pane_process_start)
 }
 
-fn compare_group_top(left: &SidebarWorktreeGroup, right: &SidebarWorktreeGroup) -> Ordering {
-    match (left.rows.first(), right.rows.first()) {
-        (Some(left), Some(right)) => compare_rows(left, right),
+/// Ascending by start time, but a missing start sorts *last* — the opposite of
+/// `Option::cmp`, which would float paneless rows (script asks, detached
+/// sessions) to the top of their bucket.
+fn cmp_start_asc(left: Option<Timestamp>, right: Option<Timestamp>) -> Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => left.cmp(&right),
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
         (None, None) => Ordering::Equal,
     }
+}
+
+fn compare_groups(left: &SidebarWorktreeGroup, right: &SidebarWorktreeGroup) -> Ordering {
+    // A worktree floats by its most-urgent member: a `waiting`-topped group sits
+    // above a `failed`-topped one, above the calm groups. Among same-tier groups
+    // the `external` catch-all sorts after project worktrees; then both hold a
+    // stable order keyed on the earliest spawned pane, then label. The external
+    // group therefore only rises out of the tail when it holds a `waiting` or
+    // `failed` agent — the tier carries that, no separate predicate needed.
+    group_tier(left)
+        .cmp(&group_tier(right))
+        .then_with(|| group_is_external(left).cmp(&group_is_external(right)))
+        .then_with(|| cmp_start_asc(group_earliest_start(left), group_earliest_start(right)))
+        .then_with(|| left.label.cmp(&right.label))
+}
+
+/// The most-urgent member's rank. `rows` is already sorted by `compare_rows`
+/// and the cap never hides `waiting`/`failed`, so `rows.first()` is the true
+/// top; an empty group ranks last.
+fn group_tier(group: &SidebarWorktreeGroup) -> u8 {
+    group.rows.first().map_or(u8::MAX, row_rank)
+}
+
+fn group_is_external(group: &SidebarWorktreeGroup) -> bool {
+    group.kind == SidebarWorktreeKind::Workspace
+}
+
+fn group_earliest_start(group: &SidebarWorktreeGroup) -> Option<Timestamp> {
+    group.rows.iter().filter_map(pane_start).min()
 }
 
 fn row_rank(row: &SidebarRow) -> u8 {
@@ -1406,12 +1444,14 @@ fn row_rank(row: &SidebarRow) -> u8 {
 }
 
 fn status_rank(status: AgentStatus) -> u8 {
+    // Working agents are the least attention-hungry, so `running` ranks below the
+    // calm-but-settled `idle`/`success`. Attention (`waiting`/`failed`) leads.
     match status {
         AgentStatus::Waiting => 0,
         AgentStatus::Failed => 1,
-        AgentStatus::Running => 2,
-        AgentStatus::Idle => 3,
-        AgentStatus::Success => 4,
+        AgentStatus::Idle => 2,
+        AgentStatus::Success => 3,
+        AgentStatus::Running => 4,
     }
 }
 
@@ -1792,6 +1832,19 @@ mod tests {
             pane_pid: None,
             pane_process_start: None,
         }
+    }
+
+    fn pane_started(raw: &str, cwd: &str, start: Timestamp) -> PaneRef {
+        PaneRef {
+            pane_process_start: Some(start),
+            ..pane(raw, "claude", cwd)
+        }
+    }
+
+    fn agent_in(id: &str, path: &str, status: AgentStatus, rank: i64) -> AgentState {
+        let mut agent = agent("claude", id, status, PermissionPosture::Default, rank);
+        agent.worktree_path = Some(path.to_owned());
+        agent
     }
 
     #[test]
@@ -3420,6 +3473,160 @@ mod tests {
             "the focused running pane remains visible even past the calm-row cap"
         );
         assert!(snapshot.worktree_groups[0].hidden_count > 0);
+    }
+
+    #[test]
+    fn bucket_order_puts_attention_first_and_running_last() {
+        // Scrambled input proves the sort, not the insertion order.
+        let agents = [
+            AgentStatus::Running,
+            AgentStatus::Success,
+            AgentStatus::Idle,
+            AgentStatus::Failed,
+            AgentStatus::Waiting,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, status)| agent_in(&format!("sess-{i}"), "/repo/main", status, 1_000 + i as i64))
+        .collect::<Vec<_>>();
+
+        let snapshot = SidebarSnapshot::build_with_carryover(
+            WorkspaceId::from_project_root(Path::new("/tmp/x")),
+            Vec::new(),
+            Vec::new(),
+            agents,
+        );
+
+        let order = snapshot.worktree_groups[0]
+            .rows
+            .iter()
+            .map(|row| row.status)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            order,
+            vec![
+                Some(AgentStatus::Waiting),
+                Some(AgentStatus::Failed),
+                Some(AgentStatus::Idle),
+                Some(AgentStatus::Success),
+                Some(AgentStatus::Running),
+            ],
+            "attention leads; working agents sink to the bottom of the group"
+        );
+    }
+
+    #[test]
+    fn calm_bucket_holds_stable_spawn_order() {
+        // Idle agents with distinct spawn times (and one with no pane). The
+        // bucket holds spawn order — oldest first — regardless of activity.
+        let specs: [(&str, Option<u64>); 4] = [
+            ("late", Some(100)),
+            ("nopane", None),
+            ("early", Some(300)),
+            ("mid", Some(200)),
+        ];
+        let agents = specs
+            .into_iter()
+            .enumerate()
+            .map(|(i, (id, ago_secs))| {
+                let mut agent = agent_in(id, "/repo/main", AgentStatus::Idle, 1_000 + i as i64);
+                agent.pane = ago_secs.map(|secs| {
+                    pane_started(
+                        &format!("%{i}"),
+                        "/repo/main",
+                        Timestamp::now() - std::time::Duration::from_secs(secs),
+                    )
+                });
+                agent
+            })
+            .collect::<Vec<_>>();
+
+        let snapshot = SidebarSnapshot::build_with_carryover(
+            WorkspaceId::from_project_root(Path::new("/tmp/x")),
+            Vec::new(),
+            Vec::new(),
+            agents,
+        );
+
+        let order = snapshot.worktree_groups[0]
+            .rows
+            .iter()
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>();
+        // Oldest pane first; the paneless row falls to the bucket tail.
+        assert_eq!(order, vec!["early", "mid", "late", "nopane"]);
+    }
+
+    #[test]
+    fn attention_bucket_sorts_longest_overdue_first() {
+        // Scrambled input; a higher rank means more recent activity.
+        let agents = vec![
+            ("wait-new", AgentStatus::Waiting, 9_000),
+            ("wait-old", AgentStatus::Waiting, 1_000),
+            ("fail-new", AgentStatus::Failed, 8_000),
+            ("fail-old", AgentStatus::Failed, 2_000),
+        ]
+        .into_iter()
+        .map(|(id, status, rank)| agent_in(id, "/repo/main", status, rank))
+        .collect::<Vec<_>>();
+
+        let snapshot = SidebarSnapshot::build_with_carryover(
+            WorkspaceId::from_project_root(Path::new("/tmp/x")),
+            Vec::new(),
+            Vec::new(),
+            agents,
+        );
+
+        let order = snapshot.worktree_groups[0]
+            .rows
+            .iter()
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>();
+        // Waiting leads failed; within each, the longest-overdue (oldest activity) rises.
+        assert_eq!(order, vec!["wait-old", "wait-new", "fail-old", "fail-new"]);
+    }
+
+    #[test]
+    fn group_tiering_floats_attention_and_tails_external() {
+        let labels_for = |agents: Vec<AgentState>| {
+            SidebarSnapshot::build_with_carryover(
+                WorkspaceId::from_project_root(Path::new("/tmp/x")),
+                Vec::new(),
+                Vec::new(),
+                agents,
+            )
+            .worktree_groups
+            .iter()
+            .map(|group| group.label.clone())
+            .collect::<Vec<_>>()
+        };
+        let external = |id: &str, status: AgentStatus| {
+            agent("claude", id, status, PermissionPosture::Default, 1_000)
+        };
+
+        // A calm external sinks below calm project worktrees; an attention
+        // worktree leads regardless of its name.
+        assert_eq!(
+            labels_for(vec![
+                agent_in("a1", "/repo/alpha", AgentStatus::Failed, 1_000),
+                agent_in("a2", "/repo/alpha", AgentStatus::Idle, 1_000),
+                agent_in("b1", "/repo/beta", AgentStatus::Idle, 1_000),
+                agent_in("b2", "/repo/beta", AgentStatus::Idle, 1_000),
+                external("e1", AgentStatus::Idle),
+            ]),
+            vec!["alpha", "beta", "external"]
+        );
+
+        // The external catch-all rises out of the tail only when it holds an
+        // attention agent (waiting or failed).
+        assert_eq!(
+            labels_for(vec![
+                agent_in("b1", "/repo/beta", AgentStatus::Idle, 1_000),
+                agent_in("b2", "/repo/beta", AgentStatus::Idle, 1_000),
+                external("e1", AgentStatus::Failed),
+            ]),
+            vec!["external", "beta"]
+        );
     }
 
     #[test]

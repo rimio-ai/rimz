@@ -78,7 +78,7 @@ Each field, where it comes from, and its **lifetime** — the rule the reducer f
 | `runtime_owner`                     | owner-process identity            | built from `agent_pid` + start token                              | identity      |
 | `worktree_path` / `worktree_branch` | grouping spine                    | live pane cwd → worktree (ledger value is detached-only fallback) | live-derived  |
 | `pane`                              | jump target                       | bound live at snapshot from the pane list                         | live-derived  |
-| `last_activity`                     | age + ranking key                 | `event.timestamp`, advanced per tool by the activity heartbeat    | activity      |
+| `last_activity`                     | age + attention rank              | `event.timestamp`, advanced per tool by the activity heartbeat    | activity      |
 | `last_seen`                         | carryover-merge tiebreak          | `event.timestamp`                                                 | activity      |
 
 The catalog turns on one distinction: **identity vs. live-derived**. `worktree_*` and `pane` are *live* facts — the pane knows its current cwd every tick — so they are derived at snapshot time, not pinned at session start. Pinning them is the branch-tracking bug (§ Liveness and presence).
@@ -87,15 +87,15 @@ The reducer stores `model` **canonicalized** — a trailing capability tag is st
 
 ### The state machine
 
-The five-value status set, in ranking order (most attention-hungry first), per [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape), which owns the full glyph/animation/color table:
+The five-value status set, in ranking order (most attention-hungry first — a working `running` agent is the least, so it sorts below the calm-but-settled `idle`/`success`), per [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape), which owns the full glyph/animation/color table:
 
 | Status    | Glyph | Meaning                     | Raises attention |
 | --------- | ----- | --------------------------- | ---------------- |
 | `waiting` | `?`   | blocked on a human decision | yes              |
 | `failed`  | `!`   | the last turn errored       | yes              |
-| `running` | `⢿`   | actively working a task     | no               |
 | `idle`    | `◌`   | wired in, nothing in flight | no               |
 | `success` | `✓`   | last turn completed cleanly | no               |
+| `running` | `⢿`   | actively working a task     | no               |
 
 The displayed cell refines `running` two ways without changing the rollup: a `running` agent in read-only plan mode renders as **thinking** (`✽`, a sparkle animation — the `plan_mode` flag below), and a `running` agent silent past the stall window escalates to the attention **`!`** (see [Liveness and presence](#liveness-and-presence)). A working `running` agent animates a braille spinner; the resolver-mid-flight overlay animates a braille spinner. Only these active states animate — `?`, `!`, `◌`, `✓` are static so attention stays scannable.
 

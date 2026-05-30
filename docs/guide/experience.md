@@ -263,7 +263,7 @@ made me faster at being the bottleneck."*
 > - **The attention line is the whole sidebar compressed to one line.** If you read nothing else, `?2 !1` tells you whether to look; no line means nothing needs you. It never undercounts behind a cap.
 > - **Ranking is the triage; you don't sort.** Attention-hungry buckets rise, oldest-first within them; the cap only ever trims the *calm* tail. The sidebar physically cannot bury something that needs you.
 > - **A global "focus next attention" key is core, not a nicety.** Seeing the blocked pane and *getting* to it are different actions; the key collapses them so triage cost stays flat as the fleet grows. It's bound only inside the Rimz session, so it never touches the reader's global mux config.
-> - **Worktrees are the spine, not tabs.** Groups are keyed on worktree isolation (only same-worktree agents share files); the `▌` marks it. The `external` catch-all holds scripts, CI, and panes outside any worktree; it renders as a dim `┄ external ┄` divider (not a `▌` pod) and sorts last unless it holds something waiting.
+> - **Worktrees are the spine, not tabs.** Groups are keyed on worktree isolation (only same-worktree agents share files); the `▌` marks it. The `external` catch-all holds scripts, CI, and panes outside any worktree; it renders as a dim `┄ external ┄` divider (not a `▌` pod) and sorts last unless it holds something waiting or failed.
 
 ### The `?` help overlay — discoverability without a manual
 
