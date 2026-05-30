@@ -397,8 +397,10 @@ pub(crate) fn read_transcript_tail(path: &Path) -> Option<String> {
 /// boundaries (`Stop`/`SubagentStop`) therefore assert `Some(false)` in the
 /// adapter rather than reading this helper. Plan mode stays posture-neutral (it
 /// folds to `Default` in the posture pill); this is the separate signal the
-/// sidebar renders as "thinking".
-pub(crate) fn plan_mode_from_payload(payload: &Value) -> Option<bool> {
+/// sidebar renders as "thinking". The per-tool activity heartbeat also reads
+/// this helper so the snapshot can clear a stale sparkle when the slider moves
+/// off `plan` mid-turn (see [`crate::agent_activity`]).
+pub fn plan_mode_from_payload(payload: &Value) -> Option<bool> {
     payload
         .get("permission_mode")
         .or_else(|| payload.get("mode"))

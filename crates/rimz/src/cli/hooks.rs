@@ -25,6 +25,7 @@ use rimz::EventEnvelope;
 use rimz::Ledger;
 use rimz::agents::{
     AgentHookClass, AgentIntegration, AgentLifecycleObservation, integration_by_name,
+    plan_mode_from_payload,
 };
 use rimz::bridge::{self, BridgeOutcome, ExpectedFrame, SocketGuard};
 use rimz::feed::{
@@ -186,11 +187,18 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             }
             // Refresh the agent's activity heartbeat on progress-proving events
             // so the sidebar's `last_activity` advances per tool call, not just
-            // per turn. A latency hint, never correctness — log and continue on
-            // failure.
+            // per turn. The touch also carries the event's plan-mode slider
+            // reading: a `PostToolUse` with a non-plan slider is how the snapshot
+            // learns the agent shift-tabbed out of plan mode mid-turn (no
+            // `ExitPlanMode`, no lifecycle event) and clears the stale sparkle. A
+            // latency hint, never correctness — log and continue on failure.
             if event_records_activity(&event_name)
-                && let Err(err) =
-                    rimz::agent_activity::touch(ledger.runtime_paths(), agent.name(), agent_id)
+                && let Err(err) = rimz::agent_activity::touch(
+                    ledger.runtime_paths(),
+                    agent.name(),
+                    agent_id,
+                    plan_mode_from_payload(&payload),
+                )
             {
                 warn!(
                     agent = agent.name(),
