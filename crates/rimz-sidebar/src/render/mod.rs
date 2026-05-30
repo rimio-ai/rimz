@@ -29,7 +29,7 @@ use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use rimz::{SidebarRowKind, SidebarSnapshot};
 
 use self::fmt::age_short;
-use self::sections::{first_run_hint_lines, fleet_stats_line, worktree_group_lines};
+use self::sections::{first_run_hint_lines, fleet_header_lines, worktree_group_lines};
 use self::theme::Theme;
 
 #[derive(Clone, Debug, Default)]
@@ -221,10 +221,15 @@ fn snapshot_lines(
     let mut lines = Vec::new();
     let mut map: Vec<Option<usize>> = Vec::new();
 
-    // The fleet header is always present and exactly one line, so the body below
-    // never shifts vertically as agents appear, clear, or change state.
-    lines.push(fleet_stats_line(theme, &snapshot.worktree_groups, width));
-    map.push(None);
+    // The fleet header (the cockpit) is always present and a fixed height — three
+    // lines for a populated room, one for an empty one — so the body below never
+    // shifts vertically as agents change state. It is chrome, never a jump
+    // target, so every header line maps to `None`.
+    extend_inert(
+        &mut lines,
+        &mut map,
+        fleet_header_lines(theme, &snapshot.agents, &snapshot.worktree_groups, width),
+    );
     let density = snapshot.sidebar.density;
     if snapshot.worktree_groups.is_empty() {
         if !active && should_show_first_run_hint(snapshot) {
@@ -741,17 +746,19 @@ mod tests {
         // Line 2 is the full-width description; todo dots inline at L2.
         assert!(rendered.contains("ledger refactor"));
         assert!(rendered.contains("●●●○○ 3/5"));
-        // The ctx bar carries a `ctx` label and a percent value, the first of
-        // the three aligned bars.
+        // The ctx bar carries a `ctx` label and the context-window size as its
+        // value (200k here), the first of the three aligned bars; the fill, not
+        // the value, now carries the used percentage.
         assert!(rendered.contains("ctx "));
-        assert!(rendered.contains('%'));
+        assert!(rendered.contains("200k"));
         // Selection appends the budget bars (reset mark in the 3-cell label),
         // the token totals, and the work line (the agent's own edit count).
         assert!(rendered.contains("5h↻"));
         assert!(rendered.contains("7d↻"));
         assert!(rendered.contains("76.5k tok"));
-        assert!(rendered.contains("↑64.2k"));
-        assert!(rendered.contains("↓12.3k"));
+        // Arrows read ↓ input, ↑ output.
+        assert!(rendered.contains("↓64.2k"));
+        assert!(rendered.contains("↑12.3k"));
         assert!(rendered.contains("worked"));
         assert!(rendered.contains("+214 -31"));
         assert_snapshot("enriched_selected_agent_card", rendered);
@@ -1276,12 +1283,15 @@ mod tests {
         );
     }
 
-    /// The fleet header is always present and one line, so the body never shifts
-    /// vertically; it splits the running total into working and thinking.
+    /// The fleet header is a fixed height — one line for an empty room, three for
+    /// a populated one — so the body never shifts as agents change state. The
+    /// attention buckets lead on line 1; the calm tail (running split into
+    /// working `⢿` and thinking `✽`) sits on line 2, each glyph spaced from its
+    /// count.
     #[test]
     fn fleet_header_is_fixed_and_splits_working_from_thinking() {
-        // Empty and populated rooms both lead with the fleet line at row 1
-        // (row 0 is the top border) — the body below never moves.
+        // An empty room is a single calm count line at row 1 (row 0 is the top
+        // border) — the body below never moves.
         let empty = snapshot_with(Vec::new(), Vec::new());
         let empty_screen = snapshot_to_screen(&empty, 40, 12);
         assert!(
@@ -1310,20 +1320,21 @@ mod tests {
         thinking.plan_mode = true;
         let snapshot = snapshot_with(Vec::new(), vec![working, thinking]);
         let screen = snapshot_to_screen(&snapshot, 40, 12);
-        let fleet = screen.lines().nth(1).unwrap();
-        // Two running agents, split one working (⢿) and one thinking (✽); the
-        // gap line below proves the header did not wrap.
-        assert!(fleet.contains("2 agents"), "{screen}");
-        assert!(fleet.contains("⢿1"), "{fleet}");
-        assert!(fleet.contains("✽1"), "{fleet}");
+        let attention = screen.lines().nth(1).unwrap(); // L1
+        let calm = screen.lines().nth(2).unwrap(); // L2
+        // L1 carries the agent total; with nothing waiting it reads "all clear".
+        assert!(attention.contains("2 agents"), "{screen}");
+        assert!(attention.contains("all clear"), "{screen}");
+        // L2 splits the running pair one working (⢿) one thinking (✽), each
+        // glyph spaced from its count — and the calm states are not on L1.
+        assert!(calm.contains("⢿ 1"), "{calm}");
+        assert!(calm.contains("✽ 1"), "{calm}");
+        assert!(!attention.contains('⢿'), "{screen}");
+        // The header is exactly three lines (L3 totals is blank here), so the
+        // worktree group lands at row 4 — proof the header did not wrap.
         assert!(
-            screen
-                .lines()
-                .nth(2)
-                .unwrap()
-                .trim_matches(|c| c == '│' || c == ' ')
-                .is_empty(),
-            "fleet header wrapped:\n{screen}"
+            screen.lines().nth(4).unwrap().contains("▌main"),
+            "fleet header wrapped or shifted:\n{screen}"
         );
     }
 }

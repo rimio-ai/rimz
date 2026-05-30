@@ -11,21 +11,26 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use rimz::agents::{AgentContext, RateLimitWindow};
 use rimz::config::SidebarDensity;
-use rimz::feed::AgentStatus;
+use rimz::feed::{AgentState, AgentStatus};
 use rimz::{
     SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
 };
 
 use super::fmt::{
-    age_short, clip, dollars, duration_compact, duration_compact_minutes, duration_worked,
-    model_label, pct_label, time_remaining, tokens_short,
+    age_label, age_secs, age_short, clip, dollars, duration_compact, duration_compact_minutes,
+    duration_worked, model_label, pct_label, time_remaining, tokens_short, window_size_short,
 };
 use super::labels::{
-    agent_glyph, agent_style, diff_spans, gauge_spans, posture_pill, posture_style, resolver_glyph,
-    resource_bar_spans, segmented_gauge_spans, status_glyph, status_style, thinking_still,
-    todo_spans, tokens_label,
+    age_style, agent_glyph, agent_style, diff_spans, gauge_spans, posture_pill, posture_style,
+    resolver_glyph, resource_bar_spans, segmented_gauge_spans, status_glyph, status_style,
+    thinking_still, todo_spans, tokens_label,
 };
 use super::theme::Theme;
+
+/// Lead glyph for the work line — a clock face for "time worked", so the line
+/// reads iconographically (`◷ 12m worked`) and sets the worked span apart from a
+/// row's activity age. One cell, so it never disturbs the card's alignment.
+const WORKED_GLYPH: &str = "◷";
 
 /// Glyph for the selected row's left accent bar; lives in a one-cell gutter
 /// reserved on every row so selecting one never shifts the columns.
@@ -64,19 +69,30 @@ impl Tier {
     }
 }
 
-/// The fixed, always-present fleet header: the agent total and a glyph+count for
-/// each non-empty status bucket — `6 agents  ⢿3 ✽1 ?2`. Always exactly one line
-/// (trimmed to width, never wrapped), so the body below never shifts vertically
-/// as agents appear, clear, or change state. `working`/`thinking` split the
-/// `running` total by plan mode; the split reads plan mode off the visible rows,
-/// so a `running` agent hidden by the per-worktree cap folds into `working` (the
-/// calm tail is rarely thinking). Counts come from `status_counts`, which spans
-/// even capped-away agents, so the aggregate is never lost.
-pub(super) fn fleet_stats_line(
+/// The fixed fleet header — the cockpit. Three lines when the room has agents,
+/// one calm count line when it does not, so the body below never shifts
+/// vertically as agents change *state* (only the empty↔populated transition
+/// moves it):
+///
+/// ```text
+/// ? 2   ! 1                6 agents     attention (loud) + total (dim, right)
+/// ⢿ 3   ✽ 1   ◌ 2   ✓ 4                calm states
+/// +214 -31 · 41k tok · $4.20    2h34m   totals (+/- left, time pinned right)
+/// ```
+///
+/// L1 leads with the attention buckets (`waiting` `?`, `failed` `!`) so the
+/// states that need a human read first; with none it reads a calm `✓ all
+/// clear`, never an empty line. L2 is the calm tail — `running` split into
+/// working/thinking by plan mode (the split reads plan mode off the visible
+/// rows, so a capped-away `running` agent folds into working). Counts come from
+/// `status_counts`, which spans capped agents; the resource totals on L3 sum the
+/// full agent list, so a capped agent's spend still lands in the total.
+pub(super) fn fleet_header_lines(
     theme: &Theme,
+    agents: &[AgentState],
     groups: &[SidebarWorktreeGroup],
     width: usize,
-) -> Line<'static> {
+) -> Vec<Line<'static>> {
     let running = status_total(groups, AgentStatus::Running);
     let thinking = groups
         .iter()
@@ -84,52 +100,179 @@ pub(super) fn fleet_stats_line(
         .filter(|row| row.status == Some(AgentStatus::Running) && row.plan_mode)
         .count();
     let working = running.saturating_sub(thinking);
-    // Order: the busy/attention states first, then the calm tail.
-    let buckets: [(usize, &'static str, Style); 6] = [
-        (
-            working,
-            status_glyph(AgentStatus::Running),
-            agent_style(theme, AgentStatus::Running),
-        ),
-        (
-            thinking,
-            thinking_still(),
-            agent_style(theme, AgentStatus::Running),
-        ),
-        (
-            status_total(groups, AgentStatus::Waiting),
-            status_glyph(AgentStatus::Waiting),
-            status_style(theme, AgentStatus::Waiting),
-        ),
-        (
-            status_total(groups, AgentStatus::Failed),
-            status_glyph(AgentStatus::Failed),
-            status_style(theme, AgentStatus::Failed),
-        ),
-        (
-            status_total(groups, AgentStatus::Idle),
-            status_glyph(AgentStatus::Idle),
-            status_style(theme, AgentStatus::Idle),
-        ),
-        (
-            status_total(groups, AgentStatus::Success),
-            status_glyph(AgentStatus::Success),
-            status_style(theme, AgentStatus::Success),
-        ),
-    ];
-    let total: usize = buckets.iter().map(|(count, _, _)| count).sum();
-    let unit = if total == 1 { "agent" } else { "agents" };
-    let mut spans = vec![Span::styled(format!("{total} {unit}"), theme.dim())];
-    let mut printed = false;
-    for (count, glyph, style) in buckets {
-        if count == 0 {
-            continue;
-        }
-        spans.push(Span::raw(if printed { " " } else { "  " }));
-        spans.push(Span::styled(format!("{glyph}{count}"), style));
-        printed = true;
+    let waiting = status_total(groups, AgentStatus::Waiting);
+    let failed = status_total(groups, AgentStatus::Failed);
+    let idle = status_total(groups, AgentStatus::Idle);
+    let success = status_total(groups, AgentStatus::Success);
+    let total = working + thinking + waiting + failed + idle + success;
+
+    let count_label = format!("{total} {}", if total == 1 { "agent" } else { "agents" });
+    // An empty (or process-only) room is a single calm count line; the
+    // three-line cockpit is reserved for a room that has agents to summarize.
+    if total == 0 {
+        return vec![Line::from(trim_spans_to_width(
+            vec![Span::styled(count_label, theme.dim())],
+            width,
+        ))];
     }
-    Line::from(trim_spans_to_width(spans, width))
+
+    // L1 — the attention buckets, loud, with the agent total pinned right.
+    let mut attention: Vec<Span<'static>> = Vec::new();
+    push_count(
+        &mut attention,
+        status_glyph(AgentStatus::Waiting),
+        waiting,
+        status_style(theme, AgentStatus::Waiting),
+    );
+    push_count(
+        &mut attention,
+        status_glyph(AgentStatus::Failed),
+        failed,
+        status_style(theme, AgentStatus::Failed),
+    );
+    if attention.is_empty() {
+        attention.push(Span::styled(
+            "✓ all clear",
+            theme.style(Color::Green, Modifier::DIM),
+        ));
+    }
+    let line1 = pin_right(
+        attention,
+        vec![Span::styled(count_label, theme.dim())],
+        width,
+    );
+
+    // L2 — the calm tail.
+    let mut calm: Vec<Span<'static>> = Vec::new();
+    push_count(
+        &mut calm,
+        status_glyph(AgentStatus::Running),
+        working,
+        agent_style(theme, AgentStatus::Running),
+    );
+    push_count(
+        &mut calm,
+        thinking_still(),
+        thinking,
+        agent_style(theme, AgentStatus::Running),
+    );
+    push_count(
+        &mut calm,
+        status_glyph(AgentStatus::Idle),
+        idle,
+        status_style(theme, AgentStatus::Idle),
+    );
+    push_count(
+        &mut calm,
+        status_glyph(AgentStatus::Success),
+        success,
+        status_style(theme, AgentStatus::Success),
+    );
+    let line2 = Line::from(trim_spans_to_width(calm, width));
+
+    vec![
+        line1,
+        line2,
+        fleet_totals_line(theme, agents, groups, width),
+    ]
+}
+
+/// Append a `glyph n` bucket to a header line, spaced from the previous one. The
+/// glyph and its count are always separated by a single space (`? 2`, never
+/// `?2`); successive buckets are separated by three. A zero count is skipped.
+fn push_count(spans: &mut Vec<Span<'static>>, glyph: &str, count: usize, style: Style) {
+    if count == 0 {
+        return;
+    }
+    if !spans.is_empty() {
+        spans.push(Span::raw("   "));
+    }
+    spans.push(Span::styled(format!("{glyph} {count}"), style));
+}
+
+/// L3 of the cockpit: the fleet's resource totals — lines changed leftmost, then
+/// tokens and spend, with total time worked pinned to the right edge. Each
+/// metric is summed from the data that carries it (cost/tokens/duration from the
+/// agents, the `+/-` churn from the worktree diffs) and is dropped when no agent
+/// reports it, so the line shows only what is real.
+fn fleet_totals_line(
+    theme: &Theme,
+    agents: &[AgentState],
+    groups: &[SidebarWorktreeGroup],
+    width: usize,
+) -> Line<'static> {
+    let (mut added, mut removed) = (0u64, 0u64);
+    for group in groups {
+        added += u64::from(group.diff_added.unwrap_or(0));
+        removed += u64::from(group.diff_removed.unwrap_or(0));
+    }
+    let (mut tokens, mut has_tokens) = (0u64, false);
+    let (mut cost, mut has_cost) = (0f64, false);
+    let (mut duration_ms, mut has_duration) = (0u64, false);
+    for agent in agents {
+        if let Some(n) = agent_total_tokens(agent) {
+            tokens += n;
+            has_tokens = true;
+        }
+        if let Some(record) = agent.context.as_ref().and_then(|ctx| ctx.cost.as_ref()) {
+            if let Some(usd) = record.total_cost_usd {
+                cost += usd;
+                has_cost = true;
+            }
+            if let Some(ms) = record.total_duration_ms {
+                duration_ms += ms;
+                has_duration = true;
+            }
+        }
+    }
+
+    let mut left: Vec<Span<'static>> = Vec::new();
+    if added + removed > 0 {
+        left.extend(diff_spans(theme, clamp_u32(added), clamp_u32(removed)));
+    }
+    if has_tokens {
+        push_dot(&mut left, theme);
+        left.push(tokens_label(theme, tokens));
+    }
+    if has_cost {
+        push_dot(&mut left, theme);
+        left.push(Span::styled(
+            dollars(cost),
+            theme.style(Color::Green, Modifier::empty()),
+        ));
+    }
+    let right = if has_duration {
+        vec![Span::styled(duration_worked(duration_ms), theme.dim())]
+    } else {
+        Vec::new()
+    };
+    pin_right(left, right, width)
+}
+
+/// The cumulative token total for an agent: the statusline split when present,
+/// else the transcript rollup scalar.
+fn agent_total_tokens(agent: &AgentState) -> Option<u64> {
+    agent
+        .context
+        .as_ref()
+        .and_then(|ctx| ctx.tokens.as_ref())
+        .map(|tokens| {
+            tokens.total_input_tokens.unwrap_or(0) + tokens.total_output_tokens.unwrap_or(0)
+        })
+        .filter(|total| *total > 0)
+        .or(agent.total_tokens)
+}
+
+/// A faint ` · ` separator between totals fields, pushed only when something
+/// already sits to its left.
+fn push_dot(spans: &mut Vec<Span<'static>>, theme: &Theme) {
+    if !spans.is_empty() {
+        spans.push(Span::styled(" · ", theme.faint()));
+    }
+}
+
+fn clamp_u32(n: u64) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
 }
 
 /// Dim getting-started hint for a healthy room with no agent or feed rows.
@@ -210,23 +353,17 @@ fn group_header(theme: &Theme, group: &SidebarWorktreeGroup, width: usize) -> Li
         return workspace_divider(theme, group, width);
     }
     let label = format!("▌{}", group.label);
-    let tally = tally_text(&group.status_counts);
-    let diff_text = group
+    // The worktree's churn (lines added/removed vs trunk) pins right. The
+    // per-worktree status tally is gone: the cockpit owns the fleet make-up and
+    // each row carries its own status glyph, so repeating it here was noise. The
+    // label clips to whatever's left after the diff claims its width, always
+    // leaving a cell so the header never shrinks to zero on extreme narrowness.
+    let diff = group
         .diff_added
         .zip(group.diff_removed)
-        .filter(|(added, removed)| *added + *removed > 0)
-        .map(|(added, removed)| format!("+{added} -{removed}"));
-
-    // Right-align tally, with diff sitting just left of it. The label is
-    // clipped to whatever's left after both right-hand chunks claim their
-    // width; clipping always leaves at least one cell so the header never
-    // shrinks to zero on extreme narrowness.
-    let right_text = match diff_text.as_deref() {
-        Some(diff) if !tally.is_empty() => format!("{diff}  {tally}"),
-        Some(diff) => diff.to_owned(),
-        None => tally.clone(),
-    };
-    let right_width = right_text.chars().count();
+        .filter(|(added, removed)| *added + *removed > 0);
+    let diff_text = diff.map(|(added, removed)| format!("+{added} -{removed}"));
+    let right_width = diff_text.as_deref().map_or(0, |text| text.chars().count());
     let label_width = width.saturating_sub(right_width + 1).max(1);
     let left = clip(&label, label_width);
     let padding = width
@@ -237,27 +374,18 @@ fn group_header(theme: &Theme, group: &SidebarWorktreeGroup, width: usize) -> Li
         Span::styled(left, theme.style(Color::Cyan, Modifier::BOLD)),
         Span::raw(" ".repeat(padding)),
     ];
-    if diff_text.is_some() {
-        let (added, removed) = (
-            group.diff_added.unwrap_or(0),
-            group.diff_removed.unwrap_or(0),
-        );
+    if let Some((added, removed)) = diff {
         spans.extend(diff_spans(theme, added, removed));
-        if !tally.is_empty() {
-            spans.push(Span::raw("  "));
-        }
-    }
-    if !tally.is_empty() {
-        spans.push(Span::styled(tally, theme.dim()));
     }
     Line::from(spans)
 }
 
 /// The `workspace` catch-all (untethered scripts/CI and out-of-project shells)
 /// renders as a dim `┄ external ┄┄┄` divider rather than a bold `▌` pod header.
-/// The right-aligned tally is kept so a waiting script ask still surfaces.
+/// It keeps an *attention-only* tally (`? n` / `! n`) so a waiting script ask
+/// still surfaces; the calm counts stay with the cockpit.
 fn workspace_divider(theme: &Theme, group: &SidebarWorktreeGroup, width: usize) -> Line<'static> {
-    let tally = tally_text(&group.status_counts);
+    let tally = attention_tally(&group.status_counts);
     let head = format!("┄ {} ", group.label);
     let tail = if tally.is_empty() {
         String::new()
@@ -268,8 +396,8 @@ fn workspace_divider(theme: &Theme, group: &SidebarWorktreeGroup, width: usize) 
         .saturating_sub(head.chars().count() + tail.chars().count())
         .max(1);
     let mut spans = vec![
-        Span::styled(head, theme.dim()),
-        Span::styled("┄".repeat(fill), theme.dim()),
+        Span::styled(head, theme.faint()),
+        Span::styled("┄".repeat(fill), theme.faint()),
     ];
     if !tally.is_empty() {
         spans.push(Span::styled(tail, theme.dim()));
@@ -277,12 +405,18 @@ fn workspace_divider(theme: &Theme, group: &SidebarWorktreeGroup, width: usize) 
     Line::from(spans)
 }
 
-fn tally_text(counts: &[SidebarStatusCount]) -> String {
+/// An attention-only status tally — a spaced `? n` / `! n` for the waiting and
+/// failed counts only. The glyph and count are separated by a space (`? 1`,
+/// never `1?`); the calm states are omitted (the cockpit owns the fleet
+/// make-up). Empty when nothing in the group needs a human.
+fn attention_tally(counts: &[SidebarStatusCount]) -> String {
     counts
         .iter()
-        .map(|count| format!("{}{}", count.count, status_glyph(count.status)))
+        .filter(|count| matches!(count.status, AgentStatus::Waiting | AgentStatus::Failed))
+        .filter(|count| count.count > 0)
+        .map(|count| format!("{} {}", status_glyph(count.status), count.count))
         .collect::<Vec<_>>()
-        .join(" ")
+        .join("  ")
 }
 
 fn row_lines(
@@ -393,7 +527,8 @@ fn agent_identity_line(
     animation_phase: u64,
 ) -> Line<'static> {
     // Right cluster, built first so the left trims to whatever's left: the
-    // session cost in money-green, then the dim activity age.
+    // session cost in money-green, then — for the resting states only — the
+    // activity age.
     let mut right: Vec<Span<'static>> = Vec::new();
     if let Some(cost) = ctx(row)
         .and_then(|context| context.cost.as_ref())
@@ -404,9 +539,23 @@ fn agent_identity_line(
             cost,
             theme.style(Color::Green, Modifier::empty()),
         ));
-        right.push(Span::raw("  "));
     }
-    right.push(Span::styled(age_short(row.last_activity), theme.dim()));
+    // The age earns its place only when the agent is *not* actively working: a
+    // working/thinking head already signals liveness and its age is always
+    // "now". For waiting/failed it ramps with staleness (dim → amber → red past
+    // the 10-minute window) so a long-ignored ask visibly reddens; idle/done
+    // stay dim. A stalled `running` agent is projected to `failed` upstream, so
+    // it lands here with its age back — in red.
+    if status != AgentStatus::Running {
+        let secs = age_secs(row.last_activity);
+        if !right.is_empty() {
+            right.push(Span::raw("  "));
+        }
+        right.push(Span::styled(
+            age_label(secs),
+            age_style(theme, status, secs),
+        ));
+    }
 
     // Left cluster: glyph + name + dim capability tokens.
     let mut left: Vec<Span<'static>> = vec![
@@ -443,16 +592,16 @@ fn agent_identity_line(
 }
 
 /// Line 2 for an agent: the description (the user's session name, else the task,
-/// else an em dash) on its own full-width line. At L2 it also inlines todo
-/// progress (`●●●○○ 3/5`), which used to ride the old capability line.
+/// else an em dash) on its own full-width line. At L2 the todo progress
+/// (`●●●○○ 3/5`) pins to a right column, aligning under the cost/age above so
+/// the dots read as a tidy gutter instead of floating after the text.
 fn description_line(theme: &Theme, row: &SidebarRow, tier: Tier, width: usize) -> Line<'static> {
-    let mut spans = vec![Span::raw("  "), Span::raw(descriptor(row).to_owned())];
+    let left = vec![Span::raw("  "), Span::raw(descriptor(row).to_owned())];
     if tier == Tier::L2 && row.todo_total.unwrap_or(0) > 0 {
-        spans.push(Span::raw("  "));
         let (done, total) = (row.todo_done.unwrap_or(0), row.todo_total.unwrap_or(0));
-        spans.extend(todo_spans(theme, done, total));
+        return pin_right(left, todo_spans(theme, done, total), width);
     }
-    Line::from(trim_spans_to_width(spans, width))
+    Line::from(trim_spans_to_width(left, width))
 }
 
 /// Pack `left` from the start and pin `right` flush to the trailing edge: trim
@@ -616,14 +765,21 @@ fn bar_row(
 }
 
 /// Bar #1, the context meter — the first of the three aligned bars and the only
-/// one in the resting `compact` card. `ctx` on the left, the used-percent value
-/// on the right, the bar between. When the statusline reports the per-message
-/// token breakdown the fill is split into colored segments (cache writes / cache
-/// reads / fresh input) — the three add up to exactly the used percentage —
-/// otherwise it is a single green → amber → red ramp.
+/// one in the resting `compact` card. `ctx` on the left, the window *size* it
+/// fills on the right (`1M` / `200k`), the bar between. The fill amount and its
+/// green → amber → red ramp come from the used percentage; when the statusline
+/// reports the per-message token breakdown the fill is split into colored
+/// segments (cache writes / cache reads / fresh input) that add up to exactly
+/// that percentage. With no window size known (e.g. Codex exposes no token
+/// context) the value falls back to the used-percent label.
 fn gauge_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     let percent = gauge_percent(row)?;
-    let value = pct_label(precise_context_pct(row), percent);
+    let value = ctx(row)
+        .and_then(|context| context.tokens.as_ref())
+        .and_then(|tokens| tokens.context_window_size)
+        .filter(|size| *size > 0)
+        .map(window_size_short)
+        .unwrap_or_else(|| pct_label(precise_context_pct(row), percent));
     let segments = gauge_segments(row);
     Some(bar_row(
         theme,
@@ -737,12 +893,13 @@ fn usage_window_line(
     ))
 }
 
-/// The session's token totals (`76.5k tok · ↑64.2k ↓12.3k`): the cumulative
-/// total, then input and output. Falls back to the bare rollup total for an
-/// agent whose context carries no read-only token split (Codex's app-server
-/// exposes none), so the line shows *something* for every agent. No cumulative
-/// cached figure exists — the cache split is per-message, and the ctx bar's
-/// colored segments already show where the live window went.
+/// The session's token totals (`76.5k tok · ↓64.2k ↑12.3k`): the cumulative
+/// total, then input (`↓`, read into context) and output (`↑`, generated).
+/// Falls back to the bare rollup total for an agent whose context carries no
+/// read-only token split (Codex's app-server exposes none), so the line shows
+/// *something* for every agent. No cumulative cached figure exists — the cache
+/// split is per-message, and the ctx bar's colored segments already show where
+/// the live window went.
 fn token_totals_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     if let Some(tokens) = ctx(row).and_then(|context| context.tokens.as_ref())
         && (tokens.total_input_tokens.is_some() || tokens.total_output_tokens.is_some())
@@ -752,10 +909,10 @@ fn token_totals_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Li
         let spans = vec![
             Span::raw("  "),
             tokens_label(theme, input + output),
-            Span::styled(" · ", theme.dim()),
-            Span::styled(format!("↑{}", tokens_short(input)), theme.dim()),
+            Span::styled(" · ", theme.faint()),
+            Span::styled(format!("↓{}", tokens_short(input)), theme.dim()),
             Span::raw(" "),
-            Span::styled(format!("↓{}", tokens_short(output)), theme.dim()),
+            Span::styled(format!("↑{}", tokens_short(output)), theme.dim()),
         ];
         return Some(Line::from(trim_spans_to_width(spans, width)));
     }
@@ -764,30 +921,30 @@ fn token_totals_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Li
     Some(Line::from(trim_spans_to_width(spans, width)))
 }
 
-/// The session's work line (`12m worked · +127 -43`): total time worked and the
-/// lines the agent added/removed, from the statusline cost record. The diff is
-/// the agent's own edit count — distinct from the worktree-total diff on the
-/// group header. Drawn only when the cost record reports a field.
+/// The session's work line (`◷ 12m worked · +127 -43`): a clock-led span of time
+/// worked and the lines the agent added/removed, from the statusline cost
+/// record. The clock sets the worked time apart from a row's activity age; the
+/// diff is the agent's own edit count, distinct from the worktree-total diff on
+/// the group header. Drawn only when the cost record reports a field.
 fn work_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     let cost = ctx(row)?.cost.as_ref()?;
     let mut spans = vec![Span::raw("  ")];
     let mut printed = false;
     if let Some(ms) = cost.total_duration_ms {
         spans.push(Span::styled(
-            format!("{} worked", duration_worked(ms)),
+            format!("{WORKED_GLYPH} {} worked", duration_worked(ms)),
             theme.dim(),
         ));
         printed = true;
     }
     if cost.total_lines_added.is_some() || cost.total_lines_removed.is_some() {
         if printed {
-            spans.push(Span::styled(" · ", theme.dim()));
+            spans.push(Span::styled(" · ", theme.faint()));
         }
-        let clamp = |n: u64| u32::try_from(n).unwrap_or(u32::MAX);
         spans.extend(diff_spans(
             theme,
-            clamp(cost.total_lines_added.unwrap_or(0)),
-            clamp(cost.total_lines_removed.unwrap_or(0)),
+            clamp_u32(cost.total_lines_added.unwrap_or(0)),
+            clamp_u32(cost.total_lines_removed.unwrap_or(0)),
         ));
         printed = true;
     }

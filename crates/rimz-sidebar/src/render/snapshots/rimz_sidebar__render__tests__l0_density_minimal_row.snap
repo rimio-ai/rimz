@@ -3,10 +3,10 @@ source: crates/rimz-sidebar/src/render/mod.rs
 expression: screen
 ---
 ┌ query-engine ────────┐
-│1 agent  ⢿1           │
+│✓ all clear    1 agent│
+│⢿ 1                   │
 │                      │
-│▌main               1⢿│
-│▎⣾ codex            <t>│
+│▌main                 │
+│▎⣾ codex              │
 │▎  compile            │
-│▎  ctx ─────────    0%│
 └──────────────────────┘

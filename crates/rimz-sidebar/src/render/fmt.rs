@@ -2,8 +2,17 @@
 
 use jiff::Timestamp;
 
-pub(super) fn age_short(at: Timestamp) -> String {
-    let seconds = Timestamp::now().duration_since(at).as_secs();
+/// Seconds since `at`, clamped at zero — the shared input for [`age_short`] and
+/// the staleness color ramp, so a row reads the wall clock once and styles and
+/// labels its age from the same number.
+pub(super) fn age_secs(at: Timestamp) -> i64 {
+    Timestamp::now().duration_since(at).as_secs().max(0)
+}
+
+/// A coarse age as its single highest unit (`8s`, `12m`, `3h`, `2d`) — the pure
+/// core of [`age_short`], so the styling caller can format from a seconds value
+/// it already has.
+pub(super) fn age_label(seconds: i64) -> String {
     if seconds <= 0 {
         "0s".to_owned()
     } else if seconds < 60 {
@@ -15,6 +24,10 @@ pub(super) fn age_short(at: Timestamp) -> String {
     } else {
         format!("{}d", seconds / 86_400)
     }
+}
+
+pub(super) fn age_short(at: Timestamp) -> String {
+    age_label(age_secs(at))
 }
 
 pub(super) fn time_remaining(deadline: Timestamp) -> String {
@@ -121,6 +134,20 @@ pub(super) fn tokens_short(count: u64) -> String {
     }
 }
 
+/// A context-window *size* as a whole-unit magnitude — `200k`, `1M`, `128k` —
+/// for the ctx meter's right value, naming the window the bar fills. Rounds to
+/// the nearest whole unit (windows are round numbers like 200k / 1M), so it
+/// never carries the decimal [`tokens_short`] keeps for a live count.
+pub(super) fn window_size_short(size: u64) -> String {
+    if size >= 1_000_000 {
+        format!("{}M", (size + 500_000) / 1_000_000)
+    } else if size >= 1_000 {
+        format!("{}k", (size + 500) / 1_000)
+    } else {
+        size.to_string()
+    }
+}
+
 /// The context bar's right-hand value, sized to fit the bar's 5-cell value
 /// column. Prefers a one-decimal precise fraction (`78.2%`) when the caller can
 /// derive it from the current-message token composition; otherwise the agent's
@@ -216,6 +243,20 @@ mod tests {
             pct_label(None, 38),
         ] {
             assert!(s.chars().count() <= 5, "{s:?} exceeds 5 cells");
+        }
+    }
+
+    #[test]
+    fn window_size_short_is_whole_unit_magnitude() {
+        assert_eq!(window_size_short(200_000), "200k");
+        assert_eq!(window_size_short(128_000), "128k");
+        assert_eq!(window_size_short(1_000_000), "1M");
+        // 2^20 (a 1,048,576 window) rounds to a clean 1M, not 1.0M.
+        assert_eq!(window_size_short(1_048_576), "1M");
+        assert_eq!(window_size_short(512), "512");
+        // Fits the bar's 5-cell value column for every realistic window.
+        for size in [200_000, 1_000_000, 1_048_576, 128_000] {
+            assert!(window_size_short(size).chars().count() <= 5);
         }
     }
 

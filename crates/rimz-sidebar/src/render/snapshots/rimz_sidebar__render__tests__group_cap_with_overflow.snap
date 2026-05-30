@@ -3,29 +3,29 @@ source: crates/rimz-sidebar/src/render/mod.rs
 expression: screen
 ---
 ┌ query-engine ────────────────────┐
-│9 agents  ⢿9                      │
+│✓ all clear               9 agents│
+│⢿ 9                               │
 │                                  │
-│▌main                           9⢿│
-│▎⣾ codex                        <t>│
+│▌main                             │
+│▎⣾ codex                          │
 │▎  task-0                         │
 │▎  ctx ─────────────────────    0%│
-│ ⣾ codex                        <t>│
+│ ⣾ codex                          │
 │   task-1                         │
 │   ctx ─────────────────────    0%│
-│ ⣾ codex                        <t>│
+│ ⣾ codex                          │
 │   task-2                         │
 │   ctx ─────────────────────    0%│
-│ ⣾ codex                        <t>│
+│ ⣾ codex                          │
 │   task-3                         │
 │   ctx ─────────────────────    0%│
-│ ⣾ codex                        <t>│
+│ ⣾ codex                          │
 │   task-4                         │
 │   ctx ─────────────────────    0%│
-│ ⣾ codex                        <t>│
+│ ⣾ codex                          │
 │   task-5                         │
 │   ctx ─────────────────────    0%│
 │  +3 more                         │
-│                                  │
 │                                  │
 │                                  │
 │                                  │

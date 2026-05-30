@@ -22,7 +22,8 @@ const RED: Color = Color::Indexed(167); // balanced red — failed / high gauge 
 const CYAN: Color = Color::Indexed(73); // teal — worktree headers
 const BLUE: Color = Color::Indexed(75); // sky — generic blue accent (no current context-bar caller)
 const VIOLET: Color = Color::Indexed(141); // soft purple — the weekly "mana" bar and remote-host rows
-const DIM: Color = Color::Indexed(244); // mid gray — separators, ages, labels
+const DIM: Color = Color::Indexed(244); // mid gray — labels, ages, values
+const FAINT: Color = Color::Indexed(240); // deep gray — recedes below DIM: bar tracks, `·` separators, dividers
 
 /// Claude clay — the running agent's animated working/thinking head, so the
 /// live cell reads in the agent's own brand orange. Closest muted 256-color
@@ -74,10 +75,18 @@ impl Theme {
         }
     }
 
-    /// Shared dim-chrome style — for separators, ages, and labels that sit
+    /// Shared dim-chrome style — for ages, labels, and values that sit
     /// alongside the active vocabulary glyphs.
     pub(crate) fn dim(&self) -> Style {
         self.style(Color::DarkGray, Modifier::DIM)
+    }
+
+    /// The faintest chrome — a step below [`dim`] for the pure scaffolding that
+    /// should recede furthest: bar tracks, `·` separators, and dividers. Under
+    /// `NO_COLOR` it collapses to the same dim modifier as [`dim`]; the shape
+    /// (a light `─` track, a thin `·`) carries the reading without the tone.
+    pub(crate) fn faint(&self) -> Style {
+        self.style(FAINT, Modifier::DIM)
     }
 
     /// Accent style for the selected-row left bar (`▎`). Under `NO_COLOR` the

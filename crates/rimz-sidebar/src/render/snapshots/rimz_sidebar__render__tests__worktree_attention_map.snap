@@ -3,20 +3,20 @@ source: crates/rimz-sidebar/src/render/mod.rs
 expression: screen
 ---
 ┌ query-engine ──────────────────────┐
-│3 agents  ⢿1 ?2                     │
+│? 2                         3 agents│
+│⢿ 1                                 │
 │                                    │
-│▌main                          1? 1⢿│
+│▌main                               │
 │▎? claude                        <t>│
 │▎  permission                       │
 │▎  ctx ───────────────────────    0%│
-│ ⣾ codex · GPT-5.5                <t>│
+│ ⣾ codex · GPT-5.5                  │
 │   add tests                        │
 │   ctx ───────────────────────    0%│
 │                                    │
-│┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ 1?│
+│┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1│
 │ ? deploy.sh                      <t>│
 │   Deploy staging?                  │
 │                                    │
 │↵ jump   ␣ next ?!   ? keys         │
-│                                    │
 └────────────────────────────────────┘

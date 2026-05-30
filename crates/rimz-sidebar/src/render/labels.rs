@@ -7,7 +7,7 @@
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
-use rimz::feed::{AgentStatus, PermissionPosture};
+use rimz::feed::{AgentStatus, PermissionPosture, STALL_WINDOW_SECS};
 
 use super::fmt::tokens_short;
 use super::theme::{ORANGE, Theme};
@@ -107,6 +107,29 @@ pub(super) fn agent_style(theme: &Theme, status: AgentStatus) -> Style {
     status_style(theme, status)
 }
 
+/// Color for a row's activity age, ramped by how stale it is. For the attention
+/// states (`waiting` / `failed`) the age is a neglect timer: quiet while fresh,
+/// amber once it has sat a couple of minutes, and red + bold past the
+/// [`STALL_WINDOW_SECS`] (10-minute) window — so a long-ignored ask visibly
+/// heats up. Idle and done are calm: their age is informational, never an alarm,
+/// so it stays dim. The working states never call this — their head animates
+/// and their age is suppressed.
+pub(super) fn age_style(theme: &Theme, status: AgentStatus, age_secs: i64) -> Style {
+    const WARM_SECS: i64 = 2 * 60;
+    match status {
+        AgentStatus::Waiting | AgentStatus::Failed => {
+            if age_secs >= STALL_WINDOW_SECS {
+                theme.style(Color::Red, Modifier::BOLD)
+            } else if age_secs >= WARM_SECS {
+                theme.style(Color::Yellow, Modifier::empty())
+            } else {
+                theme.dim()
+            }
+        }
+        _ => theme.dim(),
+    }
+}
+
 /// Human label for the permission posture. `Default` is the omitted baseline,
 /// so it returns `None` and disappears from the row. `Unknown` is also
 /// suppressed — an unparseable mode word is not a warning surface.
@@ -156,7 +179,7 @@ fn rule_bar(theme: &Theme, filled: usize, width: usize, color: Color) -> Vec<Spa
     if filled < width {
         spans.push(Span::styled(
             std::iter::repeat_n(BAR_TRACK, width - filled).collect::<String>(),
-            theme.dim(),
+            theme.faint(),
         ));
     }
     spans
@@ -209,7 +232,7 @@ pub(super) fn segmented_gauge_spans(
     if filled < width {
         spans.push(Span::styled(
             std::iter::repeat_n(BAR_TRACK, width - filled).collect::<String>(),
-            theme.dim(),
+            theme.faint(),
         ));
     }
     spans
@@ -446,6 +469,30 @@ mod tests {
         for span in &spans {
             assert!(span.style.fg.is_none());
         }
+    }
+
+    /// The age ramp heats up only for the attention states, and steps
+    /// dim → amber → red as it crosses the warm (2m) and stall (10m) thresholds.
+    /// Calm states stay dim no matter how old.
+    #[test]
+    fn age_style_heats_attention_and_leaves_calm_dim() {
+        let theme = Theme::fixed(false);
+        let dim = theme.dim().fg;
+        let amber = theme.style(Color::Yellow, Modifier::empty()).fg;
+        let red = theme.style(Color::Red, Modifier::BOLD).fg;
+
+        // Waiting: fresh is dim, a few minutes warms to amber, past 10m reddens.
+        assert_eq!(age_style(&theme, AgentStatus::Waiting, 30).fg, dim);
+        assert_eq!(age_style(&theme, AgentStatus::Waiting, 5 * 60).fg, amber);
+        assert_eq!(age_style(&theme, AgentStatus::Waiting, 11 * 60).fg, red);
+        assert!(
+            age_style(&theme, AgentStatus::Failed, 11 * 60)
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+        // Idle and done never alarm.
+        assert_eq!(age_style(&theme, AgentStatus::Idle, 11 * 60).fg, dim);
+        assert_eq!(age_style(&theme, AgentStatus::Success, 11 * 60).fg, dim);
     }
 
     /// Each animation cycles through its frames and wraps, so the phase can grow
