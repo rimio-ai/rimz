@@ -26,6 +26,7 @@ The rules every performance change here follows. They are ordered: an earlier ru
 5. **Single-flight, then coalesce.** One outstanding fetch at a time. A burst of deltas collapses to one fetch (`in_flight`); a delta that races an in-flight fetch defers exactly one follow-up (`refetch_pending`), never a queue. The same lock+poll election (`ledger::single_flight`) sits on both shared external reads so concurrent sidebars across a fleet share one producer instead of stampeding: the snapshot cache producer (`snapshot.lock`, `SNAPSHOT_CACHE_TTL` 750ms) for the ledger rollup + `list-panes`, and the per-worktree git probes (`diff-stats.lock`, `DIFF_STATS_TTL` 5s) — one sidebar forks git for the fleet while the rest read its `diff-stats.json` write.
 6. **Pay the round-trip once per window.** `list-panes` and the git probes are the snapshot's cost; bound them with a short TTL cache and reuse the last good result. A degraded read (an empty body, a live pane missing its command/cwd) backfills the missing fields per pane id from the last good read rather than flashing a corrupt frame, and the renderer holds the last good frame rather than commit a regression while the pane set is unchanged — see [sidebar.md → Presence model](./sidebar.md#presence-model).
 7. **Cheapest correct read.** The snapshot rebuild is O(active-events + items), never O(history); archives are touched only at rotation. Skip work that cannot matter — an idle room with no agents skips both sidecar directory scans entirely.
+8. **One live sidebar per workspace.** The fetch cost above is per *sidebar*, so the count must stay at one — N daemons polling one session means N× `list-panes` on the shared mux server, which the cross-fleet single-flight (principle 5) cannot collapse because each daemon falls back to producing locally when it loses the cache lock. Two paths hold the invariant: a launch lock so concurrent attaches to one shared session don't each spawn a daemon (`launch_sidebar_if_needed`), and — the definitive backstop — a runtime election where every younger duplicate yields to the eldest live instance (UUIDv7 ids sort by birth, so the lowest id wins; `elder_sidebar_present`), collapsing any stampede that slips the lock to one within a tick. Trust the heartbeat TTL here exactly as the launch gate does: a just-SIGKILLed elder is honoured for at most one TTL before the gate relaunches.
 
 ## Cost map
 
@@ -33,7 +34,7 @@ Where the milliseconds are, and what bounds each. Treat the figures as orders of
 
 | Operation | Rough cost | Bound |
 | --- | --- | --- |
-| `list-panes` (Zellij/tmux IPC) | 200–680ms, occasionally degraded mid-tick | snapshot cache (750ms TTL, single-flight); per-pane field carry-forward; render-side last-known-good gate |
+| `list-panes` (Zellij/tmux IPC) | 200–680ms, occasionally degraded mid-tick | one live sidebar per workspace (oldest-instance election); snapshot cache (750ms TTL, single-flight); per-pane field carry-forward; render-side last-known-good gate |
 | git diff-stats per worktree | 4 sequential `git` forks (trunk ref → merge-base → branch → numstat) | diff-stats cache (`DIFF_STATS_TTL`, 5s) keyed on worktree, single-flighted across the fleet (`diff-stats.lock`) |
 | git worktree enumeration | 1 `git worktree list` fork per snapshot, to group a worktree parked outside the project root | cached in the diff-stats cache under the same `DIFF_STATS_TTL` (the set changes only on `git worktree add/remove`) |
 | snapshot rebuild | O(active-events + items) | event-log rotation caps the active log; carryover preserves the rollup |
@@ -55,6 +56,7 @@ The 2026-05 performance pass. Symptom → fix → where.
 | Two fsyncs per disposable-cache write | `write_temp_then_rename_cache` (atomic rename, no fsync) for the snapshot/diff-stats caches and the agent-context sidecar | `ledger::atomic`, `cli::sidebar`, `ledger::agent_context` |
 | Idle room re-scans the activity dir every tick | Gate `agent_activity::read_all` behind `!agents.is_empty()`, beside the context read | `cli::sidebar::run` |
 | Throwaway allocations per pane per tick | Move `command`/`cwd` out of the owned `RawPane` (`take_*`) instead of cloning | `mux::zellij::list_panes` |
+| Duplicate sidebar daemons pin the mux server with N× `list-panes` | One live sidebar per workspace: a launch lock serializes check-then-spawn, a runtime election yields every younger duplicate to the eldest live instance, and orphaned heartbeats/sockets are swept | `sidebar::launch_sidebar_if_needed`, `sidebar::elder_sidebar_present`, `sidebar::sweep_orphan_runtime`, `app::run_fetch` |
 
 ## Deferred candidates
 

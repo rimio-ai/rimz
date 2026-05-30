@@ -2,20 +2,36 @@
 //!
 //! The sidebar heartbeat remains a latency hint. A stale, unreadable, or
 //! protocol-mismatched heartbeat never blocks a fresh launch.
+//!
+//! The invariant is one live sidebar per workspace. Two paths enforce it: a
+//! launch lock so concurrent attaches don't each spawn a daemon, and — the
+//! definitive backstop — a runtime election where every younger duplicate
+//! yields to the eldest live instance (UUIDv7 ids sort by birth), so any
+//! stampede that slips the lock collapses to one within a tick.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use tracing::debug;
 
 use crate::ids::{MuxName, SidebarInstanceId, WorkspaceId};
 use crate::ledger::RuntimePaths;
 use crate::ledger::atomic;
+use crate::ledger::single_flight::{self, Coalesced};
 use crate::ledger::wakeup::SIDEBAR_HEARTBEAT_TTL;
 use crate::mux::{MuxBackend, SidebarPaneOptions};
 use crate::schema::SIDEBAR_PROTOCOL_VERSION;
 use crate::schema::heartbeat::SidebarHeartbeat;
+
+/// Launch-lock poll cadence: the producer holds the election lock while the
+/// daemon it spawned starts and publishes its first heartbeat, and a peer queued
+/// behind it polls this long before giving up to the runtime election. Longer
+/// than the diff-stats window because production here is an async process spawn,
+/// not a synchronous git fork. `25ms × 60 ≈ 1.5s`.
+const LAUNCH_WAIT_STEP: Duration = Duration::from_millis(25);
+const LAUNCH_WAIT_STEPS: u32 = 60;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SidebarLaunchOutcome {
@@ -60,22 +76,27 @@ pub fn write_heartbeat(
         .map_err(|source| HeartbeatWriteErr { path, source })
 }
 
-pub fn fresh_sidebar_present(rt: &RuntimePaths) -> bool {
+/// Instance ids of every fresh, current-protocol sidebar heartbeat in the
+/// workspace runtime dir. The shared liveness filter behind the launch gate and
+/// the runtime election: a stale mtime, unreadable JSON, or mismatched protocol
+/// is skipped.
+fn fresh_sidebar_instances(rt: &RuntimePaths) -> Vec<SidebarInstanceId> {
     let entries = match fs::read_dir(&rt.heartbeat_dir) {
         Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
         Err(err) => {
             debug!(path = %rt.heartbeat_dir.display(), error = %err, "sidebar heartbeat dir unreadable");
-            return false;
+            return Vec::new();
         }
     };
 
+    let mut ids = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if !SidebarHeartbeat::is_heartbeat_file(&path) {
             continue;
         }
-        if !heartbeat_mtime_fresh(&path) {
+        if !mtime_within_ttl(&path) {
             continue;
         }
         let heartbeat = match SidebarHeartbeat::read_from(&path) {
@@ -86,11 +107,60 @@ pub fn fresh_sidebar_present(rt: &RuntimePaths) -> bool {
             }
         };
         if heartbeat.protocol_version == SIDEBAR_PROTOCOL_VERSION {
-            return true;
+            ids.push(heartbeat.instance_id);
         }
     }
+    ids
+}
 
-    false
+pub fn fresh_sidebar_present(rt: &RuntimePaths) -> bool {
+    !fresh_sidebar_instances(rt).is_empty()
+}
+
+/// True when a live sidebar holds an older instance id than `own_id`. UUIDv7
+/// ids sort by birth time, so the lowest id is the eldest; every younger
+/// duplicate yields to it (see [`crate::sidebar`] module docs), collapsing a
+/// launch-race stampede to one live sidebar per workspace. The eldest finds no
+/// elder and never yields, so exactly one survives. The handoff trusts the same
+/// heartbeat TTL as the launch gate, so a just-SIGKILLed elder is honoured for
+/// at most one TTL before the gate relaunches.
+pub fn elder_sidebar_present(rt: &RuntimePaths, own_id: &SidebarInstanceId) -> bool {
+    fresh_sidebar_instances(rt)
+        .iter()
+        .any(|id| id.as_str() < own_id.as_str())
+}
+
+/// Remove runtime files left by sidebars that exited without their RAII cleanup
+/// (a SIGKILL skips it): heartbeats aged past the liveness TTL, and sockets with
+/// no live owner. A live sidebar re-stamps its heartbeat every tick, so a stale
+/// mtime is an honest "owner is gone". A socket is kept while its owner is fresh
+/// (paired by short id) or still starting up (bound before the first heartbeat —
+/// guarded by its own fresh mtime). Best-effort: a removal race is ignored.
+pub fn sweep_orphan_runtime(rt: &RuntimePaths) {
+    let live: HashSet<String> = fresh_sidebar_instances(rt)
+        .iter()
+        .map(|id| id.short().to_owned())
+        .collect();
+
+    if let Ok(entries) = fs::read_dir(&rt.heartbeat_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if SidebarHeartbeat::is_heartbeat_file(&path) && !mtime_within_ttl(&path) {
+                remove_orphan(&path);
+            }
+        }
+    }
+    if let Ok(entries) = fs::read_dir(&rt.sock_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(short) = sidebar_socket_short_id(&path) else {
+                continue;
+            };
+            if !live.contains(&short) && !mtime_within_ttl(&path) {
+                remove_orphan(&path);
+            }
+        }
+    }
 }
 
 pub fn launch_sidebar_if_needed(
@@ -98,13 +168,37 @@ pub fn launch_sidebar_if_needed(
     runtime: &RuntimePaths,
     opts: &SidebarPaneOptions,
 ) -> SidebarLaunchOutcome {
+    sweep_orphan_runtime(runtime);
+    // Fast path before contending — `single_flight`'s contract is that the
+    // caller has already missed a fresh read by the time it elects.
     if fresh_sidebar_present(runtime) {
         return SidebarLaunchOutcome::SkippedFresh;
     }
+    // Serialize check-then-launch through the shared single-flight election so
+    // two concurrent attaches to one shared session can't both spawn a daemon.
+    // A peer that finds a fresh heartbeat while polling skips; the winner holds
+    // the lock until its daemon publishes one. No lock dir or a wedged producer
+    // falls to a local launch, and the runtime election reaps the loser.
+    let lock_path = runtime.root.join("sidebar-launch.lock");
+    let _guard = match single_flight::coalesce(&lock_path, LAUNCH_WAIT_STEP, LAUNCH_WAIT_STEPS, || {
+        fresh_sidebar_present(runtime).then_some(())
+    }) {
+        Coalesced::Shared(()) => return SidebarLaunchOutcome::SkippedFresh,
+        Coalesced::Produce(guard) => Some(guard),
+        Coalesced::ProduceLocal => None,
+    };
     let mut opts = opts.clone();
     opts.replace_existing = true;
     match backend.open_sidebar(&opts) {
-        Ok(()) => SidebarLaunchOutcome::Opened,
+        Ok(()) => {
+            // Hold the election lock (`_guard`) until the new daemon publishes
+            // its heartbeat, so an attach polling behind us reads it and skips.
+            // The daemon writes the heartbeat just after start, well inside the
+            // budget; a slow one falls to the election rather than stalling the
+            // attach further.
+            wait_for_fresh_sidebar(runtime);
+            SidebarLaunchOutcome::Opened
+        }
         Err(err) => {
             tracing::warn!(
                 session = %opts.session_name,
@@ -117,11 +211,40 @@ pub fn launch_sidebar_if_needed(
     }
 }
 
-fn heartbeat_mtime_fresh(path: &Path) -> bool {
+/// Poll for a fresh sidebar heartbeat, returning as soon as one appears, on the
+/// same cadence the launch election polls. Held under the election lock so the
+/// next launcher observes the daemon we just spawned instead of racing it.
+fn wait_for_fresh_sidebar(rt: &RuntimePaths) {
+    for _ in 0..LAUNCH_WAIT_STEPS {
+        if fresh_sidebar_present(rt) {
+            return;
+        }
+        std::thread::sleep(LAUNCH_WAIT_STEP);
+    }
+}
+
+/// Short (12-hex) instance id embedded in a `sidebar.<short>.sock` path, or
+/// `None` for any other file. Mirrors the socket naming in the renderer.
+fn sidebar_socket_short_id(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    name.strip_prefix("sidebar.")?
+        .strip_suffix(".sock")
+        .map(str::to_owned)
+}
+
+fn remove_orphan(path: &Path) {
+    match fs::remove_file(path) {
+        Ok(()) => debug!(path = %path.display(), "swept orphaned sidebar runtime file"),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => debug!(path = %path.display(), error = %err, "sweeping orphaned runtime file failed"),
+    }
+}
+
+fn mtime_within_ttl(path: &Path) -> bool {
     let modified = match fs::metadata(path).and_then(|meta| meta.modified()) {
         Ok(modified) => modified,
         Err(err) => {
-            debug!(path = %path.display(), error = %err, "sidebar heartbeat metadata unreadable");
+            debug!(path = %path.display(), error = %err, "sidebar runtime file metadata unreadable");
             return false;
         }
     };
@@ -177,6 +300,40 @@ mod tests {
                 .expect("write heartbeat");
             path
         }
+
+        /// Write a fresh, current-protocol heartbeat carrying `id`, at the path
+        /// the renderer would use (`sidebar.<id>.json`).
+        fn write_sidebar_for(&self, id: &SidebarInstanceId) -> std::path::PathBuf {
+            self.ensure_runtime();
+            let heartbeat = SidebarHeartbeat::new(
+                self.workspace_id.clone(),
+                id.clone(),
+                MuxName::Tmux,
+                "session",
+                self.runtime
+                    .sock_dir
+                    .join(format!("sidebar.{}.sock", id.short())),
+            );
+            let path = self.runtime.sidebar_heartbeat_path(id);
+            std::fs::write(&path, serde_json::to_vec(&heartbeat).expect("json"))
+                .expect("write heartbeat");
+            path
+        }
+    }
+
+    fn make_stale(path: &Path) {
+        let old = SystemTime::now() - SIDEBAR_HEARTBEAT_TTL - Duration::from_secs(1);
+        std::fs::File::open(path)
+            .expect("open runtime file")
+            .set_modified(old)
+            .expect("set mtime");
+    }
+
+    fn instance(hex_tail: &str) -> SidebarInstanceId {
+        // UUIDv7 ids sort lexicographically by birth; craft deterministic ids so
+        // a test controls who is the elder. 32 hex chars after the `sb_` prefix.
+        let body = format!("{hex_tail:0>32}");
+        SidebarInstanceId::parse(&format!("sb_{body}")).expect("valid instance id")
     }
 
     #[test]
@@ -249,5 +406,82 @@ mod tests {
         assert_eq!(hb.protocol_version, SIDEBAR_PROTOCOL_VERSION);
         assert_eq!(hb.mux, MuxName::Zellij);
         assert_eq!(hb.wakeup_socket, socket);
+    }
+
+    #[test]
+    fn younger_yields_to_live_elder_eldest_survives() {
+        let h = Harness::new();
+        let elder = instance("01");
+        let younger = instance("02");
+        h.write_sidebar_for(&elder);
+        h.write_sidebar_for(&younger);
+        // The younger sees an older live instance and yields; the eldest finds no
+        // elder and stays, so exactly one survives.
+        assert!(elder_sidebar_present(&h.runtime, &younger));
+        assert!(!elder_sidebar_present(&h.runtime, &elder));
+    }
+
+    #[test]
+    fn no_elder_when_alone() {
+        let h = Harness::new();
+        let only = instance("05");
+        h.write_sidebar_for(&only);
+        assert!(!elder_sidebar_present(&h.runtime, &only));
+    }
+
+    #[test]
+    fn stale_or_wrong_protocol_elder_is_not_honored() {
+        let h = Harness::new();
+        let younger = instance("09");
+        // A stale lower id is a dead elder — ignored, so the survivor does not
+        // yield to a ghost (recovery is bounded by the heartbeat TTL).
+        let stale_elder = instance("07");
+        make_stale(&h.write_sidebar_for(&stale_elder));
+        // A wrong-protocol lower id is not a peer we hand off to.
+        h.write_sidebar("sidebar.0000000000000008.json", "rimz.plugin.v0");
+        assert!(!elder_sidebar_present(&h.runtime, &younger));
+    }
+
+    #[test]
+    fn sweep_removes_stale_heartbeat_keeps_fresh() {
+        let h = Harness::new();
+        let live = instance("0a");
+        let dead = instance("0b");
+        h.write_sidebar_for(&live);
+        let dead_path = h.write_sidebar_for(&dead);
+        make_stale(&dead_path);
+
+        sweep_orphan_runtime(&h.runtime);
+
+        assert!(h.runtime.sidebar_heartbeat_path(&live).exists());
+        assert!(!dead_path.exists());
+        assert!(fresh_sidebar_present(&h.runtime));
+    }
+
+    #[test]
+    fn sweep_removes_orphan_socket_keeps_live_and_starting() {
+        let h = Harness::new();
+        let live = instance("0c");
+        h.write_sidebar_for(&live);
+
+        let live_sock = h
+            .runtime
+            .sock_dir
+            .join(format!("sidebar.{}.sock", live.short()));
+        let orphan_sock = h.runtime.sock_dir.join("sidebar.ffffffffffff.sock");
+        let starting_sock = h.runtime.sock_dir.join("sidebar.eeeeeeeeeeee.sock");
+        for sock in [&live_sock, &orphan_sock, &starting_sock] {
+            std::fs::write(sock, b"").expect("write socket file");
+        }
+        // The orphan's owner is long gone (no heartbeat, stale socket); the
+        // starting socket is bound before its first heartbeat, so its fresh
+        // mtime protects it.
+        make_stale(&orphan_sock);
+
+        sweep_orphan_runtime(&h.runtime);
+
+        assert!(live_sock.exists(), "live owner's socket kept");
+        assert!(starting_sock.exists(), "startup-window socket kept");
+        assert!(!orphan_sock.exists(), "dead owner's socket swept");
     }
 }

@@ -49,6 +49,8 @@ Both backends run the same native renderer through `rimz sidebar serve`:
 
 Launch is idempotent by heartbeat. Before opening a pane, Rimz scans `runtime/heartbeat/sidebar.*.json` and treats only readable, current-protocol files whose mtime is within the sidebar heartbeat TTL as live. Stale, unreadable, or old-protocol heartbeats are ignored so a crashed sidebar or upgraded protocol does not suppress relaunch.
 
+One live sidebar per workspace. A launch lock serializes the check-then-spawn so concurrent attaches to one shared session don't each pass the gate and spawn a daemon; as the definitive backstop, each renderer elects the eldest live instance every tick (UUIDv7 ids sort by birth) and a younger duplicate yields, so any stampede that slips the lock collapses to one within a tick. The launch sweep also removes orphaned heartbeats and sockets a SIGKilled sidebar left behind. See [performance.md → Principles](./performance.md#principles).
+
 `rimz reload` recovers in place. Beyond signalling live sidebars to re-exec a freshly-installed binary, it re-adds a sidebar to any tab/window that still has working panes but lost its own — without rebirthing the session, so the user's panes survive. tmux re-runs the same left split (`-b -l <pct>% -d`) against the bare window; Zellij, which docks left only at session birth, reaches a live tab by splitting a `rimz-sidebar` pane to the right, moving it left, and resizing it toward the layout width, then restores the caller's focus. The pass is per-view and run-once: a view that fails to gain a sidebar is logged and left alone, never retried in a loop.
 
 ### Self-close

@@ -721,10 +721,13 @@ fn fetch_snapshot_for(
 
 /// One refresh cycle's result: the liveness-write error (if any) and the
 /// snapshot fetch, kept separate so [`compute_next_state`] can tell a
-/// heartbeat-only failure apart from a snapshot failure.
+/// heartbeat-only failure apart from a snapshot failure. `yield_to_elder` short-
+/// circuits both: an older sidebar is live for this workspace, so this duplicate
+/// exits instead of rendering.
 struct FetchOutcome {
     heartbeat_err: Option<String>,
     snapshot: std::result::Result<SidebarSnapshot, String>,
+    yield_to_elder: bool,
 }
 
 /// Write the heartbeat and fetch the snapshot. Runs on the fetch worker thread
@@ -735,6 +738,18 @@ fn run_fetch(config: &ServeConfig, runtime: &RuntimePaths, socket_path: &Path) -
     let heartbeat_err = write_heartbeat(config, runtime, socket_path)
         .err()
         .map(|err| err.to_string());
+    // Having published our own heartbeat, yield to any elder sidebar so a
+    // launch-race stampede collapses to one live instance per workspace. Skip
+    // the snapshot fetch when yielding — we're about to exit, and a doomed
+    // duplicate that never forks `list-panes` spares the shared mux server a
+    // round-trip.
+    if rimz::sidebar::elder_sidebar_present(runtime, &config.instance_id) {
+        return FetchOutcome {
+            heartbeat_err,
+            snapshot: Err("yielding to an elder sidebar".to_owned()),
+            yield_to_elder: true,
+        };
+    }
     let snapshot = fetch_snapshot_for(
         &resolve_snapshot_bin(&config.rimz_bin),
         &config.workspace_id,
@@ -746,6 +761,7 @@ fn run_fetch(config: &ServeConfig, runtime: &RuntimePaths, socket_path: &Path) -
     FetchOutcome {
         heartbeat_err,
         snapshot,
+        yield_to_elder: false,
     }
 }
 
@@ -822,6 +838,21 @@ fn apply_fetch_outcome(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     anim_start: Instant,
 ) -> Result<ApplyOutcome> {
+    // An elder sidebar is live for this workspace: exit before rendering so one
+    // sidebar serves it. Dropping out releases this instance's heartbeat and
+    // socket and closes its pane — the duplicate disappears within a tick.
+    if outcome.yield_to_elder {
+        debug!(
+            session = %config.session_name,
+            instance = %config.instance_id,
+            "an elder sidebar is live for this workspace; yielding so one sidebar serves it",
+        );
+        return Ok(ApplyOutcome {
+            should_exit: true,
+            rejected: false,
+        });
+    }
+
     // The gate compares the incoming snapshot against the last frame we actually
     // committed; `current` still holds it until we overwrite it below.
     let fetch_was_ok = outcome.snapshot.is_ok();
