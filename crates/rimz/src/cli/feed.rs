@@ -38,9 +38,9 @@ enum FeedSubcmd {
         title: String,
         #[arg(long, value_delimiter = ',')]
         options: Vec<String>,
-        /// Total seconds to wait before failing. Omit for unbounded.
-        #[arg(long)]
-        timeout_seconds: Option<u64>,
+        /// Time to wait before failing (`30s`, `5m`, `1h`, `4h`, `1d`). Omit for unbounded.
+        #[arg(long, value_parser = parse_timeout)]
+        timeout: Option<Duration>,
         /// Print the request id and return without blocking.
         #[arg(long)]
         no_block: bool,
@@ -133,7 +133,7 @@ pub fn run(args: FeedArgs, globals: &GlobalFlags) -> Result<()> {
         FeedSubcmd::Ask {
             title,
             options,
-            timeout_seconds,
+            timeout,
             no_block,
         } => {
             let mut item = FeedItem::new(
@@ -147,9 +147,9 @@ pub fn run(args: FeedArgs, globals: &GlobalFlags) -> Result<()> {
             item.options = options;
             attach_worktree(&mut item, &workspace);
             attach_current_owner(&mut item);
-            item.hook_wait_timeout_seconds = timeout_seconds.unwrap_or(0);
-            if let Some(seconds) = timeout_seconds {
-                item.feed_deadline_at = Some(Timestamp::now() + Duration::from_secs(seconds));
+            item.hook_wait_timeout_seconds = timeout.map(|d| d.as_secs()).unwrap_or(0);
+            if let Some(deadline) = timeout {
+                item.feed_deadline_at = Some(Timestamp::now() + deadline);
             }
             let request_id = item.request_id.clone();
 
@@ -178,7 +178,7 @@ pub fn run(args: FeedArgs, globals: &GlobalFlags) -> Result<()> {
                 println!("{request_id}");
             }
 
-            let cap = timeout_seconds.map(Duration::from_secs);
+            let cap = timeout;
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -346,4 +346,26 @@ fn attach_current_owner(item: &mut FeedItem) {
         RuntimeOwnerKind::Script,
         item.request_id.to_string(),
     ));
+}
+
+/// Parse a `feed ask` timeout like `30s`, `5m`, `1h`, or `1d`. Scripts can gate
+/// for days, so days join the resolver/gc units.
+fn parse_timeout(raw: &str) -> std::result::Result<Duration, String> {
+    super::parse::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_timeout_accepts_short_units() {
+        assert_eq!(parse_timeout("30s").unwrap(), Duration::from_secs(30));
+        assert_eq!(parse_timeout("5m").unwrap(), Duration::from_secs(300));
+        assert_eq!(parse_timeout("4h").unwrap(), Duration::from_secs(4 * 3600));
+        assert_eq!(parse_timeout("1d").unwrap(), Duration::from_secs(86_400));
+        assert!(parse_timeout("").is_err());
+        assert!(parse_timeout("30").is_err());
+        assert!(parse_timeout("30y").is_err());
+    }
 }
