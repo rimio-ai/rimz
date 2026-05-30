@@ -21,6 +21,7 @@ mod list;
 mod property;
 mod reload;
 mod resolver;
+mod sidebar_diff_stats;
 mod sidebar_launch;
 mod trust;
 mod wakeup_pipe;

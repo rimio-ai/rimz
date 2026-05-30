@@ -36,6 +36,16 @@ required-features = []
 test = false
 bench = false
 
+# Test-only fixture: a `git`-shaped shim that logs argv to `$RIMZ_TEST_GIT_LOG`
+# then execs the real git. Used by `tests/integration/sidebar_diff_stats.rs` to
+# count the cross-process git fork rate and prove the diff-stats single-flight.
+[[bin]]
+name = "git-trace"
+path = "tests/fixtures/git-trace/main.rs"
+required-features = []
+test = false
+bench = false
+
 [[test]]
 name = "integration"
 path = "tests/integration/main.rs"

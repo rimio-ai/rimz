@@ -11,6 +11,7 @@ use super::{GlobalFlags, open_ledger};
 use rimz::ids::{MuxName, WorkspaceId};
 use rimz::ledger::atomic;
 use rimz::ledger::paths::env_path;
+use rimz::ledger::single_flight::{self, Coalesced};
 use rimz::ledger::workspace_record;
 use rimz::mux::PaneListOptions;
 use rimz::workspace::WorkspaceResolver;
@@ -318,18 +319,6 @@ fn fresh_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotCach
     fresh.then_some(cache)
 }
 
-/// Open the single-flight lock file. `None` (e.g. the runtime dir is missing)
-/// means "cannot coordinate" — the caller produces directly without caching.
-fn open_snapshot_cache_lock(path: &Path) -> Option<std::fs::File> {
-    std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(path)
-        .ok()
-}
-
 /// Do the heavy work: project the ledger rollup and enumerate the session's
 /// live panes. The `(workspace, session)`-shared result of this is what the
 /// cache amortizes across sidebars.
@@ -386,26 +375,28 @@ fn cached_base_or_produce(
     let runtime = ledger.runtime_paths();
     let cache_path = runtime.root.join("snapshot.json");
 
+    // Fast path: a fresh same-session entry needs no ledger or mux work.
     if let Some(cache) = fresh_snapshot_cache(&cache_path, session) {
         return Ok((cache.snapshot, cache.panes));
     }
 
+    // Slow path: elect one producer for this `(workspace, session)` refresh.
+    // Losers read its write back; if it wedges, they fall back to an uncached
+    // local produce rather than block.
     let lock_path = runtime.root.join("snapshot.lock");
-    let Some(lock_file) = open_snapshot_cache_lock(&lock_path) else {
-        // No place to coordinate (runtime dir missing on a bare call): just do
-        // the work without caching it.
-        return produce_snapshot_base(ledger, mux, session);
-    };
-
-    match fs4::FileExt::try_lock(&lock_file) {
-        // We are the single producer. The `lock_file` flock releases when it
-        // drops at end of scope (its fd closes).
-        Ok(()) => {
-            // A peer may have written a fresh entry between our miss and the
-            // lock — re-check before doing the heavy work.
-            if let Some(cache) = fresh_snapshot_cache(&cache_path, session) {
-                return Ok((cache.snapshot, cache.panes));
-            }
+    let fresh =
+        || fresh_snapshot_cache(&cache_path, session).map(|cache| (cache.snapshot, cache.panes));
+    match single_flight::coalesce(
+        &lock_path,
+        SNAPSHOT_CACHE_WAIT_STEP,
+        SNAPSHOT_CACHE_WAIT_STEPS,
+        fresh,
+    ) {
+        Coalesced::Shared((snapshot, panes)) => Ok((snapshot, panes)),
+        Coalesced::ProduceLocal => produce_snapshot_base(ledger, mux, session),
+        // We won: produce the heavy snapshot and publish it. The guard holds
+        // the lock until this arm returns.
+        Coalesced::Produce(_guard) => {
             let (rollup, mut panes) = produce_snapshot_base(ledger, mux, session)?;
             // A mid-tick `list-panes` race can drop a live pane's command/cwd/
             // process-start; rather than fold an anonymous `external`/`process`
@@ -425,17 +416,6 @@ fn cached_base_or_produce(
             }
             Ok((rollup, panes))
         }
-        // Another sidebar is producing: wait briefly for its write, then fall
-        // back to producing locally rather than blocking on a wedged producer.
-        Err(_) => {
-            for _ in 0..SNAPSHOT_CACHE_WAIT_STEPS {
-                std::thread::sleep(SNAPSHOT_CACHE_WAIT_STEP);
-                if let Some(cache) = fresh_snapshot_cache(&cache_path, session) {
-                    return Ok((cache.snapshot, cache.panes));
-                }
-            }
-            produce_snapshot_base(ledger, mux, session)
-        }
     }
 }
 
@@ -446,6 +426,13 @@ fn cached_base_or_produce(
 /// multi-worktree fleet; the cost the column buys is freshness lag, which the
 /// renderer's latency-tolerant data layer is built to absorb.
 const DIFF_STATS_TTL: Duration = Duration::from_secs(5);
+
+/// How a non-producing sidebar waits for the elected producer's diff-stats
+/// write before refreshing locally. ~300ms total (15 × 20ms) — wider than the
+/// snapshot's ~200ms because the git tail (up to four sequential forks per
+/// worktree) runs longer, yet still well under the ~2s backstop tick.
+const DIFF_STATS_WAIT_STEP: Duration = Duration::from_millis(20);
+const DIFF_STATS_WAIT_STEPS: u32 = 15;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct DiffStats {
@@ -517,45 +504,43 @@ impl DiffStatsCacheEntry {
 /// the linked pane.
 fn enrich_worktree_groups(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::RuntimePaths) {
     let cache_path = runtime.root.join("diff-stats.json");
-    let mut cache = read_diff_stats_cache(&cache_path);
     let now_ms = unix_now_ms();
-    let mut changed = false;
 
+    // The worktree paths this snapshot needs git facts for: a `Worktree`-kind
+    // group whose recovered path is a live directory. De-duplicated so two
+    // branch-split groups for one dir share a single git read — the cache key
+    // is the bare path.
+    let mut needed: Vec<String> = Vec::new();
+    for group in &snapshot.worktree_groups {
+        if group.kind != rimz::SidebarWorktreeKind::Worktree {
+            continue;
+        }
+        let Some(path) = worktree_group_path(group) else {
+            continue;
+        };
+        if Path::new(path).is_dir() && !needed.iter().any(|known| known == path) {
+            needed.push(path.to_owned());
+        }
+    }
+
+    // Refresh the diff stats those paths need — single-flighted across the
+    // fleet — then project the resulting cache onto the groups.
+    let cache = refresh_diff_stats(&cache_path, runtime, &needed, now_ms);
     for group in &mut snapshot.worktree_groups {
         if group.kind != rimz::SidebarWorktreeKind::Worktree {
             continue;
         }
-        // Git facts are per worktree *path*. The group key may carry a branch
-        // suffix (a path that holds more than one), so read the path from the
-        // rows — every row in a group shares it — and key the cache on it so
-        // two branch-split groups for one dir share a single git read.
-        let Some(path) = group
-            .rows
-            .iter()
-            .find_map(|row| row.worktree_path.as_deref())
-            .filter(|path| !path.is_empty())
-        else {
+        let Some(path) = worktree_group_path(group).map(ToOwned::to_owned) else {
             continue;
         };
-        let worktree = Path::new(path);
-        if !worktree.is_dir() {
+        // Only paths resolved this tick (live dirs) carry stats, so a stale
+        // leftover entry for a now-missing worktree never resurfaces.
+        if !needed.iter().any(|known| known == &path) {
             continue;
         }
-
-        let entry = match cache.entries.get(path).filter(|e| e.is_fresh(now_ms)) {
-            Some(entry) => entry.clone(),
-            None => {
-                let entry = DiffStatsCacheEntry::new(
-                    now_ms,
-                    worktree_diff_stats(worktree),
-                    worktree_branch(worktree),
-                );
-                cache.entries.insert(path.to_owned(), entry.clone());
-                changed = true;
-                entry
-            }
+        let Some(entry) = cache.entries.get(&path).cloned() else {
+            continue;
         };
-
         if let Some(stats) = entry.stats() {
             group.diff_added = Some(stats.added);
             group.diff_removed = Some(stats.removed);
@@ -564,10 +549,105 @@ fn enrich_worktree_groups(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::
             group.label = branch;
         }
     }
+}
 
-    if changed && let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &cache) {
-        tracing::warn!(path = %cache_path.display(), error = %err, "sidebar diff-stats cache write failed");
+/// The worktree path a group's rows share, if any. The group key may carry a
+/// branch suffix (a path that holds more than one branch), so the bare path is
+/// recovered from the rows — every row in a group shares it.
+fn worktree_group_path(group: &rimz::SidebarWorktreeGroup) -> Option<&str> {
+    group
+        .rows
+        .iter()
+        .find_map(|row| row.worktree_path.as_deref())
+        .filter(|path| !path.is_empty())
+}
+
+/// Refresh the diff stats for `needed` worktree paths and return the cache map
+/// to project. Single-flighted across the fleet, mirroring the snapshot cache:
+/// the common case — every needed entry already fresh — touches no lock and
+/// forks no git. Otherwise one elected producer forks git for the stale entries
+/// and writes the shared cache once; the rest read its write back, or (if it
+/// wedges) refresh locally for their own frame without writing — never
+/// clobbering the producer's fresher map.
+fn refresh_diff_stats(
+    cache_path: &Path,
+    runtime: &rimz::RuntimePaths,
+    needed: &[String],
+    now_ms: u64,
+) -> DiffStatsCache {
+    let stale = |cache: &DiffStatsCache| -> Vec<String> {
+        needed
+            .iter()
+            .filter(|path| {
+                !cache
+                    .entries
+                    .get(path.as_str())
+                    .is_some_and(|entry| entry.is_fresh(now_ms))
+            })
+            .cloned()
+            .collect()
+    };
+
+    let cache = read_diff_stats_cache(cache_path);
+    // Fast path: nothing stale — no lock, no git, as the all-fresh tick already
+    // behaved before the single-flight.
+    if stale(&cache).is_empty() {
+        return cache;
     }
+
+    let lock_path = runtime.root.join("diff-stats.lock");
+    let fresh = || {
+        let cache = read_diff_stats_cache(cache_path);
+        stale(&cache).is_empty().then_some(cache)
+    };
+    match single_flight::coalesce(
+        &lock_path,
+        DIFF_STATS_WAIT_STEP,
+        DIFF_STATS_WAIT_STEPS,
+        fresh,
+    ) {
+        // A peer already refreshed every entry we need.
+        Coalesced::Shared(cache) => cache,
+        // We won: re-read (a peer may have written between our miss and the
+        // lock), refresh only what is still stale against that read, write once.
+        Coalesced::Produce(_guard) => {
+            let mut cache = read_diff_stats_cache(cache_path);
+            let mut changed = false;
+            for path in stale(&cache) {
+                cache
+                    .entries
+                    .insert(path.clone(), refresh_entry(&path, now_ms));
+                changed = true;
+            }
+            if changed && let Err(err) = atomic::write_temp_then_rename_cache(cache_path, &cache) {
+                tracing::warn!(path = %cache_path.display(), error = %err, "sidebar diff-stats cache write failed");
+            }
+            cache
+        }
+        // The producer wedged: refresh locally for our own frame, but do not
+        // write — the producer's map will be fresher.
+        Coalesced::ProduceLocal => {
+            let mut cache = cache;
+            for path in stale(&cache) {
+                cache
+                    .entries
+                    .insert(path.clone(), refresh_entry(&path, now_ms));
+            }
+            cache
+        }
+    }
+}
+
+/// Produce a fresh diff-stats entry for one worktree path: the sequential `git`
+/// forks behind the column (trunk ref → merge-base → numstat) plus the live
+/// branch label.
+fn refresh_entry(path: &str, now_ms: u64) -> DiffStatsCacheEntry {
+    let worktree = Path::new(path);
+    DiffStatsCacheEntry::new(
+        now_ms,
+        worktree_diff_stats(worktree),
+        worktree_branch(worktree),
+    )
 }
 
 fn read_diff_stats_cache(path: &Path) -> DiffStatsCache {
@@ -1045,27 +1125,5 @@ mod tests {
         assert!(fresh_snapshot_cache(&path, "rimz-query-engine").is_none());
         std::fs::write(&path, b"{ not json").unwrap();
         assert!(fresh_snapshot_cache(&path, "rimz-query-engine").is_none());
-    }
-
-    #[test]
-    fn snapshot_cache_lock_is_exclusive_then_releases_on_drop() {
-        // The single-flight lock elects exactly one producer; a second try while
-        // it is held fails, and once the holder drops, the lock is free again.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("snapshot.lock");
-        {
-            let held = open_snapshot_cache_lock(&path).expect("open lock");
-            assert!(fs4::FileExt::try_lock(&held).is_ok(), "first producer wins");
-            let contender = open_snapshot_cache_lock(&path).expect("open lock again");
-            assert!(
-                fs4::FileExt::try_lock(&contender).is_err(),
-                "a second sidebar must not also become the producer"
-            );
-        }
-        let after = open_snapshot_cache_lock(&path).expect("open lock after release");
-        assert!(
-            fs4::FileExt::try_lock(&after).is_ok(),
-            "the lock frees once the producer drops it"
-        );
     }
 }
