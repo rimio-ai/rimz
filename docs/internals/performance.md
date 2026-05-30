@@ -35,9 +35,9 @@ Where the milliseconds are, and what bounds each. Treat the figures as orders of
 | Operation | Rough cost | Bound |
 | --- | --- | --- |
 | `list-panes` (Zellij/tmux IPC) | 200–680ms, occasionally degraded mid-tick | one producer per workspace (oldest-instance election; younger renderers read `--no-produce`); snapshot cache (750ms TTL, single-flight); per-pane field carry-forward; render-side last-known-good gate |
-| git diff-stats per worktree | 4 sequential `git` forks (trunk ref → merge-base → branch → numstat) | diff-stats cache (`DIFF_STATS_TTL`, 5s) keyed on worktree, single-flighted across the fleet (`diff-stats.lock`) |
+| git diff-stats per worktree | 4 `git` forks per worktree (trunk ref → merge-base → branch → numstat); the per-worktree chain is sequential, but worktrees run in parallel, bounded to `MAX_PARALLEL_GIT` | diff-stats cache (`DIFF_STATS_TTL`, 5s) keyed on worktree, single-flighted across the fleet (`diff-stats.lock`); bounded-parallel fan-out across worktrees (`refresh_entries`) |
 | git worktree enumeration | 1 `git worktree list` fork per snapshot, to group a worktree parked outside the project root | cached in the diff-stats cache under the same `DIFF_STATS_TTL` (the set changes only on `git worktree add/remove`) |
-| snapshot rebuild | O(active-events + items) | event-log rotation caps the active log; carryover preserves the rollup |
+| snapshot rollup | O(1) on the common path — served from `snapshots/latest.json` lock-free (`Ledger::snapshot_cached`); O(active-events + items) only when a write raced the read | `latest.json` is rebuilt under the lock on every mutation; a staleness guard (its mtime vs the event log's) re-projects on a miss; rotation caps the active log |
 | `rimz pane focus` (a jump) | process spawn + mux IPC, tens–hundreds ms | off the render thread (detached); fire-and-forget |
 | durable file write | temp + 2 fsyncs (file, parent dir) | reserved for the event log and durable state |
 | disposable cache write | temp + atomic rename, 0 fsync | `write_temp_then_rename_cache` |
@@ -57,19 +57,19 @@ The 2026-05 performance pass. Symptom → fix → where.
 | Idle room re-scans the activity dir every tick | Gate `agent_activity::read_all` behind `!agents.is_empty()`, beside the context read | `cli::sidebar::run` |
 | Throwaway allocations per pane per tick | Move `command`/`cwd` out of the owned `RawPane` (`take_*`) instead of cloning | `mux::zellij::list_panes` |
 | Per-tab sidebars pin the mux server with N× `list-panes` (and a per-workspace renderer-exit election went too far — only one tab kept its sidebar, the rest went black) | One producer per workspace, one renderer per tab: the eldest is elected producer and publishes the cache; younger renderers read it `--no-produce` (never their own `list-panes`/git, never exit). Production is capped, renderers are not | `sidebar::elder_sidebar_present`, `cli::sidebar` (`--no-produce`), `app::run_fetch`, `sidebar::launch_sidebar_if_needed`, `sidebar::sweep_orphan_runtime` |
+| Every snapshot fetch replays the active event log under the workspace lock (O(active-events)), contending with the agent hooks appending events | Serve the rollup from `snapshots/latest.json` lock-free when its mtime reflects every appended event; re-project only on a raced write. `latest.json` carries the same runtime liveness expel as the live read | `ledger::snapshot_cached`, `snapshot::read_fresh_latest`, `snapshot::build_from` |
+| The four per-worktree git probes run sequentially; a many-worktree fleet serializes them | Parallelize across worktrees with a bounded fan-out (`MAX_PARALLEL_GIT`); each worktree's own chain stays sequential | `cli::sidebar::refresh_entries` |
 
 ## Deferred candidates
 
 Real wins the pass identified but did not take, because each changes a contract or crosses a backend-parity boundary and deserves its own change with tests. Ranked by expected payoff.
 
-1. **Serve the snapshot read from `latest.json`.** The read path replays the active event log on every fetch; `snapshots/latest.json` already holds the rebuilt rollup. Reading it directly is O(1) versus O(active-events). Risk: read-after-write freshness — a fetch racing a just-appended event must fall back to a rebuild, so the fast path needs a staleness guard.
-2. **Parallelize the per-worktree git probes.** The four `git` forks per worktree run sequentially; they are independent and could join. Risk: a process-spawn burst across a many-worktree fleet — bound the fan-out.
-3. **Drop the eager `latest.json` rebuild on every mutation.** Rebuilding on every write pays O(active-events) on the write path; a debounced or lazy rebuild would cut it. Risk: it changes the read contract (1) depends on — sequence the two.
-4. **Event-triggered pane updates.** Subscribe to multiplexer events instead of polling `list-panes`, so a pane open/close pushes a refresh. Zellij exposes pane events only inside a plugin, so this is the rail's path, not the CLI's — and it must keep tmux at parity (see [multiplexers.md](./multiplexers.md)).
-5. **Opt-in async / group-commit event-log fsync.** The per-record `sync_data` is the durability floor; a workspace that tolerates bounded event loss could batch it for throughput. Risk: correctness — this stays opt-in and documented, never the default (principle 4).
-6. **Persistent Codex app-server connection.** Each Codex datapoint currently spawns; a held connection amortizes the handshake. Risk: connection lifecycle and ownership.
-7. **Remove the dead Zellij `pipe` broadcast.** The post-write `zellij pipe --name rimz::feed` (a per-ledger-write subprocess on Zellij) has no consumer — the native pane wakes over the socket. Removing it deletes a fork per write and shrinks the surface. Confirm no rail build depends on it first (see [ledger.md → Wakeups](./ledger.md#wakeups)).
-8. **DRY the status and hit-test helpers.** The `AgentStatus` rank/glyph/attention logic and the mouse-hit-test geometry are duplicated across the renderer and `app`. Quality, not throughput — fold into one authority on a focused pass.
+1. **Drop the eager `latest.json` rebuild on every mutation.** Rebuilding on every write pays O(active-events) on the write path; a debounced or lazy rebuild would cut it. Risk: it changes the read contract the `latest.json` fast path now depends on (`snapshot::read_fresh_latest`) — keep the staleness guard honest, or the served rollup goes stale.
+2. **Event-triggered pane updates.** Subscribe to multiplexer events instead of polling `list-panes`, so a pane open/close pushes a refresh. Zellij exposes pane events only inside a plugin, so this is the rail's path, not the CLI's — and it must keep tmux at parity (see [multiplexers.md](./multiplexers.md)).
+3. **Opt-in async / group-commit event-log fsync.** The per-record `sync_data` is the durability floor; a workspace that tolerates bounded event loss could batch it for throughput. Risk: correctness — this stays opt-in and documented, never the default (principle 4).
+4. **Persistent Codex app-server connection.** Each Codex datapoint currently spawns; a held connection amortizes the handshake. Risk: connection lifecycle and ownership.
+5. **Remove the dead Zellij `pipe` broadcast.** The post-write `zellij pipe --name rimz::feed` (a per-ledger-write subprocess on Zellij) has no consumer — the native pane wakes over the socket. Removing it deletes a fork per write and shrinks the surface. Confirm no rail build depends on it first (see [ledger.md → Wakeups](./ledger.md#wakeups)).
+6. **DRY the status and hit-test helpers.** The `AgentStatus` rank/glyph/attention logic and the mouse-hit-test geometry are duplicated across the renderer and `app`. Quality, not throughput — fold into one authority on a focused pass.
 
 ## Adding a performance change
 

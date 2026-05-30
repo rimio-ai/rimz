@@ -370,7 +370,11 @@ fn produce_snapshot_base(
     mux: MuxName,
     session: &str,
 ) -> Result<(rimz::SidebarSnapshot, Vec<rimz::feed::PaneRef>)> {
-    let rollup = ledger.snapshot()?;
+    // Serve the rollup from `latest.json` when it is current (O(1), lock-free),
+    // re-projecting only when a write raced this fetch. The `list-panes`
+    // round-trip is the irreducible cost here; the rollup no longer adds an
+    // O(active-events) replay under the workspace lock on the common path.
+    let rollup = ledger.snapshot_cached()?;
     let panes = rimz::mux::backend_for(mux).list_panes(PaneListOptions {
         session_name: Some(session.to_owned()),
     })?;
@@ -664,15 +668,14 @@ fn refresh_diff_stats(
         // A peer already refreshed every entry we need.
         Coalesced::Shared(cache) => cache,
         // We won: re-read (a peer may have written between our miss and the
-        // lock), refresh only what is still stale against that read, write once.
+        // lock), refresh only what is still stale against that read — git forks
+        // run in parallel across worktrees — and write once.
         Coalesced::Produce(_guard) => {
             let mut cache = read_diff_stats_cache(cache_path);
-            let mut changed = false;
-            for path in stale(&cache) {
-                cache
-                    .entries
-                    .insert(path.clone(), refresh_entry(&path, now_ms));
-                changed = true;
+            let refreshed = refresh_entries(&stale(&cache), now_ms);
+            let changed = !refreshed.is_empty();
+            for (path, entry) in refreshed {
+                cache.entries.insert(path, entry);
             }
             if changed && let Err(err) = atomic::write_temp_then_rename_cache(cache_path, &cache) {
                 tracing::warn!(path = %cache_path.display(), error = %err, "sidebar diff-stats cache write failed");
@@ -683,14 +686,40 @@ fn refresh_diff_stats(
         // write — the producer's map will be fresher.
         Coalesced::ProduceLocal => {
             let mut cache = cache;
-            for path in stale(&cache) {
-                cache
-                    .entries
-                    .insert(path.clone(), refresh_entry(&path, now_ms));
+            for (path, entry) in refresh_entries(&stale(&cache), now_ms) {
+                cache.entries.insert(path, entry);
             }
             cache
         }
     }
+}
+
+/// Most worktrees probed concurrently. Each worktree's own chain stays
+/// sequential (merge-base needs the trunk ref), but independent worktrees run in
+/// parallel; the cap keeps a many-worktree fleet from bursting a fork storm.
+const MAX_PARALLEL_GIT: usize = 8;
+
+/// Refresh several worktrees' diff-stats concurrently, returning each path's
+/// fresh entry. Independent worktrees run in parallel — bounded to
+/// [`MAX_PARALLEL_GIT`] live `git` chains at a time — while each path's own
+/// `trunk ref → merge-base → numstat → branch` chain stays sequential. Runs on
+/// the diff-stats producer (the fetch worker), never the render thread.
+fn refresh_entries(paths: &[String], now_ms: u64) -> Vec<(String, DiffStatsCacheEntry)> {
+    let mut out = Vec::with_capacity(paths.len());
+    for chunk in paths.chunks(MAX_PARALLEL_GIT) {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = chunk
+                .iter()
+                .map(|path| scope.spawn(move || (path.clone(), refresh_entry(path, now_ms))))
+                .collect();
+            for handle in handles {
+                if let Ok(entry) = handle.join() {
+                    out.push(entry);
+                }
+            }
+        });
+    }
+    out
 }
 
 /// Produce a fresh diff-stats entry for one worktree path: the sequential `git`

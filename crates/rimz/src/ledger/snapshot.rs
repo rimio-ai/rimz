@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -1830,6 +1831,34 @@ pub fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
     Ok(snapshot)
 }
 
+/// Read the pre-built `latest.json` rollup when it already reflects every event
+/// in the active log — i.e. it was rebuilt at or after the log's last append.
+///
+/// `latest.json` is rewritten under the workspace lock on every mutation (right
+/// after the event append), so its mtime is `>=` the log's exactly when it is
+/// current. A write racing this read leaves the log newer than `latest.json`;
+/// the guard then returns `None` and the caller re-projects, so a just-appended
+/// event is never missed. Lock-free and O(snapshot): a torn or absent file
+/// deserializes to `None` and falls back. `write_temp_then_rename` makes the
+/// file all-or-nothing, so a readable `latest.json` is always a complete rollup.
+pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
+    let latest_mtime = modified_time(&paths.latest_snapshot)?;
+    // A missing log means there are no appended events to lag behind.
+    let reflects_log = match modified_time(&paths.events_log) {
+        Some(log_mtime) => latest_mtime >= log_mtime,
+        None => true,
+    };
+    if !reflects_log {
+        return None;
+    }
+    let bytes = fs::read(&paths.latest_snapshot).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn modified_time(path: &Path) -> Option<SystemTime> {
+    fs::metadata(path).and_then(|meta| meta.modified()).ok()
+}
+
 pub(crate) fn display_name_for(paths: &StatePaths) -> String {
     workspace_record::read(&paths.workspace_record)
         .ok()
@@ -2714,6 +2743,60 @@ mod tests {
         assert!(
             !ids.contains(&"sess-dead"),
             "a dead-pid agent must be expelled so latest.json matches the live read: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn read_fresh_latest_serves_only_when_it_reflects_the_log() {
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+
+        // Absent `latest.json`: nothing to serve, so the caller re-projects.
+        assert!(read_fresh_latest(&paths).is_none());
+
+        // Seed an event log and a rebuilt `latest.json`.
+        let event = EventEnvelope::new(
+            workspace.clone(),
+            "session",
+            "claude",
+            "agent-hook",
+            "agent.lifecycle",
+            serde_json::json!({
+                "event_name": "SessionStart",
+                "agent_id": "a",
+                "status": "idle",
+            }),
+        );
+        event_log::append(&paths.events_log, &event).unwrap();
+        rebuild(&paths).unwrap();
+
+        let set_mtime = |path: &Path, time: SystemTime| {
+            std::fs::File::open(path)
+                .unwrap()
+                .set_modified(time)
+                .unwrap();
+        };
+        let now = SystemTime::now();
+
+        // `latest.json` rebuilt at/after the log's last append → fresh, served.
+        set_mtime(&paths.events_log, now - Duration::from_secs(2));
+        set_mtime(&paths.latest_snapshot, now);
+        assert!(
+            read_fresh_latest(&paths).is_some(),
+            "latest.json newer than the log reflects every append → serve it O(1)"
+        );
+
+        // A write raced the read: the log is newer than `latest.json` → stale,
+        // so the guard declines and the caller re-projects.
+        set_mtime(&paths.latest_snapshot, now - Duration::from_secs(2));
+        set_mtime(&paths.events_log, now);
+        assert!(
+            read_fresh_latest(&paths).is_none(),
+            "log newer than latest.json → a just-appended event is unreflected; re-project"
         );
     }
 

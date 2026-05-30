@@ -871,6 +871,23 @@ impl Ledger {
         Ok(snapshot)
     }
 
+    /// Like [`Self::snapshot`] but O(1) in the common case: serve the pre-built
+    /// `latest.json` rollup when it already reflects every appended event,
+    /// falling back to a full re-projection on a miss. The fast path is
+    /// lock-free — it reads no event log and takes no workspace lock — so a hot
+    /// fleet's snapshot fetches never contend with the agent hooks appending
+    /// events. `latest.json` is rebuilt under the lock on every mutation and
+    /// carries the same runtime liveness expel as [`Self::snapshot`], so the
+    /// served rollup matches the live read; the staleness guard (its mtime vs
+    /// the event log's) catches a fetch racing a just-appended event and
+    /// re-projects instead.
+    pub fn snapshot_cached(&self) -> Result<SidebarSnapshot> {
+        if let Some(snapshot) = snapshot::read_fresh_latest(&self.inner.paths) {
+            return Ok(snapshot);
+        }
+        self.snapshot()
+    }
+
     /// Rotate the active event log when it exceeds `min_bytes`, preserving
     /// the agent rollup across the archive boundary.
     ///
