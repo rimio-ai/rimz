@@ -57,6 +57,7 @@ projects/<sha256(project_root)>/    per-project, per-machine state
 `config.toml` may define:
 
 - remote-control auto-launch, per agent (`[remote_control] claude` / `codex`),
+- sidebar row density (`[sidebar] density`),
 - local workspace display name,
 - sound profile,
 - hook install state,
@@ -77,6 +78,15 @@ Each toggle is independent: when it is set *and* that agent can start a host, `r
 - **Codex** runs `remote-control start`, which brings up the Codex app-server daemon with remote control enabled, then returns — so its pane is kept open on its start receipt. `remote-control start` boots and updates the app-server from the *managed standalone install* at `$CODEX_HOME/packages/standalone/current/codex` (CODEX_HOME defaults to `~/.codex`), so a distro `codex` on PATH (e.g. `/usr/bin/codex`) is a different binary and does not satisfy it. The pane runs that standalone binary directly. **Fail-fast:** when `codex = true` but that install is absent, `rimz start` refuses up front rather than launching a host that only errors — install it with `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, then re-run (or set `codex = false`). `rimz doctor` reports the same gap and fix ahead of time. That daemon is the one Codex enrichment re-uses: `rimz codex refresh-context` prefers the running daemon's control socket (`codex app-server proxy`) over cold-spawning a throwaway `codex app-server`, and always falls back to a cold-spawn so enrichment never depends on the daemon being up. Set `RIMZ_CODEX_APP_SERVER_SOCK=` (empty) to force the cold-spawn path.
 
 This tier is per-machine on purpose: remote control links *your* agent accounts and accepts remote spawn commands, so a clone never inherits it and it never enters the project trust hash. Neither host pane is a coding agent — the sidebar shows each as a pinned, specially-coloured row (`remote control` for Claude, `codex remote` for Codex), never as an idle agent.
+
+### Sidebar row density
+
+```toml
+[sidebar]
+density = "compact"    # "compact" (default) | "bars" | "full"
+```
+
+How much of each agent card the sidebar renders by default (unselected). `compact` shows identity, description, and the context bar; `bars` adds the 5-hour and 7-day budget bars so all three meters show on every row; `full` adds the token totals and the time/lines-worked line too. Selecting a row always reveals the full card, so density only sets the resting height — a denser default trades on-screen agent count for detail at a glance. Display-only and per-machine: it never affects ledger correctness and a clone does not inherit it.
 
 ## Merge order
 

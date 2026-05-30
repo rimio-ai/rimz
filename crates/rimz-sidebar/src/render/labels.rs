@@ -64,6 +64,13 @@ pub(super) fn resolver_glyph(animation_phase: u64) -> &'static str {
     frame(&RESOLVER_FRAMES, animation_phase)
 }
 
+/// The still sparkle representing the thinking (plan-mode) bucket in the fleet
+/// header — the fullest thinking frame, so a count reads as a thinking cell at
+/// rest. The working bucket reuses the static [`status_glyph`] for `Running`.
+pub(super) fn thinking_still() -> &'static str {
+    THINKING_FRAMES[5]
+}
+
 /// The leading cell for an agent row, animated when the agent is actively doing
 /// something. A `running` agent fills (working) or sparkles (thinking, in plan
 /// mode); every other state is the static [`status_glyph`]. Stall is already
@@ -120,28 +127,25 @@ pub(super) fn posture_style(theme: &Theme, posture: PermissionPosture) -> Style 
     }
 }
 
-/// Heavy `━` for the bar's filled run, light `─` for the remaining track. The
-/// weight difference — not just the color — carries the meter, so the bar still
-/// reads with color off.
+/// Heavy `━` for a bar's filled run, light `─` for the remaining track. The
+/// weight difference — not just the color — carries the meter, so every bar
+/// still reads with color off. One glyph pair for all three meters (context
+/// gauge and the two draining budget bars), so they read as one aligned family.
 const BAR_FILLED: char = '━';
 const BAR_TRACK: char = '─';
 
-/// Full-width context bar: a thin rule whose filled run grows left-to-right and
-/// ramps green → amber → red by value. Drawn as its own line that underlines
-/// the model name, it starts at the same column on every agent, so the bars
-/// line up with no alignment bookkeeping. There is no label — the heavy run
-/// against the light track is the whole meter, and the weight split keeps it
-/// legible under `NO_COLOR`.
-pub(super) fn gauge_spans(theme: &Theme, percent: u8, width: usize) -> Vec<Span<'static>> {
-    let percent = percent.min(100);
+/// Filled-cell count for `percent` of `width`, to the nearest whole cell: 0%
+/// stays an unbroken track, 100% fills the whole width.
+fn filled_cells(percent: u8, width: usize) -> usize {
+    ((percent.min(100) as usize) * width.max(1) + 50) / 100
+}
+
+/// A single-color rule bar: `filled` heavy cells, then a light track out to
+/// `width`. The shared shape behind the context gauge and the draining budget
+/// bars — color and fill amount differ per meter, the rule shape does not.
+fn rule_bar(theme: &Theme, filled: usize, width: usize, color: Color) -> Vec<Span<'static>> {
     let width = width.max(1);
-    // Nearest-cell fill: 0% stays an unbroken track, 100% fills the whole width.
-    let filled = ((percent as usize) * width + 50) / 100;
-    let color = match percent {
-        0..=40 => Color::Green,
-        41..=75 => Color::Yellow,
-        _ => Color::Red,
-    };
+    let filled = filled.min(width);
     let mut spans = Vec::with_capacity(2);
     if filled > 0 {
         spans.push(Span::styled(
@@ -156,6 +160,18 @@ pub(super) fn gauge_spans(theme: &Theme, percent: u8, width: usize) -> Vec<Span<
         ));
     }
     spans
+}
+
+/// Context bar: a thin rule whose filled run grows left-to-right as the window
+/// fills and ramps green → amber → red by value. The label and value columns
+/// live in the renderer's shared bar row; here we paint just the meter.
+pub(super) fn gauge_spans(theme: &Theme, percent: u8, width: usize) -> Vec<Span<'static>> {
+    let color = match percent.min(100) {
+        0..=40 => Color::Green,
+        41..=75 => Color::Yellow,
+        _ => Color::Red,
+    };
+    rule_bar(theme, filled_cells(percent, width), width, color)
 }
 
 /// Like [`gauge_spans`], but the filled run is split into colored segments by
@@ -175,7 +191,7 @@ pub(super) fn segmented_gauge_spans(
 ) -> Vec<Span<'static>> {
     let width = width.max(1);
     let total_pct = total_pct.min(100);
-    let filled = ((total_pct as usize) * width + 50) / 100;
+    let filled = filled_cells(total_pct, width);
     let weight: u64 = segments.iter().map(|(value, _)| *value).sum();
     if filled == 0 || weight == 0 {
         return gauge_spans(theme, total_pct, width);
@@ -228,65 +244,23 @@ fn apportion(weights: impl IntoIterator<Item = u64>, total: usize) -> Vec<usize>
     cells
 }
 
-/// A draining resource bar in the game-stamina idiom: `remaining_pct` of the
-/// width is heavy `▰`, the rest an empty `▱` track. Opposite the context gauge,
-/// a full bar means budget *left* — it shortens as the window is spent, and the
-/// reset countdown beside it says when it refills. `kind` picks the palette.
+/// A draining budget bar: `remaining_pct` of the width is heavy `━`, the rest a
+/// light `─` track — the same rule shape as the context gauge, so the three
+/// meters read as one aligned family. Opposite the gauge, a full bar means
+/// budget *left*: it shortens as the window is spent, and the reset countdown
+/// beside it says when it refills. Ramps green → yellow → red by how much
+/// remains, so a near-spent window reddens regardless of which window it is.
 pub(super) fn resource_bar_spans(
     theme: &Theme,
     remaining_pct: u8,
-    kind: ResourceKind,
     width: usize,
 ) -> Vec<Span<'static>> {
-    let remaining = remaining_pct.min(100);
-    let width = width.max(1);
-    let filled = ((remaining as usize) * width + 50) / 100;
-    let mut spans = Vec::with_capacity(2);
-    if filled > 0 {
-        spans.push(Span::styled(
-            std::iter::repeat_n(RESOURCE_FILLED, filled).collect::<String>(),
-            theme.style(kind.color(remaining), Modifier::empty()),
-        ));
-    }
-    if filled < width {
-        spans.push(Span::styled(
-            std::iter::repeat_n(RESOURCE_TRACK, width - filled).collect::<String>(),
-            theme.dim(),
-        ));
-    }
-    spans
-}
-
-/// Heavy/empty squares for the draining resource bars — a different shape from
-/// the context gauge's rules so the two meters never read as the same bar.
-const RESOURCE_FILLED: char = '▰';
-const RESOURCE_TRACK: char = '▱';
-
-/// Which usage window a [`resource_bar_spans`] bar tracks, and thus its palette.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ResourceKind {
-    /// The 5-hour window: a stamina bar, green when full and ramping
-    /// amber → red as it drains.
-    Stamina,
-    /// The weekly window: a mana bar, a calm violet that only reddens when the
-    /// budget is nearly spent.
-    Mana,
-}
-
-impl ResourceKind {
-    fn color(self, remaining: u8) -> Color {
-        match self {
-            ResourceKind::Stamina => match remaining {
-                0..=20 => Color::Red,
-                21..=50 => Color::Yellow,
-                _ => Color::Green,
-            },
-            ResourceKind::Mana => match remaining {
-                0..=20 => Color::Red,
-                _ => Color::Magenta,
-            },
-        }
-    }
+    let color = match remaining_pct.min(100) {
+        0..=20 => Color::Red,
+        21..=50 => Color::Yellow,
+        _ => Color::Green,
+    };
+    rule_bar(theme, filled_cells(remaining_pct, width), width, color)
 }
 
 /// Todo progress: filled dots for done, hollow dots for remaining, with the
@@ -426,32 +400,26 @@ mod tests {
         assert_eq!(apportion([0, 0], 3), vec![0, 0]);
     }
 
-    /// The resource bar drains (filled = remaining) and keeps its squares under
-    /// `NO_COLOR`; its color ramps by how much budget is left.
+    /// The budget bar drains (filled = remaining) and reads by the same heavy/
+    /// light rule shape as the context gauge under `NO_COLOR`; its color ramps
+    /// green → yellow → red by how much budget is left — one ramp for both the
+    /// 5-hour and weekly windows.
     #[test]
     fn resource_bar_drains_and_ramps() {
         let plain = Theme::fixed(true);
-        let spans = resource_bar_spans(&plain, 70, ResourceKind::Stamina, 10);
+        let spans = resource_bar_spans(&plain, 70, 10);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, "▰▰▰▰▰▰▰▱▱▱");
+        assert_eq!(text, "━━━━━━━───");
         for span in &spans {
             assert!(span.style.fg.is_none());
         }
 
         let lit = Theme::fixed(false);
-        let fg = |remaining, kind| {
-            resource_bar_spans(&lit, remaining, kind, 10)[0]
-                .style
-                .fg
-                .unwrap()
-        };
-        // Stamina: green when full, amber mid-drain, red nearly spent.
-        assert_eq!(fg(80, ResourceKind::Stamina), Color::Indexed(108));
-        assert_eq!(fg(40, ResourceKind::Stamina), Color::Indexed(179));
-        assert_eq!(fg(10, ResourceKind::Stamina), Color::Indexed(167));
-        // Mana: calm violet, reddening only when nearly spent.
-        assert_eq!(fg(60, ResourceKind::Mana), Color::Indexed(141));
-        assert_eq!(fg(10, ResourceKind::Mana), Color::Indexed(167));
+        let fg = |remaining| resource_bar_spans(&lit, remaining, 10)[0].style.fg.unwrap();
+        // Green when full, amber mid-drain, red nearly spent.
+        assert_eq!(fg(80), Color::Indexed(108));
+        assert_eq!(fg(40), Color::Indexed(179));
+        assert_eq!(fg(10), Color::Indexed(167));
     }
 
     /// Todo dots use the same fill/empty grammar as the gauge — the dot

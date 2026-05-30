@@ -29,7 +29,7 @@ use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use rimz::{SidebarRowKind, SidebarSnapshot};
 
 use self::fmt::age_short;
-use self::sections::{attention_line, first_run_hint_lines, worktree_group_lines};
+use self::sections::{first_run_hint_lines, fleet_stats_line, worktree_group_lines};
 use self::theme::Theme;
 
 #[derive(Clone, Debug, Default)]
@@ -195,9 +195,10 @@ fn snapshot_lines(
     let active = alert.is_some_and(Alert::is_active);
     let mut lines = Vec::new();
 
-    if let Some(line) = attention_line(theme, &snapshot.worktree_groups) {
-        lines.push(line);
-    }
+    // The fleet header is always present and exactly one line, so the body below
+    // never shifts vertically as agents appear, clear, or change state.
+    lines.push(fleet_stats_line(theme, &snapshot.worktree_groups, width));
+    let density = snapshot.sidebar.density;
     if snapshot.worktree_groups.is_empty() {
         if !active && should_show_first_run_hint(snapshot) {
             push_section_gap(&mut lines);
@@ -217,6 +218,7 @@ fn snapshot_lines(
                 theme,
                 group,
                 width,
+                density,
                 &mut row_index,
                 ui.selected_index,
                 ui.animation_phase,
@@ -390,9 +392,11 @@ mod tests {
         insta::with_settings!({
             filters => vec![
                 (r"degraded for \d+[smhd]", "degraded for <elapsed>"),
-                // Usage-window resets are a live countdown; scrub the value but
-                // keep the marker so the line shape stays asserted.
-                (r"↻ [0-9dhms]+", "↻ <reset>"),
+                // Budget-bar reset countdowns are a live two-unit duration in the
+                // bar's right value column (`3h12m`, `3d3h`); scrub them so the
+                // card snapshot stays stable across time. Single-unit ages and
+                // the `5h`/`7d` labels fall to the age scrub below.
+                (r"\b\d+[dhms]\d+[dhms]\b", "<reset>"),
                 (r"\b\d+[smhd]\b", "<t>"),
             ],
         }, {
@@ -524,10 +528,10 @@ mod tests {
             exceeds_200k_tokens: Some(false),
             cost: Some(AgentCost {
                 total_cost_usd: Some(1.27),
-                total_duration_ms: None,
+                total_duration_ms: Some(12 * 60 * 1_000),
                 total_api_duration_ms: None,
-                total_lines_added: None,
-                total_lines_removed: None,
+                total_lines_added: Some(214),
+                total_lines_removed: Some(31),
             }),
             tokens: Some(AgentTokenUsage {
                 total_input_tokens: Some(64_200),
@@ -690,26 +694,32 @@ mod tests {
             14,
         );
 
+        // The worktree-total diff sits on the group header (distinct from the
+        // agent's own edit count on the work line below).
         assert!(rendered.contains("+127 -43"));
-        // Line 1 prefers the user's session name over the task; line 2 prefers
-        // the statusline model/effort and pins the cost right.
-        assert!(rendered.contains("ledger refactor"));
-        // The model display name is shortened — `(1M context)` → `(1M)`.
+        // Line 1 carries identity + capability + cost; line 2 is the session
+        // name; the model display name is shortened (`(1M context)` → `(1M)`).
         assert!(rendered.contains("Opus 4.8 (1M)"));
         assert!(!rendered.contains("context"));
         assert!(rendered.contains("high"));
         assert!(rendered.contains("auto"));
         assert!(rendered.contains("$1.3"));
+        // Line 2 is the full-width description; todo dots inline at L2.
+        assert!(rendered.contains("ledger refactor"));
         assert!(rendered.contains("●●●○○ 3/5"));
-        // Selection reveals the token split above the usage windows (reset
-        // marker). The window labels are scrubbed in the snapshot — they match
-        // the age filter — so assert the `5h`/`7d` rename on the raw string.
-        assert!(rendered.contains('↻'));
+        // The ctx bar carries a `ctx` label and a percent value, the first of
+        // the three aligned bars.
+        assert!(rendered.contains("ctx "));
+        assert!(rendered.contains('%'));
+        // Selection appends the budget bars (reset mark in the 3-cell label),
+        // the token totals, and the work line (the agent's own edit count).
+        assert!(rendered.contains("5h↻"));
+        assert!(rendered.contains("7d↻"));
         assert!(rendered.contains("76.5k tok"));
         assert!(rendered.contains("↑64.2k"));
         assert!(rendered.contains("↓12.3k"));
-        assert!(rendered.contains("5h "));
-        assert!(rendered.contains("7d "));
+        assert!(rendered.contains("worked"));
+        assert!(rendered.contains("+214 -31"));
         assert_snapshot("enriched_selected_agent_card", rendered);
     }
 
@@ -807,12 +817,13 @@ mod tests {
         assert!(rendered.contains("GPT-5.5 Codex"));
         assert!(!rendered.contains("gpt-5.5-codex"));
         assert!(rendered.contains("xhigh"));
-        // Selection reveals both rate-limit windows with reset countdowns.
+        // Selection reveals both rate-limit windows; the reset mark rides the
+        // 3-cell label (`5h↻` / `7d↻`).
         assert!(rendered.contains('↻'));
-        assert!(rendered.contains("5h "));
-        assert!(rendered.contains("7d "));
+        assert!(rendered.contains("5h↻"));
+        assert!(rendered.contains("7d↻"));
         // No read-only token usage or cost: the bare rollout total stands in for
-        // the token split, and no cost pins to the row.
+        // the token totals, and no cost pins to the row.
         assert!(rendered.contains("48.0k tok"));
         assert!(!rendered.contains('↑'));
         assert!(!rendered.contains('$'));
@@ -1009,10 +1020,12 @@ mod tests {
             .collect::<Vec<_>>();
         let snapshot = snapshot_with(Vec::new(), agents);
 
-        assert_snapshot(
-            "group_cap_with_overflow",
-            snapshot_to_screen(&snapshot, 36, 16),
-        );
+        // Tall enough that the six capped rows (3 lines each in the compact
+        // default) plus the `+3 more` overflow all fit, so the indicator the
+        // test is named for actually renders.
+        let rendered = snapshot_to_screen(&snapshot, 36, 30);
+        assert!(rendered.contains("+3 more"), "{rendered}");
+        assert_snapshot("group_cap_with_overflow", rendered);
     }
 
     /// L0 density (~24 columns): line 1 still names the row by status glyph
@@ -1106,6 +1119,161 @@ mod tests {
         assert_ne!(
             first, second,
             "a running agent's head must advance with the phase"
+        );
+    }
+
+    /// A fully-enriched single-agent group, rendered as raw card lines at a
+    /// fixed width and density. Returns the group lines (header first), each
+    /// flattened to its text — the seam the structural card tests share.
+    fn card_lines(density: rimz::config::SidebarDensity, selected_index: usize) -> Vec<String> {
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Auto,
+            Some("/repo/main"),
+            Some("main"),
+            Some("db migrate"),
+        );
+        claude.context = Some(claude_context(fixed_now()));
+        let snapshot = snapshot_with(Vec::new(), vec![claude]);
+        let theme = Theme::fixed(true);
+        let mut row_index = 0;
+        worktree_group_lines(
+            &theme,
+            &snapshot.worktree_groups[0],
+            54,
+            density,
+            &mut row_index,
+            selected_index,
+            0,
+        )
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect()
+    }
+
+    /// The load-bearing no-flicker guarantee: selecting a row only *appends*
+    /// lines beneath the card — the resting fold lines (identity, description,
+    /// ctx bar) keep their exact content, differing only by the selection gutter.
+    #[test]
+    fn selecting_a_row_only_appends_never_reshapes_the_fold_lines() {
+        use rimz::config::SidebarDensity::Compact;
+        let unselected = card_lines(Compact, usize::MAX);
+        let selected = card_lines(Compact, 0);
+
+        // The group header (no gutter) is identical either way.
+        assert_eq!(unselected[0], selected[0], "header reshaped on select");
+        // Row lines differ only by the leading one-cell gutter; strip it.
+        let strip = |line: &String| line.chars().skip(1).collect::<String>();
+        let fold: Vec<String> = unselected[1..].iter().map(strip).collect();
+        let full: Vec<String> = selected[1..].iter().map(strip).collect();
+        // Compact fold is exactly identity + description + ctx bar.
+        assert_eq!(fold.len(), 3, "compact fold is three card lines: {fold:?}");
+        // Those three are a byte-identical prefix of the expanded card.
+        assert_eq!(fold, full[..fold.len()], "selection reshaped a fold line");
+        // Selection only appended beneath — the budget bars and the work line.
+        assert!(full.len() > fold.len(), "selection must append detail lines");
+        assert!(full[fold.len()..].iter().any(|line| line.contains("5h↻")));
+        assert!(full[fold.len()..].iter().any(|line| line.contains("worked")));
+    }
+
+    /// Density sets the resting height; selection always reaches the full card,
+    /// so the deepest data is one keystroke away in every density.
+    #[test]
+    fn density_sets_resting_height_and_selection_reaches_full() {
+        use rimz::config::SidebarDensity::{Bars, Compact, Full};
+        // Card lines, excluding the group header.
+        let resting = |density| card_lines(density, usize::MAX).len() - 1;
+        let selected = |density| card_lines(density, 0).len() - 1;
+
+        assert_eq!(resting(Compact), 3, "compact: identity, description, ctx");
+        assert_eq!(resting(Bars), 5, "bars: + the 5h/7d budget bars");
+        assert_eq!(resting(Full), 7, "full: + token totals and work line");
+        // Selection reaches the full seven-line card from any density.
+        assert_eq!(selected(Compact), 7);
+        assert_eq!(selected(Bars), 7);
+        assert_eq!(selected(Full), 7);
+    }
+
+    /// The three meter bars share one left edge (bar start) and one right edge
+    /// (value end) by construction — the structural payoff of the shared grammar.
+    #[test]
+    fn the_three_bars_share_one_left_and_right_edge() {
+        let bars: Vec<String> = card_lines(rimz::config::SidebarDensity::Full, usize::MAX)
+            .into_iter()
+            .filter(|line| line.contains("ctx ") || line.contains("5h↻") || line.contains("7d↻"))
+            .collect();
+        assert_eq!(bars.len(), 3, "ctx/5h/7d all present: {bars:?}");
+        // Bar start: the first heavy/light rule cell, by char column.
+        let start = |line: &str| line.chars().position(|c| c == '━' || c == '─').unwrap();
+        let starts: Vec<usize> = bars.iter().map(|line| start(line)).collect();
+        assert!(
+            starts.iter().all(|&s| s == starts[0]),
+            "bars share a left edge: {starts:?}"
+        );
+        // Value end: the last non-space char column (values are right-aligned).
+        let end = |line: &str| line.trim_end().chars().count();
+        let ends: Vec<usize> = bars.iter().map(|line| end(line)).collect();
+        assert!(
+            ends.iter().all(|&e| e == ends[0]),
+            "values share a right edge: {ends:?}"
+        );
+    }
+
+    /// The fleet header is always present and one line, so the body never shifts
+    /// vertically; it splits the running total into working and thinking.
+    #[test]
+    fn fleet_header_is_fixed_and_splits_working_from_thinking() {
+        // Empty and populated rooms both lead with the fleet line at row 1
+        // (row 0 is the top border) — the body below never moves.
+        let empty = snapshot_with(Vec::new(), Vec::new());
+        let empty_screen = snapshot_to_screen(&empty, 40, 12);
+        assert!(
+            empty_screen.lines().nth(1).unwrap().contains("0 agents"),
+            "{empty_screen}"
+        );
+
+        let working = agent(
+            "w",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            Some("/repo/main"),
+            Some("main"),
+            Some("a"),
+        );
+        let mut thinking = agent(
+            "t",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            Some("/repo/main"),
+            Some("main"),
+            Some("b"),
+        );
+        thinking.plan_mode = true;
+        let snapshot = snapshot_with(Vec::new(), vec![working, thinking]);
+        let screen = snapshot_to_screen(&snapshot, 40, 12);
+        let fleet = screen.lines().nth(1).unwrap();
+        // Two running agents, split one working (⢿) and one thinking (✽); the
+        // gap line below proves the header did not wrap.
+        assert!(fleet.contains("2 agents"), "{screen}");
+        assert!(fleet.contains("⢿1"), "{fleet}");
+        assert!(fleet.contains("✽1"), "{fleet}");
+        assert!(
+            screen
+                .lines()
+                .nth(2)
+                .unwrap()
+                .trim_matches(|c| c == '│' || c == ' ')
+                .is_empty(),
+            "fleet header wrapped:\n{screen}"
         );
     }
 }

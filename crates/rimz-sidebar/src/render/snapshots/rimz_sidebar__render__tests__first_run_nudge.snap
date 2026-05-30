@@ -3,11 +3,11 @@ source: crates/rimz-sidebar/src/render/mod.rs
 expression: screen
 ---
 ┌ query-engine ────────────────────────────────────────────────────────────────┐
+│0 agents                                                                      │
+│                                                                              │
 │no agents yet                                                                 │
 │install hooks:                                                                │
 │rimz hooks install claude                                                     │
-│                                                                              │
-│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │

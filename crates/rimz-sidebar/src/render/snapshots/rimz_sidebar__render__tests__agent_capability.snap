@@ -1,15 +1,14 @@
 ---
 source: crates/rimz-sidebar/src/render/mod.rs
-assertion_line: 389
 expression: screen
 ---
 ┌ query-engine ──────────────────┐
-│!1                              │
+│1 agent  !1                     │
 │                                │
 │▌feature-migration            1!│
-│▎! claude  db migrate         <t>│
-│▎  Opus · xhigh · yolo          │
-│▎  ───────────────────────────  │
+│▎! claude · Opus · yolo       <t>│
+│▎  db migrate                   │
+│▎  ctx ───────────────────    0%│
 │                                │
 │↵ jump to claude                │
 │                                │

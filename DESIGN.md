@@ -65,9 +65,9 @@ Agent permission postures (observed from the agent, not set by Rimz) render as c
 default   auto   yolo   unknown
 ```
 
-Live enrichments use one grammar. Context-window % renders as a smooth `Gauge`-style fill bar, todo progress as dots, and worktree diff stats as paired numeric tokens; they enrich display only and never drive a decision. A running agent's leading cell animates continuously on a wall-clock tick — a braille spinner while working, a sparkle while thinking, both in Claude clay — so motion tracks live work; silence no longer freezes the spinner but escalates to `!` once the agent crosses the stall window. Color is a garnish layer over the same glyph grammar, and `NO_COLOR` keeps every shape readable.
+Live enrichments use one grammar. The context window, the 5-hour budget, and the 7-day budget render as three aligned meter bars sharing one label column and one value column; todo progress renders as dots and worktree diff stats as paired numeric tokens. They enrich display only and never drive a decision. A running agent's leading cell animates continuously on a wall-clock tick — a braille spinner while working, a sparkle while thinking, both in Claude clay — so motion tracks live work; silence no longer freezes the spinner but escalates to `!` once the agent crosses the stall window. Color is a garnish layer over the same glyph grammar, and `NO_COLOR` keeps every shape readable.
 
-Renderer details — the two-line row anatomy, attention ranking, and the jump interaction — live in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
+Renderer details — the three-line card anatomy, the aligned meter bars and configurable row density, the fixed fleet header, attention ranking, and the jump interaction — live in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
 
 ## Non-goals
 

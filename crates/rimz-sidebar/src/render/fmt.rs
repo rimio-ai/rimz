@@ -121,6 +121,31 @@ pub(super) fn tokens_short(count: u64) -> String {
     }
 }
 
+/// The context bar's right-hand value, sized to fit the bar's 5-cell value
+/// column. Prefers a one-decimal precise fraction (`78.2%`) when the caller can
+/// derive it from the current-message token composition; otherwise the agent's
+/// integer `used_percentage` (`38%`). Clamps to `100%` so it never spills past
+/// five cells (`100.0%` would).
+pub(super) fn pct_label(precise: Option<f64>, whole: u8) -> String {
+    match precise {
+        Some(fraction) if fraction >= 99.95 => "100%".to_owned(),
+        Some(fraction) => format!("{:.1}%", fraction.clamp(0.0, 100.0)),
+        None => format!("{}%", whole.min(100)),
+    }
+}
+
+/// A worked-time span (`12m`, `1h12m`, `3d4h`) from a millisecond duration — the
+/// session's `total_duration_ms`. Reuses the two-highest-units core that
+/// [`duration_compact`] uses; a zero span reads `0s` rather than the core's
+/// `now`, which is a countdown idiom that misreads as elapsed work.
+pub(super) fn duration_worked(ms: u64) -> String {
+    let seconds = (ms / 1_000) as i64;
+    if seconds <= 0 {
+        return "0s".to_owned();
+    }
+    compact_seconds(seconds)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,5 +197,33 @@ mod tests {
         assert_eq!(tokens_short(523), "523");
         assert_eq!(tokens_short(76_500), "76.5k");
         assert_eq!(tokens_short(1_200_000), "1.2M");
+    }
+
+    #[test]
+    fn pct_label_prefers_precise_decimal_then_clamps() {
+        assert_eq!(pct_label(Some(78.23), 78), "78.2%");
+        assert_eq!(pct_label(Some(9.9), 9), "9.9%");
+        // A precise value within rounding of full reads `100%`, never `100.0%`.
+        assert_eq!(pct_label(Some(99.96), 99), "100%");
+        assert_eq!(pct_label(Some(100.0), 100), "100%");
+        // No breakdown: the integer gauge value, also clamped.
+        assert_eq!(pct_label(None, 38), "38%");
+        assert_eq!(pct_label(None, 200), "100%");
+        // Every rendering fits the 5-cell value column.
+        for s in [
+            pct_label(Some(78.23), 78),
+            pct_label(Some(100.0), 100),
+            pct_label(None, 38),
+        ] {
+            assert!(s.chars().count() <= 5, "{s:?} exceeds 5 cells");
+        }
+    }
+
+    #[test]
+    fn duration_worked_spans_two_units_and_floors_zero() {
+        assert_eq!(duration_worked(720_000), "12m"); // 12 minutes
+        assert_eq!(duration_worked(4_320_000), "1h12m"); // 1h12m
+        assert_eq!(duration_worked(0), "0s");
+        assert_eq!(duration_worked(500), "0s"); // sub-second floors to 0s, not "now"
     }
 }

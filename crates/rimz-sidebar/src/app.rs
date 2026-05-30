@@ -673,6 +673,7 @@ fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
         own_view: None,
         project_root: None,
         worktree_roots: Vec::new(),
+        sidebar: rimz::config::SidebarConfig::default(),
     }
 }
 

@@ -163,6 +163,14 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     .map(|agent| agent.supports_hook_install() && agent.hooks_installed())
                     .unwrap_or(false)
             });
+            // Fold the per-machine sidebar display preferences (row density) onto
+            // the snapshot so the renderer can read them. Best-effort: a config
+            // read failure falls back to the default (compact) rather than
+            // failing the snapshot — display preference is enrichment, never a
+            // precondition.
+            snapshot.sidebar = rimz::config::MachineConfig::load()
+                .map(|config| config.sidebar)
+                .unwrap_or_default();
             enrich_worktree_groups(&mut snapshot, ledger.runtime_paths());
             if json {
                 let rendered = serde_json::to_string_pretty(&snapshot)?;

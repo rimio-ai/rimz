@@ -7,21 +7,22 @@
 //! [grammar in docs/internals/sidebar.md](../../../docs/internals/sidebar.md).
 
 use jiff::Timestamp;
-use ratatui::style::{Color, Modifier};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use rimz::agents::{AgentContext, RateLimitWindow};
-use rimz::feed::{AgentStatus, PermissionPosture};
+use rimz::config::SidebarDensity;
+use rimz::feed::AgentStatus;
 use rimz::{
     SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
 };
 
 use super::fmt::{
-    age_short, clip, dollars, duration_compact, duration_compact_minutes, model_label,
-    time_remaining, tokens_short,
+    age_short, clip, dollars, duration_compact, duration_compact_minutes, duration_worked,
+    model_label, pct_label, time_remaining, tokens_short,
 };
 use super::labels::{
-    ResourceKind, agent_glyph, agent_style, diff_spans, gauge_spans, posture_pill, posture_style,
-    resolver_glyph, resource_bar_spans, segmented_gauge_spans, status_glyph, status_style,
+    agent_glyph, agent_style, diff_spans, gauge_spans, posture_pill, posture_style, resolver_glyph,
+    resource_bar_spans, segmented_gauge_spans, status_glyph, status_style, thinking_still,
     todo_spans, tokens_label,
 };
 use super::theme::Theme;
@@ -63,33 +64,72 @@ impl Tier {
     }
 }
 
-pub(super) fn attention_line(
+/// The fixed, always-present fleet header: the agent total and a glyph+count for
+/// each non-empty status bucket — `6 agents  ⢿3 ✽1 ?2`. Always exactly one line
+/// (trimmed to width, never wrapped), so the body below never shifts vertically
+/// as agents appear, clear, or change state. `working`/`thinking` split the
+/// `running` total by plan mode; the split reads plan mode off the visible rows,
+/// so a `running` agent hidden by the per-worktree cap folds into `working` (the
+/// calm tail is rarely thinking). Counts come from `status_counts`, which spans
+/// even capped-away agents, so the aggregate is never lost.
+pub(super) fn fleet_stats_line(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
-) -> Option<Line<'static>> {
-    let waiting = status_total(groups, AgentStatus::Waiting);
-    let failed = status_total(groups, AgentStatus::Failed);
-    if waiting == 0 && failed == 0 {
-        return None;
-    }
-
-    let mut spans = Vec::new();
-    if waiting > 0 {
-        spans.push(Span::styled(
-            format!("{}{}", status_glyph(AgentStatus::Waiting), waiting),
+    width: usize,
+) -> Line<'static> {
+    let running = status_total(groups, AgentStatus::Running);
+    let thinking = groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter(|row| row.status == Some(AgentStatus::Running) && row.plan_mode)
+        .count();
+    let working = running.saturating_sub(thinking);
+    // Order: the busy/attention states first, then the calm tail.
+    let buckets: [(usize, &'static str, Style); 6] = [
+        (
+            working,
+            status_glyph(AgentStatus::Running),
+            agent_style(theme, AgentStatus::Running),
+        ),
+        (
+            thinking,
+            thinking_still(),
+            agent_style(theme, AgentStatus::Running),
+        ),
+        (
+            status_total(groups, AgentStatus::Waiting),
+            status_glyph(AgentStatus::Waiting),
             status_style(theme, AgentStatus::Waiting),
-        ));
-    }
-    if failed > 0 {
-        if !spans.is_empty() {
-            spans.push(Span::raw("  "));
-        }
-        spans.push(Span::styled(
-            format!("{}{}", status_glyph(AgentStatus::Failed), failed),
+        ),
+        (
+            status_total(groups, AgentStatus::Failed),
+            status_glyph(AgentStatus::Failed),
             status_style(theme, AgentStatus::Failed),
-        ));
+        ),
+        (
+            status_total(groups, AgentStatus::Idle),
+            status_glyph(AgentStatus::Idle),
+            status_style(theme, AgentStatus::Idle),
+        ),
+        (
+            status_total(groups, AgentStatus::Success),
+            status_glyph(AgentStatus::Success),
+            status_style(theme, AgentStatus::Success),
+        ),
+    ];
+    let total: usize = buckets.iter().map(|(count, _, _)| count).sum();
+    let unit = if total == 1 { "agent" } else { "agents" };
+    let mut spans = vec![Span::styled(format!("{total} {unit}"), theme.dim())];
+    let mut printed = false;
+    for (count, glyph, style) in buckets {
+        if count == 0 {
+            continue;
+        }
+        spans.push(Span::raw(if printed { " " } else { "  " }));
+        spans.push(Span::styled(format!("{glyph}{count}"), style));
+        printed = true;
     }
-    Some(Line::from(spans))
+    Line::from(trim_spans_to_width(spans, width))
 }
 
 /// Dim getting-started hint for a healthy room with no agent or feed rows.
@@ -120,6 +160,7 @@ pub(super) fn worktree_group_lines(
     theme: &Theme,
     group: &SidebarWorktreeGroup,
     width: usize,
+    density: SidebarDensity,
     row_index: &mut usize,
     selected_index: usize,
     animation_phase: u64,
@@ -135,6 +176,7 @@ pub(super) fn worktree_group_lines(
             row,
             width,
             tier,
+            density,
             selected,
             animation_phase,
         ));
@@ -244,29 +286,37 @@ fn row_lines(
     row: &SidebarRow,
     width: usize,
     tier: Tier,
+    density: SidebarDensity,
     selected: bool,
     animation_phase: u64,
 ) -> Vec<Line<'static>> {
     let cw = content_width(width);
-    // Selecting a row never reshapes its ambient lines: line 1, the capability
-    // line, and the context bar render the same whether selected or not.
-    // Selection only *adds* a detail block beneath them — usage windows and the
-    // token split — so a calm row stays exactly as tall as its unselected self.
-    let mut inner = vec![row_line(theme, row, cw, animation_phase)];
+    // The resting (unselected) card is line 1 (identity), line 2 (description),
+    // and the ctx bar — plus whatever `density` keeps resident. Selection only
+    // *appends* the deeper lines (the 5h/7d budget bars, then the token and work
+    // stats); it never reshapes a line already on screen, so the card never
+    // reflows on expand, in any density.
+    let mut inner = vec![identity_line(theme, row, tier, cw, animation_phase)];
     if row.row_kind == SidebarRowKind::Agent {
-        // L0 is too narrow for the capability labels; it keeps just identity
-        // and the bar beneath it.
-        if tier != Tier::L0
-            && let Some(line) = capability_line(theme, row, tier, cw)
-        {
-            inner.push(line);
-        }
+        inner.push(description_line(theme, row, tier, cw));
         if let Some(line) = gauge_line(theme, row, cw) {
             inner.push(line);
         }
-        if selected {
-            inner.extend(detail_lines(theme, row, cw));
+        let show_bars = selected || density.shows_budget_bars();
+        let show_stats = selected || density.shows_stats();
+        if show_bars {
+            inner.extend(budget_bar_lines(theme, row, cw));
         }
+        if show_stats {
+            if let Some(line) = token_totals_line(theme, row, cw) {
+                inner.push(line);
+            }
+            if let Some(line) = work_line(theme, row, cw) {
+                inner.push(line);
+            }
+        }
+        // Sub-agent list: designed but deferred — the rollup carries no
+        // parent→child link yet (see docs/internals/sidebar.md, "sub-agents").
     }
     inner
         .into_iter()
@@ -274,7 +324,18 @@ fn row_lines(
         .collect()
 }
 
-fn row_line(theme: &Theme, row: &SidebarRow, width: usize, animation_phase: u64) -> Line<'static> {
+/// Width budget for the agent name on line 1: short agent kinds (`claude`,
+/// `codex`) fit comfortably, and a longer name clips with `…` rather than
+/// pushing the model/effort tokens off the line.
+const NAME_MAX: usize = 12;
+
+fn identity_line(
+    theme: &Theme,
+    row: &SidebarRow,
+    tier: Tier,
+    width: usize,
+    animation_phase: u64,
+) -> Line<'static> {
     if row.row_kind == SidebarRowKind::Process {
         return process_row_line(theme, row, width);
     }
@@ -294,7 +355,7 @@ fn row_line(theme: &Theme, row: &SidebarRow, width: usize, animation_phase: u64)
             .unwrap_or_else(|| "?".to_owned());
         // A resolver mid-flight is the one "waiting for an answer" motion: a
         // braille spinner while the resolver composes the decision, bounded by
-        // its budget.
+        // its budget. The resolver + budget fill the slot a task would.
         return composed_row(
             theme,
             Span::styled(
@@ -309,24 +370,110 @@ fn row_line(theme: &Theme, row: &SidebarRow, width: usize, animation_phase: u64)
     }
 
     let status = row.status.unwrap_or(AgentStatus::Idle);
-    // The leading cell animates only when the agent is actively doing something:
-    // a running agent fills (working) or sparkles (plan-mode thinking). A
-    // waiting `?`, a failed/stalled `!`, idle `◌`, and success `✓` stay still —
-    // attention markers must be scannable, not jittery.
-    composed_row(
-        theme,
+    agent_identity_line(theme, row, status, tier, width, animation_phase)
+}
+
+/// Line 1 for an agent: the leading cell (animated only while the agent is
+/// actively working or plan-mode thinking — attention markers stay still), the
+/// agent name, then the dim capability tokens (`· model · effort`) and the
+/// permission posture pill, with `$cost` (money-green) and the activity age
+/// pinned right. Capability tokens degrade by width tier: L2 carries model +
+/// effort + posture, L1 drops effort, L0 keeps just the name — cost and age
+/// always pin right.
+fn agent_identity_line(
+    theme: &Theme,
+    row: &SidebarRow,
+    status: AgentStatus,
+    tier: Tier,
+    width: usize,
+    animation_phase: u64,
+) -> Line<'static> {
+    // Right cluster, built first so the left trims to whatever's left: the
+    // session cost in money-green, then the dim activity age.
+    let mut right: Vec<Span<'static>> = Vec::new();
+    if let Some(cost) = ctx(row)
+        .and_then(|context| context.cost.as_ref())
+        .and_then(|cost| cost.total_cost_usd)
+        .map(dollars)
+    {
+        right.push(Span::styled(
+            cost,
+            theme.style(Color::Green, Modifier::empty()),
+        ));
+        right.push(Span::raw("  "));
+    }
+    right.push(Span::styled(age_short(row.last_activity), theme.dim()));
+
+    // Left cluster: glyph + name + dim capability tokens.
+    let mut left: Vec<Span<'static>> = vec![
         Span::styled(
             agent_glyph(status, row.plan_mode, animation_phase),
             agent_style(theme, status),
         ),
-        &row.name,
-        descriptor(row),
-        row.last_activity,
-        width,
-    )
+        Span::raw(" "),
+        Span::raw(clip(&row.name, NAME_MAX)),
+    ];
+    if tier != Tier::L0 {
+        if let Some(model) = display_model(row) {
+            left.push(Span::styled(" · ", theme.dim()));
+            left.push(Span::styled(model, theme.dim()));
+        }
+        if tier == Tier::L2
+            && let Some(effort) = display_effort(row)
+        {
+            left.push(Span::styled(" · ", theme.dim()));
+            left.push(Span::styled(effort.to_owned(), theme.dim()));
+        }
+        if let Some(posture_label) = row.permission_posture.and_then(posture_pill) {
+            let posture = row
+                .permission_posture
+                .expect("posture is Some when its label is Some");
+            left.push(Span::styled(" · ", theme.dim()));
+            left.push(Span::styled(
+                posture_label.to_owned(),
+                posture_style(theme, posture),
+            ));
+        }
+    }
+    pin_right(left, right, width)
 }
 
-/// The line-1 descriptor: the user's session name when they set one (`--name` /
+/// Line 2 for an agent: the description (the user's session name, else the task,
+/// else an em dash) on its own full-width line. At L2 it also inlines todo
+/// progress (`●●●○○ 3/5`), which used to ride the old capability line.
+fn description_line(theme: &Theme, row: &SidebarRow, tier: Tier, width: usize) -> Line<'static> {
+    let mut spans = vec![Span::raw("  "), Span::raw(descriptor(row).to_owned())];
+    if tier == Tier::L2 && row.todo_total.unwrap_or(0) > 0 {
+        spans.push(Span::raw("  "));
+        let (done, total) = (row.todo_done.unwrap_or(0), row.todo_total.unwrap_or(0));
+        spans.extend(todo_spans(theme, done, total));
+    }
+    Line::from(trim_spans_to_width(spans, width))
+}
+
+/// Pack `left` from the start and pin `right` flush to the trailing edge: trim
+/// the left to leave room for the right plus a one-cell gap, then pad the gap so
+/// the right cluster ends at `width`. Shared by the identity line and the meter
+/// rows so every right-anchored column lands on one edge.
+fn pin_right(
+    left: Vec<Span<'static>>,
+    right: Vec<Span<'static>>,
+    width: usize,
+) -> Line<'static> {
+    if right.is_empty() {
+        return Line::from(trim_spans_to_width(left, width));
+    }
+    let right_width = spans_width(&right);
+    let mut spans = trim_spans_to_width(left, width.saturating_sub(right_width + 1));
+    let padding = width
+        .saturating_sub(spans_width(&spans) + right_width)
+        .max(1);
+    spans.push(Span::raw(" ".repeat(padding)));
+    spans.extend(right);
+    Line::from(spans)
+}
+
+/// The line-2 description: the user's session name when they set one (`--name` /
 /// `/rename`), else the agent's task, else an em dash. The name is what a human
 /// chose to call this session, so it reads better than the first-prompt task
 /// when present.
@@ -432,97 +579,81 @@ fn composed_row(
     ])
 }
 
-fn capability_line(
+/// Column widths for the three aligned meter bars (`ctx` / `5h↻` / `7d↻`): a
+/// fixed 3-cell left label and a fixed 5-cell right value, with the bar filling
+/// the middle. The values (`78.2%`, `3h20m`, `5d12h`) all fit five cells.
+const BAR_LABEL_WIDTH: usize = 3;
+const BAR_VALUE_WIDTH: usize = 5;
+
+/// One aligned meter row: `<indent><label:3> <bar> <value:5>`. The caller's
+/// `make_bar` builds the colored bar spans to the supplied width; this helper
+/// owns the indent, the fixed label and value columns, and the gaps — so `ctx`,
+/// `5h`, and `7d` share one bar-start column and one value-end column by
+/// construction, with no per-call alignment math.
+fn bar_row(
     theme: &Theme,
-    row: &SidebarRow,
-    tier: Tier,
+    label: &str,
+    value: &str,
+    make_bar: impl FnOnce(usize) -> Vec<Span<'static>>,
     width: usize,
-) -> Option<Line<'static>> {
-    let mut tokens: Vec<CapabilityToken> = Vec::new();
-    if let Some(model) = display_model(row) {
-        tokens.push(CapabilityToken::Dim(model));
-    }
-    if let Some(effort) = display_effort(row) {
-        tokens.push(CapabilityToken::Dim(effort.to_owned()));
-    }
-    let posture = row.permission_posture.and_then(posture_pill);
-    if let Some(posture_label) = posture {
-        let posture = row
-            .permission_posture
-            .expect("posture is Some when its label is Some");
-        tokens.push(CapabilityToken::Posture(posture, posture_label.to_owned()));
-    }
-    let has_inline_todo = tier == Tier::L2 && row.todo_total.unwrap_or(0) > 0;
-    // Session cost pins to the right edge of the line (`$1.27`); the capability
-    // tokens pack from the left and yield to it when the row is narrow.
-    let cost = ctx(row)
-        .and_then(|context| context.cost.as_ref())
-        .and_then(|cost| cost.total_cost_usd)
-        .map(dollars);
-    if tokens.is_empty() && !has_inline_todo && cost.is_none() {
-        return None;
-    }
-
-    let mut left: Vec<Span<'static>> = vec![Span::raw("  ")];
-    let mut printed_any = false;
-    for token in tokens {
-        if printed_any {
-            left.push(Span::styled(" · ", theme.dim()));
-        }
-        match token {
-            CapabilityToken::Dim(value) => left.push(Span::styled(value, theme.dim())),
-            CapabilityToken::Posture(posture, value) => {
-                left.push(Span::styled(value, posture_style(theme, posture)));
-            }
-        }
-        printed_any = true;
-    }
-    if has_inline_todo {
-        if printed_any {
-            left.push(Span::raw("  "));
-        }
-        let (done, total) = (row.todo_done.unwrap_or(0), row.todo_total.unwrap_or(0));
-        left.extend(todo_spans(theme, done, total));
-    }
-
-    let Some(cost) = cost else {
-        return Some(Line::from(trim_spans_to_width(left, width)));
-    };
-    // Trim the left chunk to leave room for the cost plus a one-cell gap, then
-    // pad the gap so the cost sits flush right.
-    let cost_width = cost.chars().count();
-    let mut spans = trim_spans_to_width(left, width.saturating_sub(cost_width + 1));
-    let padding = width
-        .saturating_sub(spans_width(&spans) + cost_width)
+) -> Line<'static> {
+    // "  "(2) + label(3) + " "(1) + bar + " "(1) + value(5)
+    let bar_width = width
+        .saturating_sub(2 + BAR_LABEL_WIDTH + 1 + 1 + BAR_VALUE_WIDTH)
         .max(1);
-    spans.push(Span::raw(" ".repeat(padding)));
-    // Cost reads in money-green — the one non-dim token on the line, so spend
-    // stands out from the dim model/effort chrome around it.
+    let mut spans = vec![
+        Span::raw("  "),
+        Span::styled(format!("{label:<BAR_LABEL_WIDTH$}"), theme.dim()),
+        Span::raw(" "),
+    ];
+    spans.extend(make_bar(bar_width));
+    spans.push(Span::raw(" "));
     spans.push(Span::styled(
-        cost,
-        theme.style(Color::Green, Modifier::empty()),
+        format!("{value:>BAR_VALUE_WIDTH$}"),
+        theme.dim(),
     ));
-    Some(Line::from(spans))
+    Line::from(trim_spans_to_width(spans, width))
 }
 
-/// Centered context bar, drawn as its own thin line beneath the capability
-/// row. It starts at the same indent as the model name it underlines and leaves
-/// an equal gap at the trailing edge, so every agent's bar shares one left edge
-/// and the bars line up across worktrees with no alignment bookkeeping. When the
-/// statusline reports the per-message token breakdown the fill is split into
-/// colored segments (cache writes / cache reads / fresh input) — the three add
-/// up to exactly the used percentage — otherwise it is a single-color ramp.
+/// Bar #1, the context meter — the first of the three aligned bars and the only
+/// one in the resting `compact` card. `ctx` on the left, the used-percent value
+/// on the right, the bar between. When the statusline reports the per-message
+/// token breakdown the fill is split into colored segments (cache writes / cache
+/// reads / fresh input) — the three add up to exactly the used percentage —
+/// otherwise it is a single green → amber → red ramp.
 fn gauge_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     let percent = gauge_percent(row)?;
-    // Reserve the leading two columns again on the right so the bar sits
-    // centered with matching gaps on both ends.
-    let bar_width = width.saturating_sub(4);
-    let mut spans = vec![Span::raw("  ")];
-    match gauge_segments(row) {
-        Some(segments) => spans.extend(segmented_gauge_spans(theme, &segments, percent, bar_width)),
-        None => spans.extend(gauge_spans(theme, percent, bar_width)),
+    let value = pct_label(precise_context_pct(row), percent);
+    let segments = gauge_segments(row);
+    Some(bar_row(
+        theme,
+        "ctx",
+        &value,
+        |bar_width| match &segments {
+            Some(segments) => segmented_gauge_spans(theme, segments, percent, bar_width),
+            None => gauge_spans(theme, percent, bar_width),
+        },
+        width,
+    ))
+}
+
+/// A precise context-used fraction (0..=100) from the current-message token
+/// composition over the window size, so the `ctx` value can read a decimal
+/// (`78.2%`). The composition (`input + cache_creation + cache_read`) is exactly
+/// what `used_percentage` measures, so the decimal refines the same number.
+/// `None` (no breakdown, or no window size) falls the value back to the integer
+/// gauge percent.
+fn precise_context_pct(row: &SidebarRow) -> Option<f64> {
+    let tokens = ctx(row)?.tokens.as_ref()?;
+    let window = tokens.context_window_size? as f64;
+    if window <= 0.0 {
+        return None;
     }
-    Some(Line::from(trim_spans_to_width(spans, width)))
+    let usage = tokens.current_usage.as_ref()?;
+    let used = usage.input_tokens.unwrap_or(0)
+        + usage.cache_creation_input_tokens.unwrap_or(0)
+        + usage.cache_read_input_tokens.unwrap_or(0);
+    Some((used as f64 / window * 100.0).clamp(0.0, 100.0))
 }
 
 /// The context bar's value: the statusline's authoritative `used_percentage`
@@ -550,130 +681,122 @@ fn gauge_segments(row: &SidebarRow) -> Option<[(u64, Color); 3]> {
     ])
 }
 
-/// The detail block selection reveals beneath the ambient lines: the token
-/// split, then the two usage windows as draining stamina/mana bars. The token
-/// totals lead — the per-session number reads first, then the budget meters it
-/// draws down. Falls back to a bare token total for an agent that published no
-/// statusline context.
-fn detail_lines(theme: &Theme, row: &SidebarRow, width: usize) -> Vec<Line<'static>> {
-    let Some(context) = ctx(row) else {
-        return tokens_line(theme, row, width).into_iter().collect();
+/// Bars #2 and #3, the draining budget windows — appended beneath the ctx bar
+/// when the card expands (selection, or a `bars`/`full` density). Both ride the
+/// shared bar grammar so they line up under `ctx`: a 3-cell label carrying the
+/// `↻` reset mark (`5h↻` / `7d↻`), the draining bar, and the reset countdown in
+/// the 5-cell value column. Empty when the agent reported no rate-limit windows.
+fn budget_bar_lines(theme: &Theme, row: &SidebarRow, width: usize) -> Vec<Line<'static>> {
+    let Some(limits) = ctx(row).and_then(|context| context.rate_limits.as_ref()) else {
+        return Vec::new();
     };
     let mut lines = Vec::new();
-    if let Some(line) = token_split_line(theme, context, width) {
-        lines.push(line);
-    } else if let Some(line) = tokens_line(theme, row, width) {
+    // The 5-hour reset floors to minutes (seconds are noise on it); the weekly
+    // reset keeps the full d/h resolution.
+    if let Some(line) = usage_window_line(
+        theme,
+        "5h↻",
+        limits.five_hour.as_ref(),
+        duration_compact_minutes,
+        width,
+    ) {
         lines.push(line);
     }
-    if let Some(limits) = context.rate_limits.as_ref() {
-        // The 5-hour reset floors to minutes (seconds are noise on it); the
-        // weekly reset keeps the full d/h resolution.
-        if let Some(line) = usage_window_line(
-            theme,
-            "5h",
-            limits.five_hour.as_ref(),
-            ResourceKind::Stamina,
-            duration_compact_minutes,
-            width,
-        ) {
-            lines.push(line);
-        }
-        if let Some(line) = usage_window_line(
-            theme,
-            "7d",
-            limits.seven_day.as_ref(),
-            ResourceKind::Mana,
-            duration_compact,
-            width,
-        ) {
-            lines.push(line);
-        }
+    if let Some(line) = usage_window_line(
+        theme,
+        "7d↻",
+        limits.seven_day.as_ref(),
+        duration_compact,
+        width,
+    ) {
+        lines.push(line);
     }
     lines
 }
 
-/// Column width reserved for a usage-window label, so the two bars share one
-/// left edge. The `5h`/`7d` labels both fit in two cells.
-const WINDOW_LABEL_WIDTH: usize = 2;
-
-/// One usage-limit window as a draining resource bar with a reset countdown:
-/// `5h ▰▰▰▰▰▰▰▱▱▱ ↻ 3h12m`. The bar fills with budget *remaining*
-/// (`100 - used`) so a full bar means headroom; `reset_fmt` renders the
-/// countdown beside it — the 5-hour window floors to minutes, the weekly keeps
-/// full resolution. Drawn only when the window reported a usage percentage.
+/// One usage-limit window as a draining budget bar in the shared bar grammar:
+/// the bar fills with budget *remaining* (`100 - used`) so a full bar means
+/// headroom, and the right value is the reset countdown (`reset_fmt`). Drawn
+/// only when the window reported a usage percentage.
 fn usage_window_line(
     theme: &Theme,
     label: &str,
     window: Option<&RateLimitWindow>,
-    kind: ResourceKind,
     reset_fmt: fn(Timestamp) -> String,
     width: usize,
 ) -> Option<Line<'static>> {
     let window = window?;
     let remaining = 100 - window.used_percentage?;
-    let reset = window
-        .resets_at
-        .map(|at| format!("{RESET_GLYPH} {}", reset_fmt(at)));
-    let reset_width = reset.as_ref().map_or(0, |text| text.chars().count());
-    // "  " indent + label column + " " + bar + (" " + reset).
-    let tail = if reset_width > 0 { reset_width + 1 } else { 0 };
-    let bar_width = width
-        .saturating_sub(2 + WINDOW_LABEL_WIDTH + 1 + tail)
-        .max(1);
-    let mut spans = vec![
-        Span::raw("  "),
-        Span::styled(format!("{label:<WINDOW_LABEL_WIDTH$}"), theme.dim()),
-        Span::raw(" "),
-    ];
-    spans.extend(resource_bar_spans(theme, remaining, kind, bar_width));
-    if let Some(reset) = reset {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(reset, theme.dim()));
-    }
-    Some(Line::from(trim_spans_to_width(spans, width)))
+    let value = window.resets_at.map(reset_fmt).unwrap_or_default();
+    Some(bar_row(
+        theme,
+        label,
+        &value,
+        |bar_width| resource_bar_spans(theme, remaining, bar_width),
+        width,
+    ))
 }
 
-/// The selected row's token split: `76.5k tok · ↑64.2k ↓12.3k` — current-context
-/// total, then input and output. Drawn from the statusline token usage.
-fn token_split_line(theme: &Theme, context: &AgentContext, width: usize) -> Option<Line<'static>> {
-    let tokens = context.tokens.as_ref()?;
-    let input = tokens.total_input_tokens;
-    let output = tokens.total_output_tokens;
-    if input.is_none() && output.is_none() {
-        return None;
+/// The session's token totals (`76.5k tok · ↑64.2k ↓12.3k`): the cumulative
+/// total, then input and output. Falls back to the bare rollup total for an
+/// agent whose context carries no read-only token split (Codex's app-server
+/// exposes none), so the line shows *something* for every agent. No cumulative
+/// cached figure exists — the cache split is per-message, and the ctx bar's
+/// colored segments already show where the live window went.
+fn token_totals_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
+    if let Some(tokens) = ctx(row).and_then(|context| context.tokens.as_ref())
+        && (tokens.total_input_tokens.is_some() || tokens.total_output_tokens.is_some())
+    {
+        let input = tokens.total_input_tokens.unwrap_or(0);
+        let output = tokens.total_output_tokens.unwrap_or(0);
+        let spans = vec![
+            Span::raw("  "),
+            tokens_label(theme, input + output),
+            Span::styled(" · ", theme.dim()),
+            Span::styled(format!("↑{}", tokens_short(input)), theme.dim()),
+            Span::raw(" "),
+            Span::styled(format!("↓{}", tokens_short(output)), theme.dim()),
+        ];
+        return Some(Line::from(trim_spans_to_width(spans, width)));
     }
-    let (input, output) = (input.unwrap_or(0), output.unwrap_or(0));
-    let spans = vec![
-        Span::raw("  "),
-        tokens_label(theme, input + output),
-        Span::styled(" · ", theme.dim()),
-        Span::styled(format!("↑{}", tokens_short(input)), theme.dim()),
-        Span::raw(" "),
-        Span::styled(format!("↓{}", tokens_short(output)), theme.dim()),
-    ];
-    Some(Line::from(trim_spans_to_width(spans, width)))
-}
-
-/// The bare token total, shown when the context carries no read-only token
-/// usage (Codex, whose app-server exposes none) so selection still reveals
-/// *something* for every agent.
-fn tokens_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     let total = row.total_tokens?;
     let spans = vec![Span::raw("  "), tokens_label(theme, total)];
     Some(Line::from(trim_spans_to_width(spans, width)))
 }
 
-/// Reset marker beside a usage-window countdown — a single-width refresh arrow.
-const RESET_GLYPH: char = '↻';
+/// The session's work line (`12m worked · +127 -43`): total time worked and the
+/// lines the agent added/removed, from the statusline cost record. The diff is
+/// the agent's own edit count — distinct from the worktree-total diff on the
+/// group header. Drawn only when the cost record reports a field.
+fn work_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
+    let cost = ctx(row)?.cost.as_ref()?;
+    let mut spans = vec![Span::raw("  ")];
+    let mut printed = false;
+    if let Some(ms) = cost.total_duration_ms {
+        spans.push(Span::styled(
+            format!("{} worked", duration_worked(ms)),
+            theme.dim(),
+        ));
+        printed = true;
+    }
+    if cost.total_lines_added.is_some() || cost.total_lines_removed.is_some() {
+        if printed {
+            spans.push(Span::styled(" · ", theme.dim()));
+        }
+        let clamp = |n: u64| u32::try_from(n).unwrap_or(u32::MAX);
+        spans.extend(diff_spans(
+            theme,
+            clamp(cost.total_lines_added.unwrap_or(0)),
+            clamp(cost.total_lines_removed.unwrap_or(0)),
+        ));
+        printed = true;
+    }
+    printed.then(|| Line::from(trim_spans_to_width(spans, width)))
+}
 
 /// Total display width of a span run, in terminal cells.
 fn spans_width(spans: &[Span<'static>]) -> usize {
     spans.iter().map(|span| span.content.chars().count()).sum()
-}
-
-enum CapabilityToken {
-    Dim(String),
-    Posture(PermissionPosture, String),
 }
 
 fn trim_spans_to_width(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
