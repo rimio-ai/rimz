@@ -142,6 +142,12 @@ pub struct AgentLifecycleObservation {
     /// `ZELLIJ_PANE_ID`). Lets the sidebar bind each agent row to its actual
     /// pane when two agents of the same kind share one worktree.
     pub pane_id: Option<PaneId>,
+    /// The root session id this observation's agent is a *child* of, set only
+    /// on `SubagentStart`/`SubagentStop` (the payload `session_id`, which both
+    /// adapters report as the parent for a subagent event). `None` for root
+    /// agents. Identity lifetime in the reducer, so a child row links to its
+    /// parent row by `(kind, parent_agent_id)` for the whole child's life.
+    pub parent_agent_id: Option<String>,
 }
 
 /// Result of installing hooks. Surfaced to the CLI so the user sees which

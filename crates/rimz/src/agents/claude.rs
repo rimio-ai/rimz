@@ -61,6 +61,11 @@ const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
     ("PermissionRequest", None),
     ("PreToolUse", None),
     ("PostToolUse", None),
+    // Subagent lifecycle (Claude Code's Task-tool children, parity with Codex's
+    // threads): `SubagentStart` registers a child row keyed by its `agent_id`,
+    // `SubagentStop` returns it to idle. Both carry the parent root `session_id`.
+    ("SubagentStart", None),
+    ("SubagentStop", None),
 ];
 
 /// Events that hold the agent open while the bridge waits for an answer.
@@ -119,7 +124,9 @@ impl AgentIntegration for ClaudeIntegration {
         } else {
             match event_name {
                 "SessionStart" | "SessionEnd" | "Stop" | "Notification" | "UserPromptSubmit"
-                | "PreToolUse" | "PostToolUse" => AgentHookClass::Lifecycle,
+                | "PreToolUse" | "PostToolUse" | "SubagentStart" | "SubagentStop" => {
+                    AgentHookClass::Lifecycle
+                }
                 _ => AgentHookClass::Unknown,
             }
         };
@@ -213,6 +220,12 @@ impl AgentIntegration for ClaudeIntegration {
         let (status, posture) = match event_name {
             "SessionStart" => (AgentStatus::Idle, posture_from_payload(payload)),
             "UserPromptSubmit" => (AgentStatus::Running, posture_from_payload(payload)),
+            // A subagent fires before the child model request, so it registers
+            // running under the child `agent_id`; a finished child returns to
+            // idle. Parity with the Codex adapter. Posture is sampled like every
+            // other event (the slider is self-correcting).
+            "SubagentStart" => (AgentStatus::Running, posture_from_payload(payload)),
+            "SubagentStop" => (AgentStatus::Idle, posture_from_payload(payload)),
             "Stop" => (
                 stop_status_with_background(payload, &pending_background),
                 posture_from_payload(payload),
@@ -249,10 +262,15 @@ impl AgentIntegration for ClaudeIntegration {
             .or(usage.total_tokens);
         let (todo_done, todo_total) = todos_from_payload(payload);
         Some(AgentLifecycleObservation {
-            agent_id: payload
-                .get("session_id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
+            // Root events key on `session_id`; a subagent event keys on the
+            // child's own `agent_id` so the child gets its own row instead of
+            // overwriting the parent session's. (`session_id` on a subagent
+            // event is the parent root — captured as `parent_agent_id` below.)
+            agent_id: match event_name {
+                "SubagentStart" | "SubagentStop" => optional_payload_string(payload, &["agent_id"])
+                    .or_else(|| optional_payload_string(payload, &["session_id"])),
+                _ => optional_payload_string(payload, &["session_id"]),
+            },
             status,
             agent_pid: None,
             agent_process_start: None,
@@ -260,8 +278,18 @@ impl AgentIntegration for ClaudeIntegration {
             permission_posture: posture,
             worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
             worktree_branch: optional_payload_string(payload, &["worktree_branch"]),
-            task: background_task_label(&pending_background)
-                .or_else(|| optional_payload_string(payload, &["task", "prompt"])),
+            // A subagent labels its row with what it is (`subagent_type`) or what
+            // it was asked (`description`). The type rides both start and stop so
+            // a *finished* child keeps its label while it lingers in the parent's
+            // list. Root events keep the background-work / prompt label.
+            task: match event_name {
+                "SubagentStart" | "SubagentStop" => optional_payload_string(
+                    payload,
+                    &["subagent_type", "agent_type", "description", "task"],
+                ),
+                _ => background_task_label(&pending_background)
+                    .or_else(|| optional_payload_string(payload, &["task", "prompt"])),
+            },
             model,
             effort: optional_payload_string(payload, &["thinking_level", "effort"]),
             context_pct,
@@ -269,6 +297,12 @@ impl AgentIntegration for ClaudeIntegration {
             todo_done,
             todo_total,
             pane_id: None,
+            // A subagent event's `session_id` is the parent root the child nests
+            // under; root events carry no parent.
+            parent_agent_id: match event_name {
+                "SubagentStart" | "SubagentStop" => optional_payload_string(payload, &["session_id"]),
+                _ => None,
+            },
         })
     }
 
@@ -1127,6 +1161,68 @@ mod tests {
     }
 
     #[test]
+    fn classify_subagent_events_are_lifecycle() {
+        for event in ["SubagentStart", "SubagentStop"] {
+            let c = ClaudeIntegration.classify_hook(event, &json!({}));
+            assert_eq!(c.class, AgentHookClass::Lifecycle, "{event}");
+            assert_eq!(c.feed_kind, None, "{event}");
+        }
+    }
+
+    #[test]
+    fn subagent_start_observes_running_child_keyed_by_agent_id() {
+        let obs = ClaudeIntegration
+            .observe_lifecycle(
+                "SubagentStart",
+                &json!({
+                    "session_id": "sess-parent",
+                    "agent_id": "child-1",
+                    "subagent_type": "Explore",
+                    "description": "search the ledger",
+                    "permission_mode": "acceptEdits",
+                }),
+            )
+            .unwrap();
+
+        // Keyed off the child's own id, not the parent session.
+        assert_eq!(obs.agent_id.as_deref(), Some("child-1"));
+        assert_eq!(obs.status, AgentStatus::Running);
+        // The type labels the child row; `session_id` is captured as the parent.
+        assert_eq!(obs.task.as_deref(), Some("Explore"));
+        assert_eq!(obs.parent_agent_id.as_deref(), Some("sess-parent"));
+        assert_eq!(obs.permission_posture, Some(PermissionPosture::Auto));
+    }
+
+    #[test]
+    fn subagent_stop_returns_child_idle_keeping_its_label() {
+        let obs = ClaudeIntegration
+            .observe_lifecycle(
+                "SubagentStop",
+                &json!({
+                    "session_id": "sess-parent",
+                    "agent_id": "child-1",
+                    "agent_type": "Explore",
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(obs.agent_id.as_deref(), Some("child-1"));
+        assert_eq!(obs.status, AgentStatus::Idle);
+        // The label persists past stop; the parent link survives.
+        assert_eq!(obs.task.as_deref(), Some("Explore"));
+        assert_eq!(obs.parent_agent_id.as_deref(), Some("sess-parent"));
+    }
+
+    #[test]
+    fn root_lifecycle_event_carries_no_parent() {
+        let obs = ClaudeIntegration
+            .observe_lifecycle("UserPromptSubmit", &json!({ "session_id": "sess-root" }))
+            .unwrap();
+        assert_eq!(obs.agent_id.as_deref(), Some("sess-root"));
+        assert_eq!(obs.parent_agent_id, None);
+    }
+
+    #[test]
     fn hook_cap_is_120_seconds() {
         assert_eq!(ClaudeIntegration.hook_cap(), Duration::from_secs(120));
     }
@@ -1235,6 +1331,32 @@ mod tests {
               }
             ],
             "Stop": [
+              {
+                "_rimz_managed": true,
+                "_rimz_sync": false,
+                "hooks": [
+                  {
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
+                    "timeout": 120,
+                    "type": "command"
+                  }
+                ]
+              }
+            ],
+            "SubagentStart": [
+              {
+                "_rimz_managed": true,
+                "_rimz_sync": false,
+                "hooks": [
+                  {
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
+                    "timeout": 120,
+                    "type": "command"
+                  }
+                ]
+              }
+            ],
+            "SubagentStop": [
               {
                 "_rimz_managed": true,
                 "_rimz_sync": false,

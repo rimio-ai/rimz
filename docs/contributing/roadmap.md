@@ -53,7 +53,9 @@ The approved design in [sidebar.md](../internals/sidebar.md) now drives the nati
 
 ## M6 — Sub-agent observability
 
-Codex thread events, parent/child rendering, gated auto-open only when preconditions are met.
+Done: Claude `Task` children and Codex thread events both flow through `SubagentStart`/`SubagentStop`, keyed by child `agent_id` with the root captured as `parent_agent_id`; the snapshot nests each child under its parent and the expanded card lists them with turn-scoped retention (see [agent.md](../internals/agent.md) and [sidebar.md → Sub-agent lists](../internals/sidebar.md#sub-agent-lists)).
+
+Remaining: gated auto-open of a subagent surface only when preconditions are met.
 
 ## M7 — Additional agents
 

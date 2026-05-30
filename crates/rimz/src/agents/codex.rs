@@ -205,6 +205,12 @@ impl AgentIntegration for CodexIntegration {
             todo_done: None,
             todo_total: None,
             pane_id: None,
+            // A subagent event keys the child off `agent_id` (above); the
+            // payload's `session_id` is the parent root the child nests under.
+            parent_agent_id: match event_name {
+                "SubagentStart" | "SubagentStop" => optional_payload_string(payload, &["session_id"]),
+                _ => None,
+            },
         })
     }
 
@@ -283,10 +289,14 @@ fn codex_agent_id(payload: &Value) -> Option<String> {
 }
 
 fn task_from_payload(event_name: &str, payload: &Value) -> Option<String> {
-    if event_name == "SubagentStart" {
-        optional_payload_string(payload, &["task", "prompt", "agent_type"])
-    } else {
-        optional_payload_string(payload, &["task", "prompt"])
+    match event_name {
+        // The subagent type labels the child row; it rides both start and stop
+        // so a *finished* child keeps its label while it lingers in the parent's
+        // list. Root events read the prompt/task only.
+        "SubagentStart" | "SubagentStop" => {
+            optional_payload_string(payload, &["task", "prompt", "agent_type"])
+        }
+        _ => optional_payload_string(payload, &["task", "prompt"]),
     }
 }
 
@@ -928,6 +938,9 @@ mod tests {
         assert_eq!(obs.status, AgentStatus::Running);
         assert_eq!(obs.task.as_deref(), Some("review"));
         assert_eq!(obs.permission_posture, Some(PermissionPosture::Auto));
+        // The child keys off `agent_id`; the payload's `session_id` is its parent
+        // root, captured so the sidebar can nest it.
+        assert_eq!(obs.parent_agent_id.as_deref(), Some("sess-parent"));
     }
 
     #[test]
@@ -945,7 +958,10 @@ mod tests {
 
         assert_eq!(obs.agent_id.as_deref(), Some("child-thread-1"));
         assert_eq!(obs.status, AgentStatus::Idle);
-        assert_eq!(obs.task, None);
+        // The type label persists across stop so a finished child stays labeled
+        // while it lingers in the parent's list.
+        assert_eq!(obs.task.as_deref(), Some("review"));
+        assert_eq!(obs.parent_agent_id.as_deref(), Some("sess-parent"));
         assert_eq!(obs.permission_posture, None);
     }
 

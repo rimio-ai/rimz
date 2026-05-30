@@ -36,6 +36,7 @@ fn inject_lifecycle(
         todo_done: None,
         todo_total: None,
         pane_id: None,
+        parent_agent_id: None,
     };
     let envelope = EventEnvelope::agent_lifecycle(
         env.workspace_id.clone(),

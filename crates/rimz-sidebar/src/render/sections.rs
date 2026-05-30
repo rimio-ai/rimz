@@ -13,7 +13,8 @@ use rimz::agents::{AgentContext, RateLimitWindow};
 use rimz::config::SidebarDensity;
 use rimz::feed::{AgentState, AgentStatus, PermissionPosture};
 use rimz::{
-    SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
+    SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
+    SidebarWorktreeKind,
 };
 
 use super::fmt::{
@@ -456,13 +457,46 @@ fn row_lines(
                 inner.push(line);
             }
         }
-        // Sub-agent list: designed but deferred — the rollup carries no
-        // parent→child link yet (see docs/internals/sidebar.md, "sub-agents").
+        // The subagents this agent spawned this turn, listed only in the
+        // expanded card — appended after the stats so the resting card never
+        // reflows (selection only ever adds lines).
+        if selected && !row.sub_agents.is_empty() {
+            inner.extend(sub_agent_lines(theme, &row.sub_agents, cw));
+        }
     }
     inner
         .into_iter()
         .map(|line| with_gutter(theme, line, selected))
         .collect()
+}
+
+/// The expanded card's subagent list: a dim `subagents (N)` header, then one
+/// indented line per child — its status glyph, its type, and the task when that
+/// adds anything. Children are subordinate to the parent card, so every line is
+/// dim and indented past the parent's own stat lines.
+fn sub_agent_lines(theme: &Theme, sub_agents: &[SidebarSubAgent], width: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(trim_spans_to_width(
+        vec![Span::styled(
+            format!("  subagents ({})", sub_agents.len()),
+            theme.dim(),
+        )],
+        width,
+    ))];
+    for sub in sub_agents {
+        let mut spans = vec![
+            Span::raw("    "),
+            Span::styled(status_glyph(sub.status), status_style(theme, sub.status)),
+            Span::raw(" "),
+            Span::styled(sub.name.clone(), theme.dim()),
+        ];
+        // Show the task only when it differs from the name (the name already is
+        // the type for most children) so the line doesn't read `Explore — Explore`.
+        if let Some(task) = sub.task.as_deref().filter(|task| *task != sub.name) {
+            spans.push(Span::styled(format!(" — {task}"), theme.dim()));
+        }
+        lines.push(Line::from(trim_spans_to_width(spans, width)));
+    }
+    lines
 }
 
 /// Width budget for the agent name on line 1: short agent kinds (`claude`,

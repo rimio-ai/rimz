@@ -518,6 +518,7 @@ mod tests {
             agent_pid: None,
             agent_process_start: None,
             runtime_owner: None,
+            parent_agent_id: None,
             worktree_path: worktree_path.map(ToOwned::to_owned),
             worktree_branch: branch.map(ToOwned::to_owned),
             task: task.map(ToOwned::to_owned),
@@ -528,6 +529,7 @@ mod tests {
             todo_done: None,
             todo_total: None,
             context: None,
+            turn_started_at: None,
             last_seen: now,
             last_activity: now,
         }
@@ -1236,6 +1238,78 @@ mod tests {
             full[fold.len()..]
                 .iter()
                 .any(|line| line.contains("worked"))
+        );
+    }
+
+    /// The expanded card lists the agent's subagents (status glyph + type),
+    /// nested under the parent and shown only when the row is selected — the
+    /// resting card never reveals them, preserving the no-reflow invariant.
+    #[test]
+    fn expanded_card_lists_subagents_only_when_selected() {
+        let parent = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Auto,
+            Some("/repo/main"),
+            Some("main"),
+            Some("db migrate"),
+        );
+        // A paneless child of the parent, still running — it nests onto the
+        // parent's card during snapshot projection.
+        let mut kid = agent(
+            "kid-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            None,
+            None,
+            Some("Explore"),
+        );
+        kid.parent_agent_id = Some("claude-1".to_owned());
+        let snapshot = snapshot_with(Vec::new(), vec![parent, kid]);
+        let theme = Theme::fixed(true);
+        let render = |selected_index: usize| {
+            let mut row_index = 0;
+            let mut lines = Vec::new();
+            let mut map = Vec::new();
+            worktree_group_lines(
+                &theme,
+                &snapshot.worktree_groups[0],
+                54,
+                rimz::config::SidebarDensity::Compact,
+                &mut row_index,
+                selected_index,
+                0,
+                &mut lines,
+                &mut map,
+            );
+            lines
+                .into_iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let selected = render(0);
+        assert!(
+            selected.contains("subagents"),
+            "expanded card lists subagents:\n{selected}"
+        );
+        assert!(
+            selected.contains("Explore"),
+            "the subagent type is shown:\n{selected}"
+        );
+
+        let resting = render(usize::MAX);
+        assert!(
+            !resting.contains("subagents"),
+            "the resting card hides the subagent list:\n{resting}"
         );
     }
 

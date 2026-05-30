@@ -225,6 +225,27 @@ pub struct SidebarRow {
     pub last_activity: Timestamp,
     pub resolver: Option<SidebarResolverState>,
     pub options: Vec<String>,
+    /// Subagents this agent spawned this turn (Claude Task children, Codex
+    /// threads), nested under the parent at projection time. Paneless, so they
+    /// never render as their own row; the sidebar lists them inside the parent's
+    /// expanded card. Empty for every non-parent row.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sub_agents: Vec<SidebarSubAgent>,
+}
+
+/// A compact summary of a child agent, nested under its parent's row. Subagents
+/// are paneless and carry no out-of-band enrichment, so this holds only what the
+/// expanded list paints: identity, live status, and what it's working on.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SidebarSubAgent {
+    pub id: String,
+    /// The subagent's type (`Explore`, `review`, …), from the `SubagentStart`
+    /// task descriptor; falls back to the agent kind when none was reported.
+    pub name: String,
+    pub status: AgentStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    pub last_activity: Timestamp,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -444,12 +465,20 @@ impl SidebarSnapshot {
     ///     while never dropping a concurrent agent that owns its own pane.
     pub fn reap_stale_sessions(&mut self, now: Timestamp) {
         let previous_len = self.agents.len();
+        // Both reap rules are root-only. A subagent is paneless and pidless by
+        // construction and shares no worktree key with its parent, so the
+        // supersession rule would collapse two live parallel siblings and the
+        // pidless-TTL rule would reap an idle child — both wrong. Children leave
+        // the rollup only transitively: once the parent is gone, the projection's
+        // orphan-drop hides them.
         let superseded: BTreeSet<(String, String)> = self
             .agents
             .iter()
+            .filter(|older| older.parent_agent_id.is_none())
             .filter(|older| {
                 self.agents.iter().any(|newer| {
-                    newer.kind == older.kind
+                    newer.parent_agent_id.is_none()
+                        && newer.kind == older.kind
                         && newer.agent_id != older.agent_id
                         && newer.last_activity > older.last_activity
                         && newer.worktree_path == older.worktree_path
@@ -460,6 +489,9 @@ impl SidebarSnapshot {
             .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
             .collect();
         self.agents.retain(|agent| {
+            if agent.parent_agent_id.is_some() {
+                return true;
+            }
             if superseded.contains(&(agent.kind.clone(), agent.agent_id.clone())) {
                 return false;
             }
@@ -644,7 +676,7 @@ fn build_worktree_groups(
     worktree_roots: &[PathBuf],
 ) -> Vec<SidebarWorktreeGroup> {
     let rows = rows_from_ledger(agents, needs_attention, resolver_working);
-    build_worktree_groups_from_rows(rows, project_root, worktree_roots)
+    build_worktree_groups_from_rows(rows, agents, project_root, worktree_roots)
 }
 
 /// One pane = one row, by construction. Every live pane anchors exactly one
@@ -665,6 +697,7 @@ fn build_worktree_groups_with_panes(
 ) -> Vec<SidebarWorktreeGroup> {
     build_worktree_groups_from_rows(
         rows_from_panes(agents, needs_attention, resolver_working, panes),
+        agents,
         project_root,
         worktree_roots,
     )
@@ -824,6 +857,12 @@ fn rows_from_ledger(
     }
 
     for agent in agents {
+        // A subagent is paneless and nests inside its parent's card; it must
+        // never become a standalone top-level row. `attach_sub_agents` folds it
+        // onto the parent later.
+        if agent.parent_agent_id.is_some() {
+            continue;
+        }
         let key = (agent.kind.clone(), agent.agent_id.clone());
         if replaced_agents.contains(&key) {
             continue;
@@ -835,10 +874,16 @@ fn rows_from_ledger(
 }
 
 fn build_worktree_groups_from_rows(
-    rows: Vec<SidebarRow>,
+    mut rows: Vec<SidebarRow>,
+    agents: &[AgentState],
     project_root: Option<&Path>,
     worktree_roots: &[PathBuf],
 ) -> Vec<SidebarWorktreeGroup> {
+    // Nest each subagent under its parent root row before grouping. This is the
+    // one chokepoint both the live (`rows_from_panes`) and no-pane
+    // (`rows_from_ledger`) builders share, so nesting behaves identically on
+    // either path.
+    attach_sub_agents(&mut rows, agents);
     // A worktree dir holds one branch at a time, so rows under one path
     // normally share a branch and group together — the agent and its shell
     // panes alike. Only when stale ledger rows put two distinct branches under
@@ -910,6 +955,73 @@ fn build_worktree_groups_from_rows(
     groups
 }
 
+/// Nest each subagent under its parent root row. A subagent is a reduced
+/// `AgentState` carrying `parent_agent_id`; it is paneless, so it built no row
+/// of its own (`rows_from_panes` binds only stamped panes, `rows_from_ledger`
+/// skips it). This pass matches each child to its parent row by
+/// `(kind, parent_agent_id)` and pushes a compact summary onto it.
+///
+/// Retention is turn-scoped: a still-running child is always shown, but a
+/// finished (idle/success) child whose work predates the parent's *current*
+/// turn (`turn_started_at`, advanced only by `UserPromptSubmit`) belongs to a
+/// past turn and is dropped. A child whose parent row is absent (parent ended,
+/// reaped, or has no live pane) is an orphan and never renders.
+fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState]) {
+    let parent_turn_start = |kind: &str, id: &str| -> Option<Timestamp> {
+        agents
+            .iter()
+            .find(|a| a.kind == kind && a.agent_id == id)
+            .and_then(|a| a.turn_started_at)
+    };
+    for child in agents.iter().filter(|a| a.parent_agent_id.is_some()) {
+        let Some(parent_id) = child.parent_agent_id.as_deref() else {
+            continue;
+        };
+        // A finished child from a past turn is history — drop it. A running
+        // child is live work and always kept.
+        if child.status != AgentStatus::Running
+            && parent_turn_start(&child.kind, parent_id)
+                .is_some_and(|started| started > child.last_activity)
+        {
+            continue;
+        }
+        // Attach to the parent row when one is present; an orphan (no parent
+        // row) is simply never rendered.
+        if let Some(parent) = rows.iter_mut().find(|row| {
+            row.row_kind == SidebarRowKind::Agent && row.name == child.kind && row.id == parent_id
+        }) {
+            parent.sub_agents.push(sub_agent_from_state(child));
+        }
+    }
+    // Order each parent's children: running first, then most-recent work, then a
+    // stable id tiebreak so the list is deterministic.
+    for row in rows.iter_mut().filter(|r| !r.sub_agents.is_empty()) {
+        row.sub_agents.sort_by(|a, b| {
+            let running = |status: AgentStatus| status == AgentStatus::Running;
+            running(b.status)
+                .cmp(&running(a.status))
+                .then(b.last_activity.cmp(&a.last_activity))
+                .then(a.id.cmp(&b.id))
+        });
+    }
+}
+
+/// A child `AgentState` projected to the compact summary the parent's expanded
+/// card paints. The subagent's type rode in as its `task` (set on both
+/// `SubagentStart` and `SubagentStop`), so it stays labeled after it finishes.
+fn sub_agent_from_state(child: &AgentState) -> SidebarSubAgent {
+    SidebarSubAgent {
+        id: child.agent_id.clone(),
+        name: child
+            .task
+            .clone()
+            .unwrap_or_else(|| child.kind.clone()),
+        status: child.status,
+        task: child.task.clone(),
+        last_activity: child.last_activity,
+    }
+}
+
 fn row_from_agent(agent: &AgentState) -> SidebarRow {
     // `SidebarRow.status` is the *displayed* status, not the raw rollup (a
     // pending ask folds it to `waiting` below). A `running` agent silent past
@@ -943,6 +1055,7 @@ fn row_from_agent(agent: &AgentState) -> SidebarRow {
         last_activity: agent.last_activity,
         resolver: None,
         options: Vec::new(),
+        sub_agents: Vec::new(),
     }
 }
 
@@ -975,6 +1088,7 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
         last_activity: pane.pane_process_start.unwrap_or_else(Timestamp::now),
         resolver: None,
         options: Vec::new(),
+        sub_agents: Vec::new(),
     }
 }
 
@@ -1006,6 +1120,7 @@ fn row_from_remote_control(pane: &PaneRef) -> SidebarRow {
         last_activity: pane.pane_process_start.unwrap_or_else(Timestamp::now),
         resolver: None,
         options: Vec::new(),
+        sub_agents: Vec::new(),
     }
 }
 
@@ -1096,6 +1211,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         last_activity: item.updated_at,
         resolver: active_resolver_state(item),
         options: item.options.clone(),
+        sub_agents: Vec::new(),
     })
 }
 
@@ -1596,6 +1712,23 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             .map(|v| v.min(u32::MAX as u64) as u32)
             .or_else(|| prior.and_then(|p| p.todo_total));
         let establishes_identity = matches!(event_name, Some("SessionStart" | "SubagentStart"));
+        // The parent link is pure identity: a `SubagentStart` establishes it,
+        // and it must survive every later child event (`SubagentStop`, per-tool
+        // hooks) so the child never loses its parent and surfaces as a spurious
+        // top-level row. Root agents never carry one.
+        let parent_agent_id = if establishes_identity {
+            param_string("parent_agent_id").or_else(|| prior.and_then(|p| p.parent_agent_id.clone()))
+        } else {
+            prior.and_then(|p| p.parent_agent_id.clone())
+        };
+        // The current turn's start instant — advanced only by `UserPromptSubmit`,
+        // never by `Stop`. It is the "next prompt" boundary the subagent-list
+        // retention reads; carried forward across all other events.
+        let turn_started_at = if event_name == Some("UserPromptSubmit") {
+            Some(event.timestamp)
+        } else {
+            prior.and_then(|p| p.turn_started_at)
+        };
         let event_worktree_path = param_string("worktree_path");
         let event_worktree_branch = param_string("worktree_branch");
         let prior_worktree_path = prior.and_then(|p| p.worktree_path.clone());
@@ -1662,6 +1795,7 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             agent_pid,
             agent_process_start,
             runtime_owner,
+            parent_agent_id,
             worktree_path,
             worktree_branch,
             task,
@@ -1674,6 +1808,7 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             // Never reduced from events — the snapshot CLI folds the latest
             // statusline context in via `with_agent_context`.
             context: None,
+            turn_started_at,
             last_seen: event.timestamp,
             last_activity: event.timestamp,
         };
@@ -1797,6 +1932,7 @@ mod tests {
             agent_pid: None,
             agent_process_start: None,
             runtime_owner: None,
+            parent_agent_id: None,
             worktree_path: None,
             worktree_branch: None,
             task: None,
@@ -1807,6 +1943,7 @@ mod tests {
             todo_done: None,
             todo_total: None,
             context: None,
+            turn_started_at: None,
             last_seen: timestamp,
             last_activity: timestamp,
         }
@@ -2660,6 +2797,211 @@ mod tests {
         let agents = reduce_agent_states(&[start, prompt, stop]);
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].model.as_deref(), Some("claude-opus-4-8"));
+    }
+
+    // ---- Subagent observability (M6): parent link, nesting, retention, reaping ----
+
+    /// A paneless child `AgentState` of `parent`, stamped `secs_ago` before now.
+    fn child_state(parent: &str, id: &str, status: AgentStatus, secs_ago: i64) -> AgentState {
+        let now = Timestamp::now();
+        let mut child = agent("claude", id, status, PermissionPosture::Default, 0);
+        child.parent_agent_id = Some(parent.to_owned());
+        child.task = Some("Explore".to_owned());
+        let at = Timestamp::from_second(now.as_second() - secs_ago).unwrap();
+        child.last_activity = at;
+        child.last_seen = at;
+        child
+    }
+
+    #[test]
+    fn subagent_start_reduces_parent_link_that_survives_stop() {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let lifecycle = |params: serde_json::Value| {
+            EventEnvelope::new(
+                workspace.clone(),
+                "session",
+                "claude",
+                "agent-hook",
+                "agent.lifecycle",
+                params,
+            )
+        };
+        let start = lifecycle(serde_json::json!({
+            "event_name": "SubagentStart",
+            "agent_id": "child-1",
+            "status": "running",
+            "parent_agent_id": "sess-root",
+            "task": "Explore",
+        }));
+        // SubagentStop omits the parent link — the reducer carries identity forward.
+        let stop = lifecycle(serde_json::json!({
+            "event_name": "SubagentStop",
+            "agent_id": "child-1",
+            "status": "idle",
+            "task": "Explore",
+        }));
+        let agents = reduce_agent_states(&[start, stop]);
+        let child = agents
+            .iter()
+            .find(|a| a.agent_id == "child-1")
+            .expect("child row");
+        assert_eq!(child.parent_agent_id.as_deref(), Some("sess-root"));
+        assert_eq!(child.status, AgentStatus::Idle);
+    }
+
+    #[test]
+    fn turn_started_tracks_prompt_never_stop() {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let lifecycle = |params: serde_json::Value| {
+            EventEnvelope::new(
+                workspace.clone(),
+                "session",
+                "claude",
+                "agent-hook",
+                "agent.lifecycle",
+                params,
+            )
+        };
+        let start =
+            lifecycle(serde_json::json!({ "event_name": "SessionStart", "agent_id": "s1", "status": "idle" }));
+        let prompt = lifecycle(
+            serde_json::json!({ "event_name": "UserPromptSubmit", "agent_id": "s1", "status": "running" }),
+        );
+        let prompt_ts = prompt.timestamp;
+        let stop =
+            lifecycle(serde_json::json!({ "event_name": "Stop", "agent_id": "s1", "status": "success" }));
+        let agents = reduce_agent_states(&[start, prompt, stop]);
+        // The boundary is the prompt; the later Stop must not advance it (that is
+        // what keeps a finished child visible until the *next* prompt).
+        assert_eq!(agents[0].turn_started_at, Some(prompt_ts));
+    }
+
+    #[test]
+    fn sub_agent_nests_under_parent_and_never_top_level() {
+        let parent = agent(
+            "claude",
+            "sess-root",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            100,
+        );
+        let child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
+        // Only the parent built a row; the paneless child attaches onto it.
+        let mut rows = vec![row_from_agent(&parent)];
+        attach_sub_agents(&mut rows, &[parent.clone(), child]);
+        assert_eq!(rows.len(), 1, "the child is never its own top-level row");
+        assert_eq!(rows[0].sub_agents.len(), 1);
+        assert_eq!(rows[0].sub_agents[0].id, "child-1");
+        assert_eq!(rows[0].sub_agents[0].name, "Explore");
+    }
+
+    #[test]
+    fn orphan_sub_agent_is_dropped() {
+        let child = child_state("missing-parent", "child-1", AgentStatus::Running, 5);
+        let mut rows: Vec<SidebarRow> = Vec::new();
+        attach_sub_agents(&mut rows, &[child]);
+        assert!(rows.is_empty(), "a child with no parent row never renders");
+    }
+
+    #[test]
+    fn finished_sub_agent_drops_once_parent_starts_next_turn() {
+        let now = Timestamp::now();
+        let mut parent = agent(
+            "claude",
+            "sess-root",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            100,
+        );
+        // The current turn began AFTER the child finished — a past-turn child.
+        parent.turn_started_at = Some(Timestamp::from_second(now.as_second() - 30).unwrap());
+        let child = child_state("sess-root", "child-1", AgentStatus::Idle, 60);
+        let mut rows = vec![row_from_agent(&parent)];
+        attach_sub_agents(&mut rows, &[parent.clone(), child]);
+        assert!(rows[0].sub_agents.is_empty());
+    }
+
+    #[test]
+    fn running_sub_agent_survives_parent_turn_boundary() {
+        let now = Timestamp::now();
+        let mut parent = agent(
+            "claude",
+            "sess-root",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            100,
+        );
+        parent.turn_started_at = Some(Timestamp::from_second(now.as_second() - 30).unwrap());
+        let child = child_state("sess-root", "child-1", AgentStatus::Running, 60);
+        let mut rows = vec![row_from_agent(&parent)];
+        attach_sub_agents(&mut rows, &[parent.clone(), child]);
+        assert_eq!(rows[0].sub_agents.len(), 1, "a running child is always kept");
+    }
+
+    #[test]
+    fn finished_sub_agent_of_current_turn_is_kept() {
+        let now = Timestamp::now();
+        let mut parent = agent(
+            "claude",
+            "sess-root",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            100,
+        );
+        // The turn began BEFORE the child finished — same-turn, so it stays.
+        parent.turn_started_at = Some(Timestamp::from_second(now.as_second() - 90).unwrap());
+        let child = child_state("sess-root", "child-1", AgentStatus::Idle, 30);
+        let mut rows = vec![row_from_agent(&parent)];
+        attach_sub_agents(&mut rows, &[parent.clone(), child]);
+        assert_eq!(rows[0].sub_agents.len(), 1);
+    }
+
+    #[test]
+    fn sub_agents_sort_running_before_finished() {
+        let parent = agent(
+            "claude",
+            "sess-root",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            100,
+        );
+        // The idle child is more recent, the running child older — running leads.
+        let idle = child_state("sess-root", "c-idle", AgentStatus::Idle, 2);
+        let running = child_state("sess-root", "c-run", AgentStatus::Running, 30);
+        let mut rows = vec![row_from_agent(&parent)];
+        attach_sub_agents(&mut rows, &[parent.clone(), idle, running]);
+        let ids: Vec<&str> = rows[0].sub_agents.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["c-run", "c-idle"]);
+    }
+
+    #[test]
+    fn reaper_never_drops_a_subagent() {
+        let now = Timestamp::now();
+        let parent = agent(
+            "claude",
+            "sess-root",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            0,
+        );
+        // A pidless idle child well past the ghost TTL, plus a same-type sibling
+        // that would "supersede" it under the root rule — both survive, because
+        // children are exempt and leave only when the parent does.
+        let old_child = child_state(
+            "sess-root",
+            "child-old",
+            AgentStatus::Idle,
+            GHOST_SESSION_TTL_SECS + 600,
+        );
+        let new_child = child_state("sess-root", "child-new", AgentStatus::Running, 5);
+        assert_eq!(
+            reap_survivors(now, vec![parent, old_child, new_child]),
+            vec![
+                "child-new".to_owned(),
+                "child-old".to_owned(),
+                "sess-root".to_owned()
+            ],
+        );
     }
 
     #[test]

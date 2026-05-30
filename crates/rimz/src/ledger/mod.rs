@@ -52,7 +52,7 @@ pub use crate::ledger::paths::{RuntimePaths, StatePaths};
 pub use crate::ledger::runtime::{RuntimeProjection, RuntimeScope};
 pub use crate::ledger::snapshot::{
     SidebarActivity, SidebarOwnView, SidebarResolverState, SidebarRow, SidebarRowKind,
-    SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
+    SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind,
 };
 pub use crate::ledger::workspace_record::WorkspaceRecord;
 

@@ -139,6 +139,7 @@ mod tests {
             agent_pid: owner.as_ref().map(|owner| owner.pid),
             agent_process_start: owner.as_ref().and_then(|owner| owner.process_start.clone()),
             runtime_owner: owner,
+            parent_agent_id: None,
             worktree_path: None,
             worktree_branch: None,
             task: None,
@@ -149,6 +150,7 @@ mod tests {
             todo_done: None,
             todo_total: None,
             context: None,
+            turn_started_at: None,
             last_seen: Timestamp::UNIX_EPOCH,
             last_activity: Timestamp::UNIX_EPOCH,
         }

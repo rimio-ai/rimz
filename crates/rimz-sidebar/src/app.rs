@@ -1319,6 +1319,7 @@ mod tests {
                     last_activity: Timestamp::now(),
                     resolver: None,
                     options: Vec::new(),
+                    sub_agents: Vec::new(),
                 })
                 .collect(),
             hidden_count: 0,
@@ -1352,6 +1353,7 @@ mod tests {
             last_activity: Timestamp::now(),
             resolver: None,
             options: Vec::new(),
+            sub_agents: Vec::new(),
         };
         snapshot.worktree_groups = vec![rimz::SidebarWorktreeGroup {
             key: "/repo/main".to_owned(),
@@ -1398,6 +1400,7 @@ mod tests {
             last_activity: Timestamp::now(),
             resolver: None,
             options: Vec::new(),
+            sub_agents: Vec::new(),
         };
         let process = rimz::SidebarRow {
             row_kind: rimz::SidebarRowKind::Process,
@@ -1421,6 +1424,7 @@ mod tests {
             last_activity: Timestamp::now(),
             resolver: None,
             options: Vec::new(),
+            sub_agents: Vec::new(),
         };
         snapshot.worktree_groups = vec![rimz::SidebarWorktreeGroup {
             key: "/repo/main".to_owned(),

@@ -34,7 +34,7 @@ pub use crate::ids::{
 pub use crate::ledger::{
     Ledger, RuntimePaths, RuntimeProjection, RuntimeScope, SidebarActivity, SidebarOwnView,
     SidebarResolverState, SidebarRow, SidebarRowKind, SidebarSnapshot, SidebarStatusCount,
-    SidebarWorktreeGroup, SidebarWorktreeKind, StatePaths, WorkspaceRecord,
+    SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, StatePaths, WorkspaceRecord,
 };
 pub use crate::schema::event::EventEnvelope;
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

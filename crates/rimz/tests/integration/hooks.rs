@@ -451,6 +451,9 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
     assert_eq!(agents[0]["status"], "running");
     assert_eq!(agents[0]["permission_posture"], "auto");
     assert_eq!(agents[0]["task"], "review");
+    // The child keys off `agent_id`; the payload's `session_id` is captured as
+    // the parent root so the sidebar can nest the child under it.
+    assert_eq!(agents[0]["parent_agent_id"], "sess-codex-parent");
 
     let stop_payload = serde_json::to_string(&json!({
         "hook_event_name": "SubagentStop",
@@ -466,7 +469,10 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
     let parsed = env.snapshot_json();
     assert_eq!(parsed["agents"][0]["agent_id"], "child-thread-1");
     assert_eq!(parsed["agents"][0]["status"], "idle");
-    assert!(parsed["agents"][0]["task"].is_null());
+    // The type label and the parent link both persist past stop so a finished
+    // child stays labeled and nested while it lingers in the parent's list.
+    assert_eq!(parsed["agents"][0]["task"], "review");
+    assert_eq!(parsed["agents"][0]["parent_agent_id"], "sess-codex-parent");
 }
 
 #[test]

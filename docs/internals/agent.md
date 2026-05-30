@@ -64,6 +64,7 @@ Each field, where it comes from, and its **lifetime** — the rule the reducer f
 | Field                               | Meaning                           | Source (event · payload field)                                    | Lifetime      |
 | ----------------------------------- | --------------------------------- | ----------------------------------------------------------------- | ------------- |
 | `agent_id`                          | session/instance key              | `session_id` (Claude); `agent_id`→`session_id` (Codex)            | identity      |
+| `parent_agent_id`                   | root session of a subagent        | `SubagentStart`/`SubagentStop` · `session_id` (both agents)       | identity      |
 | `kind`                              | `claude` / `codex`                | `--source` on the hook                                            | identity      |
 | `status`                            | 5-value rollup (below)            | derived from `event_name` (§ state machine)                       | activity      |
 | `permission_posture`                | `default`/`plan`/`auto`/`yolo`/`unknown` (`plan` → thinking) | every lifecycle event + per-tool heartbeat · `permission_mode`/`approval_policy`, last sample wins (§ Plan mode as a sticky posture) | carry-forward |
@@ -211,6 +212,8 @@ Native event → unified mapping:
 | ----------------------------- | ------------- | ----------------------------------- | ------------------------------------------- |
 | `SessionStart`                | lifecycle     | `idle`                              | posture, model, context/tokens (transcript) |
 | `UserPromptSubmit`            | lifecycle     | `running`                           | `task` = prompt; refresh context/tokens     |
+| `SubagentStart`               | lifecycle     | `running`                           | keyed by child `agent_id`; `parent_agent_id` = `session_id`; `task` = `subagent_type`/`description` |
+| `SubagentStop`                | lifecycle     | `idle`                              | child row; keeps `task` (type label) and parent link; clear plan mode |
 | `Stop`                        | lifecycle     | `success` (error → `failed`; in-flight `background_tasks` → `running`) | `task` = background work else clear; clear plan mode unless still `plan`; refresh context/tokens |
 | `SessionEnd`                  | lifecycle     | removed                             | —                                           |
 | `Notification`                | lifecycle     | none (silent)                       | —                                           |
@@ -231,6 +234,8 @@ Decision shapes — Claude requires `hookSpecificOutput`:
 ```
 
 `ExitPlanMode` and `AskUserQuestion` require `updatedInput`. The Claude adapter sets `hook_cap = 120s` (upstream cap ~125s; Rimz leaves a 5s margin so the bridge times out before the agent kills the hook). The exact value is `CLAUDE_HOOK_CAP` in [`claude.rs`](../../crates/rimz/src/agents/claude.rs). Install merges non-destructively into `~/.claude/settings.json` under per-matcher `_rimz_managed` markers; `PreToolUse` installs as a single broad hook whose blocking sub-events self-classify from `tool_name`, and only `PermissionRequest` carries `_rimz_sync = true` (see [The installed config shape](#the-installed-config-shape)).
+
+Claude Code routes `Task`-tool children through `SubagentStart`/`SubagentStop` (parity with Codex threads). A subagent event carries the child's `agent_id` and `agent_type`/`subagent_type`; Rimz keys those rows by the child `agent_id`, so the child gets its own `AgentState` rather than overwriting the parent session's, and captures the payload's `session_id` as `parent_agent_id`. The sidebar nests the child under its parent row (see [sidebar.md → Sub-agent lists](./sidebar.md#sub-agent-lists)); the child's type rides `task` on both events so a finished child stays labeled while it lingers in the parent's expanded list.
 
 ## Appendix — Codex
 
@@ -256,7 +261,7 @@ Decision shape — Codex permission hooks emit only `hookSpecificOutput.decision
 
 Never emit `updatedInput`, `updatedPermissions`, or `interrupt` for Codex permission hooks — those fields belong to other Codex hook types and corrupt the permission decision. Codex's hook cap is shorter than Claude's (`CODEX_HOOK_CAP`); chain budgets must account for it. Install writes inline `[[hooks.Event]]` tables in `~/.codex/config.toml` with the same `--event`-free command and substring-based reclaim as Claude (see [The installed config shape](#the-installed-config-shape)); the legacy `[hooks.rimz]` table is ignored by Codex and exists only as uninstall cleanup.
 
-Codex 0.134 routes thread-spawned subagents through `SubagentStart`/`SubagentStop` instead of the root `SessionStart`/`Stop` lifecycle. Hooks fired inside a subagent carry a child `agent_id` and `agent_type`; Rimz keys those rows by the child `agent_id`, so a pending subagent permission request replaces the subagent row rather than duplicating the parent session.
+Codex 0.134 routes thread-spawned subagents through `SubagentStart`/`SubagentStop` instead of the root `SessionStart`/`Stop` lifecycle. Hooks fired inside a subagent carry a child `agent_id` and `agent_type`; Rimz keys those rows by the child `agent_id`, so a pending subagent permission request replaces the subagent row rather than duplicating the parent session. The payload's `session_id` is the parent root, captured as `parent_agent_id` so the sidebar nests the child under its parent (see [sidebar.md → Sub-agent lists](./sidebar.md#sub-agent-lists)).
 
 ### App-server enrichment
 

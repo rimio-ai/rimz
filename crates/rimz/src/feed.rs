@@ -575,6 +575,12 @@ pub struct AgentState {
     pub agent_process_start: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_owner: Option<RuntimeOwner>,
+    /// The root session id this agent is a *child* of, set only when a
+    /// `SubagentStart` established it (identity, carried forward). `None` for a
+    /// root agent. The sidebar nests a child under its parent row by
+    /// `(kind, parent_agent_id)` and never renders a child as a top-level row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_agent_id: Option<String>,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
     pub task: Option<String>,
@@ -604,6 +610,14 @@ pub struct AgentState {
     /// Same enrich-only discipline as `context_pct`: display, never routing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<crate::agents::context::AgentContext>,
+    /// When this agent's current turn began — the timestamp of its latest
+    /// `UserPromptSubmit` (carried forward; `None` until the first prompt).
+    /// Unlike `last_seen` it does *not* advance on `Stop`, so it marks the
+    /// "next prompt" boundary the sidebar uses to clear a finished subagent:
+    /// a completed child older than its parent's `turn_started_at` belongs to a
+    /// past turn and drops from the parent's expanded list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_started_at: Option<Timestamp>,
     pub last_seen: Timestamp,
     pub last_activity: Timestamp,
 }
