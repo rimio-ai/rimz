@@ -169,17 +169,18 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     request_fetch(&request_tx, &mut in_flight, &mut refetch_pending, false);
                 }
             }
-            // The poll timeout. While a running agent animates, advance the spin
-            // frame on the current snapshot but refetch every `ACTIVE_REFRESH` so
-            // its $/tokens track in near-real-time; an idle room refetches only
-            // once per `tick` to catch pane/git drift that fires no ledger delta.
+            // The poll timeout drives two decoupled layers. Render: while a
+            // running agent animates, advance the spin frame on the cached
+            // snapshot — pure in-process redraw, never gated on fetch state, so
+            // the spin stays smooth at `ANIMATION_FRAME` regardless of fetch
+            // latency. Data: a latency-tolerant backstop refetch, fired only when
+            // nothing has refreshed data for a full `tick`. Ledger deltas (which
+            // include the statusline `$`/token push) are the primary data
+            // channel; this backstop only catches pane/git drift that fires no
+            // delta. `request_fetch` is a no-op while a fetch is in flight, so the
+            // backstop can neither double-fire nor stall.
             Wakeup::Tick => {
-                let refresh_after = if animating {
-                    ACTIVE_REFRESH.min(tick)
-                } else {
-                    tick
-                };
-                if animating && fetched_at.elapsed() < refresh_after {
+                if animating {
                     ui.animation_phase = wall_clock_phase(anim_start);
                     render::draw_to_terminal_with_ui(
                         &mut terminal,
@@ -187,7 +188,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                         health.alert.as_ref(),
                         &ui,
                     )?;
-                } else {
+                }
+                if fetched_at.elapsed() >= tick {
                     request_fetch(&request_tx, &mut in_flight, &mut refetch_pending, false);
                 }
             }
@@ -478,18 +480,13 @@ fn next_health(previous: &Health, failure: Option<String>) -> Health {
     }
 }
 
-/// Animation tick: how often a running agent's head advances a spin frame.
-/// Clamped against the data tick so a slow `tick_seconds` never stutters, and
-/// only used while [`render::has_live_animation`] reports something to move.
-const ANIMATION_FRAME: Duration = Duration::from_millis(120);
-
-/// How often to refetch while an agent is actively working — far tighter than
-/// the idle data tick so its `$`/tokens/context climb in near-real-time. The
-/// fetch is off-thread and request-coalesced, and the heavy ledger+`list-panes`
-/// work is cache-amortized while the cost sidecar is re-read fresh each time, so
-/// this cadence costs little and never stalls the spin. An idle room ignores it
-/// and keeps the slow `tick`.
-const ACTIVE_REFRESH: Duration = Duration::from_millis(500);
+/// Animation tick: how often a running agent's head advances a spin frame. Pure
+/// in-process redraw from the cached snapshot — it never forks a fetch — so the
+/// spin layer is decoupled from the data layer and stays smooth regardless of
+/// fetch latency. Clamped against the data tick so a slow `tick_seconds` never
+/// stutters, and only used while [`render::has_live_animation`] reports
+/// something to move.
+const ANIMATION_FRAME: Duration = Duration::from_millis(100);
 
 /// The animation frame index for `now`, derived from elapsed wall-clock since
 /// the serve loop's monotonic base. Every redraw path sets the phase from this,

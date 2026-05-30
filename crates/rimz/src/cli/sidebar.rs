@@ -454,7 +454,13 @@ fn cached_base_or_produce(
     }
 }
 
-const DIFF_STATS_TTL: Duration = Duration::from_secs(2);
+/// How long a worktree's git diff-stats stay cached before the four sequential
+/// `git` forks behind them are re-run. A working-tree edit fires no ledger
+/// delta, so this column is never push-refreshed — it rides this TTL plus the
+/// sidebar's backstop poll. Held wide to keep the git-fork rate low across a
+/// multi-worktree fleet; the cost the column buys is freshness lag, which the
+/// renderer's latency-tolerant data layer is built to absorb.
+const DIFF_STATS_TTL: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct DiffStats {
