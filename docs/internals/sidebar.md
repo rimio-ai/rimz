@@ -88,13 +88,15 @@ With nothing waiting or failed the attention line is omitted and the body is nev
 
 ## State access
 
-On load and tick, the renderer fetches the snapshot through the CLI:
+Data access splits by role (see [performance.md → Principles](./performance.md#principles)). The elected **producer** (the eldest live renderer) forks the snapshot through the CLI — the one `list-panes` + git round-trip per workspace — and publishes the shared cache:
 
 ```text
 rimz sidebar snapshot --workspace-id <id> --exclude-pane-id <own>
 ```
 
-It refreshes its own liveness heartbeat **in process** — no `rimz` fork per tick — through the `rimz::sidebar::write_heartbeat` liveness helper (a runtime-file write, never a ledger-writer import). The renderer binds `sock/sidebar.<instance_id>.sock` and the heartbeat carries:
+Every other per-tab renderer is a **consumer**: it reads that published frame **in process** through `rimz::sidebar::snapshot::read_published_snapshot`, folding only its own-pane exclusion — no subprocess fork, no `list-panes`/git, no ledger lock. The `rimz sidebar snapshot --no-produce` CLI path (the plugin rail's read) shares the same implementation. The producer's first publish is what a fresh consumer waits on; until then it holds its last good frame.
+
+The renderer refreshes its own liveness heartbeat **in process** — no `rimz` fork per tick — through the `rimz::sidebar::write_heartbeat` liveness helper (a runtime-file write, never a ledger-writer import). The renderer binds `sock/sidebar.<instance_id>.sock` and the heartbeat carries:
 
 - workspace ID,
 - session name,

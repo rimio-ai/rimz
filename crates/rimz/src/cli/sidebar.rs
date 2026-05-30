@@ -1,11 +1,9 @@
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Subcommand};
-use serde::{Deserialize, Serialize};
 
 use super::{GlobalFlags, open_ledger};
 use rimz::ids::{MuxName, WorkspaceId};
@@ -14,6 +12,11 @@ use rimz::ledger::paths::env_path;
 use rimz::ledger::single_flight::{self, Coalesced};
 use rimz::ledger::workspace_record;
 use rimz::mux::PaneListOptions;
+use rimz::sidebar::snapshot::{
+    DiffStats, DiffStatsCache, DiffStatsCacheEntry, SNAPSHOT_CACHE_TTL, SnapshotCache,
+    WorktreeRootsCache, enrich_consumer, needed_worktree_paths, project_diff_stats,
+    read_diff_stats_cache, read_published_snapshot, read_snapshot_cache, unix_now_ms,
+};
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, RuntimePaths, StatePaths};
 
@@ -92,29 +95,66 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 .map(rimz::ids::PaneId::parse)
                 .transpose()?;
 
-            // Resolve the ledger rollup and the live pane list. The heavy work
-            // (ledger projection + `list-panes`) is identical for every sidebar
-            // pinned to one session, so it rides a short-lived single-flight
-            // shared cache: the first sidebar to miss produces and writes it,
-            // and the rest within the coalescing window read it back instead of
-            // each spawning their own `list-panes` against the mux server. Only
-            // the cheap per-sidebar projection (own-pane exclusion + own-view)
-            // stays local.
+            let runtime = ledger.runtime_paths();
+            let emit = |snapshot: &rimz::SidebarSnapshot| -> Result<()> {
+                if json {
+                    let rendered = serde_json::to_string_pretty(snapshot)?;
+                    #[expect(clippy::print_stdout, reason = "json emitter for sidebar")]
+                    {
+                        println!("{rendered}");
+                    }
+                } else {
+                    let tally = |status| {
+                        snapshot
+                            .worktree_groups
+                            .iter()
+                            .flat_map(|group| &group.status_counts)
+                            .filter(|count| count.status == status)
+                            .map(|count| count.count)
+                            .sum::<usize>()
+                    };
+                    let waiting = tally(rimz::feed::AgentStatus::Waiting);
+                    let failed = tally(rimz::feed::AgentStatus::Failed);
+                    #[expect(clippy::print_stdout, reason = "human summary")]
+                    {
+                        println!("Workspace:       {}", snapshot.display_name);
+                        println!("Worktree groups: {}", snapshot.worktree_groups.len());
+                        println!("Waiting:         {waiting}");
+                        println!("Failed:          {failed}");
+                    }
+                }
+                Ok(())
+            };
+
+            // Resolve the base and emit. The heavy work (ledger projection +
+            // `list-panes`) is the producer's: one elected sidebar per workspace
+            // forks it and publishes the shared cache. Every other per-tab
+            // renderer is a consumer — it reads that published frame in process,
+            // applying only its own-pane exclusion, never forking `list-panes`/git.
+            let fixture = pane_list_fixture()?;
+            if !produce
+                && fixture.is_none()
+                && let Some(session) = session_name.as_deref()
+            {
+                // Consumer: render the producer's published frame in process. A
+                // cold cache (no publish yet) falls back to the bare rollup with
+                // the same read-only enrichments until the next tick.
+                let snapshot = match read_published_snapshot(runtime, session, exclude.as_ref()) {
+                    Some(snapshot) => snapshot,
+                    None => enrich_consumer(ledger.snapshot()?, None, runtime, exclude.as_ref()),
+                };
+                return emit(&snapshot);
+            }
+
+            // Producer (or a deterministic test fixture, or a bare inspection
+            // call): resolve the base — ledger rollup plus live pane list,
+            // single-flighted across the fleet — then fold the git enrichments
+            // and publish the cache the consumers read.
             let (mut snapshot, panes): (rimz::SidebarSnapshot, Option<Vec<rimz::feed::PaneRef>>) =
-                match (&session_name, pane_list_fixture()?) {
+                match (&session_name, fixture) {
                     // A test fixture stands in for the mux; never touch the shared
                     // cache so deterministic tests can neither poison nor read it.
                     (Some(_), Some(fixture)) => (ledger.snapshot()?, Some(fixture)),
-                    // A non-producer renders from the producer's published
-                    // cache and never forks `list-panes`. A cold miss (the
-                    // producer has not published yet) shows the bare rollup
-                    // until the next tick — never a `list-panes` of its own.
-                    (Some(session), None) if !produce => {
-                        match read_published_base(&ledger, session) {
-                            Some((rollup, panes)) => (rollup, Some(panes)),
-                            None => (ledger.snapshot()?, None),
-                        }
-                    }
                     (Some(session), None) => {
                         let mux = mux
                             .or(globals.mux)
@@ -148,24 +188,21 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             // `external`. The git probe is cached under the diff-stats TTL and
             // runs on this fetch worker, never the render thread.
             if let Some(root) = snapshot.project_root.clone() {
-                let roots = project_worktree_roots(&root, ledger.runtime_paths(), produce);
+                let roots = project_worktree_roots(&root, runtime);
                 snapshot = snapshot.with_worktree_roots(roots);
             }
 
             // Fold each session's rich statusline context onto its agent state
-            // (read-only; the feed process is the writer). This enriches the
-            // snapshot's `agents[]` for `--json` consumers without changing row
-            // rendering. Both the context sidecar and the per-tool activity
-            // heartbeats fold only onto existing agents, so an empty room skips
-            // both directory scans entirely — the common idle case. Activity
-            // lands before the pane overlay so age, ranking, the ask-fold guard,
-            // and the stall window all see the truer per-tool value rather than
-            // the turn-grained event-log timestamp.
+            // (read-only; the feed process is the writer). Both the context
+            // sidecar and the per-tool activity heartbeats fold only onto
+            // existing agents, so an empty room skips both directory scans —
+            // the common idle case. Activity lands before the pane overlay so
+            // age, ranking, the ask-fold guard, and the stall window all see the
+            // truer per-tool value rather than the turn-grained event timestamp.
             if !snapshot.agents.is_empty() {
-                snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(
-                    ledger.runtime_paths(),
-                ));
-                let activity = rimz::agent_activity::read_all(ledger.runtime_paths());
+                snapshot =
+                    snapshot.with_agent_context(rimz::ledger::agent_context::read_all(runtime));
+                let activity = rimz::agent_activity::read_all(runtime);
                 snapshot = snapshot.with_agent_activity(&activity);
             }
 
@@ -175,15 +212,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 }
                 snapshot = snapshot.with_live_panes(panes, exclude.as_ref());
             }
-            // Hook-install state is environment, not ledger, so the reducer
-            // can't know it — fill it here so the renderer's first-run hint
-            // can point at `rimz hooks install` until a supported agent is
-            // wired. Unsupported adapters must not make the room look ready.
-            snapshot.agent_hooks_ready = rimz::agents::KNOWN_AGENTS.iter().any(|name| {
-                rimz::agents::integration_by_name(name)
-                    .map(|agent| agent.supports_hook_install() && agent.hooks_installed())
-                    .unwrap_or(false)
-            });
+            snapshot.agent_hooks_ready = rimz::sidebar::snapshot::agent_hooks_ready();
             // Fold the per-machine sidebar display preferences (row density) onto
             // the snapshot so the renderer can read them. Best-effort: a config
             // read failure falls back to the default (compact) rather than
@@ -192,34 +221,8 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             snapshot.sidebar = rimz::config::MachineConfig::load()
                 .map(|config| config.sidebar)
                 .unwrap_or_default();
-            enrich_worktree_groups(&mut snapshot, ledger.runtime_paths(), produce);
-            if json {
-                let rendered = serde_json::to_string_pretty(&snapshot)?;
-                #[expect(clippy::print_stdout, reason = "json emitter for sidebar")]
-                {
-                    println!("{rendered}");
-                }
-            } else {
-                let tally = |status| {
-                    snapshot
-                        .worktree_groups
-                        .iter()
-                        .flat_map(|group| &group.status_counts)
-                        .filter(|count| count.status == status)
-                        .map(|count| count.count)
-                        .sum::<usize>()
-                };
-                let waiting = tally(rimz::feed::AgentStatus::Waiting);
-                let failed = tally(rimz::feed::AgentStatus::Failed);
-                #[expect(clippy::print_stdout, reason = "human summary")]
-                {
-                    println!("Workspace:       {}", snapshot.display_name);
-                    println!("Worktree groups: {}", snapshot.worktree_groups.len());
-                    println!("Waiting:         {waiting}");
-                    println!("Failed:          {failed}");
-                }
-            }
-            Ok(())
+            enrich_worktree_groups(&mut snapshot, runtime);
+            emit(&snapshot)
         }
         SidebarSubcmd::Serve {
             workspace_id,
@@ -302,42 +305,10 @@ fn pane_list_fixture() -> Result<Option<Vec<rimz::feed::PaneRef>>> {
     Ok(Some(serde_json::from_slice(&bytes)?))
 }
 
-/// Coalescing window for the shared snapshot cache. Well under the default 2s
-/// data tick: when one ledger-delta wakeup wakes every sidebar at once, the
-/// first produces the heavy snapshot and the rest read it back within this
-/// window instead of each spawning their own `list-panes`. Short enough that
-/// live pane/git drift (which fires no ledger delta) still surfaces inside one
-/// tick — the same staleness budget the diff-stats cache already accepts.
-const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
-
 /// How a non-producing sidebar waits for the single producer's cache write
 /// before giving up and producing locally. ~200ms total (10 × 20ms).
 const SNAPSHOT_CACHE_WAIT_STEP: Duration = Duration::from_millis(20);
 const SNAPSHOT_CACHE_WAIT_STEPS: u32 = 10;
-
-/// Shared, single-flight snapshot cache. Holds the ledger rollup plus the live
-/// pane list keyed to one `(workspace, session)` — the per-workspace runtime
-/// root scopes the workspace; `session_name` guards against serving one
-/// session's panes (which the Zellij backend stamps from the requested session,
-/// not the true owner) to a sidebar pinned to another during a detach or
-/// session-rotation handoff. Per-sidebar exclusion and own-view are applied by
-/// the reader, so the cached snapshot is pre-pane-fold.
-#[derive(Serialize, Deserialize)]
-struct SnapshotCache {
-    produced_at_ms: u64,
-    session_name: String,
-    panes: Vec<rimz::feed::PaneRef>,
-    snapshot: rimz::SidebarSnapshot,
-}
-
-/// Read a same-session cache entry regardless of coalescing freshness. `None`
-/// when it is absent, for another session, or unreadable. Used as the
-/// hold-last-good fallback for a degraded fresh read.
-fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotCache> {
-    let bytes = std::fs::read(cache_path).ok()?;
-    let cache: SnapshotCache = serde_json::from_slice(&bytes).ok()?;
-    (cache.session_name == session).then_some(cache)
-}
 
 /// Return a same-session cache entry younger than [`SNAPSHOT_CACHE_TTL`], or
 /// `None` when it is absent, stale, for another session, or unreadable.
@@ -346,20 +317,6 @@ fn fresh_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotCach
     let fresh =
         unix_now_ms().saturating_sub(cache.produced_at_ms) <= SNAPSHOT_CACHE_TTL.as_millis() as u64;
     fresh.then_some(cache)
-}
-
-/// The producer's last published base (ledger rollup + live pane list) for a
-/// read-only (`--no-produce`) renderer. Returns the same-session cache
-/// regardless of freshness — a non-producer holds the last good frame rather
-/// than forking its own `list-panes`; the elder's next publish refreshes it.
-/// `None` when no same-session cache exists yet, so the caller falls back to the
-/// bare ledger rollup until the producer's first publish.
-fn read_published_base(
-    ledger: &Ledger,
-    session: &str,
-) -> Option<(rimz::SidebarSnapshot, Vec<rimz::feed::PaneRef>)> {
-    let cache_path = ledger.runtime_paths().root.join("snapshot.json");
-    read_snapshot_cache(&cache_path, session).map(|cache| (cache.snapshot, cache.panes))
 }
 
 /// Do the heavy work: project the ledger rollup and enumerate the session's
@@ -466,14 +423,6 @@ fn cached_base_or_produce(
     }
 }
 
-/// How long a worktree's git diff-stats stay cached before the four sequential
-/// `git` forks behind them are re-run. A working-tree edit fires no ledger
-/// delta, so this column is never push-refreshed — it rides this TTL plus the
-/// sidebar's backstop poll. Held wide to keep the git-fork rate low across a
-/// multi-worktree fleet; the cost the column buys is freshness lag, which the
-/// renderer's latency-tolerant data layer is built to absorb.
-const DIFF_STATS_TTL: Duration = Duration::from_secs(5);
-
 /// How a non-producing sidebar waits for the elected producer's diff-stats
 /// write before refreshing locally. ~300ms total (15 × 20ms) — wider than the
 /// snapshot's ~200ms because the git tail (up to four sequential forks per
@@ -481,138 +430,19 @@ const DIFF_STATS_TTL: Duration = Duration::from_secs(5);
 const DIFF_STATS_WAIT_STEP: Duration = Duration::from_millis(20);
 const DIFF_STATS_WAIT_STEPS: u32 = 15;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-struct DiffStats {
-    added: u32,
-    removed: u32,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-struct DiffStatsCache {
-    entries: BTreeMap<String, DiffStatsCacheEntry>,
-    /// The repo's worktree checkout roots, cached under the same TTL as the
-    /// per-worktree diff stats. The set changes only on `git worktree
-    /// add/remove`, so grouping reuses it across ticks instead of forking
-    /// `git worktree list` every snapshot.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    worktrees: Option<WorktreeRootsCache>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct WorktreeRootsCache {
-    refreshed_at_ms: u64,
-    roots: Vec<PathBuf>,
-}
-
-impl WorktreeRootsCache {
-    fn is_fresh(&self, now_ms: u64) -> bool {
-        now_ms.saturating_sub(self.refreshed_at_ms) <= DIFF_STATS_TTL.as_millis() as u64
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct DiffStatsCacheEntry {
-    refreshed_at_ms: u64,
-    added: Option<u32>,
-    removed: Option<u32>,
-    /// Live branch resolved from the worktree path, cached under the same TTL
-    /// as the diff stats so the group header tracks `git checkout` without a
-    /// git call every tick.
-    #[serde(default)]
-    branch: Option<String>,
-}
-
-impl DiffStatsCacheEntry {
-    fn new(refreshed_at_ms: u64, stats: Option<DiffStats>, branch: Option<String>) -> Self {
-        Self {
-            refreshed_at_ms,
-            added: stats.map(|stats| stats.added),
-            removed: stats.map(|stats| stats.removed),
-            branch,
-        }
-    }
-
-    fn is_fresh(&self, now_ms: u64) -> bool {
-        now_ms.saturating_sub(self.refreshed_at_ms) <= DIFF_STATS_TTL.as_millis() as u64
-    }
-
-    fn stats(&self) -> Option<DiffStats> {
-        self.added
-            .zip(self.removed)
-            .map(|(added, removed)| DiffStats { added, removed })
-    }
-}
-
-/// Project live git facts onto each worktree group: the diff stats shown on
-/// the header and the live branch label. Both are properties of the worktree
-/// *path*, not of any one agent, so they belong to the group — which also
-/// settles the shared-worktree "whose branch?" ambiguity. The live branch
-/// overrides the reducer's pinned label so the header tracks `git checkout` in
-/// the linked pane.
-fn enrich_worktree_groups(
-    snapshot: &mut rimz::SidebarSnapshot,
-    runtime: &rimz::RuntimePaths,
-    produce: bool,
-) {
+/// Refresh the producer's per-worktree git facts, then project them onto the
+/// snapshot's worktree groups. The git forks are the producer's job — a
+/// consumer reads the published frame in process via
+/// [`rimz::sidebar::snapshot::read_published_snapshot`] and never reaches here.
+fn enrich_worktree_groups(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::RuntimePaths) {
     let cache_path = runtime.root.join("diff-stats.json");
     let now_ms = unix_now_ms();
-
-    // The worktree paths this snapshot needs git facts for: a `Worktree`-kind
-    // group whose recovered path is a live directory. De-duplicated so two
-    // branch-split groups for one dir share a single git read — the cache key
-    // is the bare path.
-    let mut needed: Vec<String> = Vec::new();
-    for group in &snapshot.worktree_groups {
-        if group.kind != rimz::SidebarWorktreeKind::Worktree {
-            continue;
-        }
-        let Some(path) = worktree_group_path(group) else {
-            continue;
-        };
-        if Path::new(path).is_dir() && !needed.iter().any(|known| known == path) {
-            needed.push(path.to_owned());
-        }
-    }
-
-    // Refresh the diff stats those paths need — single-flighted across the
-    // fleet — then project the resulting cache onto the groups. A non-producer
-    // skips the git forks entirely and projects whatever the elder last
-    // published.
-    let cache = refresh_diff_stats(&cache_path, runtime, &needed, now_ms, produce);
-    for group in &mut snapshot.worktree_groups {
-        if group.kind != rimz::SidebarWorktreeKind::Worktree {
-            continue;
-        }
-        let Some(path) = worktree_group_path(group).map(ToOwned::to_owned) else {
-            continue;
-        };
-        // Only paths resolved this tick (live dirs) carry stats, so a stale
-        // leftover entry for a now-missing worktree never resurfaces.
-        if !needed.iter().any(|known| known == &path) {
-            continue;
-        }
-        let Some(entry) = cache.entries.get(&path).cloned() else {
-            continue;
-        };
-        if let Some(stats) = entry.stats() {
-            group.diff_added = Some(stats.added);
-            group.diff_removed = Some(stats.removed);
-        }
-        if let Some(branch) = entry.branch.filter(|branch| !branch.is_empty()) {
-            group.label = branch;
-        }
-    }
-}
-
-/// The worktree path a group's rows share, if any. The group key may carry a
-/// branch suffix (a path that holds more than one branch), so the bare path is
-/// recovered from the rows — every row in a group shares it.
-fn worktree_group_path(group: &rimz::SidebarWorktreeGroup) -> Option<&str> {
-    group
-        .rows
-        .iter()
-        .find_map(|row| row.worktree_path.as_deref())
-        .filter(|path| !path.is_empty())
+    // The producer refreshes the live worktrees' diff stats (single-flighted,
+    // git forks parallel across worktrees), then the shared projection folds the
+    // resulting cache onto the groups — the same projection a consumer applies.
+    let needed = needed_worktree_paths(snapshot);
+    let cache = refresh_diff_stats(&cache_path, runtime, &needed, now_ms);
+    project_diff_stats(snapshot, &cache);
 }
 
 /// Refresh the diff stats for `needed` worktree paths and return the cache map
@@ -627,7 +457,6 @@ fn refresh_diff_stats(
     runtime: &rimz::RuntimePaths,
     needed: &[String],
     now_ms: u64,
-    produce: bool,
 ) -> DiffStatsCache {
     let stale = |cache: &DiffStatsCache| -> Vec<String> {
         needed
@@ -643,11 +472,6 @@ fn refresh_diff_stats(
     };
 
     let cache = read_diff_stats_cache(cache_path);
-    // A non-producer never forks git: it projects whatever the elder published,
-    // even when stale. The elder's next refresh heals the column.
-    if !produce {
-        return cache;
-    }
     // Fast path: nothing stale — no lock, no git, as the all-fresh tick already
     // behaved before the single-flight.
     if stale(&cache).is_empty() {
@@ -734,13 +558,6 @@ fn refresh_entry(path: &str, now_ms: u64) -> DiffStatsCacheEntry {
     )
 }
 
-fn read_diff_stats_cache(path: &Path) -> DiffStatsCache {
-    let Ok(bytes) = std::fs::read(path) else {
-        return DiffStatsCache::default();
-    };
-    serde_json::from_slice(&bytes).unwrap_or_default()
-}
-
 fn worktree_branch(worktree: &Path) -> Option<String> {
     let branch = git_line(worktree, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     // A detached HEAD has no branch to track — keep the reducer's path-basename
@@ -799,22 +616,12 @@ fn trunk_ref(worktree: &Path) -> Option<String> {
 /// worktree add/remove`, so re-forking `git worktree list` every tick would be
 /// pure overhead. Empty on a non-git project or a git probe failure, which
 /// leaves the reducer's `project_root` prefix test to stand alone.
-fn project_worktree_roots(
-    project_root: &Path,
-    runtime: &RuntimePaths,
-    produce: bool,
-) -> Vec<PathBuf> {
+fn project_worktree_roots(project_root: &Path, runtime: &RuntimePaths) -> Vec<PathBuf> {
     let cache_path = runtime.root.join("diff-stats.json");
     let mut cache = read_diff_stats_cache(&cache_path);
     let now_ms = unix_now_ms();
     if let Some(cached) = cache.worktrees.as_ref().filter(|w| w.is_fresh(now_ms)) {
         return cached.roots.clone();
-    }
-    // A non-producer never forks `git worktree list`: it reuses whatever roots
-    // the elder last published (even stale), and an empty set on a cold start
-    // simply leaves the reducer's project-root prefix test to stand alone.
-    if !produce {
-        return cache.worktrees.map(|w| w.roots).unwrap_or_default();
     }
     let roots = list_worktree_roots(project_root);
     cache.worktrees = Some(WorktreeRootsCache {
@@ -883,14 +690,6 @@ fn parse_numstat_cell(cell: Option<&str>) -> u32 {
     cell.and_then(|value| value.parse::<u64>().ok())
         .map(|value| value.min(u64::from(u32::MAX)) as u32)
         .unwrap_or(0)
-}
-
-fn unix_now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .min(u128::from(u64::MAX)) as u64
 }
 
 pub(crate) fn sidebar_renderer_program() -> PathBuf {
@@ -1150,29 +949,6 @@ mod tests {
         assert!(list_worktree_roots(plain.path()).is_empty());
     }
 
-    #[test]
-    fn diff_stats_cache_entry_expires_after_ttl() {
-        let entry = DiffStatsCacheEntry::new(
-            1_000,
-            Some(DiffStats {
-                added: 2,
-                removed: 1,
-            }),
-            Some("feature-migration".to_owned()),
-        );
-
-        assert!(entry.is_fresh(1_000 + DIFF_STATS_TTL.as_millis() as u64));
-        assert!(!entry.is_fresh(1_001 + DIFF_STATS_TTL.as_millis() as u64));
-        assert_eq!(
-            entry.stats(),
-            Some(DiffStats {
-                added: 2,
-                removed: 1,
-            })
-        );
-        assert_eq!(entry.branch.as_deref(), Some("feature-migration"));
-    }
-
     fn write_snapshot_cache(path: &Path, session: &str, produced_at_ms: u64) {
         let ws = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let cache = SnapshotCache {
@@ -1239,40 +1015,5 @@ mod tests {
             read_snapshot_cache(&path, "rimz-query-engine").is_some(),
             "the consumer's read serves the stale entry as last-good"
         );
-    }
-
-    #[test]
-    fn read_only_diff_stats_forks_no_git_and_leaves_cache_intact() {
-        // A non-producer projects whatever the elder last published and never
-        // forks git: a stale/missing needed path adds no entry and mutates
-        // nothing, so the read-only path can never spawn a `git` per worktree.
-        let dir = tempfile::tempdir().unwrap();
-        let workspace_id = WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace_id, dir.path()).expect("runtime");
-        runtime.ensure_dirs().expect("runtime dirs");
-        let cache_path = runtime.root.join("diff-stats.json");
-
-        let now = unix_now_ms();
-        let mut seed = DiffStatsCache::default();
-        seed.entries.insert(
-            "/repo/wt".to_owned(),
-            DiffStatsCacheEntry::new(
-                now,
-                Some(DiffStats {
-                    added: 7,
-                    removed: 2,
-                }),
-                Some("feature-migration".to_owned()),
-            ),
-        );
-        atomic::write_temp_then_rename_cache(&cache_path, &seed).expect("seed diff-stats cache");
-
-        // The consumer needs a path the cache does not hold (stale on its side):
-        // read-only must return the on-disk cache verbatim, never producing.
-        let needed = vec!["/repo/other".to_owned()];
-        let got = refresh_diff_stats(&cache_path, &runtime, &needed, now, false);
-        assert_eq!(got.entries.len(), 1, "read-only adds no produced entry");
-        assert!(got.entries.contains_key("/repo/wt"));
-        assert!(!got.entries.contains_key("/repo/other"));
     }
 }

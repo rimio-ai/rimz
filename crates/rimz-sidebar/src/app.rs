@@ -685,13 +685,17 @@ pub struct RenderState {
     pub last_snapshot: Option<SidebarSnapshot>,
 }
 
+/// Fork `rimz sidebar snapshot` for the producer: it resolves the workspace,
+/// runs `list-panes` and git, and publishes the shared cache the consumers read.
+/// Off the render loop (fetch worker thread), so the round-trip never stalls
+/// animation. Consumers do not call this — they read the published cache in
+/// process via [`rimz::sidebar::snapshot::read_published_snapshot`].
 fn fetch_snapshot_for(
     rimz_bin: &Path,
     workspace_id: &WorkspaceId,
     mux: Option<MuxName>,
     session_name: Option<&str>,
     exclude_pane_id: Option<PaneId>,
-    produce: bool,
 ) -> Result<SidebarSnapshot> {
     let mut command = Command::new(rimz_bin);
     command
@@ -705,11 +709,6 @@ fn fetch_snapshot_for(
     }
     if let Some(pane_id) = exclude_pane_id {
         command.args(["--exclude-pane-id", pane_id.as_str()]);
-    }
-    // A non-producer renders read-only from the elder's published cache, never
-    // forking its own `list-panes`/git.
-    if !produce {
-        command.arg("--no-produce");
     }
     command.arg("--json");
     let output = command
@@ -735,32 +734,40 @@ struct FetchOutcome {
 }
 
 /// Write the heartbeat and fetch the snapshot. Runs on the fetch worker thread
-/// (and once inline for the first frame), keeping the `rimz sidebar snapshot`
-/// subprocess — workspace resolve + `list-panes` + git — off the render/input
-/// loop so animation never stalls on it.
+/// (and once inline for the first frame), keeping the producer's `list-panes` +
+/// git round-trip off the render/input loop so animation never stalls on it.
 ///
 /// One producer per workspace, one renderer per tab. The eldest live instance
-/// is the producer: it forks `list-panes`/git and publishes the shared cache.
-/// Every younger instance is a read-only consumer — it renders its own pane
-/// from the elder's published cache (`--no-produce`) rather than exiting, so a
-/// per-tab renderer never goes dark, while the mux/git round-trip is paid once
-/// per workspace. The launch lock and orphan sweep remain the duplicate guard;
-/// since only the elder produces, even a stray duplicate costs one read, not a
-/// second `list-panes`.
+/// is the producer: it forks `rimz sidebar snapshot` (`list-panes`/git) and
+/// publishes the shared cache. Every younger instance is a consumer — it reads
+/// that published frame **in process** ([`rimz::sidebar::snapshot::read_published_snapshot`]),
+/// folding only its own-pane exclusion, so it never forks a subprocess, never
+/// runs `list-panes`/git, and never exits — a per-tab renderer stays alive and
+/// paints. The mux/git round-trip is paid once per workspace; a consumer with no
+/// published frame yet reports a soft miss so the gate holds its last good frame.
 fn run_fetch(config: &ServeConfig, runtime: &RuntimePaths, socket_path: &Path) -> FetchOutcome {
     let heartbeat_err = write_heartbeat(config, runtime, socket_path)
         .err()
         .map(|err| err.to_string());
     let is_producer = !rimz::sidebar::elder_sidebar_present(runtime, &config.instance_id);
-    let snapshot = fetch_snapshot_for(
-        &resolve_snapshot_bin(&config.rimz_bin),
-        &config.workspace_id,
-        Some(config.mux),
-        Some(&config.session_name),
-        own_pane_id(config.mux),
-        is_producer,
-    )
-    .map_err(|err| err.to_string());
+    let exclude = own_pane_id(config.mux);
+    let snapshot = if is_producer {
+        fetch_snapshot_for(
+            &resolve_snapshot_bin(&config.rimz_bin),
+            &config.workspace_id,
+            Some(config.mux),
+            Some(&config.session_name),
+            exclude,
+        )
+        .map_err(|err| err.to_string())
+    } else {
+        rimz::sidebar::snapshot::read_published_snapshot(
+            runtime,
+            &config.session_name,
+            exclude.as_ref(),
+        )
+        .ok_or_else(|| "waiting for the producer's first published snapshot".to_owned())
+    };
     FetchOutcome {
         heartbeat_err,
         snapshot,

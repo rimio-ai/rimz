@@ -11,6 +11,8 @@
 //! lock keeps concurrent attaches from each spawning a daemon, and the orphan
 //! sweep reaps a SIGKILLed instance's runtime files.
 
+pub mod snapshot;
+
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
