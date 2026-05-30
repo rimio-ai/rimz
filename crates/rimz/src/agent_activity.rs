@@ -10,11 +10,12 @@
 //! something" signal without appending a durable event — and a sidebar
 //! wakeup — per tool call.
 //!
-//! The touch also ferries the agent's latest per-tool plan-mode slider reading
-//! (`Some(true)` while planning, `Some(false)` once it shift-tabs out). The
-//! snapshot applies it as a clear-only override: a non-plan reading drops a
-//! stale "thinking" sparkle the turn-grained log otherwise can't clear until
-//! `Stop`. Same latency channel, same rule — a display hint, never truth.
+//! The touch also ferries the agent's latest per-tool permission-slider reading
+//! (`posture`). The snapshot applies it as a bidirectional last-sample-wins
+//! override on the agent's sticky posture: a `PostToolUse` is the only channel
+//! that catches a mid-turn slider move (a shift-tab out of `plan`, or back in)
+//! between the turn-grained lifecycle events. Same latency channel, same rule —
+//! a display hint, never truth.
 //!
 //! The file is overwritten in place (one per `(kind, agent_id)`), so a live
 //! agent's touch never grows the directory, and a stale touch left by a dead
@@ -30,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::debug;
 
+use crate::feed::PermissionPosture;
 use crate::ledger::RuntimePaths;
 use crate::ledger::atomic;
 
@@ -42,13 +44,14 @@ pub struct AgentActivity {
     pub kind: String,
     pub agent_id: String,
     pub at: Timestamp,
-    /// The plan-mode slider reading the agent's most recent activity event
-    /// carried (`permission_mode == "plan"`). `None` when the event reported no
-    /// slider, or when read from a record an older binary wrote. A clear-only
-    /// display hint, not truth: the snapshot uses it to drop a stale thinking
-    /// sparkle when a tool ran with a non-plan slider — never to re-arm one.
+    /// The permission-slider posture the agent's most recent activity event
+    /// reported. `None` when the event named no slider, or when read from a
+    /// record an older binary wrote (the legacy `plan_mode` key is ignored). A
+    /// display hint, not truth: the snapshot applies it as a last-sample-wins
+    /// override on the agent's sticky posture, so a mid-turn slider move repaints
+    /// before the next lifecycle event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan_mode: Option<bool>,
+    pub posture: Option<PermissionPosture>,
 }
 
 fn activity_path(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> PathBuf {
@@ -64,22 +67,22 @@ fn activity_path(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> PathBuf 
     runtime.agent_activity_dir.join(format!("{name}.json"))
 }
 
-/// Record that `(kind, agent_id)` just made progress, carrying the slider
-/// reading the event reported (`plan_mode`; `None` when it named no mode).
-/// Atomic temp-then-rename, like every other runtime liveness file.
+/// Record that `(kind, agent_id)` just made progress, carrying the
+/// permission-slider posture the event reported (`None` when it named no
+/// slider). Atomic temp-then-rename, like every other runtime liveness file.
 /// Best-effort: a failed write only degrades the liveness hint, never
 /// correctness, so callers log and continue.
 pub fn touch(
     runtime: &RuntimePaths,
     kind: &str,
     agent_id: &str,
-    plan_mode: Option<bool>,
+    posture: Option<PermissionPosture>,
 ) -> Result<(), atomic::AtomicErr> {
     let record = AgentActivity {
         kind: kind.to_owned(),
         agent_id: agent_id.to_owned(),
         at: Timestamp::now(),
-        plan_mode,
+        posture,
     };
     atomic::write_temp_then_rename(&activity_path(runtime, kind, agent_id), &record)
 }
@@ -135,34 +138,43 @@ mod tests {
     }
 
     #[test]
-    fn touch_round_trips_plan_mode() {
+    fn touch_round_trips_posture() {
         let (_dir, runtime) = runtime();
         // A non-plan slider reading survives the write/read.
-        touch(&runtime, "claude", "sess-1", Some(false)).expect("touch");
-        assert_eq!(read_all(&runtime)[0].plan_mode, Some(false));
-        // A planning slider reading round-trips as `Some(true)`.
-        touch(&runtime, "claude", "sess-1", Some(true)).expect("touch again");
-        assert_eq!(read_all(&runtime)[0].plan_mode, Some(true));
+        touch(
+            &runtime,
+            "claude",
+            "sess-1",
+            Some(PermissionPosture::Default),
+        )
+        .expect("touch");
+        assert_eq!(
+            read_all(&runtime)[0].posture,
+            Some(PermissionPosture::Default)
+        );
+        // A planning slider reading round-trips as `Some(Plan)`.
+        touch(&runtime, "claude", "sess-1", Some(PermissionPosture::Plan)).expect("touch again");
+        assert_eq!(read_all(&runtime)[0].posture, Some(PermissionPosture::Plan));
         // No slider reading round-trips as `None`.
         touch(&runtime, "claude", "sess-1", None).expect("touch none");
-        assert_eq!(read_all(&runtime)[0].plan_mode, None);
+        assert_eq!(read_all(&runtime)[0].posture, None);
     }
 
     #[test]
-    fn older_json_without_plan_mode_field_reads_none() {
+    fn legacy_plan_mode_field_is_ignored_posture_reads_none() {
         let (_dir, runtime) = runtime();
-        // A record an older binary wrote carries no `plan_mode` key. `serde`'s
-        // `default` must read it back as `None` (ignored by the clear-only
-        // override) rather than failing the whole touch.
+        // A record an older binary wrote carries the legacy `plan_mode` key and
+        // no `posture`. The unknown key is ignored and `posture` defaults to
+        // `None` (a no-op carry-forward), rather than failing the whole touch.
         std::fs::create_dir_all(&runtime.agent_activity_dir).expect("create activity dir");
         std::fs::write(
             runtime.agent_activity_dir.join("legacy.json"),
-            br#"{"kind":"claude","agent_id":"sess-1","at":"2026-05-30T00:00:00Z"}"#,
+            br#"{"kind":"claude","agent_id":"sess-1","at":"2026-05-30T00:00:00Z","plan_mode":true}"#,
         )
         .expect("write legacy record");
         let all = read_all(&runtime);
         assert_eq!(all.len(), 1);
-        assert_eq!(all[0].plan_mode, None);
+        assert_eq!(all[0].posture, None);
     }
 
     #[test]

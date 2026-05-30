@@ -537,24 +537,26 @@ pub fn is_stalled(status: AgentStatus, last_activity: Timestamp, now: Timestamp)
         && now.duration_since(last_activity).as_secs() >= STALL_WINDOW_SECS
 }
 
-/// Permission posture pill: how much the human is in the loop for this agent's
-/// tool calls. The agent owns this; Rimz observes and surfaces it.
+/// Permission posture pill: which position the agent's permission slider sits
+/// in. The agent owns this; Rimz observes and surfaces it. It is the single
+/// sticky reading of the slider — last sample wins, carried forward across
+/// events — so the security surface (`Yolo`) and the read-only `Plan` mode both
+/// stay visible without a separate flag.
 ///
 /// `Default` is the omitted baseline (the human approves each tool call —
-/// Claude's `default` and Codex's `on-request`/`ask`, and Claude's `plan` mode
-/// which is still default-posture); `Auto` is auto-accept (Claude
-/// `acceptEdits`, Codex `auto`/`on-failure`); `Yolo` is the full bypass (Claude
-/// `bypassPermissions`, Codex `--ask-for-approval never`). `Unknown` is any
-/// value the agent reports that doesn't fit the three buckets.
+/// Claude's `default`, Codex's `on-request`/`ask`); `Plan` is read-only plan
+/// mode (Claude/Codex `plan`), where the agent reasons without writing — with
+/// `status == Running` the sidebar renders it as the "thinking" state; `Auto`
+/// is auto-accept (Claude `acceptEdits`, Codex `auto`/`on-failure`); `Yolo` is
+/// the full bypass (Claude `bypassPermissions`, Codex `--ask-for-approval
+/// never`). `Unknown` is any value the agent reports that fits no bucket.
 ///
-/// Wire format: snake_case (`default`/`auto`/`yolo`/`unknown`). Mode words like
-/// `plan` or `interactive` do not appear on the wire — they were a mix of
-/// posture and workflow that confused cross-backend parity, so they fold into
-/// `Default`.
+/// Wire format: snake_case (`default`/`plan`/`auto`/`yolo`/`unknown`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionPosture {
     Default,
+    Plan,
     Auto,
     Yolo,
     Unknown,
@@ -566,11 +568,6 @@ pub struct AgentState {
     pub kind: String,
     pub status: AgentStatus,
     pub permission_posture: PermissionPosture,
-    /// Whether the agent is in read-only plan mode. Posture-neutral (the pill
-    /// stays `Default`); combined with `status == Running` the sidebar renders
-    /// it as the "thinking" state. Carry-forward in the reducer, like posture.
-    #[serde(default)]
-    pub plan_mode: bool,
     pub pane: Option<PaneRef>,
     #[serde(default)]
     pub agent_pid: Option<u32>,

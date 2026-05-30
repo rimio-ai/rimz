@@ -27,8 +27,7 @@ use super::{
     AgentContext, AgentErr, AgentHookClass, AgentIntegration, AgentLifecycleObservation,
     ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
     StatusLineChange, agent_config_path, choice_is_allow, optional_payload_string,
-    permission_decision, plan_mode_from_payload, read_optional_file, read_transcript_tail,
-    stop_status_from_payload,
+    permission_decision, read_optional_file, read_transcript_tail, stop_status_from_payload,
 };
 use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution};
 use crate::ledger::atomic;
@@ -204,12 +203,19 @@ impl AgentIntegration for ClaudeIntegration {
         } else {
             Vec::new()
         };
+        // The permission slider rides every hook of a session, so sample it on
+        // every event: last sample wins, and an event that names no slider
+        // returns `None` so the reducer carries the prior posture forward. The
+        // slider is self-correcting — Claude moves it off `plan` when the human
+        // approves a plan — so the next hook reports the real position; no
+        // turn-boundary special-case is needed. `SessionEnd` drops the row, so
+        // its posture carries no meaning.
         let (status, posture) = match event_name {
-            "SessionStart" => (AgentStatus::Idle, Some(posture_from_payload(payload))),
-            "UserPromptSubmit" => (AgentStatus::Running, None),
+            "SessionStart" => (AgentStatus::Idle, posture_from_payload(payload)),
+            "UserPromptSubmit" => (AgentStatus::Running, posture_from_payload(payload)),
             "Stop" => (
                 stop_status_with_background(payload, &pending_background),
-                None,
+                posture_from_payload(payload),
             ),
             "SessionEnd" => (AgentStatus::Idle, None),
             _ => return None,
@@ -252,18 +258,6 @@ impl AgentIntegration for ClaudeIntegration {
             agent_process_start: None,
             runtime_owner: None,
             permission_posture: posture,
-            // `permission_mode` is a sticky session-slider setting, not a
-            // per-turn "currently planning" signal: Claude reports `plan` on
-            // every hook of a plan-slider session, `Stop` included. So a turn
-            // boundary asserts the end of the planning phase unconditionally —
-            // a finished turn is never read-only planning — rather than trusting
-            // the slider value the payload still carries. Mid-turn, an approved
-            // `ExitPlanMode` (carried on the feed channel) is what re-arms
-            // thinking; every other event reads the slider the payload gives it.
-            plan_mode: match event_name {
-                "Stop" => Some(false),
-                _ => plan_mode_from_payload(payload),
-            },
             worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
             worktree_branch: optional_payload_string(payload, &["worktree_branch"]),
             task: background_task_label(&pending_background)
@@ -276,6 +270,10 @@ impl AgentIntegration for ClaudeIntegration {
             todo_total,
             pane_id: None,
         })
+    }
+
+    fn posture_from_payload(&self, payload: &Value) -> Option<PermissionPosture> {
+        posture_from_payload(payload)
     }
 
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
@@ -387,25 +385,25 @@ fn background_task_label(pending: &[String]) -> Option<String> {
     }
 }
 
-/// Translate a Claude payload's mode/permission hints onto the four-value
-/// permission posture pill. `permission_mode = "bypassPermissions"` (the value
-/// `--dangerously-skip-permissions` surfaces) maps to `Yolo`. Claude's `plan`
-/// mode is still default-posture — the human approves each tool call from the
-/// plan — so it folds into `Default`.
-fn posture_from_payload(payload: &Value) -> PermissionPosture {
+/// Sample a Claude payload's permission slider onto the posture enum.
+/// `permission_mode = "bypassPermissions"` (the value
+/// `--dangerously-skip-permissions` surfaces) maps to `Yolo`; `plan` is its own
+/// first-class read-only posture. `None` when the payload names no slider field,
+/// so the reducer carries the prior posture forward rather than resetting it —
+/// the slider is sticky and rides every hook, so absence means "unchanged".
+fn posture_from_payload(payload: &Value) -> Option<PermissionPosture> {
     let raw = payload
         .get("permission_mode")
         .or_else(|| payload.get("mode"))
         .and_then(Value::as_str);
-    match raw {
+    Some(match raw {
         Some("bypassPermissions") | Some("bypass") => PermissionPosture::Yolo,
         Some("acceptEdits") | Some("auto") => PermissionPosture::Auto,
-        Some("plan") | Some("default") | Some("interactive") | Some("ask") => {
-            PermissionPosture::Default
-        }
+        Some("plan") => PermissionPosture::Plan,
+        Some("default") | Some("interactive") | Some("ask") => PermissionPosture::Default,
         Some(_) => PermissionPosture::Unknown,
-        None => PermissionPosture::Default,
-    }
+        None => return None,
+    })
 }
 
 /// Read a Claude `TodoWrite` payload's `tool_input.todos` (or the post-hook
@@ -1742,58 +1740,49 @@ mod tests {
     }
 
     #[test]
-    fn plan_mode_collapses_to_default_posture() {
-        // Plan is a workflow mode, not a permission posture — the human still
-        // approves each tool call when the plan executes. It folds into the
-        // omitted baseline so the sidebar's posture pill only flags Auto/Yolo.
-        let obs = ClaudeIntegration
-            .observe_lifecycle("SessionStart", &json!({ "permission_mode": "plan" }))
-            .unwrap();
-        assert_eq!(obs.permission_posture, Some(PermissionPosture::Default));
-    }
-
-    #[test]
-    fn plan_mode_observed_from_permission_mode() {
-        // `permission_mode == "plan"` is the read-only "thinking" signal the
-        // sidebar renders as a sparkle; any other concrete mode clears it, and
-        // an absent mode reports `None` so the reducer carries the prior value.
+    fn posture_sampled_from_permission_mode() {
+        // The slider maps onto the posture enum: `plan` is a first-class sticky
+        // posture (the read-only "thinking" signal), `acceptEdits` is `Auto`, and
+        // an absent mode reports `None` so the reducer carries the prior posture
+        // forward.
         let plan = ClaudeIntegration
             .observe_lifecycle("SessionStart", &json!({ "permission_mode": "plan" }))
             .unwrap();
-        assert_eq!(plan.plan_mode, Some(true));
+        assert_eq!(plan.permission_posture, Some(PermissionPosture::Plan));
 
         let acting = ClaudeIntegration
             .observe_lifecycle("SessionStart", &json!({ "permission_mode": "acceptEdits" }))
             .unwrap();
-        assert_eq!(acting.plan_mode, Some(false));
+        assert_eq!(acting.permission_posture, Some(PermissionPosture::Auto));
 
         let silent = ClaudeIntegration
             .observe_lifecycle("UserPromptSubmit", &json!({ "session_id": "sess-1" }))
             .unwrap();
-        assert_eq!(silent.plan_mode, None);
+        assert_eq!(silent.permission_posture, None);
     }
 
     #[test]
-    fn stop_always_clears_plan_mode() {
-        // A completed turn is not read-only plan mode. After a plan-approval the
-        // agent runs auto mode firing only per-tool hooks, so a mode-less `Stop`
-        // must report `Some(false)` — otherwise the carried-forward `plan` keeps
-        // the thinking sparkle on a working (or background-parked) agent.
-        let done = ClaudeIntegration
+    fn stop_samples_slider_last_sample_wins() {
+        // The slider is sticky and rides every hook, `Stop` included: a `Stop`
+        // still carrying `plan` reports `Plan` (the session is still in plan
+        // mode), and a mode-less `Stop` reports `None` so the reducer carries the
+        // prior posture forward. No turn-boundary special-case — the slider
+        // self-corrects when the human approves and Claude moves it off `plan`.
+        let mode_less = ClaudeIntegration
             .observe_lifecycle("Stop", &json!({ "session_id": "sess-1" }))
             .unwrap();
-        assert_eq!(done.plan_mode, Some(false));
+        assert_eq!(mode_less.permission_posture, None);
 
-        // `permission_mode` is the sticky session slider, present on every hook
-        // including `Stop`. A `Stop` still carrying `plan` means the slider is
-        // set, not that the finished turn was planning — so it clears too.
         let slider_still_plan = ClaudeIntegration
             .observe_lifecycle(
                 "Stop",
                 &json!({ "session_id": "sess-1", "permission_mode": "plan" }),
             )
             .unwrap();
-        assert_eq!(slider_still_plan.plan_mode, Some(false));
+        assert_eq!(
+            slider_still_plan.permission_posture,
+            Some(PermissionPosture::Plan)
+        );
     }
 
     #[test]

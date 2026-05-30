@@ -11,7 +11,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use rimz::agents::{AgentContext, RateLimitWindow};
 use rimz::config::SidebarDensity;
-use rimz::feed::{AgentState, AgentStatus};
+use rimz::feed::{AgentState, AgentStatus, PermissionPosture};
 use rimz::{
     SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
 };
@@ -83,7 +83,7 @@ impl Tier {
 /// L1 leads with the attention buckets (`waiting` `?`, `failed` `!`) so the
 /// states that need a human read first; with none it reads a calm `✓ all
 /// clear`, never an empty line. L2 is the calm tail — `running` split into
-/// working/thinking by plan mode (the split reads plan mode off the visible
+/// working/thinking by plan posture (the split reads posture off the visible
 /// rows, so a capped-away `running` agent folds into working). Counts come from
 /// `status_counts`, which spans capped agents; the resource totals on L3 sum the
 /// full agent list, so a capped agent's spend still lands in the total.
@@ -97,7 +97,10 @@ pub(super) fn fleet_header_lines(
     let thinking = groups
         .iter()
         .flat_map(|group| &group.rows)
-        .filter(|row| row.status == Some(AgentStatus::Running) && row.plan_mode)
+        .filter(|row| {
+            row.status == Some(AgentStatus::Running)
+                && row.permission_posture == Some(PermissionPosture::Plan)
+        })
         .count();
     let working = running.saturating_sub(thinking);
     let waiting = status_total(groups, AgentStatus::Waiting);
@@ -560,7 +563,7 @@ fn agent_identity_line(
     // Left cluster: glyph + name + dim capability tokens.
     let mut left: Vec<Span<'static>> = vec![
         Span::styled(
-            agent_glyph(status, row.plan_mode, animation_phase),
+            agent_glyph(status, row.permission_posture, animation_phase),
             agent_style(theme, status),
         ),
         Span::raw(" "),

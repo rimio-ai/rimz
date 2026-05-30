@@ -634,7 +634,6 @@ fn runtime_projection_reads_under_the_workspace_lock() {
         agent_id: Some("agent-1".to_owned()),
         status: rimz::feed::AgentStatus::Idle,
         permission_posture: Some(rimz::feed::PermissionPosture::Default),
-        plan_mode: None,
         agent_pid: None,
         agent_process_start: None,
         runtime_owner: None,

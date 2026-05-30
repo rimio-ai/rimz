@@ -59,10 +59,10 @@ Agent status is a five-value rollup the agent owns (`running`/`waiting`/`idle`/`
 
 `waiting` is a pending human ask folded onto the agent's row; "thinking" is `running` in read-only plan mode; "stalled" is a `running` agent silent past Claude Code's ~10-minute operation timeout, escalated to `!` so a wedged agent becomes actionable rather than a frozen spinner. Both "thinking" and "stalled" are display projections — the rollup keeps the true `running` status.
 
-Agent permission postures (observed from the agent, not set by Rimz) render as capability tokens; `default` and `unknown` are omitted, `auto` is dim, and `yolo` is warn-colored. Workflow words such as `plan` and `interactive` are not posture and do not render — `plan` surfaces as the "thinking" state above, not as a posture pill.
+Agent permission postures (observed from the agent, not set by Rimz) are one sticky reading of the agent's permission slider, rendered as capability tokens; `default` and `unknown` are omitted, `plan` and `auto` are dim, and `yolo` is warn-colored. `plan` is the read-only slider position: it shows as a dim pill whenever the agent is not running, and surfaces as the "thinking" state above while it is. `interactive` folds into `default`.
 
 ```text
-default   auto   yolo   unknown
+default   plan   auto   yolo   unknown
 ```
 
 Live enrichments use one grammar. The context window, the 5-hour budget, and the 7-day budget render as three aligned meter bars sharing one label column and one value column; todo progress renders as dots and worktree diff stats as paired numeric tokens. They enrich display only and never drive a decision. A running agent's leading cell animates continuously on a wall-clock tick — a braille spinner while working, a sparkle while thinking, both in Claude clay — so motion tracks live work; silence no longer freezes the spinner but escalates to `!` once the agent crosses the stall window. Color is a garnish layer over the same glyph grammar, and `NO_COLOR` keeps every shape readable.

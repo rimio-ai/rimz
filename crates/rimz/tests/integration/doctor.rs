@@ -23,7 +23,6 @@ fn inject_lifecycle(
         agent_id: Some(agent_id.to_owned()),
         status,
         permission_posture: Some(posture),
-        plan_mode: None,
         agent_pid: None,
         agent_process_start: None,
         runtime_owner: None,

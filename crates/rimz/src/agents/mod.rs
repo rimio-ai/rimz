@@ -119,13 +119,6 @@ pub struct AgentLifecycleObservation {
     /// can never demote a `yolo` agent to default (a security surface must
     /// stay visible).
     pub permission_posture: Option<PermissionPosture>,
-    /// Whether the agent is in read-only plan mode this event. `Some(true)`
-    /// while planning, `Some(false)` once it leaves; `None` means "this event
-    /// does not report a mode" and the reducer carries the prior value forward.
-    /// Plan mode is posture-neutral (it still folds to `Default` in
-    /// `permission_posture`); this flag is the separate signal the sidebar
-    /// renders as the "thinking" state while the agent is also `running`.
-    pub plan_mode: Option<bool>,
     /// Optional absolute worktree path observed from the agent payload or
     /// filled by the CLI from the current Rimz workspace.
     pub worktree_path: Option<String>,
@@ -228,6 +221,17 @@ pub trait AgentIntegration: Send + Sync {
         _event_name: &str,
         _payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
+        None
+    }
+
+    /// Sample the permission-posture slider from a hook payload. `None` when the
+    /// payload names no slider field, so the snapshot carries the prior posture
+    /// forward. The per-tool activity heartbeat calls this directly to keep the
+    /// agent's sticky posture current between lifecycle events — a `PostToolUse`
+    /// does not flow through [`Self::observe_lifecycle`], so it is the only
+    /// channel that catches a mid-turn slider move (shift-tab out of `plan`).
+    /// Defaults to `None`; adapters override with their slider mapping.
+    fn posture_from_payload(&self, _payload: &Value) -> Option<PermissionPosture> {
         None
     }
 
@@ -386,26 +390,6 @@ pub(crate) fn read_transcript_tail(path: &Path) -> Option<String> {
     let mut buf = Vec::new();
     file.read_to_end(&mut buf).ok()?;
     Some(String::from_utf8_lossy(&buf).into_owned())
-}
-
-/// Whether a payload's `permission_mode`/`mode` field names read-only plan
-/// mode. `None` when the field is absent — the reducer then carries the prior
-/// plan-mode value forward, so a session-start/prompt event that reports no
-/// mode never flips it. `permission_mode` is the *session slider*, sticky
-/// across turns and present on every hook (including `Stop`), so it reflects
-/// the slider's current position, not "the agent is planning right now": turn
-/// boundaries (`Stop`/`SubagentStop`) therefore assert `Some(false)` in the
-/// adapter rather than reading this helper. Plan mode stays posture-neutral (it
-/// folds to `Default` in the posture pill); this is the separate signal the
-/// sidebar renders as "thinking". The per-tool activity heartbeat also reads
-/// this helper so the snapshot can clear a stale sparkle when the slider moves
-/// off `plan` mid-turn (see [`crate::agent_activity`]).
-pub fn plan_mode_from_payload(payload: &Value) -> Option<bool> {
-    payload
-        .get("permission_mode")
-        .or_else(|| payload.get("mode"))
-        .and_then(Value::as_str)
-        .map(|raw| raw == "plan")
 }
 
 pub(crate) fn optional_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {

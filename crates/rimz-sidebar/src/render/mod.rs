@@ -514,7 +514,6 @@ mod tests {
             kind: kind.to_owned(),
             status,
             permission_posture,
-            plan_mode: false,
             pane: None,
             agent_pid: None,
             agent_process_start: None,
@@ -1308,16 +1307,15 @@ mod tests {
             Some("main"),
             Some("a"),
         );
-        let mut thinking = agent(
+        let thinking = agent(
             "t",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Default,
+            PermissionPosture::Plan,
             Some("/repo/main"),
             Some("main"),
             Some("b"),
         );
-        thinking.plan_mode = true;
         let snapshot = snapshot_with(Vec::new(), vec![working, thinking]);
         let screen = snapshot_to_screen(&snapshot, 40, 12);
         let attention = screen.lines().nth(1).unwrap(); // L1

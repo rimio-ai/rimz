@@ -72,16 +72,19 @@ pub(super) fn thinking_still() -> &'static str {
 }
 
 /// The leading cell for an agent row, animated when the agent is actively doing
-/// something. A `running` agent fills (working) or sparkles (thinking, in plan
-/// mode); every other state is the static [`status_glyph`]. Stall is already
-/// folded into `Failed` upstream, so it falls through to the static `!`.
+/// something. A `running` agent fills (working) or sparkles (thinking, when the
+/// slider is in `plan`); every other state is the static [`status_glyph`]. Stall
+/// is already folded into `Failed` upstream, so it falls through to the static
+/// `!`.
 pub(super) fn agent_glyph(
     status: AgentStatus,
-    plan_mode: bool,
+    posture: Option<PermissionPosture>,
     animation_phase: u64,
 ) -> &'static str {
     match status {
-        AgentStatus::Running if plan_mode => thinking_glyph(animation_phase),
+        AgentStatus::Running if posture == Some(PermissionPosture::Plan) => {
+            thinking_glyph(animation_phase)
+        }
         AgentStatus::Running => working_glyph(animation_phase),
         other => status_glyph(other),
     }
@@ -132,17 +135,22 @@ pub(super) fn age_style(theme: &Theme, status: AgentStatus, age_secs: i64) -> St
 
 /// Human label for the permission posture. `Default` is the omitted baseline,
 /// so it returns `None` and disappears from the row. `Unknown` is also
-/// suppressed — an unparseable mode word is not a warning surface.
+/// suppressed — an unparseable mode word is not a warning surface. `plan` shows
+/// in every state (like `auto`/`yolo`): the thinking sparkle only fires while
+/// `running`, so the pill is what keeps a plan-slider tab legible when it is
+/// idle or waiting.
 pub(super) fn posture_pill(posture: PermissionPosture) -> Option<&'static str> {
     match posture {
         PermissionPosture::Default | PermissionPosture::Unknown => None,
+        PermissionPosture::Plan => Some("plan"),
         PermissionPosture::Auto => Some("auto"),
         PermissionPosture::Yolo => Some("yolo"),
     }
 }
 
 /// `yolo` is the security surface — keep it warn-colored and bold even when
-/// every other capability token dims. `auto` is informational and dim.
+/// every other capability token dims. `plan` and `auto` are informational and
+/// dim (`plan` is the more cautious posture, not a warning).
 pub(super) fn posture_style(theme: &Theme, posture: PermissionPosture) -> Style {
     match posture {
         PermissionPosture::Yolo => theme.style(Color::Yellow, Modifier::BOLD),
@@ -521,22 +529,27 @@ mod tests {
         );
     }
 
-    /// A running agent animates the working fill; in plan mode it sparkles; a
-    /// stalled agent (folded to `Failed` upstream) and every other state takes
-    /// the static glyph, regardless of phase.
+    /// A running agent animates the working fill; with a `plan` posture it
+    /// sparkles; a stalled agent (folded to `Failed` upstream) and every other
+    /// state takes the static glyph, regardless of phase.
     #[test]
     fn agent_glyph_animates_only_active_states() {
+        let acting = Some(PermissionPosture::Default);
+        let planning = Some(PermissionPosture::Plan);
         assert_eq!(
-            agent_glyph(AgentStatus::Running, false, 2),
+            agent_glyph(AgentStatus::Running, acting, 2),
             WORKING_FRAMES[2]
         );
         assert_eq!(
-            agent_glyph(AgentStatus::Running, true, 2),
+            agent_glyph(AgentStatus::Running, planning, 2),
             THINKING_FRAMES[2]
         );
-        assert_eq!(agent_glyph(AgentStatus::Waiting, false, 2), "?");
-        assert_eq!(agent_glyph(AgentStatus::Failed, false, 2), "!");
-        assert_eq!(agent_glyph(AgentStatus::Idle, false, 2), "◌");
-        assert_eq!(agent_glyph(AgentStatus::Success, false, 2), "✓");
+        // A plan posture on a non-running agent never sparkles — the slider is
+        // sticky, but the sparkle is the running-state indicator.
+        assert_eq!(agent_glyph(AgentStatus::Idle, planning, 2), "◌");
+        assert_eq!(agent_glyph(AgentStatus::Waiting, acting, 2), "?");
+        assert_eq!(agent_glyph(AgentStatus::Failed, acting, 2), "!");
+        assert_eq!(agent_glyph(AgentStatus::Idle, acting, 2), "◌");
+        assert_eq!(agent_glyph(AgentStatus::Success, acting, 2), "✓");
     }
 }

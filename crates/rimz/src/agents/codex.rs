@@ -33,8 +33,8 @@ use super::context::AgentContext;
 use super::{
     AgentErr, AgentHookClass, AgentIntegration, AgentLifecycleObservation, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, Result, agent_config_path,
-    optional_payload_string, permission_decision, plan_mode_from_payload, read_optional_file,
-    read_transcript_tail, stop_status_from_payload,
+    optional_payload_string, permission_decision, read_optional_file, read_transcript_tail,
+    stop_status_from_payload,
 };
 use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution};
 use crate::ledger::atomic;
@@ -146,16 +146,20 @@ impl AgentIntegration for CodexIntegration {
         // anything yet, so it registers idle; the prompt is what moves it to
         // running. SubagentStart is different: it fires immediately before the
         // child model request, so it registers running under the child
-        // `agent_id`. Stop-like events report no posture so the reducer keeps
-        // the established posture.
+        // `agent_id`. The permission slider rides every hook, so sample it on
+        // every event (last sample wins); an event that names no slider returns
+        // `None` and the reducer carries the prior posture forward.
         let (status, posture) = match event_name {
-            "SessionStart" => (AgentStatus::Idle, Some(posture_from_payload(payload))),
-            "SubagentStart" => (AgentStatus::Running, Some(posture_from_payload(payload))),
-            "UserPromptSubmit" => (AgentStatus::Running, None),
+            "SessionStart" => (AgentStatus::Idle, posture_from_payload(payload)),
+            "SubagentStart" => (AgentStatus::Running, posture_from_payload(payload)),
+            "UserPromptSubmit" => (AgentStatus::Running, posture_from_payload(payload)),
             // A child finishing returns its row to idle; the root agent's Stop
             // completes the turn (success), or fails it on an error signal.
-            "SubagentStop" => (AgentStatus::Idle, None),
-            "Stop" => (stop_status_from_payload(payload), None),
+            "SubagentStop" => (AgentStatus::Idle, posture_from_payload(payload)),
+            "Stop" => (
+                stop_status_from_payload(payload),
+                posture_from_payload(payload),
+            ),
             _ => return None,
         };
         // Context budget lives in the rollout JSONL, not the hook payload.
@@ -184,17 +188,6 @@ impl AgentIntegration for CodexIntegration {
             agent_process_start: None,
             runtime_owner: None,
             permission_posture: posture,
-            // `permission_mode` is a sticky session-slider setting, not a
-            // per-turn "currently planning" signal: it rides every hook of a
-            // plan-slider session, turn-ending events included. So a turn
-            // boundary (`Stop`/`SubagentStop`) asserts the end of the planning
-            // phase unconditionally rather than trusting the slider value the
-            // payload still carries; every other event reads the slider as
-            // given. Parity with the Claude adapter.
-            plan_mode: match event_name {
-                "Stop" | "SubagentStop" => Some(false),
-                _ => plan_mode_from_payload(payload),
-            },
             worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
             worktree_branch: optional_payload_string(payload, &["worktree_branch"]),
             task: task_from_payload(event_name, payload),
@@ -213,6 +206,10 @@ impl AgentIntegration for CodexIntegration {
             todo_total: None,
             pane_id: None,
         })
+    }
+
+    fn posture_from_payload(&self, payload: &Value) -> Option<PermissionPosture> {
+        posture_from_payload(payload)
     }
 
     fn install_hooks(&self) -> Result<HookInstallReport> {
@@ -254,28 +251,31 @@ pub fn refresh_context(model_hint: Option<&str>) -> Option<AgentContext> {
     Some(client.observe_context("codex", model_hint, Timestamp::now()))
 }
 
-/// Map Codex's `approval_policy` (or `mode`) payload field onto the
-/// four-value permission posture pill. `Yolo` is observed from
-/// `--ask-for-approval never` per docs/internals/agent.md:60. Codex's `plan`
-/// mode (when present) is still default-posture — folds into `Default`.
-fn posture_from_payload(payload: &Value) -> PermissionPosture {
+/// Sample Codex's `approval_policy` (or `permission_mode`/`mode`) payload field
+/// onto the posture enum. `Yolo` is observed from `--ask-for-approval never`
+/// per docs/internals/agent.md:60; `plan` is its own first-class read-only
+/// posture. `None` when the payload names no slider field, so the reducer
+/// carries the prior posture forward — the slider is sticky and rides every
+/// hook, so absence means "unchanged".
+fn posture_from_payload(payload: &Value) -> Option<PermissionPosture> {
     let policy = payload
         .get("permission_mode")
         .or_else(|| payload.get("approval_policy"))
         .or_else(|| payload.get("mode"))
         .and_then(Value::as_str);
-    match policy {
+    Some(match policy {
         Some("never") | Some("bypass") | Some("bypassPermissions") | Some("dontAsk") => {
             PermissionPosture::Yolo
         }
         Some("acceptEdits") | Some("auto") | Some("auto-edit") | Some("on-failure") => {
             PermissionPosture::Auto
         }
-        Some("plan") | Some("default") | Some("interactive") | Some("untrusted")
-        | Some("on-request") | Some("ask") => PermissionPosture::Default,
+        Some("plan") => PermissionPosture::Plan,
+        Some("default") | Some("interactive") | Some("untrusted") | Some("on-request")
+        | Some("ask") => PermissionPosture::Default,
         Some(_) => PermissionPosture::Unknown,
-        None => PermissionPosture::Default,
-    }
+        None => return None,
+    })
 }
 
 fn codex_agent_id(payload: &Value) -> Option<String> {
@@ -855,16 +855,17 @@ mod tests {
     }
 
     #[test]
-    fn plan_mode_observed_from_permission_mode() {
-        // Plan mode renders as "thinking"; any other concrete mode clears it,
-        // and an absent mode reports `None` for carry-forward.
+    fn posture_sampled_from_permission_mode() {
+        // `plan` is a first-class sticky posture (rendered as "thinking" while
+        // running), `acceptEdits` is `Auto`, and an absent mode reports `None`
+        // for carry-forward.
         let plan = CodexIntegration
             .observe_lifecycle(
                 "SessionStart",
                 &json!({ "session_id": "sess-1", "permission_mode": "plan" }),
             )
             .unwrap();
-        assert_eq!(plan.plan_mode, Some(true));
+        assert_eq!(plan.permission_posture, Some(PermissionPosture::Plan));
 
         let acting = CodexIntegration
             .observe_lifecycle(
@@ -872,7 +873,7 @@ mod tests {
                 &json!({ "session_id": "sess-1", "permission_mode": "acceptEdits" }),
             )
             .unwrap();
-        assert_eq!(acting.plan_mode, Some(false));
+        assert_eq!(acting.permission_posture, Some(PermissionPosture::Auto));
 
         let silent = CodexIntegration
             .observe_lifecycle(
@@ -880,31 +881,33 @@ mod tests {
                 &json!({ "session_id": "sess-1", "prompt": "go" }),
             )
             .unwrap();
-        assert_eq!(silent.plan_mode, None);
+        assert_eq!(silent.permission_posture, None);
     }
 
     #[test]
-    fn turn_end_always_clears_plan_mode() {
-        // A completed turn (or finished subagent) is not planning: a mode-less
-        // turn-ending event reports `Some(false)` so the reducer drops the
-        // thinking signal instead of carrying a stale `plan` forward.
+    fn turn_end_samples_slider_last_sample_wins() {
+        // The slider is sticky and rides every hook, the turn-ending ones
+        // included: a mode-less `Stop`/`SubagentStop` reports `None` so the
+        // reducer carries the prior posture forward — no turn-boundary clear.
         for event in ["Stop", "SubagentStop"] {
             let obs = CodexIntegration
                 .observe_lifecycle(event, &json!({ "session_id": "sess-1" }))
                 .unwrap();
-            assert_eq!(obs.plan_mode, Some(false), "{event} should clear plan mode");
+            assert_eq!(obs.permission_posture, None, "{event} carries forward");
         }
 
-        // `permission_mode` is the sticky session slider, present on every hook
-        // including the turn-ending ones. A `Stop` still carrying `plan` reports
-        // the slider position, not a planning turn, so it clears too.
+        // A `Stop` still carrying `plan` reports the slider position — the
+        // session is still in plan mode — so it stays `Plan`.
         let slider_still_plan = CodexIntegration
             .observe_lifecycle(
                 "Stop",
                 &json!({ "session_id": "sess-1", "permission_mode": "plan" }),
             )
             .unwrap();
-        assert_eq!(slider_still_plan.plan_mode, Some(false));
+        assert_eq!(
+            slider_still_plan.permission_posture,
+            Some(PermissionPosture::Plan)
+        );
     }
 
     #[test]

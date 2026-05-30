@@ -190,14 +190,10 @@ pub struct SidebarRow {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<AgentStatus>,
-    /// Permission posture pill (`auto`/`yolo`; `default` and `unknown` omit).
-    /// Replaces the older `mode` field — mode/posture were conflated in a way
-    /// that didn't cross backends cleanly.
+    /// Permission posture pill (`plan`/`auto`/`yolo`; `default` and `unknown`
+    /// omit). The single sticky slider reading: with `status == Running` a `plan`
+    /// posture paints the "thinking" state instead of the working spinner.
     pub permission_posture: Option<PermissionPosture>,
-    /// True while the agent is in read-only plan mode. With `status == Running`
-    /// the renderer paints the "thinking" state instead of the working spinner.
-    #[serde(default)]
-    pub plan_mode: bool,
     pub pane: Option<PaneRef>,
     pub request_id: Option<RequestId>,
     pub surface: Option<Surface>,
@@ -280,7 +276,7 @@ impl SidebarSnapshot {
         workspace_id: WorkspaceId,
         mut items: Vec<FeedItem>,
         events: Vec<EventEnvelope>,
-        mut agents: Vec<AgentState>,
+        agents: Vec<AgentState>,
     ) -> Self {
         items.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
 
@@ -322,17 +318,6 @@ impl SidebarSnapshot {
                 }),
         );
         recent_activity.sort_by_key(|activity| std::cmp::Reverse(activity.timestamp()));
-
-        // The lifecycle log can't carry the "left read-only plan mode" signal:
-        // after a plan-approval the agent runs auto mode firing only per-tool
-        // hooks, so `plan_mode` would stay true and keep the thinking sparkle on
-        // a working agent. The approval lives in the feed store, not the event
-        // log, so clear it here. This is the pure path: only the allow-resolved
-        // branch can bite (the native-UI moved-past branch needs the heartbeat
-        // `last_activity`, folded later in `with_agent_activity`).
-        let plan_asks =
-            plan_approval_candidates(&needs_attention, &recently_answered, &recent_activity);
-        clear_exited_plan_modes(&mut agents, &plan_asks);
 
         let display_name = workspace_id.as_str().to_owned();
         // The pure reducer has no project root or worktree set, so every cwd
@@ -535,37 +520,26 @@ impl SidebarSnapshot {
                 agent.last_activity = touch.at;
                 changed = true;
             }
-            // Clear a stale thinking sparkle when the freshest per-tool touch
-            // proves the agent left plan mode. Shift-tabbing the slider out of
-            // `plan` raises no `ExitPlanMode` approval and no lifecycle event —
-            // only per-tool hooks, which carry the new non-plan slider — so this
-            // is the one mid-turn exit the turn-grained log can't carry. Guard on
-            // `last_seen` (the agent's latest *lifecycle* event, which the
-            // heartbeat never advances, unlike `last_activity` just mutated
-            // above) so the clear scopes to the current planning episode — the
-            // `UserPromptSubmit` that armed it — and a leftover touch from a
-            // prior turn can't fire. Clear-only: a touch still reading `plan`
-            // (`Some(true)`) is ignored, so the override never re-arms thinking
-            // or fights the approval clear below.
-            if agent.plan_mode && touch.plan_mode == Some(false) && touch.at > agent.last_seen {
-                agent.plan_mode = false;
+            // Apply the freshest per-tool slider reading as a last-sample-wins
+            // override on the agent's sticky posture. A `PostToolUse` is the
+            // only channel that catches a mid-turn slider move — shift-tabbing
+            // out of `plan` (or back in) raises no lifecycle event — so this is
+            // how a plan-mode tab drops its thinking sparkle the moment it runs a
+            // non-plan tool, and how the parent stays in `plan` while a subagent
+            // (a separate `agent_id`, never matched here) runs non-plan tools.
+            // Guard on `last_seen` (the agent's latest *lifecycle* event, which
+            // the heartbeat never advances, unlike `last_activity` just mutated
+            // above) so a leftover touch from a prior turn can't override the
+            // posture a fresh lifecycle event just established.
+            if let Some(posture) = touch.posture
+                && touch.at > agent.last_seen
+                && agent.permission_posture != posture
+            {
+                agent.permission_posture = posture;
                 changed = true;
             }
         }
-        // The heartbeat just advanced `last_activity`, which is the native-UI
-        // plan-approval exit signal: an agent that ran a tool after its
-        // `ExitPlanMode` ask has left read-only planning even though Rimz never
-        // resolved the ask (the human approved in the agent's own UI). Re-run
-        // the plan-mode clear with the fresh value so the working agent drops
-        // the thinking sparkle; the reducer already covered the allow-resolved
-        // branch. Disjoint field borrows: `agents` vs the three feed buckets.
-        let plan_asks = plan_approval_candidates(
-            &self.needs_attention,
-            &self.recently_answered,
-            &self.recent_activity,
-        );
-        let cleared = clear_exited_plan_modes(&mut self.agents, &plan_asks);
-        if changed || cleared {
+        if changed {
             self.rebuild_groups();
         }
         self
@@ -794,93 +768,6 @@ fn agent_moved_past_ask(agent: &AgentState, ask: &FeedItem) -> bool {
     agent.last_activity > ask.updated_at
 }
 
-/// Whether a plan-approval's resolution is an explicit allow.
-fn resolution_is_allow(item: &FeedItem) -> bool {
-    item.resolution
-        .as_ref()
-        .is_some_and(crate::agents::choice_is_allow)
-}
-
-/// Whether a plan-approval was explicitly *denied*. A deny is an actual refusal
-/// (a `choice` that is not an allow); an expiry/moved-on resolution carries
-/// `{"expired": true}` with no `choice` and is therefore not a deny — the human
-/// didn't refuse, the ask was reclaimed because the session moved on.
-fn resolution_is_deny(item: &FeedItem) -> bool {
-    item.resolution.as_ref().is_some_and(|resolution| {
-        resolution.decision.get("choice").is_some() && !crate::agents::choice_is_allow(resolution)
-    })
-}
-
-/// Plan-approval feed items visible across the snapshot's buckets, regardless of
-/// terminal status: a within-turn native-UI approval is still `Pending` (in
-/// `needs_attention`), a Rimz-resolved one lands in `recently_answered`, and a
-/// moved-on/abandoned one rode into `recent_activity`. The "left plan mode"
-/// signal can sit in any of them, so [`clear_exited_plan_modes`] scans all three.
-fn plan_approval_candidates<'a>(
-    needs_attention: &'a [FeedItem],
-    recently_answered: &'a [FeedItem],
-    recent_activity: &'a [SidebarActivity],
-) -> Vec<&'a FeedItem> {
-    needs_attention
-        .iter()
-        .chain(recently_answered.iter())
-        .chain(
-            recent_activity
-                .iter()
-                .filter_map(|activity| match activity {
-                    SidebarActivity::Feed { item } => Some(item.as_ref()),
-                    SidebarActivity::Event { .. } => None,
-                }),
-        )
-        .filter(|item| item.kind == FeedKind::PlanApproval)
-        .collect()
-}
-
-/// Clear `plan_mode` on any agent that has *left its read-only planning phase*.
-/// An `ExitPlanMode` plan-approval is the "left plan mode" signal the lifecycle
-/// log can't carry — after approval the agent runs auto mode firing only
-/// per-tool hooks, so the carried-forward `plan_mode` would keep the thinking
-/// sparkle on a working agent. The approval is a feed item, visible only here at
-/// projection time. Two independent signals close the gap:
-///
-/// - **Approved through Rimz.** An allow-resolved approval clears it outright.
-/// - **Approved in the agent's own UI.** Rimz does not answer plan approvals by
-///   default, so the common case never produces an allow resolution — the human
-///   approves in the agent's UI and it runs the plan. The per-tool activity
-///   heartbeat advances `last_activity` past the ask's `updated_at` on the next
-///   tool, so "the agent moved past its own plan-approval ask" is the native-UI
-///   exit signal ([`agent_moved_past_ask`]). This branch only bites once
-///   `last_activity` has been folded from the heartbeat (see
-///   [`SidebarSnapshot::with_agent_activity`]).
-///
-/// A *denied* plan leaves the agent planning, so a deny never clears — even if
-/// the agent then ran read-only tools. `updated_at > last_seen` scopes the
-/// approval to the current planning episode: `last_seen` is the timestamp of the
-/// agent's latest *lifecycle* event (the heartbeat advances `last_activity`,
-/// never `last_seen`), so a prior turn's approval is older than a fresh
-/// plan-mode prompt and is ignored — a new planning phase still sparkles.
-///
-/// Returns whether any agent's `plan_mode` flipped, so callers can rebuild rows.
-fn clear_exited_plan_modes(agents: &mut [AgentState], plan_asks: &[&FeedItem]) -> bool {
-    let mut cleared = false;
-    for agent in agents.iter_mut().filter(|agent| agent.plan_mode) {
-        let exited_plan_mode = plan_asks.iter().any(|item| {
-            item.kind == FeedKind::PlanApproval
-                && item.source_kind == "agent-hook"
-                && item.source == agent.kind
-                && item.agent_session_id() == Some(agent.agent_id.as_str())
-                && item.updated_at > agent.last_seen
-                && !resolution_is_deny(item)
-                && (resolution_is_allow(item) || agent_moved_past_ask(agent, item))
-        });
-        if exited_plan_mode {
-            agent.plan_mode = false;
-            cleared = true;
-        }
-    }
-    cleared
-}
-
 /// Overlay a pending ask onto its agent's pane row: the row keeps the agent's
 /// identity and capability line but takes the ask's waiting status, request,
 /// surface, resolver, options, and age.
@@ -1040,7 +927,6 @@ fn row_from_agent(agent: &AgentState) -> SidebarRow {
         name: agent.kind.clone(),
         status: Some(status),
         permission_posture: Some(agent.permission_posture),
-        plan_mode: agent.plan_mode,
         pane: agent.pane.clone(),
         request_id: None,
         surface: None,
@@ -1073,7 +959,6 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
         name,
         status: None,
         permission_posture: None,
-        plan_mode: false,
         pane: Some(pane.clone()),
         request_id: None,
         surface: None,
@@ -1105,7 +990,6 @@ fn row_from_remote_control(pane: &PaneRef) -> SidebarRow {
         name: crate::remote_control::host_label(pane).to_owned(),
         status: None,
         permission_posture: None,
-        plan_mode: false,
         pane: Some(pane.clone()),
         request_id: None,
         surface: None,
@@ -1183,7 +1067,6 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         name: item.source.clone(),
         status: Some(AgentStatus::Waiting),
         permission_posture: matched.map(|agent| agent.permission_posture),
-        plan_mode: matched.is_some_and(|agent| agent.plan_mode),
         pane: item
             .pane
             .clone()
@@ -1670,22 +1553,28 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             .get("status")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or(AgentStatus::Idle);
-        let permission_posture: PermissionPosture = event
+        // The permission slider is sticky and carried forward: an event that
+        // names no posture keeps the prior value. Back-compat: an event an older
+        // binary wrote encoded plan as a separate `plan_mode: true` flag riding a
+        // `default` posture, so fold that legacy pair back into `Plan`; new
+        // events carry `plan` in the posture directly.
+        let parsed_posture = event
             .params
             .get("permission_posture")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .or_else(|| prior.map(|p| p.permission_posture))
-            .unwrap_or(PermissionPosture::Default);
-        // Plan mode carries forward like posture: an event that omits it (the
-        // prompt/stop turn boundaries report no mode) keeps the prior value, so
-        // toggling plan mode mid-session persists until the agent reports a new
-        // one.
-        let plan_mode: bool = event
+            .and_then(|v| serde_json::from_value::<PermissionPosture>(v.clone()).ok());
+        let legacy_plan = event
             .params
             .get("plan_mode")
             .and_then(serde_json::Value::as_bool)
-            .or_else(|| prior.map(|p| p.plan_mode))
             .unwrap_or(false);
+        let permission_posture: PermissionPosture =
+            if legacy_plan && matches!(parsed_posture, None | Some(PermissionPosture::Default)) {
+                PermissionPosture::Plan
+            } else {
+                parsed_posture
+                    .or_else(|| prior.map(|p| p.permission_posture))
+                    .unwrap_or(PermissionPosture::Default)
+            };
         let param_string = |key: &str| {
             event
                 .params
@@ -1769,7 +1658,6 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             kind: kind.clone(),
             status,
             permission_posture,
-            plan_mode,
             pane,
             agent_pid,
             agent_process_start,
@@ -1905,7 +1793,6 @@ mod tests {
             kind: kind.into(),
             status,
             permission_posture: posture,
-            plan_mode: false,
             pane: None,
             agent_pid: None,
             agent_process_start: None,
@@ -2007,136 +1894,30 @@ mod tests {
         assert_eq!(snap.worktree_groups[0].rows.len(), 2);
     }
 
-    /// A resolved `ExitPlanMode` plan-approval bound to `session`, decided
-    /// `allow`/deny, `secs_after_last_seen` seconds after the agent's last
-    /// lifecycle event (negative = before).
-    fn resolved_plan_approval(session: &str, allow: bool, secs_after_last_seen: i64) -> FeedItem {
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut item = FeedItem::new(
-            workspace,
-            Surface::NativeUi,
-            FeedKind::PlanApproval,
-            "plan approval",
-            "claude",
-            "agent-hook",
-        );
-        item.payload = serde_json::json!({ "session_id": session });
-        item.status = FeedStatus::Resolved;
-        // `planning_agent` anchors `last_seen` at rank 50_000 → now − 50s; place
-        // the resolution that many seconds to either side of it.
-        let last_seen = Timestamp::now() - std::time::Duration::from_secs(50);
-        item.updated_at = if secs_after_last_seen >= 0 {
-            last_seen + std::time::Duration::from_secs(secs_after_last_seen as u64)
-        } else {
-            last_seen - std::time::Duration::from_secs((-secs_after_last_seen) as u64)
-        };
-        item.resolution = Some(crate::feed::Resolution::new(
-            serde_json::json!({ "choice": if allow { "allow" } else { "deny" } }),
-            crate::feed::ResolutionMethod::Sidebar,
-        ));
-        item
-    }
-
     fn planning_agent(session: &str) -> AgentState {
         planning_agent_of("claude", session)
     }
 
     fn planning_agent_of(kind: &str, session: &str) -> AgentState {
         // Rank 50_000 → last_seen at now − 50s, the plan-mode prompt time.
-        let mut agent = agent(
+        agent(
             kind,
             session,
             AgentStatus::Running,
-            PermissionPosture::Default,
+            PermissionPosture::Plan,
             50_000,
-        );
-        agent.plan_mode = true;
-        agent
+        )
     }
 
-    fn plan_mode_after_approval(item: FeedItem, agent: AgentState) -> bool {
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let snap =
-            SidebarSnapshot::build_with_agents(workspace, vec![item], Vec::new(), vec![agent]);
-        snap.agents[0].plan_mode
-    }
-
-    #[test]
-    fn approving_a_plan_clears_thinking() {
-        // The reported bug: after the plan is approved the agent runs auto mode,
-        // but `plan_mode` was carried forward, so the thinking sparkle never
-        // quit. An allow-resolved plan-approval newer than `last_seen` clears it.
-        let item = resolved_plan_approval("sess-1", true, 10);
-        assert!(!plan_mode_after_approval(item, planning_agent("sess-1")));
-    }
-
-    #[test]
-    fn thinking_survives_deny_prior_turn_and_foreign_approval() {
-        // Deny: the agent keeps planning, so the sparkle stays.
-        let denied = resolved_plan_approval("sess-1", false, 10);
-        assert!(plan_mode_after_approval(denied, planning_agent("sess-1")));
-
-        // Prior turn: an approval older than this planning episode's `last_seen`
-        // belongs to a finished turn and must not silence a fresh plan prompt.
-        let stale = resolved_plan_approval("sess-1", true, -10);
-        assert!(plan_mode_after_approval(stale, planning_agent("sess-1")));
-
-        // Another session's approval never touches this agent.
-        let foreign = resolved_plan_approval("sess-other", true, 10);
-        assert!(plan_mode_after_approval(foreign, planning_agent("sess-1")));
-    }
-
-    /// A still-pending native-UI plan approval (the human approves in the
-    /// agent's own UI, so Rimz never resolves it), `secs_after_last_seen`
-    /// seconds after the agent's last lifecycle event.
-    fn pending_plan_approval(session: &str, secs_after_last_seen: i64) -> FeedItem {
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut item = FeedItem::new(
-            workspace,
-            Surface::NativeUi,
-            FeedKind::PlanApproval,
-            "plan approval",
-            "claude",
-            "agent-hook",
-        );
-        item.payload = serde_json::json!({ "session_id": session });
-        // Pending — no resolution. `planning_agent` anchors `last_seen` at now − 50s.
-        let last_seen = Timestamp::now() - std::time::Duration::from_secs(50);
-        item.updated_at = last_seen + std::time::Duration::from_secs(secs_after_last_seen as u64);
-        item
-    }
-
-    /// Build the snapshot, then fold a heartbeat touch `touch_secs_after_last_seen`
-    /// seconds after the agent's last lifecycle event — the per-tool activity
-    /// that advances `last_activity` and signals the agent moved past its ask.
-    fn plan_mode_after_activity(item: FeedItem, agent: AgentState, touch_secs: i64) -> bool {
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let last_seen = Timestamp::now() - std::time::Duration::from_secs(50);
-        let touch = AgentActivity {
-            kind: agent.kind.clone(),
-            agent_id: agent.agent_id.clone(),
-            at: last_seen + std::time::Duration::from_secs(touch_secs as u64),
-            // This helper exercises the approval clear; the slider override is
-            // inert with `None`.
-            plan_mode: None,
-        };
-        let snap =
-            SidebarSnapshot::build_with_agents(workspace, vec![item], Vec::new(), vec![agent])
-                .with_agent_activity(&[touch]);
-        snap.agents[0].plan_mode
-    }
-
-    /// Build the snapshot with `items` in the feed, then fold one heartbeat touch
-    /// `touch_secs` after the agent's last lifecycle event (negative = before)
-    /// carrying `touch_plan_mode` as its slider reading. Returns the agent's
-    /// `plan_mode` after the fold — the path the mid-turn shift-tab-out clear
-    /// rides.
-    fn plan_mode_after_slider(
-        items: Vec<FeedItem>,
+    /// Build the snapshot, then fold one heartbeat touch `touch_secs` after the
+    /// agent's last lifecycle event (negative = before) carrying `touch_posture`
+    /// as its slider reading. Returns the agent's posture after the bidirectional
+    /// override — the path the mid-turn slider move rides.
+    fn posture_after_slider(
         agent: AgentState,
-        touch_plan_mode: Option<bool>,
+        touch_posture: Option<PermissionPosture>,
         touch_secs: i64,
-    ) -> bool {
+    ) -> PermissionPosture {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let last_seen = Timestamp::now() - std::time::Duration::from_secs(50);
         let at = if touch_secs >= 0 {
@@ -2148,100 +1929,83 @@ mod tests {
             kind: agent.kind.clone(),
             agent_id: agent.agent_id.clone(),
             at,
-            plan_mode: touch_plan_mode,
+            posture: touch_posture,
         };
-        let snap = SidebarSnapshot::build_with_agents(workspace, items, Vec::new(), vec![agent])
-            .with_agent_activity(&[touch]);
-        snap.agents[0].plan_mode
+        let snap =
+            SidebarSnapshot::build_with_agents(workspace, Vec::new(), Vec::new(), vec![agent])
+                .with_agent_activity(&[touch]);
+        snap.agents[0].permission_posture
     }
 
     #[test]
-    fn shift_tab_out_of_plan_clears_thinking_via_heartbeat() {
-        // The reported bug: a prompt submitted in plan mode latches `plan_mode`,
-        // then the user shift-tabs to auto. No `ExitPlanMode` approval fires, so
-        // the only mid-turn signal is the next `PostToolUse` carrying a non-plan
-        // slider. The heartbeat ferries it and the snapshot drops the sparkle.
-        assert!(!plan_mode_after_slider(
-            Vec::new(),
-            planning_agent("sess-1"),
-            Some(false),
-            10
-        ));
+    fn shift_tab_out_of_plan_drops_thinking_via_heartbeat() {
+        // The reported bug: a session in plan mode latched the thinking sparkle.
+        // The user shift-tabs to auto; the next `PostToolUse` carries the new
+        // slider, the heartbeat ferries it, and the override moves the posture.
+        assert_eq!(
+            posture_after_slider(
+                planning_agent("sess-1"),
+                Some(PermissionPosture::Default),
+                10
+            ),
+            PermissionPosture::Default
+        );
     }
 
     #[test]
     fn still_planning_slider_keeps_thinking() {
-        // A genuinely-planning agent runs read-only tools before presenting its
-        // plan; those `PostToolUse` carry slider `plan` → `Some(true)`.
-        // Clear-only ignores `Some(true)`, so the sparkle stays.
-        assert!(plan_mode_after_slider(
-            Vec::new(),
-            planning_agent("sess-1"),
-            Some(true),
-            10
-        ));
+        // A genuinely-planning agent's read-only tools carry slider `plan`; the
+        // override re-asserts `Plan`, so the sparkle stays.
+        assert_eq!(
+            posture_after_slider(planning_agent("sess-1"), Some(PermissionPosture::Plan), 10),
+            PermissionPosture::Plan
+        );
     }
 
     #[test]
-    fn heartbeat_without_plan_mode_field_does_not_clear() {
+    fn heartbeat_without_posture_carries_forward() {
         // A touch an older binary wrote (or an event that named no slider)
-        // carries `None`. The override is inert, so the carried-forward
-        // `plan_mode` survives.
-        assert!(plan_mode_after_slider(
-            Vec::new(),
-            planning_agent("sess-1"),
-            None,
-            10
-        ));
+        // carries `None`. The override is inert, so the prior posture survives.
+        assert_eq!(
+            posture_after_slider(planning_agent("sess-1"), None, 10),
+            PermissionPosture::Plan
+        );
     }
 
     #[test]
-    fn stale_heartbeat_does_not_clear() {
-        // A non-plan touch older than the plan-mode prompt (`last_seen`) belongs
-        // to a prior turn; the `> last_seen` guard ignores it so a fresh plan
-        // prompt still sparkles.
-        assert!(plan_mode_after_slider(
-            Vec::new(),
-            planning_agent("sess-1"),
-            Some(false),
-            -10
-        ));
+    fn stale_heartbeat_does_not_override() {
+        // A touch older than the plan-mode prompt (`last_seen`) belongs to a
+        // prior turn; the `> last_seen` guard ignores it so a fresh plan prompt
+        // keeps its posture.
+        assert_eq!(
+            posture_after_slider(
+                planning_agent("sess-1"),
+                Some(PermissionPosture::Default),
+                -10
+            ),
+            PermissionPosture::Plan
+        );
     }
 
     #[test]
-    fn override_does_not_fight_clear_exited_plan_modes() {
-        // A denied plan keeps the agent planning; its read-only tools carry
-        // slider `plan` → `Some(true)`. Clear-only ignores `Some(true)` and the
-        // deny blocks the approval clear, so the sparkle stays — the slider
-        // override and the approval clear never conflict.
-        let denied = resolved_plan_approval("sess-1", false, 5);
-        assert!(plan_mode_after_slider(
-            vec![denied],
-            planning_agent("sess-1"),
-            Some(true),
-            10
-        ));
+    fn codex_shift_tab_out_drops_thinking() {
+        // Parity: the heartbeat override is agent-agnostic, so a Codex agent
+        // shift-tabbing out of plan moves identically to Claude.
+        assert_eq!(
+            posture_after_slider(
+                planning_agent_of("codex", "sess-1"),
+                Some(PermissionPosture::Default),
+                10
+            ),
+            PermissionPosture::Default
+        );
     }
 
     #[test]
-    fn codex_shift_tab_out_clears_thinking() {
-        // Parity: the heartbeat touch site and `plan_mode_from_payload` are
-        // agent-agnostic, so a Codex agent shift-tabbing out of plan clears
-        // identically to Claude.
-        assert!(!plan_mode_after_slider(
-            Vec::new(),
-            planning_agent_of("codex", "sess-1"),
-            Some(false),
-            10
-        ));
-    }
-
-    #[test]
-    fn no_tool_turn_keeps_thinking_until_stop() {
-        // A racy plan capture on a no-tool turn (the agent answers in text) fires
-        // no `PostToolUse`, so no heartbeat carries a fresh slider. The override
-        // can't fire; the sparkle clears only at the unconditional `Stop`. A
-        // documented gap — assert it so a future change can't silently alter it.
+    fn no_tool_turn_keeps_plan_until_next_event() {
+        // No `PostToolUse` fires, so no heartbeat carries a fresh slider. The
+        // posture is sticky and carries forward; it changes only when the next
+        // lifecycle event or tool reports a new slider.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let snap = SidebarSnapshot::build_with_agents(
             workspace,
@@ -2250,36 +2014,85 @@ mod tests {
             vec![planning_agent("sess-1")],
         )
         .with_agent_activity(&[]);
-        assert!(snap.agents[0].plan_mode);
+        assert_eq!(snap.agents[0].permission_posture, PermissionPosture::Plan);
     }
 
     #[test]
-    fn native_ui_approval_clears_thinking_via_activity() {
-        // The reported bug: a plan-slider agent approves its plan in the agent's
-        // own UI, so Rimz never resolves the ask. The per-tool heartbeat advances
-        // `last_activity` past the still-pending ask, which is the "left plan
-        // mode" signal — the now-working agent must drop the thinking sparkle.
-        // (At reducer time the turn-grained `last_activity` hasn't advanced yet;
-        // only the heartbeat fold in `with_agent_activity` clears it.)
-        let pending = pending_plan_approval("sess-1", 5);
-        assert!(!plan_mode_after_activity(
-            pending,
-            planning_agent("sess-1"),
-            10
-        ));
-    }
+    fn plan_posture_survives_subagent_and_flips_on_own_non_plan_touch() {
+        // The reported bug: a parent agent in plan mode rendered as "working". A
+        // parent in `plan` stays `plan` while a subagent (a separate `agent_id`)
+        // runs non-plan tools, and flips only to the slider its OWN next tool
+        // reports — never the subagent's.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let last_seen = Timestamp::now() - std::time::Duration::from_secs(50);
+        let parent = planning_agent("sess-1");
+        let subagent = agent(
+            "claude",
+            "sess-1.sub",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            50_000,
+        );
 
-    #[test]
-    fn denied_plan_keeps_thinking_even_after_activity() {
-        // A denied plan keeps the agent planning. Even if it then runs read-only
-        // tools — advancing `last_activity` past the ask — the deny dominates the
-        // moved-past branch, so the sparkle stays.
-        let denied = resolved_plan_approval("sess-1", false, 5);
-        assert!(plan_mode_after_activity(
-            denied,
-            planning_agent("sess-1"),
-            10
-        ));
+        // The parent's own read-only tool still reads `plan`; the subagent's
+        // non-plan tool touches its own leaf-session heartbeat, never the parent.
+        let parent_plan_touch = AgentActivity {
+            kind: "claude".to_owned(),
+            agent_id: "sess-1".to_owned(),
+            at: last_seen + std::time::Duration::from_secs(10),
+            posture: Some(PermissionPosture::Plan),
+        };
+        let subagent_touch = AgentActivity {
+            kind: "claude".to_owned(),
+            agent_id: "sess-1.sub".to_owned(),
+            at: last_seen + std::time::Duration::from_secs(15),
+            posture: Some(PermissionPosture::Default),
+        };
+        let snap = SidebarSnapshot::build_with_agents(
+            workspace.clone(),
+            Vec::new(),
+            Vec::new(),
+            vec![parent.clone(), subagent.clone()],
+        )
+        .with_agent_activity(&[parent_plan_touch, subagent_touch]);
+        let parent_posture = snap
+            .agents
+            .iter()
+            .find(|a| a.agent_id == "sess-1")
+            .unwrap()
+            .permission_posture;
+        assert_eq!(
+            parent_posture,
+            PermissionPosture::Plan,
+            "a subagent's non-plan tool must not clobber the parent's plan posture"
+        );
+
+        // After the human approves, the parent's own next tool reports the slider
+        // moved off `plan`; only then does the parent flip to `Default`.
+        let parent_exit_touch = AgentActivity {
+            kind: "claude".to_owned(),
+            agent_id: "sess-1".to_owned(),
+            at: last_seen + std::time::Duration::from_secs(20),
+            posture: Some(PermissionPosture::Default),
+        };
+        let snap = SidebarSnapshot::build_with_agents(
+            workspace,
+            Vec::new(),
+            Vec::new(),
+            vec![parent, subagent],
+        )
+        .with_agent_activity(&[parent_exit_touch]);
+        let parent_posture = snap
+            .agents
+            .iter()
+            .find(|a| a.agent_id == "sess-1")
+            .unwrap()
+            .permission_posture;
+        assert_eq!(
+            parent_posture,
+            PermissionPosture::Default,
+            "the parent flips on its own non-plan slider reading"
+        );
     }
 
     #[test]
@@ -3319,7 +3132,7 @@ mod tests {
             kind: "claude".to_owned(),
             agent_id: "live-claude".to_owned(),
             at: Timestamp::now(),
-            plan_mode: None,
+            posture: None,
         };
         let snapshot =
             SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![session])
