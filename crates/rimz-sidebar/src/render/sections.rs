@@ -510,7 +510,7 @@ fn capability_line(
 /// an equal gap at the trailing edge, so every agent's bar shares one left edge
 /// and the bars line up across worktrees with no alignment bookkeeping. When the
 /// statusline reports the per-message token breakdown the fill is split into
-/// colored segments (fresh input / cache writes / cache reads) — the three add
+/// colored segments (cache writes / cache reads / fresh input) — the three add
 /// up to exactly the used percentage — otherwise it is a single-color ramp.
 fn gauge_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     let percent = gauge_percent(row)?;
@@ -534,19 +534,19 @@ fn gauge_percent(row: &SidebarRow) -> Option<u8> {
         .or(row.context_pct)
 }
 
-/// The context bar's color segments, when the per-message breakdown is known:
-/// fresh `input` (green), cache writes (amber), cache reads (blue). `None` when
-/// no breakdown was reported (a fresh session, post-compact, or a non-Claude
-/// agent), so the bar falls back to a single-color ramp.
+/// The context bar's color segments, when the per-message breakdown is known,
+/// left to right: cache writes (amber), cache reads (green), fresh `input`
+/// (red). `None` when no breakdown was reported (a fresh session, post-compact,
+/// or a non-Claude agent), so the bar falls back to a single-color ramp.
 fn gauge_segments(row: &SidebarRow) -> Option<[(u64, Color); 3]> {
     let usage = ctx(row)?.tokens.as_ref()?.current_usage.as_ref()?;
     let input = usage.input_tokens.unwrap_or(0);
     let writes = usage.cache_creation_input_tokens.unwrap_or(0);
     let reads = usage.cache_read_input_tokens.unwrap_or(0);
     (input + writes + reads > 0).then_some([
-        (input, Color::Green),
         (writes, Color::Yellow),
-        (reads, Color::Blue),
+        (reads, Color::Green),
+        (input, Color::Red),
     ])
 }
 

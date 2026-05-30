@@ -16,11 +16,11 @@ use ratatui::style::{Color, Modifier, Style};
 /// names (`Color::Green` for "good", `Color::Red` for "alarm"); [`Theme::style`]
 /// resolves each to one of these indexed tones, so the whole palette lives in
 /// one place and stays easy on the eyes on a dark terminal.
-const GREEN: Color = Color::Indexed(108); // sage — running tally / low gauge / additions
-const AMBER: Color = Color::Indexed(179); // gold — waiting / mid gauge
-const RED: Color = Color::Indexed(167); // balanced red — failed / high gauge
-const CYAN: Color = Color::Indexed(73); // teal — worktree headers / cache writes
-const BLUE: Color = Color::Indexed(75); // sky — cache reads in the context bar
+const GREEN: Color = Color::Indexed(108); // sage — running tally / low gauge / additions / cache reads
+const AMBER: Color = Color::Indexed(179); // gold — waiting / mid gauge / cache writes
+const RED: Color = Color::Indexed(167); // balanced red — failed / high gauge / fresh input
+const CYAN: Color = Color::Indexed(73); // teal — worktree headers
+const BLUE: Color = Color::Indexed(75); // sky — generic blue accent (no current context-bar caller)
 const VIOLET: Color = Color::Indexed(141); // soft purple — the weekly "mana" bar and remote-host rows
 const DIM: Color = Color::Indexed(244); // mid gray — separators, ages, labels
 
