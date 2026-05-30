@@ -100,6 +100,16 @@ pub struct SidebarSnapshot {
     /// per-path grouping) and the `rimz sidebar snapshot` CLI fills it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_root: Option<PathBuf>,
+    /// The repo's worktree checkout roots, as `git worktree list` reports them.
+    /// A pane whose cwd is inside any of these is one of the project's
+    /// worktrees and earns its own pod — *including a worktree parked outside
+    /// `project_root`*, which the `project_root` prefix test alone would miss.
+    /// Like `project_root`, this is workspace identity the reducer can't read
+    /// from the ledger, so the pure path leaves it empty (the `project_root`
+    /// prefix test then stands alone) and the `rimz sidebar snapshot` CLI fills
+    /// it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worktree_roots: Vec<PathBuf>,
 }
 
 /// One sidebar's view of the panes sharing its tab/window. `None` on the
@@ -316,10 +326,11 @@ impl SidebarSnapshot {
         clear_exited_plan_modes(&mut agents, &plan_asks);
 
         let display_name = workspace_id.as_str().to_owned();
-        // The pure reducer has no project root, so every cwd keeps per-path
-        // grouping here; callers that know the root re-fold via `with_project_root`.
+        // The pure reducer has no project root or worktree set, so every cwd
+        // keeps per-path grouping here; callers that know them re-fold via
+        // `with_project_root` / `with_worktree_roots`.
         let worktree_groups =
-            build_worktree_groups(&agents, &needs_attention, &resolver_working, None);
+            build_worktree_groups(&agents, &needs_attention, &resolver_working, None, &[]);
 
         Self {
             workspace_id,
@@ -334,6 +345,7 @@ impl SidebarSnapshot {
             agent_hooks_ready: false,
             own_view: None,
             project_root: None,
+            worktree_roots: Vec::new(),
         }
     }
 
@@ -345,15 +357,28 @@ impl SidebarSnapshot {
             &self.needs_attention,
             &self.resolver_working,
             self.project_root.as_deref(),
+            &self.worktree_roots,
         );
     }
 
-    /// Record the project root and re-fold groups so a cwd outside it lands in
-    /// the `external` catch-all instead of its own pod. Callers set this from
-    /// the workspace record after construction (the reducer can't read it),
-    /// mirroring how `display_name` is filled.
+    /// Record the project root and re-fold groups so a cwd that is neither under
+    /// it nor inside one of the repo's worktrees lands in the `external`
+    /// catch-all instead of its own pod. Callers set this from the workspace
+    /// record after construction (the reducer can't read it), mirroring how
+    /// `display_name` is filled.
     pub fn with_project_root(mut self, project_root: Option<PathBuf>) -> Self {
         self.project_root = project_root;
+        self.rebuild_groups();
+        self
+    }
+
+    /// Record the repo's worktree checkout roots and re-fold groups so a
+    /// worktree parked *outside* `project_root` still earns its own pod rather
+    /// than folding into `external`. Like `with_project_root`, the
+    /// `rimz sidebar snapshot` CLI fills this from `git worktree list` after
+    /// construction; the pure path leaves it empty.
+    pub fn with_worktree_roots(mut self, worktree_roots: Vec<PathBuf>) -> Self {
+        self.worktree_roots = worktree_roots;
         self.rebuild_groups();
         self
     }
@@ -469,6 +494,7 @@ impl SidebarSnapshot {
             &self.resolver_working,
             &panes,
             self.project_root.as_deref(),
+            &self.worktree_roots,
         );
         self
     }
@@ -610,9 +636,10 @@ fn build_worktree_groups(
     needs_attention: &[FeedItem],
     resolver_working: &[FeedItem],
     project_root: Option<&Path>,
+    worktree_roots: &[PathBuf],
 ) -> Vec<SidebarWorktreeGroup> {
     let rows = rows_from_ledger(agents, needs_attention, resolver_working);
-    build_worktree_groups_from_rows(rows, project_root)
+    build_worktree_groups_from_rows(rows, project_root, worktree_roots)
 }
 
 /// One pane = one row, by construction. Every live pane anchors exactly one
@@ -629,10 +656,12 @@ fn build_worktree_groups_with_panes(
     resolver_working: &[FeedItem],
     panes: &[PaneRef],
     project_root: Option<&Path>,
+    worktree_roots: &[PathBuf],
 ) -> Vec<SidebarWorktreeGroup> {
     build_worktree_groups_from_rows(
         rows_from_panes(agents, needs_attention, resolver_working, panes),
         project_root,
+        worktree_roots,
     )
 }
 
@@ -890,6 +919,7 @@ fn rows_from_ledger(
 fn build_worktree_groups_from_rows(
     rows: Vec<SidebarRow>,
     project_root: Option<&Path>,
+    worktree_roots: &[PathBuf],
 ) -> Vec<SidebarWorktreeGroup> {
     // A worktree dir holds one branch at a time, so rows under one path
     // normally share a branch and group together — the agent and its shell
@@ -925,6 +955,7 @@ fn build_worktree_groups_from_rows(
             row.worktree_branch.as_deref(),
             split_by_branch,
             project_root,
+            worktree_roots,
         );
         by_group
             .entry(key)
@@ -1258,14 +1289,21 @@ fn worktree_group_key(
     branch: Option<&str>,
     split_by_branch: bool,
     project_root: Option<&Path>,
+    worktree_roots: &[PathBuf],
 ) -> (SidebarWorktreeKind, String, String) {
     let branch = branch.filter(|branch| !branch.is_empty());
     if let Some(path) = path.filter(|path| !path.is_empty()) {
-        // A cwd outside the project root is not one of the project's worktrees
-        // (a home shell, `/tmp`), so it folds into the `external` catch-all
-        // rather than minting its own pod. With no known root, every path keeps
-        // per-path grouping.
-        let in_project = project_root.is_none_or(|root| is_within(root, Path::new(path)));
+        // A cwd is one of the project's worktrees when it is under the main
+        // checkout *or* inside any worktree `git worktree list` reported —
+        // including a worktree parked outside `project_root`. Only a cwd that is
+        // neither (a home shell, `/tmp`, CI) folds into the `external` catch-all
+        // rather than minting its own pod. With no known root and no enumerated
+        // worktrees, every path keeps per-path grouping.
+        let cwd = Path::new(path);
+        let in_project = match project_root {
+            Some(root) => is_within(root, cwd) || worktree_roots.iter().any(|w| is_within(w, cwd)),
+            None => worktree_roots.is_empty() || worktree_roots.iter().any(|w| is_within(w, cwd)),
+        };
         if in_project {
             let label = branch.map(ToOwned::to_owned).unwrap_or_else(|| {
                 Path::new(path)
@@ -1307,7 +1345,8 @@ fn worktree_group_key(
 /// True when `path` is `root` itself or nested under it, compared by path
 /// components so `/home/marvinX` is not treated as under `/home/marvin`. This
 /// is a lexical test on the raw cwd the mux reported — no filesystem
-/// canonicalization — keeping the reducer pure, consistent with `worktree_matches`.
+/// canonicalization — keeping the reducer pure. Used against both the project
+/// root and each enumerated worktree root to decide a cwd's pod.
 fn is_within(root: &Path, path: &Path) -> bool {
     let mut root_components = root.components();
     let mut path_components = path.components();
@@ -2696,6 +2735,60 @@ mod tests {
         let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new())
             .with_project_root(Some(PathBuf::from("/home/marvin")))
             .with_live_panes(vec![pane("%1", "zsh", "/home/marvinX/repo")], None);
+
+        let group = &snapshot.worktree_groups[0];
+        assert_eq!(group.kind, SidebarWorktreeKind::Workspace);
+        assert_eq!(group.label, "external");
+    }
+
+    #[test]
+    fn external_worktree_pane_gets_its_own_pod() {
+        // A worktree parked outside the project root — captured by `git worktree
+        // list` — is project-related and earns its own pod, not the `external`
+        // catch-all the `project_root` prefix test alone would give it.
+        let root = "/repo/rimz";
+        let external = "/elsewhere/feature-wt";
+        let workspace = WorkspaceId::from_project_root(Path::new(root));
+        let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new())
+            .with_project_root(Some(PathBuf::from(root)))
+            .with_worktree_roots(vec![PathBuf::from(root), PathBuf::from(external)])
+            .with_live_panes(vec![pane("%1", "zsh", external)], None);
+
+        assert_eq!(snapshot.worktree_groups.len(), 1);
+        let group = &snapshot.worktree_groups[0];
+        assert_eq!(group.kind, SidebarWorktreeKind::Worktree);
+        assert_eq!(group.key, external);
+        assert_eq!(group.label, "feature-wt");
+    }
+
+    #[test]
+    fn external_worktree_subdir_stays_with_its_worktree() {
+        // A cwd nested under an external worktree root is still that worktree's,
+        // never `external`.
+        let root = "/repo/rimz";
+        let external = "/elsewhere/feature-wt";
+        let workspace = WorkspaceId::from_project_root(Path::new(root));
+        let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new())
+            .with_project_root(Some(PathBuf::from(root)))
+            .with_worktree_roots(vec![PathBuf::from(root), PathBuf::from(external)])
+            .with_live_panes(vec![pane("%1", "zsh", "/elsewhere/feature-wt/src")], None);
+
+        let group = &snapshot.worktree_groups[0];
+        assert_eq!(group.kind, SidebarWorktreeKind::Worktree);
+    }
+
+    #[test]
+    fn non_worktree_path_is_the_only_external() {
+        // With the worktree set known, a cwd that is neither under the project
+        // root nor inside any worktree (a home shell) is all that's left as
+        // `external`.
+        let root = "/repo/rimz";
+        let external = "/elsewhere/feature-wt";
+        let workspace = WorkspaceId::from_project_root(Path::new(root));
+        let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new())
+            .with_project_root(Some(PathBuf::from(root)))
+            .with_worktree_roots(vec![PathBuf::from(root), PathBuf::from(external)])
+            .with_live_panes(vec![pane("%1", "zsh", "/home/marvin")], None);
 
         let group = &snapshot.worktree_groups[0];
         assert_eq!(group.kind, SidebarWorktreeKind::Workspace);

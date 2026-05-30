@@ -672,6 +672,7 @@ fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
         agent_hooks_ready: false,
         own_view: None,
         project_root: None,
+        worktree_roots: Vec::new(),
     }
 }
 

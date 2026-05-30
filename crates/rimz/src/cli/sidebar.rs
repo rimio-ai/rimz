@@ -121,6 +121,15 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     (None, _) => (ledger.snapshot()?, None),
                 };
 
+            // Enumerate the repo's worktrees so a checkout parked outside the
+            // project root still earns its own pod instead of folding into
+            // `external`. The git probe is cached under the diff-stats TTL and
+            // runs on this fetch worker, never the render thread.
+            if let Some(root) = snapshot.project_root.clone() {
+                let roots = project_worktree_roots(&root, ledger.runtime_paths());
+                snapshot = snapshot.with_worktree_roots(roots);
+            }
+
             // Fold each session's rich statusline context onto its agent state
             // (read-only; the feed process is the writer). This enriches the
             // snapshot's `agents[]` for `--json` consumers without changing row
@@ -447,6 +456,24 @@ struct DiffStats {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct DiffStatsCache {
     entries: BTreeMap<String, DiffStatsCacheEntry>,
+    /// The repo's worktree checkout roots, cached under the same TTL as the
+    /// per-worktree diff stats. The set changes only on `git worktree
+    /// add/remove`, so grouping reuses it across ticks instead of forking
+    /// `git worktree list` every snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    worktrees: Option<WorktreeRootsCache>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct WorktreeRootsCache {
+    refreshed_at_ms: u64,
+    roots: Vec<PathBuf>,
+}
+
+impl WorktreeRootsCache {
+    fn is_fresh(&self, now_ms: u64) -> bool {
+        now_ms.saturating_sub(self.refreshed_at_ms) <= DIFF_STATS_TTL.as_millis() as u64
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -600,6 +627,52 @@ fn trunk_ref(worktree: &Path) -> Option<String> {
         worktree,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
     )
+}
+
+/// The repo's worktree checkout roots, so a worktree parked outside the project
+/// root still groups as project-related instead of folding into `external`.
+/// Cached under the diff-stats TTL: the worktree set changes only on `git
+/// worktree add/remove`, so re-forking `git worktree list` every tick would be
+/// pure overhead. Empty on a non-git project or a git probe failure, which
+/// leaves the reducer's `project_root` prefix test to stand alone.
+fn project_worktree_roots(project_root: &Path, runtime: &RuntimePaths) -> Vec<PathBuf> {
+    let cache_path = runtime.root.join("diff-stats.json");
+    let mut cache = read_diff_stats_cache(&cache_path);
+    let now_ms = unix_now_ms();
+    if let Some(cached) = cache.worktrees.as_ref().filter(|w| w.is_fresh(now_ms)) {
+        return cached.roots.clone();
+    }
+    let roots = list_worktree_roots(project_root);
+    cache.worktrees = Some(WorktreeRootsCache {
+        refreshed_at_ms: now_ms,
+        roots: roots.clone(),
+    });
+    if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &cache) {
+        tracing::warn!(path = %cache_path.display(), error = %err, "sidebar worktree-roots cache write failed");
+    }
+    roots
+}
+
+/// Parse `git -C <root> worktree list --porcelain` into the absolute checkout
+/// root of every worktree — main and linked alike — from its `worktree <path>`
+/// lines. Linked worktrees report absolute paths, so a checkout outside the
+/// project root is captured here exactly as the reducer needs it.
+fn list_worktree_roots(project_root: &Path) -> Vec<PathBuf> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["worktree", "list", "--porcelain"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success());
+    let Some(output) = output else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .map(|path| PathBuf::from(path.trim()))
+        .collect()
 }
 
 /// Run `git -C <worktree> <args>` and return its stdout's first non-empty line,
@@ -844,6 +917,63 @@ mod tests {
         // A non-repository path has nothing to diff.
         let plain = tempfile::tempdir().unwrap();
         assert_eq!(worktree_diff_stats(plain.path()), None);
+    }
+
+    #[test]
+    fn list_worktree_roots_includes_a_checkout_outside_the_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        let git = |cwd: &Path, args: &[&str]| {
+            Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .args(args)
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+        };
+        if !git(&main, &["init", "-q"]) {
+            // No git on PATH; the helper degrades to an empty list, which leaves
+            // the reducer's project_root prefix test to stand alone.
+            assert!(list_worktree_roots(&main).is_empty());
+            return;
+        }
+        let _ = git(&main, &["config", "user.email", "t@example.com"]);
+        let _ = git(&main, &["config", "user.name", "t"]);
+        std::fs::write(main.join("f"), "x").unwrap();
+        let _ = git(&main, &["add", "f"]);
+        let _ = git(&main, &["commit", "-q", "-m", "init"]);
+
+        // A worktree parked OUTSIDE the project root (a sibling of `main`).
+        let external = tmp.path().join("external-wt");
+        let _ = git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                external.to_str().unwrap(),
+                "-b",
+                "feature",
+            ],
+        );
+
+        let roots = list_worktree_roots(&main);
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let roots: Vec<PathBuf> = roots.iter().map(|r| canon(r)).collect();
+        assert!(
+            roots.contains(&canon(&main)),
+            "the main checkout is one of the worktree roots"
+        );
+        assert!(
+            roots.contains(&canon(&external)),
+            "a worktree outside the project root is enumerated, so it groups as project-related"
+        );
+
+        // A non-repository path has no worktrees to list.
+        let plain = tempfile::tempdir().unwrap();
+        assert!(list_worktree_roots(plain.path()).is_empty());
     }
 
     #[test]

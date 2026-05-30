@@ -35,6 +35,7 @@ Where the milliseconds are, and what bounds each. Treat the figures as orders of
 | --- | --- | --- |
 | `list-panes` (Zellij/tmux IPC) | 200–680ms, occasionally degraded mid-tick | snapshot cache (750ms TTL, single-flight); per-pane field carry-forward; render-side last-known-good gate |
 | git diff-stats per worktree | 4 sequential `git` forks (trunk ref → merge-base → branch → numstat) | diff-stats cache (`DIFF_STATS_TTL`, 5s), keyed on worktree + session |
+| git worktree enumeration | 1 `git worktree list` fork per snapshot, to group a worktree parked outside the project root | cached in the diff-stats cache under the same `DIFF_STATS_TTL` (the set changes only on `git worktree add/remove`) |
 | snapshot rebuild | O(active-events + items) | event-log rotation caps the active log; carryover preserves the rollup |
 | `rimz pane focus` (a jump) | process spawn + mux IPC, tens–hundreds ms | off the render thread (detached); fire-and-forget |
 | durable file write | temp + 2 fsyncs (file, parent dir) | reserved for the event log and durable state |
