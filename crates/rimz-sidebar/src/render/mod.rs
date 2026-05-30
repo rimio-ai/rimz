@@ -1178,9 +1178,16 @@ mod tests {
         // Those three are a byte-identical prefix of the expanded card.
         assert_eq!(fold, full[..fold.len()], "selection reshaped a fold line");
         // Selection only appended beneath — the budget bars and the work line.
-        assert!(full.len() > fold.len(), "selection must append detail lines");
+        assert!(
+            full.len() > fold.len(),
+            "selection must append detail lines"
+        );
         assert!(full[fold.len()..].iter().any(|line| line.contains("5h↻")));
-        assert!(full[fold.len()..].iter().any(|line| line.contains("worked")));
+        assert!(
+            full[fold.len()..]
+                .iter()
+                .any(|line| line.contains("worked"))
+        );
     }
 
     /// Density sets the resting height; selection always reaches the full card,

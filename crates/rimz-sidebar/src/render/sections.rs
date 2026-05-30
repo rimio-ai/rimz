@@ -455,11 +455,7 @@ fn description_line(theme: &Theme, row: &SidebarRow, tier: Tier, width: usize) -
 /// the left to leave room for the right plus a one-cell gap, then pad the gap so
 /// the right cluster ends at `width`. Shared by the identity line and the meter
 /// rows so every right-anchored column lands on one edge.
-fn pin_right(
-    left: Vec<Span<'static>>,
-    right: Vec<Span<'static>>,
-    width: usize,
-) -> Line<'static> {
+fn pin_right(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) -> Line<'static> {
     if right.is_empty() {
         return Line::from(trim_spans_to_width(left, width));
     }
