@@ -205,7 +205,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                         &mut terminal,
                         &current,
                         health.alert.as_ref(),
-                        &ui,
+                        &mut ui,
                     )?;
                 }
                 if fetched_at.elapsed() >= tick {
@@ -237,14 +237,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 );
             }
             wakeup => {
-                apply_input(
-                    wakeup,
-                    &mut ui,
-                    &mut health,
-                    &mut terminal,
-                    &current,
-                    &config,
-                )?;
+                apply_input(wakeup, &mut ui, &mut health, &mut terminal, &current)?;
             }
         }
     }
@@ -1019,7 +1012,6 @@ fn apply_input(
     health: &mut Health,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     snapshot: &SidebarSnapshot,
-    config: &ServeConfig,
 ) -> Result<()> {
     let outcome = handle_wakeup(wakeup, ui, snapshot);
     if outcome.dismiss {
@@ -1029,7 +1021,7 @@ fn apply_input(
         render::draw_to_terminal_with_ui(terminal, snapshot, health.alert.as_ref(), ui)?;
     }
     if let Some(index) = outcome.focus_index {
-        focus_selected_row(snapshot, index, config);
+        focus_selected_row(snapshot, index);
     }
     Ok(())
 }
@@ -1126,9 +1118,9 @@ fn handle_mouse_click(
     column: u16,
     row: u16,
     ui: &mut UiState,
-    snapshot: &SidebarSnapshot,
+    _snapshot: &SidebarSnapshot,
 ) -> InputOutcome {
-    if let Some(index) = row_index_at_screen_position(snapshot, ui.selected_index, column, row) {
+    if let Some(index) = row_index_at_screen_position(ui, column, row) {
         ui.selected_index = index;
         return InputOutcome::focus(ui.selected_index);
     }
@@ -1161,129 +1153,12 @@ fn sync_selection_to_focused_pane(
     }
 }
 
-fn row_index_at_screen_position(
-    snapshot: &SidebarSnapshot,
-    selected_index: usize,
-    column: u16,
-    row: u16,
-) -> Option<usize> {
-    // The block border occupies row 0 and column 0. Ratatui renders the
-    // snapshot body one cell in from the top-left border.
+fn row_index_at_screen_position(ui: &UiState, column: u16, row: u16) -> Option<usize> {
+    // The block border occupies row 0 and column 0; the body starts one cell in.
     if row == 0 || column == 0 {
         return None;
     }
-    let target = usize::from(row - 1);
-    row_index_at_content_line(snapshot, selected_index, target)
-}
-
-fn row_index_at_content_line(
-    snapshot: &SidebarSnapshot,
-    selected_index: usize,
-    target: usize,
-) -> Option<usize> {
-    // The health alert is pinned below every row, so it never shifts the row
-    // grid; clicks on it fall through to `None`.
-    let mut line = 0_usize;
-    let mut last_nonempty = false;
-
-    if has_attention_line(snapshot) {
-        if target == line {
-            return None;
-        }
-        line += 1;
-        last_nonempty = true;
-    }
-
-    if snapshot.worktree_groups.is_empty() {
-        return None;
-    }
-
-    if last_nonempty {
-        if target == line {
-            return None;
-        }
-        line += 1;
-    }
-
-    let mut row_index = 0_usize;
-    for (group_index, group) in snapshot.worktree_groups.iter().enumerate() {
-        if group_index > 0 {
-            if target == line {
-                return None;
-            }
-            line += 1;
-        }
-
-        if target == line {
-            return None;
-        }
-        line += 1;
-
-        for row in &group.rows {
-            if target == line {
-                return Some(row_index);
-            }
-            line += 1;
-
-            let selected = row_index == selected_index;
-            for _ in 0..row_extra_line_count(row, selected) {
-                if target == line {
-                    return Some(row_index);
-                }
-                line += 1;
-            }
-            row_index += 1;
-        }
-
-        if group.hidden_count > 0 {
-            if target == line {
-                return None;
-            }
-            line += 1;
-        }
-    }
-    None
-}
-
-fn has_attention_line(snapshot: &SidebarSnapshot) -> bool {
-    snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| &group.status_counts)
-        .any(|count| {
-            count.count > 0
-                && matches!(
-                    count.status,
-                    rimz::feed::AgentStatus::Waiting | rimz::feed::AgentStatus::Failed
-                )
-        })
-}
-
-fn row_extra_line_count(row: &rimz::SidebarRow, selected: bool) -> usize {
-    if row.row_kind != rimz::SidebarRowKind::Agent {
-        return 0;
-    }
-    let mut lines = 0;
-    if row_has_capability_line(row) {
-        lines += 1;
-    }
-    // Selection adds only the token-total line; the gauge stays inline on the
-    // capability line whether selected or not (see `render::sections`).
-    if selected && row.total_tokens.is_some() {
-        lines += 1;
-    }
-    lines
-}
-
-fn row_has_capability_line(row: &rimz::SidebarRow) -> bool {
-    row.model.as_deref().is_some_and(|value| !value.is_empty())
-        || row.effort.as_deref().is_some_and(|value| !value.is_empty())
-        || matches!(
-            row.permission_posture,
-            Some(rimz::feed::PermissionPosture::Auto | rimz::feed::PermissionPosture::Yolo)
-        )
-        || row.context_pct.is_some()
-        || row.todo_total.unwrap_or(0) > 0
+    ui.line_map.get(usize::from(row - 1)).copied().flatten()
 }
 
 fn visible_row_count(snapshot: &SidebarSnapshot) -> usize {
@@ -1317,53 +1192,31 @@ fn next_attention_index(snapshot: &SidebarSnapshot, selected: usize) -> Option<u
     })
 }
 
-fn focus_selected_row(snapshot: &SidebarSnapshot, selected: usize, config: &ServeConfig) {
+fn focus_selected_row(snapshot: &SidebarSnapshot, selected: usize) {
     let Some(row) = visible_rows(snapshot).nth(selected) else {
         return;
     };
     let Some(pane) = &row.pane else {
         return;
     };
-    // Jump off the render thread. `rimz pane focus` forks a child that talks to
-    // the multiplexer (process spawn + mux IPC, routinely tens to hundreds of
-    // ms); running it inline froze the loop so the selection bar moved but the
-    // sidebar then stalled — the "click feels slow" symptom. The highlight has
-    // already been redrawn by the caller, so the jump itself is fire-and-forget.
-    spawn_pane_focus(
-        config.rimz_bin.clone(),
-        pane.pane_id.as_str().to_owned(),
-        pane.session_name.clone(),
-        pane.pane_process_start,
-    );
+    // Jump off the render thread: `focus_pane` still forks the mux client
+    // (`zellij action focus-pane-id` / the tmux equivalent), which must never
+    // block the loop. The highlight is already redrawn, so the jump is
+    // fire-and-forget. Focus the pane bound in the snapshot directly — no
+    // `rimz pane focus` child, no per-click `list-panes` re-validation. A pane
+    // recycled in the sub-second window since the snapshot self-corrects on the
+    // next refresh.
+    spawn_pane_focus(pane.pane_id.clone());
 }
 
-/// Run `rimz pane focus` on a detached thread so the user's keypress/click
-/// returns instantly. Errors are logged, not surfaced — a missed jump is a
-/// retriable annoyance, never a reason to block the UI.
-fn spawn_pane_focus(
-    rimz_bin: PathBuf,
-    pane_id: String,
-    session_name: String,
-    pane_process_start: Option<Timestamp>,
-) {
+/// Focus the pane on a detached thread so the keypress/click returns instantly.
+/// Errors are logged, not surfaced — a missed jump is a retriable annoyance,
+/// never a reason to block the UI.
+fn spawn_pane_focus(pane_id: PaneId) {
     std::thread::spawn(move || {
-        let mut command = Command::new(&rimz_bin);
-        command.args(["pane", "focus", &pane_id, "--session-name", &session_name]);
-        if let Some(start) = pane_process_start {
-            command.arg("--pane-process-start").arg(start.to_string());
-        }
-        match command.output() {
-            Ok(output) if output.status.success() => {}
-            Ok(output) => warn!(
-                pane = %pane_id,
-                stderr = %String::from_utf8_lossy(&output.stderr),
-                "sidebar pane focus failed",
-            ),
-            Err(err) => warn!(
-                pane = %pane_id,
-                error = %err,
-                "sidebar pane focus command failed",
-            ),
+        let backend = rimz::mux::backend_for(pane_id.mux());
+        if let Err(err) = backend.focus_pane(&pane_id) {
+            warn!(pane = %pane_id, error = %err, "sidebar pane focus failed");
         }
     });
 }
@@ -1512,6 +1365,77 @@ mod tests {
             }],
             rows: vec![row],
             hidden_count: 0,
+            diff_added: None,
+            diff_removed: None,
+        }];
+        snapshot
+    }
+
+    /// A group whose first row is a multi-line agent card (model, effort, and
+    /// context% set so it carries identity + description + gauge, and selecting
+    /// it reveals its deeper budget-bar and stats lines), followed by a
+    /// single-line process row, with a non-zero hidden count so a `+K more` line
+    /// renders. The fixture for the whole-block clickability regression guard.
+    fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
+        let mut snapshot = snapshot(ws);
+        let agent = rimz::SidebarRow {
+            row_kind: rimz::SidebarRowKind::Agent,
+            id: "agent-1".to_owned(),
+            name: "claude".to_owned(),
+            status: Some(rimz::feed::AgentStatus::Running),
+            permission_posture: Some(rimz::feed::PermissionPosture::Auto),
+            plan_mode: false,
+            pane: Some(pane("terminal_9", "tab_0", false)),
+            request_id: None,
+            surface: None,
+            task: Some("inspect auth".to_owned()),
+            model: Some("Opus".to_owned()),
+            effort: Some("high".to_owned()),
+            context_pct: Some(38),
+            total_tokens: Some(12_400),
+            todo_done: Some(3),
+            todo_total: Some(5),
+            context: None,
+            worktree_path: Some("/repo/main".to_owned()),
+            worktree_branch: Some("main".to_owned()),
+            last_activity: Timestamp::now(),
+            resolver: None,
+            options: Vec::new(),
+        };
+        let process = rimz::SidebarRow {
+            row_kind: rimz::SidebarRowKind::Process,
+            id: "terminal_10".to_owned(),
+            name: "zsh".to_owned(),
+            status: None,
+            permission_posture: None,
+            plan_mode: false,
+            pane: Some(pane("terminal_10", "tab_0", false)),
+            request_id: None,
+            surface: None,
+            task: None,
+            model: None,
+            effort: None,
+            context_pct: None,
+            total_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            context: None,
+            worktree_path: Some("/repo/main".to_owned()),
+            worktree_branch: Some("main".to_owned()),
+            last_activity: Timestamp::now(),
+            resolver: None,
+            options: Vec::new(),
+        };
+        snapshot.worktree_groups = vec![rimz::SidebarWorktreeGroup {
+            key: "/repo/main".to_owned(),
+            label: "main".to_owned(),
+            kind: rimz::SidebarWorktreeKind::Worktree,
+            status_counts: vec![rimz::SidebarStatusCount {
+                status: rimz::feed::AgentStatus::Running,
+                count: 1,
+            }],
+            rows: vec![agent, process],
+            hidden_count: 2,
             diff_added: None,
             diff_removed: None,
         }];
@@ -1837,6 +1761,7 @@ mod tests {
             selected_index: 0,
             help_visible: false,
             animation_phase: 0,
+            line_map: Vec::new(),
         };
 
         sync_selection_to_focused_pane(&mut ui, &snapshot, Some(&focused));
@@ -1858,11 +1783,33 @@ mod tests {
             selected_index: 1,
             help_visible: false,
             animation_phase: 0,
+            line_map: Vec::new(),
         };
 
         sync_selection_to_focused_pane(&mut ui, &snapshot, None);
 
         assert_eq!(ui.selected_index, 1);
+    }
+
+    /// Lay out `snapshot` at a generous size through the real render path,
+    /// returning the freshly-composed hit-test map — the same map the live draw
+    /// stores on `UiState`. Width/height are wide and tall enough that nothing
+    /// the tests probe is clipped.
+    fn line_map_for(snapshot: &SidebarSnapshot, selected: usize) -> Vec<Option<usize>> {
+        let ui = UiState {
+            selected_index: selected,
+            help_visible: false,
+            animation_phase: 0,
+            line_map: Vec::new(),
+        };
+        let (_lines, map) = render::compose_lines(snapshot, None, &ui, 54, 64);
+        map
+    }
+
+    /// The screen row a content-line index maps to: the hit-test reads
+    /// `row - 1`, so map index `i` is screen row `i + 1` (row 0 is the border).
+    fn screen_row_for(map_index: usize) -> u16 {
+        u16::try_from(map_index + 1).unwrap()
     }
 
     #[test]
@@ -1875,31 +1822,71 @@ mod tests {
                 pane("terminal_2", "tab_0", false),
             ],
         );
+        let ui = UiState {
+            line_map: line_map_for(&snapshot, 0),
+            ..UiState::default()
+        };
+
+        // Two single-line process rows, each its own jump target.
+        let row0 = ui.line_map.iter().position(|m| *m == Some(0)).unwrap();
+        let row1 = ui.line_map.iter().position(|m| *m == Some(1)).unwrap();
 
         assert_eq!(
-            row_index_at_screen_position(&snapshot, 0, 1, 1),
-            None,
-            "the group header is not a row"
-        );
-        assert_eq!(
-            row_index_at_screen_position(&snapshot, 0, 0, 2),
+            row_index_at_screen_position(&ui, 0, screen_row_for(row0)),
             None,
             "the border is not clickable content"
         );
-        assert_eq!(row_index_at_screen_position(&snapshot, 0, 1, 2), Some(0));
-        assert_eq!(row_index_at_screen_position(&snapshot, 0, 1, 3), Some(1));
+        assert_eq!(
+            row_index_at_screen_position(&ui, 1, screen_row_for(row0)),
+            Some(0)
+        );
+        assert_eq!(
+            row_index_at_screen_position(&ui, 1, screen_row_for(row1)),
+            Some(1)
+        );
+        // The line just above row 0 is the group header — inert.
+        assert_eq!(
+            row_index_at_screen_position(&ui, 1, screen_row_for(row0 - 1)),
+            None,
+            "the group header is not a row"
+        );
     }
 
     #[test]
-    fn row_index_maps_agent_capability_line_to_same_row() {
+    fn every_line_of_an_agent_block_routes_to_that_agent() {
+        // The user-visible contract: the whole multi-line agent card is one
+        // click target, the group header and `+K more` are inert, and a process
+        // row's single line routes to its own index.
         let ws = workspace();
-        let snapshot = agent_snapshot(&ws);
+        let snapshot = clickable_block_snapshot(&ws);
+        // Select the agent so its deeper budget-bar and stats lines appear too.
+        let map = line_map_for(&snapshot, 0);
 
-        assert_eq!(row_index_at_screen_position(&snapshot, 0, 1, 2), Some(0));
-        assert_eq!(
-            row_index_at_screen_position(&snapshot, 0, 1, 3),
-            Some(0),
-            "clicking an agent capability line routes to that agent row"
+        // Index 0 is the agent (a multi-line card); index 1 is the process row.
+        let agent_lines = map.iter().filter(|m| **m == Some(0)).count();
+        assert!(
+            agent_lines >= 4,
+            "the selected agent card spans identity + description + gauge + \
+             bars/stats, not {agent_lines} lines",
+        );
+        let process_lines = map.iter().filter(|m| **m == Some(1)).count();
+        assert_eq!(process_lines, 1, "a process row is a single line");
+
+        // No content line of the agent block is missed: every map slot routes
+        // through the hit-test to exactly the row it was tagged with.
+        let ui = UiState {
+            line_map: map.clone(),
+            ..UiState::default()
+        };
+        for (i, entry) in map.iter().enumerate() {
+            let got = row_index_at_screen_position(&ui, 1, screen_row_for(i));
+            assert_eq!(got, *entry, "screen row {} mismatched its map slot", i + 1);
+        }
+
+        // The group header, gaps, and the `+K more` hidden-count line are inert.
+        assert!(
+            map.contains(&None),
+            "group header / gaps / +K more stay inert"
         );
     }
 
@@ -1917,9 +1904,11 @@ mod tests {
             selected_index: 0,
             help_visible: false,
             animation_phase: 0,
+            line_map: line_map_for(&snapshot, 0),
         };
+        let row1 = ui.line_map.iter().position(|m| *m == Some(1)).unwrap();
 
-        let outcome = handle_mouse_click(1, 3, &mut ui, &snapshot);
+        let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
 
         assert_eq!(outcome, InputOutcome::focus(1));
         assert_eq!(ui.selected_index, 1);
@@ -1939,6 +1928,7 @@ mod tests {
             selected_index: 0,
             help_visible: false,
             animation_phase: 0,
+            line_map: Vec::new(),
         };
 
         let outcome = handle_key(KeyAction::Down, &mut ui, &snapshot);
@@ -1976,6 +1966,7 @@ mod tests {
             selected_index: 1,
             help_visible: false,
             animation_phase: 0,
+            line_map: Vec::new(),
         };
 
         let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);

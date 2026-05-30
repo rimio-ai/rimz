@@ -11,7 +11,7 @@ Perceived latency lives on one thread: the sidebar's render/input loop. Correctn
 The expensive work is offloaded:
 
 - The snapshot fetch — a `rimz sidebar snapshot` child that resolves the workspace, calls `list-panes`, and runs git — happens on a background **fetch worker** thread. The worker posts a `snapshot` wakeup datagram when a result is ready, so the loop folds it without polling.
-- A jump (`rimz pane focus`, a process spawn plus mux IPC) runs on a **detached thread**. The highlight is already redrawn, so the jump is fire-and-forget.
+- A jump runs on a **detached thread**: the native sidebar focuses the snapshot-bound pane in process (`rimz::mux::backend_for(..).focus_pane`), which still forks the mux client (`zellij action focus-pane-id` / the tmux equivalent) but skips the `rimz pane focus` child and its per-click `list-panes` re-validation. The highlight is already redrawn, so the jump is fire-and-forget; a pane recycled since the snapshot self-corrects on the next refresh.
 
 Two kinds of update reach the loop: a **push** (a `ledger_delta` datagram after any ledger write, or a context-sidecar write) collapses to one refetch; a **poll** (the ~2s tick) is the backstop that catches drift no write announced — pane and git changes the multiplexer never signals. The animation tick is *not* a data channel: it redraws the spinner from the cached snapshot and never forks a fetch, so the render layer and the data layer run on independent cadences.
 
@@ -38,7 +38,7 @@ Where the milliseconds are, and what bounds each. Treat the figures as orders of
 | git diff-stats per worktree | 4 `git` forks per worktree (trunk ref → merge-base → branch → numstat); the per-worktree chain is sequential, but worktrees run in parallel, bounded to `MAX_PARALLEL_GIT` | diff-stats cache (`DIFF_STATS_TTL`, 5s) keyed on worktree, single-flighted across the fleet (`diff-stats.lock`); bounded-parallel fan-out across worktrees (`refresh_entries`) |
 | git worktree enumeration | 1 `git worktree list` fork per snapshot, to group a worktree parked outside the project root | cached in the diff-stats cache under the same `DIFF_STATS_TTL` (the set changes only on `git worktree add/remove`) |
 | snapshot rollup | O(1) on the common path — served from `snapshots/latest.json` lock-free (`Ledger::snapshot_cached`); O(active-events + items) only when a write raced the read | `latest.json` is rebuilt under the lock on every mutation; a staleness guard (its mtime vs the event log's) re-projects on a miss; rotation caps the active log |
-| `rimz pane focus` (a jump) | process spawn + mux IPC, tens–hundreds ms | off the render thread (detached); fire-and-forget |
+| jump (focus the bound pane) | one mux-client fork (`focus_pane`), tens–hundreds ms | off the render thread (detached); in-process focus of the snapshot-bound pane, no `rimz pane focus` child, no per-click `list-panes` re-validation; fire-and-forget |
 | durable file write | temp + 2 fsyncs (file, parent dir) | reserved for the event log and durable state |
 | disposable cache write | temp + atomic rename, 0 fsync | `write_temp_then_rename_cache` |
 | frame redraw | sub-millisecond, in-process | animation tick gated to `ANIMATION_FRAME` (100ms); pure redraw from cache, never forks a fetch |
@@ -49,7 +49,7 @@ The 2026-05 performance pass. Symptom → fix → where.
 
 | Symptom | Fix | Where |
 | --- | --- | --- |
-| Click/Enter "feels slow" | Run `rimz pane focus` on a detached thread; the keypress returns after the highlight redraw | `app::spawn_pane_focus` |
+| Click/Enter "feels slow" (and only worked on retry) | Focus the snapshot-bound pane in process on a detached thread (`focus_pane`), no `rimz pane focus` child and no per-click `list-panes` re-validation that could transiently bail before focusing; the keypress returns after the highlight redraw | `app::spawn_pane_focus` |
 | Animation freezes; keystrokes land in a late burst | Move the snapshot subprocess to a background fetch worker; the loop blocks only in `recv` and folds results via a `snapshot` wakeup | `app::serve`, `spawn_fetch_worker`, `request_fetch`, `apply_fetch_outcome` |
 | `$`/token figure lags, updates in ~2s steps | Statusline sidecar write posts a sidebar wakeup (`ledger_delta`) so the cost pushes a repaint within one wakeup — the sole near-real-time cost channel. The animation tick is decoupled: it redraws the spinner from the cached snapshot and never fetches, so a missed push degrades only to the ~2s backstop tick, not a per-frame poll storm | `cli::statusline::persist_context`, `ledger::wakeup::wake_sidebars_for_context`, `app::serve` |
 | Per-frame env read on the hottest path | Cache the `NO_COLOR` lookup in a `OnceLock` (immutable for the process) | `render::theme::Theme::from_env` |
@@ -70,7 +70,7 @@ Real wins the pass identified but did not take, because each changes a contract 
 3. **Opt-in async / group-commit event-log fsync.** The per-record `sync_data` is the durability floor; a workspace that tolerates bounded event loss could batch it for throughput. Risk: correctness — this stays opt-in and documented, never the default (principle 4).
 4. **Persistent Codex app-server connection.** Each Codex datapoint currently spawns; a held connection amortizes the handshake. Risk: connection lifecycle and ownership.
 5. **Remove the dead Zellij `pipe` broadcast.** The post-write `zellij pipe --name rimz::feed` (a per-ledger-write subprocess on Zellij) has no consumer — the native pane wakes over the socket. Removing it deletes a fork per write and shrinks the surface. Confirm no rail build depends on it first (see [ledger.md → Wakeups](./ledger.md#wakeups)).
-6. **DRY the status and hit-test helpers.** The `AgentStatus` rank/glyph/attention logic and the mouse-hit-test geometry are duplicated across the renderer and `app`. Quality, not throughput — fold into one authority on a focused pass.
+6. **DRY the status helpers.** The `AgentStatus` rank/glyph/attention logic is still duplicated across the renderer and `app`. Quality, not throughput — fold into one authority on a focused pass. (The mouse-hit-test geometry half is done: the renderer now emits a line map in lockstep with the composed body, so `app` looks a screen line up instead of re-deriving row heights.)
 
 ## Adding a performance change
 
@@ -85,7 +85,7 @@ Real wins the pass identified but did not take, because each changes a contract 
 
 Responsiveness is what the user feels, not what the profiler measures: a frame that paints now with slightly-stale data beats a fresh frame that arrives late. The UI/UX levers, in the order to reach for them.
 
-1. **Acknowledge before you finish.** Redraw the optimistic outcome the instant an input lands — the row highlights on click, the pane focuses — then reconcile when the real result returns. `rimz pane focus` repaints the highlight before the mux IPC completes (`app::spawn_pane_focus`), so the click feels instant and the jump runs fire-and-forget behind it. Reach for this before trying to make the underlying action faster.
+1. **Acknowledge before you finish.** Redraw the optimistic outcome the instant an input lands — the row highlights on click, the pane focuses — then reconcile when the real result returns. The jump repaints the highlight, then focuses the snapshot-bound pane in process before the mux IPC completes (`app::spawn_pane_focus`), so the click feels instant and the jump runs fire-and-forget behind it. Reach for this before trying to make the underlying action faster.
 2. **Animate on wall-clock, never on I/O.** The spinner and cursor advance from `wall_clock_phase` on a fixed frame interval, independent of whether a fetch is in flight. Motion that stalls when data is slow reads as hung even when nothing is wrong; a steady 100ms tick from cache reads as alive. Drive any future animation off the same monotonic base so a refetch or delta can never reset its phase.
 3. **Tune smoothness and freshness on separate dials.** A smoother UI shortens the frame interval — cheap, in-process paints (principle 2). Fresher data adds a push, not a tighter poll (principle 3). Conflating the two is how a cosmetic tweak (a faster spinner) becomes a CPU regression (a fetch per frame) — the `ACTIVE_REFRESH` mistake this pass removed. If a "make it feel snappier" request lands, ask first whether it is a frame-rate problem or a data-latency problem; they are fixed in different layers.
 4. **Keep session-wide effects off the frame path.** A redraw writes only to the sidebar's own pane and is safe at any rate. A mux *action* — `list-panes`, a `pipe` broadcast — touches the whole session and can reset an unrelated pane's cursor blink, so it belongs on the slow, event-driven data layer, never on the animation tick. When perceived smoothness and a session-wide side effect pull in opposite directions, the side effect moves to a slower cadence; the frame does not.

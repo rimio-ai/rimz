@@ -199,9 +199,9 @@ You don't read where to go; you go. Selecting a row focuses that agent's pane vi
 Per renderer this is the same model over different input plumbing:
 
 - **Zellij plugin rail** — mouse click or the keys above call `focus_pane_with_id(...)`, reconciling `pane_process_start` to refuse a stale pane.
-- **Native pane** — the renderer's key handler maps the same keys to mux focus commands; where the terminal forwards mouse, a click does the same. The glyph + color stays the at-a-glance signal regardless of input support.
+- **Native pane** — the renderer's key/mouse handler focuses the pane bound on the snapshot row directly, in process (`rimz::mux::backend_for(..).focus_pane`) on a detached thread — no `rimz pane focus` child and no per-click `list-panes` re-validation. A click anywhere in a row's multi-line block jumps to that row on a single click: the renderer emits a hit-test line map in lockstep with the composed body, and the handler looks the clicked screen line up in it. A pane recycled in the sub-second window since the snapshot may briefly focus a stranger; it self-corrects on the next snapshot rather than blocking the jump. The glyph + color stays the at-a-glance signal regardless of input support.
 
-Either way the jump reconciles pane id *and* `pane_process_start`, so a reused pane id never silently focuses a stranger (see [Action rules](#action-rules)).
+The rail reconciles pane id *and* `pane_process_start` so a reused pane id never silently focuses a stranger (see [Action rules](#action-rules)).
 
 On every refresh, the native pane mirrors selection to the focused working pane in its own mux view. If focus is on the sidebar itself or focus cannot be discovered, the current manual selection stays in place.
 

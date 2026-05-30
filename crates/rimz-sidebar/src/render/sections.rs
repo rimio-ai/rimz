@@ -156,6 +156,13 @@ pub(super) fn first_run_hint_lines(theme: &Theme, hooks_ready: bool) -> Vec<Line
         .collect()
 }
 
+/// Compose one worktree group's lines, appending to `lines`, and tag each
+/// content line in the parallel `map` with the visible row index it belongs to
+/// (or `None` for the group header and the `+K more` hidden-count line). `map`
+/// stays exactly as long as `lines`, so the hit-test can look a screen line up
+/// to a row with no separate geometry. The row index captured for a row's lines
+/// is the value *before* `row_index` advances, matching `app::visible_rows()`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn worktree_group_lines(
     theme: &Theme,
     group: &SidebarWorktreeGroup,
@@ -164,30 +171,27 @@ pub(super) fn worktree_group_lines(
     row_index: &mut usize,
     selected_index: usize,
     animation_phase: u64,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
+    lines: &mut Vec<Line<'static>>,
+    map: &mut Vec<Option<usize>>,
+) {
     lines.push(group_header(theme, group, width));
+    map.push(None);
     let tier = Tier::for_width(content_width(width));
     for row in &group.rows {
         let selected = *row_index == selected_index;
+        let this_row = *row_index;
         *row_index += 1;
-        lines.extend(row_lines(
-            theme,
-            row,
-            width,
-            tier,
-            density,
-            selected,
-            animation_phase,
-        ));
+        let row_lines = row_lines(theme, row, width, tier, density, selected, animation_phase);
+        map.extend(std::iter::repeat_n(Some(this_row), row_lines.len()));
+        lines.extend(row_lines);
     }
     if group.hidden_count > 0 {
         lines.push(Line::styled(
             format!("  +{} more", group.hidden_count),
             theme.dim(),
         ));
+        map.push(None);
     }
-    lines
 }
 
 fn status_total(groups: &[SidebarWorktreeGroup], status: AgentStatus) -> usize {

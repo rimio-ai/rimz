@@ -40,6 +40,12 @@ pub struct UiState {
     /// animation tick. The renderer derives the running-agent spin frame from
     /// it; freshness gating (per row) keeps a quiet agent frozen.
     pub animation_phase: u64,
+    /// Hit-test map of the most recently drawn frame: one entry per inner-area
+    /// content line, `Some(row)` for a jump-target row line (in
+    /// `app::visible_rows()` order) and `None` for chrome. The renderer writes
+    /// it as a byproduct of every draw; the mouse hit-test reads it. Empty
+    /// before the first draw.
+    pub line_map: Vec<Option<usize>>,
 }
 
 /// A sticky health alert pinned to the bottom of the sidebar.
@@ -70,7 +76,7 @@ impl Alert {
 }
 
 pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Alert>) {
-    draw_with_ui(frame, snapshot, alert, &UiState::default());
+    draw_with_ui(frame, snapshot, alert, &mut UiState::default());
 }
 
 /// Whether any visible row is in an animated state — a running agent (working
@@ -94,7 +100,7 @@ pub fn draw_with_ui(
     frame: &mut Frame<'_>,
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
-    ui: &UiState,
+    ui: &mut UiState,
 ) {
     let area = frame.area();
     let title = format!(" {} ", snapshot.display_name);
@@ -105,7 +111,10 @@ pub fn draw_with_ui(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let lines = compose_lines(snapshot, alert, ui, inner.width, inner.height);
+    // The composed map is a byproduct of the draw: store it so the mouse
+    // hit-test reads the geometry of the frame the user is actually looking at.
+    let (lines, map) = compose_lines(snapshot, alert, ui, inner.width, inner.height);
+    ui.line_map = map;
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, inner);
 }
@@ -114,19 +123,26 @@ pub fn draw_with_ui(
 /// viewport like a status bar. Space for the alert is always reserved — the
 /// body is truncated before the alert is ever clipped — so the sticky notice
 /// can never scroll off the bottom of a full sidebar.
-fn compose_lines(
+///
+/// Returns the composed body *and* a parallel hit-test map of equal length:
+/// entry `i` is the visible row index that on-screen content line `i` belongs
+/// to (`app::visible_rows()` order), or `None` for structural lines (header,
+/// group headers, gaps, `+K more`, footer, help, alert). The map is the single
+/// authority on row geometry — built from the same final line vector that is
+/// rendered, so it stays 1:1 with what the user sees through every clip.
+pub(crate) fn compose_lines(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
     ui: &UiState,
     width: u16,
     height: u16,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
     // `NO_COLOR` can't change mid-process, so read the palette once per frame
     // and hand the same `Theme` to the body and the alert.
     let theme = Theme::from_env();
-    let mut body = snapshot_lines(snapshot, alert, ui, usize::from(width), &theme);
+    let (mut body, mut map) = snapshot_lines(snapshot, alert, ui, usize::from(width), &theme);
     let Some(alert) = alert else {
-        return body;
+        return (body, map);
     };
 
     let alert_block = alert_lines(&theme, alert);
@@ -141,11 +157,15 @@ fn compose_lines(
     let max_body = height.saturating_sub(alert_height);
     if body.len() > max_body {
         body.truncate(max_body);
+        map.truncate(max_body);
     }
     let pad = height.saturating_sub(body.len() + alert_height);
     body.extend(std::iter::repeat_n(Line::from(""), pad));
+    map.extend(std::iter::repeat_n(None, pad));
+    // The alert is pinned chrome, never a jump target: one `None` per line.
+    map.extend(std::iter::repeat_n(None, alert_block.len()));
     body.extend(alert_block);
-    body
+    (body, map)
 }
 
 pub fn draw_to_terminal<B: Backend>(
@@ -153,14 +173,14 @@ pub fn draw_to_terminal<B: Backend>(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
 ) -> Result<(), B::Error> {
-    draw_to_terminal_with_ui(terminal, snapshot, alert, &UiState::default())
+    draw_to_terminal_with_ui(terminal, snapshot, alert, &mut UiState::default())
 }
 
 pub fn draw_to_terminal_with_ui<B: Backend>(
     terminal: &mut Terminal<B>,
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
-    ui: &UiState,
+    ui: &mut UiState,
 ) -> Result<(), B::Error> {
     terminal
         .draw(|frame| draw_with_ui(frame, snapshot, alert, ui))
@@ -182,39 +202,51 @@ pub fn render_fixed<W: Write>(
     Ok(())
 }
 
+/// Compose the sidebar body and, in lockstep, the hit-test map: every content
+/// line gets one map entry, `Some(row)` for an agent/process row line and `None`
+/// for structural chrome (fleet header, gaps, group headers, first-run hint,
+/// help, footer, `+K more`). The two vectors stay equal length and same order so
+/// [`compose_lines`] can hand the map straight to the hit-test.
 fn snapshot_lines(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
     ui: &UiState,
     width: usize,
     theme: &Theme,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
     // An *active* alert means the body is a stale/empty fetch, not a live room:
     // suppress the first-run hint, footer, and help so the alert speaks alone.
     // A recovered alert is just a lingering notice — the room below it is live.
     let active = alert.is_some_and(Alert::is_active);
     let mut lines = Vec::new();
+    let mut map: Vec<Option<usize>> = Vec::new();
 
     // The fleet header is always present and exactly one line, so the body below
     // never shifts vertically as agents appear, clear, or change state.
     lines.push(fleet_stats_line(theme, &snapshot.worktree_groups, width));
+    map.push(None);
     let density = snapshot.sidebar.density;
     if snapshot.worktree_groups.is_empty() {
         if !active && should_show_first_run_hint(snapshot) {
-            push_section_gap(&mut lines);
-            lines.extend(first_run_hint_lines(theme, snapshot.agent_hooks_ready));
+            push_section_gap(&mut lines, &mut map);
+            extend_inert(
+                &mut lines,
+                &mut map,
+                first_run_hint_lines(theme, snapshot.agent_hooks_ready),
+            );
         }
         if !active {
-            lines.extend(footer_lines(snapshot));
+            extend_inert(&mut lines, &mut map, footer_lines(snapshot));
         }
     } else {
-        push_section_gap(&mut lines);
+        push_section_gap(&mut lines, &mut map);
         let mut row_index = 0;
         for (index, group) in snapshot.worktree_groups.iter().enumerate() {
             if index > 0 {
                 lines.push(Line::from(""));
+                map.push(None);
             }
-            lines.extend(worktree_group_lines(
+            worktree_group_lines(
                 theme,
                 group,
                 width,
@@ -222,22 +254,40 @@ fn snapshot_lines(
                 &mut row_index,
                 ui.selected_index,
                 ui.animation_phase,
-            ));
+                &mut lines,
+                &mut map,
+            );
         }
         if !active && should_show_first_run_hint(snapshot) {
             lines.push(Line::from(""));
-            lines.extend(first_run_hint_lines(theme, snapshot.agent_hooks_ready));
+            map.push(None);
+            extend_inert(
+                &mut lines,
+                &mut map,
+                first_run_hint_lines(theme, snapshot.agent_hooks_ready),
+            );
         }
         if ui.help_visible && !active {
             lines.push(Line::from(""));
-            lines.extend(help_lines());
+            map.push(None);
+            extend_inert(&mut lines, &mut map, help_lines());
         }
         if !active {
-            lines.extend(footer_lines(snapshot));
+            extend_inert(&mut lines, &mut map, footer_lines(snapshot));
         }
     }
 
-    lines
+    (lines, map)
+}
+
+/// Append structural (non-row) lines, tagging each map slot `None`.
+fn extend_inert(
+    lines: &mut Vec<Line<'static>>,
+    map: &mut Vec<Option<usize>>,
+    inert: Vec<Line<'static>>,
+) {
+    map.extend(std::iter::repeat_n(None, inert.len()));
+    lines.extend(inert);
 }
 
 fn alert_lines(theme: &Theme, alert: &Alert) -> Vec<Line<'static>> {
@@ -259,9 +309,10 @@ fn alert_lines(theme: &Theme, alert: &Alert) -> Vec<Line<'static>> {
     }
 }
 
-fn push_section_gap(lines: &mut Vec<Line<'static>>) {
+fn push_section_gap(lines: &mut Vec<Line<'static>>, map: &mut Vec<Option<usize>>) {
     if lines.last().is_some_and(|line| line.width() > 0) {
         lines.push(Line::from(""));
+        map.push(None);
     }
 }
 
@@ -380,7 +431,8 @@ mod tests {
         let viewport = Viewport::Fixed(Rect::new(0, 0, width, height));
         let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
         terminal.clear().unwrap();
-        draw_to_terminal_with_ui(&mut terminal, snapshot, alert, ui).unwrap();
+        let mut ui = ui.clone();
+        draw_to_terminal_with_ui(&mut terminal, snapshot, alert, &mut ui).unwrap();
         drop(terminal);
         let mut parser = vt100::Parser::new(height, width, 0);
         parser.process(&bytes);
@@ -670,6 +722,7 @@ mod tests {
                 selected_index: 0,
                 help_visible: false,
                 animation_phase: 0,
+                line_map: Vec::new(),
             },
             54,
             14,
@@ -748,6 +801,7 @@ mod tests {
                 selected_index: 0,
                 help_visible: false,
                 animation_phase: 0,
+                line_map: Vec::new(),
             },
             44,
             12,
@@ -788,6 +842,7 @@ mod tests {
                 selected_index: 0,
                 help_visible: false,
                 animation_phase: 0,
+                line_map: Vec::new(),
             },
             54,
             14,
@@ -946,6 +1001,7 @@ mod tests {
                 selected_index: 0,
                 help_visible: true,
                 animation_phase: 0,
+                line_map: Vec::new(),
             },
             80,
             18,
@@ -1048,6 +1104,7 @@ mod tests {
             selected_index: 0,
             help_visible: false,
             animation_phase: phase,
+            line_map: Vec::new(),
         }
     }
 
@@ -1120,6 +1177,8 @@ mod tests {
         let snapshot = snapshot_with(Vec::new(), vec![claude]);
         let theme = Theme::fixed(true);
         let mut row_index = 0;
+        let mut lines = Vec::new();
+        let mut map = Vec::new();
         worktree_group_lines(
             &theme,
             &snapshot.worktree_groups[0],
@@ -1128,15 +1187,18 @@ mod tests {
             &mut row_index,
             selected_index,
             0,
-        )
-        .into_iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>()
-        })
-        .collect()
+            &mut lines,
+            &mut map,
+        );
+        lines
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
     }
 
     /// The load-bearing no-flicker guarantee: selecting a row only *appends*
