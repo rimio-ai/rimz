@@ -1095,9 +1095,9 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
 
 /// A remote-control host's row: a process-style single line, but a distinct
 /// kind so the renderer marks it specially and `row_rank` pins it to the bottom
-/// of its group. Labelled by [`crate::remote_control::host_label`] ("remote
-/// control" for Claude, "codex remote" for Codex), never the bare agent name,
-/// so it never reads as a stray idle agent.
+/// of its group. Labelled "remote control" by [`crate::remote_control::host_label`]
+/// (only Claude is a host pane now — Codex is a per-user daemon), never the bare
+/// agent name, so it never reads as a stray idle agent.
 fn row_from_remote_control(pane: &PaneRef) -> SidebarRow {
     SidebarRow {
         row_kind: SidebarRowKind::RemoteControl,
@@ -2514,51 +2514,6 @@ mod tests {
         assert!(
             rows.iter().all(|row| row.row_kind != SidebarRowKind::Agent),
             "host must never be an agent row: {rows:?}",
-        );
-    }
-
-    #[test]
-    fn claude_and_codex_hosts_are_distinct_pinned_rows() {
-        // Both remote-control hosts share the rimz-rc view, in separate panes.
-        // Each is its own pinned RemoteControl row — Codex attributed "codex
-        // remote", Claude the canonical "remote control" — never an agent, and
-        // both below the working agent/shell rows of their group.
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new()).with_live_panes(
-            vec![
-                pane("%1", "zsh", "/repo/main"),
-                pane("%2", "claude remote-control --spawn worktree", "/repo/main"),
-                pane("%3", "codex remote-control start", "/repo/main"),
-            ],
-            None,
-        );
-
-        let rows = &snapshot.worktree_groups[0].rows;
-        let rc: Vec<_> = rows
-            .iter()
-            .filter(|row| row.row_kind == SidebarRowKind::RemoteControl)
-            .collect();
-        assert_eq!(rc.len(), 2, "one row per host: {rows:?}");
-        let labels: Vec<&str> = rc.iter().map(|row| row.name.as_str()).collect();
-        assert!(
-            labels.contains(&"remote control"),
-            "claude host label: {labels:?}"
-        );
-        assert!(
-            labels.contains(&"codex remote"),
-            "codex host label: {labels:?}"
-        );
-        assert!(
-            rows.iter().all(|row| row.row_kind != SidebarRowKind::Agent),
-            "no host reads as an agent: {rows:?}",
-        );
-        // The two hosts pin to the bottom: the last two rows are both RemoteControl.
-        assert!(
-            rows.iter()
-                .rev()
-                .take(2)
-                .all(|row| row.row_kind == SidebarRowKind::RemoteControl),
-            "both hosts sort below the working rows: {rows:?}",
         );
     }
 

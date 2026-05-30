@@ -195,9 +195,9 @@ pub struct BackgroundViewPane {
     pub command: Vec<String>,
     /// Keep the pane after its command exits. A long-lived foreground host
     /// (Claude Remote Control) sets `false`: an exit means the host is gone and
-    /// the pane should close. A launcher that starts a daemon and returns
-    /// (Codex `remote-control start`) sets `true`, so the pane lingers on its
-    /// start receipt — or its error — instead of vanishing instantly.
+    /// the pane should close. A launcher that starts a daemon and returns sets
+    /// `true`, so the pane lingers on its start receipt — or its error — instead
+    /// of vanishing instantly.
     pub keep_open: bool,
 }
 

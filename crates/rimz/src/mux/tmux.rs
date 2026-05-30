@@ -487,8 +487,8 @@ impl MuxBackend for TmuxBackend {
         }
 
         // Additional panes split the same window. `-d` keeps the user's focus
-        // where it was; a `keep_open` pane (a daemon launcher like Codex that
-        // returns) gets `remain-on-exit` so it lingers on its receipt.
+        // where it was; a `keep_open` pane (a returning daemon launcher) gets
+        // `remain-on-exit` so it lingers on its receipt.
         for pane in rest {
             let output = self
                 .cmd()

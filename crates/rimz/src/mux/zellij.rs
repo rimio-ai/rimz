@@ -356,7 +356,8 @@ impl MuxBackend for ZellijBackend {
     fn open_background_view(&self, opts: &BackgroundViewOptions) -> Result<BackgroundViewLaunch> {
         // Idempotent on the tab name: a relaunch into a session already carrying
         // the view is a no-op. A failed query propagates rather than risk a
-        // duplicate launch.
+        // duplicate launch. Short-circuiting here also means the focus restore
+        // below only runs when a tab was actually created.
         if session_has_named_tab(&opts.session_name, &opts.name)? {
             return Ok(BackgroundViewLaunch::AlreadyRunning);
         }
@@ -377,6 +378,22 @@ impl MuxBackend for ZellijBackend {
             ])
             .run()?;
         drop(layout);
+        // `new-tab` focuses the view it just created; a *background* view must
+        // not pull the user off their work. Make the session's first tab — the
+        // working tab born from the sidebar default-tab template — active again,
+        // so the imminent `attach` lands on the shell, not a host pane. This is
+        // unconditional on purpose: unlike `recover_sidebars` (run from inside
+        // the managed session via `rimz reload`), `rimz start` may run from a
+        // plain shell or a *different* mux session, so the caller's own pane is
+        // not a focus target here — the working tab always is. Best-effort: a
+        // focus hiccup never sinks an otherwise-launched view.
+        if let Err(err) = go_to_tab(&opts.session_name, 1) {
+            tracing::warn!(
+                session = %opts.session_name,
+                error = %err,
+                "could not return focus to the working tab after opening the background view",
+            );
+        }
         Ok(BackgroundViewLaunch::Launched)
     }
 
@@ -572,6 +589,16 @@ fn zellij_action(session: &str) -> CommandSpec {
 fn focus_terminal(session: &str, raw_id: u64) -> Result<()> {
     zellij_action(session)
         .args(["focus-pane-id".to_owned(), format!("terminal_{raw_id}")])
+        .run()
+        .map(|_| ())
+}
+
+/// `zellij --session <name> action go-to-tab <index>` (1-based). A background
+/// view's working tab is the session's first, so this returns focus there after
+/// `new-tab` steals it.
+fn go_to_tab(session: &str, index: u32) -> Result<()> {
+    zellij_action(session)
+        .args(["go-to-tab".to_owned(), index.to_string()])
         .run()
         .map(|_| ())
 }
@@ -1194,19 +1221,16 @@ mod tests {
 
     #[test]
     fn command_layout_lays_out_one_pane_per_command_with_keep_open() {
-        // Claude (foreground host, closes on exit) beside Codex (daemon
-        // launcher, kept open on its receipt) in one tab.
+        // A foreground host that closes on exit (keep_open=false) beside a
+        // returning daemon launcher kept open on its receipt (keep_open=true),
+        // one pane per command in one tab.
         let layout = render_command_layout(&[
             BackgroundViewPane {
                 command: vec!["claude".to_owned(), "remote-control".to_owned()],
                 keep_open: false,
             },
             BackgroundViewPane {
-                command: vec![
-                    "codex".to_owned(),
-                    "remote-control".to_owned(),
-                    "start".to_owned(),
-                ],
+                command: vec!["some-daemon".to_owned(), "start".to_owned()],
                 keep_open: true,
             },
         ])
@@ -1217,15 +1241,15 @@ mod tests {
             "one pane per command:\n{layout}"
         );
         assert!(layout.contains(r#"command "claude""#), "{layout}");
-        assert!(layout.contains(r#"command "codex""#), "{layout}");
-        // close_on_exit tracks !keep_open: claude false→closes, codex true→lingers.
+        assert!(layout.contains(r#"command "some-daemon""#), "{layout}");
+        // close_on_exit tracks !keep_open: keep_open=false→closes, true→lingers.
         assert!(
             layout.contains("close_on_exit true"),
-            "claude closes:\n{layout}"
+            "the foreground host closes:\n{layout}"
         );
         assert!(
             layout.contains("close_on_exit false"),
-            "codex lingers:\n{layout}"
+            "the kept-open pane lingers:\n{layout}"
         );
     }
 

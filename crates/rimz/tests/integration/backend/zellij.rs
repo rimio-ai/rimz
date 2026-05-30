@@ -1197,6 +1197,88 @@ fn open_background_view_creates_named_tab_idempotently() {
     );
 }
 
+/// `open_background_view` must not leave the user's focus on the host tab. Zellij
+/// `new-tab` creates *and focuses* the new tab, so without the focus restore the
+/// session's active tab becomes `rimz-rc` and the imminent `attach` dumps the
+/// user straight into a host pane. `ZellijSession` keeps a real client attached,
+/// so `dump-layout` marks the active tab `focus=true`; we assert it is not the
+/// `rimz-rc` tab.
+#[test]
+fn open_background_view_keeps_focus_off_the_host_tab() {
+    require_zellij!();
+
+    let name = unique_session_name("bgfocus");
+    let _session = ZellijSession::spawn(&name);
+
+    let opts = rimz::mux::BackgroundViewOptions {
+        session_name: name.clone(),
+        cwd: std::env::temp_dir(),
+        name: "rimz-rc".to_owned(),
+        panes: vec![rimz::mux::BackgroundViewPane {
+            command: vec!["sleep".to_owned(), "120".to_owned()],
+            keep_open: false,
+        }],
+    };
+    ZellijBackend
+        .open_background_view(&opts)
+        .expect("open_background_view");
+    assert!(
+        wait_for_tab_named(&name, "rimz-rc"),
+        "expected a rimz-rc tab after launch",
+    );
+
+    let focused =
+        wait_for_focused_tab_off_rc(&name).expect("an attached client should report a focused tab");
+    assert_ne!(
+        focused, "rimz-rc",
+        "focus was left on the rimz-rc host tab; an attach would dump the user into a host pane",
+    );
+}
+
+/// The name of the tab Zellij marks `focus=true` in `dump-layout` — the active
+/// tab an attaching client lands on. `None` until an attached client has
+/// realized one (the marker only renders for a live client).
+fn focused_tab_name(session: &str) -> Option<String> {
+    let out = std::process::Command::new("zellij")
+        .args(["--session", session, "action", "dump-layout"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim_start)
+        .find(|line| line.starts_with("tab ") && line.contains("focus=true"))
+        .and_then(|line| {
+            let start = line.find("name=\"")? + "name=\"".len();
+            let rest = &line[start..];
+            let end = rest.find('"')?;
+            Some(rest[..end].to_owned())
+        })
+}
+
+/// Poll until the attached client's focused tab settles off `rimz-rc`, or time
+/// out. Returns the last focused tab seen so the caller can assert on it: the
+/// fix settles it on the working tab quickly; the unfixed code leaves it pinned
+/// to `rimz-rc` until the deadline.
+fn wait_for_focused_tab_off_rc(session: &str) -> Option<String> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last = None;
+    loop {
+        if let Some(tab) = focused_tab_name(session) {
+            if tab != "rimz-rc" {
+                return Some(tab);
+            }
+            last = Some(tab);
+        }
+        if Instant::now() >= deadline {
+            return last;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
 /// Poll `query-tab-names` until a tab named `tab_name` appears, or time out.
 fn wait_for_tab_named(session: &str, tab_name: &str) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);

@@ -671,23 +671,26 @@ fn remote_control_config() -> Option<rimz::config::RemoteControlConfig> {
     }
 }
 
-/// Auto-launch the enabled remote-control hosts (Claude, Codex) in one managed
-/// background view. Best-effort: every failure is logged and the room still
-/// opens — the hard precondition (Codex's standalone install) is enforced
-/// earlier by [`rimz::remote_control::preflight`], so by here a launch only
-/// fails on transient mux trouble. The view runs from the project root (the main
-/// checkout), so Claude's `--spawn=worktree` carves new on-demand sessions off
-/// the canonical repo rather than the current worktree.
+/// Auto-launch the enabled remote-control hosts. The two have different
+/// lifecycles, so they launch differently and independently, best-effort:
+///
+/// - **Codex** is a per-user app-server daemon (a singleton keyed by its control
+///   socket), so it is ensured once — detached, idempotent, never a pane — by
+///   [`rimz::remote_control::ensure_codex_daemon`]; enrichment reaches it over
+///   the socket. Its hard precondition (the standalone install) is enforced
+///   earlier by [`rimz::remote_control::preflight`].
+/// - **Claude** is a long-lived foreground host launched into the workspace
+///   session's one managed background view, from the project root (the main
+///   checkout) so `--spawn=worktree` carves new on-demand sessions off the
+///   canonical repo rather than the current worktree.
 fn maybe_launch_remote_control(
     backend: &dyn MuxBackend,
     workspace: &rimz::ResolvedWorkspace,
     config: &rimz::config::RemoteControlConfig,
 ) {
-    let panes = remote_control_panes(
-        config,
-        which::which("claude").is_ok(),
-        rimz::remote_control::codex_standalone_bin().as_deref(),
-    );
+    rimz::remote_control::ensure_codex_daemon(config);
+
+    let panes = remote_control_panes(config, which::which("claude").is_ok());
     if panes.is_empty() {
         return;
     }
@@ -703,7 +706,7 @@ fn maybe_launch_remote_control(
             session = %workspace.session_name,
             view = rimz::remote_control::VIEW_NAME,
             hosts = host_count,
-            "launched remote-control hosts in a background view",
+            "launched remote-control host in a background view",
         ),
         Ok(BackgroundViewLaunch::AlreadyRunning) => tracing::debug!(
             session = %workspace.session_name,
@@ -717,30 +720,20 @@ fn maybe_launch_remote_control(
     }
 }
 
-/// The remote-control panes to launch, from the per-machine toggles and what is
-/// installed — split out pure for testing. An agent contributes a pane only when
-/// its toggle is on *and* it can start: Claude needs `claude` on PATH; Codex
-/// needs the managed standalone install (`codex_standalone`), run directly from
-/// that path. Claude (a long-lived foreground host) leads and never `keep_open`;
-/// Codex (`remote-control start` returns once the daemon is up) follows and is
-/// `keep_open` so its receipt stays on screen. Claude-first ordering keeps the
-/// long-lived host as the view's primary pane.
+/// The remote-control panes to launch into the [`rimz::remote_control::VIEW_NAME`]
+/// view — split out pure for testing. Only Claude is a pane: a long-lived
+/// foreground host (`keep_open=false`), contributed when the `claude` toggle is
+/// on *and* `claude` is on PATH. Codex is not a pane — it is a per-user daemon
+/// ensured by [`rimz::remote_control::ensure_codex_daemon`].
 fn remote_control_panes(
     config: &rimz::config::RemoteControlConfig,
     claude_present: bool,
-    codex_standalone: Option<&Path>,
 ) -> Vec<BackgroundViewPane> {
     let mut panes = Vec::new();
     if config.claude && claude_present {
         panes.push(BackgroundViewPane {
             command: rimz::remote_control::claude_command(),
             keep_open: false,
-        });
-    }
-    if let (true, Some(bin)) = (config.codex, codex_standalone) {
-        panes.push(BackgroundViewPane {
-            command: rimz::remote_control::codex_command(bin),
-            keep_open: true,
         });
     }
     panes
@@ -884,7 +877,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_control_panes_need_opt_in_and_detection_per_agent() {
+    fn remote_control_panes_carry_only_claude_when_opted_in_and_present() {
         use rimz::config::RemoteControlConfig;
         let cmds = |panes: &[BackgroundViewPane]| {
             panes
@@ -892,53 +885,33 @@ mod tests {
                 .map(|p| p.command.first().cloned().unwrap_or_default())
                 .collect::<Vec<_>>()
         };
-        // The managed standalone Codex install `remote-control start` requires.
-        let codex_bin = Path::new("/home/u/.codex/packages/standalone/current/codex");
 
-        // Both off → nothing, regardless of what is installed.
-        let off = RemoteControlConfig::default();
-        assert!(remote_control_panes(&off, true, Some(codex_bin)).is_empty());
-
-        // A toggle without the binary contributes nothing; with it, one pane.
-        let claude_only = RemoteControlConfig {
-            claude: true,
-            codex: false,
-        };
-        assert!(remote_control_panes(&claude_only, false, Some(codex_bin)).is_empty());
-        assert_eq!(
-            cmds(&remote_control_panes(&claude_only, true, Some(codex_bin))),
-            vec!["claude"]
-        );
-
-        // Codex needs the standalone install, not just a `codex` on PATH: no
-        // standalone (`None`) → no pane, even with the toggle on. With it, the
-        // pane runs that exact binary by path.
+        // Both off → no panes. Codex never contributes a pane (it is a per-user
+        // daemon, ensured separately), so the codex toggle alone yields nothing.
+        assert!(remote_control_panes(&RemoteControlConfig::default(), true).is_empty());
         let codex_only = RemoteControlConfig {
             claude: false,
             codex: true,
         };
-        assert!(remote_control_panes(&codex_only, true, None).is_empty());
-        assert_eq!(
-            cmds(&remote_control_panes(&codex_only, true, Some(codex_bin))),
-            vec![codex_bin.to_string_lossy()]
-        );
+        assert!(remote_control_panes(&codex_only, true).is_empty());
 
-        // Both on + both present → Claude first (the long-lived primary), then
-        // Codex which is kept open on its start receipt.
+        // Claude needs both the toggle and `claude` on PATH; then one pane that
+        // closes with its process.
+        let claude_only = RemoteControlConfig {
+            claude: true,
+            codex: false,
+        };
+        assert!(remote_control_panes(&claude_only, false).is_empty());
+        let panes = remote_control_panes(&claude_only, true);
+        assert_eq!(cmds(&panes), vec!["claude"]);
+        assert!(!panes[0].keep_open, "claude host closes with its process");
+
+        // Both toggles on → still just the Claude pane.
         let both = RemoteControlConfig {
             claude: true,
             codex: true,
         };
-        let panes = remote_control_panes(&both, true, Some(codex_bin));
-        assert_eq!(
-            cmds(&panes),
-            vec![
-                "claude".to_owned(),
-                codex_bin.to_string_lossy().into_owned()
-            ],
-        );
-        assert!(!panes[0].keep_open, "claude host closes with its process");
-        assert!(panes[1].keep_open, "codex pane lingers on its receipt");
+        assert_eq!(cmds(&remote_control_panes(&both, true)), vec!["claude"]);
     }
 
     #[test]

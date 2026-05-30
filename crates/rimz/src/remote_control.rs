@@ -1,30 +1,33 @@
-//! Remote-control auto-launch behaviour, shared by Claude and Codex.
+//! Remote-control auto-launch behaviour for Claude and Codex.
 //!
 //! When a [`crate::config::RemoteControlConfig`] toggle is set and that agent
-//! can start its host, `rimz start` launches it in a single dedicated, named
-//! background view of the workspace session (a tmux window / Zellij tab):
+//! can start, `rimz start` brings its host up — but the two have different
+//! lifecycles, so they launch differently:
 //!
 //! - **Claude** runs `claude remote-control --spawn worktree`, a long-lived
-//!   foreground host. It runs from the project root so `--spawn=worktree` carves
-//!   new on-demand sessions off the canonical repo, not the current worktree.
+//!   foreground host, in the workspace session's one named [`VIEW_NAME`]
+//!   background view (a tmux window / Zellij tab). It runs from the project root
+//!   so `--spawn=worktree` carves new on-demand sessions off the canonical repo,
+//!   not the current worktree. It is a pane but not a coding agent — no Rimz
+//!   hooks, never stamps a pane — so the sidebar must not render it as an idle
+//!   agent: [`pane_is_host`] identifies the host pane and [`host_label`] names
+//!   it, so the snapshot reducer gives it a dedicated, pinned row instead.
 //! - **Codex** runs `remote-control start` from the *managed standalone install*
 //!   ([`codex_standalone_bin`]), which brings up the Codex app-server daemon
-//!   with remote control enabled and returns. That daemon is the one Codex
-//!   enrichment re-uses (see [`crate::agents::codex_app_server`]).
+//!   with remote control enabled and returns. That daemon is a **per-user
+//!   singleton** (one control socket), so it is *not* a per-workspace pane:
+//!   [`ensure_codex_daemon`] spawns the (idempotent) start command detached with
+//!   null stdio, and Codex enrichment reaches the daemon over the control socket
+//!   (see [`crate::agents::codex_app_server`]).
 //!
 //! `remote-control start` boots and updates its daemon from the standalone's
 //! fixed path, so a `codex` merely on PATH (a different binary) is not enough.
 //! When the `codex` toggle is on but that install is absent, [`preflight`]
-//! refuses the start with the fix — fail-fast, rather than launching a host that
-//! only prints an install error.
-//!
-//! Both share the one [`VIEW_NAME`] view, in separate panes. Neither host is a
-//! coding agent — they have no Rimz hooks and never stamp a pane — so the
-//! sidebar must not render them as idle agents. [`pane_is_host`] identifies a
-//! host pane and [`host_label`] names it, so the snapshot reducer can give it a
-//! dedicated, pinned row instead.
+//! refuses the start with the fix — fail-fast, rather than ensuring a daemon
+//! that only prints an install error.
 
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use crate::agents::codex_app_server::codex_home;
 use crate::config::RemoteControlConfig;
@@ -35,14 +38,9 @@ use crate::feed::PaneRef;
 /// ([`pane_is_host`]), so both speak the same name. Claude and Codex share it.
 pub const VIEW_NAME: &str = "rimz-rc";
 
-/// Substring marking a remote-control subcommand in a pane's command line. Both
-/// agents spell it `remote-control`, so this one marker catches either host.
+/// Substring marking a remote-control subcommand in a pane's command line. Only
+/// Claude is a host pane now, and it spells the subcommand `remote-control`.
 const COMMAND_MARKER: &str = "remote-control";
-
-/// Substring that distinguishes a Codex host from a Claude one. Zellij reports
-/// the full command line and tmux reports the `codex` basename, so either way a
-/// Codex host's command contains this.
-const CODEX_MARKER: &str = "codex";
 
 /// The Claude Remote Control argv (program first). `--spawn worktree` isolates
 /// each on-demand remote session in its own git worktree — the worktree mode.
@@ -57,16 +55,62 @@ pub fn claude_command() -> Vec<String> {
 
 /// The Codex remote-control argv (program first), invoked through `bin` — the
 /// managed standalone install from [`codex_standalone_bin`]. `start` brings up
-/// the app-server daemon with remote control enabled, then returns — so the pane
-/// that runs it is launched `keep_open` to keep its start receipt on screen.
-/// Invoking the standalone path directly means the launch never depends on a
-/// `codex` being on PATH, and runs exactly the binary the daemon updates from.
+/// the app-server daemon with remote control enabled, then returns. Invoking the
+/// standalone path directly means the launch never depends on a `codex` being on
+/// PATH, and runs exactly the binary the daemon updates from.
 pub fn codex_command(bin: &Path) -> Vec<String> {
     vec![
         bin.to_string_lossy().into_owned(),
         "remote-control".to_owned(),
         "start".to_owned(),
     ]
+}
+
+/// Ensure the per-user Codex app-server daemon is running when `[remote_control]
+/// codex` is on and the managed standalone install resolves. The daemon is a
+/// per-user singleton (one control socket), so it is ensured once here rather
+/// than parked in a per-workspace pane; enrichment reaches it over the socket.
+/// Best-effort, gated by [`should_ensure_codex_daemon`].
+pub fn ensure_codex_daemon(config: &RemoteControlConfig) {
+    let standalone = codex_standalone_bin();
+    if !should_ensure_codex_daemon(config.codex, standalone.is_some()) {
+        return;
+    }
+    // The gate above guarantees the standalone resolved.
+    if let Some(bin) = standalone {
+        spawn_codex_daemon(&bin);
+    }
+}
+
+/// The pure ensure-daemon decision, split from [`ensure_codex_daemon`] so the
+/// matrix is unit-testable without touching the filesystem: ensure iff the
+/// toggle is on *and* the managed standalone install is present (a `codex` on
+/// PATH does not satisfy `remote-control start` — see [`codex_standalone_bin`]).
+fn should_ensure_codex_daemon(codex_enabled: bool, standalone_present: bool) -> bool {
+    codex_enabled && standalone_present
+}
+
+/// Spawn `codex remote-control start` from the managed standalone `bin` detached,
+/// with all stdio nulled, and drop the child without waiting. The command is
+/// idempotent — it no-ops once the per-user daemon is up — and returns as soon as
+/// the daemon is running, so this adds no latency and prints nothing to the
+/// terminal. Best-effort: a spawn failure is logged and ignored, because the
+/// app-server is enrichment, not correctness — the proxy client cold-spawns a
+/// server when the daemon is absent.
+fn spawn_codex_daemon(bin: &Path) {
+    let argv = codex_command(bin);
+    let mut parts = argv.iter();
+    let Some(program) = parts.next() else {
+        return;
+    };
+    let mut cmd = Command::new(program);
+    cmd.args(parts)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Err(err) = cmd.spawn() {
+        tracing::warn!(error = %err, "failed to spawn the codex app-server daemon");
+    }
 }
 
 /// The managed standalone Codex install `codex remote-control start` boots its
@@ -146,7 +190,8 @@ fn preflight_decision(
     Ok(())
 }
 
-/// Whether `pane` hosts a remote-control server (Claude or Codex).
+/// Whether `pane` hosts a remote-control server. Only Claude is a host pane now
+/// (Codex is a per-user daemon, never a pane).
 ///
 /// Two signals, because the backends expose different metadata: Zellij reports
 /// the full command line (so the `remote-control` subcommand is visible),
@@ -159,19 +204,11 @@ pub fn pane_is_host(pane: &PaneRef) -> bool {
         || pane.view_name.as_deref() == Some(VIEW_NAME)
 }
 
-/// The sidebar label for a host pane: `codex remote` when the command names
-/// Codex, otherwise the canonical `remote control` (Claude or unattributed).
-/// Never the bare agent name, so the row never reads as an idle coding agent.
-pub fn host_label(pane: &PaneRef) -> &'static str {
-    if pane
-        .command
-        .as_deref()
-        .is_some_and(|command| command.contains(CODEX_MARKER))
-    {
-        "codex remote"
-    } else {
-        "remote control"
-    }
+/// The sidebar label for a host pane. Only Claude is a host pane now (Codex is a
+/// per-user daemon, never a pane), so the row reads the canonical `remote
+/// control` — never a bare agent name, so it never reads as an idle coding agent.
+pub fn host_label(_pane: &PaneRef) -> &'static str {
+    "remote control"
 }
 
 #[cfg(test)]
@@ -259,54 +296,57 @@ mod tests {
     }
 
     #[test]
-    fn detects_either_host_by_full_command_line() {
-        // Zellij reports the full command line; both agents spell the
-        // subcommand `remote-control`.
+    fn ensure_codex_daemon_requires_toggle_and_standalone() {
+        // codex off → never ensure, install present or not.
+        assert!(!should_ensure_codex_daemon(false, false));
+        assert!(!should_ensure_codex_daemon(false, true));
+        // codex on → ensure iff the managed standalone install is present.
+        assert!(!should_ensure_codex_daemon(true, false));
+        assert!(should_ensure_codex_daemon(true, true));
+    }
+
+    #[test]
+    fn detects_the_claude_host_by_full_command_line() {
+        // Zellij reports the full command line; Claude spells the subcommand
+        // `remote-control`.
         assert!(pane_is_host(&pane(
             Some("claude remote-control --spawn worktree"),
             None,
-        )));
-        assert!(pane_is_host(&pane(
-            Some("codex remote-control start"),
-            None
         )));
     }
 
     #[test]
     fn detects_host_by_view_name_when_command_is_a_bare_basename() {
-        // tmux reports only the basename, but the window carries the view name.
+        // tmux reports only the basename, but the window carries the view name,
+        // so any pane in the rimz-rc view is a host regardless of its command.
         assert!(pane_is_host(&pane(Some("claude"), Some(VIEW_NAME))));
-        assert!(pane_is_host(&pane(Some("codex"), Some(VIEW_NAME))));
         assert!(pane_is_host(&pane(Some("node"), Some(VIEW_NAME))));
     }
 
     #[test]
     fn a_plain_agent_is_not_the_host() {
-        // A real coding session: bare basename, no rimz-rc view.
+        // A real coding session: bare basename, no rimz-rc view. A plain `codex`
+        // agent pane must never be classified as a host.
         assert!(!pane_is_host(&pane(Some("claude"), Some("2"))));
         assert!(!pane_is_host(&pane(Some("codex"), Some("3"))));
         assert!(!pane_is_host(&pane(Some("zsh"), None)));
     }
 
     #[test]
-    fn host_label_attributes_codex_but_not_claude() {
-        // Full command line (Zellij) and bare basename (tmux) both resolve.
-        assert_eq!(
-            host_label(&pane(Some("codex remote-control start"), None)),
-            "codex remote"
-        );
-        assert_eq!(
-            host_label(&pane(Some("codex"), Some(VIEW_NAME))),
-            "codex remote"
-        );
+    fn host_label_is_the_canonical_remote_control() {
+        // Only Claude is a host pane now; every host row reads `remote control`,
+        // never a bare agent name.
         assert_eq!(
             host_label(&pane(Some("claude remote-control --spawn worktree"), None)),
             "remote control",
         );
-        // A bare-`claude` (or `node`) host in the rc window stays unattributed.
+        assert_eq!(
+            host_label(&pane(Some("claude"), Some(VIEW_NAME))),
+            "remote control",
+        );
         assert_eq!(
             host_label(&pane(Some("node"), Some(VIEW_NAME))),
-            "remote control"
+            "remote control",
         );
     }
 }
