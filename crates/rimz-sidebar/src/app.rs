@@ -928,10 +928,19 @@ fn apply_fetch_outcome(
     {
         warn!(reason = %alert.reason, "sidebar refresh degraded");
     }
-    clamp_selection(ui, &state.snapshot);
     *last_snapshot = state.last_snapshot;
     *health = state.health;
     *current = state.snapshot;
+    // Reconcile the highlight before drawing: re-anchor the identity-keyed
+    // selection to its row (so a status-churn reorder never slides it onto a
+    // neighbour) and apply the edge-triggered external-focus mirror. Running it
+    // before the draw means an external focus move paints this frame, not next.
+    let focused_pane_id = current
+        .own_view
+        .as_ref()
+        .filter(|view| !view.own_is_focused)
+        .and_then(|view| view.focused_pane_id.clone());
+    reconcile_selection(ui, current, focused_pane_id.as_ref());
     ui.animation_phase = wall_clock_phase(anim_start);
     render::draw_to_terminal_with_ui(terminal, current, health.alert.as_ref(), ui)?;
 
@@ -952,19 +961,14 @@ fn apply_fetch_outcome(
         });
     }
 
-    // Own-view (sibling count, focus) rides in on the snapshot — the CLI
-    // computes it from the same pane list it already enumerated, so the renderer
-    // never spawns a second `pane list`.
-    let own_view = current.own_view.as_ref();
-    sync_selection_to_focused_pane(
-        ui,
-        current,
-        own_view
-            .filter(|view| !view.own_is_focused)
-            .and_then(|view| view.focused_pane_id.as_ref()),
-        Timestamp::now(),
-    );
-    if self_close_decision(self_close, own_view.map(|view| view.sibling_count)) {
+    // Own-view (sibling count) rides in on the snapshot — the CLI computes it
+    // from the same pane list it already enumerated, so the renderer never
+    // spawns a second `pane list`. The focus-driven selection reconcile already
+    // ran before the draw above.
+    if self_close_decision(
+        self_close,
+        current.own_view.as_ref().map(|view| view.sibling_count),
+    ) {
         debug!(
             session = %config.session_name,
             "sidebar tab emptied; exiting so the pane closes itself",
@@ -1088,12 +1092,11 @@ fn apply_input(
         render::draw_to_terminal_with_ui(terminal, snapshot, health.alert.as_ref(), ui)?;
     }
     if let Some(index) = outcome.focus_index {
-        // Arm the optimistic-focus guard on the pane we just jumped to, so the
-        // next fetch fold holds the highlight here until the snapshot confirms
-        // the focus rather than rolling it back to the previous pane.
-        if let Some(pane_id) = focus_selected_row(snapshot, index) {
-            arm_pending_focus(ui, pane_id);
-        }
+        // The handler already pinned `selected_pane`; fire the async jump. The
+        // fold's edge-triggered mirror (`reconcile_selection`) holds the
+        // highlight on the clicked pane through the briefly-stale focus, so no
+        // optimistic-focus guard is needed.
+        focus_selected_row(snapshot, index);
     }
     Ok(())
 }
@@ -1149,11 +1152,7 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
     match action {
         KeyAction::Up => {
             if ui.selected_index > 0 {
-                // Manual navigation is the user driving selection directly, so
-                // drop any optimistic-focus guard rather than letting it snap
-                // the highlight back to the clicked pane.
-                clear_pending_focus(ui);
-                ui.selected_index -= 1;
+                select_row(ui, snapshot, ui.selected_index - 1);
                 return InputOutcome::redraw();
             }
             InputOutcome::default()
@@ -1161,8 +1160,7 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
         KeyAction::Down => {
             let len = visible_row_count(snapshot);
             if ui.selected_index + 1 < len {
-                clear_pending_focus(ui);
-                ui.selected_index += 1;
+                select_row(ui, snapshot, ui.selected_index + 1);
                 return InputOutcome::redraw();
             }
             InputOutcome::default()
@@ -1170,8 +1168,8 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
         KeyAction::Enter => InputOutcome::focus(ui.selected_index),
         KeyAction::Space => {
             if let Some(index) = next_attention_index(snapshot, ui.selected_index) {
-                ui.selected_index = index;
-                return InputOutcome::focus(ui.selected_index);
+                select_row(ui, snapshot, index);
+                return InputOutcome::focus(index);
             }
             InputOutcome::default()
         }
@@ -1183,8 +1181,8 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
         KeyAction::Digit(digit) => {
             let index = usize::from(digit.saturating_sub(1));
             if index < visible_row_count(snapshot) {
-                ui.selected_index = index;
-                return InputOutcome::focus(ui.selected_index);
+                select_row(ui, snapshot, index);
+                return InputOutcome::focus(index);
             }
             InputOutcome::default()
         }
@@ -1195,13 +1193,25 @@ fn handle_mouse_click(
     _column: u16,
     row: u16,
     ui: &mut UiState,
-    _snapshot: &SidebarSnapshot,
+    snapshot: &SidebarSnapshot,
 ) -> InputOutcome {
     if let Some(index) = row_index_at_screen_position(ui, row) {
-        ui.selected_index = index;
-        return InputOutcome::focus(ui.selected_index);
+        select_row(ui, snapshot, index);
+        return InputOutcome::focus(index);
     }
     InputOutcome::default()
+}
+
+/// Point the highlight at a visible row by index — the identity-keyed selection
+/// (`selected_pane`) plus its derived render index. Every local selection action
+/// (click, digit, `␣`, arrow navigation) routes through here so the highlight is
+/// always anchored to a pane, never a bare position.
+fn select_row(ui: &mut UiState, snapshot: &SidebarSnapshot, index: usize) {
+    ui.selected_index = index;
+    ui.selected_pane = visible_rows(snapshot)
+        .nth(index)
+        .and_then(|row| row.pane.as_ref())
+        .map(|pane| pane.pane_id.clone());
 }
 
 fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
@@ -1213,62 +1223,48 @@ fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
     }
 }
 
-/// How long an optimistic click holds the highlight before the fold gives up
-/// waiting for the snapshot to confirm the focus. Comfortably longer than one
-/// producer republish plus a consumer fold (~2s each) so a healthy round-trip
-/// always confirms first, yet short enough that a focus that never lands (the
-/// pane closed mid-jump) frees the highlight promptly.
-const PENDING_FOCUS_TIMEOUT_SECS: i64 = 5;
-
-/// Move the highlight to follow the snapshot's focused pane, honouring an
-/// optimistic [`UiState::pending_focus`] click in flight.
+/// Reconcile the highlight after folding a new snapshot, in two steps that are
+/// both keyed on pane identity rather than position.
 ///
-/// Without a pending guard this tracks `focused_pane_id` exactly as before, so a
-/// focus change made outside the sidebar still moves the highlight. With one, a
-/// click already jumped the highlight and fired an async `focus_pane`; until the
-/// next published snapshot reflects that focus, `focused_pane_id` still names the
-/// *previous* pane. Adopting it would roll the selection back — the reported
-/// desync. So while the guard holds we keep the highlight on the clicked pane
-/// (re-anchored to its current row, in case the list reordered) and ignore the
-/// stale focus. The guard releases when the focus lands, when the pane leaves the
-/// room, or when it has waited past [`PENDING_FOCUS_TIMEOUT_SECS`] without
-/// confirmation — never pinning the highlight forever.
-fn sync_selection_to_focused_pane(
+/// 1. **Edge-triggered external mirror.** Adopt the snapshot's focused pane only
+///    when it has *changed* since the last fold (`last_focused_pane`). A
+///    briefly-stale post-click focus, or a cross-tab focus that never names this
+///    tab's pane, is unchanged frame-to-frame — no edge — so it can never roll an
+///    optimistic click back to the previous pane (the reported desync). A genuine
+///    external focus move (a mux keybind) *is* an edge, so the highlight follows
+///    it. The observed focus is always recorded, even when it maps to no row, so
+///    the next real change still registers as an edge.
+/// 2. **Re-anchor.** Re-derive `selected_index` from `selected_pane` so a
+///    status-churn reorder keeps the highlight on the same pane instead of
+///    sliding it onto whatever row now sits at the old index.
+fn reconcile_selection(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
     focused_pane_id: Option<&PaneId>,
-    now: Timestamp,
 ) {
-    if let Some(pending) = ui.pending_focus.clone() {
-        let landed = focused_pane_id == Some(&pending);
-        let expired = ui
-            .pending_focus_since
-            .is_some_and(|since| now.duration_since(since).as_secs() >= PENDING_FOCUS_TIMEOUT_SECS);
-        match row_index_of_pane(snapshot, &pending) {
-            // The clicked pane is still on screen and the focus has neither
-            // landed nor timed out: hold the highlight on it and ignore the
-            // stale snapshot focus.
-            Some(index) if !landed && !expired => {
-                ui.selected_index = index;
-                return;
-            }
-            // Landed, gone, or timed out: drop the guard and fall through to
-            // track the snapshot focus normally.
-            _ => clear_pending_focus(ui),
+    if focused_pane_id != ui.last_focused_pane.as_ref() {
+        ui.last_focused_pane = focused_pane_id.cloned();
+        if let Some(focused) = focused_pane_id
+            && row_index_of_pane(snapshot, focused).is_some()
+        {
+            ui.selected_pane = Some(focused.clone());
         }
     }
-    select_focused(ui, snapshot, focused_pane_id);
+    anchor_selection(ui, snapshot);
 }
 
-/// Set the highlight to the row backing `focused_pane_id`, if any. The plain
-/// follow-the-focus path, with no optimistic guard.
-fn select_focused(ui: &mut UiState, snapshot: &SidebarSnapshot, focused_pane_id: Option<&PaneId>) {
-    let Some(focused_pane_id) = focused_pane_id else {
-        return;
-    };
-    if let Some(index) = row_index_of_pane(snapshot, focused_pane_id) {
-        ui.selected_index = index;
+/// Re-derive `selected_index` from the identity-keyed `selected_pane`. When the
+/// selected pane has left the room its row is gone, so drop the dangling
+/// identity and clamp the index — the next external focus edge re-seats it.
+fn anchor_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
+    if let Some(pane) = ui.selected_pane.clone() {
+        if let Some(index) = row_index_of_pane(snapshot, &pane) {
+            ui.selected_index = index;
+            return;
+        }
+        ui.selected_pane = None;
     }
+    clamp_selection(ui, snapshot);
 }
 
 /// The visible-row index backing `pane_id`, in `visible_rows` order.
@@ -1278,18 +1274,6 @@ fn row_index_of_pane(snapshot: &SidebarSnapshot, pane_id: &PaneId) -> Option<usi
             .as_ref()
             .is_some_and(|pane| pane.pane_id == *pane_id)
     })
-}
-
-/// Arm the optimistic-focus guard on the pane a click/Enter just focused.
-fn arm_pending_focus(ui: &mut UiState, pane_id: PaneId) {
-    ui.pending_focus = Some(pane_id);
-    ui.pending_focus_since = Some(Timestamp::now());
-}
-
-/// Drop the optimistic-focus guard, returning to plain follow-the-focus.
-fn clear_pending_focus(ui: &mut UiState) {
-    ui.pending_focus = None;
-    ui.pending_focus_since = None;
 }
 
 fn row_index_at_screen_position(ui: &UiState, row: u16) -> Option<usize> {
@@ -1330,10 +1314,14 @@ fn next_attention_index(snapshot: &SidebarSnapshot, selected: usize) -> Option<u
     })
 }
 
-/// Focus the pane backing the selected row and return its id so the caller can
-/// arm the optimistic-focus guard. `None` when the row has no pane to focus.
-fn focus_selected_row(snapshot: &SidebarSnapshot, selected: usize) -> Option<PaneId> {
-    let pane = &visible_rows(snapshot).nth(selected)?.pane.as_ref()?.pane_id;
+/// Focus the pane backing the selected row. A no-op when the row has no pane.
+fn focus_selected_row(snapshot: &SidebarSnapshot, selected: usize) {
+    let Some(pane) = visible_rows(snapshot)
+        .nth(selected)
+        .and_then(|row| row.pane.as_ref())
+    else {
+        return;
+    };
     // Jump off the render thread: `focus_pane` still forks the mux client
     // (`zellij action focus-pane-id` / the tmux equivalent), which must never
     // block the loop. The highlight is already redrawn, so the jump is
@@ -1341,8 +1329,7 @@ fn focus_selected_row(snapshot: &SidebarSnapshot, selected: usize) -> Option<Pan
     // `rimz pane focus` child, no per-click `list-panes` re-validation. A pane
     // recycled in the sub-second window since the snapshot self-corrects on the
     // next refresh.
-    spawn_pane_focus(pane.clone());
-    Some(pane.clone())
+    spawn_pane_focus(pane.pane_id.clone());
 }
 
 /// Focus the pane on a detached thread so the keypress/click returns instantly.
@@ -1886,7 +1873,9 @@ mod tests {
     }
 
     #[test]
-    fn selection_syncs_to_focused_pane_row() {
+    fn first_fold_adopts_the_focused_pane() {
+        // Cold start: no focus observed yet, so the first reported focus is an
+        // edge and seeds the selection.
         let ws = workspace();
         let focused = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let snapshot = snapshot_with_panes(
@@ -1896,83 +1885,21 @@ mod tests {
                 pane("terminal_2", "tab_0", true),
             ],
         );
-        let mut ui = UiState {
-            selected_index: 0,
-            help_visible: false,
-            animation_phase: 0,
-            line_map: Vec::new(),
-            ..Default::default()
-        };
+        let mut ui = UiState::default();
 
-        sync_selection_to_focused_pane(&mut ui, &snapshot, Some(&focused), Timestamp::now());
+        reconcile_selection(&mut ui, &snapshot, Some(&focused));
 
         assert_eq!(ui.selected_index, 1);
+        assert_eq!(ui.selected_pane, Some(focused.clone()));
+        assert_eq!(ui.last_focused_pane, Some(focused));
     }
 
     #[test]
-    fn selection_stays_put_when_focus_is_unknown() {
+    fn external_focus_edge_moves_the_highlight() {
+        // A genuine external focus move — the observed focus changes — follows.
         let ws = workspace();
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", false),
-                pane("terminal_2", "tab_0", false),
-            ],
-        );
-        let mut ui = UiState {
-            selected_index: 1,
-            help_visible: false,
-            animation_phase: 0,
-            line_map: Vec::new(),
-            ..Default::default()
-        };
-
-        sync_selection_to_focused_pane(&mut ui, &snapshot, None, Timestamp::now());
-
-        assert_eq!(ui.selected_index, 1);
-    }
-
-    /// Build two timestamps `gap` seconds apart on the deterministic test clock.
-    fn since_and_now(gap: i64) -> (Timestamp, Timestamp) {
-        let base = 1_700_000_000;
-        (
-            Timestamp::from_second(base).unwrap(),
-            Timestamp::from_second(base + gap).unwrap(),
-        )
-    }
-
-    #[test]
-    fn pending_focus_holds_selection_against_a_stale_snapshot() {
-        let ws = workspace();
-        let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let stale_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", false),
-                pane("terminal_2", "tab_0", false),
-            ],
-        );
-        let (since, now) = since_and_now(1);
-        let mut ui = UiState {
-            selected_index: 1,
-            pending_focus: Some(target.clone()),
-            pending_focus_since: Some(since),
-            ..Default::default()
-        };
-
-        // The snapshot still reports the previous focus (the click has not
-        // propagated): the guard must keep the highlight on the clicked pane.
-        sync_selection_to_focused_pane(&mut ui, &snapshot, Some(&stale_focus), now);
-
-        assert_eq!(ui.selected_index, 1, "held on the clicked pane");
-        assert_eq!(ui.pending_focus, Some(target), "guard still armed");
-    }
-
-    #[test]
-    fn pending_focus_clears_when_the_snapshot_confirms_the_focus() {
-        let ws = workspace();
-        let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let moved = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
@@ -1980,80 +1907,113 @@ mod tests {
                 pane("terminal_2", "tab_0", true),
             ],
         );
-        let (since, now) = since_and_now(1);
         let mut ui = UiState {
-            selected_index: 1,
-            pending_focus: Some(target.clone()),
-            pending_focus_since: Some(since),
+            selected_index: 0,
+            selected_pane: Some(first.clone()),
+            last_focused_pane: Some(first),
             ..Default::default()
         };
 
-        sync_selection_to_focused_pane(&mut ui, &snapshot, Some(&target), now);
+        reconcile_selection(&mut ui, &snapshot, Some(&moved));
 
         assert_eq!(ui.selected_index, 1);
-        assert_eq!(ui.pending_focus, None, "guard released once focus landed");
+        assert_eq!(ui.selected_pane, Some(moved));
     }
 
     #[test]
-    fn pending_focus_releases_after_the_timeout() {
+    fn stale_post_click_focus_holds_the_selection() {
+        // The reported desync: a click pinned terminal_2, but the snapshot still
+        // names the previous focus (terminal_1). That focus is unchanged from the
+        // last observation, so it is no edge and must not roll the click back.
         let ws = workspace();
-        let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let real_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", true),
-                pane("terminal_2", "tab_0", false),
-            ],
-        );
-        let (since, now) = since_and_now(PENDING_FOCUS_TIMEOUT_SECS + 1);
-        let mut ui = UiState {
-            selected_index: 1,
-            pending_focus: Some(target),
-            pending_focus_since: Some(since),
-            ..Default::default()
-        };
-
-        // The focus never reached the target; past the deadline the guard gives
-        // up and the highlight follows the real focus again.
-        sync_selection_to_focused_pane(&mut ui, &snapshot, Some(&real_focus), now);
-
-        assert_eq!(ui.pending_focus, None);
-        assert_eq!(ui.selected_index, 0, "fell back to the snapshot focus");
-    }
-
-    #[test]
-    fn pending_focus_clears_when_the_pending_pane_leaves() {
-        let ws = workspace();
-        let gone = PaneId::from_parts(MuxName::Zellij, "terminal_9");
-        let real_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", true),
-                pane("terminal_2", "tab_0", false),
-            ],
-        );
-        let (since, now) = since_and_now(1);
-        let mut ui = UiState {
-            selected_index: 1,
-            pending_focus: Some(gone),
-            pending_focus_since: Some(since),
-            ..Default::default()
-        };
-
-        sync_selection_to_focused_pane(&mut ui, &snapshot, Some(&real_focus), now);
-
-        assert_eq!(ui.pending_focus, None, "guard released, the pane is gone");
-        assert_eq!(ui.selected_index, 0, "followed the snapshot focus");
-    }
-
-    #[test]
-    fn pending_focus_reanchors_to_the_clicked_pane_after_a_reorder() {
-        let ws = workspace();
-        let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let stale_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        // terminal_2 moved from row 1 to row 0 between snapshots.
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 1,
+            selected_pane: Some(clicked.clone()),
+            last_focused_pane: Some(stale_focus.clone()),
+            ..Default::default()
+        };
+
+        reconcile_selection(&mut ui, &snapshot, Some(&stale_focus));
+
+        assert_eq!(ui.selected_index, 1, "held on the clicked pane");
+        assert_eq!(ui.selected_pane, Some(clicked));
+    }
+
+    #[test]
+    fn cross_tab_click_never_rolls_back() {
+        // A click on a pane in another tab: this tab's focus never changes, so no
+        // edge ever fires and the highlight holds — no timeout, no rollback.
+        let ws = workspace();
+        let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+        let own_tab_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", true),
+                pane("terminal_2", "tab_0", false),
+                pane("terminal_3", "tab_1", false),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 2,
+            selected_pane: Some(clicked.clone()),
+            last_focused_pane: Some(own_tab_focus.clone()),
+            ..Default::default()
+        };
+
+        // Fold repeatedly with the same (unchanged) focus: the highlight stays.
+        for _ in 0..3 {
+            reconcile_selection(&mut ui, &snapshot, Some(&own_tab_focus));
+        }
+
+        assert_eq!(ui.selected_index, 2, "held on the cross-tab clicked pane");
+        assert_eq!(ui.selected_pane, Some(clicked));
+    }
+
+    #[test]
+    fn focus_going_unknown_holds_the_selection() {
+        // Focus on the sidebar itself (or undiscoverable) arrives as `None`. That
+        // is an edge, but there is no row to adopt, so the selection holds.
+        let ws = workspace();
+        let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let prev_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 1,
+            selected_pane: Some(clicked.clone()),
+            last_focused_pane: Some(prev_focus),
+            ..Default::default()
+        };
+
+        reconcile_selection(&mut ui, &snapshot, None);
+
+        assert_eq!(ui.selected_index, 1);
+        assert_eq!(ui.selected_pane, Some(clicked));
+        assert_eq!(ui.last_focused_pane, None, "observed focus recorded");
+    }
+
+    #[test]
+    fn selection_reanchors_to_its_pane_after_a_reorder() {
+        // terminal_2 moved from row 1 to row 0 between folds with no focus edge;
+        // the highlight follows its pane, not the old index.
+        let ws = workspace();
+        let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
@@ -2061,21 +2021,44 @@ mod tests {
                 pane("terminal_1", "tab_0", false),
             ],
         );
-        let (since, now) = since_and_now(1);
         let mut ui = UiState {
             selected_index: 1,
-            pending_focus: Some(target.clone()),
-            pending_focus_since: Some(since),
+            selected_pane: Some(clicked.clone()),
+            last_focused_pane: Some(focus.clone()),
             ..Default::default()
         };
 
-        sync_selection_to_focused_pane(&mut ui, &snapshot, Some(&stale_focus), now);
+        reconcile_selection(&mut ui, &snapshot, Some(&focus));
 
-        assert_eq!(
-            ui.selected_index, 0,
-            "highlight re-anchored to the clicked pane's new row"
+        assert_eq!(ui.selected_index, 0, "re-anchored to the pane's new row");
+        assert_eq!(ui.selected_pane, Some(clicked));
+    }
+
+    #[test]
+    fn selection_drops_when_its_pane_leaves_the_room() {
+        // The selected pane is gone from the snapshot: drop the dangling identity
+        // and clamp, so the next external edge can re-seat it.
+        let ws = workspace();
+        let gone = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+        let focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+            ],
         );
-        assert_eq!(ui.pending_focus, Some(target));
+        let mut ui = UiState {
+            selected_index: 1,
+            selected_pane: Some(gone),
+            last_focused_pane: Some(focus.clone()),
+            ..Default::default()
+        };
+
+        reconcile_selection(&mut ui, &snapshot, Some(&focus));
+
+        assert_eq!(ui.selected_pane, None, "dangling identity dropped");
+        assert!(ui.selected_index < 2, "clamped to a valid row");
     }
 
     /// Lay out `snapshot` at a generous size through the real render path,

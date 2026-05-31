@@ -50,17 +50,19 @@ pub struct UiState {
     /// it as a byproduct of every draw; the mouse hit-test reads it. Empty
     /// before the first draw.
     pub line_map: Vec<Option<usize>>,
-    /// The pane a click/Enter optimistically focused, held until a folded
-    /// snapshot confirms the mux focus landed there. While set, the fetch fold
-    /// keeps the highlight pinned to this pane instead of adopting the
-    /// snapshot's briefly-stale focused pane — so an in-flight focus can't roll
-    /// the selection back. Cleared on confirmation, when the pane leaves the
-    /// room, after the focus deadline lapses, or on manual up/down navigation.
-    pub pending_focus: Option<PaneId>,
-    /// When the current `pending_focus` was registered. The fold abandons an
-    /// unconfirmed guard once this is older than the focus deadline, so a focus
-    /// that never lands can't pin the highlight forever.
-    pub pending_focus_since: Option<Timestamp>,
+    /// The pane the highlight is pinned to — selection keyed by identity, not
+    /// position. Set by every local selection action (click, `↵`, a digit, `␣`,
+    /// or arrow navigation) and moved otherwise only by an *external* focus
+    /// change (edge-triggered, see `app::reconcile_selection`). Keying on the
+    /// pane means a status-churn reorder re-anchors the highlight to the same
+    /// pane instead of sliding it onto a neighbour.
+    pub selected_pane: Option<PaneId>,
+    /// The last *observed* external focus, for edge detection. The mirror adopts
+    /// the snapshot's focused pane only when it differs from this — so a
+    /// briefly-stale post-click focus, or a cross-tab focus that never names
+    /// this tab's pane, holds the level and can never roll an optimistic click
+    /// back. A genuine external focus move is an edge, so the highlight follows.
+    pub last_focused_pane: Option<PaneId>,
 }
 
 /// A sticky health alert pinned to the bottom of the sidebar.
