@@ -1,6 +1,6 @@
 # The Rimz experience — first run to fleet
 
-> The product walkthrough, written from the chair of someone meeting Rimz for the first time. [product.md](./product.md) is the five-minute tour; [DESIGN.md](../../DESIGN.md) holds the invariants; this doc is the *felt* experience, phase by phase — what the developer does, sees, feels, and thinks, from the first keystroke to a ten-agent fleet. Renderer mechanics live in [docs/internals/sidebar.md](../internals/sidebar.md); the canonical glyph table lives in [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape).
+> The product walkthrough, written from the chair of someone meeting Rimz for the first time. [product.md](./product.md) is the five-minute tour; [DESIGN.md](../../DESIGN.md) holds the invariants; this doc is the *felt* experience, phase by phase — what the developer does, sees, feels, and thinks, from the first keystroke to a ten-agent fleet. The frames below are illustrative sketches of the moment; the exact, machine-checked rendering — every glyph, meter, and zone — is the [interface reference](../interface/sidebar.md). Renderer mechanics live in [docs/internals/sidebar.md](../internals/sidebar.md).
 
 The reader of this doc is the primary audience: an engineer who runs Claude Code and Codex agents all day, several at once, and is tired of flipping tabs to find the one that's blocked. They saw Rimz on Hacker News an hour ago. They want to feel the value in under five minutes or they close the tab. Every decision below is in service of that five minutes.
 
@@ -89,23 +89,27 @@ asked — *additive*, *reversible*, *"never answers for you."*
 
 Consent done, Rimz ensures the session exists and drops the reader in: a working shell pane (focused, pristine — nothing dumped into their scrollback) on the right, and the sidebar pinned left at ~30% width.
 
-The column is never blank. Their shell pane is itself a row. With nothing needing attention, the top attention line is omitted and a dim hint points at the *one* next thing to do.
+The column is never blank. Their shell pane is itself a row. With nothing needing attention, the cockpit's make-up line is omitted (no agents to summarize) and a dim hint points at the *one* next thing to do.
 
 ```
-┌ query-engine ──────────────┐
-│ ▏main                      │
-│ · zsh                   3s │
-│                            │
-│ no agents yet              │
-│ run claude or codex        │
-│ in a pane to begin         │
-└────────────────────────────┘
+ ⌘ query-engine
+ ✦ 0
+ ────────────────────────────────────────────
+
+▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌· zsh
+
+ no agents yet
+ run claude or codex
+ in a pane to begin
+
+                  ? for help
 ```
 
 **Does:** Looks left, reads two words of hint, looks back at the prompt.
 
-**Feels:** Oriented. Nothing is demanding anything. The title is the project name
-they recognize; the `▏main` tells them which worktree they're standing in.
+**Feels:** Oriented. Nothing is demanding anything. The `⌘ query-engine` line is the project name
+they recognize; the `▏main` lane tells them which worktree they're standing in.
 
 **Thinks:** *"Right — it wants me to run my agent in here. Let's see what it
 does."*
@@ -122,12 +126,17 @@ does."*
 The reader types `claude` in the shell pane and just looks at its input box — hasn't prompted it yet. Within about a second, the pane that read `· zsh` *becomes* the agent's row. Same row, re-skinned — never a second entry.
 
 ```
-┌ query-engine ──────────────┐
-│ ▏main                  1○  │
-│ ○ claude  —             4s │
-│   Opus · xhigh             │
-│   ━────────────────────────│
-└────────────────────────────┘
+ ⌘ query-engine
+ ✦ 1
+ ────────────────────────────────────────────
+ ? 0   ! 0   ○ 1              ✽ 0   ⢿ 0   ✓ 0
+
+▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌○ claude · Opus · xhigh
+▌  —
+▌  ▣ ──────────────────────────────────    0%
+
+                  ? for help
 ```
 
 **Does:** Nothing. That's the point.
@@ -137,7 +146,7 @@ agent showed up in the sidebar, correctly named, with its model and effort. The 
 
 **Thinks:** *"Oh — it just knows. And it knows it's Opus on xhigh. Nice."*
 
-> **This is the activation moment.** Everything before it was setup; this is the first time the product *does something for them*. The latency budget here is tight: the row must update within a second or two of `SessionStart`, or the magic reads as lag. Idle never raises the attention line, because an idle agent is not a cue.
+> **This is the activation moment.** Everything before it was setup; this is the first time the product *does something for them*. The latency budget here is tight: the row must update within a second or two of `SessionStart`, or the magic reads as lag. Idle never fills an attention bucket, because an idle agent is not a cue.
 
 ---
 
@@ -146,15 +155,20 @@ agent showed up in the sidebar, correctly named, with its model and effort. The 
 The reader gives Claude a task. `UserPromptSubmit` then `PreToolUse` move the row to `⢿ running`; the task slot fills with the agent's reported task (or the first ~20 chars of the prompt). A *wedged* `running` agent betrays itself by escalating to the static `!` attention state once it falls silent past the stall window, rather than spinning forever.
 
 ```
-┌ query-engine ──────────────┐
-│ ▏main                  1⢿  │
-│ ⢿ claude  fix auth flow  8s│
-│   Opus · xhigh             │
-│   ━━━━─────────────────────│
-└────────────────────────────┘
+ ⌘ query-engine
+ ✦ 1
+ ────────────────────────────────────────────
+ ? 0   ! 0   ○ 0              ✽ 0   ⢿ 1   ✓ 0
+
+▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌⢿ claude · Opus · xhigh
+▌  fix auth flow
+▌  ▣ ━━━━━━━━━━━━━━────────────────────   41%
+
+                  ? for help
 ```
 
-**Feels:** Calm. Still no attention line — running is not their cue to do anything.
+**Feels:** Calm. The attention buckets hold at `? 0  ! 0` — running is not their cue to do anything.
 They go get coffee, or open a second agent.
 
 **Thinks:** *"Green means go, it's working, I don't need to watch it."*
@@ -165,19 +179,20 @@ They go get coffee, or open a second agent.
 
 ## Phase 5 — The first question: the moment Rimz earns its place
 
-Claude hits a permission prompt — it wants to run something. A feed item is written to the ledger, the row flips to `? waiting`, rises to the top of its worktree, the attention line counts it (`?1`), and a native notification fires.
+Claude hits a permission prompt — it wants to run something. A feed item is written to the ledger, the row flips to `? waiting`, rises to the top of its worktree, the cockpit make-up counts it (`? 1`), and a native notification fires.
 
 ```
-┌ query-engine ──────────────┐
-│ ?1                         │
-│                            │
-│ ▏main                  1?  │
-│ ? claude  fix auth flow  1m│
-│   Opus · xhigh             │
-│   ━━━━━━───────────────────│
-│                            │
-│ ↵ jump to claude           │
-└────────────────────────────┘
+ ⌘ query-engine
+ ✦ 1
+ ────────────────────────────────────────────
+ ? 1   ! 0   ○ 0              ✽ 0   ⢿ 0   ✓ 0
+
+▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌? claude · Opus · xhigh
+▌  fix auth flow
+▌  ▣ ━━━━━━━━━━━━━━────────────────────   41%
+
+           ␣ next ?!   ? for help
 ```
 
 Even if the reader is in another pane or another app, the OS notification reaches them:
@@ -207,7 +222,7 @@ these."*
 Once the reader enrols a resolver (Phase 9), the same waiting row shows the chain working instead of demanding them: the glyph becomes a braille resolver spinner (`⠙`) and the task slot reads the resolver and its remaining budget. It still counts in the `?` tally — the item is pending, just being handled — and flips back to `? waiting` if the chain exhausts or misses the agent's hook cap.
 
 ```
-? claude  fix auth flow  1m      →      ⠙ claude  opus-policy 24s   1m
+? claude · Opus      →      ⠙ claude  opus-policy 24s
 ```
 
 ---
@@ -217,40 +232,43 @@ Once the reader enrols a resolver (Phase 9), the same waiting row shows the chai
 The reader does exactly what they said they would: spins up four more agents across two worktrees, plus a deploy script paused at a gate. This is the load the product was built for, and it has to stay scannable.
 
 ```
-┌ query-engine ──────────────┐
-│ ?2  !1                     │
-│                            │
-│ ▏main                 2⢿ 1?│
-│ ? claude  fix auth flow 12m│
-│   Opus · xhigh             │
-│   ━━━━━━━━━━───────────────│
-│ ⢿ claude  add tests     8s │
-│   Sonnet · high            │
-│   ━━━━━────────────────────│
-│ ⢿ codex   refactor api 30s │
-│   GPT-5.5 · high           │
-│   ━━━━━━━━━━━━━━━──────────│
-│                            │
-│ ▏feature-migration    1! 1○│
-│ ! claude  db migrate    4m │
-│   Opus · xhigh · yolo      │
-│   ━━━━━━━━━━━━━━━━━━━━━────│
-│ ○ codex   —             1h │
-│   GPT-5.5 · low            │
-│   ━━━──────────────────────│
-│                            │
-│ ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄ 1?│
-│ ? deploy  promote?      5m │
-│                            │
-│ ↵ jump   ␣ next ?!   ? keys│
-└────────────────────────────┘
+ ⌘ query-engine
+ ✦ 6   ✧ 2                              $4.20
+ ────────────────────────────────────────────
+ ? 2   ! 1   ○ 1              ✽ 1   ⢿ 1   ✓ 0
+ ◷ 41m · ◇ 486.0k · ◆ 4
+
+▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌? claude · Opus · xhigh
+▌  fix auth flow
+▌  ▣ ━━━━━━━━━━━━━━────────────────────   41%
+▏✽ claude · Sonnet · high · plan
+▏  add tests
+▏  ▣ ━━━━━━────────────────────────────   18%
+▏⢿ codex · GPT-5.5 · high
+▏  refactor api
+▏  ▣ ━━━━━━━━━━━━━━━━━━━━━─────────────   63%
+
+ feature-migration                   +230 -23
+ ! claude · Opus · xhigh · yolo
+   db migrate
+   ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━─────   84%
+ ○ codex · GPT-5.5 · low
+   —
+   ▣ ──────────────────────────────────    0%
+
+ ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1
+ ? deploy.sh
+   Deploy staging?
+
+           ␣ next ?!   ? for help
 ```
 
-The attention line is the first thing the eye lands on: `?2 !1` — two waiting, one failed, summed across *every* worktree, counting even rows hidden by a per-worktree cap. Ranking does the triage automatically: the most overdue `waiting`/`failed` rows rise (oldest first); calm agents settle below; each worktree caps its calm tail with a dim `+K more` but *never* hides a `waiting`/`failed` row.
+The cockpit make-up is the first thing the eye lands on: `? 2   ! 1` — two waiting, one failed, summed across *every* worktree, counting even rows hidden by a per-worktree cap. Ranking does the triage automatically: the most overdue `waiting`/`failed` rows rise (oldest first); calm agents settle below; each worktree caps its calm tail with a dim `+K more` but *never* hides a `waiting`/`failed` row.
 
 **The power move — never hunt for the blocked pane again.** A single session-scoped keystroke (`␣` / "next ?!" in the footer) focuses the next item that needs attention, in ranking order, *without the reader ever focusing the sidebar*. Twelve agents, one key, straight to the oldest blocked one; press it again for the next.
 
-**Does:** Glances at `?2 !1`, hits the next-attention key twice to clear both
+**Does:** Glances at `? 2  ! 1`, hits the next-attention key twice to clear both
 waiting items in their own panes, then jumps to the red `!` to read the failure.
 
 **Feels:** In control of a fleet that would have been five flickering tab-bars a
@@ -260,7 +278,7 @@ day ago. The worktree grouping matches their mental model — `main` work here, 
 made me faster at being the bottleneck."*
 
 > **Design laws for the fleet.**
-> - **The attention line is the whole sidebar compressed to one line.** If you read nothing else, `?2 !1` tells you whether to look; no line means nothing needs you. It never undercounts behind a cap.
+> - **The cockpit make-up is the whole sidebar compressed to one line.** If you read nothing else, `? 2   ! 1` tells you whether to look; a row of zeros means nothing needs you. It never undercounts behind a cap.
 > - **Ranking is the triage; you don't sort.** Attention-hungry buckets rise, oldest-first within them; the cap only ever trims the *calm* tail. The sidebar physically cannot bury something that needs you.
 > - **A global "focus next attention" key is core, not a nicety.** Seeing the blocked pane and *getting* to it are different actions; the key collapses them so triage cost stays flat as the fleet grows. It's bound only inside the Rimz session, so it never touches the reader's global mux config.
 > - **Worktrees are the structure, not tabs.** Groups are keyed on worktree isolation (only same-worktree agents share files); a bold header marks each one, and the worktree you've *selected* reads as one bracketed lane — a thin spine down its full height with a faint dotted seal capping its header, the selected card inside it bolder — so the lane is the only spine ink on screen. The `external` catch-all holds scripts, CI, and panes outside any worktree; it renders as a dim `┄ external ┄` divider and sorts last unless it holds something waiting or failed.
@@ -270,21 +288,12 @@ made me faster at being the bottleneck."*
 The footer advertises `?`. Pressing it overlays the legend and keys, so the glyph vocabulary is learnable in-place and the reader never has to leave the room to find out what `?` or `!` means.
 
 ```
-┌ rimz · keys & legend ──────┐
-│ ↑↓   select row            │
-│ ↵    jump to that pane     │
-│ 1–9  jump by number        │
-│ ␣    jump to next ? / !    │
-│ x    dismiss alert         │
-│ r    reload renderer       │
-│ ?    close                 │
-│                            │
-│ ⢿ working    ✽ thinking    │
-│ ? waiting    ! attention   │
-│ ○ idle       ✓ done        │
-│ · process                  │
-│ posture: auto · yolo       │
-└────────────────────────────┘
+ keys & legend
+ ↑/↓ select   1-9 jump   ↵ jump
+ ␣ next ?!   x dismiss   r reload   ? close
+ ⢿ working   ✽ thinking   ? waiting
+ ! attention   ○ idle   ✓ done   · process
+ posture: plan · auto · yolo
 ```
 
 > **Design law — color reinforces, shape carries.** Every status is legible under `NO_COLOR` and to color-blind readers because the *glyph shape* carries the meaning; color is a second, redundant channel. The legend shows both.
@@ -333,16 +342,19 @@ on my phone at the airport. That changes how I work."*
 The product's honesty law gets tested when a fetch fails — the binary moved, the ledger dir vanished mid-write, a snapshot is half-written. The reader must never mistake a *stale* frame for a *current* one.
 
 ```
-┌ query-engine ──────────────┐
-│ ▏main                  1⢿  │
-│ ⢿ claude  fix auth flow  2m│
-│   Opus · xhigh             │
-│   ━━━━━━━━━────────────────│
-│                            │
-│! Sidebar degraded for 8s:  │
-│snapshot failed: ledger not │
-│found                       │
-└────────────────────────────┘
+ ⌘ query-engine
+ ✦ 1
+ ────────────────────────────────────────────
+ ? 0   ! 0   ○ 0              ✽ 0   ⢿ 1   ✓ 0
+
+▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌⢿ claude · Opus · xhigh
+▌  fix auth flow
+▌  ▣ ━━━━━━━━━━━━━━────────────────────   41%
+
+
+ ! Sidebar degraded for 8s: snapshot
+ failed: ledger not found
 ```
 
 The loop keeps the last good snapshot for the body but pins a sticky banner to the *bottom* edge — status-bar style, so the body truncates before the banner ever clips — explaining *why* the UI isn't updating and *for how long*. When a fetch finally succeeds the banner doesn't just vanish: it steps down to a dim `⚠ last alert 8s ago: … · x dismiss` notice so a failure that flickered past stays visible, and clears for good when the reader presses `x` (a fresh failure re-arms it). The first-run hint and footer are suppressed while the alert is active — because an empty body under a failed fetch is a missing snapshot, not an empty room.
@@ -392,9 +404,9 @@ on the very first screen.
 | 1 Consent | runs `rimz` | additive-diff gate | reassured | report, don't answer; reversible |
 | 2 Empty room | looks left | `· zsh`, hint | oriented | never blank |
 | 3 First agent | types `claude` | row re-skins to `○ claude` | delight | it just knows |
-| 4 Working | prompts | `⢿ running`, climbing age | calm | age is the honesty signal |
+| 4 Working | prompts | `⢿ running`, animated head | calm | a wedged agent escalates to `!` |
 | 5 Question | gets notified, jumps | `? waiting`, OS notify | *the pitch* | notify & route, never answer |
-| 6 Fleet | hits "next ?!" | grouped roster, `?2 !1` | in control | one key tames the fleet |
+| 6 Fleet | hits "next ?!" | grouped roster, `? 2  ! 1` | in control | one key tames the fleet |
 | 7 Tabs | opens a tab | same room everywhere | coherent | tabs are viewports |
 | 8 Detach | closes laptop, ssh back | reconstructed column | relief, trust | ledger is truth |
 | 9 Degraded | hits a failure | labeled banner | trust-via-honesty | never a stale frame as fresh |
