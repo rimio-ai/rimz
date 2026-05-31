@@ -25,6 +25,8 @@ use rimz::mux::{
 };
 use tempfile::TempDir;
 
+use crate::common::CommandTimeoutExt;
+
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Skip the test (return) if the host has no `zellij` binary on PATH.
@@ -126,7 +128,7 @@ impl Drop for ZellijSession {
     fn drop(&mut self) {
         let _ = scoped_zellij(self.xdg.path())
             .args(["delete-session", &self.name, "--force"])
-            .output();
+            .bounded_output();
     }
 }
 
@@ -142,7 +144,7 @@ impl Drop for ScopedSessionCleanup {
     fn drop(&mut self) {
         let _ = scoped_zellij(&self.xdg)
             .args(["delete-session", &self.name, "--force"])
-            .output();
+            .bounded_output();
     }
 }
 
@@ -158,7 +160,7 @@ fn wait_until_session_ready(xdg: &Path, name: &str) {
     loop {
         let ready = scoped_zellij(xdg)
             .args(["--session", name, "action", "query-tab-names"])
-            .output()
+            .bounded_output()
             .is_ok_and(|out| out.status.success());
         if ready {
             return;
@@ -348,7 +350,7 @@ fn open_sidebar_starts_sidebar_without_a_run_prompt() {
 fn assert_session_has_bottom_bar(xdg: &Path, session: &str) {
     let output = scoped_zellij(xdg)
         .args(["--session", session, "action", "list-panes", "-j", "-a"])
-        .output()
+        .bounded_output()
         .expect("list-panes for bar check");
     assert!(output.status.success(), "list-panes for bar check failed");
     let panes: serde_json::Value =
@@ -439,7 +441,7 @@ fn open_sidebar_heals_a_live_session_with_a_held_sidebar() {
         .arg(cwd.path())
         .arg("--default-layout")
         .arg(&layout)
-        .output()
+        .bounded_output()
         .expect("spawn held-sidebar session");
     assert!(
         output.status.success(),
@@ -506,7 +508,7 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
         .arg(cwd.path())
         .arg("--default-layout")
         .arg(&layout)
-        .status()
+        .bounded_status()
         .expect("create plain session");
     assert!(created.success(), "create-background failed for {name}");
     let plain = wait_for_pane_count(xdg.path(), &name, 1);
@@ -639,7 +641,7 @@ fn tabs_focus_the_terminal_not_the_sidebar() {
 fn open_new_tab(xdg: &Path, session: &str) {
     let output = scoped_zellij(xdg)
         .args(["--session", session, "action", "new-tab"])
-        .output()
+        .bounded_output()
         .expect("new-tab");
     assert!(
         output.status.success(),
@@ -652,7 +654,7 @@ fn open_new_tab(xdg: &Path, session: &str) {
 fn list_panes_json(xdg: &Path, session: &str) -> serde_json::Value {
     scoped_zellij(xdg)
         .args(["--session", session, "action", "list-panes", "-j", "-a"])
-        .output()
+        .bounded_output()
         .ok()
         .filter(|out| out.status.success())
         .and_then(|out| serde_json::from_slice(&out.stdout).ok())
@@ -700,7 +702,7 @@ fn session_has_held_sidebar(xdg: &Path, session: &str) -> bool {
 fn new_tab_template_dump(xdg: &Path, session: &str) -> String {
     let output = scoped_zellij(xdg)
         .args(["--session", session, "action", "dump-layout"])
-        .output()
+        .bounded_output()
         .expect("dump-layout");
     assert!(
         output.status.success(),
@@ -814,7 +816,7 @@ fn sidebar_self_closes_when_its_tab_empties() {
         .arg(cwd.path())
         .arg("--default-layout")
         .arg(&layout_path)
-        .status()
+        .bounded_status()
         .expect("create background session");
     assert!(created.success(), "create-background failed for {name}");
 
@@ -877,7 +879,7 @@ fn sidebar_self_closes_when_its_tab_starts_empty() {
         .arg(cwd.path())
         .arg("--default-layout")
         .arg(&layout_path)
-        .status()
+        .bounded_status()
         .expect("create background session");
     assert!(created.success(), "create-background failed for {name}");
 
@@ -1042,7 +1044,7 @@ fn wait_for_pane_count(xdg: &Path, session: &str, want: usize) -> Vec<PaneRef> {
 fn session_nonplugin_count(xdg: &Path, name: &str) -> usize {
     scoped_zellij(xdg)
         .args(["--session", name, "action", "list-panes", "-j", "-a"])
-        .output()
+        .bounded_output()
         .ok()
         .filter(|out| out.status.success())
         .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok())
@@ -1064,7 +1066,7 @@ fn session_nonplugin_count(xdg: &Path, name: &str) -> usize {
 fn tab_nonplugin_count(xdg: &Path, name: &str, tab_name: &str) -> usize {
     scoped_zellij(xdg)
         .args(["--session", name, "action", "list-panes", "-j", "-a"])
-        .output()
+        .bounded_output()
         .ok()
         .filter(|out| out.status.success())
         .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok())
@@ -1122,7 +1124,7 @@ fn wait_for_nonplugin_panes_in_tab(
 fn assert_sidebar_is_left_thirty_percent(xdg: &Path, session: &str) {
     let output = scoped_zellij(xdg)
         .args(["--session", session, "action", "list-panes", "-j", "-a"])
-        .output()
+        .bounded_output()
         .expect("list-panes geometry");
     assert!(output.status.success(), "list-panes geometry failed");
     let panes: serde_json::Value =
@@ -1306,7 +1308,7 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
 fn focused_tab_name(xdg: &Path, session: &str) -> Option<String> {
     let out = scoped_zellij(xdg)
         .args(["--session", session, "action", "dump-layout"])
-        .output()
+        .bounded_output()
         .ok()?;
     if !out.status.success() {
         return None;
@@ -1348,7 +1350,7 @@ fn wait_for_focused_tab_off_daemon(xdg: &Path, session: &str) -> Option<String> 
 fn tab_names_in_order(xdg: &Path, session: &str) -> Vec<String> {
     let out = scoped_zellij(xdg)
         .args(["--session", session, "action", "query-tab-names"])
-        .output();
+        .bounded_output();
     out.ok()
         .filter(|out| out.status.success())
         .map(|out| {
@@ -1381,7 +1383,7 @@ fn wait_for_tab_named(xdg: &Path, session: &str, tab_name: &str) -> bool {
     loop {
         let listed = scoped_zellij(xdg)
             .args(["--session", session, "action", "query-tab-names"])
-            .output();
+            .bounded_output();
         if let Ok(out) = listed
             && out.status.success()
             && String::from_utf8_lossy(&out.stdout)

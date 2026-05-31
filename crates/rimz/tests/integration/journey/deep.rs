@@ -16,7 +16,7 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use tempfile::TempDir;
 
 use super::{rimz_sidebar_bin, session_start_at};
-use crate::common::Env;
+use crate::common::{CommandTimeoutExt, Env};
 
 const CAPTURE_BUDGET: Duration = Duration::from_secs(15);
 
@@ -208,7 +208,7 @@ fn zellij_room_shows_agent_after_hook() {
         .arg(&env.project_root)
         .arg("--default-layout")
         .arg(&layout_path)
-        .status()
+        .bounded_status()
         .expect("create background session");
     assert!(created.success(), "create-background failed for {name}");
 
@@ -376,6 +376,6 @@ impl Drop for ZellijSessionGuard {
     fn drop(&mut self) {
         let _ = scoped_zellij(&self.runtime)
             .args(["delete-session", &self.name, "--force"])
-            .output();
+            .bounded_output();
     }
 }
