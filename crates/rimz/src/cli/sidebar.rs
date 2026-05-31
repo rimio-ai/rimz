@@ -215,6 +215,9 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 if let Some(own) = exclude.as_ref() {
                     snapshot.own_view = rimz::SidebarOwnView::from_panes(own, &panes);
                 }
+                // Computed from the full session pane list (pre-exclusion), before
+                // `with_live_panes` consumes `panes`.
+                snapshot.only_daemon_view_remains = rimz::SidebarSnapshot::only_daemon_view(&panes);
                 snapshot = snapshot.with_live_panes(panes, exclude.as_ref());
             }
             snapshot.agent_hooks_ready = rimz::sidebar::snapshot::agent_hooks_ready();

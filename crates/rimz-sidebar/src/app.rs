@@ -18,7 +18,7 @@ use ratatui::crossterm::terminal;
 use rimz::ids::PaneId;
 use rimz::ledger::paths::PathErr;
 use rimz::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::render::{self, Alert, UiState};
 
@@ -90,6 +90,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     let mut health = Health::default();
     let mut gate = GateState::default();
     let mut self_close = SelfCloseState::default();
+    let mut session_exit = SessionExitState::default();
     let mut ui = UiState::default();
     let mut reexec_to: Option<PathBuf> = None;
     // Monotonic base for the animation frame. Deriving the phase from elapsed
@@ -128,6 +129,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         &mut health,
         &mut gate,
         &mut self_close,
+        &mut session_exit,
         &mut ui,
         &mut terminal,
         anim_start,
@@ -168,6 +170,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                         &mut health,
                         &mut gate,
                         &mut self_close,
+                        &mut session_exit,
                         &mut ui,
                         &mut terminal,
                         anim_start,
@@ -420,6 +423,48 @@ impl SelfCloseState {
 }
 
 const EMPTY_STARTUP_OBSERVATIONS_BEFORE_CLOSE: u8 = 2;
+
+/// Decide whether the daemon-view sidebar should detach the client because the
+/// `rimzd` daemon tab is the only tab left in the session. Mirrors
+/// [`SelfCloseState`], but it detaches the client (the session keeps running)
+/// rather than exiting, fires once, and only after a working view has been seen.
+///
+/// `only_daemon` is the snapshot's `only_daemon_view_remains`, passed only when
+/// this renderer's own view *is* the daemon view (the caller gates on
+/// `SidebarOwnView::own_view_is_daemon`); otherwise `None`, which never detaches.
+#[derive(Debug, Default)]
+struct SessionExitState {
+    /// Latched once a non-daemon (working) view has ever been seen. Until then,
+    /// "only the daemon view remains" is session birth (the `rimzd` tab is born
+    /// first), not teardown, so it must never detach.
+    seen_other_view: bool,
+    /// Latched after a detach has been requested once, so a slow client teardown
+    /// spanning the next few ticks does not spawn redundant detaches.
+    fired: bool,
+}
+
+impl SessionExitState {
+    fn should_detach(&mut self, only_daemon: Option<bool>) -> bool {
+        match only_daemon {
+            // A working view still exists → latch it; never detach while the
+            // user has work open.
+            Some(false) => {
+                self.seen_other_view = true;
+                false
+            }
+            // Only the daemon view remains, a working view has come and gone, and
+            // we have not detached yet → the room emptied: detach, once.
+            Some(true) if self.seen_other_view && !self.fired => {
+                self.fired = true;
+                true
+            }
+            // Already fired, or session birth (no working view seen yet): hold.
+            Some(true) => false,
+            // Not in the daemon view, or unknown: never our call.
+            None => false,
+        }
+    }
+}
 
 /// This process's normalized pane id, read from the multiplexer's per-pane env
 /// var. Zellij exposes a bare integer in `ZELLIJ_PANE_ID` (normalized as
@@ -698,6 +743,7 @@ fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
         agents: Vec::new(),
         agent_hooks_ready: false,
         own_view: None,
+        only_daemon_view_remains: false,
         project_root: None,
         worktree_roots: Vec::new(),
         sidebar: rimz::config::SidebarConfig::default(),
@@ -913,6 +959,7 @@ fn apply_fetch_outcome(
     health: &mut Health,
     gate: &mut GateState,
     self_close: &mut SelfCloseState,
+    session_exit: &mut SessionExitState,
     ui: &mut UiState,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     anim_start: Instant,
@@ -989,10 +1036,56 @@ fn apply_fetch_outcome(
             rejected,
         });
     }
+    // The daemon-view sidebar detaches the client once the daemon tab is the
+    // only tab left — gated on our own view being the daemon view, then latched
+    // so it fires once after a working view has come and gone. Unlike
+    // self-close it does not exit: the daemon pane keeps running in the
+    // background session and resurrects on reattach.
+    let only_daemon = current.own_view.as_ref().and_then(|view| {
+        view.own_view_is_daemon
+            .then_some(current.only_daemon_view_remains)
+    });
+    if session_exit.should_detach(only_daemon) {
+        info!(
+            session = %config.session_name,
+            "only the daemon view remains; detaching the client",
+        );
+        request_detach(config);
+    }
     Ok(ApplyOutcome {
         should_exit: false,
         rejected,
     })
+}
+
+/// Detach the attached client from the session, best-effort, by shelling out to
+/// `rimz pane detach` (the same cached binary the snapshot fork uses, so no mux
+/// command knowledge leaks into the sidebar). The daemon-view sidebar calls this
+/// once the daemon tab is the only tab left; the background session and its
+/// daemons keep running and resurrect on the next attach. A failure is logged,
+/// never fatal — the session stays attached and the next tick retries.
+fn request_detach(config: &ServeConfig) {
+    let bin = resolve_snapshot_bin(&config.rimz_bin);
+    match Command::new(&bin)
+        .args(["pane", "detach", "--mux"])
+        .arg(config.mux.as_str())
+        .args(["--session-name", &config.session_name])
+        .status()
+    {
+        Ok(status) if status.success() => {
+            debug!(session = %config.session_name, "client detach requested");
+        }
+        Ok(status) => warn!(
+            session = %config.session_name,
+            code = ?status.code(),
+            "client detach exited non-zero",
+        ),
+        Err(err) => warn!(
+            session = %config.session_name,
+            error = %err,
+            "client detach spawn failed",
+        ),
+    }
 }
 
 /// Refresh this instance's liveness heartbeat. Written in-process — no `rimz
@@ -1880,6 +1973,58 @@ mod tests {
         assert!(
             state.seen_sibling,
             "an unknown count must not clear the latch"
+        );
+    }
+
+    #[test]
+    fn session_exit_holds_at_birth_before_a_working_view() {
+        // The `rimzd` tab is born first, so "only the daemon view" is birth, not
+        // teardown: hold, and do not latch.
+        let mut state = SessionExitState::default();
+        assert!(!state.should_detach(Some(true)));
+        assert!(!state.seen_other_view);
+    }
+
+    #[test]
+    fn session_exit_latches_then_detaches_when_the_room_empties() {
+        let mut state = SessionExitState::default();
+        assert!(!state.should_detach(Some(false))); // a working view appears → latch
+        assert!(state.seen_other_view);
+        assert!(state.should_detach(Some(true))); // it closed → only the daemon view → detach
+    }
+
+    #[test]
+    fn session_exit_holds_while_a_working_view_exists() {
+        let mut state = SessionExitState {
+            seen_other_view: true,
+            fired: false,
+        };
+        assert!(!state.should_detach(Some(false)));
+    }
+
+    #[test]
+    fn session_exit_never_fires_on_none() {
+        let mut state = SessionExitState {
+            seen_other_view: true,
+            fired: false,
+        };
+        assert!(!state.should_detach(None));
+        assert!(
+            state.seen_other_view,
+            "an unknown signal must not clear the latch"
+        );
+    }
+
+    #[test]
+    fn session_exit_fires_exactly_once() {
+        let mut state = SessionExitState {
+            seen_other_view: true,
+            fired: false,
+        };
+        assert!(state.should_detach(Some(true)));
+        assert!(
+            !state.should_detach(Some(true)),
+            "a second tick must not re-detach"
         );
     }
 

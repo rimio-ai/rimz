@@ -48,6 +48,19 @@ enum PaneSubcmd {
     },
     /// Split off a new pane in the current view.
     Split,
+    /// Detach the attached client from a session; the session keeps running in
+    /// the background and resurrects on the next attach. The `rimzd` daemon
+    /// tab's sidebar issues this once the daemon tab is the only tab left.
+    ///
+    /// Client semantics differ by backend (accepted, not papered over): Zellij's
+    /// `action detach` detaches the client whose process tree this pane belongs
+    /// to; tmux's `detach-client -s <session>` detaches every client of the
+    /// session.
+    Detach {
+        /// Session to detach. Defaults to the cwd's workspace session.
+        #[arg(long)]
+        session_name: Option<String>,
+    },
 }
 
 pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
@@ -149,6 +162,13 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
                     env,
                 })
                 .map_err(Into::into)
+        }
+        PaneSubcmd::Detach { session_name } => {
+            let session_name = match session_name {
+                Some(name) => name,
+                None => WorkspaceResolver::resolve(".", globals.root.clone())?.session_name,
+            };
+            backend.detach(&session_name).map_err(Into::into)
         }
     }
 }

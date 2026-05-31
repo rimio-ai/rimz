@@ -417,6 +417,9 @@ pub fn enrich_consumer(
         if let Some(own) = exclude {
             snapshot.own_view = SidebarOwnView::from_panes(own, &panes);
         }
+        // Recompute from the published pane list (pre-exclusion) rather than
+        // trusting the producer's base bit, for producer/consumer symmetry.
+        snapshot.only_daemon_view_remains = SidebarSnapshot::only_daemon_view(&panes);
         snapshot = snapshot.with_live_panes(panes, exclude);
     }
     snapshot.agent_hooks_ready = agent_hooks_ready();

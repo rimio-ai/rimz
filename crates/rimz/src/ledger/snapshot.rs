@@ -93,6 +93,16 @@ pub struct SidebarSnapshot {
     /// `None`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub own_view: Option<SidebarOwnView>,
+    /// True iff every live, non-sidebar view in the session is the `rimzd`
+    /// daemon view — the user has closed every working tab and only the managed
+    /// daemon tab remains. The daemon view's own sidebar reads it (gated by
+    /// `SidebarOwnView::own_view_is_daemon` and a latch) to detach the client,
+    /// leaving the background session and its daemons alive. Like `own_view`,
+    /// this is live-pane state the pure reducer can't read, so the reducer and
+    /// the placeholder/persisted snapshot leave it `false`; the `rimz sidebar
+    /// snapshot` CLI fills it from the live pane list.
+    #[serde(default)]
+    pub only_daemon_view_remains: bool,
     /// The project's canonical root. Grouping uses it to tell a project
     /// worktree (the main checkout, or `<root>/.claude/worktrees/*`) from a
     /// pane whose cwd sits outside the project entirely (a home shell, `/tmp`),
@@ -183,6 +193,13 @@ pub struct SidebarOwnView {
     pub sibling_count: usize,
     pub own_is_focused: bool,
     pub focused_pane_id: Option<PaneId>,
+    /// Whether the caller's own view is the `rimzd` daemon view: its siblings,
+    /// after dropping any sidebar pane, are non-empty and all managed hosts
+    /// ([`crate::remote_control::pane_is_host`]). The daemon-view sidebar gates
+    /// the session-exit detach on this so a working-tab sidebar never triggers
+    /// it. `#[serde(default)]` keeps the wire shape stable for older producers.
+    #[serde(default)]
+    pub own_view_is_daemon: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -414,6 +431,7 @@ impl SidebarSnapshot {
             agents,
             agent_hooks_ready: false,
             own_view: None,
+            only_daemon_view_remains: false,
             project_root: None,
             worktree_roots: Vec::new(),
             sidebar: crate::config::SidebarConfig::default(),
@@ -570,6 +588,55 @@ impl SidebarSnapshot {
         if self.agents.len() != previous_len {
             self.rebuild_groups();
         }
+    }
+
+    /// Whether every live, non-sidebar view in `panes` is the `rimzd` daemon
+    /// view — i.e. the user has nothing left but the managed daemon tab. A view
+    /// is a *daemon* view iff, after dropping its sidebar pane, it is non-empty
+    /// and every remaining pane is a managed host
+    /// ([`crate::remote_control::pane_is_host`]); a *working* view iff it holds
+    /// any non-sidebar, non-host pane. A sidebar-only view (a working tab
+    /// mid-self-close) counts as neither, so it neither trips nor blocks the
+    /// signal. Returns `false` for an empty or not-yet-born session (no daemon
+    /// view), so the renderer never detaches at startup.
+    ///
+    /// Keys on `view_id` + `pane_is_host`, never on `view_name`, so it behaves
+    /// identically on Zellij (where `list_panes` leaves `view_name` `None`) and
+    /// tmux (where it carries the window name).
+    pub fn only_daemon_view(panes: &[PaneRef]) -> bool {
+        // Per view_id: (host pane count, working pane count). Sidebar panes are
+        // dropped but still register the view, so a sidebar-only view exists as
+        // an entry with zero of each — counted as neither daemon nor working.
+        let mut views: std::collections::BTreeMap<&str, (u32, u32)> =
+            std::collections::BTreeMap::new();
+        for pane in panes {
+            let Some(view_id) = pane.view_id.as_deref() else {
+                continue;
+            };
+            let entry = views.entry(view_id).or_default();
+            let is_sidebar = pane
+                .command
+                .as_deref()
+                .is_some_and(|command| command_label(command) == "rimz-sidebar");
+            if is_sidebar {
+                continue;
+            }
+            if crate::remote_control::pane_is_host(pane) {
+                entry.0 += 1;
+            } else {
+                entry.1 += 1;
+            }
+        }
+        let mut saw_daemon = false;
+        for (hosts, working) in views.values() {
+            if *working > 0 {
+                return false;
+            }
+            if *hosts > 0 {
+                saw_daemon = true;
+            }
+        }
+        saw_daemon
     }
 
     /// Fold live multiplexer panes into the sidebar view-model. This reducer is
@@ -949,10 +1016,27 @@ impl SidebarOwnView {
             .iter()
             .find(|pane| pane.is_focused)
             .map(|pane| pane.pane_id.clone());
+        // The own view is the daemon view iff, after dropping sidebar panes, its
+        // remaining siblings are non-empty and all managed hosts. Keys on
+        // `pane_is_host`, never `view_name`, for Zellij/tmux parity.
+        let non_sidebar_siblings: Vec<&PaneRef> = siblings
+            .iter()
+            .copied()
+            .filter(|pane| {
+                pane.command
+                    .as_deref()
+                    .is_none_or(|command| command_label(command) != "rimz-sidebar")
+            })
+            .collect();
+        let own_view_is_daemon = !non_sidebar_siblings.is_empty()
+            && non_sidebar_siblings
+                .iter()
+                .all(|&pane| crate::remote_control::pane_is_host(pane));
         Some(Self {
             sibling_count: siblings.len(),
             own_is_focused: own_pane.is_focused,
             focused_pane_id,
+            own_view_is_daemon,
         })
     }
 }
@@ -4947,6 +5031,129 @@ mod tests {
         let panes = vec![view_pane("terminal_1", "tab_0", true)];
 
         assert!(SidebarOwnView::from_panes(&own, &panes).is_none());
+    }
+
+    /// A pane fixture with an explicit command and optional window name, so a
+    /// test can build daemon hosts, sidebars, and working shells across views.
+    fn pane_cmd(raw: &str, view: &str, command: &str, view_name: Option<&str>) -> PaneRef {
+        PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
+            session_name: "rimz-test".to_owned(),
+            view_id: Some(view.to_owned()),
+            view_kind: Some(crate::ids::ViewKind::Tab),
+            view_name: view_name.map(str::to_owned),
+            is_focused: false,
+            command: Some(command.to_owned()),
+            cwd: Some("/repo/main".to_owned()),
+            pane_pid: None,
+            pane_process_start: None,
+        }
+    }
+
+    #[test]
+    fn only_daemon_view_true_when_only_the_daemon_view_remains() {
+        // rimzd view: sidebar + two managed hosts; no working view left.
+        let panes = vec![
+            pane_cmd(
+                "terminal_0",
+                "tab_0",
+                "rimz-sidebar serve --workspace-id ws_x",
+                None,
+            ),
+            pane_cmd(
+                "terminal_1",
+                "tab_0",
+                "claude remote-control --spawn worktree",
+                None,
+            ),
+            pane_cmd("terminal_2", "tab_0", "rimz codex app-server serve", None),
+        ];
+        assert!(SidebarSnapshot::only_daemon_view(&panes));
+    }
+
+    #[test]
+    fn only_daemon_view_false_while_a_working_view_exists() {
+        let panes = vec![
+            pane_cmd("terminal_0", "tab_0", "rimz-sidebar serve", None),
+            pane_cmd(
+                "terminal_1",
+                "tab_0",
+                "claude remote-control --spawn worktree",
+                None,
+            ),
+            pane_cmd("terminal_3", "tab_1", "rimz-sidebar serve", None),
+            pane_cmd("terminal_4", "tab_1", "zsh", None),
+        ];
+        assert!(!SidebarSnapshot::only_daemon_view(&panes));
+    }
+
+    #[test]
+    fn only_daemon_view_false_when_no_daemon_view() {
+        let panes = vec![
+            pane_cmd("terminal_0", "tab_0", "rimz-sidebar serve", None),
+            pane_cmd("terminal_1", "tab_0", "zsh", None),
+        ];
+        assert!(!SidebarSnapshot::only_daemon_view(&panes));
+    }
+
+    #[test]
+    fn only_daemon_view_false_on_empty_session() {
+        assert!(!SidebarSnapshot::only_daemon_view(&[]));
+    }
+
+    #[test]
+    fn only_daemon_view_ignores_a_sidebar_only_limbo_view() {
+        // The working tab's last working pane just exited; its sidebar is mid
+        // self-close. That sidebar-only view counts as neither, so detach fires.
+        let panes = vec![
+            pane_cmd("terminal_0", "tab_0", "rimz-sidebar serve", None),
+            pane_cmd("terminal_1", "tab_0", "rimz codex app-server serve", None),
+            pane_cmd("terminal_3", "tab_1", "rimz-sidebar serve", None),
+        ];
+        assert!(SidebarSnapshot::only_daemon_view(&panes));
+    }
+
+    #[test]
+    fn own_view_is_daemon_true_in_the_rimzd_view_zellij() {
+        // Zellij leaves view_name None; the daemon view is recognised by the
+        // host command markers alone.
+        let own = PaneId::from_parts(MuxName::Zellij, "terminal_0");
+        let panes = vec![
+            pane_cmd("terminal_0", "tab_0", "rimz-sidebar serve", None),
+            pane_cmd(
+                "terminal_1",
+                "tab_0",
+                "claude remote-control --spawn worktree",
+                None,
+            ),
+            pane_cmd("terminal_2", "tab_0", "rimz codex app-server serve", None),
+        ];
+        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane present");
+        assert!(view.own_view_is_daemon);
+    }
+
+    #[test]
+    fn own_view_is_daemon_true_in_the_rimzd_view_tmux() {
+        // tmux: a host pane is recognised by the window-name fallback even when
+        // its command carries no marker.
+        let own = PaneId::from_parts(MuxName::Zellij, "terminal_0");
+        let panes = vec![
+            pane_cmd("terminal_0", "rimzd", "rimz-sidebar serve", Some("rimzd")),
+            pane_cmd("terminal_1", "rimzd", "claude", Some("rimzd")),
+        ];
+        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane present");
+        assert!(view.own_view_is_daemon);
+    }
+
+    #[test]
+    fn own_view_is_daemon_false_in_a_working_view() {
+        let own = PaneId::from_parts(MuxName::Zellij, "terminal_0");
+        let panes = vec![
+            pane_cmd("terminal_0", "tab_1", "rimz-sidebar serve", None),
+            pane_cmd("terminal_1", "tab_1", "zsh", None),
+        ];
+        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane present");
+        assert!(!view.own_view_is_daemon);
     }
 
     fn window(used: u8, resets_in_secs: i64) -> RateLimitWindow {
