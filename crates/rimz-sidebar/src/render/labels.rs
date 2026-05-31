@@ -16,10 +16,11 @@ use super::theme::{ORANGE, Theme};
 /// attention line, and as the leading cell for every non-animated state. The
 /// shape carries the status under `NO_COLOR`; color reinforces it. `Running`
 /// returns a representative working frame `⢿` as the still fallback (distinct
-/// from idle `◌`, a todo `●`, and a todo `○`); the *animated* working/thinking cells live
-/// in [`working_glyph`]/[`thinking_glyph`]. A `running` agent that has gone
-/// silent past the stall window is projected to `Failed` upstream, so it reads
-/// here as the attention `!` — there is no separate stalled glyph.
+/// from idle `○`); the *animated* working/thinking cells live in
+/// [`working_glyph`]/[`thinking_glyph`]. Idle is a hollow `○` (the filled `◌`
+/// reads as "cached" in the token line). A `running` agent that has gone silent
+/// past the stall window is projected to `Failed` upstream, so it reads here as
+/// the attention `!` — there is no separate stalled glyph.
 pub(super) fn status_glyph(status: AgentStatus) -> &'static str {
     match status {
         // `?` needs your answer; `!` needs a look (a failed turn or a wedged
@@ -27,14 +28,14 @@ pub(super) fn status_glyph(status: AgentStatus) -> &'static str {
         AgentStatus::Waiting => "?",
         AgentStatus::Failed => "!",
         AgentStatus::Running => WORKING_FRAMES[3],
-        AgentStatus::Idle => "◌",
+        AgentStatus::Idle => "○",
         AgentStatus::Success => "✓",
     }
 }
 
 /// Working: a braille spinner cycling its dots. Spans the most time of any
 /// state, so it is the steady motion the eye learns to ignore until something
-/// changes. No frame matches idle `◌`, so a frozen frame still reads as "working".
+/// changes. No frame matches idle `○`, so a frozen frame still reads as "working".
 const WORKING_FRAMES: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 
 /// Thinking: a sparkle that grows and fades. Reserved for read-only plan mode —
@@ -95,7 +96,10 @@ pub(super) fn status_style(theme: &Theme, status: AgentStatus) -> Style {
         AgentStatus::Waiting => theme.style(Color::Yellow, Modifier::BOLD),
         AgentStatus::Failed => theme.style(Color::Red, Modifier::BOLD),
         AgentStatus::Running => theme.style(Color::Green, Modifier::empty()),
-        AgentStatus::Idle => theme.dim(),
+        // Idle and success are the two calm "nothing needs you" states, so both
+        // read in a quiet green — the hollow `○` and the `✓` carry the meaning,
+        // the dim weight keeps them from competing with live attention.
+        AgentStatus::Idle => theme.style(Color::Green, Modifier::DIM),
         AgentStatus::Success => theme.style(Color::Green, Modifier::DIM),
     }
 }
@@ -110,18 +114,25 @@ pub(super) fn agent_style(theme: &Theme, status: AgentStatus) -> Style {
     status_style(theme, status)
 }
 
-/// How long a `waiting`/`failed` row sits unanswered before its glyph reddens —
-/// the neglect window past which a blocked agent reads as urgent.
-const REDDEN_AFTER_SECS: i64 = 30 * 60;
-
-/// Style for an agent row's leading glyph. The attention states (`?` waiting,
-/// `!` failed) escalate to bold red once the row has gone unanswered past
-/// [`REDDEN_AFTER_SECS`], so a long-ignored ask visibly heats up; a fresh
-/// attention row and every calm state keep their resting [`agent_style`] tone.
-pub(super) fn attention_glyph_style(theme: &Theme, status: AgentStatus, age_secs: i64) -> Style {
-    if matches!(status, AgentStatus::Waiting | AgentStatus::Failed) && age_secs >= REDDEN_AFTER_SECS
-    {
-        theme.style(Color::Red, Modifier::BOLD)
+/// Style for an agent row's leading glyph. Both attention states — `?` waiting
+/// and `!` failed — rest in bold yellow ("a human is needed here") and escalate
+/// to bold red once the row has gone unanswered past `redden_secs` (the
+/// configurable neglect window), so a fresh ask reads calm-urgent and a
+/// long-ignored one visibly heats up. Every calm state keeps its resting
+/// [`agent_style`] tone.
+pub(super) fn attention_glyph_style(
+    theme: &Theme,
+    status: AgentStatus,
+    age_secs: i64,
+    redden_secs: i64,
+) -> Style {
+    if matches!(status, AgentStatus::Waiting | AgentStatus::Failed) {
+        let color = if age_secs >= redden_secs {
+            Color::Red
+        } else {
+            Color::Yellow
+        };
+        theme.style(color, Modifier::BOLD)
     } else {
         agent_style(theme, status)
     }
@@ -142,22 +153,41 @@ pub(super) fn posture_pill(posture: PermissionPosture) -> Option<&'static str> {
     }
 }
 
-/// `yolo` is the security surface — keep it warn-colored and bold even when
-/// every other capability token dims. `plan` and `auto` are informational and
-/// dim (`plan` is the more cautious posture, not a warning).
+/// Posture pills carry a permission-heat gradient, so a row's blast radius
+/// reads at a glance: `plan` is the cautious read-only posture (calm blue),
+/// `auto` edits within the sandbox (amber), `yolo` bypasses every gate (bold
+/// red — the security surface, loud even when every other capability token
+/// dims). `Default`/`Unknown` carry no pill, so they never reach here.
 pub(super) fn posture_style(theme: &Theme, posture: PermissionPosture) -> Style {
     match posture {
-        PermissionPosture::Yolo => theme.style(Color::Yellow, Modifier::BOLD),
-        _ => theme.dim(),
+        PermissionPosture::Plan => theme.style(Color::Blue, Modifier::empty()),
+        PermissionPosture::Auto => theme.style(Color::Yellow, Modifier::empty()),
+        PermissionPosture::Yolo => theme.style(Color::Red, Modifier::BOLD),
+        PermissionPosture::Default | PermissionPosture::Unknown => theme.dim(),
     }
 }
 
-/// Heavy `━` for a bar's filled run, light `─` for the remaining track. The
-/// weight difference — not just the color — carries the meter, so every bar
-/// still reads with color off. One glyph pair for all three meters (context
-/// gauge and the two draining budget bars), so they read as one aligned family.
+/// Token-composition glyphs for the expanded card's token line: a diamond for
+/// the cumulative total, the directional arrows for input read in / output
+/// generated, and a filled ring for the cached reads. Aggregate sites (the
+/// cockpit, the provider stats) use [`TOKENS_TOTAL`] alone.
+pub(super) const TOKENS_TOTAL: &str = "◇";
+pub(super) const TOKENS_IN: &str = "↘";
+pub(super) const TOKENS_OUT: &str = "↗";
+pub(super) const TOKENS_CACHED: &str = "◌";
+
+/// Heavy `━` for the thin context/rule bars' filled run, light `─` for the
+/// remaining track. The weight difference — not just the color — carries the
+/// meter, so it reads with color off.
 const BAR_FILLED: char = '━';
 const BAR_TRACK: char = '─';
+
+/// Segmented `▰` / `▱` for the provider dashboard's draining "mana / stamina"
+/// bars: a thin, ticked energy gauge that reads lighter than a solid `█` block
+/// while still distinct from the `━`/`─` context rule. The fill/hollow shape
+/// carries the meter, so it survives `NO_COLOR`.
+const MANA_FILLED: char = '▰';
+const MANA_TRACK: char = '▱';
 
 /// Filled-cell count for `percent` of `width`, to the nearest whole cell: 0%
 /// stays an unbroken track, 100% fills the whole width.
@@ -165,38 +195,90 @@ fn filled_cells(percent: u8, width: usize) -> usize {
     ((percent.min(100) as usize) * width.max(1) + 50) / 100
 }
 
-/// A single-color rule bar: `filled` heavy cells, then a light track out to
-/// `width`. The shared shape behind the context gauge and the draining budget
-/// bars — color and fill amount differ per meter, the rule shape does not.
-fn rule_bar(theme: &Theme, filled: usize, width: usize, color: Color) -> Vec<Span<'static>> {
+/// A two-tone bar: `filled` cells of `filled_glyph` in `color`, then a faint
+/// `track_glyph` out to `width`. The shared shape behind every meter — the thin
+/// `━`/`─` context gauge and the heavy `█`/`░` dashboard bars — so they read as
+/// one family differing only in weight. Color and fill differ per meter; the
+/// shape does not.
+fn two_tone_bar(
+    theme: &Theme,
+    filled: usize,
+    width: usize,
+    color: Color,
+    filled_glyph: char,
+    track_glyph: char,
+) -> Vec<Span<'static>> {
     let width = width.max(1);
     let filled = filled.min(width);
     let mut spans = Vec::with_capacity(2);
     if filled > 0 {
         spans.push(Span::styled(
-            std::iter::repeat_n(BAR_FILLED, filled).collect::<String>(),
+            std::iter::repeat_n(filled_glyph, filled).collect::<String>(),
             theme.style(color, Modifier::empty()),
         ));
     }
     if filled < width {
         spans.push(Span::styled(
-            std::iter::repeat_n(BAR_TRACK, width - filled).collect::<String>(),
+            std::iter::repeat_n(track_glyph, width - filled).collect::<String>(),
             theme.faint(),
         ));
     }
     spans
 }
 
-/// Context bar: a thin rule whose filled run grows left-to-right as the window
-/// fills and ramps green → amber → red by value. The label and value columns
-/// live in the renderer's shared bar row; here we paint just the meter.
-pub(super) fn gauge_spans(theme: &Theme, percent: u8, width: usize) -> Vec<Span<'static>> {
-    let color = match percent.min(100) {
-        0..=40 => Color::Green,
-        41..=75 => Color::Yellow,
-        _ => Color::Red,
+/// The context meter's tone, combining two severities and taking the worse: the
+/// fill-percentage ramp (green ≤40, amber ≤75, red above) and an absolute-token
+/// overlay — a context window gets pricey past 200k tokens and dear past 400k,
+/// regardless of its size, so a large-window model that still reads green by
+/// percentage warns by sheer volume. Red beats yellow beats green.
+pub(super) fn context_severity_color(percent: u8, used_tokens: Option<u64>) -> Color {
+    let by_percent = match percent.min(100) {
+        0..=40 => 0u8,
+        41..=75 => 1,
+        _ => 2,
     };
-    rule_bar(theme, filled_cells(percent, width), width, color)
+    let by_tokens = match used_tokens.unwrap_or(0) {
+        0..=200_000 => 0,
+        200_001..=400_000 => 1,
+        _ => 2,
+    };
+    match by_percent.max(by_tokens) {
+        0 => Color::Green,
+        1 => Color::Yellow,
+        _ => Color::Red,
+    }
+}
+
+/// The tone the heaviest segment paints, so the `▣` glyph can match the color
+/// the bar visibly reads as: the color of the largest-weight segment (the run
+/// that fills the most cells). `None` when every segment is empty — the bar then
+/// falls back to its single severity color and the glyph follows that instead.
+pub(super) fn dominant_segment_color(segments: &[(u64, Color)]) -> Option<Color> {
+    segments
+        .iter()
+        .filter(|(weight, _)| *weight > 0)
+        .max_by_key(|(weight, _)| *weight)
+        .map(|(_, color)| *color)
+}
+
+/// Context bar: a thin rule whose filled run grows left-to-right as the window
+/// fills, painted in `color` (the caller's [`context_severity_color`]). The label
+/// and value columns live in the renderer's shared bar row; here we paint just
+/// the meter.
+pub(super) fn gauge_spans(
+    theme: &Theme,
+    color: Color,
+    percent: u8,
+    width: usize,
+) -> Vec<Span<'static>> {
+    two_tone_bar(
+        theme,
+        filled_cells(percent, width),
+        width,
+        color,
+        BAR_FILLED,
+        BAR_TRACK,
+    )
 }
 
 /// Like [`gauge_spans`], but the filled run is split into colored segments by
@@ -211,6 +293,7 @@ pub(super) fn gauge_spans(theme: &Theme, percent: u8, width: usize) -> Vec<Span<
 pub(super) fn segmented_gauge_spans(
     theme: &Theme,
     segments: &[(u64, Color)],
+    fallback_color: Color,
     total_pct: u8,
     width: usize,
 ) -> Vec<Span<'static>> {
@@ -219,7 +302,7 @@ pub(super) fn segmented_gauge_spans(
     let filled = filled_cells(total_pct, width);
     let weight: u64 = segments.iter().map(|(value, _)| *value).sum();
     if filled == 0 || weight == 0 {
-        return gauge_spans(theme, total_pct, width);
+        return gauge_spans(theme, fallback_color, total_pct, width);
     }
     let cells = apportion(segments.iter().map(|(value, _)| *value), filled);
     let mut spans = Vec::with_capacity(segments.len() + 1);
@@ -269,23 +352,39 @@ fn apportion(weights: impl IntoIterator<Item = u64>, total: usize) -> Vec<usize>
     cells
 }
 
-/// A draining budget bar: `remaining_pct` of the width is heavy `━`, the rest a
-/// light `─` track — the same rule shape as the context gauge, so the three
-/// meters read as one aligned family. Opposite the gauge, a full bar means
-/// budget *left*: it shortens as the window is spent, and the reset countdown
-/// beside it says when it refills. Ramps green → yellow → red by how much
-/// remains, so a near-spent window reddens regardless of which window it is.
-pub(super) fn resource_bar_spans(
-    theme: &Theme,
-    remaining_pct: u8,
-    width: usize,
-) -> Vec<Span<'static>> {
+/// The provider dashboard's draining budget ("mana / stamina") bar:
+/// `remaining_pct` of the width in solid `█`, the rest a light `░` track, with
+/// no brackets. A full bar means budget *left*: it shortens as the window is
+/// spent, and the reset countdown beside it says when it refills. Ramps green →
+/// yellow → red by how much remains, so a near-spent window reddens regardless
+/// of which window it is.
+pub(super) fn mana_bar_spans(theme: &Theme, remaining_pct: u8, width: usize) -> Vec<Span<'static>> {
     let color = match remaining_pct.min(100) {
         0..=20 => Color::Red,
         21..=50 => Color::Yellow,
         _ => Color::Green,
     };
-    rule_bar(theme, filled_cells(remaining_pct, width), width, color)
+    two_tone_bar(
+        theme,
+        filled_cells(remaining_pct, width),
+        width,
+        color,
+        MANA_FILLED,
+        MANA_TRACK,
+    )
+}
+
+/// The unmetered ("infinite") bar: a full-width empty `▱` track in the same faint
+/// tone as a drained mana bar's track, so an API-key account aligns with the
+/// metered `5h`/`7d` bars and reads as "no meter to spend." The brand color and
+/// the meaning ride the `∞` icon in the label slot; the track stays faint so it
+/// never competes with a real draining bar. Under `NO_COLOR` the unbroken `▱`
+/// run reads as an empty track by shape.
+pub(super) fn infinite_bar_spans(theme: &Theme, width: usize) -> Vec<Span<'static>> {
+    vec![Span::styled(
+        std::iter::repeat_n(MANA_TRACK, width.max(1)).collect::<String>(),
+        theme.faint(),
+    )]
 }
 
 /// Todo progress: filled dots for done, hollow dots for remaining, with the
@@ -312,10 +411,15 @@ pub(super) fn todo_spans(theme: &Theme, done: u32, total: u32) -> Vec<Span<'stat
     ]
 }
 
-/// Total tokens formatted with a thin unit (`12.4k tok`, `523 tok`). Dim
-/// chrome — display-only, never a decision driver.
-pub(super) fn tokens_label(theme: &Theme, total: u64) -> Span<'static> {
-    Span::styled(format!("{} tok", tokens_short(total)), theme.dim())
+/// Aggregate token total behind the `◇` diamond (`◇ 12.4k`, `◇ 523`) — the
+/// cockpit and provider stats read the cumulative total alone. The diamond is a
+/// soft-violet icon; the value stays dim so the glyph reads as a colored marker,
+/// not noise. Display-only, never a decision driver.
+pub(super) fn tokens_label(theme: &Theme, total: u64) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(TOKENS_TOTAL, theme.style(Color::Magenta, Modifier::empty())),
+        Span::styled(format!(" {}", tokens_short(total)), theme.dim()),
+    ]
 }
 
 /// `+127 -43`-style diff stat. Added in green, removed in red, both dim to
@@ -344,7 +448,7 @@ mod tests {
     #[test]
     fn gauge_under_no_color_reads_by_shape() {
         let theme = Theme::fixed(true);
-        let spans = gauge_spans(&theme, 60, 5);
+        let spans = gauge_spans(&theme, Color::Green, 60, 5);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "━━━──");
         for span in &spans {
@@ -361,7 +465,7 @@ mod tests {
     #[test]
     fn gauge_rounds_fill_to_whole_cells() {
         let theme = Theme::fixed(true);
-        let spans = gauge_spans(&theme, 38, 10);
+        let spans = gauge_spans(&theme, Color::Green, 38, 10);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "━━━━──────");
     }
@@ -371,7 +475,7 @@ mod tests {
     #[test]
     fn gauge_zero_percent_is_all_track() {
         let theme = Theme::fixed(true);
-        let spans = gauge_spans(&theme, 0, 5);
+        let spans = gauge_spans(&theme, Color::Green, 0, 5);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "─────");
     }
@@ -380,7 +484,7 @@ mod tests {
     #[test]
     fn gauge_full_has_no_track() {
         let theme = Theme::fixed(true);
-        let spans = gauge_spans(&theme, 100, 5);
+        let spans = gauge_spans(&theme, Color::Red, 100, 5);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "━━━━━");
     }
@@ -396,7 +500,7 @@ mod tests {
             (5_000, Color::Cyan),
             (2_000, Color::Blue),
         ];
-        let spans = segmented_gauge_spans(&theme, &segments, 60, 10);
+        let spans = segmented_gauge_spans(&theme, &segments, Color::Green, 60, 10);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         // 60% of 10 = 6 filled; segments apportion 6 → 3/2/1; then a 4-cell track.
         assert_eq!(text, "━━━━━━────");
@@ -412,9 +516,65 @@ mod tests {
     #[test]
     fn segmented_gauge_falls_back_with_zero_weights() {
         let theme = Theme::fixed(true);
-        let spans = segmented_gauge_spans(&theme, &[(0, Color::Green), (0, Color::Cyan)], 50, 4);
+        let spans = segmented_gauge_spans(
+            &theme,
+            &[(0, Color::Green), (0, Color::Cyan)],
+            Color::Green,
+            50,
+            4,
+        );
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "━━──");
+    }
+
+    /// The context tone takes the worse of two severities: the fill-percentage
+    /// ramp and an absolute-token overlay (pricey past 200k, dear past 400k), so
+    /// a large-window model green by percentage still warns by volume.
+    #[test]
+    fn context_severity_takes_the_worse_of_percent_and_tokens() {
+        // Low fill, low tokens: calm green.
+        assert_eq!(context_severity_color(20, Some(50_000)), Color::Green);
+        // The percentage ramp alone still reddens a full window.
+        assert_eq!(context_severity_color(60, Some(10_000)), Color::Yellow);
+        assert_eq!(context_severity_color(80, Some(10_000)), Color::Red);
+        // Green by percentage, but the token volume escalates it.
+        assert_eq!(context_severity_color(20, Some(250_000)), Color::Yellow);
+        assert_eq!(context_severity_color(20, Some(500_000)), Color::Red);
+        // The worse severity wins regardless of which axis it comes from.
+        assert_eq!(context_severity_color(10, Some(450_000)), Color::Red);
+        // No token reading falls back to the percentage ramp alone.
+        assert_eq!(context_severity_color(80, None), Color::Red);
+        assert_eq!(context_severity_color(10, None), Color::Green);
+    }
+
+    /// The dominant-segment color is the heaviest non-empty segment's tone — the
+    /// color the bar reads as — so the `▣` glyph can mirror it. All-empty yields
+    /// `None` (the glyph falls back to the solid severity color).
+    #[test]
+    fn dominant_segment_color_picks_the_heaviest() {
+        // Cache reads (blue) dominate a long session → the glyph reads blue.
+        assert_eq!(
+            dominant_segment_color(&[
+                (20_000, Color::Yellow),
+                (48_000, Color::Blue),
+                (8_500, Color::Red),
+            ]),
+            Some(Color::Blue)
+        );
+        // Fresh input (red) dominates a hot turn.
+        assert_eq!(
+            dominant_segment_color(&[
+                (1_000, Color::Yellow),
+                (2_000, Color::Blue),
+                (9_000, Color::Red)
+            ]),
+            Some(Color::Red)
+        );
+        // No weight anywhere → no dominant tone.
+        assert_eq!(
+            dominant_segment_color(&[(0, Color::Blue), (0, Color::Red)]),
+            None
+        );
     }
 
     /// Largest-remainder apportionment always sums to the requested total.
@@ -425,26 +585,46 @@ mod tests {
         assert_eq!(apportion([0, 0], 3), vec![0, 0]);
     }
 
-    /// The budget bar drains (filled = remaining) and reads by the same heavy/
-    /// light rule shape as the context gauge under `NO_COLOR`; its color ramps
+    /// The mana bar drains (filled = remaining) in the segmented `▰`/`▱` style
+    /// and reads by that fill/hollow shape under `NO_COLOR`; its color ramps
     /// green → yellow → red by how much budget is left — one ramp for both the
     /// 5-hour and weekly windows.
     #[test]
-    fn resource_bar_drains_and_ramps() {
+    fn mana_bar_drains_and_ramps() {
         let plain = Theme::fixed(true);
-        let spans = resource_bar_spans(&plain, 70, 10);
+        let spans = mana_bar_spans(&plain, 70, 10);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, "━━━━━━━───");
+        assert_eq!(text, "▰▰▰▰▰▰▰▱▱▱");
         for span in &spans {
             assert!(span.style.fg.is_none());
         }
 
         let lit = Theme::fixed(false);
-        let fg = |remaining| resource_bar_spans(&lit, remaining, 10)[0].style.fg.unwrap();
+        let fg = |remaining| mana_bar_spans(&lit, remaining, 10)[0].style.fg.unwrap();
         // Green when full, amber mid-drain, red nearly spent.
         assert_eq!(fg(80), Color::Indexed(108));
         assert_eq!(fg(40), Color::Indexed(179));
         assert_eq!(fg(10), Color::Indexed(167));
+    }
+
+    /// The infinite bar is a full-width empty `▱` track in the same faint tone as
+    /// a drained mana bar's track — so an unmetered (API-key) account aligns with
+    /// the metered bars and reads as "no meter to spend." Under `NO_COLOR` the
+    /// unbroken `▱` run reads as an empty track by shape.
+    #[test]
+    fn infinite_bar_is_an_empty_faint_track() {
+        let plain = Theme::fixed(true);
+        let spans = infinite_bar_spans(&plain, 8);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "▱▱▱▱▱▱▱▱");
+        for span in &spans {
+            assert!(span.style.fg.is_none());
+        }
+
+        // With color on it shares the faint track tone, not a brand fill.
+        let lit = Theme::fixed(false);
+        let spans = infinite_bar_spans(&lit, 8);
+        assert_eq!(spans[0].style.fg, lit.faint().fg);
     }
 
     /// Todo dots use the same fill/empty grammar as the gauge — the dot
@@ -458,6 +638,25 @@ mod tests {
         for span in &spans {
             assert!(span.style.fg.is_none());
         }
+    }
+
+    /// Posture pills ramp by permission heat: `plan` calm blue, `auto` amber,
+    /// `yolo` bold red. `Default`/`Unknown` carry no pill but still resolve to a
+    /// dim baseline.
+    #[test]
+    fn posture_style_ramps_by_permission_heat() {
+        let theme = Theme::fixed(false);
+        assert_eq!(
+            posture_style(&theme, PermissionPosture::Plan).fg,
+            Some(Color::Indexed(75))
+        );
+        assert_eq!(
+            posture_style(&theme, PermissionPosture::Auto).fg,
+            Some(Color::Indexed(179))
+        );
+        let yolo = posture_style(&theme, PermissionPosture::Yolo);
+        assert_eq!(yolo.fg, Some(Color::Indexed(167)));
+        assert!(yolo.add_modifier.contains(Modifier::BOLD));
     }
 
     /// Diff stats fall back to the numbers when color is stripped; the
@@ -477,30 +676,34 @@ mod tests {
     /// only for the `waiting`/`failed` states; a fresh attention row and every
     /// calm state keep their resting tone, however old.
     #[test]
-    fn attention_glyph_reddens_past_the_neglect_window() {
+    fn attention_glyph_is_yellow_until_the_neglect_window_then_red() {
         let theme = Theme::fixed(false);
         let red = theme.style(Color::Red, Modifier::BOLD).fg;
+        let yellow = theme.style(Color::Yellow, Modifier::BOLD).fg;
+        let redden = 30 * 60;
 
-        // Waiting: fresh keeps its resting (amber) tone; past 30m it reddens.
-        assert_ne!(
-            attention_glyph_style(&theme, AgentStatus::Waiting, 5 * 60).fg,
-            red
-        );
-        let stale = attention_glyph_style(&theme, AgentStatus::Waiting, 31 * 60);
-        assert_eq!(stale.fg, red);
-        assert!(stale.add_modifier.contains(Modifier::BOLD));
-        // Failed reddens the same way once neglected.
+        // Both attention states rest yellow while fresh — `!` no longer starts
+        // red; it earns red only by going unanswered.
+        for status in [AgentStatus::Waiting, AgentStatus::Failed] {
+            let fresh = attention_glyph_style(&theme, status, 5 * 60, redden);
+            assert_eq!(fresh.fg, yellow);
+            assert!(fresh.add_modifier.contains(Modifier::BOLD));
+            let stale = attention_glyph_style(&theme, status, 31 * 60, redden);
+            assert_eq!(stale.fg, red);
+            assert!(stale.add_modifier.contains(Modifier::BOLD));
+        }
+        // The threshold is honoured: a shorter window reddens sooner.
         assert_eq!(
-            attention_glyph_style(&theme, AgentStatus::Failed, 31 * 60).fg,
+            attention_glyph_style(&theme, AgentStatus::Waiting, 6 * 60, 5 * 60).fg,
             red
         );
         // Calm states never redden, however old — they take their plain style.
         assert_eq!(
-            attention_glyph_style(&theme, AgentStatus::Idle, 60 * 60).fg,
+            attention_glyph_style(&theme, AgentStatus::Idle, 60 * 60, redden).fg,
             agent_style(&theme, AgentStatus::Idle).fg
         );
         assert_eq!(
-            attention_glyph_style(&theme, AgentStatus::Running, 60 * 60).fg,
+            attention_glyph_style(&theme, AgentStatus::Running, 60 * 60, redden).fg,
             agent_style(&theme, AgentStatus::Running).fg
         );
     }
@@ -548,10 +751,10 @@ mod tests {
         );
         // A plan posture on a non-running agent never sparkles — the slider is
         // sticky, but the sparkle is the running-state indicator.
-        assert_eq!(agent_glyph(AgentStatus::Idle, planning, 2), "◌");
+        assert_eq!(agent_glyph(AgentStatus::Idle, planning, 2), "○");
         assert_eq!(agent_glyph(AgentStatus::Waiting, acting, 2), "?");
         assert_eq!(agent_glyph(AgentStatus::Failed, acting, 2), "!");
-        assert_eq!(agent_glyph(AgentStatus::Idle, acting, 2), "◌");
+        assert_eq!(agent_glyph(AgentStatus::Idle, acting, 2), "○");
         assert_eq!(agent_glyph(AgentStatus::Success, acting, 2), "✓");
     }
 }

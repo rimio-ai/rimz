@@ -24,13 +24,16 @@ use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use rimz::ids::PaneId;
 use rimz::{SidebarRowKind, SidebarSnapshot};
 
 use self::fmt::age_short;
-use self::sections::{first_run_hint_lines, fleet_header_lines, worktree_group_lines};
+use self::sections::{
+    content_width, dashboard_summary_line, first_run_hint_lines, fleet_header_lines, fleet_size,
+    fleet_totals, provider_panel_lines, worktree_group_lines,
+};
 use self::theme::Theme;
 
 #[derive(Clone, Debug, Default)]
@@ -115,20 +118,17 @@ pub fn draw_with_ui(
     ui: &mut UiState,
 ) {
     let area = frame.area();
-    let title = format!(" {} ", snapshot.display_name);
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Indexed(244)));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
+    // Borderless: the sidebar already sits inside a framed mux pane, so a second
+    // 4-sided border double-frames it and eats two precious columns. The body
+    // fills the whole area; a title line and faint hairline rules carry the
+    // structure the border used to.
+    //
     // The composed map is a byproduct of the draw: store it so the mouse
     // hit-test reads the geometry of the frame the user is actually looking at.
-    let (lines, map) = compose_lines(snapshot, alert, ui, inner.width, inner.height);
+    let (lines, map) = compose_lines(snapshot, alert, ui, area.width, area.height);
     ui.line_map = map;
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, inner);
+    frame.render_widget(paragraph, area);
 }
 
 /// Lay out the body, then pin the bottom chrome to the bottom edge of the
@@ -156,28 +156,53 @@ pub(crate) fn compose_lines(
     // `NO_COLOR` can't change mid-process, so read the palette once per frame
     // and hand the same `Theme` to the body and the bottom chrome.
     let theme = Theme::from_env();
-    let (mut body, mut map) = snapshot_lines(snapshot, alert, ui, usize::from(width), &theme);
+    let cells = usize::from(width.max(1));
+    // The whole sidebar sits inside a one-cell frame: chrome is built to the inner
+    // width and opened with a blank gutter, leaving the trailing column as the
+    // matching right margin — the same frame the cards carry (see `with_gutter`).
+    let inner = content_width(cells);
+    let (mut body, mut map) = snapshot_lines(snapshot, alert, ui, cells, &theme);
 
-    // Bottom-pinned chrome, top to bottom: the navigation footer (centered),
-    // then the sticky health alert. The footer is suppressed while an alert is
-    // active so the alert speaks alone.
+    // Bottom-pinned chrome, top to bottom: the per-provider dashboard (account-
+    // scoped budgets + brand emblem), the navigation footer (centered), then the
+    // sticky health alert — each bracketed by a faint hairline rule. While an
+    // alert is active the body is a stale/empty fetch, so the panel and footer
+    // step aside and the alert speaks alone. Every chrome line is gutter-padded so
+    // it breathes in the same one-cell frame as the body.
     let active = alert.is_some_and(Alert::is_active);
     let mut bottom: Vec<Line<'static>> = Vec::new();
+    if !active && !snapshot.providers.is_empty() {
+        bottom.push(pad_chrome(hairline_rule(&theme, inner)));
+        bottom.extend(
+            provider_panel_lines(&theme, &snapshot.providers, inner)
+                .into_iter()
+                .map(pad_chrome),
+        );
+    }
     if !active {
-        bottom.extend(footer_lines(snapshot, usize::from(width)));
+        let footer = footer_lines(snapshot, inner);
+        if !footer.is_empty() {
+            // Seal the panel from the footer only when both are present.
+            if !snapshot.providers.is_empty() {
+                bottom.push(pad_chrome(hairline_rule(&theme, inner)));
+            }
+            bottom.extend(footer.into_iter().map(pad_chrome));
+        }
     }
     if let Some(alert) = alert {
-        bottom.extend(alert_lines(&theme, alert));
+        bottom.extend(alert_lines(&theme, alert).into_iter().map(pad_chrome));
     }
     if bottom.is_empty() {
         return (body, map);
     }
 
-    let cells = usize::from(width.max(1));
     let height = usize::from(height);
     let bottom_height = bottom
         .iter()
-        .map(|line| line.width().div_ceil(cells))
+        // Every line occupies at least one row — a blank separator has width 0
+        // but still takes a row, so `.max(1)` keeps the reservation honest and
+        // the footer from being pushed off the frame.
+        .map(|line| line.width().div_ceil(cells).max(1))
         .sum::<usize>()
         .min(height);
 
@@ -251,14 +276,41 @@ fn snapshot_lines(
     let mut lines = Vec::new();
     let mut map: Vec<Option<usize>> = Vec::new();
 
+    // The whole sidebar is built one cell narrow on each side; chrome lines pick
+    // up their blank gutter in `extend_inert`, the cards carry their own.
+    let inner = content_width(width);
+
+    // Borderless repo header: the workspace name and its path behind their
+    // glyphs, then the count/spend line and a faint hairline rule sealing the
+    // header from the cockpit. Inert chrome, so every line maps to `None`.
+    let mut header = repo_header_lines(theme, snapshot, inner);
+    // Dashboard L2: the fleet head-count (`✦`/`✧`, left) and the bold spend
+    // (right), directly under the name. Always present — an empty room reads
+    // `✦ 0` with no spend.
+    let totals = fleet_totals(&snapshot.agents, &snapshot.worktree_groups);
+    let size = fleet_size(&snapshot.worktree_groups);
+    header.push(dashboard_summary_line(theme, size, &totals, inner));
+    header.push(hairline_rule(theme, inner));
+    extend_inert(&mut lines, &mut map, header);
+
     // The fleet header (the cockpit) is always present and a fixed height — two
     // lines for a populated room, one for an empty one — so the body below never
     // shifts vertically as agents change state. It is chrome, never a jump
     // target, so every header line maps to `None`.
+    // The configurable neglect window (seconds an unanswered `?`/`!` stays
+    // yellow before it reddens) rides in on the snapshot like `density` does, so
+    // the renderer stays a pure consumer. Clamp into the `i64` age space.
+    let redden_secs = i64::try_from(snapshot.sidebar.attention_redden_secs).unwrap_or(i64::MAX);
     extend_inert(
         &mut lines,
         &mut map,
-        fleet_header_lines(theme, &snapshot.agents, &snapshot.worktree_groups, width),
+        fleet_header_lines(
+            theme,
+            &snapshot.agents,
+            &snapshot.worktree_groups,
+            inner,
+            redden_secs,
+        ),
     );
     let density = snapshot.sidebar.density;
     if snapshot.worktree_groups.is_empty() {
@@ -283,6 +335,7 @@ fn snapshot_lines(
                 group,
                 width,
                 density,
+                redden_secs,
                 &mut row_index,
                 ui.selected_index,
                 ui.animation_phase,
@@ -309,14 +362,108 @@ fn snapshot_lines(
     (lines, map)
 }
 
-/// Append structural (non-row) lines, tagging each map slot `None`.
+/// Append structural (non-row) lines, tagging each map slot `None` and opening
+/// each with a blank one-cell gutter so chrome breathes in the same one-cell
+/// frame as the cards (which carry their own gutter via `with_gutter`).
 fn extend_inert(
     lines: &mut Vec<Line<'static>>,
     map: &mut Vec<Option<usize>>,
     inert: Vec<Line<'static>>,
 ) {
     map.extend(std::iter::repeat_n(None, inert.len()));
-    lines.extend(inert);
+    lines.extend(inert.into_iter().map(pad_chrome));
+}
+
+/// Open a chrome line with the same one-cell blank left gutter the cards carry,
+/// so the whole sidebar sits inside a one-cell frame — the trailing column the
+/// content leaves free is the matching right margin. A genuinely empty line (a
+/// blank separator, or the cockpit's reserved-but-empty totals slot) is left as
+/// is, so it stays zero-width and never reads as a one-space "content" line that
+/// would trip the section-gap heuristic.
+fn pad_chrome(line: Line<'static>) -> Line<'static> {
+    if line.spans.iter().all(|span| span.content.is_empty()) {
+        return line;
+    }
+    let mut spans = Vec::with_capacity(line.spans.len() + 1);
+    spans.push(Span::raw(" "));
+    spans.extend(line.spans);
+    Line::from(spans)
+}
+
+/// The borderless repo header (dashboard L1): the workspace name behind a `⌘`
+/// glyph in bold on the left, and — when the project root is known — its
+/// home-abbreviated path dim on the right edge of the same line. Identity and
+/// location at a glance, on one line so the spend line can sit below it. The
+/// path left-truncates with a leading `…` (keeping the meaningful tail) when it
+/// can't fit, so the name is never crowded out.
+fn repo_header_lines(
+    theme: &Theme,
+    snapshot: &SidebarSnapshot,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let clip = |text: &str| -> String { text.chars().take(width.max(1)).collect() };
+    let name = clip(&format!("⌘ {}", snapshot.display_name));
+    let name_width = name.chars().count();
+
+    let Some(root) = snapshot.project_root.as_deref() else {
+        return vec![Line::styled(name, bold)];
+    };
+    let path = abbreviate_home(&root.to_string_lossy());
+    let path_budget = width.saturating_sub(name_width + 1);
+    if path_budget == 0 {
+        return vec![Line::styled(name, bold)];
+    }
+    let path = truncate_left(&path, path_budget);
+    let gap = width
+        .saturating_sub(name_width + path.chars().count())
+        .max(1);
+    vec![Line::from(vec![
+        Span::styled(name, bold),
+        Span::raw(" ".repeat(gap)),
+        Span::styled(path, theme.dim()),
+    ])]
+}
+
+/// Truncate `text` from its left to fit `budget` cells, marking the cut with a
+/// leading `…` so the meaningful tail (`…engine/main`) survives. Shorter text
+/// passes through unchanged.
+fn truncate_left(text: &str, budget: usize) -> String {
+    let len = text.chars().count();
+    if len <= budget {
+        return text.to_owned();
+    }
+    if budget <= 1 {
+        return "…".chars().take(budget).collect();
+    }
+    let tail: String = text.chars().skip(len - (budget - 1)).collect();
+    format!("…{tail}")
+}
+
+/// Abbreviate a leading `$HOME` to `~` for the path line, so a deep home path
+/// reads `~/code/query-engine` rather than spilling the absolute prefix.
+fn abbreviate_home(path: &str) -> String {
+    let home = std::env::var_os("HOME").map(|home| home.to_string_lossy().into_owned());
+    abbreviate_under(path, home.as_deref())
+}
+
+/// The pure core of [`abbreviate_home`]: collapse a leading `home` prefix to
+/// `~`. A path outside `home`, or with no `home`, passes through unchanged.
+fn abbreviate_under(path: &str, home: Option<&str>) -> String {
+    match home {
+        Some(home) if !home.is_empty() && path == home => "~".to_owned(),
+        Some(home) if !home.is_empty() => match path.strip_prefix(home) {
+            Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+            _ => path.to_owned(),
+        },
+        _ => path.to_owned(),
+    }
+}
+
+/// A faint full-width `─` hairline rule. Seals the header from the cockpit and
+/// brackets the bottom chrome — the structure the dropped border once carried.
+fn hairline_rule(theme: &Theme, width: usize) -> Line<'static> {
+    Line::styled("─".repeat(width.max(1)), theme.faint())
 }
 
 fn alert_lines(theme: &Theme, alert: &Alert) -> Vec<Line<'static>> {
@@ -419,8 +566,8 @@ fn help_lines() -> Vec<Line<'static>> {
         Line::styled("↑/↓ select   1-9 jump   ↵ jump", dim),
         Line::styled("␣ next ?!   x dismiss   r reload   ? close", dim),
         Line::styled("⢿ working   ✽ thinking   ? waiting", dim),
-        Line::styled("! attention   ◌ idle   ✓ done   · process", dim),
-        Line::styled("posture: auto · yolo", dim),
+        Line::styled("! attention   ○ idle   ✓ done   · process", dim),
+        Line::styled("posture: plan · auto · yolo", dim),
     ]
 }
 
@@ -508,9 +655,11 @@ mod tests {
     }
 
     #[test]
-    fn remote_control_host_renders_as_a_distinct_pinned_row() {
-        // A `claude remote-control` pane gets the host treatment: a `⇅`-marked
-        // "remote control" line, never an agent card and never labelled `claude`.
+    fn remote_control_host_pane_is_filtered_not_rendered() {
+        // A `claude remote-control` pane is host infrastructure, not a coding
+        // agent: the snapshot reducer filters it out, so it never reads as a
+        // `claude` row. Remote control surfaces as a `⇅ rc` flag on the provider
+        // dashboard (covered by the section tests), never as its own row.
         let snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(
             vec![
                 pane("%1", "zsh", "/repo/main"),
@@ -519,14 +668,17 @@ mod tests {
             None,
         );
         let screen = snapshot_to_screen(&snapshot, 32, 24);
-        assert!(screen.contains("remote control"), "screen:\n{screen}");
         assert!(
-            screen.contains('⇅'),
-            "remote-control glyph missing:\n{screen}"
+            screen.contains("· zsh"),
+            "the plain shell still renders:\n{screen}"
         );
         assert!(
-            !screen.contains("claude"),
-            "the host must not read as a claude agent/process:\n{screen}",
+            !screen.contains("· claude"),
+            "the rc host must not read as a claude process row:\n{screen}",
+        );
+        assert!(
+            !screen.contains("remote control"),
+            "the rc host is filtered, not a pinned row:\n{screen}",
         );
     }
 
@@ -634,6 +786,7 @@ mod tests {
                 }),
             }),
             pr: None,
+            account: None,
             observed_at: now,
         }
     }
@@ -668,6 +821,7 @@ mod tests {
                 }),
             }),
             pr: None,
+            account: None,
             observed_at: now,
         }
     }
@@ -782,23 +936,29 @@ mod tests {
         assert!(!rendered.contains("context"));
         assert!(rendered.contains("high"));
         assert!(rendered.contains("auto"));
-        assert!(rendered.contains("$1.3"));
+        // Per-row cost now reads at full cent resolution, like every other spend.
+        assert!(rendered.contains("$1.27"));
         // Line 2 is the full-width description; todo dots inline at L2.
         assert!(rendered.contains("ledger refactor"));
         assert!(rendered.contains("●●●○○ 3/5"));
-        // The ctx bar carries a `ctx` label and the context-window size as its
-        // value (200k here), the first of the three aligned bars; the fill, not
-        // the value, now carries the used percentage.
-        assert!(rendered.contains("ctx "));
-        assert!(rendered.contains("200k"));
-        // Selection appends the budget bars (reset mark in the 3-cell label),
-        // the token totals, and the work line (the agent's own edit count).
-        assert!(rendered.contains("5h↻"));
-        assert!(rendered.contains("7d↻"));
-        assert!(rendered.contains("76.5k tok"));
-        // Arrows read ↓ input, ↑ output.
-        assert!(rendered.contains("↓64.2k"));
-        assert!(rendered.contains("↑12.3k"));
+        // The context bar carries the `▣` label and the percent used as its
+        // value (always — the window size moved to the token line below); the
+        // fill carries the same reading.
+        assert!(rendered.contains("▣ "));
+        // The account-scoped 5h/7d budgets are gone from the row — they live in
+        // the provider dashboard now.
+        assert!(!rendered.contains("5h↻"));
+        assert!(!rendered.contains("7d↻"));
+        // Selection appends the token line (glyph set) and the work line (the
+        // agent's own edit count). Tokens read ◇ total ↘ input ↗ output ◌ cached;
+        // the window size no longer rides this line.
+        assert!(rendered.contains("◇ 76.5k"));
+        assert!(rendered.contains("↘ 64.2k"));
+        assert!(rendered.contains("↗ 12.3k"));
+        assert!(
+            !rendered.contains("ctx"),
+            "window size left the token line:\n{rendered}"
+        );
         assert!(rendered.contains("worked"));
         assert!(rendered.contains("+214 -31"));
         assert_snapshot("enriched_selected_agent_card", rendered);
@@ -855,7 +1015,7 @@ mod tests {
             12,
         );
 
-        assert!(rendered.contains("5.0k tok"));
+        assert!(rendered.contains("◇ 5.0k"));
         assert!(!rendered.contains('↻'));
         assert!(!rendered.contains('$'));
     }
@@ -902,15 +1062,15 @@ mod tests {
         assert!(rendered.contains("GPT-5.5 Codex"));
         assert!(!rendered.contains("gpt-5.5-codex"));
         assert!(rendered.contains("xhigh"));
-        // Selection reveals both rate-limit windows; the reset mark rides the
-        // 3-cell label (`5h↻` / `7d↻`).
-        assert!(rendered.contains('↻'));
-        assert!(rendered.contains("5h↻"));
-        assert!(rendered.contains("7d↻"));
-        // No read-only token usage or cost: the bare rollout total stands in for
-        // the token totals, and no cost pins to the row.
-        assert!(rendered.contains("48.0k tok"));
-        assert!(!rendered.contains('↑'));
+        // The 5h/7d windows are account-scoped now: they leave the row for the
+        // provider dashboard, so no reset mark rides a row.
+        assert!(!rendered.contains('↻'));
+        assert!(!rendered.contains("5h"));
+        assert!(!rendered.contains("7d"));
+        // No read-only token usage or cost: the bare rollout total (`◇ 48.0k`)
+        // stands in for the token line, and no cost pins to the row.
+        assert!(rendered.contains("◇ 48.0k"));
+        assert!(!rendered.contains('↗'));
         assert!(!rendered.contains('$'));
     }
 
@@ -1058,9 +1218,9 @@ mod tests {
         );
         assert!(help.contains("keys & legend"));
         assert!(help.contains("? waiting"));
-        assert!(help.contains("◌ idle"));
+        assert!(help.contains("○ idle"));
         assert!(help.contains("· process"));
-        assert!(help.contains("posture: auto · yolo"));
+        assert!(help.contains("posture: plan · auto · yolo"));
     }
 
     #[test]
@@ -1107,10 +1267,10 @@ mod tests {
             .collect::<Vec<_>>();
         let snapshot = snapshot_with(Vec::new(), agents);
 
-        // Tall enough that the six capped rows (3 lines each in the compact
-        // default) plus the `+3 more` overflow all fit, so the indicator the
-        // test is named for actually renders.
-        let rendered = snapshot_to_screen(&snapshot, 36, 30);
+        // Tall enough that the six capped rows (3 compact lines each, now with a
+        // blank line between cards) plus the `+3 more` overflow all fit, so the
+        // indicator the test is named for actually renders.
+        let rendered = snapshot_to_screen(&snapshot, 36, 38);
         assert!(rendered.contains("+3 more"), "{rendered}");
         assert_snapshot("group_cap_with_overflow", rendered);
     }
@@ -1235,6 +1395,7 @@ mod tests {
             &snapshot.worktree_groups[0],
             54,
             density,
+            30 * 60,
             &mut row_index,
             selected_index,
             0,
@@ -1261,8 +1422,20 @@ mod tests {
         let unselected = card_lines(Compact, usize::MAX);
         let selected = card_lines(Compact, 0);
 
-        // The group header (no gutter) is identical either way.
-        assert_eq!(unselected[0], selected[0], "header reshaped on select");
+        // Selecting the worktree adds the lane gutter and the dotted seal to its
+        // header — chrome, not a card line — but never touches the label itself.
+        assert!(unselected[0].contains("main"), "{:?}", unselected[0]);
+        assert!(selected[0].contains("main"), "{:?}", selected[0]);
+        assert!(
+            !unselected[0].contains('┄'),
+            "an unselected worktree header is unsealed: {:?}",
+            unselected[0]
+        );
+        assert!(
+            selected[0].contains('┄'),
+            "the selected worktree header is sealed: {:?}",
+            selected[0]
+        );
         // Row lines differ only by the leading one-cell gutter; strip it.
         let strip = |line: &String| line.chars().skip(1).collect::<String>();
         let fold: Vec<String> = unselected[1..].iter().map(strip).collect();
@@ -1271,12 +1444,12 @@ mod tests {
         assert_eq!(fold.len(), 3, "compact fold is three card lines: {fold:?}");
         // Those three are a byte-identical prefix of the expanded card.
         assert_eq!(fold, full[..fold.len()], "selection reshaped a fold line");
-        // Selection only appended beneath — the budget bars and the work line.
+        // Selection only appended beneath — the token line and the work line.
         assert!(
             full.len() > fold.len(),
             "selection must append detail lines"
         );
-        assert!(full[fold.len()..].iter().any(|line| line.contains("5h↻")));
+        assert!(full[fold.len()..].iter().any(|line| line.contains("◇ ")));
         assert!(
             full[fold.len()..]
                 .iter()
@@ -1321,6 +1494,7 @@ mod tests {
                 &snapshot.worktree_groups[0],
                 54,
                 rimz::config::SidebarDensity::Compact,
+                30 * 60,
                 &mut row_index,
                 selected_index,
                 0,
@@ -1360,58 +1534,244 @@ mod tests {
     /// so the deepest data is one keystroke away in every density.
     #[test]
     fn density_sets_resting_height_and_selection_reaches_full() {
-        use rimz::config::SidebarDensity::{Bars, Compact, Full};
+        use rimz::config::SidebarDensity::{Compact, Full};
         // Card lines, excluding the group header.
         let resting = |density| card_lines(density, usize::MAX).len() - 1;
         let selected = |density| card_lines(density, 0).len() - 1;
 
         assert_eq!(resting(Compact), 3, "compact: identity, description, ctx");
-        assert_eq!(resting(Bars), 5, "bars: + the 5h/7d budget bars");
-        assert_eq!(resting(Full), 7, "full: + token totals and work line");
-        // Selection reaches the full seven-line card from any density.
-        assert_eq!(selected(Compact), 7);
-        assert_eq!(selected(Bars), 7);
-        assert_eq!(selected(Full), 7);
+        assert_eq!(resting(Full), 5, "full: + the token line and work line");
+        // Selection reaches the full five-line card from either density (the
+        // account-scoped budgets moved to the provider dashboard).
+        assert_eq!(selected(Compact), 5);
+        assert_eq!(selected(Full), 5);
     }
 
-    /// The three meter bars share one left edge (bar start) and one right edge
-    /// (value end) by construction — the structural payoff of the shared grammar.
+    /// Build a metered provider panel from two rate-limit windows, for the
+    /// dashboard alignment and golden tests.
+    fn provider_panel(
+        kind: &str,
+        product_name: &str,
+        color: u8,
+        metered: bool,
+        remote_control: bool,
+        windows: Option<(u8, u8)>,
+    ) -> rimz::SidebarProviderPanel {
+        let now = fixed_now();
+        let window = |used: u8| RateLimitWindow {
+            used_percentage: Some(used),
+            resets_at: Some(now + Duration::from_secs(3 * 3_600 + 12 * 60)),
+        };
+        rimz::SidebarProviderPanel {
+            kind: kind.to_owned(),
+            product_name: product_name.to_owned(),
+            art: vec![
+                " ▐▛███▜▌".to_owned(),
+                "▝▜█████▛▘".to_owned(),
+                "  ▘▘ ▝▝".to_owned(),
+            ],
+            color,
+            version: Some("2.1.158".to_owned()),
+            plan: Some("Claude Max".to_owned()),
+            metered,
+            remote_control,
+            total_cost_usd: Some(3.5),
+            total_input_tokens: Some(470_000),
+            total_output_tokens: Some(16_000),
+            cached_tokens: Some(1_600),
+            lines_added: Some(230),
+            lines_removed: Some(23),
+            five_hour: windows.map(|(five, _)| window(five)),
+            seven_day: windows.map(|(_, seven)| window(seven)),
+        }
+    }
+
+    /// Every provider bar — `5h`, `7d` across blocks, and the unmetered `∞` —
+    /// shares one front (bar-start) column and one end (bar-end) column, so the
+    /// whole dashboard reads as one aligned grid. The structural payoff of the
+    /// shared bar grammar, now that the budgets live in the panel.
     #[test]
-    fn the_three_bars_share_one_left_and_right_edge() {
-        let bars: Vec<String> = card_lines(rimz::config::SidebarDensity::Full, usize::MAX)
+    fn provider_bars_share_one_front_and_end_column() {
+        let theme = Theme::fixed(true);
+        let panels = vec![
+            provider_panel("claude", "Claude Code", 173, true, true, Some((25, 40))),
+            provider_panel("codex", "Codex", 33, true, false, Some((55, 8))),
+            provider_panel("pi", "Pi", 28, false, false, None),
+        ];
+        // Rendered narrow so the art column is dropped and the bar lines carry no
+        // stray block glyphs from the emblem — the bar grid is what we measure.
+        let lines: Vec<String> = provider_panel_lines(&theme, &panels, 30)
             .into_iter()
-            .filter(|line| line.contains("ctx ") || line.contains("5h↻") || line.contains("7d↻"))
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .filter(|line| line.contains('▰') || line.contains('▱') || line.contains('▒'))
             .collect();
-        assert_eq!(bars.len(), 3, "ctx/5h/7d all present: {bars:?}");
-        // Bar start: the first heavy/light rule cell, by char column.
-        let start = |line: &str| line.chars().position(|c| c == '━' || c == '─').unwrap();
-        let starts: Vec<usize> = bars.iter().map(|line| start(line)).collect();
+        assert!(lines.len() >= 5, "two metered providers + one ∞: {lines:?}");
+        // Bar start: the first bar cell (tick or shade), by char column.
+        let start = |line: &str| {
+            line.chars()
+                .position(|c| matches!(c, '▰' | '▱' | '▒'))
+                .unwrap()
+        };
+        let starts: Vec<usize> = lines.iter().map(|line| start(line)).collect();
         assert!(
             starts.iter().all(|&s| s == starts[0]),
-            "bars share a left edge: {starts:?}"
+            "provider bars share a front column: {starts:?}"
         );
-        // Value end: the last non-space char column (values are right-aligned).
-        let end = |line: &str| line.trim_end().chars().count();
-        let ends: Vec<usize> = bars.iter().map(|line| end(line)).collect();
+        // Bar end: the last bar cell column.
+        let end = |line: &str| {
+            line.char_indices()
+                .filter(|(_, c)| matches!(c, '▰' | '▱' | '▒'))
+                .count()
+                + start(line)
+        };
+        let ends: Vec<usize> = lines.iter().map(|line| end(line)).collect();
         assert!(
             ends.iter().all(|&e| e == ends[0]),
-            "values share a right edge: {ends:?}"
+            "provider bars share an end column: {ends:?}"
         );
     }
 
-    /// The fleet header is a fixed height — one line for an empty room, two for a
-    /// populated one — so the body never shifts as agents change state. The
-    /// single summary line carries every bucket, a zero reading `? 0`: the
-    /// attention buckets lead, then the running pair split into working `⢿` and
-    /// thinking `✽`, each glyph spaced from its count, with the total pinned right.
+    /// The pinned per-provider dashboard: a metered block (header with version
+    /// and plan on the left, the `⇅ rc` flag pinned top-right; the brand emblem;
+    /// 5h/7d "mana" bars draining toward their resets) above an unmetered block
+    /// (the `∞` icon at the front, an empty `▱` track, no countdown).
     #[test]
-    fn fleet_header_is_fixed_and_merges_summary_onto_one_line() {
-        // An empty room is a single calm count line at row 1 (row 0 is the top
-        // border) — the body below never moves.
+    fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Auto,
+            Some("/repo/main"),
+            Some("main"),
+            Some("db migrate"),
+        );
+        claude.context = Some(claude_context(fixed_now()));
+        let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+        snapshot.providers = vec![
+            provider_panel("claude", "Claude Code", 173, true, true, Some((25, 40))),
+            {
+                let mut codex = provider_panel("codex", "Codex", 33, false, false, None);
+                codex.plan = Some("ChatGPT Pro".to_owned());
+                codex.version = Some("0.135.0".to_owned());
+                codex.total_cost_usd = Some(1.2);
+                codex.total_input_tokens = Some(80_000);
+                codex.total_output_tokens = Some(8_000);
+                codex.cached_tokens = None;
+                codex.lines_added = None;
+                codex.lines_removed = None;
+                codex
+            },
+        ];
+        let rendered = snapshot_to_screen(&snapshot, 54, 34);
+
+        // The metered Claude block: header carries the version and plan on the
+        // left with the `⇅ rc` remote-control flag pinned to the top-right corner,
+        // then drains its 5h/7d budget bars.
+        assert!(
+            rendered.contains("Claude Code v2.1.158 · Claude Max"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("⇅ rc"),
+            "rc flag pinned right:\n{rendered}"
+        );
+        assert!(rendered.contains("5h"), "{rendered}");
+        assert!(rendered.contains("7d"), "{rendered}");
+        assert!(rendered.contains('▰'), "a draining mana bar:\n{rendered}");
+        assert!(rendered.contains('↻'), "a reset countdown:\n{rendered}");
+        // The unmetered Codex block: the `∞` icon rides the front, an empty `▱`
+        // track fills, and no countdown follows it.
+        assert!(
+            rendered.contains("Codex v0.135.0 · ChatGPT Pro"),
+            "{rendered}"
+        );
+        assert!(rendered.contains('∞'), "infinity at the front:\n{rendered}");
+        assert!(rendered.contains('▱'), "the empty ∞ track:\n{rendered}");
+        assert_snapshot("provider_dashboard", rendered);
+    }
+
+    /// The borderless repo header (dashboard L1): the workspace name behind `⌘`
+    /// on the left, then the project path pinned to the right edge of the same
+    /// line — no `⌂` glyph, the dim path opposite the name reads as a path.
+    #[test]
+    fn repo_header_shows_name_then_path() {
+        let mut snapshot = snapshot_with(Vec::new(), Vec::new());
+        snapshot.project_root = Some(std::path::PathBuf::from("/srv/code/query-engine"));
+        let rendered = snapshot_to_screen(&snapshot, 44, 12);
+        let first = rendered.lines().next().unwrap_or_default();
+        let name_at = first.find("⌘ query-engine").expect("name on line 1");
+        let path_at = first
+            .find("/srv/code/query-engine")
+            .expect("path on line 1");
+        assert!(name_at < path_at, "name leads, path pins right: {first:?}");
+        assert!(
+            !rendered.contains('⌂'),
+            "the ⌂ path glyph is gone:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn home_abbreviation_collapses_only_a_home_prefix() {
+        assert_eq!(
+            abbreviate_under("/home/dev/code/query-engine", Some("/home/dev")),
+            "~/code/query-engine"
+        );
+        assert_eq!(abbreviate_under("/home/dev", Some("/home/dev")), "~");
+        // A path that merely shares a textual prefix is not under home.
+        assert_eq!(
+            abbreviate_under("/home/developer/x", Some("/home/dev")),
+            "/home/developer/x"
+        );
+        // Outside home, or no home, passes through.
+        assert_eq!(
+            abbreviate_under("/srv/code", Some("/home/dev")),
+            "/srv/code"
+        );
+        assert_eq!(abbreviate_under("/srv/code", None), "/srv/code");
+    }
+
+    /// The cockpit folds the worktrees' commits-ahead into the fleet total as a
+    /// `◆ N` count beside the `+/-` churn it came from.
+    #[test]
+    fn cockpit_totals_show_commits_ahead() {
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Auto,
+            Some("/repo/feature-migration"),
+            Some("feature-migration"),
+            Some("db migrate"),
+        );
+        claude.context = Some(claude_context(fixed_now()));
+        let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+        snapshot.worktree_groups[0].diff_added = Some(127);
+        snapshot.worktree_groups[0].diff_removed = Some(43);
+        snapshot.worktree_groups[0].commits_ahead = Some(3);
+        let rendered = snapshot_to_screen(&snapshot, 54, 14);
+        assert!(rendered.contains("◆ 3"), "{rendered}");
+    }
+
+    /// The dashboard's L2 carries the fleet head-count (`✦ N`, under the name);
+    /// the cockpit below it splits the make-up at a fixed height — the left
+    /// cluster (`? ! ○`, each glyph spaced from its count, a zero reading `? 0`)
+    /// and the busy/done tail (`✽ ⢿ ✓`) — so the body never shifts as agents
+    /// change state.
+    #[test]
+    fn fleet_header_is_fixed_and_splits_the_make_up() {
+        // Borderless layout: row 0 is the name, row 1 the count+spend line, row 2
+        // the hairline rule. An empty room reads `✦ 0` on row 1 with no cockpit
+        // beneath, so the body below never moves.
         let empty = snapshot_with(Vec::new(), Vec::new());
         let empty_screen = snapshot_to_screen(&empty, 40, 12);
         assert!(
-            empty_screen.lines().nth(1).unwrap().contains("0 agents"),
+            empty_screen.lines().nth(1).unwrap().contains("✦ 0"),
             "{empty_screen}"
         );
 
@@ -1435,20 +1795,25 @@ mod tests {
         );
         let snapshot = snapshot_with(Vec::new(), vec![working, thinking]);
         let screen = snapshot_to_screen(&snapshot, 40, 12);
-        let summary = screen.lines().nth(1).unwrap(); // L1 — the whole make-up
-        // The agent total pins right; every bucket shows its count, so the empty
-        // attention buckets read `? 0   ! 0`, then the running pair splits one
-        // working (⢿) one thinking (✽) — all on the one merged line.
-        assert!(summary.contains("2 agents"), "{screen}");
-        assert!(summary.contains("? 0"), "{summary}");
-        assert!(summary.contains("! 0"), "{summary}");
-        assert!(summary.contains("⢿ 1"), "{summary}");
-        assert!(summary.contains("✽ 1"), "{summary}");
-        // The header is exactly two lines (L2 totals is blank here), so the
-        // worktree group lands at row 3 — proof the header did not wrap or grow.
+        // Row 1 is the head-count; row 3 is the bucket make-up (row 2 is the rule).
+        assert!(screen.lines().nth(1).unwrap().contains("✦ 2"), "{screen}");
+        let buckets = screen.lines().nth(3).unwrap();
+        // Left cluster: waiting/failed/idle each show their count (a zero reads
+        // `? 0`); the running pair splits one working (⢿) one thinking (✽) right.
+        assert!(buckets.contains("? 0"), "{buckets}");
+        assert!(buckets.contains("! 0"), "{buckets}");
+        assert!(buckets.contains("○ 0"), "{buckets}");
+        assert!(buckets.contains("⢿ 1"), "{buckets}");
+        assert!(buckets.contains("✽ 1"), "{buckets}");
+        // The default selection lands on the first row, so its worktree reads as
+        // one lane: the header gains the dotted seal and a `▏` lane spine.
         assert!(
-            screen.lines().nth(3).unwrap().contains("▌main"),
+            screen.lines().any(|line| line.contains("main")),
             "fleet header wrapped or shifted:\n{screen}"
+        );
+        assert!(
+            screen.contains('▏'),
+            "the selected worktree shows the lane spine:\n{screen}"
         );
     }
 }

@@ -519,20 +519,14 @@ fn pane_id_set(snapshot: &SidebarSnapshot) -> HashSet<&PaneId> {
         .collect()
 }
 
-/// True when some pane that `prev` rendered as an agent or remote-control host
-/// is a bare process row in `incoming` — the Agent→Process demotion the gate
-/// protects against.
+/// True when some pane that `prev` rendered as an agent is a bare process row in
+/// `incoming` — the Agent→Process demotion the gate protects against.
 fn demotes_agentish_to_process(prev: &SidebarSnapshot, incoming: &SidebarSnapshot) -> bool {
     let agentish: HashSet<&PaneId> = prev
         .worktree_groups
         .iter()
         .flat_map(|group| &group.rows)
-        .filter(|row| {
-            matches!(
-                row.row_kind,
-                rimz::SidebarRowKind::Agent | rimz::SidebarRowKind::RemoteControl
-            )
-        })
+        .filter(|row| row.row_kind == rimz::SidebarRowKind::Agent)
         .filter_map(|row| row.pane.as_ref().map(|pane| &pane.pane_id))
         .collect();
     incoming
@@ -704,6 +698,7 @@ fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
         project_root: None,
         worktree_roots: Vec::new(),
         sidebar: rimz::config::SidebarConfig::default(),
+        providers: Vec::new(),
     }
 }
 
@@ -1197,12 +1192,12 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
 }
 
 fn handle_mouse_click(
-    column: u16,
+    _column: u16,
     row: u16,
     ui: &mut UiState,
     _snapshot: &SidebarSnapshot,
 ) -> InputOutcome {
-    if let Some(index) = row_index_at_screen_position(ui, column, row) {
+    if let Some(index) = row_index_at_screen_position(ui, row) {
         ui.selected_index = index;
         return InputOutcome::focus(ui.selected_index);
     }
@@ -1297,12 +1292,11 @@ fn clear_pending_focus(ui: &mut UiState) {
     ui.pending_focus_since = None;
 }
 
-fn row_index_at_screen_position(ui: &UiState, column: u16, row: u16) -> Option<usize> {
-    // The block border occupies row 0 and column 0; the body starts one cell in.
-    if row == 0 || column == 0 {
-        return None;
-    }
-    ui.line_map.get(usize::from(row - 1)).copied().flatten()
+fn row_index_at_screen_position(ui: &UiState, row: u16) -> Option<usize> {
+    // Borderless: the body fills the frame from row 0 (no border to skip) and a
+    // row's lane spine occupies column 0, so a click anywhere on a line — spine
+    // included — maps straight onto the hit-test entry built alongside it.
+    ui.line_map.get(usize::from(row)).copied().flatten()
 }
 
 fn visible_row_count(snapshot: &SidebarSnapshot) -> usize {
@@ -1467,6 +1461,7 @@ mod tests {
             hidden_count: 0,
             diff_added: None,
             diff_removed: None,
+            commits_ahead: None,
         }];
         snapshot
     }
@@ -1509,6 +1504,7 @@ mod tests {
             hidden_count: 0,
             diff_added: None,
             diff_removed: None,
+            commits_ahead: None,
         }];
         snapshot
     }
@@ -1580,6 +1576,7 @@ mod tests {
             hidden_count: 2,
             diff_added: None,
             diff_removed: None,
+            commits_ahead: None,
         }];
         snapshot
     }
@@ -2097,10 +2094,10 @@ mod tests {
         map
     }
 
-    /// The screen row a content-line index maps to: the hit-test reads
-    /// `row - 1`, so map index `i` is screen row `i + 1` (row 0 is the border).
+    /// The screen row a content-line index maps to: borderless, the body fills
+    /// the frame from row 0, so map index `i` is screen row `i`.
     fn screen_row_for(map_index: usize) -> u16 {
-        u16::try_from(map_index + 1).unwrap()
+        u16::try_from(map_index).unwrap()
     }
 
     #[test]
@@ -2130,27 +2127,28 @@ mod tests {
             "the first process row follows its worktree header"
         );
 
+        // The borderless title line at screen row 0 is inert chrome.
         assert_eq!(
-            row_index_at_screen_position(&ui, 0, screen_row_for(row0)),
+            row_index_at_screen_position(&ui, 0),
             None,
-            "the border is not clickable content"
+            "the title line is not clickable content"
         );
         assert_eq!(
-            row_index_at_screen_position(&ui, 1, screen_row_for(header)),
+            row_index_at_screen_position(&ui, screen_row_for(header)),
             Some(0),
             "the worktree header jumps into its first row"
         );
         assert_eq!(
-            row_index_at_screen_position(&ui, 1, screen_row_for(row0)),
+            row_index_at_screen_position(&ui, screen_row_for(row0)),
             Some(0)
         );
         assert_eq!(
-            row_index_at_screen_position(&ui, 1, screen_row_for(row1)),
+            row_index_at_screen_position(&ui, screen_row_for(row1)),
             Some(1)
         );
         // The line just above the worktree header is the section gap — inert.
         assert_eq!(
-            row_index_at_screen_position(&ui, 1, screen_row_for(header - 1)),
+            row_index_at_screen_position(&ui, screen_row_for(header - 1)),
             None,
             "the section gap is not a row"
         );
@@ -2164,7 +2162,7 @@ mod tests {
         // routes to its own index.
         let ws = workspace();
         let snapshot = clickable_block_snapshot(&ws);
-        // Select the agent so its deeper budget-bar and stats lines appear too.
+        // Select the agent so its deeper stats lines appear too.
         let map = line_map_for(&snapshot, 0);
 
         // Index 0 is the agent (a multi-line card) plus the worktree header that
@@ -2173,7 +2171,7 @@ mod tests {
         assert!(
             agent_lines >= 4,
             "the worktree header plus the selected agent card (identity + \
-             description + gauge + bars/stats) route to row 0, not {agent_lines} lines",
+             description + gauge + stats) route to row 0, not {agent_lines} lines",
         );
         let process_lines = map.iter().filter(|m| **m == Some(1)).count();
         assert_eq!(process_lines, 1, "a process row is a single line");
@@ -2185,8 +2183,8 @@ mod tests {
             ..UiState::default()
         };
         for (i, entry) in map.iter().enumerate() {
-            let got = row_index_at_screen_position(&ui, 1, screen_row_for(i));
-            assert_eq!(got, *entry, "screen row {} mismatched its map slot", i + 1);
+            let got = row_index_at_screen_position(&ui, screen_row_for(i));
+            assert_eq!(got, *entry, "screen row {i} mismatched its map slot");
         }
 
         // The cockpit header, gaps, and the `+K more` hidden-count line are inert.

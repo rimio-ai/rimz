@@ -10,8 +10,9 @@
 //!   so `--spawn=worktree` carves new on-demand sessions off the canonical repo,
 //!   not the current worktree. It is a pane but not a coding agent — no Rimz
 //!   hooks, never stamps a pane — so the sidebar must not render it as an idle
-//!   agent: [`pane_is_host`] identifies the host pane and [`host_label`] names
-//!   it, so the snapshot reducer gives it a dedicated, pinned row instead.
+//!   agent: [`pane_is_host`] identifies the host pane and the snapshot reducer
+//!   filters it out, surfacing remote control as a `⇅ rc` flag on the Claude
+//!   provider dashboard block instead.
 //! - **Codex** runs `remote-control start` from the *managed standalone install*
 //!   ([`codex_standalone_bin`]), which brings up the Codex app-server daemon
 //!   with remote control enabled and returns. That daemon is a **per-user
@@ -204,13 +205,6 @@ pub fn pane_is_host(pane: &PaneRef) -> bool {
         || pane.view_name.as_deref() == Some(VIEW_NAME)
 }
 
-/// The sidebar label for a host pane. Only Claude is a host pane now (Codex is a
-/// per-user daemon, never a pane), so the row reads the canonical `remote
-/// control` — never a bare agent name, so it never reads as an idle coding agent.
-pub fn host_label(_pane: &PaneRef) -> &'static str {
-    "remote control"
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,23 +324,5 @@ mod tests {
         assert!(!pane_is_host(&pane(Some("claude"), Some("2"))));
         assert!(!pane_is_host(&pane(Some("codex"), Some("3"))));
         assert!(!pane_is_host(&pane(Some("zsh"), None)));
-    }
-
-    #[test]
-    fn host_label_is_the_canonical_remote_control() {
-        // Only Claude is a host pane now; every host row reads `remote control`,
-        // never a bare agent name.
-        assert_eq!(
-            host_label(&pane(Some("claude remote-control --spawn worktree"), None)),
-            "remote control",
-        );
-        assert_eq!(
-            host_label(&pane(Some("claude"), Some(VIEW_NAME))),
-            "remote control",
-        );
-        assert_eq!(
-            host_label(&pane(Some("node"), Some(VIEW_NAME))),
-            "remote control",
-        );
     }
 }

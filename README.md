@@ -5,33 +5,43 @@ Run one coding agent and you flip tabs. Run four and you lose them.
 Rimz pins every repo to one durable room — a Zellij or tmux session with a sidebar that tells you which pane needs you, and a ledger that survives detach, sidebar reload, and reattach from anywhere. Humans, scripts, CI, and coding agents share the same feed through one CLI.
 
 ```
-┌ query-engine ──────────────┐
-│ ?2  !1                     │
-│                            │
-│ ▌main                 2⢿ 1?│
-│ ? claude  fix auth flow 12m│
-│   Opus · xhigh             │
-│   ━━━━━━━━━━───────────────│
-│ ⢿ claude  add tests     8s │
-│   Sonnet · high            │
-│   ━━━━━────────────────────│
-│ ⢿ codex   refactor api 30s │
-│   GPT-5.5 · high           │
-│   ━━━━━━━━━━━━━━━──────────│
-│                            │
-│ ▌feature-migration    1! 1◌│
-│ ! claude  db migrate    4m │
-│   Opus · xhigh · yolo      │
-│   ━━━━━━━━━━━━━━━━━━━━━────│
-│ ◌ codex   —             1h │
-│   GPT-5.5 · low            │
-│   ━━━──────────────────────│
-│                            │
-│ ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄ 1?│
-│ ? deploy  promote?      5m │
-│                            │
-│ ↵ jump   ␣ next ?!   ? keys│
-└────────────────────────────┘
+ ⌘ query-engine            ~/code/query-engine
+ ✦ 5   ✧ 2                              $4.20
+ ──────────────────────────────────────────────
+ ? 2   ! 1   ○ 0            ✽ 1   ⢿ 1   ✓ 0
+ ◷ 41m · ◇ 486k · ◆ 4
+
+▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌? claude · Opus · xhigh
+▌  fix auth flow
+▌  ▣ ━━━━━━━━━━──────────────── 41%
+▏
+▏✽ claude · Sonnet · high
+▏  add tests
+▏  ▣ ━━━━━─────────────────────  18%
+▏
+▏⢿ codex · GPT-5.5 · high
+▏  refactor api
+▏  ▣ ━━━━━━━━━━━━━━━──────────── 63%
+
+ feature-migration                     +230 -23
+ ! claude · Opus · yolo
+   db migrate
+
+ ○ codex · GPT-5.5 · low
+   —
+
+ ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1
+ ? deploy
+   promote?
+
+ ──────────────────────────────────────────────
+ Claude Code v2.1.158 · Claude Max          ⇅ rc
+  ▐▛███▜▌  $4.20 · ◇ 486k
+ ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ ↻ 2h06m
+   ▘▘ ▝▝   7d ▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h
+ ──────────────────────────────────────────────
+ ↵ jump   ␣ next ?!   ? keys
 ```
 
 > Product invariant lives in [DESIGN.md](./DESIGN.md). The short version: the agent's own UI stays the answer surface unless you explicitly enrol a resolver. Nothing in Rimz silently approves a tool call.

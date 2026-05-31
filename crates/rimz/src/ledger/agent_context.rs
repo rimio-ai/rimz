@@ -119,6 +119,7 @@ mod tests {
             tokens: None,
             rate_limits: None,
             pr: None,
+            account: None,
             observed_at,
         }
     }

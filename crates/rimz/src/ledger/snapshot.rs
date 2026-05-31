@@ -13,7 +13,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agent_activity::AgentActivity;
-use crate::agents::AgentContext;
+use crate::agents::{AgentAccount, AgentContext, RateLimitWindow};
 use crate::feed::{
     AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, PaneRef, PermissionPosture,
     ResolverStepState, RuntimeOwner, RuntimeOwnerKind, Surface,
@@ -119,6 +119,59 @@ pub struct SidebarSnapshot {
     /// reads it to pick each card's resting height.
     #[serde(default)]
     pub sidebar: crate::config::SidebarConfig,
+    /// Per-provider dashboard blocks pinned to the bottom of the sidebar — the
+    /// account-scoped 5h/7d budgets, aggregate spend/tokens, and brand emblem.
+    /// One block folds every session of a kind. Built by
+    /// [`Self::with_provider_aggregates`] on the producer (it needs config and an
+    /// account probe the pure reducer can't read), so the placeholder/persisted
+    /// snapshot leaves it empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<SidebarProviderPanel>,
+}
+
+/// One provider's aggregate dashboard block, pinned to the bottom of the
+/// sidebar. Account-scoped: every session of one agent kind folds into one
+/// block — summed spend and tokens, plus the freshest session's plan, version,
+/// and rate-limit windows — so the 5h/7d budgets render once per account, never
+/// per row. Resolved on the producer into a ready-to-paint shape: the renderer
+/// reads art, color, and plan straight off it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SidebarProviderPanel {
+    pub kind: String,
+    /// Header display name (`Claude Code`, `Codex`, …).
+    pub product_name: String,
+    /// Multi-line ASCII emblem, painted brand-colored at the block's left.
+    pub art: Vec<String>,
+    /// 256-color index for the emblem.
+    pub color: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Brand plan label (`Claude Max`, `ChatGPT Pro`); `None` when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// Whether the account is metered by rate-limit windows. `false` paints the
+    /// "infinite power" bar in place of draining 5h/7d budgets.
+    pub metered: bool,
+    /// Whether remote control is enabled for this provider (the `⇅ rc` flag).
+    pub remote_control: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_cost_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_output_tokens: Option<u64>,
+    /// Cached input tokens on the freshest session's latest message (no
+    /// cumulative cached figure exists); `None` when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines_added: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines_removed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub five_hour: Option<RateLimitWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seven_day: Option<RateLimitWindow>,
 }
 
 /// One sidebar's view of the panes sharing its tab/window. `None` on the
@@ -159,6 +212,13 @@ pub struct SidebarWorktreeGroup {
     pub diff_added: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_removed: Option<u32>,
+    /// Commits this worktree carries ahead of the trunk — `git rev-list --count
+    /// <merge-base>..HEAD`, the committed work waiting to land (the `+/-` diff
+    /// also folds in staged/unstaged change). Like the diff, it is a property of
+    /// the worktree path, projected by the `rimz sidebar snapshot` CLI; `None`
+    /// when no git read was attempted or the worktree is not a git repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commits_ahead: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -176,11 +236,6 @@ pub enum SidebarRowKind {
     Agent,
     /// A live pane with no agent bound to it: a shell, an editor, `git`.
     Process,
-    /// The Claude Remote Control host pane. It is not a coding agent — it never
-    /// stamps a pane or fires hooks — so rather than masquerade as an idle
-    /// Claude process it gets its own row: rendered like progress but specially
-    /// marked, and pinned to the bottom of its group (see `row_rank`).
-    RemoteControl,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -362,6 +417,7 @@ impl SidebarSnapshot {
             project_root: None,
             worktree_roots: Vec::new(),
             sidebar: crate::config::SidebarConfig::default(),
+            providers: Vec::new(),
         }
     }
 
@@ -528,6 +584,10 @@ impl SidebarSnapshot {
                     .as_deref()
                     .is_none_or(|command| command_label(command) != "rimz-sidebar")
             })
+            // The remote-control host is ambient infrastructure, not work: it no
+            // longer renders as a row. Its presence surfaces as the `⇅ rc` flag
+            // on the provider dashboard block instead, so drop its pane here.
+            .filter(|pane| !crate::remote_control::pane_is_host(pane))
             .collect::<Vec<_>>();
         self.worktree_groups = build_worktree_groups_with_panes(
             &self.agents,
@@ -590,6 +650,286 @@ impl SidebarSnapshot {
         }
         self
     }
+
+    /// Fold the agent rollup into per-provider dashboard blocks — one per agent
+    /// kind, plus one for any logged-in provider with no active session this run
+    /// (an account-only block, so the dashboard shows your accounts and budgets
+    /// between turns). Sums each kind's spend, tokens, and edited lines; takes the
+    /// plan, version, and rate-limit windows from the freshest session (account
+    /// state is shared, so the latest reading is truest). `probed_accounts`
+    /// carries out-of-band login facts the context cannot (Claude's `auth status`,
+    /// Codex's `auth.json`), preferred only when the freshest context has none —
+    /// and the kind whose only signal is such a login still earns a block;
+    /// `remote_control` carries the per-kind `⇅ rc` flag. Styling (emblem, color,
+    /// name) resolves from `self.sidebar.providers` over the built-in defaults, so
+    /// the renderer gets a ready-to-paint block. Capped to `max_provider_blocks`,
+    /// ordered by spend. Producer-only: the pure reducer leaves `providers` empty.
+    pub fn with_provider_aggregates(
+        mut self,
+        probed_accounts: &BTreeMap<String, AgentAccount>,
+        remote_control: &BTreeMap<String, bool>,
+    ) -> Self {
+        let mut kinds: Vec<String> = Vec::new();
+        for agent in &self.agents {
+            if agent.parent_agent_id.is_some() {
+                continue;
+            }
+            if !kinds.iter().any(|known| known == &agent.kind) {
+                kinds.push(agent.kind.clone());
+            }
+        }
+        // A provider that is logged in but has no active session this run still
+        // earns a block, so the dashboard shows your accounts and budgets between
+        // turns — fold in every probed-account kind not already covered.
+        for kind in probed_accounts.keys() {
+            if !kinds.iter().any(|known| known == kind) {
+                kinds.push(kind.clone());
+            }
+        }
+
+        let mut panels: Vec<SidebarProviderPanel> = Vec::new();
+        for kind in kinds {
+            let sessions: Vec<&AgentState> = self
+                .agents
+                .iter()
+                .filter(|agent| agent.parent_agent_id.is_none() && agent.kind == kind)
+                .collect();
+            // No sessions and no logged-in account means nothing to show; an idle
+            // but logged-in provider falls through to a minimal account-only block.
+            if sessions.is_empty() && !probed_accounts.contains_key(&kind) {
+                continue;
+            }
+
+            let mut total_cost_usd: Option<f64> = None;
+            let mut total_input_tokens: Option<u64> = None;
+            let mut total_output_tokens: Option<u64> = None;
+            let mut lines_added: Option<u64> = None;
+            let mut lines_removed: Option<u64> = None;
+            for agent in &sessions {
+                let Some(context) = agent.context.as_ref() else {
+                    continue;
+                };
+                if let Some(cost) = context.cost.as_ref() {
+                    if let Some(usd) = cost.total_cost_usd {
+                        *total_cost_usd.get_or_insert(0.0) += usd;
+                    }
+                    if let Some(added) = cost.total_lines_added {
+                        *lines_added.get_or_insert(0) += added;
+                    }
+                    if let Some(removed) = cost.total_lines_removed {
+                        *lines_removed.get_or_insert(0) += removed;
+                    }
+                }
+                if let Some(tokens) = context.tokens.as_ref() {
+                    if let Some(input) = tokens.total_input_tokens {
+                        *total_input_tokens.get_or_insert(0) += input;
+                    }
+                    if let Some(output) = tokens.total_output_tokens {
+                        *total_output_tokens.get_or_insert(0) += output;
+                    }
+                }
+            }
+
+            // The freshest context wins the account-scoped facts (plan, version)
+            // — every session shares one account.
+            let freshest = sessions
+                .iter()
+                .filter_map(|agent| agent.context.as_ref())
+                .max_by_key(|context| context.observed_at);
+            let version = freshest.and_then(|context| context.agent_version.clone());
+            // The 5h/7d windows are account-scoped too, but the *freshest* session
+            // is not the truest reading: parallel sessions report the same window
+            // at slightly different instants, so "freshest wins" flips between
+            // ticks and the bar flickers. Instead, pick each window stably across
+            // every session — drop readings whose reset already passed (stale),
+            // then keep the most-drained survivor (most conservative). Same inputs
+            // always yield the same bar, regardless of which session reported last.
+            let now = Timestamp::now();
+            let five_hour = stable_window(
+                sessions.iter().filter_map(|agent| {
+                    agent
+                        .context
+                        .as_ref()?
+                        .rate_limits
+                        .as_ref()?
+                        .five_hour
+                        .clone()
+                }),
+                now,
+            );
+            let seven_day = stable_window(
+                sessions.iter().filter_map(|agent| {
+                    agent
+                        .context
+                        .as_ref()?
+                        .rate_limits
+                        .as_ref()?
+                        .seven_day
+                        .clone()
+                }),
+                now,
+            );
+            let has_windows = five_hour.is_some() || seven_day.is_some();
+            let cached_tokens = freshest
+                .and_then(|context| context.tokens.as_ref())
+                .and_then(|tokens| tokens.current_usage.as_ref())
+                .map(|usage| {
+                    usage.cache_creation_input_tokens.unwrap_or(0)
+                        + usage.cache_read_input_tokens.unwrap_or(0)
+                })
+                .filter(|cached| *cached > 0);
+
+            let account = freshest
+                .and_then(|context| context.account.clone())
+                .or_else(|| probed_accounts.get(&kind).cloned());
+            let metered = account
+                .as_ref()
+                .and_then(|account| account.metered)
+                .unwrap_or(has_windows);
+            let plan = account
+                .and_then(|account| account.plan)
+                .filter(|plan| !plan.is_empty())
+                .map(|raw| format_plan_label(&kind, &raw));
+
+            let (default_name, default_art, default_color) = default_provider_style(&kind);
+            let style = self.sidebar.providers.get(&kind);
+            let product_name = style
+                .and_then(|style| style.product_name.clone())
+                .filter(|name| !name.is_empty())
+                .unwrap_or(default_name);
+            let art = style
+                .and_then(|style| style.ascii_art.as_deref())
+                .filter(|art| !art.is_empty())
+                .map(|art| art.lines().map(ToOwned::to_owned).collect())
+                .unwrap_or(default_art);
+            let color = style.and_then(|style| style.color).unwrap_or(default_color);
+            let remote_control = remote_control.get(&kind).copied().unwrap_or(false);
+
+            panels.push(SidebarProviderPanel {
+                kind,
+                product_name,
+                art,
+                color,
+                version,
+                plan,
+                metered,
+                remote_control,
+                total_cost_usd,
+                total_input_tokens,
+                total_output_tokens,
+                cached_tokens,
+                lines_added,
+                lines_removed,
+                five_hour,
+                seven_day,
+            });
+        }
+
+        // Most spend first, then kind for a stable order; cap the panel height.
+        panels.sort_by(|left, right| {
+            right
+                .total_cost_usd
+                .unwrap_or(0.0)
+                .partial_cmp(&left.total_cost_usd.unwrap_or(0.0))
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| left.kind.cmp(&right.kind))
+        });
+        panels.truncate(self.sidebar.max_provider_blocks);
+        self.providers = panels;
+        self
+    }
+}
+
+/// The account-stable reading of one rate-limit window across every session of a
+/// provider. Parallel sessions report the same shared budget at different
+/// instants, so a "freshest wins" pick flickers; this is deterministic instead.
+///
+/// Drop any reading whose `resets_at` has already passed — that window reset, so
+/// its `used_percentage` is stale — then, among the survivors, keep the most
+/// drained (highest `used_percentage`, so the bar never over-promises remaining
+/// budget). A window with no reset instant can't be aged out, so it is kept as a
+/// last-resort reading only when nothing with a live reset survives.
+fn stable_window(
+    windows: impl Iterator<Item = RateLimitWindow>,
+    now: Timestamp,
+) -> Option<RateLimitWindow> {
+    let mut live: Option<RateLimitWindow> = None;
+    let mut undated: Option<RateLimitWindow> = None;
+    for window in windows {
+        if window.used_percentage.is_none() {
+            continue;
+        }
+        match window.resets_at {
+            Some(resets_at) if resets_at <= now => continue, // reset already passed — stale
+            Some(_) => {
+                if live
+                    .as_ref()
+                    .is_none_or(|best| window.used_percentage > best.used_percentage)
+                {
+                    live = Some(window);
+                }
+            }
+            None => {
+                if undated
+                    .as_ref()
+                    .is_none_or(|best| window.used_percentage > best.used_percentage)
+                {
+                    undated = Some(window);
+                }
+            }
+        }
+    }
+    live.or(undated)
+}
+
+/// Built-in `(product_name, art lines, color)` for a provider kind, used when
+/// the per-machine config overrides none of them. Ships the brand emblems and
+/// colors: Claude clay (173), Codex deep blue (26), Pi forest green (28).
+fn default_provider_style(kind: &str) -> (String, Vec<String>, u8) {
+    let lines = |art: &str| art.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
+    match kind {
+        "claude" => (
+            "Claude Code".to_owned(),
+            lines(" ▐▛███▜▌\n▝▜█████▛▘\n  ▘▘ ▝▝"),
+            173,
+        ),
+        "codex" => (
+            "Codex".to_owned(),
+            lines(" ▗▛███▜▖\n ▜▌ ▚ ▐▛\n ▝▙███▟▘"),
+            26,
+        ),
+        "pi" => ("Pi".to_owned(), lines(" ▗▛████▜▖\n  ▐▌  ▐▌\n  ▝▘  ▝▘"), 28),
+        other => (provider_title_case(other), Vec::new(), 244),
+    }
+}
+
+/// Format a raw provider plan tier into its brand label: Claude's tiers prefix
+/// `Claude` (`max` → `Claude Max`), Codex's prefix `ChatGPT` (`pro` → `ChatGPT
+/// Pro`); any other provider just title-cases the tier.
+fn format_plan_label(kind: &str, raw: &str) -> String {
+    let tier = provider_title_case(raw);
+    match kind {
+        "claude" => format!("Claude {tier}"),
+        "codex" => format!("ChatGPT {tier}"),
+        _ => tier,
+    }
+}
+
+/// Title-case a `-`/`_`/space-delimited token (`gpt-5` → `Gpt 5`, `max` →
+/// `Max`). ASCII-oriented; a non-ASCII leading char is uppercased as Unicode.
+fn provider_title_case(value: &str) -> String {
+    value
+        .split(['-', '_', ' '])
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 impl SidebarOwnView {
@@ -738,9 +1078,8 @@ fn rows_from_panes(
                 }
                 rows.push(row);
             }
-            None if crate::remote_control::pane_is_host(pane) => {
-                rows.push(row_from_remote_control(pane));
-            }
+            // Remote-control host panes are filtered out upstream
+            // (`with_live_panes`); every remaining paneless match is a process.
             None => rows.push(row_from_process(pane)),
         }
     }
@@ -962,6 +1301,7 @@ fn build_worktree_groups_from_rows(
                 rows,
                 diff_added: None,
                 diff_removed: None,
+                commits_ahead: None,
             }
         })
         .collect::<Vec<_>>();
@@ -1081,38 +1421,6 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
         row_kind: SidebarRowKind::Process,
         id: pane.pane_id.to_string(),
         name,
-        status: None,
-        permission_posture: None,
-        pane: Some(pane.clone()),
-        request_id: None,
-        surface: None,
-        task: None,
-        model: None,
-        effort: None,
-        context_pct: None,
-        total_tokens: None,
-        todo_done: None,
-        todo_total: None,
-        context: None,
-        worktree_path: pane.cwd.clone(),
-        worktree_branch: None,
-        last_activity: pane.pane_process_start.unwrap_or_else(Timestamp::now),
-        resolver: None,
-        options: Vec::new(),
-        sub_agents: Vec::new(),
-    }
-}
-
-/// A remote-control host's row: a process-style single line, but a distinct
-/// kind so the renderer marks it specially and `row_rank` pins it to the bottom
-/// of its group. Labelled "remote control" by [`crate::remote_control::host_label`]
-/// (only Claude is a host pane now — Codex is a per-user daemon), never the bare
-/// agent name, so it never reads as a stray idle agent.
-fn row_from_remote_control(pane: &PaneRef) -> SidebarRow {
-    SidebarRow {
-        row_kind: SidebarRowKind::RemoteControl,
-        id: pane.pane_id.to_string(),
-        name: crate::remote_control::host_label(pane).to_owned(),
         status: None,
         permission_posture: None,
         pane: Some(pane.clone()),
@@ -1512,11 +1820,6 @@ fn group_earliest_start(group: &SidebarWorktreeGroup) -> Option<Timestamp> {
 }
 
 fn row_rank(row: &SidebarRow) -> u8 {
-    // The remote-control host is pinned below every agent and process row in its
-    // group: it is ambient infrastructure, never the thing you came to look at.
-    if row.row_kind == SidebarRowKind::RemoteControl {
-        return 7;
-    }
     match row.status {
         Some(status) => status_rank(status),
         None => 6,
@@ -2428,10 +2731,11 @@ mod tests {
     }
 
     #[test]
-    fn remote_control_host_is_a_pinned_special_row_not_a_claude_agent() {
+    fn remote_control_host_pane_renders_no_row() {
         // A `claude remote-control` pane (Zellij reports the full command line)
-        // must not read as a Claude agent or a stray `claude` process: it gets
-        // its own RemoteControl row, named "remote control", pinned last.
+        // is ambient infrastructure: it no longer renders as any row — its
+        // presence surfaces as the provider dashboard's `⇅ rc` flag instead.
+        // Only the shell pane beside it remains a row.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new()).with_live_panes(
             vec![
@@ -2442,46 +2746,33 @@ mod tests {
         );
 
         let rows = &snapshot.worktree_groups[0].rows;
-        assert!(
-            rows.iter().all(|row| row.row_kind != SidebarRowKind::Agent),
-            "remote-control host must never be an agent row: {rows:?}",
-        );
-        let rc: Vec<_> = rows
-            .iter()
-            .filter(|row| row.row_kind == SidebarRowKind::RemoteControl)
-            .collect();
-        assert_eq!(rc.len(), 1, "exactly one remote-control row: {rows:?}");
-        assert_eq!(rc[0].name, "remote control");
+        assert_eq!(rows.len(), 1, "only the shell pane is a row: {rows:?}");
+        assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+        assert_eq!(rows[0].name, "zsh");
         assert!(
             rows.iter().all(|row| row.name != "claude"),
-            "host must not be labelled `claude`: {rows:?}",
-        );
-        assert_eq!(
-            rows.last().map(|row| row.row_kind),
-            Some(SidebarRowKind::RemoteControl),
-            "remote-control row must sort to the bottom of its group: {rows:?}",
+            "the host pane must not produce a claude row: {rows:?}",
         );
     }
 
     #[test]
-    fn remote_control_host_detected_by_view_name_when_command_is_bare() {
+    fn remote_control_host_pane_filtered_when_detected_by_view_name() {
         // tmux reports only the `claude` basename, but names the window — so the
-        // view name is what marks the host there.
+        // view name marks the host, and that pane is filtered out the same way.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let mut rc_pane = pane("%2", "claude", "/repo/main");
         rc_pane.view_name = Some(crate::remote_control::VIEW_NAME.to_owned());
         let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new())
             .with_live_panes(vec![rc_pane], None);
 
-        let rows = &snapshot.worktree_groups[0].rows;
+        let rows: Vec<_> = snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .collect();
         assert!(
-            rows.iter()
-                .any(|row| row.row_kind == SidebarRowKind::RemoteControl),
-            "a bare-`claude` pane in the rimz-rc window is the host: {rows:?}",
-        );
-        assert!(
-            rows.iter().all(|row| row.row_kind != SidebarRowKind::Agent),
-            "host must never be an agent row: {rows:?}",
+            rows.is_empty(),
+            "a host-only pane set produces no rows: {rows:?}",
         );
     }
 
@@ -4404,5 +4695,61 @@ mod tests {
         let panes = vec![view_pane("terminal_1", "tab_0", true)];
 
         assert!(SidebarOwnView::from_panes(&own, &panes).is_none());
+    }
+
+    fn window(used: u8, resets_in_secs: i64) -> RateLimitWindow {
+        let now = Timestamp::now();
+        let resets_at = if resets_in_secs >= 0 {
+            now + std::time::Duration::from_secs(resets_in_secs as u64)
+        } else {
+            now - std::time::Duration::from_secs((-resets_in_secs) as u64)
+        };
+        RateLimitWindow {
+            used_percentage: Some(used),
+            resets_at: Some(resets_at),
+        }
+    }
+
+    #[test]
+    fn stable_window_ignores_passed_resets_and_keeps_the_most_drained() {
+        let now = Timestamp::now();
+        // A stale window (reset already passed) reads low; two live windows
+        // report 50% and 80%. The stale one is dropped, and the most-drained
+        // live survivor (80%) wins — never over-promising remaining budget.
+        let live_50 = window(50, 3_600);
+        let live_80 = window(80, 1_800);
+        let stale_10 = window(10, -60);
+
+        let pick = stable_window(
+            [live_50.clone(), live_80.clone(), stale_10.clone()].into_iter(),
+            now,
+        )
+        .expect("a live window survives");
+        assert_eq!(pick.used_percentage, Some(80));
+
+        // Order-independent: the producer must not flicker with session order.
+        let reversed = stable_window([stale_10, live_80, live_50].into_iter(), now)
+            .expect("a live window survives");
+        assert_eq!(reversed.used_percentage, Some(80));
+    }
+
+    #[test]
+    fn stable_window_is_none_when_every_reading_is_stale() {
+        let now = Timestamp::now();
+        assert!(stable_window([window(90, -10), window(40, -3_600)].into_iter(), now).is_none());
+    }
+
+    #[test]
+    fn stable_window_falls_back_to_an_undated_reading() {
+        // A window with no reset instant can't be aged out; it is the last-resort
+        // reading only when nothing with a live reset survives.
+        let now = Timestamp::now();
+        let undated = RateLimitWindow {
+            used_percentage: Some(33),
+            resets_at: None,
+        };
+        let pick = stable_window([window(90, -10), undated].into_iter(), now)
+            .expect("the undated reading backstops the stale one");
+        assert_eq!(pick.used_percentage, Some(33));
     }
 }

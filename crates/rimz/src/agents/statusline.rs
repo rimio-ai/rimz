@@ -196,6 +196,10 @@ impl StatuslinePayload {
             tokens,
             rate_limits,
             pr,
+            // The statusline carries no subscription/plan; Claude's account is
+            // probed separately (`claude auth status`) and folded at the
+            // provider panel, never here.
+            account: None,
             observed_at,
         }
     }

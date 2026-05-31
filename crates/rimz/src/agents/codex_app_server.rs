@@ -38,7 +38,7 @@ use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::context::{AgentContext, AgentRateLimits, RateLimitWindow};
+use super::context::{AgentAccount, AgentContext, AgentRateLimits, RateLimitWindow};
 
 /// Total wall-clock budget for one refresh (spawn + handshake + reads). The
 /// caller is a detached background helper with no user waiting, so this is
@@ -227,6 +227,11 @@ struct RateLimitSnapshot {
     primary: Option<RawWindow>,
     #[serde(default)]
     secondary: Option<RawWindow>,
+    /// The account's plan tier (`plus`, `pro`, `team`, …), reported alongside
+    /// the windows. Account-scoped, so the provider dashboard reads it from the
+    /// freshest session and uses it to label the block + mark it metered.
+    #[serde(default)]
+    plan_type: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -377,16 +382,26 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
         Ok(())
     }
 
-    fn rate_limits(&mut self) -> Result<Option<AgentRateLimits>, AppServerErr> {
+    /// Read the account's rate-limit windows and plan tier in one call. The
+    /// windows ride [`AgentRateLimits`]; the plan tier (when present) marks a
+    /// metered subscription account on [`AgentAccount`]. An API-key account
+    /// returns neither, so the account is left `None` and the dashboard infers
+    /// the unmetered "infinite" bar.
+    fn rate_limits(
+        &mut self,
+    ) -> Result<(Option<AgentRateLimits>, Option<AgentAccount>), AppServerErr> {
         let result = self
             .transport
             .request("account/rateLimits/read", Value::Null)?;
         let parsed: RateLimitsResponse = serde_json::from_value(result)
             .map_err(|err| AppServerErr::Protocol(err.to_string()))?;
-        Ok(bucket_windows(
-            parsed.rate_limits.primary,
-            parsed.rate_limits.secondary,
-        ))
+        let windows = bucket_windows(parsed.rate_limits.primary, parsed.rate_limits.secondary);
+        let plan = parsed.rate_limits.plan_type.filter(|plan| !plan.is_empty());
+        let account = (plan.is_some() || windows.is_some()).then_some(AgentAccount {
+            metered: Some(true),
+            plan,
+        });
+        Ok((windows, account))
     }
 
     /// Match the session's model `hint` (a raw model id from the lifecycle
@@ -424,13 +439,20 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
         model_hint: Option<&str>,
         observed_at: Timestamp,
     ) -> AgentContext {
-        let rate_limits = self.rate_limits().unwrap_or_default();
+        let (rate_limits, account) = self.rate_limits().unwrap_or_default();
         let model = model_hint.and_then(|hint| self.matched_model(hint).ok().flatten());
         let agent_version = self
             .user_agent
             .as_deref()
             .and_then(codex_version_from_user_agent);
-        into_context(source, rate_limits, model, agent_version, observed_at)
+        into_context(
+            source,
+            rate_limits,
+            account,
+            model,
+            agent_version,
+            observed_at,
+        )
     }
 }
 
@@ -439,9 +461,11 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
 /// is stamped by the caller. Codex has no read-only source for the session name,
 /// tokens, cost, PR, thinking toggle, output style, or vim mode — those stay
 /// `None`.
+#[allow(clippy::too_many_arguments)]
 fn into_context(
     source: &str,
     rate_limits: Option<AgentRateLimits>,
+    account: Option<AgentAccount>,
     model: Option<MatchedModel>,
     agent_version: Option<String>,
     observed_at: Timestamp,
@@ -461,6 +485,7 @@ fn into_context(
         tokens: None,
         rate_limits,
         pr: None,
+        account,
         observed_at,
     }
 }
@@ -641,6 +666,33 @@ mod tests {
         assert_eq!(seven.used_percentage, Some(88));
         assert_eq!(five.resets_at, Timestamp::from_second(1_780_092_691).ok());
         assert_eq!(seven.resets_at, Timestamp::from_second(1_780_186_207).ok());
+    }
+
+    #[test]
+    fn account_plan_type_rides_the_rate_limit_read() {
+        // The plan tier sits beside the windows in `account/rateLimits/read`, so
+        // it lands on the context account — metered, since a tier is present.
+        let transport =
+            CannedTransport::new().with("account/rateLimits/read", rate_limits_result());
+        let mut client = CodexAppServer::new(transport);
+        client.handshake().unwrap();
+        let account = client
+            .observe_context("codex", None, ts())
+            .account
+            .expect("account from planType");
+        assert_eq!(account.plan.as_deref(), Some("team"));
+        assert_eq!(account.metered, Some(true));
+    }
+
+    #[test]
+    fn api_key_account_leaves_account_none() {
+        // No windows and no plan tier (an API-key account) means no account —
+        // the dashboard then infers the unmetered "infinite" bar.
+        let result = json!({ "rateLimits": {} });
+        let transport = CannedTransport::new().with("account/rateLimits/read", result);
+        let mut client = CodexAppServer::new(transport);
+        client.handshake().unwrap();
+        assert_eq!(client.observe_context("codex", None, ts()).account, None);
     }
 
     #[test]

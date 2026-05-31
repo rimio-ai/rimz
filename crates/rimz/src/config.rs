@@ -9,6 +9,7 @@
 //! Loading is best-effort by contract: a missing file is the default config,
 //! and unknown keys are ignored so an older binary tolerates a newer file.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -52,25 +53,19 @@ pub struct MachineConfig {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SidebarDensity {
-    /// Identity, description, and the context bar. The 5h/7d budget bars and the
-    /// token/work stats stay reveal-on-select. The calm default — most agents
-    /// fit on screen.
+    /// Identity, description, and the context bar. The token/work stats stay
+    /// reveal-on-select. The calm default — most agents fit on screen.
     #[default]
     Compact,
-    /// Adds the 5h/7d budget bars so all three meters show on every row;
-    /// selection still reveals the token/work stats.
-    Bars,
-    /// The whole card on every row — three bars plus token and work stats.
-    /// Richest, and tallest, so the fewest agents fit.
+    /// The whole card on every row — the context bar plus the token and work
+    /// stats. Richest, and tallest, so the fewest agents fit. The 5h/7d budget
+    /// windows are account-scoped and live in the provider panel, never a row,
+    /// so `bars` is a legacy alias that now folds into `full`.
+    #[serde(alias = "bars")]
     Full,
 }
 
 impl SidebarDensity {
-    /// Whether the resting (unselected) card includes the 5h/7d budget bars.
-    pub fn shows_budget_bars(self) -> bool {
-        matches!(self, Self::Bars | Self::Full)
-    }
-
     /// Whether the resting card includes the token and work stat lines.
     pub fn shows_stats(self) -> bool {
         matches!(self, Self::Full)
@@ -79,10 +74,63 @@ impl SidebarDensity {
 
 /// Sidebar display preferences. A personal, machine-wide tuning of how the
 /// renderer paints; it never affects ledger correctness.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SidebarConfig {
     pub density: SidebarDensity,
+    /// Per-provider styling for the bottom dashboard panel, keyed by agent kind
+    /// (`claude`/`codex`/`pi`/…). Any field a user omits falls back to the
+    /// built-in default for that kind, so overriding just the color leaves the
+    /// shipped emblem intact.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub providers: BTreeMap<String, SidebarProviderStyle>,
+    /// Most provider blocks the pinned dashboard shows before the rest are
+    /// elided. Providers are few, so the cap rarely bites; it bounds the panel
+    /// height on a box that links many accounts.
+    pub max_provider_blocks: usize,
+    /// Seconds an unanswered `?`/`!` attention glyph stays yellow before it
+    /// reddens — the neglect window past which a blocked agent reads as urgent.
+    /// Display-only; it tunes the colour ramp, never the ledger.
+    pub attention_redden_secs: u64,
+}
+
+impl Default for SidebarConfig {
+    fn default() -> Self {
+        Self {
+            density: SidebarDensity::default(),
+            providers: BTreeMap::new(),
+            max_provider_blocks: default_max_provider_blocks(),
+            attention_redden_secs: default_attention_redden_secs(),
+        }
+    }
+}
+
+/// Default cap on provider blocks in the bottom dashboard.
+fn default_max_provider_blocks() -> usize {
+    3
+}
+
+/// Default neglect window before an unanswered attention glyph reddens (30 min).
+fn default_attention_redden_secs() -> u64 {
+    30 * 60
+}
+
+/// Per-provider styling: the ASCII emblem and brand color for the bottom
+/// dashboard. Every field is optional; an omitted field uses the built-in
+/// default for the provider kind, so a user overrides just the art or just the
+/// color without restating both.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SidebarProviderStyle {
+    /// Display name for the panel header (`Claude Code`, `Codex`, …).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product_name: Option<String>,
+    /// Multi-line ASCII emblem painted at the left of the provider block.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ascii_art: Option<String>,
+    /// 256-color index for the emblem (the provider's brand color).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<u8>,
 }
 
 /// Remote-control auto-launch policy, per agent. Off unless explicitly enabled
@@ -207,12 +255,14 @@ mod tests {
     #[test]
     fn sidebar_density_parses_each_level() {
         let dir = tempdir().expect("tempdir");
-        let bars = MachineConfig::load_from(&write(&dir, "[sidebar]\ndensity = \"bars\"\n"))
-            .expect("load");
-        assert_eq!(bars.sidebar.density, SidebarDensity::Bars);
         let full = MachineConfig::load_from(&write(&dir, "[sidebar]\ndensity = \"full\"\n"))
             .expect("load");
         assert_eq!(full.sidebar.density, SidebarDensity::Full);
+        // `bars` is the legacy name for the densest card; it now folds into
+        // `full` because the 5h/7d budget bars moved to the provider panel.
+        let bars = MachineConfig::load_from(&write(&dir, "[sidebar]\ndensity = \"bars\"\n"))
+            .expect("load");
+        assert_eq!(bars.sidebar.density, SidebarDensity::Full);
     }
 
     #[test]
@@ -221,5 +271,44 @@ mod tests {
         let err = MachineConfig::load_from(&write(&dir, "[sidebar]\ndensity = \"cozy\"\n"))
             .expect_err("unknown density should fail");
         assert!(matches!(err, ConfigErr::Parse { .. }));
+    }
+
+    #[test]
+    fn provider_block_cap_defaults_to_three() {
+        let dir = tempdir().expect("tempdir");
+        let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+        assert_eq!(config.sidebar.max_provider_blocks, 3);
+        // Set just the density: the cap still falls back to its default.
+        let density_only =
+            MachineConfig::load_from(&write(&dir, "[sidebar]\ndensity = \"full\"\n"))
+                .expect("load");
+        assert_eq!(density_only.sidebar.max_provider_blocks, 3);
+    }
+
+    #[test]
+    fn attention_redden_window_defaults_to_thirty_minutes_and_parses() {
+        let dir = tempdir().expect("tempdir");
+        let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+        assert_eq!(config.sidebar.attention_redden_secs, 30 * 60);
+        let tuned =
+            MachineConfig::load_from(&write(&dir, "[sidebar]\nattention_redden_secs = 600\n"))
+                .expect("load");
+        assert_eq!(tuned.sidebar.attention_redden_secs, 600);
+    }
+
+    #[test]
+    fn provider_style_parses_art_and_color() {
+        let dir = tempdir().expect("tempdir");
+        let text = "[sidebar.providers.claude]\ncolor = 173\nascii_art = \" ▐▛███▜▌\"\n";
+        let config = MachineConfig::load_from(&write(&dir, text)).expect("load");
+        let claude = config
+            .sidebar
+            .providers
+            .get("claude")
+            .expect("claude provider style");
+        assert_eq!(claude.color, Some(173));
+        assert_eq!(claude.ascii_art.as_deref(), Some(" ▐▛███▜▌"));
+        // An unset color leaves room for the built-in default downstream.
+        assert_eq!(claude.product_name, None);
     }
 }

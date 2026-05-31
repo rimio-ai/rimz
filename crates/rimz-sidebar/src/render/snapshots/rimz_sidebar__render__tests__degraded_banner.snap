@@ -2,21 +2,21 @@
 source: crates/rimz-sidebar/src/render/mod.rs
 expression: screen
 ---
-┌ query-engine ────────────────────────────────────────────────────────────────┐
-│0 agents                                                                      │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│! Sidebar degraded for <elapsed>: snapshot failed: ledger not found                  │
-└──────────────────────────────────────────────────────────────────────────────┘
+ ⌘ query-engine
+ ✦ 0
+ ──────────────────────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ! Sidebar degraded for <elapsed>: snapshot failed: ledger not found

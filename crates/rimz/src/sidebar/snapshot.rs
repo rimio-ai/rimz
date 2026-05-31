@@ -39,6 +39,32 @@ pub const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
 /// sidebar's backstop poll.
 pub const DIFF_STATS_TTL: Duration = Duration::from_secs(5);
 
+/// How long the producer trusts a published provider-account map before it
+/// re-probes. A subscription tier and login state change about never, so a
+/// coarse TTL keeps the `claude auth status` subprocess off the per-tick produce
+/// path while still picking up a login or logout within a few minutes.
+pub const ACCOUNTS_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// The producer's published provider-account map: the out-of-band login facts
+/// (`claude auth status`, the `codex` auth file) the dashboard folds onto its
+/// blocks. Single-flighted like the diff stats — the elder probes and publishes,
+/// every other tab reads it back — so a consumer renderer forks zero subprocesses.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct AccountsCache {
+    /// When the producer last probed and published this map, for the TTL gate.
+    pub refreshed_at_ms: u64,
+    /// Probed accounts by agent kind; a logged-out provider is simply absent.
+    pub accounts: BTreeMap<String, crate::agents::AgentAccount>,
+}
+
+impl AccountsCache {
+    /// Whether the published map is young enough that the producer skips the
+    /// re-probe this tick. Saturating, so a clock that ran backwards reads fresh.
+    fn is_fresh(&self, now_ms: u64) -> bool {
+        now_ms.saturating_sub(self.refreshed_at_ms) <= ACCOUNTS_TTL.as_millis() as u64
+    }
+}
+
 /// How long a consumer keeps trusting the elected producer's published frame
 /// before it stops holding it and produces locally instead. A healthy producer
 /// rewrites `snapshot.json` every backstop tick (~2s), so several ticks of slack
@@ -190,6 +216,10 @@ pub struct DiffStatsCacheEntry {
     pub refreshed_at_ms: u64,
     pub added: Option<u32>,
     pub removed: Option<u32>,
+    /// Commits the worktree carries ahead of the trunk (`rev-list --count
+    /// <merge-base>..HEAD`), refreshed on the same git tick as the diff.
+    #[serde(default)]
+    pub commits: Option<u32>,
     /// Live branch resolved from the worktree path, cached under the same TTL
     /// as the diff stats so the group header tracks `git checkout` without a
     /// git call every tick.
@@ -198,11 +228,17 @@ pub struct DiffStatsCacheEntry {
 }
 
 impl DiffStatsCacheEntry {
-    pub fn new(refreshed_at_ms: u64, stats: Option<DiffStats>, branch: Option<String>) -> Self {
+    pub fn new(
+        refreshed_at_ms: u64,
+        stats: Option<DiffStats>,
+        commits: Option<u32>,
+        branch: Option<String>,
+    ) -> Self {
         Self {
             refreshed_at_ms,
             added: stats.map(|stats| stats.added),
             removed: stats.map(|stats| stats.removed),
+            commits,
             branch,
         }
     }
@@ -293,6 +329,9 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
             group.diff_added = Some(stats.added);
             group.diff_removed = Some(stats.removed);
         }
+        if let Some(commits) = entry.commits {
+            group.commits_ahead = Some(commits);
+        }
         if let Some(branch) = entry.branch.filter(|branch| !branch.is_empty()) {
             group.label = branch;
         }
@@ -357,18 +396,136 @@ pub fn enrich_consumer(
         snapshot = snapshot.with_live_panes(panes, exclude);
     }
     snapshot.agent_hooks_ready = agent_hooks_ready();
-    // Per-machine display preferences (row density) are environment, not ledger,
-    // so the producer's published rollup carries the default. Fold them here so a
-    // consumer tab honours the user's preference too — a cheap config read, never
-    // a fork or a ledger lock. Best-effort: a read failure falls back to the
-    // compact default rather than failing the frame.
-    snapshot.sidebar = crate::config::MachineConfig::load()
-        .map(|config| config.sidebar)
-        .unwrap_or_default();
+    // Per-machine display preferences (row density) and the per-provider
+    // dashboard are environment, not ledger, so the producer's published rollup
+    // carries neither. Fold them here so a consumer tab honours the user's
+    // preference and paints the same provider panel — a cheap config read plus
+    // the producer's published account cache, never a per-tick fork or a ledger
+    // lock. The account probe is a subprocess and stays on the producer.
+    snapshot = fold_machine_config_cached(snapshot, runtime);
 
     let cache = read_diff_stats_cache(&runtime.root.join("diff-stats.json"));
     project_diff_stats(&mut snapshot, &cache);
     snapshot
+}
+
+/// Fold the per-machine config and the per-provider dashboard onto a *producer*
+/// snapshot: row density, the `⇅ rc` flags, and the account-scoped budget blocks.
+/// The account facts come from a live out-of-band probe (`claude auth status`, a
+/// `codex` auth-file read) — a subprocess — so this is the producer's job. The
+/// probed map is published to the shared `accounts.json` cache for consumers to
+/// read, mirroring the diff-stats single-flight: one fork on the elder, a cache
+/// read on every other tab. Best-effort: a config read failure falls back to
+/// defaults; the probe is memoized so it stays off the hot path.
+pub fn fold_machine_config_producing(
+    snapshot: SidebarSnapshot,
+    runtime: &RuntimePaths,
+) -> SidebarSnapshot {
+    let path = runtime.root.join("accounts.json");
+    let now = unix_now_ms();
+    let cached = read_accounts_cache(&path);
+    // Single-flight the subprocess probe behind a coarse TTL: a fresh cache rides
+    // straight through, so the per-tick produce path forks `claude auth status`
+    // at most once per TTL, never every render. Cold or stale → re-probe and
+    // republish for consumer tabs.
+    let accounts = if cached.is_fresh(now) {
+        cached.accounts
+    } else {
+        let probed = probe_accounts(&snapshot);
+        write_accounts_cache(
+            &path,
+            &AccountsCache {
+                refreshed_at_ms: now,
+                accounts: probed.clone(),
+            },
+        );
+        probed
+    };
+    fold_machine_config_with(
+        snapshot,
+        crate::config::MachineConfig::load().unwrap_or_default(),
+        accounts,
+    )
+}
+
+/// Fold the per-machine config and dashboard onto a *consumer* snapshot, reading
+/// the producer's published `accounts.json` instead of probing. A consumer forks
+/// zero subprocesses (the single-flight contract); a cold cache (no producer
+/// publish yet) carries no blocks until the elder's first publish. The cheap
+/// config read stays local so each tab honours its own row density.
+pub fn fold_machine_config_cached(
+    snapshot: SidebarSnapshot,
+    runtime: &RuntimePaths,
+) -> SidebarSnapshot {
+    let accounts = read_accounts_cache(&runtime.root.join("accounts.json")).accounts;
+    fold_machine_config_with(
+        snapshot,
+        crate::config::MachineConfig::load().unwrap_or_default(),
+        accounts,
+    )
+}
+
+/// Apply the resolved config and already-resolved accounts onto the snapshot:
+/// row density, the per-provider `⇅ rc` flags, and the dashboard aggregates.
+fn fold_machine_config_with(
+    mut snapshot: SidebarSnapshot,
+    config: crate::config::MachineConfig,
+    accounts: BTreeMap<String, crate::agents::AgentAccount>,
+) -> SidebarSnapshot {
+    let crate::config::MachineConfig {
+        remote_control,
+        sidebar,
+    } = config;
+    snapshot.sidebar = sidebar;
+
+    // The `⇅ rc` flag per provider comes from the remote-control toggles.
+    let mut remote_control_flags: BTreeMap<String, bool> = BTreeMap::new();
+    remote_control_flags.insert("claude".to_owned(), remote_control.claude);
+    remote_control_flags.insert("codex".to_owned(), remote_control.codex);
+
+    snapshot.with_provider_aggregates(&accounts, &remote_control_flags)
+}
+
+/// Probe out-of-band login/account facts for every known provider plus any
+/// active kind: a logged-in but idle provider still earns a dashboard block, so
+/// the panel shows your accounts and budgets even between turns. A logged-out
+/// provider returns `None` and never appears. Producer-only — the probe is a
+/// subprocess; consumers read the published result.
+fn probe_accounts(snapshot: &SidebarSnapshot) -> BTreeMap<String, crate::agents::AgentAccount> {
+    let mut kinds: Vec<String> = crate::agents::KNOWN_AGENTS
+        .iter()
+        .map(|kind| (*kind).to_owned())
+        .collect();
+    for agent in &snapshot.agents {
+        if agent.parent_agent_id.is_none() && !kinds.iter().any(|known| known == &agent.kind) {
+            kinds.push(agent.kind.clone());
+        }
+    }
+    let mut accounts: BTreeMap<String, crate::agents::AgentAccount> = BTreeMap::new();
+    for kind in kinds {
+        if let Some(account) = crate::agents::account::probe(&kind) {
+            accounts.insert(kind, account);
+        }
+    }
+    accounts
+}
+
+/// Read the producer's published account cache, or an empty cache on a cold or
+/// corrupt file. Read-only and fork-free — the consumer's view of the dashboard.
+fn read_accounts_cache(path: &Path) -> AccountsCache {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+/// Publish the probed account cache for consumer tabs to read, atomically so a
+/// reader never observes a half-written file. Best-effort: a write failure logs
+/// and leaves the prior cache in place.
+fn write_accounts_cache(path: &Path, cache: &AccountsCache) {
+    if let Err(err) = crate::ledger::atomic::write_temp_then_rename_cache(path, cache) {
+        tracing::warn!(path = %path.display(), error = %err, "sidebar accounts cache write failed");
+    }
 }
 
 pub fn unix_now_ms() -> u64 {
@@ -501,7 +658,8 @@ mod tests {
         };
         atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
 
-        // Publish diff stats for the worktree path: +7 / -2 on branch `feat`.
+        // Publish diff stats for the worktree path: +7 / -2, 3 commits ahead, on
+        // branch `feat`.
         let mut diff = DiffStatsCache::default();
         diff.entries.insert(
             wt.clone(),
@@ -511,6 +669,7 @@ mod tests {
                     added: 7,
                     removed: 2,
                 }),
+                Some(3),
                 Some("feat".to_owned()),
             ),
         );
@@ -649,6 +808,7 @@ mod tests {
                 added: 2,
                 removed: 1,
             }),
+            Some(4),
             Some("feature-migration".to_owned()),
         );
 
@@ -661,6 +821,7 @@ mod tests {
                 removed: 1,
             })
         );
+        assert_eq!(entry.commits, Some(4));
         assert_eq!(entry.branch.as_deref(), Some("feature-migration"));
     }
 }

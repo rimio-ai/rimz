@@ -52,74 +52,109 @@ pub(super) fn clip(value: &str, max_chars: usize) -> String {
         + "..."
 }
 
-/// Compact countdown to a deadline as its two highest non-zero units — `3d12h`,
-/// `3h12m`, `2m30s`, `45s`. Skipping zero units keeps it short, so a window with
-/// no minutes left reads `3h3s` rather than padding a `0m`. A passed deadline is
-/// `now` (the window already reset).
-pub(super) fn duration_compact(deadline: Timestamp) -> String {
-    compact_seconds(deadline.duration_since(Timestamp::now()).as_secs())
+/// The 5-hour budget window's reset countdown as a fixed `{h}h{mm:02}m`
+/// (`4h20m`, `0h45m`, `5h00m`): always two units, so it column-aligns with the
+/// 7-day [`reset_days_hours`] beside it. The window caps at 5h, so hours stay a
+/// single digit. A passed reset reads `0h00m` (the stable-window selection drops
+/// expired readings upstream, so a rendered window is live).
+pub(super) fn reset_hours_minutes(deadline: Timestamp) -> String {
+    reset_hm(deadline.duration_since(Timestamp::now()).as_secs())
 }
 
-/// The pure core of [`duration_compact`], split out so the formatting is tested
-/// without a wall-clock read.
-fn compact_seconds(seconds: i64) -> String {
-    if seconds <= 0 {
-        return "now".to_owned();
-    }
-    let parts = [
-        (seconds / 86_400, 'd'),
-        (seconds % 86_400 / 3_600, 'h'),
-        (seconds % 3_600 / 60, 'm'),
-        (seconds % 60, 's'),
-    ];
-    parts
-        .into_iter()
-        .filter(|(value, _)| *value > 0)
-        .take(2)
-        .map(|(value, unit)| format!("{value}{unit}"))
-        .collect()
+fn reset_hm(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+    format!("{}h{:02}m", seconds / 3_600, seconds % 3_600 / 60)
 }
 
-/// Like [`duration_compact`] but never finer than minutes — for the 5-hour
-/// usage window, where a ticking seconds field is just noise. A sub-minute
-/// remainder rounds up to `1m`, so a live window never reads `now` before it
-/// has actually reset.
-pub(super) fn duration_compact_minutes(deadline: Timestamp) -> String {
-    compact_minutes(deadline.duration_since(Timestamp::now()).as_secs())
+/// The 7-day budget window's reset countdown as a fixed `{d}d{hh:02}h` (`2d23h`,
+/// `0d05h`, `6d23h`): always two units, so it column-aligns with the 5-hour
+/// [`reset_hours_minutes`]. The window caps at 7d, so days stay a single digit.
+pub(super) fn reset_days_hours(deadline: Timestamp) -> String {
+    reset_dh(deadline.duration_since(Timestamp::now()).as_secs())
 }
 
-/// The pure core of [`duration_compact_minutes`]. Rounds up to the next whole
-/// minute, then takes the two highest non-zero units from `d`/`h`/`m`.
-fn compact_minutes(seconds: i64) -> String {
-    if seconds <= 0 {
-        return "now".to_owned();
-    }
-    let minutes = (seconds + 59) / 60;
-    let parts = [
-        (minutes / 1_440, 'd'),
-        (minutes % 1_440 / 60, 'h'),
-        (minutes % 60, 'm'),
-    ];
-    parts
-        .into_iter()
-        .filter(|(value, _)| *value > 0)
-        .take(2)
-        .map(|(value, unit)| format!("{value}{unit}"))
-        .collect()
+fn reset_dh(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+    format!("{}d{:02}h", seconds / 86_400, seconds % 86_400 / 3_600)
 }
 
-/// Session spend as a fixed one-decimal dollar amount — `$0.0`, `$3.3`, `$21.0`,
-/// `$124.0`. The single decimal never varies, so the cost column aligns across
-/// rows instead of jittering between a cents and a whole-dollar shape.
-pub(super) fn dollars(usd: f64) -> String {
-    format!("${usd:.1}")
+/// Spend at full cent resolution — `$0.00`, `$3.50`, `$124.05`. Every spend in
+/// the sidebar reads as money at two decimals: the per-row cost, the cockpit
+/// fleet total, and the provider dashboard all share this one shape, so a price
+/// never jitters between a cents and a whole-dollar form.
+pub(super) fn dollars2(usd: f64) -> String {
+    format!("${usd:.2}")
 }
 
-/// Shorten a model's statusline display name for the capability line: drop the
-/// `context` qualifier from an extended-window suffix so `Opus 4.8 (1M context)`
-/// reads `Opus 4.8 (1M)`. A name without that suffix passes through unchanged.
+/// Shorten a model's display name for the capability line. First drops the
+/// `context` qualifier from an extended-window suffix (`Opus 4.8 (1M context)`
+/// → `Opus 4.8 (1M)`). Then, when the name is still a bare vendor *slug* (all
+/// lowercase, hyphenated, no spaces — the pre-enrichment fallback), prettifies
+/// it (`claude-opus-4-8` → `Opus 4.8`). A friendly name passes through.
 pub(super) fn model_label(display: &str) -> String {
-    display.replace(" context)", ")")
+    let cleaned = display.replace(" context)", ")");
+    if looks_like_slug(&cleaned) {
+        prettify_model_slug(&cleaned)
+    } else {
+        cleaned
+    }
+}
+
+/// A name still reads as a raw model slug when it is hyphenated, carries no
+/// space, no parenthetical, and no uppercase letter — exactly the shape of a
+/// catalog id (`claude-opus-4-8`, `gpt-5.5-codex`) and never of a friendly
+/// display name (`Opus 4.8`, `GPT-5.5`), so the prettifier only fires on the
+/// fallback path.
+fn looks_like_slug(value: &str) -> bool {
+    value.contains('-')
+        && !value.contains(' ')
+        && !value.contains('(')
+        && !value.chars().any(|c| c.is_ascii_uppercase())
+}
+
+/// Prettify a raw model slug into a display name: drop a leading vendor token
+/// so the family name leads, join split version digits with a dot (`4-8` →
+/// `4.8`), and title-case the words (acronyms like `gpt` upper-cased), so
+/// `claude-opus-4-8` reads `Opus 4.8` and `gpt-5.5-codex` reads `GPT 5.5 Codex`.
+fn prettify_model_slug(slug: &str) -> String {
+    let segments: Vec<&str> = slug.split('-').filter(|seg| !seg.is_empty()).collect();
+    // A leading vendor prefix is redundant with the brand emblem and product
+    // header, so the family name leads; a single-segment product keeps its name.
+    let start = usize::from(segments.len() > 1 && matches!(segments[0], "claude" | "anthropic"));
+    let mut words: Vec<String> = Vec::new();
+    for segment in &segments[start..] {
+        let is_int = segment.chars().all(|c| c.is_ascii_digit());
+        let prev_is_version = words
+            .last()
+            .is_some_and(|prev| prev.chars().all(|c| c.is_ascii_digit() || c == '.'));
+        if is_int && prev_is_version {
+            // A split `major-minor`: glue onto the running version (`4` then `8`).
+            let version = words.last_mut().expect("prev_is_version implies a word");
+            version.push('.');
+            version.push_str(segment);
+        } else {
+            words.push(title_word(segment));
+        }
+    }
+    words.join(" ")
+}
+
+/// Title-case one slug segment: known acronyms upper-case, a version-like
+/// segment (digits and dots) passes through, every other word capitalizes its
+/// first letter.
+fn title_word(word: &str) -> String {
+    match word {
+        "gpt" => "GPT".to_owned(),
+        "codex" => "Codex".to_owned(),
+        _ if word.chars().all(|c| c.is_ascii_digit() || c == '.') => word.to_owned(),
+        _ => {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+    }
 }
 
 /// A token count as a thin magnitude with no unit suffix — `523`, `76.5k`,
@@ -131,20 +166,6 @@ pub(super) fn tokens_short(count: u64) -> String {
         format!("{:.1}k", count as f64 / 1_000.0)
     } else {
         count.to_string()
-    }
-}
-
-/// A context-window *size* as a whole-unit magnitude — `200k`, `1M`, `128k` —
-/// for the ctx meter's right value, naming the window the bar fills. Rounds to
-/// the nearest whole unit (windows are round numbers like 200k / 1M), so it
-/// never carries the decimal [`tokens_short`] keeps for a live count.
-pub(super) fn window_size_short(size: u64) -> String {
-    if size >= 1_000_000 {
-        format!("{}M", (size + 500_000) / 1_000_000)
-    } else if size >= 1_000 {
-        format!("{}k", (size + 500) / 1_000)
-    } else {
-        size.to_string()
     }
 }
 
@@ -161,10 +182,30 @@ pub(super) fn pct_label(precise: Option<f64>, whole: u8) -> String {
     }
 }
 
+/// A span as its two highest non-zero units — `3d12h`, `3h12m`, `2m30s`, `45s`.
+/// Skipping zero units keeps it short, so a span with no minutes reads `3h3s`
+/// rather than padding a `0m`; a non-positive span is empty (callers special-case
+/// it). The shared core behind the worked-time spans.
+fn compact_seconds(seconds: i64) -> String {
+    if seconds <= 0 {
+        return String::new();
+    }
+    [
+        (seconds / 86_400, 'd'),
+        (seconds % 86_400 / 3_600, 'h'),
+        (seconds % 3_600 / 60, 'm'),
+        (seconds % 60, 's'),
+    ]
+    .into_iter()
+    .filter(|(value, _)| *value > 0)
+    .take(2)
+    .map(|(value, unit)| format!("{value}{unit}"))
+    .collect()
+}
+
 /// A worked-time span (`12m`, `1h12m`, `3d4h`) from a millisecond duration — the
-/// session's `total_duration_ms`. Reuses the two-highest-units core that
-/// [`duration_compact`] uses; a zero span reads `0s` rather than the core's
-/// `now`, which is a countdown idiom that misreads as elapsed work.
+/// session's `total_duration_ms`. A zero span reads `0s` rather than the empty
+/// core, which would misread as missing data.
 pub(super) fn duration_worked(ms: u64) -> String {
     let seconds = (ms / 1_000) as i64;
     if seconds <= 0 {
@@ -173,43 +214,59 @@ pub(super) fn duration_worked(ms: u64) -> String {
     compact_seconds(seconds)
 }
 
+/// Like [`duration_worked`] but never finer than minutes — for the cockpit
+/// fleet clock, where a ticking seconds field on an aggregate is noise. Floors
+/// to whole minutes (a span under a minute reads `0m`) and takes the two
+/// highest non-zero units from `d`/`h`/`m`.
+pub(super) fn duration_worked_coarse(ms: u64) -> String {
+    let minutes = (ms / 60_000) as i64;
+    if minutes <= 0 {
+        return "0m".to_owned();
+    }
+    [
+        (minutes / 1_440, 'd'),
+        (minutes % 1_440 / 60, 'h'),
+        (minutes % 60, 'm'),
+    ]
+    .into_iter()
+    .filter(|(value, _)| *value > 0)
+    .take(2)
+    .map(|(value, unit)| format!("{value}{unit}"))
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn duration_compact_takes_two_highest_nonzero_units() {
+    fn compact_seconds_takes_two_highest_nonzero_units() {
         assert_eq!(compact_seconds(3 * 86_400 + 12 * 3_600), "3d12h");
         assert_eq!(compact_seconds(3 * 3_600 + 12 * 60), "3h12m");
         assert_eq!(compact_seconds(2 * 60 + 30), "2m30s");
         assert_eq!(compact_seconds(45), "45s");
         // Zero minutes between non-zero hours and seconds collapses out.
         assert_eq!(compact_seconds(3 * 3_600 + 3), "3h3s");
+        // A non-positive span is the empty core (callers special-case it).
+        assert_eq!(compact_seconds(0), "");
     }
 
     #[test]
-    fn duration_compact_past_deadline_is_now() {
-        assert_eq!(compact_seconds(0), "now");
-        assert_eq!(compact_seconds(-5), "now");
-    }
-
-    #[test]
-    fn duration_compact_minutes_never_shows_seconds() {
-        assert_eq!(compact_minutes(3 * 3_600 + 12 * 60), "3h12m");
-        assert_eq!(compact_minutes(3 * 86_400 + 4 * 3_600), "3d4h");
-        // A sub-minute remainder rounds up to 1m, never collapsing to "now".
-        assert_eq!(compact_minutes(45), "1m");
-        assert_eq!(compact_minutes(2 * 60 + 30), "3m");
-        assert_eq!(compact_minutes(0), "now");
-    }
-
-    #[test]
-    fn dollars_is_always_one_decimal() {
-        assert_eq!(dollars(0.0), "$0.0");
-        assert_eq!(dollars(0.04), "$0.0");
-        assert_eq!(dollars(3.27), "$3.3");
-        assert_eq!(dollars(20.4), "$20.4");
-        assert_eq!(dollars(124.0), "$124.0");
+    fn reset_labels_are_fixed_two_unit_and_aligned() {
+        // 5h window: always `{h}h{mm:02}m` — single-digit hours, padded minutes.
+        assert_eq!(reset_hm(4 * 3_600 + 20 * 60), "4h20m");
+        assert_eq!(reset_hm(45 * 60), "0h45m");
+        assert_eq!(reset_hm(5 * 3_600), "5h00m");
+        // 7d window: always `{d}d{hh:02}h` — single-digit days, padded hours.
+        assert_eq!(reset_dh(2 * 86_400 + 23 * 3_600), "2d23h");
+        assert_eq!(reset_dh(5 * 3_600), "0d05h");
+        assert_eq!(reset_dh(6 * 86_400 + 23 * 3_600), "6d23h");
+        // Both stay five cells so the two countdowns column-align.
+        assert_eq!(reset_hm(45 * 60).chars().count(), 5);
+        assert_eq!(reset_dh(5 * 3_600).chars().count(), 5);
+        // A passed reset is the zero floor, never negative.
+        assert_eq!(reset_hm(-10), "0h00m");
+        assert_eq!(reset_dh(-10), "0d00h");
     }
 
     #[test]
@@ -217,6 +274,38 @@ mod tests {
         assert_eq!(model_label("Opus 4.8 (1M context)"), "Opus 4.8 (1M)");
         assert_eq!(model_label("Opus 4.8"), "Opus 4.8");
         assert_eq!(model_label("GPT-5.5"), "GPT-5.5");
+    }
+
+    #[test]
+    fn model_label_prettifies_a_bare_slug() {
+        // A pre-enrichment slug has no friendly display name to prefer, so the
+        // fallback cleans it: vendor prefix dropped, split version glued, words
+        // title-cased.
+        assert_eq!(model_label("claude-opus-4-8"), "Opus 4.8");
+        assert_eq!(model_label("gpt-5.5-codex"), "GPT 5.5 Codex");
+        // A friendly name (space or uppercase) is never mistaken for a slug.
+        assert_eq!(model_label("GPT-5.5"), "GPT-5.5");
+        assert_eq!(model_label("Opus 4.8 (1M)"), "Opus 4.8 (1M)");
+    }
+
+    #[test]
+    fn dollars2_is_always_two_decimals() {
+        assert_eq!(dollars2(0.0), "$0.00");
+        assert_eq!(dollars2(3.5), "$3.50");
+        assert_eq!(dollars2(3.276), "$3.28");
+        assert_eq!(dollars2(124.0), "$124.00");
+    }
+
+    #[test]
+    fn duration_worked_coarse_floors_to_minutes() {
+        assert_eq!(duration_worked_coarse(13 * 60_000 + 3_000), "13m"); // 13m3s → 13m
+        assert_eq!(duration_worked_coarse(60 * 60_000 + 12 * 60_000), "1h12m");
+        assert_eq!(
+            duration_worked_coarse(3 * 86_400_000 + 4 * 3_600_000),
+            "3d4h"
+        );
+        assert_eq!(duration_worked_coarse(30_000), "0m"); // sub-minute floors to 0m
+        assert_eq!(duration_worked_coarse(0), "0m");
     }
 
     #[test]
@@ -243,20 +332,6 @@ mod tests {
             pct_label(None, 38),
         ] {
             assert!(s.chars().count() <= 5, "{s:?} exceeds 5 cells");
-        }
-    }
-
-    #[test]
-    fn window_size_short_is_whole_unit_magnitude() {
-        assert_eq!(window_size_short(200_000), "200k");
-        assert_eq!(window_size_short(128_000), "128k");
-        assert_eq!(window_size_short(1_000_000), "1M");
-        // 2^20 (a 1,048,576 window) rounds to a clean 1M, not 1.0M.
-        assert_eq!(window_size_short(1_048_576), "1M");
-        assert_eq!(window_size_short(512), "512");
-        // Fits the bar's 5-cell value column for every realistic window.
-        for size in [200_000, 1_000_000, 1_048_576, 128_000] {
-            assert!(window_size_short(size).chars().count() <= 5);
         }
     }
 

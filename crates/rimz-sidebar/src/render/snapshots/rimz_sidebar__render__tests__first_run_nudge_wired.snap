@@ -2,21 +2,10 @@
 source: crates/rimz-sidebar/src/render/mod.rs
 expression: screen
 ---
-┌ query-engine ────────────────────────────────────────────────────────────────┐
-│0 agents                                                                      │
-│                                                                              │
-│no agents yet                                                                 │
-│run claude or codex                                                           │
-│in a pane to begin                                                            │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
+ ⌘ query-engine
+ ✦ 0
+ ──────────────────────────────────────────────────────────────────────────────
+
+ no agents yet
+ run claude or codex
+ in a pane to begin

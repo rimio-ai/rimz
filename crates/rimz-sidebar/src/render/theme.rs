@@ -19,9 +19,9 @@ use ratatui::style::{Color, Modifier, Style};
 const GREEN: Color = Color::Indexed(108); // sage — running tally / low gauge / additions / cache reads
 const AMBER: Color = Color::Indexed(179); // gold — waiting / mid gauge / cache writes
 const RED: Color = Color::Indexed(167); // balanced red — failed / high gauge / fresh input
-const CYAN: Color = Color::Indexed(73); // teal — worktree headers
-const BLUE: Color = Color::Indexed(75); // sky — generic blue accent (no current context-bar caller)
-const VIOLET: Color = Color::Indexed(141); // soft purple — the weekly "mana" bar and remote-host rows
+const CYAN: Color = Color::Indexed(73); // teal — worktree headers and the lane spine
+const BLUE: Color = Color::Indexed(75); // sky — the cautious `plan` posture pill
+const VIOLET: Color = Color::Indexed(141); // soft purple — the provider `⇅ rc` flag
 const DIM: Color = Color::Indexed(244); // mid gray — labels, ages, values
 const FAINT: Color = Color::Indexed(240); // deep gray — recedes below DIM: bar tracks, `·` separators, dividers
 

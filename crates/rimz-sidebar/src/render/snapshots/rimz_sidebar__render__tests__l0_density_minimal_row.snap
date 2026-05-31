@@ -2,11 +2,11 @@
 source: crates/rimz-sidebar/src/render/mod.rs
 expression: screen
 ---
-┌ query-engine ────────┐
-│? 0   ! 0   ⢿  1 agent│
-│                      │
-│▌main                 │
-│▎⣾ codex              │
-│▎  compile            │
-│▎  ctx ─────────    0%│
-└──────────────────────┘
+ ⌘ query-engine
+ ✦ 1
+ ──────────────────────
+ ? 0   ! 0   ○ 0   ✽ 0
+
+▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌⣾ codex
+▌  compile

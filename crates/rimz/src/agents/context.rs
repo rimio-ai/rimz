@@ -54,9 +54,33 @@ pub struct AgentContext {
     pub rate_limits: Option<AgentRateLimits>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr: Option<AgentPullRequest>,
+    /// The provider account/plan this session authenticates against. Account-
+    /// scoped, not session-scoped, so the sidebar's provider dashboard reads it
+    /// from the freshest session of each kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<AgentAccount>,
     /// When the producer observed this record. The snapshot reaper drops a
     /// sidecar past the ghost-session TTL even if a `SessionEnd` was missed.
     pub observed_at: Timestamp,
+}
+
+/// The provider account/plan a session authenticates against. Account-scoped —
+/// every session of one provider shares it — so the sidebar's provider
+/// dashboard reads it from the freshest session, never paints it per row.
+/// Source-agnostic: Codex fills it from the app-server `account/rateLimits/read`
+/// plan type, Claude from `claude auth status`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AgentAccount {
+    /// Raw plan/subscription tier the provider reports (`max`, `team`, `pro`);
+    /// the renderer formats it into a brand label (`Claude Max`, `ChatGPT Pro`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// Whether the account is metered by rate-limit windows. `Some(false)` marks
+    /// an unmetered (API-key) account, which the dashboard paints as an
+    /// "infinite power" bar instead of a draining budget; `None` is unknown, and
+    /// the dashboard infers metering from whether rate-limit windows are present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metered: Option<bool>,
 }
 
 /// Cumulative spend for the session, as the agent reports it.

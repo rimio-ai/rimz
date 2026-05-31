@@ -93,7 +93,7 @@ The column is never blank. Their shell pane is itself a row. With nothing needin
 
 ```
 ┌ query-engine ──────────────┐
-│ ▌main                      │
+│ ▏main                      │
 │ · zsh                   3s │
 │                            │
 │ no agents yet              │
@@ -105,7 +105,7 @@ The column is never blank. Their shell pane is itself a row. With nothing needin
 **Does:** Looks left, reads two words of hint, looks back at the prompt.
 
 **Feels:** Oriented. Nothing is demanding anything. The title is the project name
-they recognize; the `▌main` tells them which worktree they're standing in.
+they recognize; the `▏main` tells them which worktree they're standing in.
 
 **Thinks:** *"Right — it wants me to run my agent in here. Let's see what it
 does."*
@@ -123,8 +123,8 @@ The reader types `claude` in the shell pane and just looks at its input box — 
 
 ```
 ┌ query-engine ──────────────┐
-│ ▌main                  1◌  │
-│ ◌ claude  —             4s │
+│ ▏main                  1○  │
+│ ○ claude  —             4s │
 │   Opus · xhigh             │
 │   ━────────────────────────│
 └────────────────────────────┘
@@ -147,7 +147,7 @@ The reader gives Claude a task. `UserPromptSubmit` then `PreToolUse` move the ro
 
 ```
 ┌ query-engine ──────────────┐
-│ ▌main                  1⢿  │
+│ ▏main                  1⢿  │
 │ ⢿ claude  fix auth flow  8s│
 │   Opus · xhigh             │
 │   ━━━━─────────────────────│
@@ -171,7 +171,7 @@ Claude hits a permission prompt — it wants to run something. A feed item is wr
 ┌ query-engine ──────────────┐
 │ ?1                         │
 │                            │
-│ ▌main                  1?  │
+│ ▏main                  1?  │
 │ ? claude  fix auth flow  1m│
 │   Opus · xhigh             │
 │   ━━━━━━───────────────────│
@@ -220,7 +220,7 @@ The reader does exactly what they said they would: spins up four more agents acr
 ┌ query-engine ──────────────┐
 │ ?2  !1                     │
 │                            │
-│ ▌main                 2⢿ 1?│
+│ ▏main                 2⢿ 1?│
 │ ? claude  fix auth flow 12m│
 │   Opus · xhigh             │
 │   ━━━━━━━━━━───────────────│
@@ -231,11 +231,11 @@ The reader does exactly what they said they would: spins up four more agents acr
 │   GPT-5.5 · high           │
 │   ━━━━━━━━━━━━━━━──────────│
 │                            │
-│ ▌feature-migration    1! 1◌│
+│ ▏feature-migration    1! 1○│
 │ ! claude  db migrate    4m │
 │   Opus · xhigh · yolo      │
 │   ━━━━━━━━━━━━━━━━━━━━━────│
-│ ◌ codex   —             1h │
+│ ○ codex   —             1h │
 │   GPT-5.5 · low            │
 │   ━━━──────────────────────│
 │                            │
@@ -263,7 +263,7 @@ made me faster at being the bottleneck."*
 > - **The attention line is the whole sidebar compressed to one line.** If you read nothing else, `?2 !1` tells you whether to look; no line means nothing needs you. It never undercounts behind a cap.
 > - **Ranking is the triage; you don't sort.** Attention-hungry buckets rise, oldest-first within them; the cap only ever trims the *calm* tail. The sidebar physically cannot bury something that needs you.
 > - **A global "focus next attention" key is core, not a nicety.** Seeing the blocked pane and *getting* to it are different actions; the key collapses them so triage cost stays flat as the fleet grows. It's bound only inside the Rimz session, so it never touches the reader's global mux config.
-> - **Worktrees are the spine, not tabs.** Groups are keyed on worktree isolation (only same-worktree agents share files); the `▌` marks it. The `external` catch-all holds scripts, CI, and panes outside any worktree; it renders as a dim `┄ external ┄` divider (not a `▌` pod) and sorts last unless it holds something waiting or failed.
+> - **Worktrees are the structure, not tabs.** Groups are keyed on worktree isolation (only same-worktree agents share files); a bold header marks each one, and the worktree you've *selected* reads as one bracketed lane — a thin spine down its full height with a faint dotted seal capping its header, the selected card inside it bolder — so the lane is the only spine ink on screen. The `external` catch-all holds scripts, CI, and panes outside any worktree; it renders as a dim `┄ external ┄` divider and sorts last unless it holds something waiting or failed.
 
 ### The `?` help overlay — discoverability without a manual
 
@@ -281,7 +281,7 @@ The footer advertises `?`. Pressing it overlays the legend and keys, so the glyp
 │                            │
 │ ⢿ working    ✽ thinking    │
 │ ? waiting    ! attention   │
-│ ◌ idle       ✓ done        │
+│ ○ idle       ✓ done        │
 │ · process                  │
 │ posture: auto · yolo       │
 └────────────────────────────┘
@@ -334,7 +334,7 @@ The product's honesty law gets tested when a fetch fails — the binary moved, t
 
 ```
 ┌ query-engine ──────────────┐
-│ ▌main                  1⢿  │
+│ ▏main                  1⢿  │
 │ ⢿ claude  fix auth flow  2m│
 │   Opus · xhigh             │
 │   ━━━━━━━━━────────────────│
@@ -391,7 +391,7 @@ on the very first screen.
 | 0 Discovery | installs | 3-line pitch, 1 command | low-commitment | one line in, `rimz` to start |
 | 1 Consent | runs `rimz` | additive-diff gate | reassured | report, don't answer; reversible |
 | 2 Empty room | looks left | `· zsh`, hint | oriented | never blank |
-| 3 First agent | types `claude` | row re-skins to `◌ claude` | delight | it just knows |
+| 3 First agent | types `claude` | row re-skins to `○ claude` | delight | it just knows |
 | 4 Working | prompts | `⢿ running`, climbing age | calm | age is the honesty signal |
 | 5 Question | gets notified, jumps | `? waiting`, OS notify | *the pitch* | notify & route, never answer |
 | 6 Fleet | hits "next ?!" | grouped roster, `?2 !1` | in control | one key tames the fleet |

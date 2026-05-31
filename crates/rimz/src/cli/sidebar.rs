@@ -213,14 +213,13 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 snapshot = snapshot.with_live_panes(panes, exclude.as_ref());
             }
             snapshot.agent_hooks_ready = rimz::sidebar::snapshot::agent_hooks_ready();
-            // Fold the per-machine sidebar display preferences (row density) onto
-            // the snapshot so the renderer can read them. Best-effort: a config
-            // read failure falls back to the default (compact) rather than
-            // failing the snapshot — display preference is enrichment, never a
-            // precondition.
-            snapshot.sidebar = rimz::config::MachineConfig::load()
-                .map(|config| config.sidebar)
-                .unwrap_or_default();
+            // Fold the per-machine config onto the snapshot: row density plus the
+            // per-provider dashboard (account-scoped budgets, spend, emblem). The
+            // producer owns the out-of-band account probe (a subprocess) and
+            // publishes it to `accounts.json` for consumer tabs to read back.
+            // Best-effort — a config read failure falls back to defaults, so
+            // display preference is enrichment, never a precondition.
+            snapshot = rimz::sidebar::snapshot::fold_machine_config_producing(snapshot, runtime);
             enrich_worktree_groups(&mut snapshot, runtime);
             emit(&snapshot)
         }
@@ -526,8 +525,9 @@ const MAX_PARALLEL_GIT: usize = 8;
 /// Refresh several worktrees' diff-stats concurrently, returning each path's
 /// fresh entry. Independent worktrees run in parallel — bounded to
 /// [`MAX_PARALLEL_GIT`] live `git` chains at a time — while each path's own
-/// `trunk ref → merge-base → numstat → branch` chain stays sequential. Runs on
-/// the diff-stats producer (the fetch worker), never the render thread.
+/// `trunk ref → merge-base → numstat + rev-list → branch` chain stays
+/// sequential. Runs on the diff-stats producer (the fetch worker), never the
+/// render thread.
 fn refresh_entries(paths: &[String], now_ms: u64) -> Vec<(String, DiffStatsCacheEntry)> {
     let mut out = Vec::with_capacity(paths.len());
     for chunk in paths.chunks(MAX_PARALLEL_GIT) {
@@ -547,15 +547,20 @@ fn refresh_entries(paths: &[String], now_ms: u64) -> Vec<(String, DiffStatsCache
 }
 
 /// Produce a fresh diff-stats entry for one worktree path: the sequential `git`
-/// forks behind the column (trunk ref → merge-base → numstat) plus the live
-/// branch label.
+/// forks behind the columns (trunk ref → merge-base, then numstat and
+/// commit-count off that one base) plus the live branch label. The merge-base
+/// is resolved once and shared by the diff and the commit count, so the two
+/// columns cost one extra fork, not two full chains.
 fn refresh_entry(path: &str, now_ms: u64) -> DiffStatsCacheEntry {
     let worktree = Path::new(path);
-    DiffStatsCacheEntry::new(
-        now_ms,
-        worktree_diff_stats(worktree),
-        worktree_branch(worktree),
-    )
+    let base = diff_base(worktree);
+    let stats = base
+        .as_deref()
+        .and_then(|base| worktree_diff_stats(worktree, base));
+    let commits = base
+        .as_deref()
+        .and_then(|base| worktree_commits_ahead(worktree, base));
+    DiffStatsCacheEntry::new(now_ms, stats, commits, worktree_branch(worktree))
 }
 
 fn worktree_branch(worktree: &Path) -> Option<String> {
@@ -567,22 +572,35 @@ fn worktree_branch(worktree: &Path) -> Option<String> {
 
 /// The total diff the worktree carries relative to `main`: committed, staged,
 /// and unstaged changes folded into one `+/-`. We diff the *working tree*
-/// against the merge-base with the trunk, so it counts what this branch added
-/// on top of where it forked — never the trunk's own progress since the fork —
-/// and `git diff <commit>` reads the tree on disk, so staged and unstaged work
-/// land in the same number as committed work.
-fn worktree_diff_stats(worktree: &Path) -> Option<DiffStats> {
-    let base = diff_base(worktree)?;
+/// against the `base` merge-base with the trunk, so it counts what this branch
+/// added on top of where it forked — never the trunk's own progress since the
+/// fork — and `git diff <commit>` reads the tree on disk, so staged and unstaged
+/// work land in the same number as committed work.
+fn worktree_diff_stats(worktree: &Path, base: &str) -> Option<DiffStats> {
     let output = Command::new("git")
         .arg("-C")
         .arg(worktree)
-        .args(["diff", "--no-ext-diff", "--numstat", &base, "--"])
+        .args(["diff", "--no-ext-diff", "--numstat", base, "--"])
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
     Some(parse_numstat(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// The commits the worktree carries ahead of the trunk — `git rev-list --count
+/// <base>..HEAD`, the committed work waiting to land. Measured off the same
+/// merge-base as the diff, so it counts this branch's own commits since the
+/// fork, never the trunk's. The diff's `+/-` also folds in staged/unstaged
+/// change; this column is committed work alone.
+fn worktree_commits_ahead(worktree: &Path, base: &str) -> Option<u32> {
+    let range = format!("{base}..HEAD");
+    let count = git_line(worktree, &["rev-list", "--count", &range])?;
+    count
+        .parse::<u64>()
+        .ok()
+        .map(|count| count.min(u64::from(u32::MAX)) as u32)
 }
 
 /// The commit a worktree's diff is measured against: the merge-base between its
@@ -835,6 +853,7 @@ mod tests {
     #[test]
     fn worktree_diff_stats_total_committed_staged_and_unstaged_over_trunk() {
         let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
         let git = |args: &[&str]| {
             Command::new("git")
                 .arg("-C")
@@ -847,7 +866,7 @@ mod tests {
         // `-b main` needs Git >= 2.28; an older git fails init and the helper
         // degrades to None, which is the documented fallback.
         if !git(&["init", "-q", "-b", "main"]) {
-            assert_eq!(worktree_diff_stats(dir.path()), None);
+            assert_eq!(refresh_entry(path, 0).stats(), None);
             return;
         }
         let _ = git(&["config", "user.email", "t@example.com"]);
@@ -876,8 +895,9 @@ mod tests {
         // Unstaged: one more line appended to a tracked file.
         write("base.txt", "a\nb\nc\nd\n");
 
+        let entry = refresh_entry(path, 0);
         assert_eq!(
-            worktree_diff_stats(dir.path()),
+            entry.stats(),
             Some(DiffStats {
                 // +2 committed, +1 staged, +1 unstaged — all measured from the
                 // fork point, none from main's post-fork commit.
@@ -886,10 +906,19 @@ mod tests {
             }),
             "the header counts committed + staged + unstaged over the trunk merge-base"
         );
+        // One commit on the branch since the fork point — staged/unstaged change
+        // does not bump the commit count.
+        assert_eq!(
+            entry.commits,
+            Some(1),
+            "the commit count is the branch's commits ahead of the trunk merge-base"
+        );
 
-        // A non-repository path has nothing to diff.
+        // A non-repository path has nothing to diff or count.
         let plain = tempfile::tempdir().unwrap();
-        assert_eq!(worktree_diff_stats(plain.path()), None);
+        let plain_entry = refresh_entry(plain.path().to_str().unwrap(), 0);
+        assert_eq!(plain_entry.stats(), None);
+        assert_eq!(plain_entry.commits, None);
     }
 
     #[test]

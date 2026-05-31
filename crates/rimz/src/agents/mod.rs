@@ -9,6 +9,7 @@
 //! Adapters also own hook install and uninstall — translating the trait
 //! defaults into whatever per-agent config file the upstream agent reads.
 
+pub mod account;
 pub mod claude;
 pub mod codex;
 pub(crate) mod codex_app_server;
@@ -26,8 +27,8 @@ use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution
 use crate::ids::PaneId;
 
 pub use context::{
-    AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits, AgentTokenUsage,
-    RateLimitWindow,
+    AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
+    AgentTokenUsage, RateLimitWindow,
 };
 
 /// Conservative fallback for adapters that don't override. Claude overrides

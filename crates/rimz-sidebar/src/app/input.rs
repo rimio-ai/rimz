@@ -65,9 +65,12 @@ pub(super) fn encode_key(code: KeyCode) -> Option<String> {
 
 pub(super) fn encode_mouse(kind: MouseEventKind, column: u16, row: u16) -> Option<String> {
     match kind {
-        MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left) => {
-            Some(format!("mouse:left:{column}:{row}"))
-        }
+        // Only the press fires a click — never the release. A press and its
+        // release report the same cell, so encoding both made one physical click
+        // select twice; because selecting a row expands it (compact → full)
+        // between the two events, the second landed on a now-shifted row and the
+        // highlight flashed to the wrong card. One event per click fixes it.
+        MouseEventKind::Down(MouseButton::Left) => Some(format!("mouse:left:{column}:{row}")),
         _ => None,
     }
 }
@@ -142,19 +145,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mouse_click_codec_round_trips_left_button_down() {
+    fn mouse_left_press_is_the_only_click_event() {
         let encoded = encode_mouse(MouseEventKind::Down(MouseButton::Left), 4, 7)
             .expect("left button down is encoded");
-
         assert_eq!(
             decode_wakeup(encoded.as_bytes()),
             Wakeup::MouseClick { column: 4, row: 7 }
         );
-        let release = encode_mouse(MouseEventKind::Up(MouseButton::Left), 4, 7)
-            .expect("left button release is also a click");
+        // The release must NOT also encode a click: one physical click is one
+        // selection event, so the card's compact→full expansion between press
+        // and release can't relocate the highlight.
         assert_eq!(
-            decode_wakeup(release.as_bytes()),
-            Wakeup::MouseClick { column: 4, row: 7 }
+            encode_mouse(MouseEventKind::Up(MouseButton::Left), 4, 7),
+            None
         );
     }
 

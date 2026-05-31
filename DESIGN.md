@@ -46,28 +46,28 @@ The sidebar is a **worktree-keyed presence and attention map**, not a feed reade
 
 Agent status is a five-value rollup the agent owns (`running`/`waiting`/`idle`/`success`/`failed`); Rimz observes it and paints one glyph + color per *displayed* state. The glyph carries the state by **shape** (so it survives `NO_COLOR`); color reinforces it. Two symbols carry every attention state — `?` *needs your answer*, `!` *needs a look* — and only genuinely-active states animate. A pane running a non-agent process (a bare shell, an editor) renders as a dim process row with no status glyph and never counts as attention.
 
-| state              | glyph | animation              | color       | attention |
-|--------------------|-------|------------------------|-------------|-----------|
-| `waiting`          | `?`   | —                      | yellow bold | yes       |
-| `failed`           | `!`   | —                      | red bold    | yes       |
-| stalled (≥10 min)  | `!`   | —                      | red bold    | yes       |
-| `running` working  | `⢿`   | spin `⣾⣽⣻⢿⡿⣟⣯⣷`        | Claude clay | no        |
-| `running` thinking | `✽`   | sparkle `· ✢ ✳ ✶ ✻ ✽`  | Claude clay | no        |
-| resolver answering | `⠋`   | braille spin           | yellow      | yes       |
-| `idle`             | `◌`   | —                      | gray / dim  | no        |
-| `success`          | `✓`   | —                      | green dim   | no        |
+| state              | glyph | animation              | color         | attention |
+|--------------------|-------|------------------------|---------------|-----------|
+| `waiting`          | `?`   | —                      | yellow→red    | yes       |
+| `failed`           | `!`   | —                      | yellow→red    | yes       |
+| stalled (≥10 min)  | `!`   | —                      | yellow→red    | yes       |
+| `running` working  | `⢿`   | spin `⣾⣽⣻⢿⡿⣟⣯⣷`        | Claude clay   | no        |
+| `running` thinking | `✽`   | sparkle `· ✢ ✳ ✶ ✻ ✽`  | Claude clay   | no        |
+| resolver answering | `⠋`   | braille spin           | yellow        | yes       |
+| `idle`             | `○`   | —                      | green dim     | no        |
+| `success`          | `✓`   | —                      | green dim     | no        |
 
-`waiting` is a pending human ask folded onto the agent's row; "thinking" is `running` in read-only plan mode; "stalled" is a `running` agent silent past Claude Code's ~10-minute operation timeout, escalated to `!` so a wedged agent becomes actionable rather than a frozen spinner. Both "thinking" and "stalled" are display projections — the rollup keeps the true `running` status.
+`waiting` is a pending human ask folded onto the agent's row; "thinking" is `running` in read-only plan mode; "stalled" is a `running` agent silent past Claude Code's ~10-minute operation timeout, escalated to `!` so a wedged agent becomes actionable rather than a frozen spinner. Both "thinking" and "stalled" are display projections — the rollup keeps the true `running` status. The two attention glyphs (`?`/`!`) rest bold **yellow** and redden to bold **red** once a row sits unanswered past the neglect window (`[sidebar] attention_redden_secs`, default 30 minutes) — a fresh ask reads calm-urgent, a long-ignored one heats up. The two calm states share a quiet green: a hollow `○` idle and a `✓` success.
 
-Agent permission postures (observed from the agent, not set by Rimz) are one sticky reading of the agent's permission slider, rendered as capability tokens; `default` and `unknown` are omitted, `plan` and `auto` are dim, and `yolo` is warn-colored. `plan` is the read-only slider position: it shows as a dim pill whenever the agent is not running, and surfaces as the "thinking" state above while it is. `interactive` folds into `default`.
+Agent permission postures (observed from the agent, not set by Rimz) are one sticky reading of the agent's permission slider, rendered as capability tokens; `default` and `unknown` are omitted, and the rest carry a *permission-heat* gradient — `plan` calm blue, `auto` amber, `yolo` bold red (the security surface, loud even when other tokens dim). `plan` is the read-only slider position: it shows as a blue pill whenever the agent is not running, and surfaces as the "thinking" state above while it is. `interactive` folds into `default`.
 
 ```text
 default   plan   auto   yolo   unknown
 ```
 
-Live enrichments use one grammar. The context window, the 5-hour budget, and the 7-day budget render as three aligned meter bars sharing one label column and one value column; todo progress renders as dots and worktree diff stats as paired numeric tokens. They enrich display only and never drive a decision. A running agent's leading cell animates continuously on a wall-clock tick — a braille spinner while working, a sparkle while thinking, both in Claude clay — so motion tracks live work; silence no longer freezes the spinner but escalates to `!` once the agent crosses the stall window. Color is a garnish layer over the same glyph grammar, and `NO_COLOR` keeps every shape readable.
+Live enrichments use one grammar. Each agent row carries one context-window meter (`▣`); todo progress renders as dots, tokens as a glyph set (`◇` total · `↘` input · `↗` output · `◌` cached), and worktree diff stats as paired numeric tokens. The **5-hour and 7-day budgets are account-scoped, not session-scoped** — every session of a provider shares one account — so they leave the rows entirely for a pinned **per-provider dashboard** at the bottom of the sidebar: one block per provider — active or merely logged in, so your accounts and budgets show even between turns (a brand emblem, the plan and version, aggregate spend/tokens, and the two budgets as draining "mana" bars; an unmetered API-key account shows an `∞` bar instead). Enrichments enrich display only and never drive a decision. A running agent's leading cell animates continuously on a wall-clock tick — a braille spinner while working, a sparkle while thinking, both in Claude clay — so motion tracks live work; silence no longer freezes the spinner but escalates to `!` once the agent crosses the stall window. Color is a garnish layer over the same glyph grammar, and `NO_COLOR` keeps every shape readable.
 
-Renderer details — the three-line card anatomy, the aligned meter bars and configurable row density, the fixed fleet header, attention ranking, and the jump interaction — live in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
+Renderer details — the borderless frame and selection lane, the card anatomy, the meter grammar and configurable row density, the fixed cockpit, the per-provider dashboard, attention ranking, and the jump interaction — live in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
 
 ## Non-goals
 
