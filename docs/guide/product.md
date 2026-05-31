@@ -8,17 +8,17 @@ Rimz gives every project one room — a Zellij or tmux session with a sidebar �
 
 ```
  ⌘ query-engine            ~/code/query-engine
- ✦ 5   ✧ 2                              $4.20
+ ✦ 6   ✧ 2                              $4.20
  ──────────────────────────────────────────────
- ? 2   ! 1   ○ 0            ✽ 1   ⢿ 1   ✓ 0
- ◷ 41m · ◇ 486k · ◆ 4
+ ? 2   ! 1   ○ 1            ✽ 1   ⢿ 1   ✓ 0
+ ◷ 41m · ◇ 486.0k · ◆ 4
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌? claude · Opus · xhigh
 ▌  fix auth flow
 ▌  ▣ ━━━━━━━━━━──────────────── 41%
 ▏
-▏✽ claude · Sonnet · high
+▏✽ claude · Sonnet · high · plan
 ▏  add tests
 ▏  ▣ ━━━━━─────────────────────  18%
 ▏
@@ -39,14 +39,14 @@ Rimz gives every project one room — a Zellij or tmux session with a sidebar �
 
  ──────────────────────────────────────────────
  Claude Code v2.1.158 · Claude Max          ⇅ rc
-  ▐▛███▜▌  $4.20 · ◇ 486k
+  ▐▛███▜▌  $4.20 · ◇ 486.0k
  ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ ↻ 2h06m
    ▘▘ ▝▝   7d ▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h
  ──────────────────────────────────────────────
- ↵ jump   ␣ next ?!   ? keys
+            ␣ next ?!   ? for help
 ```
 
-> Product invariant lives in [DESIGN.md](../../DESIGN.md).
+> Product invariant lives in [DESIGN.md](../../DESIGN.md). Every glyph and meter in this frame is broken down, zone by zone, in the [interface reference](../interface/sidebar.md).
 
 The sidebar is a worktree-keyed presence and attention map: every pane is a row — a bare shell shows as `· zsh`, and becomes the agent's row the moment you run one — and each agent shows its status (a colored glyph), the task it's on, and its context meter, grouped by the worktree it lives in. Each worktree is a bold header, and the worktree you have selected reads as one bracketed lane — a thin accent spine down its whole height with a faint dotted seal capping its header — while the selected card inside it lights up with a bolder spine. Other worktrees stay quiet, so the lane is the only marker on screen and the selection is unmistakable. Account-scoped usage budgets (5-hour / 7-day) leave the rows for the pinned per-provider dashboard at the bottom — one block per provider with its plan, spend, and draining "mana" bars. When an agent exits, its row reverts to the shell, so the column always mirrors what's actually running. It **routes you to the pane that needs you** — select a row to jump there — and you read the actual prompt and answer in the agent's own UI. That safety net never breaks. Resolvers can slot ahead of you when you want help; the chain ends with you.
 

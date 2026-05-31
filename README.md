@@ -6,17 +6,17 @@ Rimz pins every repo to one durable room — a Zellij or tmux session with a sid
 
 ```
  ⌘ query-engine            ~/code/query-engine
- ✦ 5   ✧ 2                              $4.20
+ ✦ 6   ✧ 2                              $4.20
  ──────────────────────────────────────────────
- ? 2   ! 1   ○ 0            ✽ 1   ⢿ 1   ✓ 0
- ◷ 41m · ◇ 486k · ◆ 4
+ ? 2   ! 1   ○ 1            ✽ 1   ⢿ 1   ✓ 0
+ ◷ 41m · ◇ 486.0k · ◆ 4
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌? claude · Opus · xhigh
 ▌  fix auth flow
 ▌  ▣ ━━━━━━━━━━──────────────── 41%
 ▏
-▏✽ claude · Sonnet · high
+▏✽ claude · Sonnet · high · plan
 ▏  add tests
 ▏  ▣ ━━━━━─────────────────────  18%
 ▏
@@ -37,14 +37,16 @@ Rimz pins every repo to one durable room — a Zellij or tmux session with a sid
 
  ──────────────────────────────────────────────
  Claude Code v2.1.158 · Claude Max          ⇅ rc
-  ▐▛███▜▌  $4.20 · ◇ 486k
+  ▐▛███▜▌  $4.20 · ◇ 486.0k
  ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ ↻ 2h06m
    ▘▘ ▝▝   7d ▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h
  ──────────────────────────────────────────────
- ↵ jump   ␣ next ?!   ? keys
+            ␣ next ?!   ? for help
 ```
 
 > Product invariant lives in [DESIGN.md](./DESIGN.md). The short version: the agent's own UI stays the answer surface unless you explicitly enrol a resolver. Nothing in Rimz silently approves a tool call.
+
+Every glyph, meter, and frame above is broken down in the [interface reference](./docs/interface/sidebar.md).
 
 ## Quickstart
 
@@ -104,6 +106,7 @@ Documentation-first. Implementation lands in milestones — M0 spikes the ledger
 ## Read next
 
 - **Use it.** [docs/product.md](./docs/guide/product.md) — five-minute tour of the sidebar, the feed, and the three audiences.
+- **See it.** [docs/interface/sidebar.md](./docs/interface/sidebar.md) — the sidebar on screen, zone by zone, with the frames it draws.
 - **CLI surface.** [docs/cli.md](./docs/reference/cli.md) — every command, grouped by intent.
 - **Understand the design.** [DESIGN.md](./DESIGN.md) — commitments and the three operating paths.
 - **Contribute.** [AGENTS.md](./AGENTS.md) — engineering rules and the docs map. `cargo xtask ci` runs every quality gate locally; the gate stack is in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
