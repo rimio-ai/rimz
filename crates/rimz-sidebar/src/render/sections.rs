@@ -447,6 +447,7 @@ pub(super) fn first_run_hint_lines(theme: &Theme, hooks_ready: bool) -> Vec<Line
 pub(super) fn worktree_group_lines(
     theme: &Theme,
     group: &SidebarWorktreeGroup,
+    providers: &[SidebarProviderPanel],
     width: usize,
     density: SidebarDensity,
     redden_secs: i64,
@@ -483,9 +484,14 @@ pub(super) fn worktree_group_lines(
         .then_some(*row_index);
     map.push(header_target);
     let tier = Tier::for_width(content_width(width));
-    // Cards stack directly with no separating blank line — each card's trailing
-    // `▣` meter row sets it apart, and the lane spine runs unbroken down the group.
-    for row in &group.rows {
+    // A blank line separates consecutive cards; it carries the group's lane
+    // gutter so a selected worktree's spine runs unbroken through the gap, and
+    // maps to `None` as structural chrome (never a jump target).
+    for (index, row) in group.rows.iter().enumerate() {
+        if index > 0 {
+            lines.push(with_gutter(theme, Line::from(""), lane));
+            map.push(None);
+        }
         let selected = *row_index == selected_index;
         let this_row = *row_index;
         *row_index += 1;
@@ -493,6 +499,7 @@ pub(super) fn worktree_group_lines(
         let row_lines = row_lines(
             theme,
             row,
+            providers,
             width,
             tier,
             density,
@@ -617,10 +624,19 @@ fn attention_tally(counts: &[SidebarStatusCount]) -> String {
         .join("  ")
 }
 
+/// A just-started agent: idle, sitting on the `Some(0)` baseline context gauge
+/// with no real usage behind it yet. Its 0% bar and zeroed stat lines are noise,
+/// so the card collapses to identity + description (+ the last-activity age).
+fn idle_unstarted(row: &SidebarRow) -> bool {
+    matches!(row.status.unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
+        && gauge_percent(row).unwrap_or(0) == 0
+}
+
 #[allow(clippy::too_many_arguments)]
 fn row_lines(
     theme: &Theme,
     row: &SidebarRow,
+    providers: &[SidebarProviderPanel],
     width: usize,
     tier: Tier,
     density: SidebarDensity,
@@ -639,6 +655,7 @@ fn row_lines(
     let mut inner = vec![identity_line(
         theme,
         row,
+        providers,
         tier,
         cw,
         animation_phase,
@@ -646,15 +663,25 @@ fn row_lines(
     )];
     if row.row_kind == SidebarRowKind::Agent {
         inner.push(description_line(theme, row, tier, cw));
-        if let Some(line) = gauge_line(theme, row, cw) {
+        // A just-started idle agent sits on the 0% baseline gauge with nothing
+        // behind it — suppress the bar so the fresh card reads calm.
+        if !idle_unstarted(row)
+            && let Some(line) = gauge_line(theme, row, cw)
+        {
             inner.push(line);
         }
         if selected || density.shows_stats() {
-            if let Some(line) = token_totals_line(theme, row, cw) {
-                inner.push(line);
-            }
-            if let Some(line) = work_line(theme, row, cw) {
-                inner.push(line);
+            if idle_unstarted(row) {
+                // The zeroed token and work lines are noise on a fresh card; keep
+                // only the last-activity age, pinned bottom-right.
+                inner.push(activity_age_line(theme, row, cw));
+            } else {
+                if let Some(line) = token_totals_line(theme, row, cw) {
+                    inner.push(line);
+                }
+                if let Some(line) = work_line(theme, row, cw) {
+                    inner.push(line);
+                }
             }
         }
         // The subagents this agent spawned this turn, listed only in the
@@ -708,9 +735,22 @@ fn sub_agent_lines(
 /// pushing the model/effort tokens off the line.
 const NAME_MAX: usize = 12;
 
+/// The agent name's style: its provider's brand color (Claude clay, Codex blue,
+/// …) kept at the dim weight the name already carries, so the card ties to its
+/// provider dashboard without shouting. Falls back to plain dim chrome when no
+/// provider matches the kind.
+fn agent_name_style(theme: &Theme, providers: &[SidebarProviderPanel], kind: &str) -> Style {
+    providers
+        .iter()
+        .find(|panel| panel.kind == kind)
+        .map(|panel| theme.style(Color::Indexed(panel.color), Modifier::DIM))
+        .unwrap_or_else(|| theme.dim())
+}
+
 fn identity_line(
     theme: &Theme,
     row: &SidebarRow,
+    providers: &[SidebarProviderPanel],
     tier: Tier,
     width: usize,
     animation_phase: u64,
@@ -749,6 +789,7 @@ fn identity_line(
     agent_identity_line(
         theme,
         row,
+        providers,
         status,
         tier,
         width,
@@ -765,9 +806,11 @@ fn identity_line(
 /// L1 drops effort, L0 keeps just the name — cost always pins right. A blocked
 /// `?`/`!` glyph reddens once the row has gone unanswered past the 30-minute
 /// neglect window, so a long-ignored ask escalates without a timestamp.
+#[allow(clippy::too_many_arguments)]
 fn agent_identity_line(
     theme: &Theme,
     row: &SidebarRow,
+    providers: &[SidebarProviderPanel],
     status: AgentStatus,
     tier: Tier,
     width: usize,
@@ -798,7 +841,10 @@ fn agent_identity_line(
             attention_glyph_style(theme, status, age_secs(row.last_activity), redden_secs),
         ),
         Span::raw(" "),
-        Span::styled(clip(&row.name, NAME_MAX), theme.dim()),
+        Span::styled(
+            clip(&row.name, NAME_MAX),
+            agent_name_style(theme, providers, &row.name),
+        ),
     ];
     if tier != Tier::L0 {
         if let Some(model) = display_model(row) {
@@ -1194,6 +1240,13 @@ fn work_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'stat
     // calm.
     let age = Span::styled(activity_short(row.last_activity), theme.dim());
     printed.then(|| pin_right(spans, vec![age], width))
+}
+
+/// The lone last-activity age, pinned bottom-right — the only stat a just-started
+/// idle agent shows once the zeroed token and work lines are suppressed.
+fn activity_age_line(theme: &Theme, row: &SidebarRow, width: usize) -> Line<'static> {
+    let age = Span::styled(activity_short(row.last_activity), theme.dim());
+    pin_right(vec![Span::raw("  ")], vec![age], width)
 }
 
 /// Total display width of a span run, in terminal cells.

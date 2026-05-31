@@ -187,7 +187,11 @@ pub(crate) fn compose_lines(
         let footer = footer_lines(snapshot, &theme, inner);
         if !footer.is_empty() {
             // No rule above the footer — it sits quietly under the dashboard's own
-            // top rule.
+            // top rule, with one blank line of breathing room when a dashboard is
+            // present (skipped in an empty room so the footer doesn't float).
+            if !bottom.is_empty() {
+                bottom.push(Line::from(""));
+            }
             bottom.extend(footer.into_iter().map(pad_chrome));
         }
     }
@@ -335,6 +339,7 @@ fn snapshot_lines(
             worktree_group_lines(
                 theme,
                 group,
+                &snapshot.providers,
                 width,
                 density,
                 redden_secs,
@@ -1395,6 +1400,7 @@ mod tests {
         worktree_group_lines(
             &theme,
             &snapshot.worktree_groups[0],
+            &snapshot.providers,
             54,
             density,
             30 * 60,
@@ -1494,6 +1500,7 @@ mod tests {
             worktree_group_lines(
                 &theme,
                 &snapshot.worktree_groups[0],
+                &snapshot.providers,
                 54,
                 rimz::config::SidebarDensity::Compact,
                 30 * 60,
@@ -1547,6 +1554,195 @@ mod tests {
         // account-scoped budgets moved to the provider dashboard).
         assert_eq!(selected(Compact), 5);
         assert_eq!(selected(Full), 5);
+    }
+
+    /// Render one worktree group's lines, asserting the hit-test map stays in
+    /// lockstep so callers can read either the spans or their text.
+    fn group_lines(
+        snapshot: &SidebarSnapshot,
+        theme: &Theme,
+        density: rimz::config::SidebarDensity,
+        selected_index: usize,
+    ) -> Vec<Line<'static>> {
+        let mut row_index = 0;
+        let mut lines = Vec::new();
+        let mut map = Vec::new();
+        worktree_group_lines(
+            theme,
+            &snapshot.worktree_groups[0],
+            &snapshot.providers,
+            54,
+            density,
+            30 * 60,
+            &mut row_index,
+            selected_index,
+            0,
+            &mut lines,
+            &mut map,
+        );
+        assert_eq!(map.len(), lines.len(), "map stays in lockstep with lines");
+        lines
+    }
+
+    fn line_texts(lines: &[Line<'static>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
+    /// A just-started idle agent — idle, on the `Some(0)` baseline gauge with no
+    /// usage behind it — sheds the 0% context bar at rest, and when expanded drops
+    /// the zeroed token and work lines, keeping only the last-activity age. The
+    /// same 0% reading while *running* still paints the bar, so the suppression is
+    /// gated on idle, not merely on a zero percent.
+    #[test]
+    fn just_started_idle_agent_sheds_the_gauge_and_zeroed_stats() {
+        use rimz::config::SidebarDensity::Compact;
+        let theme = Theme::fixed(true);
+        let mk = |status| {
+            let state = agent(
+                "claude-1",
+                "claude",
+                status,
+                PermissionPosture::Default,
+                Some("/repo/main"),
+                Some("main"),
+                Some("warm up"),
+            );
+            snapshot_with(Vec::new(), vec![state])
+        };
+
+        let idle = mk(AgentStatus::Idle);
+        let resting = line_texts(&group_lines(&idle, &theme, Compact, usize::MAX));
+        let expanded = line_texts(&group_lines(&idle, &theme, Compact, 0));
+
+        assert!(
+            resting.iter().all(|line| !line.contains('▣')),
+            "fresh idle card hides the context bar:\n{}",
+            resting.join("\n")
+        );
+        // Header + identity + description — no gauge at rest.
+        assert_eq!(resting.len(), 3, "{resting:?}");
+        let joined = expanded.join("\n");
+        assert!(
+            !joined.contains('▣') && !joined.contains('◇') && !joined.contains("worked"),
+            "expanded fresh idle card hides the bar and the zeroed stats:\n{joined}"
+        );
+        // Selection only appends the lone age line beneath the two resting lines.
+        assert_eq!(expanded.len(), 4, "{expanded:?}");
+
+        let running = line_texts(&group_lines(
+            &mk(AgentStatus::Running),
+            &theme,
+            Compact,
+            usize::MAX,
+        ));
+        assert!(
+            running.iter().any(|line| line.contains('▣')),
+            "a running 0% agent keeps its bar:\n{}",
+            running.join("\n")
+        );
+    }
+
+    /// Consecutive cards in a group are separated by one blank line. The group is
+    /// unselected here, so the separator carries the plain-space gutter (a lane
+    /// spine would tint it) — exactly one all-blank line, never more.
+    #[test]
+    fn consecutive_cards_get_one_blank_separator() {
+        use rimz::config::SidebarDensity::Compact;
+        let theme = Theme::fixed(true);
+        let one = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Auto,
+            Some("/repo/main"),
+            Some("main"),
+            Some("task one"),
+        );
+        let two = agent(
+            "claude-2",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Auto,
+            Some("/repo/main"),
+            Some("main"),
+            Some("task two"),
+        );
+        let snapshot = snapshot_with(Vec::new(), vec![one, two]);
+        let rendered = line_texts(&group_lines(&snapshot, &theme, Compact, usize::MAX));
+
+        let names: Vec<usize> = rendered
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.contains("claude"))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            names.len(),
+            2,
+            "two cards in the group:\n{}",
+            rendered.join("\n")
+        );
+        let blanks: Vec<usize> = rendered
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.trim().is_empty())
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            blanks,
+            vec![names[1] - 1],
+            "one blank line sits between the cards:\n{}",
+            rendered.join("\n")
+        );
+    }
+
+    /// The agent name wears its provider's brand color (Claude's clay), tying the
+    /// card to the provider dashboard. Read the expected index off the snapshot's
+    /// own panel so the test follows config overrides.
+    #[test]
+    fn agent_name_wears_its_provider_brand_color() {
+        let theme = Theme::fixed(false); // color on, so the brand tone survives
+        let state = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Auto,
+            Some("/repo/main"),
+            Some("main"),
+            Some("db migrate"),
+        );
+        let mut snapshot = snapshot_with(Vec::new(), vec![state]);
+        // Provider panels are producer-only (`with_provider_aggregates`), so the
+        // reducer-built snapshot carries none — set one as the producer would.
+        snapshot.providers = vec![provider_panel(
+            "claude",
+            "Claude Code",
+            173,
+            true,
+            true,
+            None,
+        )];
+        let expected = snapshot.providers[0].color;
+
+        let lines = group_lines(
+            &snapshot,
+            &theme,
+            rimz::config::SidebarDensity::Compact,
+            usize::MAX,
+        );
+        let name = lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .find(|span| span.content == "claude")
+            .expect("the agent name span");
+        assert_eq!(
+            name.style.fg,
+            Some(Color::Indexed(expected)),
+            "the agent name wears the provider color"
+        );
     }
 
     /// Build a metered provider panel from two rate-limit windows, for the

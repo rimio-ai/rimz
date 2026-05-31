@@ -11,6 +11,7 @@ expression: screen
 ▌? claude
 ▌  permission
 ▌  ▣ ──────────────────────────    0%
+▏
 ▏⣾ codex · GPT-5.5
 ▏  add tests
 ▏  ▣ ──────────────────────────    0%
@@ -18,5 +19,4 @@ expression: screen
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1
  ? deploy.sh
    Deploy staging?
-
         ␣ next ?!   ? for help
