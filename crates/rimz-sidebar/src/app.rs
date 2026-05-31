@@ -742,6 +742,7 @@ fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
         recent_activity: Vec::new(),
         agents: Vec::new(),
         agent_hooks_ready: false,
+        codex_hooks_ready: false,
         own_view: None,
         only_daemon_view_remains: false,
         project_root: None,

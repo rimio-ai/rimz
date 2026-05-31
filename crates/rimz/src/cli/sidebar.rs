@@ -211,6 +211,9 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 snapshot = snapshot.with_agent_activity(&activity);
             }
 
+            // Wiring state gates the live-pane fold (the idle-Codex-pane
+            // synthesis), so set it before folding panes, not after.
+            snapshot.codex_hooks_ready = rimz::sidebar::snapshot::codex_hooks_ready();
             if let Some(panes) = panes {
                 if let Some(own) = exclude.as_ref() {
                     snapshot.own_view = rimz::SidebarOwnView::from_panes(own, &panes);

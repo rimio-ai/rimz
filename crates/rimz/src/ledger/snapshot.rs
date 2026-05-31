@@ -83,6 +83,16 @@ pub struct SidebarSnapshot {
     /// `false`, where the renderer suppresses the hint anyway.
     #[serde(default)]
     pub agent_hooks_ready: bool,
+    /// Whether Codex specifically has its Rimz hooks wired. Gates the
+    /// idle-Codex-pane synthesis in `rows_from_panes`: a launched-but-unprompted
+    /// Codex has no ledger session yet (Codex registers it lazily on the first
+    /// prompt), and only a wired Codex can ever report status, so only a wired
+    /// Codex's bare `codex` pane is promoted from a process row to an idle agent.
+    /// Environment, not ledger — the pure reducer leaves it `false`; the `rimz
+    /// sidebar snapshot` CLI and consumer enrichment fill it before folding live
+    /// panes. The placeholder/persisted snapshot keeps `false` (a process row).
+    #[serde(default)]
+    pub codex_hooks_ready: bool,
     /// The calling sidebar's own-view summary: how many sibling panes share its
     /// tab/window, whether its own pane holds focus, and which sibling is
     /// focused. The renderer's self-close and selection-sync read it instead of
@@ -430,6 +440,7 @@ impl SidebarSnapshot {
             recent_activity,
             agents,
             agent_hooks_ready: false,
+            codex_hooks_ready: false,
             own_view: None,
             only_daemon_view_remains: false,
             project_root: None,
@@ -663,6 +674,7 @@ impl SidebarSnapshot {
             &panes,
             self.project_root.as_deref(),
             &self.worktree_roots,
+            self.codex_hooks_ready,
         );
         self
     }
@@ -1125,8 +1137,10 @@ fn build_worktree_groups(
 /// dead session can never resurrect a row or latch onto a stranger's pane. The
 /// one exception is a pane-less Codex agent whose hooks fire from the
 /// app-server daemon: it binds the live `codex` pane in its own worktree
-/// (`paneless_codex_for_pane`). The only truly paneless rows are standalone
-/// script/bridge asks, which no agent session raised.
+/// (`codex_for_pane`), and a wired Codex pane with no session yet renders idle
+/// rather than as a process row. The only truly paneless rows are standalone
+/// script/bridge asks, which no agent session raised. `codex_onboarded` gates
+/// the idle-Codex synthesis (see `codex_for_pane`).
 fn build_worktree_groups_with_panes(
     agents: &[AgentState],
     needs_attention: &[FeedItem],
@@ -1134,9 +1148,16 @@ fn build_worktree_groups_with_panes(
     panes: &[PaneRef],
     project_root: Option<&Path>,
     worktree_roots: &[PathBuf],
+    codex_onboarded: bool,
 ) -> Vec<SidebarWorktreeGroup> {
     build_worktree_groups_from_rows(
-        rows_from_panes(agents, needs_attention, resolver_working, panes),
+        rows_from_panes(
+            agents,
+            needs_attention,
+            resolver_working,
+            panes,
+            codex_onboarded,
+        ),
         agents,
         project_root,
         worktree_roots,
@@ -1148,6 +1169,7 @@ fn rows_from_panes(
     needs_attention: &[FeedItem],
     resolver_working: &[FeedItem],
     panes: &[PaneRef],
+    codex_onboarded: bool,
 ) -> Vec<SidebarRow> {
     let mut rows = Vec::new();
     let mut bound_agents: BTreeSet<(String, String)> = BTreeSet::new();
@@ -1162,20 +1184,26 @@ fn rows_from_panes(
                 needs_attention,
                 resolver_working,
             );
-        } else if let Some(agent) = paneless_codex_for_pane(pane, agents, &bound_agents) {
-            // The Codex daemon exception: a session driven through the app-server
-            // daemon fires its hooks with no mux pane env, so it never stamps a
-            // pane. Bind it to the live `codex` pane in its worktree. Remote-
-            // control and app-server broker host panes are filtered out upstream
-            // (`with_live_panes`), so they never reach this fallback.
-            push_agent_row(
-                &mut rows,
-                &mut bound_agents,
-                agent,
-                pane,
-                needs_attention,
-                resolver_working,
-            );
+        } else if let Some(bind) = codex_for_pane(pane, agents, &bound_agents, codex_onboarded) {
+            // The Codex exception to stamped-id binding. Codex never stamps a
+            // pane — its hooks fire from the pane-less app-server backend — so it
+            // can't bind through `agent_for_pane`. `codex_for_pane` owns the whole
+            // case: a prompted session binds the live `codex` pane in its worktree
+            // by cwd, and a wired-but-unprompted Codex (no session yet) renders as
+            // an idle agent rather than a bare process row. Remote-control and
+            // app-server broker host panes are filtered out upstream
+            // (`with_live_panes`), so they never reach here.
+            match bind {
+                CodexPaneRow::Agent(agent) => push_agent_row(
+                    &mut rows,
+                    &mut bound_agents,
+                    agent,
+                    pane,
+                    needs_attention,
+                    resolver_working,
+                ),
+                CodexPaneRow::Idle(row) => rows.push(*row),
+            }
         } else {
             rows.push(row_from_process(pane));
         }
@@ -1224,7 +1252,7 @@ fn push_agent_row(
 /// pane id (a relaunch the reaper has not yet collapsed), the most-recently-
 /// active wins, keeping the bind deterministic. The one relaxation — a Codex
 /// session whose hooks fire from the pane-less app-server daemon — lives in the
-/// separate, tightly-scoped `paneless_codex_for_pane`, never here.
+/// separate, tightly-scoped `codex_for_pane`, never here.
 fn agent_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
@@ -1243,37 +1271,94 @@ fn agent_for_pane<'a>(
         .max_by_key(|agent| agent.last_activity)
 }
 
-/// The daemon exception to stamped-id binding. A Codex session driven through
-/// the per-user app-server daemon fires its lifecycle hooks from the daemon,
-/// which carries the session's worktree but no mux pane env, so the agent never
-/// stamps a pane. Anchor such a pane-less Codex agent to the live `codex` pane
-/// sharing its worktree. Scoped so it can only ever rescue this one case:
+/// What a live `codex` pane resolves to. Codex never stamps a pane — its hooks
+/// fire from the pane-less app-server backend — so it can't bind through
+/// `agent_for_pane` (stamped-id only); every Codex-pane special case lives in
+/// `codex_for_pane` instead.
+enum CodexPaneRow<'a> {
+    /// A prompted, daemon-driven session: pane-less, bound to this pane by exact
+    /// worktree cwd (most-recently-active wins; the reaper collapses a stale one).
+    /// Rendered through the shared `push_agent_row`, so it reads identically to a
+    /// stamped agent — its real status, model, and pending ask.
+    Agent(&'a AgentState),
+    /// A wired-but-never-prompted Codex. Codex registers its session lazily on the
+    /// first prompt, so the pane has no rollup entry yet; synthesize an idle row
+    /// so it reads `○ codex` at rest instead of a bare `· codex` process row. The
+    /// first turn then swaps in the real bound `Agent` row. Boxed so the rare
+    /// synthesized row doesn't bloat the common `Agent` (a thin reference) variant.
+    Idle(Box<SidebarRow>),
+}
+
+/// The Codex exception to stamped-id binding, and the only place Codex-pane
+/// special-casing lives. Resolve a live `codex` pane to its row:
 /// - the pane's own command must read `codex`, so a shell or a `git` the session
 ///   spawned in the worktree never binds;
-/// - the agent must be pane-less and `codex` — a stamped agent is already bound
-///   above, and a pane-less *Claude* agent is genuinely gone (Claude always
-///   stamps a live pane), so Codex alone is eligible;
-/// - the agent's worktree must equal the pane's cwd exactly, not merely contain
-///   it, so a parent-checkout session never captures a nested worktree's pane.
+/// - a pane-less `codex` agent whose worktree equals the pane's cwd *exactly*
+///   (not containment, so a parent checkout never captures a nested worktree's
+///   pane) binds as the real `Agent` — Codex alone is eligible, since a stamped
+///   agent already bound above and a pane-less *Claude* agent is genuinely gone
+///   (Claude always stamps a live pane);
+/// - failing that, a wired Codex (`codex_onboarded`) with no session yet
+///   synthesizes an `Idle` row; an *unwired* Codex reports no status, so it stays
+///   a process row (agents are invisible until their hooks are wired).
 ///
-/// When two pane-less Codex sessions share a worktree the most-recently-active
-/// wins (the rollup reaper collapses the stale one); a never-prompted Codex has
-/// no agent state yet and stays a process row until its first turn.
-fn paneless_codex_for_pane<'a>(
+/// `None` for a non-codex pane, an empty cwd, or an unwired Codex with no
+/// session. Broker / remote-control / `rimzd` host panes carry `codex` in their
+/// command but are dropped upstream by `with_live_panes`, so they never reach
+/// here.
+fn codex_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
     bound: &BTreeSet<(String, String)>,
-) -> Option<&'a AgentState> {
+    codex_onboarded: bool,
+) -> Option<CodexPaneRow<'a>> {
     if command_agent_kind(pane.command.as_deref()?)? != "codex" {
         return None;
     }
     let cwd = pane.cwd.as_deref().filter(|cwd| !cwd.is_empty())?;
-    agents
+    if let Some(agent) = agents
         .iter()
         .filter(|agent| agent.pane.is_none() && agent.kind == "codex")
         .filter(|agent| agent.worktree_path.as_deref() == Some(cwd))
         .filter(|agent| !bound.contains(&(agent.kind.clone(), agent.agent_id.clone())))
         .max_by_key(|agent| agent.last_activity)
+    {
+        return Some(CodexPaneRow::Agent(agent));
+    }
+    codex_onboarded.then(|| CodexPaneRow::Idle(Box::new(idle_codex_row(pane))))
+}
+
+/// The resting row for a wired `codex` pane that no session claimed: `○ codex`
+/// with no model or context yet (the first turn swaps in the real bound agent
+/// row). Keyed on the pane id — no session id exists, and pane ids and agent ids
+/// are disjoint, so `attach_sub_agents` can never mis-nest a child onto it.
+fn idle_codex_row(pane: &PaneRef) -> SidebarRow {
+    SidebarRow {
+        row_kind: SidebarRowKind::Agent,
+        id: pane.pane_id.to_string(),
+        name: "codex".to_owned(),
+        status: Some(AgentStatus::Idle),
+        permission_posture: None,
+        pane: Some(pane.clone()),
+        request_id: None,
+        surface: None,
+        task: None,
+        model: None,
+        effort: None,
+        // Agent rows draw the started-session gauge at `Some(0)` (see the
+        // `SidebarRow.context_pct` doc) — matching a freshly-bound Codex.
+        context_pct: Some(0),
+        total_tokens: None,
+        todo_done: None,
+        todo_total: None,
+        context: None,
+        worktree_path: pane.cwd.clone(),
+        worktree_branch: None,
+        last_activity: pane.pane_process_start.unwrap_or_else(Timestamp::now),
+        resolver: None,
+        options: Vec::new(),
+        sub_agents: Vec::new(),
+    }
 }
 
 /// The agent's single most-relevant pending ask: the newest agent-hook ask that
@@ -4314,6 +4399,130 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
         assert_eq!(rows[0].id, "sess-new");
+    }
+
+    #[test]
+    fn wired_unprompted_codex_pane_renders_as_idle_agent() {
+        // Codex registers its session lazily — `SessionStart` rides in with the
+        // first prompt — so a launched-but-never-prompted `codex` pane has no
+        // agent state. When Codex is wired it must read as an idle agent
+        // (`○ codex`), not a bare `· codex` process row, the moment it opens.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), Vec::new());
+        snapshot.codex_hooks_ready = true;
+        let snapshot = snapshot.with_live_panes(vec![pane("term1", "codex", "/repo/main")], None);
+
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
+        assert_eq!(rows[0].name, "codex");
+        assert_eq!(rows[0].status, Some(AgentStatus::Idle));
+        // No session id exists yet, so the row keys on the pane id (its full
+        // mux-qualified form, as `row_from_process` does).
+        assert_eq!(rows[0].id, "tmux:term1");
+        assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "term1");
+        assert_eq!(
+            rows[0].model, None,
+            "no model until the first turn enriches it"
+        );
+    }
+
+    #[test]
+    fn unwired_codex_pane_stays_a_process_row() {
+        // The consent invariant: an unwired Codex can report no status, so its
+        // live pane stays a process row (agents are invisible until their hooks
+        // are wired). `codex_hooks_ready` left `false` reproduces an un-onboarded
+        // Codex.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), Vec::new())
+                .with_live_panes(vec![pane("term1", "codex", "/repo/main")], None);
+
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+        assert_eq!(rows[0].name, "codex");
+    }
+
+    #[test]
+    fn bound_codex_pane_keeps_its_real_agent_over_idle_synthesis() {
+        // The idle synthesis is a last resort: a `codex` pane that binds a real
+        // (pane-less, cwd-matched) agent keeps that agent's identity and status,
+        // never the synthesized idle row — even with Codex wired.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut snapshot = SidebarSnapshot::build_with_carryover(
+            workspace,
+            Vec::new(),
+            Vec::new(),
+            vec![paneless_codex("sess-1", "/repo/main", 1_000)],
+        );
+        snapshot.codex_hooks_ready = true;
+        let snapshot = snapshot.with_live_panes(vec![pane("term1", "codex", "/repo/main")], None);
+
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
+        assert_eq!(
+            rows[0].id, "sess-1",
+            "the real agent binds, not a synthesis"
+        );
+        assert_eq!(rows[0].status, Some(AgentStatus::Running));
+    }
+
+    #[test]
+    fn two_codex_panes_one_agent_yields_one_real_one_idle() {
+        // The multi-codex-per-worktree case: one prompted (pane-less) agent plus a
+        // second still-unprompted `codex` pane in the same worktree. The agent
+        // binds the first codex pane by cwd; the second synthesizes an idle row —
+        // no codex pane is ever left as a process row.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut snapshot = SidebarSnapshot::build_with_carryover(
+            workspace,
+            Vec::new(),
+            Vec::new(),
+            vec![paneless_codex("sess-1", "/repo/main", 1_000)],
+        );
+        snapshot.codex_hooks_ready = true;
+        let snapshot = snapshot.with_live_panes(
+            vec![
+                pane("term1", "codex", "/repo/main"),
+                pane("term2", "codex", "/repo/main"),
+            ],
+            None,
+        );
+
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert_eq!(rows.len(), 2);
+        assert!(
+            rows.iter().all(|row| row.row_kind == SidebarRowKind::Agent),
+            "neither codex pane is a process row",
+        );
+        assert!(
+            rows.iter().any(|row| row.id == "sess-1"),
+            "the prompted session binds one pane",
+        );
+        assert!(
+            rows.iter().any(|row| row.status == Some(AgentStatus::Idle)),
+            "the unprompted pane synthesizes an idle row",
+        );
+    }
+
+    #[test]
+    fn unbound_claude_pane_stays_a_process_row_even_when_codex_wired() {
+        // The synthesis is Codex-only: Claude always stamps a live pane, so a
+        // `claude` pane with no bound agent is a genuinely-ended session and must
+        // read as a process row, never an idle agent — regardless of Codex wiring.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), Vec::new());
+        snapshot.codex_hooks_ready = true;
+        let snapshot = snapshot.with_live_panes(vec![pane("term1", "claude", "/repo/main")], None);
+
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+        assert_eq!(rows[0].name, "claude");
     }
 
     #[test]

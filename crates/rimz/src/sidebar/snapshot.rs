@@ -365,6 +365,16 @@ pub fn agent_hooks_ready() -> bool {
     })
 }
 
+/// Whether Codex specifically has its Rimz hooks installed. Codex-specific, not
+/// `agent_hooks_ready`'s any-agent check, so a Claude-only install never promotes
+/// an unwired Codex pane to an idle agent (it would otherwise read as a
+/// forever-idle agent Rimz can report no status for). Environment, not ledger.
+pub fn codex_hooks_ready() -> bool {
+    crate::agents::integration_by_name("codex")
+        .map(|agent| agent.supports_hook_install() && agent.hooks_installed())
+        .unwrap_or(false)
+}
+
 /// Render the published snapshot for a consumer renderer, entirely from runtime
 /// caches and sidecars — no `list-panes`, no git. Reads the producer's coalesced
 /// pane list from `snapshot.json`, pairs it with the **event-fresh** rollup read
@@ -413,6 +423,9 @@ pub fn enrich_consumer(
         let activity = crate::agent_activity::read_all(runtime);
         snapshot = snapshot.with_agent_activity(&activity);
     }
+    // Wiring state gates the live-pane fold (the idle-Codex-pane synthesis), so
+    // set it before folding panes, not after.
+    snapshot.codex_hooks_ready = codex_hooks_ready();
     if let Some(panes) = panes {
         if let Some(own) = exclude {
             snapshot.own_view = SidebarOwnView::from_panes(own, &panes);
