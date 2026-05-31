@@ -462,17 +462,20 @@ pub struct GateState {
 }
 
 /// Consecutive holds before the escape hatch accepts a regression anyway. Each
-/// reject fires one immediate self-heal refetch, so a transient rollup drop
-/// clears in a few fetch round-trips — well inside the wall-clock ceiling below
-/// — while a *genuine* agent exit (its shell pane survives) still demotes
-/// promptly.
-const ACCEPT_REGRESSION_AFTER_REJECTS: u32 = 4;
+/// reject fires one immediate self-heal refetch. The rollup is now read fresh
+/// from the atomic `latest.json` each fold (it only ever reflects committed
+/// events), so a multi-frame transient agent-drop no longer occurs — the gate
+/// needs to absorb only a single slipped frame. Two holds confirm a *genuine*
+/// exit (its shell pane survives) and demote it promptly, while a true one-frame
+/// flicker recovers on the first reject's refetch and is never accepted.
+const ACCEPT_REGRESSION_AFTER_REJECTS: u32 = 2;
 
 /// Hard wall-clock ceiling on a hold episode — the load-bearing hatch, since a
-/// slow poll cadence could otherwise stretch the count out. Kept well under
-/// [`GIVE_UP_AFTER_DEGRADED`] so a stuck demotion surfaces long before the
-/// sidebar would consider self-closing.
-const ACCEPT_REGRESSION_AFTER: Duration = Duration::from_secs(3);
+/// slow poll cadence could otherwise stretch the count out. One second caps a
+/// genuine exit on the producer tab (whose reject-refetches each pay a
+/// `list-panes` round-trip) while staying above a single such round-trip, and
+/// well under [`GIVE_UP_AFTER_DEGRADED`].
+const ACCEPT_REGRESSION_AFTER: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CommitDecision {
@@ -804,12 +807,20 @@ fn run_fetch(
         )
         .map_err(|err| err.to_string())
     } else {
-        rimz::sidebar::snapshot::read_published_snapshot(
-            runtime,
-            &config.session_name,
-            exclude.as_ref(),
-        )
-        .ok_or_else(|| "waiting for the producer's first published snapshot".to_owned())
+        // Consumer: fold the producer's coalesced panes with the event-fresh
+        // rollup read in process from `latest.json` (read-only — no ledger-writer
+        // import), so a status change or a new agent in an existing pane repaints
+        // within one wakeup without forking `list-panes`.
+        match rimz::ledger::paths::StatePaths::for_workspace(config.workspace_id.clone()) {
+            Ok(state) => rimz::sidebar::snapshot::read_published_snapshot(
+                &state,
+                runtime,
+                &config.session_name,
+                exclude.as_ref(),
+            )
+            .ok_or_else(|| "waiting for the producer's first published snapshot".to_owned()),
+            Err(err) => Err(err.to_string()),
+        }
     };
     FetchOutcome {
         heartbeat_err,

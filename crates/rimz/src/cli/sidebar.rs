@@ -139,7 +139,12 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 // Consumer: render the producer's published frame in process. A
                 // cold cache (no publish yet) falls back to the bare rollup with
                 // the same read-only enrichments until the next tick.
-                let snapshot = match read_published_snapshot(runtime, session, exclude.as_ref()) {
+                let snapshot = match read_published_snapshot(
+                    ledger.paths(),
+                    runtime,
+                    session,
+                    exclude.as_ref(),
+                ) {
                     Some(snapshot) => snapshot,
                     None => enrich_consumer(ledger.snapshot()?, None, runtime, exclude.as_ref()),
                 };
@@ -318,23 +323,13 @@ fn fresh_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotCach
     fresh.then_some(cache)
 }
 
-/// Do the heavy work: project the ledger rollup and enumerate the session's
-/// live panes. The `(workspace, session)`-shared result of this is what the
-/// cache amortizes across sidebars.
-fn produce_snapshot_base(
-    ledger: &Ledger,
-    mux: MuxName,
-    session: &str,
-) -> Result<(rimz::SidebarSnapshot, Vec<rimz::feed::PaneRef>)> {
-    // Serve the rollup from `latest.json` when it is current (O(1), lock-free),
-    // re-projecting only when a write raced this fetch. The `list-panes`
-    // round-trip is the irreducible cost here; the rollup no longer adds an
-    // O(active-events) replay under the workspace lock on the common path.
-    let rollup = ledger.snapshot_cached()?;
-    let panes = rimz::mux::backend_for(mux).list_panes(PaneListOptions {
+/// The session's live panes from the mux — the `list-panes` round-trip the
+/// snapshot cache amortizes across the fleet. The ledger rollup is read
+/// separately (fresh from `latest.json`), so this enumerates only the pane set.
+fn list_session_panes(mux: MuxName, session: &str) -> Result<Vec<rimz::feed::PaneRef>> {
+    Ok(rimz::mux::backend_for(mux).list_panes(PaneListOptions {
         session_name: Some(session.to_owned()),
-    })?;
-    Ok((rollup, panes))
+    })?)
 }
 
 /// Fill any field a fresh `list-panes` read dropped, from the last good read of
@@ -363,44 +358,60 @@ fn carry_forward_pane_fields(fresh: &mut [rimz::feed::PaneRef], prev: &[rimz::fe
     }
 }
 
-/// Return the ledger rollup + live pane list for `session`, sharing one heavy
-/// production across every sidebar via a short-lived single-flight cache.
+/// Return the event-fresh ledger rollup + live pane list for `session`.
 ///
-/// Fast path: a fresh same-session cache is read back with no ledger or mux
-/// work. Slow path: a non-blocking `try_lock` elects one producer; losers poll
-/// briefly for its write, then fall back to producing locally so a wedged
-/// producer never strands them.
+/// The rollup is always read fresh from `latest.json` (`Ledger::snapshot_cached`,
+/// lock-free on the common path), so a status change or a new agent in an
+/// existing pane shows within one wakeup rather than waiting on the pane cadence.
+/// Only the expensive `list-panes` round-trip is coalesced across the fleet (see
+/// [`cached_panes_or_produce`]).
 fn cached_base_or_produce(
     ledger: &Ledger,
     mux: MuxName,
     session: &str,
 ) -> Result<(rimz::SidebarSnapshot, Vec<rimz::feed::PaneRef>)> {
+    let panes = cached_panes_or_produce(ledger, mux, session)?;
+    let rollup = ledger.snapshot_cached()?;
+    Ok((rollup, panes))
+}
+
+/// Return the live pane list for `session`, sharing one `list-panes` round-trip
+/// across every sidebar via a short-lived single-flight cache.
+///
+/// Fast path: a fresh same-session cache is read back with no mux work. Slow
+/// path: a non-blocking `try_lock` elects one producer; losers poll briefly for
+/// its write, then fall back to producing locally so a wedged producer never
+/// strands them.
+fn cached_panes_or_produce(
+    ledger: &Ledger,
+    mux: MuxName,
+    session: &str,
+) -> Result<Vec<rimz::feed::PaneRef>> {
     let runtime = ledger.runtime_paths();
     let cache_path = runtime.root.join("snapshot.json");
 
-    // Fast path: a fresh same-session entry needs no ledger or mux work.
+    // Fast path: a fresh same-session entry needs no mux work.
     if let Some(cache) = fresh_snapshot_cache(&cache_path, session) {
-        return Ok((cache.snapshot, cache.panes));
+        return Ok(cache.panes);
     }
 
     // Slow path: elect one producer for this `(workspace, session)` refresh.
     // Losers read its write back; if it wedges, they fall back to an uncached
     // local produce rather than block.
     let lock_path = runtime.root.join("snapshot.lock");
-    let fresh =
-        || fresh_snapshot_cache(&cache_path, session).map(|cache| (cache.snapshot, cache.panes));
+    let fresh = || fresh_snapshot_cache(&cache_path, session).map(|cache| cache.panes);
     match single_flight::coalesce(
         &lock_path,
         SNAPSHOT_CACHE_WAIT_STEP,
         SNAPSHOT_CACHE_WAIT_STEPS,
         fresh,
     ) {
-        Coalesced::Shared((snapshot, panes)) => Ok((snapshot, panes)),
-        Coalesced::ProduceLocal => produce_snapshot_base(ledger, mux, session),
-        // We won: produce the heavy snapshot and publish it. The guard holds
-        // the lock until this arm returns.
+        Coalesced::Shared(panes) => Ok(panes),
+        Coalesced::ProduceLocal => list_session_panes(mux, session),
+        // We won: fork `list-panes` and publish it. The guard holds the lock
+        // until this arm returns.
         Coalesced::Produce(_guard) => {
-            let (rollup, mut panes) = produce_snapshot_base(ledger, mux, session)?;
+            let mut panes = list_session_panes(mux, session)?;
             // A mid-tick `list-panes` race can drop a live pane's command/cwd/
             // process-start; rather than fold an anonymous `external`/`process`
             // row that blinks out next tick, backfill the missing fields from
@@ -412,12 +423,11 @@ fn cached_base_or_produce(
                 produced_at_ms: unix_now_ms(),
                 session_name: session.to_owned(),
                 panes: panes.clone(),
-                snapshot: rollup.clone(),
             };
             if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &cache) {
                 tracing::warn!(path = %cache_path.display(), error = %err, "sidebar snapshot cache write failed");
             }
-            Ok((rollup, panes))
+            Ok(panes)
         }
     }
 }
@@ -979,12 +989,10 @@ mod tests {
     }
 
     fn write_snapshot_cache(path: &Path, session: &str, produced_at_ms: u64) {
-        let ws = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let cache = SnapshotCache {
             produced_at_ms,
             session_name: session.to_owned(),
             panes: Vec::new(),
-            snapshot: rimz::SidebarSnapshot::build(ws, Vec::new(), Vec::new()),
         };
         atomic::write_temp_then_rename(path, &cache).expect("write snapshot cache");
     }

@@ -23,6 +23,7 @@ use crate::feed::PaneRef;
 use crate::ids::PaneId;
 use crate::{
     RuntimePaths, SidebarOwnView, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind,
+    StatePaths,
 };
 
 /// Coalescing window for the shared snapshot cache. Well under the default 2s
@@ -75,19 +76,24 @@ impl AccountsCache {
 /// fleet still elects one local producer rather than a fork storm).
 pub const PUBLISHED_FRAME_STALE_AFTER: Duration = Duration::from_secs(8);
 
-/// Shared, single-flight snapshot cache. Holds the ledger rollup plus the live
-/// pane list keyed to one `(workspace, session)` — the per-workspace runtime
-/// root scopes the workspace; `session_name` guards against serving one
-/// session's panes (which the Zellij backend stamps from the requested session,
-/// not the true owner) to a sidebar pinned to another during a detach or
-/// session-rotation handoff. Per-sidebar exclusion and own-view are applied by
-/// the reader, so the cached snapshot is pre-pane-fold.
+/// Shared, single-flight pane-list cache, keyed to one `(workspace, session)` —
+/// the per-workspace runtime root scopes the workspace; `session_name` guards
+/// against serving one session's panes (which the Zellij backend stamps from the
+/// requested session, not the true owner) to a sidebar pinned to another during
+/// a detach or session-rotation handoff.
+///
+/// It caches only the expensive `list-panes` round-trip. The ledger *rollup* is
+/// deliberately **not** stored here: it is cheap and per-event fresh in
+/// `latest.json`, so producer and consumer both read it fresh each fetch
+/// ([`consumer_rollup`] / `Ledger::snapshot_cached`) and fold these coalesced
+/// panes over it. Fusing the two would pin a status change to the slow pane
+/// cadence — the lag this split removes. Per-sidebar exclusion and own-view are
+/// applied by the reader, so the panes are pre-fold.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SnapshotCache {
     pub produced_at_ms: u64,
     pub session_name: String,
     pub panes: Vec<PaneRef>,
-    pub snapshot: SidebarSnapshot,
 }
 
 /// One thread's last parse of a snapshot cache file, keyed by path + identity
@@ -148,18 +154,28 @@ pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotC
     (cache.session_name == session).then_some(cache)
 }
 
-/// The producer's last published base (ledger rollup + live pane list) for a
-/// consumer renderer. Returns the same-session cache regardless of freshness —
-/// a non-producer holds the last good frame rather than forking its own
-/// `list-panes`; the elder's next publish refreshes it. `None` when no
-/// same-session cache exists yet, so the caller falls back to the bare rollup
-/// until the producer's first publish.
-fn read_published_base(
-    runtime: &RuntimePaths,
-    session: &str,
-) -> Option<(SidebarSnapshot, Vec<PaneRef>)> {
+/// The producer's last published live pane list for a consumer renderer.
+/// Returns the same-session cache regardless of freshness — a non-producer holds
+/// the last good pane set rather than forking its own `list-panes`; the elder's
+/// next publish refreshes it. `None` when no same-session cache exists yet, so
+/// the caller holds its last good frame until the producer's first publish.
+fn read_published_panes(runtime: &RuntimePaths, session: &str) -> Option<Vec<PaneRef>> {
     let cache_path = runtime.root.join("snapshot.json");
-    read_snapshot_cache(&cache_path, session).map(|cache| (cache.snapshot, cache.panes))
+    read_snapshot_cache(&cache_path, session).map(|cache| cache.panes)
+}
+
+/// The event-fresh ledger rollup for a consumer, read in process: `latest.json`
+/// when it reflects the log (lock-free, O(snapshot)), else a full re-projection
+/// (the cold/empty room, or a write that raced the freshness check). The
+/// read-only twin of the producer's `Ledger::snapshot_cached`, exposed so a
+/// consumer tab folds the freshest rollup over the producer's coalesced panes
+/// without holding a writer handle — the rollup is what makes a status change or
+/// a new agent in an existing pane repaint within one wakeup, independent of the
+/// slower pane-list cadence. `None` only when the ledger itself is unreadable,
+/// which the caller treats as a soft miss and holds the last good frame.
+pub fn consumer_rollup(state: &StatePaths) -> Option<SidebarSnapshot> {
+    crate::ledger::snapshot::read_fresh_latest(state)
+        .or_else(|| crate::ledger::snapshot::build_from(state).ok())
 }
 
 /// Whether the producer's published same-session frame has gone stale — older
@@ -350,21 +366,29 @@ pub fn agent_hooks_ready() -> bool {
 }
 
 /// Render the published snapshot for a consumer renderer, entirely from runtime
-/// caches and sidecars — no `list-panes`, no git, no ledger projection. Reads
-/// the producer's `snapshot.json` base, folds the session's statusline context
-/// and per-tool activity, overlays the live panes with this renderer's own-pane
-/// exclusion, and projects the cached diff stats. `None` until the producer has
-/// published a same-session base, so the caller holds its last good frame.
+/// caches and sidecars — no `list-panes`, no git. Reads the producer's coalesced
+/// pane list from `snapshot.json`, pairs it with the **event-fresh** rollup read
+/// in process from `latest.json` ([`consumer_rollup`]), folds the session's
+/// statusline context and per-tool activity, overlays the panes with this
+/// renderer's own-pane exclusion, and projects the cached diff stats. `None`
+/// until the producer has published a pane set (or if the ledger is unreadable),
+/// so the caller holds its last good frame.
+///
+/// Pairing fresh rollup + coalesced panes is the lag fix: a `ledger_delta` folds
+/// the new agent/status in this tab within one wakeup, while the slower
+/// `list-panes` cadence only governs genuine pane open/close.
 ///
 /// This is the in-process twin of the producer's `rimz sidebar snapshot`: the
 /// native renderer calls it directly each tick instead of forking, and the
 /// `--no-produce` CLI path (the plugin rail's read) shares it.
 pub fn read_published_snapshot(
+    state: &StatePaths,
     runtime: &RuntimePaths,
     session: &str,
     exclude: Option<&PaneId>,
 ) -> Option<SidebarSnapshot> {
-    let (base, panes) = read_published_base(runtime, session)?;
+    let panes = read_published_panes(runtime, session)?;
+    let base = consumer_rollup(state)?;
     Some(enrich_consumer(base, Some(panes), runtime, exclude))
 }
 
@@ -592,7 +616,6 @@ mod tests {
             produced_at_ms,
             session_name: "rimz-test".to_owned(),
             panes: Vec::new(),
-            snapshot: SidebarSnapshot::build(workspace, Vec::new(), Vec::new()),
         };
         atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &cache).unwrap();
         let max = PUBLISHED_FRAME_STALE_AFTER.as_millis() as u64;
@@ -642,10 +665,14 @@ mod tests {
         std::fs::create_dir_all(&worktree).unwrap();
         let wt = worktree.to_string_lossy().into_owned();
 
-        // Publish a base: a rollup whose project root is the worktree, plus one
-        // pane in it. `own` is excluded; a sibling pane becomes a row.
+        // Publish the rollup (project root = the worktree) to `latest.json`, where
+        // the consumer reads it fresh, and the live panes to `snapshot.json`. `own`
+        // is excluded; a sibling pane becomes a row.
         let mut rollup = SidebarSnapshot::build(workspace.clone(), Vec::new(), Vec::new());
         rollup = rollup.with_project_root(Some(worktree.clone()));
+        let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        state.ensure_dirs().unwrap();
+        atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
         let panes = vec![
             pane("terminal_0", "zsh", &wt),
             pane("terminal_own", "rimz-sidebar", &wt),
@@ -654,7 +681,6 @@ mod tests {
             produced_at_ms: unix_now_ms(),
             session_name: "rimz-test".to_owned(),
             panes,
-            snapshot: rollup,
         };
         atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
 
@@ -676,8 +702,8 @@ mod tests {
         atomic::write_temp_then_rename_cache(&runtime.root.join("diff-stats.json"), &diff).unwrap();
 
         let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
-        let snapshot =
-            read_published_snapshot(&runtime, "rimz-test", Some(&own)).expect("published base");
+        let snapshot = read_published_snapshot(&state, &runtime, "rimz-test", Some(&own))
+            .expect("published base");
 
         // The worktree group carries the cached +7/-2 and the live branch label,
         // projected from the cache with no git fork.
@@ -722,13 +748,18 @@ mod tests {
             produced_at_ms: unix_now_ms(),
             session_name: "rimz-test".to_owned(),
             panes: vec![main_sb, main_term, orphan_sb],
-            snapshot: SidebarSnapshot::build(workspace, Vec::new(), Vec::new()),
         };
         atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
+        // The rollup the consumer folds the panes over: an empty room, published
+        // to `latest.json` where the consumer reads it fresh.
+        let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        state.ensure_dirs().unwrap();
+        let rollup = SidebarSnapshot::build(workspace, Vec::new(), Vec::new());
+        atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
 
         let orphan_own = PaneId::from_parts(MuxName::Zellij, "orphan_sb");
-        let snapshot =
-            read_published_snapshot(&runtime, "rimz-test", Some(&orphan_own)).expect("base");
+        let snapshot = read_published_snapshot(&state, &runtime, "rimz-test", Some(&orphan_own))
+            .expect("base");
         assert_eq!(
             snapshot.own_view.map(|view| view.sibling_count),
             Some(0),
@@ -740,21 +771,61 @@ mod tests {
     fn read_published_snapshot_is_none_until_the_producer_publishes() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
-        assert!(read_published_snapshot(&runtime, "rimz-test", None).is_none());
+        // No published pane set yet (the producer hasn't run), so the consumer
+        // read is `None` regardless of the rollup — the caller holds last-good.
+        let state = StatePaths::under(workspace, dir.path()).unwrap();
+        assert!(read_published_snapshot(&state, &runtime, "rimz-test", None).is_none());
+    }
+
+    #[test]
+    fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
+        // The event-fresh split: the consumer reads the rollup from `latest.json`
+        // each call, so a status change shows even when the producer's published
+        // pane cache has not moved. Republishing `latest.json` alone changes the
+        // rendered rollup.
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        state.ensure_dirs().unwrap();
+
+        // A published (and never re-published) pane cache.
+        let panes = SnapshotCache {
+            produced_at_ms: unix_now_ms(),
+            session_name: "rimz-test".to_owned(),
+            panes: Vec::new(),
+        };
+        atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &panes).unwrap();
+
+        let mut alpha = SidebarSnapshot::build(workspace.clone(), Vec::new(), Vec::new());
+        alpha.display_name = "alpha".to_owned();
+        atomic::write_temp_then_rename(&state.latest_snapshot, &alpha).unwrap();
+        let first = read_published_snapshot(&state, &runtime, "rimz-test", None).expect("base");
+        assert_eq!(first.display_name, "alpha");
+
+        // Republish ONLY `latest.json` (a different length so the parse cache
+        // cannot mask the change); the pane cache is untouched.
+        let mut bravo = SidebarSnapshot::build(workspace, Vec::new(), Vec::new());
+        bravo.display_name = "bravo-the-second-rollup".to_owned();
+        atomic::write_temp_then_rename(&state.latest_snapshot, &bravo).unwrap();
+        let second = read_published_snapshot(&state, &runtime, "rimz-test", None).expect("base");
+        assert_eq!(
+            second.display_name, "bravo-the-second-rollup",
+            "the consumer folds the fresh rollup, not a cached one"
+        );
     }
 
     #[test]
     fn read_snapshot_cache_misses_a_different_session() {
         let dir = tempfile::tempdir().unwrap();
-        let workspace = WorkspaceId::from_project_root(dir.path());
         let path = dir.path().join("snapshot.json");
         let cache = SnapshotCache {
             produced_at_ms: unix_now_ms(),
             session_name: "rimz-one".to_owned(),
             panes: Vec::new(),
-            snapshot: SidebarSnapshot::build(workspace, Vec::new(), Vec::new()),
         };
         atomic::write_temp_then_rename(&path, &cache).unwrap();
         assert!(read_snapshot_cache(&path, "rimz-one").is_some());
@@ -768,14 +839,12 @@ mod tests {
         // a differently-sized rewrite is caught even if the filesystem's mtime
         // granularity is too coarse to register two fast writes.
         let dir = tempfile::tempdir().unwrap();
-        let workspace = WorkspaceId::from_project_root(dir.path());
         let path = dir.path().join("snapshot.json");
 
         let first = SnapshotCache {
             produced_at_ms: unix_now_ms(),
             session_name: "rimz-one".to_owned(),
             panes: Vec::new(),
-            snapshot: SidebarSnapshot::build(workspace.clone(), Vec::new(), Vec::new()),
         };
         atomic::write_temp_then_rename_cache(&path, &first).unwrap();
         // Populate this thread's parse cache.
@@ -789,7 +858,6 @@ mod tests {
             produced_at_ms: unix_now_ms() + 1,
             session_name: "rimz-two".to_owned(),
             panes: vec![pane("terminal_0", "zsh", "/tmp")],
-            snapshot: SidebarSnapshot::build(workspace, Vec::new(), Vec::new()),
         };
         atomic::write_temp_then_rename_cache(&path, &second).unwrap();
         // The stale (rimz-one) entry must not be served; the fresh frame wins.

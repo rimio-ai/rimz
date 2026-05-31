@@ -2256,7 +2256,8 @@ pub fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
 /// deserializes to `None` and falls back. `write_temp_then_rename` makes the
 /// file all-or-nothing, so a readable `latest.json` is always a complete rollup.
 pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
-    let latest_mtime = modified_time(&paths.latest_snapshot)?;
+    let meta = fs::metadata(&paths.latest_snapshot).ok()?;
+    let latest_mtime = meta.modified().ok()?;
     // A missing log means there are no appended events to lag behind.
     let reflects_log = match modified_time(&paths.events_log) {
         Some(log_mtime) => latest_mtime >= log_mtime,
@@ -2265,8 +2266,50 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
     if !reflects_log {
         return None;
     }
+    // The freshness-vs-log check ran above on the live mtimes; only the *parse*
+    // is cached. A consumer tab folds `latest.json` on every ledger delta, so
+    // skipping the 100–500 KB deserialize when the file is byte-identical to this
+    // thread's last read (same path, mtime, len) keeps the rollup off the CPU on a
+    // delta storm — the read itself is page-cache-hot. Same (path, mtime, len)
+    // trade-off the `snapshot.json` parse cache accepts; an atomic-rename republish
+    // changes both mtime and len, so a stale parse cannot be served.
+    let len = meta.len();
+    let path = paths.latest_snapshot.as_path();
+    let cached = LATEST_PARSE_CACHE.with_borrow(|slot| {
+        slot.as_ref().and_then(|entry| {
+            (entry.path == path && entry.mtime == latest_mtime && entry.len == len)
+                .then(|| entry.snapshot.clone())
+        })
+    });
+    if let Some(snapshot) = cached {
+        return Some(snapshot);
+    }
     let bytes = fs::read(&paths.latest_snapshot).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    let snapshot: SidebarSnapshot = serde_json::from_slice(&bytes).ok()?;
+    LATEST_PARSE_CACHE.with_borrow_mut(|slot| {
+        *slot = Some(ParsedLatest {
+            path: path.to_path_buf(),
+            mtime: latest_mtime,
+            len,
+            snapshot: snapshot.clone(),
+        });
+    });
+    Some(snapshot)
+}
+
+/// One thread's last parse of `latest.json`, keyed by path + identity (mtime,
+/// len) — the read-side twin of `sidebar::snapshot`'s `snapshot.json` parse
+/// cache, for the rollup a long-lived consumer thread re-reads each delta.
+struct ParsedLatest {
+    path: PathBuf,
+    mtime: SystemTime,
+    len: u64,
+    snapshot: SidebarSnapshot,
+}
+
+thread_local! {
+    static LATEST_PARSE_CACHE: std::cell::RefCell<Option<ParsedLatest>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 fn modified_time(path: &Path) -> Option<SystemTime> {
