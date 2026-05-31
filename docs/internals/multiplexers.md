@@ -27,6 +27,7 @@ attach_command(name) -> CommandSpec
 detach(name)
 list_sessions()
 list_panes(session)               id, view, foreground command, cwd
+client_focused_panes(session)     the pane each attached client focuses
 split_pane(args)
 focus_pane(pane_id)
 capture_pane(pane_id, opts)     normalized output
@@ -48,6 +49,19 @@ Backend-specific fast paths cannot become correctness requirements. If a feature
 | cwd          | `#{pane_current_path}`     | `pane_cwd`               |
 
 `PaneRef.pane_process_start` stays the reused-id reconciliation key. Neither backend's pane PID feeds the sidebar: tmux's `#{pane_pid}` is the pane's *shell*, not the agent it launched, and Zellij exposes no pane PID at all. Agent liveness instead uses the agent's own pid, captured best-effort by its hook ([agent.md](./agent.md)) — so the parity floor for presence is command + cwd, which both backends meet.
+
+### Two kinds of focus
+
+`list_panes` reports `PaneRef.is_focused`: the **per-view active pane**. Both backends mark one such pane per view (Zellij's `list-panes` `is_focused`, tmux's `#{pane_active}`), so a session with N views reports N "focused" panes — the active pane *within* each tab/window, regardless of where the user is looking.
+
+The pane a user actually looks at is **per-client**, and `client_focused_panes` reports it — one pane per attached client, deduped:
+
+| backend | command |
+|---------|---------|
+| Zellij  | `zellij action list-clients` (column 2, `ZELLIJ_PANE_ID`, per client) |
+| tmux    | `tmux list-clients -t <session> -F "#{pane_id}"` (per client) |
+
+The producer overlays this set onto `PaneRef.client_focused` (see [sidebar.md](./sidebar.md)), so the sidebar focus mirror tracks the user, not every view's active pane. It is best-effort enrichment, never a precondition: a backend that cannot answer returns an empty set and the mirror holds. `is_focused` stays the per-view signal the row cap uses to keep each view's active row visible.
 
 ## Pane IDs
 

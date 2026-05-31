@@ -350,6 +350,17 @@ pub trait MuxBackend: Send + Sync {
     fn kill_session(&self, name: &str) -> Result<()>;
     fn list_sessions(&self) -> Result<Vec<String>>;
     fn list_panes(&self, opts: PaneListOptions) -> Result<Vec<PaneRef>>;
+    /// The pane each attached client is focused on — one entry per client (the
+    /// caller dedups). This is the per-client focus set, distinct from
+    /// [`PaneRef::is_focused`], which is the per-view active pane the mux marks
+    /// once per tab/window. The sidebar focus mirror reads this so it tracks the
+    /// user, not every tab's active pane. Best-effort enrichment, never a
+    /// precondition: a backend that cannot answer returns an empty set and the
+    /// mirror simply holds its current selection.
+    fn client_focused_panes(&self, session: &str) -> Result<Vec<PaneId>> {
+        let _ = session;
+        Ok(Vec::new())
+    }
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()>;
     fn focus_pane(&self, pane: &PaneId) -> Result<()>;
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture>;

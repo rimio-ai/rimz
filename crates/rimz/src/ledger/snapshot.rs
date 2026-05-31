@@ -1031,9 +1031,14 @@ impl SidebarOwnView {
             .iter()
             .filter(|pane| pane.pane_id != *own && pane.view_id.as_deref() == own_view)
             .collect::<Vec<_>>();
+        // The focus mirror tracks the *client's* focus, not the per-view active
+        // pane (`is_focused`), so a sidebar in a tab the client isn't looking at
+        // reports no focus and holds. Under multiplayer Zellij (two clients in
+        // one tab on different panes) the set can hold two siblings; picking the
+        // first is acceptable for a single-attached sidebar.
         let focused_pane_id = siblings
             .iter()
-            .find(|pane| pane.is_focused)
+            .find(|pane| pane.client_focused)
             .map(|pane| pane.pane_id.clone());
         // The own view is the daemon view iff, after dropping sidebar panes, its
         // remaining siblings are non-empty and all managed hosts. Keys on
@@ -1053,7 +1058,7 @@ impl SidebarOwnView {
                 .all(|&pane| crate::remote_control::pane_is_host(pane));
         Some(Self {
             sibling_count: siblings.len(),
-            own_is_focused: own_pane.is_focused,
+            own_is_focused: own_pane.client_focused,
             focused_pane_id,
             own_view_is_daemon,
         })
@@ -1859,6 +1864,7 @@ fn pane_ref_from_id(pane_id: PaneId) -> PaneRef {
         view_kind: None,
         view_name: None,
         is_focused: false,
+        client_focused: false,
         command: None,
         cwd: None,
         pane_pid: None,
@@ -2599,6 +2605,7 @@ mod tests {
             view_kind: Some(crate::ids::ViewKind::Window),
             view_name: None,
             is_focused: false,
+            client_focused: false,
             command: Some(command.to_owned()),
             cwd: Some(cwd.to_owned()),
             pane_pid: None,
@@ -4866,6 +4873,7 @@ mod tests {
                         view_kind: Some(crate::ids::ViewKind::Window),
                         view_name: None,
                         is_focused: true,
+                        client_focused: false,
                         command: Some("codex".to_owned()),
                         cwd: Some("/repo/main".to_owned()),
                         pane_pid: None,
@@ -5226,6 +5234,10 @@ mod tests {
         );
     }
 
+    /// A sibling fixture whose `focused` flag sets both the per-view active bit
+    /// and the per-client focus bit — the common single-client case where the
+    /// pane the user looks at is also its tab's active pane. The regression test
+    /// below diverges them deliberately.
     fn view_pane(raw: &str, view: &str, focused: bool) -> PaneRef {
         PaneRef {
             pane_id: PaneId::from_parts(MuxName::Zellij, raw),
@@ -5234,6 +5246,7 @@ mod tests {
             view_kind: Some(crate::ids::ViewKind::Tab),
             view_name: None,
             is_focused: focused,
+            client_focused: focused,
             command: Some("zsh".to_owned()),
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
@@ -5281,6 +5294,26 @@ mod tests {
         assert!(SidebarOwnView::from_panes(&own, &panes).is_none());
     }
 
+    #[test]
+    fn focus_mirror_ignores_a_tab_active_pane_no_client_is_on() {
+        // The reported bug: a sidebar's own tab has an active pane
+        // (`is_focused`), but the attached client is focused elsewhere, so no
+        // sibling is `client_focused`. The mirror must report no focus and hold,
+        // not adopt the tab's active pane.
+        let own = PaneId::from_parts(MuxName::Zellij, "terminal_52");
+        let sibling = PaneRef {
+            is_focused: true,      // the active pane of this tab
+            client_focused: false, // but no client is looking at it
+            ..view_pane("terminal_53", "tab_11", false)
+        };
+        let panes = vec![view_pane("terminal_52", "tab_11", false), sibling];
+
+        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane is present");
+
+        assert!(!view.own_is_focused);
+        assert_eq!(view.focused_pane_id, None);
+    }
+
     /// A pane fixture with an explicit command and optional window name, so a
     /// test can build daemon hosts, sidebars, and working shells across views.
     fn pane_cmd(raw: &str, view: &str, command: &str, view_name: Option<&str>) -> PaneRef {
@@ -5291,6 +5324,7 @@ mod tests {
             view_kind: Some(crate::ids::ViewKind::Tab),
             view_name: view_name.map(str::to_owned),
             is_focused: false,
+            client_focused: false,
             command: Some(command.to_owned()),
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,

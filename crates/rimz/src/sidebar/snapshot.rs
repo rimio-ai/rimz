@@ -805,6 +805,7 @@ mod tests {
             view_kind: None,
             view_name: None,
             is_focused: false,
+            client_focused: false,
             command: Some(command.to_owned()),
             cwd: Some(cwd.to_owned()),
             pane_pid: None,

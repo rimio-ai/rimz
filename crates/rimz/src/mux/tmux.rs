@@ -302,6 +302,20 @@ impl MuxBackend for TmuxBackend {
         Ok(panes)
     }
 
+    /// `list-clients -t <session>` lists the clients attached to that session;
+    /// `#{pane_id}` resolves per-client to the pane that client is viewing (the
+    /// active pane of its current window). One row per attached client → the
+    /// per-client focus set. No clients (headless) → empty.
+    fn client_focused_panes(&self, session: &str) -> Result<Vec<PaneId>> {
+        let output = self
+            .cmd()
+            .args(["list-clients", "-t", session, "-F", "#{pane_id}"])
+            .run()?;
+        Ok(parse_client_pane_ids(&String::from_utf8_lossy(
+            &output.stdout,
+        )))
+    }
+
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()> {
         let mut spec = self.cmd().args(["split-window", "-d", "-h"]);
         for (key, value) in &opts.env {
@@ -543,6 +557,9 @@ fn parse_pane_line(line: &str) -> Option<PaneRef> {
         view_kind: Some(ViewKind::Window),
         view_name: trimmed_nonempty(8),
         is_focused: cols.get(7).is_some_and(|value| value.trim() == "1"),
+        // Stamped later by the producer from `client_focused_panes`, never here:
+        // `list-panes` reports the per-window active pane, not per-client focus.
+        client_focused: false,
         command: trimmed_nonempty(3),
         cwd: trimmed_nonempty(4),
         pane_pid: cols
@@ -553,6 +570,18 @@ fn parse_pane_line(line: &str) -> Option<PaneRef> {
             .and_then(|value| value.trim().parse::<i64>().ok())
             .and_then(|seconds| Timestamp::from_second(seconds).ok()),
     })
+}
+
+/// Parse `list-clients -F "#{pane_id}"` stdout into the per-client focused-pane
+/// set: one pane id per line. Blank lines (a short or empty read) are skipped;
+/// no clients → empty.
+fn parse_client_pane_ids(stdout: &str) -> Vec<PaneId> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|raw| PaneId::from_parts(MuxName::Tmux, raw))
+        .collect()
 }
 
 #[cfg(test)]
@@ -605,6 +634,26 @@ mod tests {
         assert_eq!(pane.command, None);
         assert_eq!(pane.view_name, None);
         assert!(!pane.is_focused);
+        assert!(!pane.client_focused);
+    }
+
+    #[test]
+    fn parse_client_pane_ids_reads_one_pane_per_client() {
+        // Two clients attached to the session, each viewing a different pane.
+        let ids = parse_client_pane_ids("%3\n%7\n");
+        assert_eq!(
+            ids,
+            vec![
+                PaneId::from_parts(MuxName::Tmux, "%3"),
+                PaneId::from_parts(MuxName::Tmux, "%7"),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_client_pane_ids_is_empty_with_no_clients() {
+        assert!(parse_client_pane_ids("").is_empty());
+        assert!(parse_client_pane_ids("\n  \n").is_empty());
     }
 
     #[test]

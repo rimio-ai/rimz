@@ -184,6 +184,7 @@ impl MuxBackend for FakeBackend {
             view_kind: Some(ViewKind::Window),
             view_name: None,
             is_focused: false,
+            client_focused: false,
             command: Some("sh".to_owned()),
             cwd: None,
             pane_pid: None,

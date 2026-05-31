@@ -1680,6 +1680,7 @@ mod tests {
             view_kind: Some(rimz::ids::ViewKind::Tab),
             view_name: None,
             is_focused: focused,
+            client_focused: focused,
             command: Some("zsh".to_owned()),
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,

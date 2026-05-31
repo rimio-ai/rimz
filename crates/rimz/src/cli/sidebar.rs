@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -6,7 +7,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Subcommand};
 
 use super::{GlobalFlags, open_ledger};
-use rimz::ids::{MuxName, WorkspaceId};
+use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::ledger::atomic;
 use rimz::ledger::paths::env_path;
 use rimz::ledger::single_flight::{self, Coalesced};
@@ -333,9 +334,27 @@ fn fresh_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotCach
 /// snapshot cache amortizes across the fleet. The ledger rollup is read
 /// separately (fresh from `latest.json`), so this enumerates only the pane set.
 fn list_session_panes(mux: MuxName, session: &str) -> Result<Vec<rimz::feed::PaneRef>> {
-    Ok(rimz::mux::backend_for(mux).list_panes(PaneListOptions {
+    let backend = rimz::mux::backend_for(mux);
+    let mut panes = backend.list_panes(PaneListOptions {
         session_name: Some(session.to_owned()),
-    })?)
+    })?;
+    // Overlay the per-client focus set onto `client_focused` so the sidebar
+    // focus mirror tracks the user, not every tab's active pane (`is_focused`).
+    // Best-effort enrichment, never a precondition: a probe failure leaves the
+    // bits `false`, and the mirror holds its current selection rather than
+    // flickering. The fresh read is never carried forward — a stale focus bit
+    // is worse than a dropped one.
+    let focused: HashSet<PaneId> = match backend.client_focused_panes(session) {
+        Ok(set) => set.into_iter().collect(),
+        Err(err) => {
+            tracing::warn!(error = %err, "client focus probe failed; sidebar focus mirror holds");
+            HashSet::new()
+        }
+    };
+    for pane in &mut panes {
+        pane.client_focused = focused.contains(&pane.pane_id);
+    }
+    Ok(panes)
 }
 
 /// Fill any field a fresh `list-panes` read dropped, from the last good read of
@@ -775,6 +794,7 @@ mod tests {
             view_kind: None,
             view_name: None,
             is_focused: false,
+            client_focused: false,
             command: command.map(ToOwned::to_owned),
             cwd: cwd.map(ToOwned::to_owned),
             pane_pid: None,

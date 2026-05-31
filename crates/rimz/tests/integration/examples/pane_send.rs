@@ -231,6 +231,7 @@ fn stage_bridge_item_with_pane(
         view_kind: None,
         view_name: None,
         is_focused: false,
+        client_focused: false,
         command: Some("sh".to_owned()),
         cwd: None,
         pane_pid: None,

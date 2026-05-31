@@ -532,6 +532,9 @@ impl MuxBackend for ZellijBackend {
                 // instead (which Zellij does report).
                 view_name: None,
                 is_focused: p.is_focused,
+                // Stamped later by the producer from `client_focused_panes`,
+                // never here: `list-panes` carries no per-client focus.
+                client_focused: false,
                 pane_pid: p.pid(),
                 pane_process_start: p.process_start(),
                 command: p.take_command(),
@@ -542,6 +545,17 @@ impl MuxBackend for ZellijBackend {
                 // to always painting — the deliberate cross-backend floor.
             })
             .collect())
+    }
+
+    /// `zellij action list-clients` prints a header row then one row per attached
+    /// client, `CLIENT_ID  ZELLIJ_PANE_ID  RUNNING_COMMAND`, whitespace-aligned.
+    /// The pane id is already `terminal_N` (unlike `list-panes`, which reports a
+    /// bare integer), so it maps straight to a [`PaneId`].
+    fn client_focused_panes(&self, session: &str) -> Result<Vec<PaneId>> {
+        let output = self.zellij_action(session).arg("list-clients").run()?;
+        Ok(parse_client_pane_ids(&String::from_utf8_lossy(
+            &output.stdout,
+        )))
     }
 
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()> {
@@ -1161,6 +1175,26 @@ fn strip_ansi(line: &str) -> String {
     out
 }
 
+/// Parse `zellij action list-clients` stdout into the per-client focused-pane
+/// set. The output is a header row (`CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND`)
+/// then one whitespace-aligned row per client; column 2 is the focused pane id,
+/// already in `terminal_N` form. The trailing `RUNNING_COMMAND` may contain
+/// spaces, but the pane id is the second column, so `split_whitespace().nth(1)`
+/// is safe. ANSI is stripped defensively (newer Zellij banners its output) and
+/// the header row is skipped by its `CLIENT_ID` lead. No clients → empty.
+fn parse_client_pane_ids(stdout: &str) -> Vec<PaneId> {
+    stdout
+        .lines()
+        .map(strip_ansi)
+        .filter(|line| !line.trim_start().starts_with("CLIENT_ID"))
+        .filter_map(|line| {
+            line.split_whitespace()
+                .nth(1)
+                .map(|raw| PaneId::from_parts(MuxName::Zellij, raw))
+        })
+        .collect()
+}
+
 fn trim_capture(raw_text: String, max_lines: Option<u16>) -> (String, Vec<String>) {
     let mut lines: Vec<String> = raw_text.lines().map(str::to_owned).collect();
     if let Some(max_lines) = max_lines {
@@ -1210,6 +1244,30 @@ mod tests {
         assert!(parsed[0].is_focused);
         assert!(parsed[1].is_plugin);
         assert!(!parsed[1].is_focused);
+    }
+
+    #[test]
+    fn parse_client_pane_ids_reads_column_two_and_skips_the_header() {
+        // The trailing RUNNING_COMMAND carries spaces; the pane id is column 2,
+        // so it still parses. Two clients on different panes → two ids.
+        let stdout = "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n\
+             1         terminal_8     claude --worktree fix_focus\n\
+             2         terminal_45    claude --worktree sidebar-minor\n";
+        let ids = parse_client_pane_ids(stdout);
+        assert_eq!(
+            ids,
+            vec![
+                PaneId::from_parts(MuxName::Zellij, "terminal_8"),
+                PaneId::from_parts(MuxName::Zellij, "terminal_45"),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_client_pane_ids_is_empty_with_no_clients() {
+        // No attached client → header only (or nothing) → empty set.
+        assert!(parse_client_pane_ids("CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n").is_empty());
+        assert!(parse_client_pane_ids("").is_empty());
     }
 
     #[test]
