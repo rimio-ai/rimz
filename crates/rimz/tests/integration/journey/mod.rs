@@ -505,6 +505,8 @@ fn process_pane(mux: MuxName, index: usize, command: &str, cwd: String) -> PaneR
         cwd: Some(cwd),
         pane_pid: None,
         pane_process_start: None,
+        view_active: None,
+        session_attached: None,
     }
 }
 

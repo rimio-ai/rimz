@@ -236,6 +236,8 @@ fn stage_bridge_item_with_pane(
         cwd: None,
         pane_pid: None,
         pane_process_start: None,
+        view_active: None,
+        session_attached: None,
     });
     item.runtime_owner = Some(current_process_owner(
         RuntimeOwnerKind::Agent,

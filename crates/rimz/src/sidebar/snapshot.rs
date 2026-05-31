@@ -46,7 +46,7 @@ pub const DIFF_STATS_TTL: Duration = Duration::from_secs(5);
 /// not the true owner) to a sidebar pinned to another during a detach or
 /// session-rotation handoff. Per-sidebar exclusion and own-view are applied by
 /// the reader, so the cached snapshot is pre-pane-fold.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SnapshotCache {
     pub produced_at_ms: u64,
     pub session_name: String,
@@ -54,12 +54,61 @@ pub struct SnapshotCache {
     pub snapshot: SidebarSnapshot,
 }
 
+/// One thread's last parse of a snapshot cache file, keyed by path + identity
+/// (mtime, len). The consumer fetch worker is a long-lived thread that calls
+/// [`read_snapshot_cache`] every fetch (~0.75–2s), but the producer only
+/// republishes `snapshot.json` when something changed — so most reads hit an
+/// unchanged file. Caching the parse lets a hit return a clone of the in-memory
+/// value (a bulk copy) instead of re-deserializing 100–500 KB of JSON. Thread-
+/// local so it needs no lock and cannot be shared across the process's threads.
+struct ParsedSnapshotCache {
+    path: PathBuf,
+    mtime: SystemTime,
+    len: u64,
+    cache: SnapshotCache,
+}
+
+thread_local! {
+    static SNAPSHOT_PARSE_CACHE: std::cell::RefCell<Option<ParsedSnapshotCache>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// Read a same-session cache entry regardless of coalescing freshness. `None`
 /// when it is absent, for another session, or unreadable. Used as the
 /// hold-last-good base for a consumer read and the degraded-read fallback.
+///
+/// Skips the JSON parse when this thread already parsed a byte-identical file
+/// (same path, mtime, and length). On a stat miss it re-reads and re-caches; a
+/// file replaced (atomic rename) between the stat and the read just costs one
+/// redundant parse next call, never a stale or torn value.
 pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotCache> {
-    let bytes = std::fs::read(cache_path).ok()?;
-    let cache: SnapshotCache = serde_json::from_slice(&bytes).ok()?;
+    let meta = std::fs::metadata(cache_path).ok()?;
+    let mtime = meta.modified().ok()?;
+    let len = meta.len();
+
+    let cached = SNAPSHOT_PARSE_CACHE.with_borrow(|slot| {
+        slot.as_ref().and_then(|entry| {
+            (entry.path == cache_path && entry.mtime == mtime && entry.len == len)
+                .then(|| entry.cache.clone())
+        })
+    });
+
+    let cache = match cached {
+        Some(cache) => cache,
+        None => {
+            let bytes = std::fs::read(cache_path).ok()?;
+            let parsed: SnapshotCache = serde_json::from_slice(&bytes).ok()?;
+            SNAPSHOT_PARSE_CACHE.with_borrow_mut(|slot| {
+                *slot = Some(ParsedSnapshotCache {
+                    path: cache_path.to_path_buf(),
+                    mtime,
+                    len,
+                    cache: parsed.clone(),
+                });
+            });
+            parsed
+        }
+    };
     (cache.session_name == session).then_some(cache)
 }
 
@@ -318,6 +367,8 @@ mod tests {
             cwd: Some(cwd.to_owned()),
             pane_pid: None,
             pane_process_start: None,
+            view_active: None,
+            session_attached: None,
         }
     }
 
@@ -432,6 +483,44 @@ mod tests {
     }
 
     #[test]
+    fn consumer_own_view_reads_its_own_pane_visibility() {
+        // The producer publishes the session-wide pane list with per-pane
+        // visibility; each consumer must derive its *own* pane's visibility, not
+        // the producer's. Here the producer's pane is on the active window but the
+        // consumer's is on an inactive one — the consumer must see `Some(false)`.
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+
+        let vis = |id: &str, view: &str, view_active: bool| PaneRef {
+            view_id: Some(view.to_owned()),
+            view_active: Some(view_active),
+            session_attached: Some(true),
+            ..pane(id, "zsh", "/tmp")
+        };
+        let base = SnapshotCache {
+            produced_at_ms: unix_now_ms(),
+            session_name: "rimz-test".to_owned(),
+            // Producer pane on the active window; consumer pane on an inactive one.
+            panes: vec![
+                vis("producer_sb", "@0", true),
+                vis("consumer_sb", "@1", false),
+            ],
+            snapshot: SidebarSnapshot::build(workspace, Vec::new(), Vec::new()),
+        };
+        atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
+
+        let own = PaneId::from_parts(MuxName::Zellij, "consumer_sb");
+        let snapshot = read_published_snapshot(&runtime, "rimz-test", Some(&own)).expect("base");
+        assert_eq!(
+            snapshot.own_view.and_then(|view| view.visible),
+            Some(false),
+            "the consumer reads its own (inactive-window) pane, not the producer's",
+        );
+    }
+
+    #[test]
     fn read_published_snapshot_is_none_until_the_producer_publishes() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
@@ -454,6 +543,45 @@ mod tests {
         atomic::write_temp_then_rename(&path, &cache).unwrap();
         assert!(read_snapshot_cache(&path, "rimz-one").is_some());
         assert!(read_snapshot_cache(&path, "rimz-other").is_none());
+    }
+
+    #[test]
+    fn read_snapshot_cache_reflects_a_changed_file() {
+        // The thread-local parse cache must invalidate when the file changes, or
+        // a consumer would serve a stale base forever. Keyed on (mtime, len), so
+        // a differently-sized rewrite is caught even if the filesystem's mtime
+        // granularity is too coarse to register two fast writes.
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let path = dir.path().join("snapshot.json");
+
+        let first = SnapshotCache {
+            produced_at_ms: unix_now_ms(),
+            session_name: "rimz-one".to_owned(),
+            panes: Vec::new(),
+            snapshot: SidebarSnapshot::build(workspace.clone(), Vec::new(), Vec::new()),
+        };
+        atomic::write_temp_then_rename_cache(&path, &first).unwrap();
+        // Populate this thread's parse cache.
+        assert_eq!(
+            read_snapshot_cache(&path, "rimz-one").map(|c| c.panes.len()),
+            Some(0),
+        );
+
+        // Republish a longer, different-session frame in place.
+        let second = SnapshotCache {
+            produced_at_ms: unix_now_ms() + 1,
+            session_name: "rimz-two".to_owned(),
+            panes: vec![pane("terminal_0", "zsh", "/tmp")],
+            snapshot: SidebarSnapshot::build(workspace, Vec::new(), Vec::new()),
+        };
+        atomic::write_temp_then_rename_cache(&path, &second).unwrap();
+        // The stale (rimz-one) entry must not be served; the fresh frame wins.
+        assert!(read_snapshot_cache(&path, "rimz-one").is_none());
+        assert_eq!(
+            read_snapshot_cache(&path, "rimz-two").map(|c| c.panes.len()),
+            Some(1),
+        );
     }
 
     #[test]

@@ -141,7 +141,15 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // or swallows a keypress.
     while !should_exit {
         let animating = render::has_live_animation(&current);
-        let timeout = if animating {
+        // A known-hidden pane (tmux: its window is inactive or its session is
+        // detached) neither paints the spin nor needs the fast wakeup: fall back
+        // to the slow data tick so a background sidebar isn't waking ~10×/sec
+        // only to skip a paint. It still folds the backstop fetch on that tick,
+        // so it is current the moment it returns to view. Unknown visibility
+        // (`None` — Zellij, a degraded read) keeps the fast tick, exactly as
+        // before this gate.
+        let fast_tick = should_draw_tick(animating, own_visibility(&current));
+        let timeout = if fast_tick {
             ANIMATION_FRAME.min(tick)
         } else {
             tick
@@ -199,7 +207,16 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             // delta. `request_fetch` is a no-op while a fetch is in flight, so the
             // backstop can neither double-fire nor stall.
             Wakeup::Tick => {
-                if animating {
+                // Advance the spin only on a fast tick — there is motion to show
+                // AND this sidebar's own pane is not known-hidden (its view is
+                // inactive or its session is detached; tmux only, Zellij/unknown
+                // always paints, the cross-backend floor). A hidden pane skips the
+                // repaint nobody can see; the data backstop below still fires, so
+                // it keeps folding fresh snapshots and the accepted fold repaints
+                // it the moment it returns to view, already at the right phase.
+                // `current` is unchanged since `fast_tick` was computed at the top
+                // of this iteration (only the other arms mutate it), so reuse it.
+                if fast_tick {
                     ui.animation_phase = wall_clock_phase(anim_start);
                     render::draw_to_terminal_with_ui(
                         &mut terminal,
@@ -648,6 +665,20 @@ fn wall_clock_phase(start: Instant) -> u64 {
 
 fn tick_for(seconds: u64) -> Duration {
     Duration::from_secs(seconds.max(1))
+}
+
+/// This sidebar's own-pane visibility from the current snapshot: `Some(true)`
+/// visible, `Some(false)` known-hidden, `None` unknown (Zellij, a degraded
+/// read, or the pre-publish placeholder, which carries no `own_view`).
+fn own_visibility(snapshot: &SidebarSnapshot) -> Option<bool> {
+    snapshot.own_view.as_ref().and_then(|view| view.visible)
+}
+
+/// Whether the animation tick should repaint: only when there is motion to show
+/// and the pane is not *known* hidden. Unknown visibility (`None`) paints, so a
+/// backend that cannot report visibility behaves exactly as before this gate.
+fn should_draw_tick(animating: bool, visible: Option<bool>) -> bool {
+    animating && visible != Some(false)
 }
 
 fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
@@ -1285,6 +1316,8 @@ mod tests {
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
             pane_process_start: None,
+            view_active: None,
+            session_attached: None,
         }
     }
 
@@ -1697,6 +1730,33 @@ mod tests {
     #[test]
     fn tick_for_clamps_zero_to_one() {
         assert_eq!(tick_for(0), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn should_draw_tick_paints_unless_known_hidden() {
+        // Nothing animating: never the fast tick, whatever the visibility.
+        assert!(!should_draw_tick(false, Some(true)));
+        assert!(!should_draw_tick(false, None));
+        // Animating + visible, or animating + unknown (Zellij / degraded read):
+        // paint, exactly as before the gate existed.
+        assert!(should_draw_tick(true, Some(true)));
+        assert!(should_draw_tick(true, None));
+        // Animating + *known hidden*: the one case the gate suppresses.
+        assert!(!should_draw_tick(true, Some(false)));
+    }
+
+    #[test]
+    fn own_visibility_reads_through_to_the_own_view() {
+        let mut snapshot = placeholder_snapshot(workspace());
+        // The placeholder carries no own_view → unknown, so it always paints.
+        assert_eq!(own_visibility(&snapshot), None);
+        snapshot.own_view = Some(rimz::SidebarOwnView {
+            sibling_count: 0,
+            own_is_focused: false,
+            focused_pane_id: None,
+            visible: Some(false),
+        });
+        assert_eq!(own_visibility(&snapshot), Some(false));
     }
 
     #[test]

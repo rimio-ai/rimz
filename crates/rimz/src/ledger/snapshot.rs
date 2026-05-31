@@ -130,6 +130,14 @@ pub struct SidebarOwnView {
     pub sibling_count: usize,
     pub own_is_focused: bool,
     pub focused_pane_id: Option<PaneId>,
+    /// Whether the calling sidebar's own pane is visible to an attached client:
+    /// its view is the session's active view AND the session has a client. The
+    /// renderer suppresses its animation repaint while this is `Some(false)`.
+    /// `None` when either signal is unknown (Zellij, or a degraded `list-panes`
+    /// row) — the renderer then paints as usual. Display/perf only; self-close
+    /// and selection-sync never read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -465,34 +473,48 @@ impl SidebarSnapshot {
     ///     while never dropping a concurrent agent that owns its own pane.
     pub fn reap_stale_sessions(&mut self, now: Timestamp) {
         let previous_len = self.agents.len();
+        // Mark each superseded older session by position, borrowing `agents`
+        // read-only. Runs on every snapshot rebuild, so the old approach — a
+        // `BTreeSet` of owned `(kind, agent_id)` tuples plus a second clone per
+        // agent in `retain` — meant up to ~3×N string allocations per call; the
+        // parallel `Vec<bool>` keeps it allocation-free per agent.
+        //
         // Both reap rules are root-only. A subagent is paneless and pidless by
         // construction and shares no worktree key with its parent, so the
         // supersession rule would collapse two live parallel siblings and the
-        // pidless-TTL rule would reap an idle child — both wrong. Children leave
-        // the rollup only transitively: once the parent is gone, the projection's
-        // orphan-drop hides them.
-        let superseded: BTreeSet<(String, String)> = self
+        // pidless-TTL rule would reap an idle child — both wrong. A subagent
+        // `older` therefore maps to `false` (never superseded), and the retain
+        // below keeps every subagent outright; they leave the rollup only
+        // transitively once the parent is gone.
+        let superseded: Vec<bool> = self
             .agents
             .iter()
-            .filter(|older| older.parent_agent_id.is_none())
-            .filter(|older| {
-                self.agents.iter().any(|newer| {
-                    newer.parent_agent_id.is_none()
-                        && newer.kind == older.kind
-                        && newer.agent_id != older.agent_id
-                        && newer.last_activity > older.last_activity
-                        && newer.worktree_path == older.worktree_path
-                        && newer.worktree_branch == older.worktree_branch
-                        && older_yields_pane(older, newer)
-                })
+            .map(|older| {
+                older.parent_agent_id.is_none()
+                    && self.agents.iter().any(|newer| {
+                        newer.parent_agent_id.is_none()
+                            && newer.kind == older.kind
+                            && newer.agent_id != older.agent_id
+                            && newer.last_activity > older.last_activity
+                            && newer.worktree_path == older.worktree_path
+                            && newer.worktree_branch == older.worktree_branch
+                            && older_yields_pane(older, newer)
+                    })
             })
-            .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
             .collect();
+        // `Vec::retain` visits each element once, front to back, so a cursor over
+        // `superseded` stays aligned with `agents` without a hand-rolled index.
+        let mut superseded = superseded.into_iter();
         self.agents.retain(|agent| {
+            // Advance the cursor once per agent, before any early return, so it
+            // stays aligned with `agents` even when a subagent short-circuits.
+            let is_superseded = superseded.next().unwrap_or(false);
+            // Subagents are never reaped here — kept until their parent leaves,
+            // when the projection's orphan-drop hides them.
             if agent.parent_agent_id.is_some() {
                 return true;
             }
-            if superseded.contains(&(agent.kind.clone(), agent.agent_id.clone())) {
+            if is_superseded {
                 return false;
             }
             !(agent_is_pidless(agent) && session_age_secs(now, agent) > GHOST_SESSION_TTL_SECS)
@@ -595,10 +617,19 @@ impl SidebarOwnView {
             .iter()
             .find(|pane| pane.is_focused)
             .map(|pane| pane.pane_id.clone());
+        // Visible only when the backend reports both signals and both hold: the
+        // own pane's view is the session's active one AND a client is attached.
+        // Either being unknown collapses to `None` (the renderer always paints),
+        // which is the cross-backend floor for Zellij and degraded reads.
+        let visible = match (own_pane.view_active, own_pane.session_attached) {
+            (Some(active), Some(attached)) => Some(active && attached),
+            _ => None,
+        };
         Some(Self {
             sibling_count: siblings.len(),
             own_is_focused: own_pane.is_focused,
             focused_pane_id,
+            visible,
         })
     }
 }
@@ -1266,6 +1297,8 @@ fn pane_ref_from_id(pane_id: PaneId) -> PaneRef {
         cwd: None,
         pane_pid: None,
         pane_process_start: None,
+        view_active: None,
+        session_attached: None,
     }
 }
 
@@ -1667,7 +1700,10 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
         let status: AgentStatus = event
             .params
             .get("status")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            // Deserialize straight from the borrowed `&Value` (itself a
+            // `Deserializer`) rather than `from_value(v.clone())` — no per-event
+            // Value clone on the rebuild path.
+            .and_then(|v| AgentStatus::deserialize(v).ok())
             .unwrap_or(AgentStatus::Idle);
         // The permission slider is sticky and carried forward: an event that
         // names no posture keeps the prior value. Back-compat: an event an older
@@ -1677,7 +1713,10 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
         let parsed_posture = event
             .params
             .get("permission_posture")
-            .and_then(|v| serde_json::from_value::<PermissionPosture>(v.clone()).ok());
+            // Deserialize straight from the borrowed `&Value` (itself a
+            // `Deserializer`) rather than `from_value(v.clone())` — no per-event
+            // Value clone on the rebuild path.
+            .and_then(|v| PermissionPosture::deserialize(v).ok());
         let legacy_plan = event
             .params
             .get("plan_mode")
@@ -1961,6 +2000,8 @@ mod tests {
             cwd: Some(cwd.to_owned()),
             pane_pid: None,
             pane_process_start: None,
+            view_active: None,
+            session_attached: None,
         }
     }
 
@@ -3971,6 +4012,8 @@ mod tests {
                         cwd: Some("/repo/main".to_owned()),
                         pane_pid: None,
                         pane_process_start: None,
+                        view_active: None,
+                        session_attached: None,
                     });
                 }
                 agent
@@ -4339,6 +4382,8 @@ mod tests {
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
             pane_process_start: None,
+            view_active: None,
+            session_attached: None,
         }
     }
 
@@ -4380,5 +4425,31 @@ mod tests {
         let panes = vec![view_pane("terminal_1", "tab_0", true)];
 
         assert!(SidebarOwnView::from_panes(&own, &panes).is_none());
+    }
+
+    #[test]
+    fn own_view_visible_only_when_view_active_and_session_attached() {
+        let own = PaneId::from_parts(MuxName::Zellij, "p");
+        let vis_pane = |va, sa| PaneRef {
+            view_active: va,
+            session_attached: sa,
+            ..view_pane("p", "tab_0", false)
+        };
+        let visible = |va, sa| {
+            SidebarOwnView::from_panes(&own, &[vis_pane(va, sa)])
+                .expect("own pane present")
+                .visible
+        };
+        // Both signals known and true → visible.
+        assert_eq!(visible(Some(true), Some(true)), Some(true));
+        // Either known-false → hidden (inactive window, or detached session).
+        assert_eq!(visible(Some(false), Some(true)), Some(false));
+        assert_eq!(visible(Some(true), Some(false)), Some(false));
+        assert_eq!(visible(Some(false), Some(false)), Some(false));
+        // Either signal unknown (Zellij / degraded row) → unknown, so the
+        // renderer falls back to always painting.
+        assert_eq!(visible(None, Some(true)), None);
+        assert_eq!(visible(Some(true), None), None);
+        assert_eq!(visible(None, None), None);
     }
 }
