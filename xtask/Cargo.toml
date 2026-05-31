@@ -10,3 +10,4 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+toml.workspace = true

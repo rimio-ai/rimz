@@ -224,7 +224,7 @@ Every gate runs in CI with warnings treated as errors. Local equivalent is `carg
 - `cargo machete` — unused dependency check.
 - `cargo vet` — supply-chain audit.
 - `cargo llvm-cov nextest --workspace --all-features --locked` — coverage. This *is* the suite run inside `ci`: the tests run once, under instrumentation, instead of building and running a second uninstrumented pass.
-- `cargo semver-checks` — release-time API check.
+- `cargo semver-checks` — release-time API check; skipped while the workspace version is the unpublished pre-release `0.0.0`.
 
 Inside `ci` the gates are ordered for speed, not listed order: the instant text gates (`fmt`, `invariants`) run first and fail fast; the metadata-only audits (`deny`, `deps`, `vet`) overlap the compile gates on their own threads; the compile gates run sequentially (`lint → coverage → doctest → semver`) because concurrent cargo builds only serialize on the target-dir lock. `ci` prints a per-gate timing summary to stderr.
 

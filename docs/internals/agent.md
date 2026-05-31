@@ -67,7 +67,7 @@ Each field, where it comes from, and its **lifetime** — the rule the reducer f
 | `parent_agent_id`                   | root session of a subagent        | `SubagentStart`/`SubagentStop` · `session_id` (both agents)       | identity      |
 | `kind`                              | `claude` / `codex`                | `--source` on the hook                                            | identity      |
 | `status`                            | 5-value rollup (below)            | derived from `event_name` (§ state machine)                       | activity      |
-| `permission_posture`                | `default`/`plan`/`auto`/`yolo`/`unknown` (`plan` → thinking) | every lifecycle event + per-tool heartbeat · `permission_mode`/`approval_policy`, last sample wins (§ Plan mode as a sticky posture) | carry-forward |
+| `permission_posture`                | `default`/`plan`/`auto`/`yolo`/`unknown` (`plan` → thinking) | lifecycle events · `permission_mode`/`approval_policy`; missing values carry forward (§ Plan mode as a sticky posture) | carry-forward |
 | `task`                              | what it's working on              | `UserPromptSubmit` · `prompt`; `SubagentStart` · `agent_type`     | activity      |
 | `prompt`                            | latest user prompt (line-2 label past idle) | `UserPromptSubmit` · `prompt`                           | carry-forward |
 | `model`                             | `Opus`, `GPT-5.5`                 | lifecycle · `model` (canonicalized — § below)                     | carry-forward |
@@ -120,11 +120,11 @@ The agent owns status and posture; Rimz observes and renders. `yolo` is observed
 
 #### Plan mode as a sticky posture
 
-`plan` is one position of the permission slider, not a separate flag: `thinking` is `running` joined to `permission_posture == plan`, and the sparkle paints only while the agent is `running`. The slider is *sticky* and present on every hook (`Stop` included), so Rimz treats it as one **last-sample-wins** value — every lifecycle event and every per-tool activity heartbeat samples `permission_mode`/`approval_policy`, an event that names no slider carries the prior value forward, and the freshest sample wins. There is no turn-boundary special-case and no approval-driven clear, because the slider is self-correcting:
+`plan` is one position of the permission slider, not a separate flag: `thinking` is `running` joined to `permission_posture == plan`, and the sparkle paints only while the agent is `running`. Rimz samples the agent-reported mode from lifecycle hook payloads only (`permission_mode`/`approval_policy`); an event that names no slider carries the prior value forward. Rimz does not infer plan mode from prompt text or transcript content.
 
-- **Approving a plan** moves the slider off `plan` (Claude switches to `default`/`acceptEdits`), so the agent's next hook — a `Stop`, the next prompt, or the next `PostToolUse` — reports the new posture and the sparkle drops on its own.
-- **Shift-tabbing out of `plan`** mid-turn raises no lifecycle event, only per-tool hooks. The activity heartbeat carries that per-tool slider reading to projection time, where `with_agent_activity` applies it as a last-sample-wins override (guarded `> last_seen`, the agent's latest lifecycle event, so a prior turn's touch can't fire). The heartbeat is keyed per `agent_id`, so a subagent's non-plan tool touches its own leaf-session heartbeat and never clobbers the parent's `plan` posture — the bug that made a planning parent render as `working`.
-- **A no-tool turn** fires no per-tool hook, so the posture changes only at the next lifecycle event (`Stop`/next prompt) — a brief, bounded latency, never a stale latch across turns.
+- **Approving a plan** moves the slider off `plan` (Claude switches to `default`/`acceptEdits`), so the next lifecycle hook that reports the new posture drops the sparkle.
+- **Shift-tabbing out of `plan`** mid-turn may not raise a lifecycle event. The sidebar may therefore lag until the next lifecycle hook; that bounded display latency is intentional, because the sidebar is observational and the simpler state model avoids transcript or prompt heuristics.
+- **Subagents** own separate `agent_id`s, so a child lifecycle event never mutates its parent's posture.
 
 ### Instance identity and age
 
@@ -214,8 +214,8 @@ Native event → unified mapping:
 | `SessionStart`                | lifecycle     | `idle`                              | posture, model, context/tokens (transcript) |
 | `UserPromptSubmit`            | lifecycle     | `running`                           | `task` = prompt; refresh context/tokens     |
 | `SubagentStart`               | lifecycle     | `running`                           | keyed by child `agent_id`; `parent_agent_id` = `session_id`; `task` = `subagent_type`/`description` |
-| `SubagentStop`                | lifecycle     | `idle`                              | child row; keeps `task` (type label) and parent link; clear plan mode |
-| `Stop`                        | lifecycle     | `success` (error → `failed`; in-flight `background_tasks` → `running`) | `task` = background work else clear; clear plan mode unless still `plan`; refresh context/tokens |
+| `SubagentStop`                | lifecycle     | `idle`                              | child row; keeps `task` (type label) and parent link; samples posture if reported |
+| `Stop`                        | lifecycle     | `success` (error → `failed`; in-flight `background_tasks` → `running`) | `task` = background work else clear; samples posture if reported; refresh context/tokens |
 | `SessionEnd`                  | lifecycle     | removed                             | —                                           |
 | `Notification`                | lifecycle     | none (silent)                       | —                                           |
 | `PermissionRequest`           | blocking-feed | `waiting`                           | —                                           |

@@ -99,6 +99,25 @@ pub struct ClassifiedHook {
     pub event_name: String,
 }
 
+pub(crate) fn classify_agent_hook(
+    event_name: &str,
+    feed_kind: Option<FeedKind>,
+    lifecycle_events: &[&str],
+) -> ClassifiedHook {
+    let class = if feed_kind.is_some() {
+        AgentHookClass::BlockingFeed
+    } else if lifecycle_events.contains(&event_name) {
+        AgentHookClass::Lifecycle
+    } else {
+        AgentHookClass::Unknown
+    };
+    ClassifiedHook {
+        class,
+        feed_kind,
+        event_name: event_name.to_owned(),
+    }
+}
+
 /// Status + mode transition observed from a lifecycle hook. Returned by
 /// [`AgentIntegration::observe_lifecycle`] so the CLI layer can record an
 /// `agent.lifecycle` event without each adapter touching the ledger.
@@ -155,6 +174,56 @@ pub struct AgentLifecycleObservation {
     /// agents. Identity lifetime in the reducer, so a child row links to its
     /// parent row by `(kind, parent_agent_id)` for the whole child's life.
     pub parent_agent_id: Option<String>,
+}
+
+impl AgentLifecycleObservation {
+    pub(crate) fn new(agent_id: Option<String>, status: AgentStatus) -> Self {
+        Self {
+            agent_id,
+            status,
+            agent_pid: None,
+            agent_process_start: None,
+            runtime_owner: None,
+            permission_posture: None,
+            worktree_path: None,
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            model: None,
+            effort: None,
+            context_pct: None,
+            total_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            pane_id: None,
+            parent_agent_id: None,
+        }
+    }
+}
+
+/// Sample an agent's permission mode field onto the unified posture enum. The
+/// input is agent-reported mode only; Rimz never infers plan/thinking from
+/// prompt text or transcripts.
+pub(crate) fn permission_posture_from_payload(
+    payload: &Value,
+    keys: &[&str],
+) -> Option<PermissionPosture> {
+    let raw = keys
+        .iter()
+        .find_map(|key| payload.get(*key).and_then(Value::as_str));
+    raw.map(permission_posture_from_str)
+}
+
+fn permission_posture_from_str(raw: &str) -> PermissionPosture {
+    match raw {
+        "never" | "bypass" | "bypassPermissions" | "dontAsk" => PermissionPosture::Yolo,
+        "acceptEdits" | "auto" | "auto-edit" | "on-failure" => PermissionPosture::Auto,
+        "plan" => PermissionPosture::Plan,
+        "default" | "interactive" | "untrusted" | "on-request" | "ask" => {
+            PermissionPosture::Default
+        }
+        _ => PermissionPosture::Unknown,
+    }
 }
 
 /// Result of installing hooks. Surfaced to the CLI so the user sees which
@@ -234,17 +303,6 @@ pub trait AgentIntegration: Send + Sync {
         _event_name: &str,
         _payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
-        None
-    }
-
-    /// Sample the permission-posture slider from a hook payload. `None` when the
-    /// payload names no slider field, so the snapshot carries the prior posture
-    /// forward. The per-tool activity heartbeat calls this directly to keep the
-    /// agent's sticky posture current between lifecycle events — a `PostToolUse`
-    /// does not flow through [`Self::observe_lifecycle`], so it is the only
-    /// channel that catches a mid-turn slider move (shift-tab out of `plan`).
-    /// Defaults to `None`; adapters override with their slider mapping.
-    fn posture_from_payload(&self, _payload: &Value) -> Option<PermissionPosture> {
         None
     }
 

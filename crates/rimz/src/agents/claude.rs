@@ -24,10 +24,11 @@ use jiff::Timestamp;
 use serde_json::{Map, Value, json};
 
 use super::{
-    AgentContext, AgentErr, AgentHookClass, AgentIntegration, AgentLifecycleObservation,
-    ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
-    StatusLineChange, agent_config_path, choice_is_allow, optional_payload_string,
-    permission_decision, read_optional_file, read_transcript_tail, stop_status_from_payload,
+    AgentContext, AgentErr, AgentIntegration, AgentLifecycleObservation, ClassifiedHook,
+    HookInstallPreview, HookInstallReport, HookUninstallReport, Result, StatusLineChange,
+    agent_config_path, choice_is_allow, classify_agent_hook, optional_payload_string,
+    permission_decision, permission_posture_from_payload, read_optional_file, read_transcript_tail,
+    stop_status_from_payload,
 };
 use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution};
 use crate::ledger::atomic;
@@ -123,23 +124,21 @@ impl AgentIntegration for ClaudeIntegration {
             _ => None,
         };
 
-        let class = if feed_kind.is_some() {
-            AgentHookClass::BlockingFeed
-        } else {
-            match event_name {
-                "SessionStart" | "SessionEnd" | "Stop" | "Notification" | "UserPromptSubmit"
-                | "PreToolUse" | "PostToolUse" | "SubagentStart" | "SubagentStop" => {
-                    AgentHookClass::Lifecycle
-                }
-                _ => AgentHookClass::Unknown,
-            }
-        };
-
-        ClassifiedHook {
-            class,
+        classify_agent_hook(
+            event_name,
             feed_kind,
-            event_name: event_name.to_owned(),
-        }
+            &[
+                "SessionStart",
+                "SessionEnd",
+                "Stop",
+                "Notification",
+                "UserPromptSubmit",
+                "PreToolUse",
+                "PostToolUse",
+                "SubagentStart",
+                "SubagentStop",
+            ],
+        )
     }
 
     fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
@@ -215,20 +214,16 @@ impl AgentIntegration for ClaudeIntegration {
         } else {
             Vec::new()
         };
-        // The permission slider rides every hook of a session, so sample it on
-        // every event: last sample wins, and an event that names no slider
-        // returns `None` so the reducer carries the prior posture forward. The
-        // slider is self-correcting — Claude moves it off `plan` when the human
-        // approves a plan — so the next hook reports the real position; no
-        // turn-boundary special-case is needed. `SessionEnd` drops the row, so
-        // its posture carries no meaning.
+        // Sample the agent-reported mode on lifecycle events only. An event that
+        // names no slider returns `None`, so the reducer carries the prior
+        // posture forward. `SessionEnd` drops the row, so its posture carries no
+        // meaning.
         let (status, posture) = match event_name {
             "SessionStart" => (AgentStatus::Idle, posture_from_payload(payload)),
             "UserPromptSubmit" => (AgentStatus::Running, posture_from_payload(payload)),
             // A subagent fires before the child model request, so it registers
             // running under the child `agent_id`; a finished child returns to
-            // idle. Parity with the Codex adapter. Posture is sampled like every
-            // other event (the slider is self-correcting).
+            // idle. Parity with the Codex adapter.
             "SubagentStart" => (AgentStatus::Running, posture_from_payload(payload)),
             "SubagentStop" => (AgentStatus::Idle, posture_from_payload(payload)),
             "Stop" => (
@@ -266,58 +261,45 @@ impl AgentIntegration for ClaudeIntegration {
             .and_then(Value::as_u64)
             .or(usage.total_tokens);
         let (todo_done, todo_total) = todos_from_payload(payload);
-        Some(AgentLifecycleObservation {
-            // Root events key on `session_id`; a subagent event keys on the
-            // child's own `agent_id` so the child gets its own row instead of
-            // overwriting the parent session's. (`session_id` on a subagent
-            // event is the parent root — captured as `parent_agent_id` below.)
-            agent_id: match event_name {
-                "SubagentStart" | "SubagentStop" => optional_payload_string(payload, &["agent_id"])
-                    .or_else(|| optional_payload_string(payload, &["session_id"])),
-                _ => optional_payload_string(payload, &["session_id"]),
-            },
-            status,
-            agent_pid: None,
-            agent_process_start: None,
-            runtime_owner: None,
-            permission_posture: posture,
-            worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
-            worktree_branch: optional_payload_string(payload, &["worktree_branch"]),
-            // A subagent labels its row with what it is (`subagent_type`) or what
-            // it was asked (`description`). The type rides both start and stop so
-            // a *finished* child keeps its label while it lingers in the parent's
-            // list. Root events keep the background-work / prompt label.
-            task: match event_name {
-                "SubagentStart" | "SubagentStop" => optional_payload_string(
-                    payload,
-                    &["subagent_type", "agent_type", "description", "task"],
-                ),
-                _ => background_task_label(&pending_background)
-                    .or_else(|| optional_payload_string(payload, &["task", "prompt"])),
-            },
-            // The raw prompt rides only its own event; every other event leaves
-            // it `None`, and the reducer carries the last one forward.
-            prompt: optional_payload_string(payload, &["prompt"]),
-            model,
-            effort: optional_payload_string(payload, &["thinking_level", "effort"]),
-            context_pct,
-            total_tokens,
-            todo_done,
-            todo_total,
-            pane_id: None,
-            // A subagent event's `session_id` is the parent root the child nests
-            // under; root events carry no parent.
-            parent_agent_id: match event_name {
-                "SubagentStart" | "SubagentStop" => {
-                    optional_payload_string(payload, &["session_id"])
-                }
-                _ => None,
-            },
-        })
-    }
-
-    fn posture_from_payload(&self, payload: &Value) -> Option<PermissionPosture> {
-        posture_from_payload(payload)
+        // Root events key on `session_id`; a subagent event keys on the child's
+        // own `agent_id` so the child gets its own row. (`session_id` on a
+        // subagent event is the parent root captured below.)
+        let agent_id = match event_name {
+            "SubagentStart" | "SubagentStop" => optional_payload_string(payload, &["agent_id"])
+                .or_else(|| optional_payload_string(payload, &["session_id"])),
+            _ => optional_payload_string(payload, &["session_id"]),
+        };
+        let mut observation = AgentLifecycleObservation::new(agent_id, status);
+        observation.permission_posture = posture;
+        observation.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
+        observation.worktree_branch = optional_payload_string(payload, &["worktree_branch"]);
+        // A subagent labels its row with what it is (`subagent_type`) or what it
+        // was asked (`description`). The type rides both start and stop so a
+        // finished child keeps its label while it lingers in the parent's list.
+        observation.task = match event_name {
+            "SubagentStart" | "SubagentStop" => optional_payload_string(
+                payload,
+                &["subagent_type", "agent_type", "description", "task"],
+            ),
+            _ => background_task_label(&pending_background)
+                .or_else(|| optional_payload_string(payload, &["task", "prompt"])),
+        };
+        // The raw prompt rides only its own event; every other event leaves it
+        // `None`, and the reducer carries the last one forward.
+        observation.prompt = optional_payload_string(payload, &["prompt"]);
+        observation.model = model;
+        observation.effort = optional_payload_string(payload, &["thinking_level", "effort"]);
+        observation.context_pct = context_pct;
+        observation.total_tokens = total_tokens;
+        observation.todo_done = todo_done;
+        observation.todo_total = todo_total;
+        // A subagent event's `session_id` is the parent root the child nests
+        // under; root events carry no parent.
+        observation.parent_agent_id = match event_name {
+            "SubagentStart" | "SubagentStop" => optional_payload_string(payload, &["session_id"]),
+            _ => None,
+        };
+        Some(observation)
     }
 
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
@@ -433,21 +415,9 @@ fn background_task_label(pending: &[String]) -> Option<String> {
 /// `permission_mode = "bypassPermissions"` (the value
 /// `--dangerously-skip-permissions` surfaces) maps to `Yolo`; `plan` is its own
 /// first-class read-only posture. `None` when the payload names no slider field,
-/// so the reducer carries the prior posture forward rather than resetting it —
-/// the slider is sticky and rides every hook, so absence means "unchanged".
+/// so the reducer carries the prior posture forward rather than resetting it.
 fn posture_from_payload(payload: &Value) -> Option<PermissionPosture> {
-    let raw = payload
-        .get("permission_mode")
-        .or_else(|| payload.get("mode"))
-        .and_then(Value::as_str);
-    Some(match raw {
-        Some("bypassPermissions") | Some("bypass") => PermissionPosture::Yolo,
-        Some("acceptEdits") | Some("auto") => PermissionPosture::Auto,
-        Some("plan") => PermissionPosture::Plan,
-        Some("default") | Some("interactive") | Some("ask") => PermissionPosture::Default,
-        Some(_) => PermissionPosture::Unknown,
-        None => return None,
-    })
+    permission_posture_from_payload(payload, &["permission_mode", "mode"])
 }
 
 /// Read a Claude `TodoWrite` payload's `tool_input.todos` (or the post-hook
@@ -1038,6 +1008,7 @@ fn is_rimz_status_line_command(command: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::AgentHookClass;
     use crate::feed::{ResolutionMethod, Surface};
     use crate::ids::WorkspaceId;
     use std::path::Path;
@@ -2001,11 +1972,8 @@ mod tests {
 
     #[test]
     fn stop_samples_slider_last_sample_wins() {
-        // The slider is sticky and rides every hook, `Stop` included: a `Stop`
-        // still carrying `plan` reports `Plan` (the session is still in plan
-        // mode), and a mode-less `Stop` reports `None` so the reducer carries the
-        // prior posture forward. No turn-boundary special-case — the slider
-        // self-corrects when the human approves and Claude moves it off `plan`.
+        // A `Stop` still carrying `plan` reports `Plan`; a mode-less `Stop`
+        // reports `None` so the reducer carries the prior posture forward.
         let mode_less = ClaudeIntegration
             .observe_lifecycle("Stop", &json!({ "session_id": "sess-1" }))
             .unwrap();

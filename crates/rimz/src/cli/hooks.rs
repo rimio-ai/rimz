@@ -186,18 +186,11 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             }
             // Refresh the agent's activity heartbeat on progress-proving events
             // so the sidebar's `last_activity` advances per tool call, not just
-            // per turn. The touch also carries the event's permission-slider
-            // reading: a `PostToolUse` is the only channel that catches a
-            // mid-turn slider move (the agent shift-tabbing out of plan mode, or
-            // back in) between the turn-grained lifecycle events. A latency hint,
-            // never correctness — log and continue on failure.
+            // per turn. A latency hint, never correctness — log and continue on
+            // failure.
             if event_records_activity(&event_name)
-                && let Err(err) = rimz::agent_activity::touch(
-                    ledger.runtime_paths(),
-                    agent.name(),
-                    agent_id,
-                    agent.posture_from_payload(&payload),
-                )
+                && let Err(err) =
+                    rimz::agent_activity::touch(ledger.runtime_paths(), agent.name(), agent_id)
             {
                 warn!(
                     agent = agent.name(),

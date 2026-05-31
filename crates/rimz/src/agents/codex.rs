@@ -31,10 +31,10 @@ use jiff::Timestamp;
 use super::codex_app_server::CodexAppServer;
 use super::context::AgentContext;
 use super::{
-    AgentErr, AgentHookClass, AgentIntegration, AgentLifecycleObservation, ClassifiedHook,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, Result, agent_config_path,
-    optional_payload_string, permission_decision, read_optional_file, read_transcript_tail,
-    stop_status_from_payload,
+    AgentErr, AgentIntegration, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
+    HookInstallReport, HookUninstallReport, Result, agent_config_path, classify_agent_hook,
+    optional_payload_string, permission_decision, permission_posture_from_payload,
+    read_optional_file, read_transcript_tail, stop_status_from_payload,
 };
 use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution};
 use crate::ledger::atomic;
@@ -96,20 +96,19 @@ impl AgentIntegration for CodexIntegration {
         } else {
             None
         };
-        let class = if feed_kind.is_some() {
-            AgentHookClass::BlockingFeed
-        } else {
-            match event_name {
-                "SessionStart" | "SubagentStart" | "SubagentStop" | "Stop" | "UserPromptSubmit"
-                | "PreToolUse" | "PostToolUse" => AgentHookClass::Lifecycle,
-                _ => AgentHookClass::Unknown,
-            }
-        };
-        ClassifiedHook {
-            class,
+        classify_agent_hook(
+            event_name,
             feed_kind,
-            event_name: event_name.to_owned(),
-        }
+            &[
+                "SessionStart",
+                "SubagentStart",
+                "SubagentStop",
+                "Stop",
+                "UserPromptSubmit",
+                "PreToolUse",
+                "PostToolUse",
+            ],
+        )
     }
 
     fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
@@ -146,9 +145,9 @@ impl AgentIntegration for CodexIntegration {
         // anything yet, so it registers idle; the prompt is what moves it to
         // running. SubagentStart is different: it fires immediately before the
         // child model request, so it registers running under the child
-        // `agent_id`. The permission slider rides every hook, so sample it on
-        // every event (last sample wins); an event that names no slider returns
-        // `None` and the reducer carries the prior posture forward.
+        // `agent_id`. Mode is sampled from lifecycle payloads only; an event
+        // that names no slider returns `None` and the reducer carries the prior
+        // posture forward.
         let (status, posture) = match event_name {
             "SessionStart" => (AgentStatus::Idle, posture_from_payload(payload)),
             "SubagentStart" => (AgentStatus::Running, posture_from_payload(payload)),
@@ -181,46 +180,32 @@ impl AgentIntegration for CodexIntegration {
             .or_else(|| payload.get("token_count"))
             .and_then(Value::as_u64)
             .or(usage.total_tokens);
-        Some(AgentLifecycleObservation {
-            agent_id: codex_agent_id(payload),
-            status,
-            agent_pid: None,
-            agent_process_start: None,
-            runtime_owner: None,
-            permission_posture: posture,
-            worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
-            worktree_branch: optional_payload_string(payload, &["worktree_branch"]),
-            task: task_from_payload(event_name, payload),
-            // The raw prompt rides only its own event; the reducer carries the
-            // last one forward so an unnamed session keeps a label past idle.
-            prompt: optional_payload_string(payload, &["prompt"]),
-            model: optional_payload_string(payload, &["model"]).or(usage.model),
-            effort: optional_payload_string(
-                payload,
-                &["model_reasoning_effort", "reasoning_effort", "effort"],
-            ),
-            context_pct,
-            total_tokens,
-            // Codex doesn't expose a stable todo-state hook field; the
-            // sidebar's todo dots stay None and read as "no todo state".
-            // Tracked: parity with Claude's TodoWrite shape if/when Codex
-            // ships one.
-            todo_done: None,
-            todo_total: None,
-            pane_id: None,
-            // A subagent event keys the child off `agent_id` (above); the
-            // payload's `session_id` is the parent root the child nests under.
-            parent_agent_id: match event_name {
-                "SubagentStart" | "SubagentStop" => {
-                    optional_payload_string(payload, &["session_id"])
-                }
-                _ => None,
-            },
-        })
-    }
-
-    fn posture_from_payload(&self, payload: &Value) -> Option<PermissionPosture> {
-        posture_from_payload(payload)
+        let mut observation = AgentLifecycleObservation::new(codex_agent_id(payload), status);
+        observation.permission_posture = posture;
+        observation.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
+        observation.worktree_branch = optional_payload_string(payload, &["worktree_branch"]);
+        observation.task = task_from_payload(event_name, payload);
+        // The raw prompt rides only its own event; the reducer carries the last
+        // one forward so an unnamed session keeps a label past idle.
+        observation.prompt = optional_payload_string(payload, &["prompt"]);
+        observation.model = optional_payload_string(payload, &["model"]).or(usage.model);
+        observation.effort = optional_payload_string(
+            payload,
+            &["model_reasoning_effort", "reasoning_effort", "effort"],
+        );
+        observation.context_pct = context_pct;
+        observation.total_tokens = total_tokens;
+        // Codex doesn't expose a stable todo-state hook field; the sidebar's
+        // todo dots stay None and read as "no todo state".
+        observation.todo_done = None;
+        observation.todo_total = None;
+        // A subagent event keys the child off `agent_id` (above); the payload's
+        // `session_id` is the parent root the child nests under.
+        observation.parent_agent_id = match event_name {
+            "SubagentStart" | "SubagentStop" => optional_payload_string(payload, &["session_id"]),
+            _ => None,
+        };
+        Some(observation)
     }
 
     fn install_hooks(&self) -> Result<HookInstallReport> {
@@ -271,27 +256,9 @@ pub fn refresh_context(
 /// onto the posture enum. `Yolo` is observed from `--ask-for-approval never`
 /// per docs/internals/agent.md:60; `plan` is its own first-class read-only
 /// posture. `None` when the payload names no slider field, so the reducer
-/// carries the prior posture forward — the slider is sticky and rides every
-/// hook, so absence means "unchanged".
+/// carries the prior posture forward.
 fn posture_from_payload(payload: &Value) -> Option<PermissionPosture> {
-    let policy = payload
-        .get("permission_mode")
-        .or_else(|| payload.get("approval_policy"))
-        .or_else(|| payload.get("mode"))
-        .and_then(Value::as_str);
-    Some(match policy {
-        Some("never") | Some("bypass") | Some("bypassPermissions") | Some("dontAsk") => {
-            PermissionPosture::Yolo
-        }
-        Some("acceptEdits") | Some("auto") | Some("auto-edit") | Some("on-failure") => {
-            PermissionPosture::Auto
-        }
-        Some("plan") => PermissionPosture::Plan,
-        Some("default") | Some("interactive") | Some("untrusted") | Some("on-request")
-        | Some("ask") => PermissionPosture::Default,
-        Some(_) => PermissionPosture::Unknown,
-        None => return None,
-    })
+    permission_posture_from_payload(payload, &["permission_mode", "approval_policy", "mode"])
 }
 
 fn codex_agent_id(payload: &Value) -> Option<String> {
@@ -768,6 +735,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::agents::AgentHookClass;
     use crate::feed::{ResolutionMethod, Surface};
     use crate::ids::WorkspaceId;
     use std::path::Path;
@@ -906,9 +874,8 @@ mod tests {
 
     #[test]
     fn turn_end_samples_slider_last_sample_wins() {
-        // The slider is sticky and rides every hook, the turn-ending ones
-        // included: a mode-less `Stop`/`SubagentStop` reports `None` so the
-        // reducer carries the prior posture forward — no turn-boundary clear.
+        // A mode-less `Stop`/`SubagentStop` reports `None` so the reducer
+        // carries the prior posture forward.
         for event in ["Stop", "SubagentStop"] {
             let obs = CodexIntegration
                 .observe_lifecycle(event, &json!({ "session_id": "sess-1" }))

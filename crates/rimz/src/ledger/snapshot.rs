@@ -702,9 +702,6 @@ impl SidebarSnapshot {
     pub fn with_agent_activity(mut self, activity: &[AgentActivity]) -> Self {
         let mut changed = false;
         for agent in &mut self.agents {
-            // The freshest touch carries both the truer `last_activity` and the
-            // slider reading of the agent's most recent activity event — read it
-            // once and use it for both.
             let Some(touch) = activity
                 .iter()
                 .filter(|a| a.kind == agent.kind && a.agent_id == agent.agent_id)
@@ -714,24 +711,6 @@ impl SidebarSnapshot {
             };
             if touch.at > agent.last_activity {
                 agent.last_activity = touch.at;
-                changed = true;
-            }
-            // Apply the freshest per-tool slider reading as a last-sample-wins
-            // override on the agent's sticky posture. A `PostToolUse` is the
-            // only channel that catches a mid-turn slider move — shift-tabbing
-            // out of `plan` (or back in) raises no lifecycle event — so this is
-            // how a plan-mode tab drops its thinking sparkle the moment it runs a
-            // non-plan tool, and how the parent stays in `plan` while a subagent
-            // (a separate `agent_id`, never matched here) runs non-plan tools.
-            // Guard on `last_seen` (the agent's latest *lifecycle* event, which
-            // the heartbeat never advances, unlike `last_activity` just mutated
-            // above) so a leftover touch from a prior turn can't override the
-            // posture a fresh lifecycle event just established.
-            if let Some(posture) = touch.posture
-                && touch.at > agent.last_seen
-                && agent.permission_posture != posture
-            {
-                agent.permission_posture = posture;
                 changed = true;
             }
         }
@@ -2694,138 +2673,81 @@ mod tests {
         assert_eq!(snap.worktree_groups[0].rows.len(), 2);
     }
 
-    fn planning_agent(session: &str) -> AgentState {
-        planning_agent_of("claude", session)
-    }
-
-    fn planning_agent_of(kind: &str, session: &str) -> AgentState {
-        // Rank 50_000 → last_seen at now − 50s, the plan-mode prompt time.
-        agent(
-            kind,
-            session,
+    #[test]
+    fn activity_heartbeat_updates_last_activity_not_posture() {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let agent = agent(
+            "claude",
+            "sess-1",
             AgentStatus::Running,
             PermissionPosture::Plan,
             50_000,
-        )
-    }
-
-    /// Build the snapshot, then fold one heartbeat touch `touch_secs` after the
-    /// agent's last lifecycle event (negative = before) carrying `touch_posture`
-    /// as its slider reading. Returns the agent's posture after the bidirectional
-    /// override — the path the mid-turn slider move rides.
-    fn posture_after_slider(
-        agent: AgentState,
-        touch_posture: Option<PermissionPosture>,
-        touch_secs: i64,
-    ) -> PermissionPosture {
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let last_seen = Timestamp::now() - std::time::Duration::from_secs(50);
-        let at = if touch_secs >= 0 {
-            last_seen + std::time::Duration::from_secs(touch_secs as u64)
-        } else {
-            last_seen - std::time::Duration::from_secs((-touch_secs) as u64)
-        };
+        );
+        let original_seen = agent.last_seen;
+        let at = original_seen + std::time::Duration::from_secs(10);
         let touch = AgentActivity {
             kind: agent.kind.clone(),
             agent_id: agent.agent_id.clone(),
             at,
-            posture: touch_posture,
         };
         let snap =
             SidebarSnapshot::build_with_agents(workspace, Vec::new(), Vec::new(), vec![agent])
                 .with_agent_activity(&[touch]);
-        snap.agents[0].permission_posture
-    }
 
-    #[test]
-    fn shift_tab_out_of_plan_drops_thinking_via_heartbeat() {
-        // The reported bug: a session in plan mode latched the thinking sparkle.
-        // The user shift-tabs to auto; the next `PostToolUse` carries the new
-        // slider, the heartbeat ferries it, and the override moves the posture.
-        assert_eq!(
-            posture_after_slider(
-                planning_agent("sess-1"),
-                Some(PermissionPosture::Default),
-                10
-            ),
-            PermissionPosture::Default
-        );
-    }
-
-    #[test]
-    fn still_planning_slider_keeps_thinking() {
-        // A genuinely-planning agent's read-only tools carry slider `plan`; the
-        // override re-asserts `Plan`, so the sparkle stays.
-        assert_eq!(
-            posture_after_slider(planning_agent("sess-1"), Some(PermissionPosture::Plan), 10),
-            PermissionPosture::Plan
-        );
-    }
-
-    #[test]
-    fn heartbeat_without_posture_carries_forward() {
-        // A touch an older binary wrote (or an event that named no slider)
-        // carries `None`. The override is inert, so the prior posture survives.
-        assert_eq!(
-            posture_after_slider(planning_agent("sess-1"), None, 10),
-            PermissionPosture::Plan
-        );
-    }
-
-    #[test]
-    fn stale_heartbeat_does_not_override() {
-        // A touch older than the plan-mode prompt (`last_seen`) belongs to a
-        // prior turn; the `> last_seen` guard ignores it so a fresh plan prompt
-        // keeps its posture.
-        assert_eq!(
-            posture_after_slider(
-                planning_agent("sess-1"),
-                Some(PermissionPosture::Default),
-                -10
-            ),
-            PermissionPosture::Plan
-        );
-    }
-
-    #[test]
-    fn codex_shift_tab_out_drops_thinking() {
-        // Parity: the heartbeat override is agent-agnostic, so a Codex agent
-        // shift-tabbing out of plan moves identically to Claude.
-        assert_eq!(
-            posture_after_slider(
-                planning_agent_of("codex", "sess-1"),
-                Some(PermissionPosture::Default),
-                10
-            ),
-            PermissionPosture::Default
-        );
-    }
-
-    #[test]
-    fn no_tool_turn_keeps_plan_until_next_event() {
-        // No `PostToolUse` fires, so no heartbeat carries a fresh slider. The
-        // posture is sticky and carries forward; it changes only when the next
-        // lifecycle event or tool reports a new slider.
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let snap = SidebarSnapshot::build_with_agents(
-            workspace,
-            Vec::new(),
-            Vec::new(),
-            vec![planning_agent("sess-1")],
-        )
-        .with_agent_activity(&[]);
         assert_eq!(snap.agents[0].permission_posture, PermissionPosture::Plan);
+        assert_eq!(snap.agents[0].last_activity, at);
+        assert_eq!(snap.agents[0].last_seen, original_seen);
     }
 
     #[test]
-    fn plan_posture_survives_subagent_and_flips_on_own_non_plan_touch() {
-        // The reported bug: a parent agent in plan mode rendered as "working". A
-        // parent in `plan` stays `plan` while a subagent (a separate `agent_id`)
-        // runs non-plan tools, and flips only to the slider its OWN next tool
-        // reports — never the subagent's.
+    fn plan_posture_changes_only_on_lifecycle_sample() {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let lifecycle = |params: serde_json::Value| {
+            EventEnvelope::new(
+                workspace.clone(),
+                "session",
+                "claude",
+                "agent-hook",
+                "agent.lifecycle",
+                params,
+            )
+        };
+        let start = lifecycle(serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "sess-1",
+            "status": "idle",
+            "permission_posture": "plan",
+        }));
+        let prompt = lifecycle(serde_json::json!({
+            "event_name": "UserPromptSubmit",
+            "agent_id": "sess-1",
+            "status": "running",
+            "permission_posture": serde_json::Value::Null,
+        }));
+        let running = reduce_agent_states(&[start.clone(), prompt]);
+        assert_eq!(running[0].permission_posture, PermissionPosture::Plan);
+
+        let stop = lifecycle(serde_json::json!({
+            "event_name": "Stop",
+            "agent_id": "sess-1",
+            "status": "success",
+            "permission_posture": "default",
+        }));
+        let stopped = reduce_agent_states(&[start, stop]);
+        assert_eq!(stopped[0].permission_posture, PermissionPosture::Default);
+    }
+
+    #[test]
+    fn subagent_activity_does_not_change_parent_posture() {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let last_seen = Timestamp::now() - std::time::Duration::from_secs(50);
-        let parent = planning_agent("sess-1");
+        let parent = agent(
+            "claude",
+            "sess-1",
+            AgentStatus::Running,
+            PermissionPosture::Plan,
+            50_000,
+        );
         let subagent = agent(
             "claude",
             "sess-1.sub",
@@ -2834,27 +2756,18 @@ mod tests {
             50_000,
         );
 
-        // The parent's own read-only tool still reads `plan`; the subagent's
-        // non-plan tool touches its own leaf-session heartbeat, never the parent.
-        let parent_plan_touch = AgentActivity {
-            kind: "claude".to_owned(),
-            agent_id: "sess-1".to_owned(),
-            at: last_seen + std::time::Duration::from_secs(10),
-            posture: Some(PermissionPosture::Plan),
-        };
         let subagent_touch = AgentActivity {
             kind: "claude".to_owned(),
             agent_id: "sess-1.sub".to_owned(),
             at: last_seen + std::time::Duration::from_secs(15),
-            posture: Some(PermissionPosture::Default),
         };
         let snap = SidebarSnapshot::build_with_agents(
-            workspace.clone(),
+            workspace,
             Vec::new(),
             Vec::new(),
-            vec![parent.clone(), subagent.clone()],
+            vec![parent, subagent],
         )
-        .with_agent_activity(&[parent_plan_touch, subagent_touch]);
+        .with_agent_activity(&[subagent_touch]);
         let parent_posture = snap
             .agents
             .iter()
@@ -2864,34 +2777,7 @@ mod tests {
         assert_eq!(
             parent_posture,
             PermissionPosture::Plan,
-            "a subagent's non-plan tool must not clobber the parent's plan posture"
-        );
-
-        // After the human approves, the parent's own next tool reports the slider
-        // moved off `plan`; only then does the parent flip to `Default`.
-        let parent_exit_touch = AgentActivity {
-            kind: "claude".to_owned(),
-            agent_id: "sess-1".to_owned(),
-            at: last_seen + std::time::Duration::from_secs(20),
-            posture: Some(PermissionPosture::Default),
-        };
-        let snap = SidebarSnapshot::build_with_agents(
-            workspace,
-            Vec::new(),
-            Vec::new(),
-            vec![parent, subagent],
-        )
-        .with_agent_activity(&[parent_exit_touch]);
-        let parent_posture = snap
-            .agents
-            .iter()
-            .find(|a| a.agent_id == "sess-1")
-            .unwrap()
-            .permission_posture;
-        assert_eq!(
-            parent_posture,
-            PermissionPosture::Default,
-            "the parent flips on its own non-plan slider reading"
+            "a subagent heartbeat must not clobber the parent's plan posture"
         );
     }
 
@@ -4166,7 +4052,6 @@ mod tests {
             kind: "claude".to_owned(),
             agent_id: "live-claude".to_owned(),
             at: Timestamp::now(),
-            posture: None,
         };
         let snapshot =
             SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![session])

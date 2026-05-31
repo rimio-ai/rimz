@@ -3,6 +3,7 @@
 
 use std::env;
 use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use std::thread;
@@ -70,7 +71,23 @@ fn vet(root: &Path) -> Result<()> {
 }
 
 fn semver(root: &Path) -> Result<()> {
+    if workspace_version(root)? == "0.0.0" {
+        return Ok(());
+    }
     run(root, "cargo", ["semver-checks"])
+}
+
+fn workspace_version(root: &Path) -> Result<String> {
+    let manifest =
+        fs::read_to_string(root.join("Cargo.toml")).context("reading workspace manifest")?;
+    let manifest: toml::Value = toml::from_str(&manifest).context("parsing workspace manifest")?;
+    manifest
+        .get("workspace")
+        .and_then(|workspace| workspace.get("package"))
+        .and_then(|package| package.get("version"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_owned)
+        .context("workspace.package.version missing from Cargo.toml")
 }
 
 fn build(root: &Path) -> Result<()> {
