@@ -27,7 +27,7 @@
 //!   stale file is unlinked first, and a [`SocketGuard`] removes it on a graceful
 //!   exit. A leftover socket is harmless — the next broker unlinks it on bind.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -50,6 +50,35 @@ const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(6);
 /// in well under this; exceeding it means a wedged child — the request fails and
 /// the client falls back rather than the broker hanging under its lock.
 const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
+
+/// ANSI clear-screen + cursor-home. Dependency-free escapes, the same idiom the
+/// `mux::zellij` layout code uses.
+const CLEAR_SCREEN: &str = "\x1b[2J\x1b[H";
+
+/// Display context for the broker pane's status banner. Presentation only — never
+/// consulted on the serving path, so a render that fails or lies cannot affect
+/// enrichment.
+pub struct BrokerInfo<'a> {
+    /// Session name shown in the banner; the session line is omitted when `None`.
+    pub session: Option<&'a str>,
+    /// The per-session broker socket the pane binds and serves on.
+    pub socket_path: &'a Path,
+}
+
+/// The broker pane's status banner: a screen-clear followed by the daemon's
+/// identity and ready state. Pure so it is unit-testable without a socket or a
+/// terminal; the success path writes it once so the pane reads as a live daemon
+/// rather than a black screen.
+fn render_banner(info: &BrokerInfo<'_>) -> String {
+    let session_line = match info.session {
+        Some(session) => format!("session: {session}\n"),
+        None => String::new(),
+    };
+    format!(
+        "{CLEAR_SCREEN}rimz · codex app-server broker\n{session_line}socket : {}\nstatus : ready · serving Codex enrichment\n",
+        info.socket_path.display(),
+    )
+}
 
 /// The held `codex app-server` child: write half, the reader-thread channel for
 /// its frames, the request id counter, and the cached `initialize` result so
@@ -219,7 +248,8 @@ fn handle_client(stream: UnixStream, shared: Arc<Mutex<ChildIo>>) {
 /// Run the broker: bring up the warm child, bind the per-session socket, and
 /// serve clients until the pane closes. Returns `Ok(())` and exits cleanly when
 /// `codex` is unavailable so the pane closes and enrichment cold-spawns instead.
-pub fn serve(socket_path: &Path) -> std::io::Result<()> {
+pub fn serve(info: BrokerInfo<'_>) -> std::io::Result<()> {
+    let socket_path = info.socket_path;
     let child = match spawn_and_handshake() {
         Ok(io) => io,
         Err(err) => {
@@ -245,6 +275,13 @@ pub fn serve(socket_path: &Path) -> std::io::Result<()> {
     let _guard = SocketGuard::new(socket_path.to_path_buf());
     tracing::info!(socket = %socket_path.display(), "codex app-server broker ready");
 
+    // Paint the pane so it reads as a live daemon, not a black screen. Best-effort
+    // presentation: a write failure must never interrupt serving.
+    let mut stdout = std::io::stdout().lock();
+    let _ = stdout.write_all(render_banner(&info).as_bytes());
+    let _ = stdout.flush();
+    drop(stdout);
+
     let shared = Arc::new(Mutex::new(child));
     for stream in listener.incoming() {
         match stream {
@@ -256,4 +293,40 @@ pub fn serve(socket_path: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_banner_includes_session_socket_and_status() {
+        let banner = render_banner(&BrokerInfo {
+            session: Some("query-engine"),
+            socket_path: Path::new("/run/user/1000/rimz/ws/codex-app-server.sock"),
+        });
+        assert!(banner.contains("query-engine"), "{banner:?}");
+        assert!(banner.contains("codex-app-server.sock"), "{banner:?}");
+        assert!(banner.contains("ready"), "{banner:?}");
+    }
+
+    #[test]
+    fn render_banner_omits_session_line_when_absent() {
+        let banner = render_banner(&BrokerInfo {
+            session: None,
+            socket_path: Path::new("/run/x/codex-app-server.sock"),
+        });
+        assert!(!banner.contains("session:"), "{banner:?}");
+        assert!(banner.contains("codex-app-server.sock"), "{banner:?}");
+        assert!(banner.contains("ready"), "{banner:?}");
+    }
+
+    #[test]
+    fn render_banner_clears_the_screen_first() {
+        let banner = render_banner(&BrokerInfo {
+            session: None,
+            socket_path: Path::new("/run/x/sock"),
+        });
+        assert!(banner.starts_with("\x1b[2J\x1b[H"), "{banner:?}");
+    }
 }

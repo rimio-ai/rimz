@@ -67,7 +67,7 @@ enum AppServerSubcmd {
         /// Workspace the broker serves; the socket path derives from it.
         #[arg(long)]
         workspace_id: String,
-        /// Session name, for the pane's startup log only.
+        /// Session name, shown in the broker pane's status banner.
         #[arg(long)]
         session_name: Option<String>,
     },
@@ -94,11 +94,12 @@ fn serve_app_server(workspace_id: &str, session_name: Option<&str>) -> Result<()
     let workspace_id: WorkspaceId = workspace_id.parse().context("parsing workspace id")?;
     let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
-    if let Some(name) = session_name {
-        tracing::info!(session = name, "starting codex app-server broker");
-    }
-    rimz::agents::codex_broker::serve(&runtime.codex_app_server_socket_path())
-        .context("running codex app-server broker")
+    let socket = runtime.codex_app_server_socket_path();
+    rimz::agents::codex_broker::serve(rimz::agents::codex_broker::BrokerInfo {
+        session: session_name,
+        socket_path: &socket,
+    })
+    .context("running codex app-server broker")
 }
 
 fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) -> Result<()> {
