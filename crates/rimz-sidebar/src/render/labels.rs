@@ -7,7 +7,7 @@
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
-use rimz::feed::{AgentStatus, PermissionPosture, STALL_WINDOW_SECS};
+use rimz::feed::{AgentStatus, PermissionPosture};
 
 use super::fmt::tokens_short;
 use super::theme::{ORANGE, Theme};
@@ -110,26 +110,20 @@ pub(super) fn agent_style(theme: &Theme, status: AgentStatus) -> Style {
     status_style(theme, status)
 }
 
-/// Color for a row's activity age, ramped by how stale it is. For the attention
-/// states (`waiting` / `failed`) the age is a neglect timer: quiet while fresh,
-/// amber once it has sat a couple of minutes, and red + bold past the
-/// [`STALL_WINDOW_SECS`] (10-minute) window — so a long-ignored ask visibly
-/// heats up. Idle and done are calm: their age is informational, never an alarm,
-/// so it stays dim. The working states never call this — their head animates
-/// and their age is suppressed.
-pub(super) fn age_style(theme: &Theme, status: AgentStatus, age_secs: i64) -> Style {
-    const WARM_SECS: i64 = 2 * 60;
-    match status {
-        AgentStatus::Waiting | AgentStatus::Failed => {
-            if age_secs >= STALL_WINDOW_SECS {
-                theme.style(Color::Red, Modifier::BOLD)
-            } else if age_secs >= WARM_SECS {
-                theme.style(Color::Yellow, Modifier::empty())
-            } else {
-                theme.dim()
-            }
-        }
-        _ => theme.dim(),
+/// How long a `waiting`/`failed` row sits unanswered before its glyph reddens —
+/// the neglect window past which a blocked agent reads as urgent.
+const REDDEN_AFTER_SECS: i64 = 30 * 60;
+
+/// Style for an agent row's leading glyph. The attention states (`?` waiting,
+/// `!` failed) escalate to bold red once the row has gone unanswered past
+/// [`REDDEN_AFTER_SECS`], so a long-ignored ask visibly heats up; a fresh
+/// attention row and every calm state keep their resting [`agent_style`] tone.
+pub(super) fn attention_glyph_style(theme: &Theme, status: AgentStatus, age_secs: i64) -> Style {
+    if matches!(status, AgentStatus::Waiting | AgentStatus::Failed) && age_secs >= REDDEN_AFTER_SECS
+    {
+        theme.style(Color::Red, Modifier::BOLD)
+    } else {
+        agent_style(theme, status)
     }
 }
 
@@ -479,28 +473,36 @@ mod tests {
         }
     }
 
-    /// The age ramp heats up only for the attention states, and steps
-    /// dim → amber → red as it crosses the warm (2m) and stall (10m) thresholds.
-    /// Calm states stay dim no matter how old.
+    /// The attention glyph reddens only past the 30-minute neglect window, and
+    /// only for the `waiting`/`failed` states; a fresh attention row and every
+    /// calm state keep their resting tone, however old.
     #[test]
-    fn age_style_heats_attention_and_leaves_calm_dim() {
+    fn attention_glyph_reddens_past_the_neglect_window() {
         let theme = Theme::fixed(false);
-        let dim = theme.dim().fg;
-        let amber = theme.style(Color::Yellow, Modifier::empty()).fg;
         let red = theme.style(Color::Red, Modifier::BOLD).fg;
 
-        // Waiting: fresh is dim, a few minutes warms to amber, past 10m reddens.
-        assert_eq!(age_style(&theme, AgentStatus::Waiting, 30).fg, dim);
-        assert_eq!(age_style(&theme, AgentStatus::Waiting, 5 * 60).fg, amber);
-        assert_eq!(age_style(&theme, AgentStatus::Waiting, 11 * 60).fg, red);
-        assert!(
-            age_style(&theme, AgentStatus::Failed, 11 * 60)
-                .add_modifier
-                .contains(Modifier::BOLD)
+        // Waiting: fresh keeps its resting (amber) tone; past 30m it reddens.
+        assert_ne!(
+            attention_glyph_style(&theme, AgentStatus::Waiting, 5 * 60).fg,
+            red
         );
-        // Idle and done never alarm.
-        assert_eq!(age_style(&theme, AgentStatus::Idle, 11 * 60).fg, dim);
-        assert_eq!(age_style(&theme, AgentStatus::Success, 11 * 60).fg, dim);
+        let stale = attention_glyph_style(&theme, AgentStatus::Waiting, 31 * 60);
+        assert_eq!(stale.fg, red);
+        assert!(stale.add_modifier.contains(Modifier::BOLD));
+        // Failed reddens the same way once neglected.
+        assert_eq!(
+            attention_glyph_style(&theme, AgentStatus::Failed, 31 * 60).fg,
+            red
+        );
+        // Calm states never redden, however old — they take their plain style.
+        assert_eq!(
+            attention_glyph_style(&theme, AgentStatus::Idle, 60 * 60).fg,
+            agent_style(&theme, AgentStatus::Idle).fg
+        );
+        assert_eq!(
+            attention_glyph_style(&theme, AgentStatus::Running, 60 * 60).fg,
+            agent_style(&theme, AgentStatus::Running).fg
+        );
     }
 
     /// Each animation cycles through its frames and wraps, so the phase can grow

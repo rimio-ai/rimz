@@ -18,13 +18,13 @@ use rimz::{
 };
 
 use super::fmt::{
-    age_label, age_secs, age_short, clip, dollars, duration_compact, duration_compact_minutes,
+    age_secs, age_short, clip, dollars, duration_compact, duration_compact_minutes,
     duration_worked, model_label, pct_label, time_remaining, tokens_short, window_size_short,
 };
 use super::labels::{
-    age_style, agent_glyph, agent_style, diff_spans, gauge_spans, posture_pill, posture_style,
-    resolver_glyph, resource_bar_spans, segmented_gauge_spans, status_glyph, status_style,
-    thinking_still, todo_spans, tokens_label,
+    agent_glyph, agent_style, attention_glyph_style, diff_spans, gauge_spans, posture_pill,
+    posture_style, resolver_glyph, resource_bar_spans, segmented_gauge_spans, status_glyph,
+    status_style, thinking_still, todo_spans, tokens_label,
 };
 use super::theme::Theme;
 
@@ -70,24 +70,25 @@ impl Tier {
     }
 }
 
-/// The fixed fleet header — the cockpit. Three lines when the room has agents,
+/// The fixed fleet header — the cockpit. Two lines when the room has agents,
 /// one calm count line when it does not, so the body below never shifts
 /// vertically as agents change *state* (only the empty↔populated transition
 /// moves it):
 ///
 /// ```text
-/// ? 2   ! 1                6 agents     attention (loud) + total (dim, right)
-/// ⢿ 3   ✽ 1   ◌ 2   ✓ 4                calm states
-/// +214 -31 · 41k tok · $4.20    2h34m   totals (+/- left, time pinned right)
+/// ? 2   ! 1   ⢿ 3   ✽ 1   ◌ 2   ✓ 4   6 agents   summary + total (dim, right)
+/// ◷ 2h34m · 41k tok · +214 -31            $4.20   totals (time left, $ right)
 /// ```
 ///
-/// L1 leads with the attention buckets (`waiting` `?`, `failed` `!`) so the
-/// states that need a human read first; with none it reads a calm `✓ all
-/// clear`, never an empty line. L2 is the calm tail — `running` split into
-/// working/thinking by plan posture (the split reads posture off the visible
-/// rows, so a capped-away `running` agent folds into working). Counts come from
-/// `status_counts`, which spans capped agents; the resource totals on L3 sum the
-/// full agent list, so a capped agent's spend still lands in the total.
+/// L1 is the whole fleet make-up on one line, every bucket shown so a zero reads
+/// `? 0` and the cockpit is a fixed dashboard scannable by position: the
+/// attention buckets (`waiting` `?`, `failed` `!`) lead so the states that need
+/// a human read first, then the calm tail — `running` split into working `⢿` /
+/// thinking `✽` by plan posture (the split reads posture off the visible rows, so
+/// a capped-away `running` agent folds into working), then `◌` idle and `✓`
+/// success — with the agent total pinned right. Counts come from `status_counts`,
+/// which spans capped agents; the resource totals on L2 sum the full agent list,
+/// so a capped agent's spend still lands in the total.
 pub(super) fn fleet_header_lines(
     theme: &Theme,
     agents: &[AgentState],
@@ -112,7 +113,7 @@ pub(super) fn fleet_header_lines(
 
     let count_label = format!("{total} {}", if total == 1 { "agent" } else { "agents" });
     // An empty (or process-only) room is a single calm count line; the
-    // three-line cockpit is reserved for a room that has agents to summarize.
+    // two-line cockpit is reserved for a room that has agents to summarize.
     if total == 0 {
         return vec![Line::from(trim_spans_to_width(
             vec![Span::styled(count_label, theme.dim())],
@@ -120,85 +121,68 @@ pub(super) fn fleet_header_lines(
         ))];
     }
 
-    // L1 — the attention buckets, loud, with the agent total pinned right.
-    let mut attention: Vec<Span<'static>> = Vec::new();
+    // L1 — the whole fleet make-up on one line, every bucket shown (a zero reads
+    // `? 0`): the attention buckets lead so a blocked agent is the first thing
+    // read, then the calm tail, with the agent total pinned right.
+    let mut summary: Vec<Span<'static>> = Vec::new();
     push_count(
-        &mut attention,
+        &mut summary,
         status_glyph(AgentStatus::Waiting),
         waiting,
         status_style(theme, AgentStatus::Waiting),
     );
     push_count(
-        &mut attention,
+        &mut summary,
         status_glyph(AgentStatus::Failed),
         failed,
         status_style(theme, AgentStatus::Failed),
     );
-    if attention.is_empty() {
-        attention.push(Span::styled(
-            "✓ all clear",
-            theme.style(Color::Green, Modifier::DIM),
-        ));
-    }
-    let line1 = pin_right(
-        attention,
-        vec![Span::styled(count_label, theme.dim())],
-        width,
-    );
-
-    // L2 — the calm tail.
-    let mut calm: Vec<Span<'static>> = Vec::new();
     push_count(
-        &mut calm,
+        &mut summary,
         status_glyph(AgentStatus::Running),
         working,
         agent_style(theme, AgentStatus::Running),
     );
     push_count(
-        &mut calm,
+        &mut summary,
         thinking_still(),
         thinking,
         agent_style(theme, AgentStatus::Running),
     );
     push_count(
-        &mut calm,
+        &mut summary,
         status_glyph(AgentStatus::Idle),
         idle,
         status_style(theme, AgentStatus::Idle),
     );
     push_count(
-        &mut calm,
+        &mut summary,
         status_glyph(AgentStatus::Success),
         success,
         status_style(theme, AgentStatus::Success),
     );
-    let line2 = Line::from(trim_spans_to_width(calm, width));
+    let line1 = pin_right(summary, vec![Span::styled(count_label, theme.dim())], width);
 
-    vec![
-        line1,
-        line2,
-        fleet_totals_line(theme, agents, groups, width),
-    ]
+    vec![line1, fleet_totals_line(theme, agents, groups, width)]
 }
 
 /// Append a `glyph n` bucket to a header line, spaced from the previous one. The
 /// glyph and its count are always separated by a single space (`? 2`, never
-/// `?2`); successive buckets are separated by three. A zero count is skipped.
+/// `?2`); successive buckets are separated by three. Every bucket renders, so a
+/// zero reads `? 0` — the cockpit is a fixed dashboard, scannable by position.
 fn push_count(spans: &mut Vec<Span<'static>>, glyph: &str, count: usize, style: Style) {
-    if count == 0 {
-        return;
-    }
     if !spans.is_empty() {
         spans.push(Span::raw("   "));
     }
     spans.push(Span::styled(format!("{glyph} {count}"), style));
 }
 
-/// L3 of the cockpit: the fleet's resource totals — lines changed leftmost, then
-/// tokens and spend, with total time worked pinned to the right edge. Each
-/// metric is summed from the data that carries it (cost/tokens/duration from the
-/// agents, the `+/-` churn from the worktree diffs) and is dropped when no agent
-/// reports it, so the line shows only what is real.
+/// L2 of the cockpit: the fleet's resource totals — total time worked leftmost
+/// behind a clock glyph, then tokens and lines changed, with the fleet spend
+/// pinned bold to the right edge. Each metric is summed from the data that
+/// carries it (cost/tokens/duration from the agents, the `+/-` churn from the
+/// worktree diffs) and is dropped when no agent reports it, so the line shows
+/// only what is real.
 fn fleet_totals_line(
     theme: &Theme,
     agents: &[AgentState],
@@ -231,22 +215,25 @@ fn fleet_totals_line(
     }
 
     let mut left: Vec<Span<'static>> = Vec::new();
-    if added + removed > 0 {
-        left.extend(diff_spans(theme, clamp_u32(added), clamp_u32(removed)));
+    if has_duration {
+        left.push(Span::styled(
+            format!("{WORKED_GLYPH} {}", duration_worked(duration_ms)),
+            theme.dim(),
+        ));
     }
     if has_tokens {
         push_dot(&mut left, theme);
         left.push(tokens_label(theme, tokens));
     }
-    if has_cost {
+    if added + removed > 0 {
         push_dot(&mut left, theme);
-        left.push(Span::styled(
-            dollars(cost),
-            theme.style(Color::Green, Modifier::empty()),
-        ));
+        left.extend(diff_spans(theme, clamp_u32(added), clamp_u32(removed)));
     }
-    let right = if has_duration {
-        vec![Span::styled(duration_worked(duration_ms), theme.dim())]
+    let right = if has_cost {
+        vec![Span::styled(
+            dollars(cost),
+            theme.style(Color::Green, Modifier::BOLD),
+        )]
     } else {
         Vec::new()
     };
@@ -322,7 +309,13 @@ pub(super) fn worktree_group_lines(
     map: &mut Vec<Option<usize>>,
 ) {
     lines.push(group_header(theme, group, width));
-    map.push(None);
+    // The worktree name is itself a click target: it lands on the group's first
+    // row — the agent adjacent to the header — so clicking the pod name jumps
+    // straight into it. The `external` divider is not a worktree name, so it
+    // stays inert chrome.
+    let header_target = (group.kind != SidebarWorktreeKind::Workspace && !group.rows.is_empty())
+        .then_some(*row_index);
+    map.push(header_target);
     let tier = Tier::for_width(content_width(width));
     for row in &group.rows {
         let selected = *row_index == selected_index;
@@ -551,10 +544,11 @@ fn identity_line(
 /// Line 1 for an agent: the leading cell (animated only while the agent is
 /// actively working or plan-mode thinking — attention markers stay still), the
 /// agent name, then the dim capability tokens (`· model · effort`) and the
-/// permission posture pill, with `$cost` (money-green) and the activity age
-/// pinned right. Capability tokens degrade by width tier: L2 carries model +
-/// effort + posture, L1 drops effort, L0 keeps just the name — cost and age
-/// always pin right.
+/// permission posture pill, with the bold `$cost` (money-green) pinned right.
+/// Capability tokens degrade by width tier: L2 carries model + effort + posture,
+/// L1 drops effort, L0 keeps just the name — cost always pins right. A blocked
+/// `?`/`!` glyph reddens once the row has gone unanswered past the 30-minute
+/// neglect window, so a long-ignored ask escalates without a timestamp.
 fn agent_identity_line(
     theme: &Theme,
     row: &SidebarRow,
@@ -564,8 +558,7 @@ fn agent_identity_line(
     animation_phase: u64,
 ) -> Line<'static> {
     // Right cluster, built first so the left trims to whatever's left: the
-    // session cost in money-green, then — for the resting states only — the
-    // activity age.
+    // session cost, bold in money-green.
     let mut right: Vec<Span<'static>> = Vec::new();
     if let Some(cost) = ctx(row)
         .and_then(|context| context.cost.as_ref())
@@ -574,31 +567,16 @@ fn agent_identity_line(
     {
         right.push(Span::styled(
             cost,
-            theme.style(Color::Green, Modifier::empty()),
-        ));
-    }
-    // The age earns its place only when the agent is *not* actively working: a
-    // working/thinking head already signals liveness and its age is always
-    // "now". For waiting/failed it ramps with staleness (dim → amber → red past
-    // the 10-minute window) so a long-ignored ask visibly reddens; idle/done
-    // stay dim. A stalled `running` agent is projected to `failed` upstream, so
-    // it lands here with its age back — in red.
-    if status != AgentStatus::Running {
-        let secs = age_secs(row.last_activity);
-        if !right.is_empty() {
-            right.push(Span::raw("  "));
-        }
-        right.push(Span::styled(
-            age_label(secs),
-            age_style(theme, status, secs),
+            theme.style(Color::Green, Modifier::BOLD),
         ));
     }
 
-    // Left cluster: glyph + name + dim capability tokens.
+    // Left cluster: glyph + name + dim capability tokens. The glyph reddens once
+    // a `waiting`/`failed` row has sat past the neglect window.
     let mut left: Vec<Span<'static>> = vec![
         Span::styled(
             agent_glyph(status, row.permission_posture, animation_phase),
-            agent_style(theme, status),
+            attention_glyph_style(theme, status, age_secs(row.last_activity)),
         ),
         Span::raw(" "),
         Span::raw(clip(&row.name, NAME_MAX)),

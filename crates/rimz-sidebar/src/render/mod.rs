@@ -23,7 +23,7 @@ use jiff::Timestamp;
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Text};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use rimz::{SidebarRowKind, SidebarSnapshot};
@@ -119,15 +119,19 @@ pub fn draw_with_ui(
     frame.render_widget(paragraph, inner);
 }
 
-/// Lay out the body, then pin the health alert to the bottom edge of the
-/// viewport like a status bar. Space for the alert is always reserved — the
-/// body is truncated before the alert is ever clipped — so the sticky notice
-/// can never scroll off the bottom of a full sidebar.
+/// Lay out the body, then pin the bottom chrome to the bottom edge of the
+/// viewport like a status bar: the centered navigation footer, and beneath it
+/// the sticky health alert. Space for the bottom block is always reserved — the
+/// body is truncated before it is ever clipped — so the footer and notice can
+/// never scroll off the bottom of a full sidebar. While an alert is *active* the
+/// body is a stale/empty fetch, so the footer steps aside and the alert speaks
+/// alone.
 ///
 /// Returns the composed body *and* a parallel hit-test map of equal length:
 /// entry `i` is the visible row index that on-screen content line `i` belongs
-/// to (`app::visible_rows()` order), or `None` for structural lines (header,
-/// group headers, gaps, `+K more`, footer, help, alert). The map is the single
+/// to (`app::visible_rows()` order), or `None` for structural lines (cockpit
+/// header, gaps, the external divider, `+K more`, help, footer, alert); a
+/// worktree header routes to the row it jumps into. The map is the single
 /// authority on row geometry — built from the same final line vector that is
 /// rendered, so it stays 1:1 with what the user sees through every clip.
 pub(crate) fn compose_lines(
@@ -138,33 +142,45 @@ pub(crate) fn compose_lines(
     height: u16,
 ) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
     // `NO_COLOR` can't change mid-process, so read the palette once per frame
-    // and hand the same `Theme` to the body and the alert.
+    // and hand the same `Theme` to the body and the bottom chrome.
     let theme = Theme::from_env();
     let (mut body, mut map) = snapshot_lines(snapshot, alert, ui, usize::from(width), &theme);
-    let Some(alert) = alert else {
-        return (body, map);
-    };
 
-    let alert_block = alert_lines(&theme, alert);
+    // Bottom-pinned chrome, top to bottom: the navigation footer (centered),
+    // then the sticky health alert. The footer is suppressed while an alert is
+    // active so the alert speaks alone.
+    let active = alert.is_some_and(Alert::is_active);
+    let mut bottom: Vec<Line<'static>> = Vec::new();
+    if !active {
+        bottom.extend(footer_lines(snapshot, usize::from(width)));
+    }
+    if let Some(alert) = alert {
+        bottom.extend(alert_lines(&theme, alert));
+    }
+    if bottom.is_empty() {
+        return (body, map);
+    }
+
     let cells = usize::from(width.max(1));
     let height = usize::from(height);
-    let alert_height = alert_block
+    let bottom_height = bottom
         .iter()
         .map(|line| line.width().div_ceil(cells))
         .sum::<usize>()
         .min(height);
 
-    let max_body = height.saturating_sub(alert_height);
+    let max_body = height.saturating_sub(bottom_height);
     if body.len() > max_body {
         body.truncate(max_body);
         map.truncate(max_body);
     }
-    let pad = height.saturating_sub(body.len() + alert_height);
+    let pad = height.saturating_sub(body.len() + bottom_height);
     body.extend(std::iter::repeat_n(Line::from(""), pad));
     map.extend(std::iter::repeat_n(None, pad));
-    // The alert is pinned chrome, never a jump target: one `None` per line.
-    map.extend(std::iter::repeat_n(None, alert_block.len()));
-    body.extend(alert_block);
+    // The footer and alert are pinned chrome, never jump targets: one `None`
+    // per line.
+    map.extend(std::iter::repeat_n(None, bottom.len()));
+    body.extend(bottom);
     (body, map)
 }
 
@@ -203,10 +219,12 @@ pub fn render_fixed<W: Write>(
 }
 
 /// Compose the sidebar body and, in lockstep, the hit-test map: every content
-/// line gets one map entry, `Some(row)` for an agent/process row line and `None`
-/// for structural chrome (fleet header, gaps, group headers, first-run hint,
-/// help, footer, `+K more`). The two vectors stay equal length and same order so
-/// [`compose_lines`] can hand the map straight to the hit-test.
+/// line gets one map entry, `Some(row)` for an agent/process row line and the
+/// worktree header that jumps into it, `None` for structural chrome (cockpit
+/// header, gaps, the external divider, first-run hint, help, `+K more`). The
+/// footer and alert are pinned to the bottom by [`compose_lines`], not here. The
+/// two vectors stay equal length and same order so [`compose_lines`] can hand
+/// the map straight to the hit-test.
 fn snapshot_lines(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
@@ -221,7 +239,7 @@ fn snapshot_lines(
     let mut lines = Vec::new();
     let mut map: Vec<Option<usize>> = Vec::new();
 
-    // The fleet header (the cockpit) is always present and a fixed height — three
+    // The fleet header (the cockpit) is always present and a fixed height — two
     // lines for a populated room, one for an empty one — so the body below never
     // shifts vertically as agents change state. It is chrome, never a jump
     // target, so every header line maps to `None`.
@@ -239,9 +257,6 @@ fn snapshot_lines(
                 &mut map,
                 first_run_hint_lines(theme, snapshot.agent_hooks_ready),
             );
-        }
-        if !active {
-            extend_inert(&mut lines, &mut map, footer_lines(snapshot));
         }
     } else {
         push_section_gap(&mut lines, &mut map);
@@ -276,9 +291,6 @@ fn snapshot_lines(
             lines.push(Line::from(""));
             map.push(None);
             extend_inert(&mut lines, &mut map, help_lines());
-        }
-        if !active {
-            extend_inert(&mut lines, &mut map, footer_lines(snapshot));
         }
     }
 
@@ -336,7 +348,7 @@ fn is_known_agent_process(row: &rimz::SidebarRow) -> bool {
         && (rimz::agents::KNOWN_AGENTS.contains(&row.name.as_str()) || row.name == "node")
 }
 
-fn footer_lines(snapshot: &SidebarSnapshot) -> Vec<Line<'static>> {
+fn footer_lines(snapshot: &SidebarSnapshot, width: usize) -> Vec<Line<'static>> {
     let attention = snapshot
         .worktree_groups
         .iter()
@@ -357,19 +369,33 @@ fn footer_lines(snapshot: &SidebarSnapshot) -> Vec<Line<'static>> {
     let dim = Style::default()
         .fg(Color::Indexed(244))
         .add_modifier(Modifier::DIM);
-    if attention.len() == 1 {
-        return vec![
-            Line::from(""),
-            Line::styled(format!("↵ jump to {}", attention[0].name), dim),
-        ];
+    let text = if attention.len() == 1 {
+        format!("↵ jump to {}", attention[0].name)
+    } else if attention.len() > 1 || jumpable > 0 {
+        "↵ jump   ␣ next ?!   ? keys".to_owned()
+    } else {
+        return Vec::new();
+    };
+    vec![center_line(Line::styled(text, dim), width)]
+}
+
+/// Center a single line within `width` by prepending padding — used to pin the
+/// navigation footer to the bottom edge, horizontally centered. A line already
+/// at or past the width is returned unchanged.
+fn center_line(line: Line<'static>, width: usize) -> Line<'static> {
+    let content_width: usize = line
+        .spans
+        .iter()
+        .map(|span| span.content.chars().count())
+        .sum();
+    let pad = width.saturating_sub(content_width) / 2;
+    if pad == 0 {
+        return line;
     }
-    if attention.len() > 1 || jumpable > 0 {
-        return vec![
-            Line::from(""),
-            Line::styled("↵ jump   ␣ next ?!   ? keys", dim),
-        ];
-    }
-    Vec::new()
+    let mut spans = Vec::with_capacity(line.spans.len() + 1);
+    spans.push(Span::raw(" ".repeat(pad)));
+    spans.extend(line.spans);
+    Line::from(spans)
 }
 
 fn help_lines() -> Vec<Line<'static>> {
@@ -1356,13 +1382,13 @@ mod tests {
         );
     }
 
-    /// The fleet header is a fixed height — one line for an empty room, three for
-    /// a populated one — so the body never shifts as agents change state. The
-    /// attention buckets lead on line 1; the calm tail (running split into
-    /// working `⢿` and thinking `✽`) sits on line 2, each glyph spaced from its
-    /// count.
+    /// The fleet header is a fixed height — one line for an empty room, two for a
+    /// populated one — so the body never shifts as agents change state. The
+    /// single summary line carries every bucket, a zero reading `? 0`: the
+    /// attention buckets lead, then the running pair split into working `⢿` and
+    /// thinking `✽`, each glyph spaced from its count, with the total pinned right.
     #[test]
-    fn fleet_header_is_fixed_and_splits_working_from_thinking() {
+    fn fleet_header_is_fixed_and_merges_summary_onto_one_line() {
         // An empty room is a single calm count line at row 1 (row 0 is the top
         // border) — the body below never moves.
         let empty = snapshot_with(Vec::new(), Vec::new());
@@ -1392,20 +1418,19 @@ mod tests {
         );
         let snapshot = snapshot_with(Vec::new(), vec![working, thinking]);
         let screen = snapshot_to_screen(&snapshot, 40, 12);
-        let attention = screen.lines().nth(1).unwrap(); // L1
-        let calm = screen.lines().nth(2).unwrap(); // L2
-        // L1 carries the agent total; with nothing waiting it reads "all clear".
-        assert!(attention.contains("2 agents"), "{screen}");
-        assert!(attention.contains("all clear"), "{screen}");
-        // L2 splits the running pair one working (⢿) one thinking (✽), each
-        // glyph spaced from its count — and the calm states are not on L1.
-        assert!(calm.contains("⢿ 1"), "{calm}");
-        assert!(calm.contains("✽ 1"), "{calm}");
-        assert!(!attention.contains('⢿'), "{screen}");
-        // The header is exactly three lines (L3 totals is blank here), so the
-        // worktree group lands at row 4 — proof the header did not wrap.
+        let summary = screen.lines().nth(1).unwrap(); // L1 — the whole make-up
+        // The agent total pins right; every bucket shows its count, so the empty
+        // attention buckets read `? 0   ! 0`, then the running pair splits one
+        // working (⢿) one thinking (✽) — all on the one merged line.
+        assert!(summary.contains("2 agents"), "{screen}");
+        assert!(summary.contains("? 0"), "{summary}");
+        assert!(summary.contains("! 0"), "{summary}");
+        assert!(summary.contains("⢿ 1"), "{summary}");
+        assert!(summary.contains("✽ 1"), "{summary}");
+        // The header is exactly two lines (L2 totals is blank here), so the
+        // worktree group lands at row 3 — proof the header did not wrap or grow.
         assert!(
-            screen.lines().nth(4).unwrap().contains("▌main"),
+            screen.lines().nth(3).unwrap().contains("▌main"),
             "fleet header wrapped or shifted:\n{screen}"
         );
     }

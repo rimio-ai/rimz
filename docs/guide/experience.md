@@ -143,7 +143,7 @@ agent showed up in the sidebar, correctly named, with its model and effort. The 
 
 ## Phase 4 — Prompted and working
 
-The reader gives Claude a task. `UserPromptSubmit` then `PreToolUse` move the row to `⢿ running`; the task slot fills with the agent's reported task (or the first ~20 chars of the prompt). The right-aligned age counts from the agent's last activity — so a *wedged* `running` agent betrays itself with an age that keeps climbing.
+The reader gives Claude a task. `UserPromptSubmit` then `PreToolUse` move the row to `⢿ running`; the task slot fills with the agent's reported task (or the first ~20 chars of the prompt). A *wedged* `running` agent betrays itself by escalating to the static `!` attention state once it falls silent past the stall window, rather than spinning forever.
 
 ```
 ┌ query-engine ──────────────┐

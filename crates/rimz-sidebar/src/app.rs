@@ -1827,14 +1827,27 @@ mod tests {
             ..UiState::default()
         };
 
-        // Two single-line process rows, each its own jump target.
-        let row0 = ui.line_map.iter().position(|m| *m == Some(0)).unwrap();
+        // The worktree header is the first line that routes to row 0 — clicking
+        // the pod name jumps into its first row — and the first process row
+        // follows directly beneath it. Both route to row 0.
+        let header = ui.line_map.iter().position(|m| *m == Some(0)).unwrap();
+        let row0 = header + 1;
         let row1 = ui.line_map.iter().position(|m| *m == Some(1)).unwrap();
+        assert_eq!(
+            ui.line_map[row0],
+            Some(0),
+            "the first process row follows its worktree header"
+        );
 
         assert_eq!(
             row_index_at_screen_position(&ui, 0, screen_row_for(row0)),
             None,
             "the border is not clickable content"
+        );
+        assert_eq!(
+            row_index_at_screen_position(&ui, 1, screen_row_for(header)),
+            Some(0),
+            "the worktree header jumps into its first row"
         );
         assert_eq!(
             row_index_at_screen_position(&ui, 1, screen_row_for(row0)),
@@ -1844,30 +1857,32 @@ mod tests {
             row_index_at_screen_position(&ui, 1, screen_row_for(row1)),
             Some(1)
         );
-        // The line just above row 0 is the group header — inert.
+        // The line just above the worktree header is the section gap — inert.
         assert_eq!(
-            row_index_at_screen_position(&ui, 1, screen_row_for(row0 - 1)),
+            row_index_at_screen_position(&ui, 1, screen_row_for(header - 1)),
             None,
-            "the group header is not a row"
+            "the section gap is not a row"
         );
     }
 
     #[test]
     fn every_line_of_an_agent_block_routes_to_that_agent() {
         // The user-visible contract: the whole multi-line agent card is one
-        // click target, the group header and `+K more` are inert, and a process
-        // row's single line routes to its own index.
+        // click target, the worktree header that jumps into it routes there too,
+        // the gaps and `+K more` are inert, and a process row's single line
+        // routes to its own index.
         let ws = workspace();
         let snapshot = clickable_block_snapshot(&ws);
         // Select the agent so its deeper budget-bar and stats lines appear too.
         let map = line_map_for(&snapshot, 0);
 
-        // Index 0 is the agent (a multi-line card); index 1 is the process row.
+        // Index 0 is the agent (a multi-line card) plus the worktree header that
+        // jumps into it; index 1 is the process row.
         let agent_lines = map.iter().filter(|m| **m == Some(0)).count();
         assert!(
             agent_lines >= 4,
-            "the selected agent card spans identity + description + gauge + \
-             bars/stats, not {agent_lines} lines",
+            "the worktree header plus the selected agent card (identity + \
+             description + gauge + bars/stats) route to row 0, not {agent_lines} lines",
         );
         let process_lines = map.iter().filter(|m| **m == Some(1)).count();
         assert_eq!(process_lines, 1, "a process row is a single line");
@@ -1883,10 +1898,10 @@ mod tests {
             assert_eq!(got, *entry, "screen row {} mismatched its map slot", i + 1);
         }
 
-        // The group header, gaps, and the `+K more` hidden-count line are inert.
+        // The cockpit header, gaps, and the `+K more` hidden-count line are inert.
         assert!(
             map.contains(&None),
-            "group header / gaps / +K more stay inert"
+            "cockpit header / gaps / +K more stay inert"
         );
     }
 

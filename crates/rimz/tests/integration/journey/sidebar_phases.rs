@@ -180,7 +180,7 @@ fn phase3_question_waits_and_counts_attention() {
         "a permission prompt makes the agent wait:\n{screen}"
     );
     assert!(
-        screen.contains("?1"),
+        screen.contains("? 1"),
         "the attention line counts the waiting agent:\n{screen}"
     );
     assert!(
@@ -234,7 +234,7 @@ fn phase3b_resolver_in_front_shows_chain() {
         "the row names the active resolver:\n{screen}"
     );
     assert!(
-        screen.contains("?1"),
+        screen.contains("? 1"),
         "a delegated item is still pending, so it still counts in the tally:\n{screen}"
     );
 }
@@ -282,7 +282,7 @@ fn phase4_fleet_groups_and_tallies() {
         "the script's ask shows its title:\n{screen}"
     );
     assert!(
-        screen.contains("?1"),
+        screen.contains("? 1"),
         "exactly one item waits across the room:\n{screen}"
     );
 }
@@ -730,11 +730,11 @@ fn target_full_fleet_tallies_script_gate_and_never_caps_attention_rows() {
     push_failed_agent_fixture(&env, "failed-1", "feature-migration");
 
     let screen = room.wait_for(
-        |s| s.contains("?2") && s.contains("!1") && s.contains("+"),
+        |s| s.contains("? 2") && s.contains("! 1") && s.contains("+"),
         SETTLE,
     );
     assert!(
-        screen.contains("?2") && screen.contains("!1"),
+        screen.contains("? 2") && screen.contains("! 1"),
         "the attention line should count waiting and failed rows across all groups:\n{screen}"
     );
     assert!(
