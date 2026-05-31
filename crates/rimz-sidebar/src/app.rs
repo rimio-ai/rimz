@@ -17,13 +17,17 @@ use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal;
 use rimz::ids::PaneId;
 use rimz::ledger::paths::PathErr;
+use rimz::mux::PaneListOptions;
 use rimz::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use tracing::{debug, info, warn};
 
 use crate::render::{self, Alert, UiState};
 
 mod input;
-use input::{KeyAction, SNAPSHOT_WAKEUP, Wakeup, encode_key, encode_mouse, wait_for_wakeup};
+use input::{
+    KeyAction, SELF_CLOSE_WAKEUP, SNAPSHOT_WAKEUP, Wakeup, encode_key, encode_mouse,
+    wait_for_wakeup,
+};
 
 #[derive(Clone, Debug)]
 pub struct ServeConfig {
@@ -115,6 +119,23 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     let mut in_flight = false;
     let mut refetch_pending = false;
 
+    // Resize is the earliest signal that a sibling pane closed and Zellij/tmux
+    // gave the sidebar the freed space. Probe only the live pane list on a
+    // second worker: it feeds the existing self-close latch without running the
+    // snapshot path's ledger/git/account enrichments.
+    let (self_close_probe_tx, self_close_probe_rx) =
+        std::sync::mpsc::channel::<SelfCloseProbeRequest>();
+    let (self_close_result_tx, self_close_result_rx) =
+        std::sync::mpsc::channel::<SelfCloseProbeOutcome>();
+    spawn_self_close_probe_worker(
+        config.clone(),
+        socket_path.clone(),
+        self_close_probe_rx,
+        self_close_result_tx,
+    );
+    let mut self_close_probe_in_flight = false;
+    let mut pending_self_close_probe: Option<Duration> = None;
+
     // First frame synchronously: nothing animates yet, so there is no loop to
     // stall, and it avoids a placeholder flash before the worker's first result.
     let mut fetched_at = Instant::now();
@@ -135,6 +156,14 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         anim_start,
     )?
     .should_exit;
+    if !should_exit && current.own_view.as_ref().map(|view| view.sibling_count) == Some(0) {
+        request_self_close_probe(
+            &self_close_probe_tx,
+            &mut self_close_probe_in_flight,
+            &mut pending_self_close_probe,
+            STARTUP_SELF_CLOSE_RECHECK_AFTER,
+        );
+    }
 
     // One event loop. It blocks only in `recv`; the spinner advances on the
     // animation tick, input is applied in place, and a finished background fetch
@@ -203,6 +232,23 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     );
                 }
             }
+            Wakeup::SelfCloseProbe => {
+                self_close_probe_in_flight = false;
+                while let Ok(outcome) = self_close_result_rx.try_recv() {
+                    if apply_self_close_probe_outcome(&config, outcome, &mut self_close) {
+                        should_exit = true;
+                        break;
+                    }
+                }
+                if !should_exit && let Some(delay) = pending_self_close_probe.take() {
+                    request_self_close_probe(
+                        &self_close_probe_tx,
+                        &mut self_close_probe_in_flight,
+                        &mut pending_self_close_probe,
+                        delay,
+                    );
+                }
+            }
             // The poll timeout drives two decoupled layers. Render: while a
             // running agent animates, advance the spin frame on the cached
             // snapshot — pure in-process redraw, never gated on fetch state, so
@@ -247,6 +293,21 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     &mut refetch_pending,
                     true,
                     false,
+                );
+            }
+            Wakeup::Resize => {
+                apply_input(
+                    Wakeup::Resize,
+                    &mut ui,
+                    &mut health,
+                    &mut terminal,
+                    &current,
+                )?;
+                request_self_close_probe(
+                    &self_close_probe_tx,
+                    &mut self_close_probe_in_flight,
+                    &mut pending_self_close_probe,
+                    Duration::ZERO,
                 );
             }
             Wakeup::Reload => {
@@ -423,6 +484,7 @@ impl SelfCloseState {
 }
 
 const EMPTY_STARTUP_OBSERVATIONS_BEFORE_CLOSE: u8 = 2;
+const STARTUP_SELF_CLOSE_RECHECK_AFTER: Duration = Duration::from_secs(1);
 
 /// Decide whether the daemon-view sidebar should detach the client because the
 /// `rimzd` daemon tab is the only tab left in the session. Mirrors
@@ -916,6 +978,55 @@ fn spawn_fetch_worker(
     });
 }
 
+fn spawn_self_close_probe_worker(
+    config: ServeConfig,
+    socket_path: PathBuf,
+    request_rx: std::sync::mpsc::Receiver<SelfCloseProbeRequest>,
+    result_tx: std::sync::mpsc::Sender<SelfCloseProbeOutcome>,
+) {
+    std::thread::spawn(move || {
+        let waker = UnixDatagram::unbound().ok();
+        while let Ok(first) = request_rx.recv() {
+            let mut delay = first.delay;
+            while let Ok(extra) = request_rx.try_recv() {
+                delay = delay.min(extra.delay);
+            }
+            if !delay.is_zero() {
+                std::thread::sleep(delay);
+            }
+            let outcome = run_self_close_probe(&config);
+            if result_tx.send(outcome).is_err() {
+                return;
+            }
+            if let Some(waker) = &waker {
+                let _ = waker.send_to(SELF_CLOSE_WAKEUP, &socket_path);
+            }
+        }
+    });
+}
+
+fn run_self_close_probe(config: &ServeConfig) -> SelfCloseProbeOutcome {
+    let Some(own) = own_pane_id(config.mux) else {
+        return SelfCloseProbeOutcome {
+            sibling_count: None,
+            error: None,
+        };
+    };
+    match rimz::mux::backend_for(config.mux).list_panes(PaneListOptions {
+        session_name: Some(config.session_name.clone()),
+    }) {
+        Ok(panes) => SelfCloseProbeOutcome {
+            sibling_count: rimz::SidebarOwnView::from_panes(&own, &panes)
+                .map(|view| view.sibling_count),
+            error: None,
+        },
+        Err(err) => SelfCloseProbeOutcome {
+            sibling_count: None,
+            error: Some(err.to_string()),
+        },
+    }
+}
+
 /// Ask the fetch worker for a fresh snapshot. `in_flight` collapses redundant
 /// requests while one is already running; `force_after` (set by a ledger delta,
 /// i.e. new committed data) guarantees one more fetch once the in-flight one
@@ -935,6 +1046,61 @@ fn request_fetch(
     } else if force_after {
         *refetch_pending = true;
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SelfCloseProbeRequest {
+    delay: Duration,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SelfCloseProbeOutcome {
+    sibling_count: Option<usize>,
+    error: Option<String>,
+}
+
+/// Ask the lightweight self-close worker for a live sibling count. While a
+/// probe is already running, keep the shortest pending delay so an immediate
+/// resize probe wins over the startup grace recheck.
+fn request_self_close_probe(
+    request_tx: &std::sync::mpsc::Sender<SelfCloseProbeRequest>,
+    in_flight: &mut bool,
+    pending_delay: &mut Option<Duration>,
+    delay: Duration,
+) {
+    if !*in_flight {
+        if request_tx.send(SelfCloseProbeRequest { delay }).is_ok() {
+            *in_flight = true;
+        }
+        return;
+    }
+    *pending_delay = Some(pending_delay.map_or(delay, |pending| pending.min(delay)));
+}
+
+/// Fold a fast probe result into the same latch the snapshot path uses. The
+/// probe is best-effort metadata: failures never degrade the rendered frame
+/// because the normal snapshot backstop still owns recovery.
+fn apply_self_close_probe_outcome(
+    config: &ServeConfig,
+    outcome: SelfCloseProbeOutcome,
+    self_close: &mut SelfCloseState,
+) -> bool {
+    if let Some(error) = outcome.error {
+        debug!(
+            session = %config.session_name,
+            error = %error,
+            "self-close pane probe failed",
+        );
+        return false;
+    }
+    if self_close_decision(self_close, outcome.sibling_count) {
+        debug!(
+            session = %config.session_name,
+            "sidebar tab emptied; exiting after resize probe",
+        );
+        return true;
+    }
+    false
 }
 
 /// What [`apply_fetch_outcome`] reports back to the loop: whether to exit, and
@@ -1021,9 +1187,10 @@ fn apply_fetch_outcome(
     }
 
     // Own-view (sibling count) rides in on the snapshot — the CLI computes it
-    // from the same pane list it already enumerated, so the renderer never
-    // spawns a second `pane list`. The focus-driven selection reconcile already
-    // ran before the draw above.
+    // from the same pane list it already enumerated. Resize events have their
+    // own metadata-only fast probe; this snapshot path stays the durable
+    // backstop. The focus-driven selection reconcile already ran before the
+    // draw above.
     if self_close_decision(
         self_close,
         current.own_view.as_ref().map(|view| view.sibling_count),
@@ -1212,11 +1379,13 @@ fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -
         Wakeup::MouseClick { column, row } => handle_mouse_click(column, row, ui, snapshot),
         Wakeup::Resize => InputOutcome::redraw(),
         // The serve loop intercepts these before dispatching here: a tick or a
-        // ledger delta is the re-fetch trigger, a finished fetch is folded, and
-        // a reload re-execs.
-        Wakeup::Tick | Wakeup::Ledger | Wakeup::Reload | Wakeup::Snapshot => {
-            InputOutcome::default()
-        }
+        // ledger delta is the re-fetch trigger, worker completions are folded,
+        // and a reload re-execs.
+        Wakeup::Tick
+        | Wakeup::Ledger
+        | Wakeup::Reload
+        | Wakeup::Snapshot
+        | Wakeup::SelfCloseProbe => InputOutcome::default(),
     }
 }
 
@@ -1934,6 +2103,67 @@ mod tests {
     #[test]
     fn tick_for_clamps_zero_to_one() {
         assert_eq!(tick_for(0), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn self_close_probe_request_sends_when_idle() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut in_flight = false;
+        let mut pending = None;
+
+        request_self_close_probe(&tx, &mut in_flight, &mut pending, Duration::ZERO);
+
+        assert!(in_flight);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            SelfCloseProbeRequest {
+                delay: Duration::ZERO
+            }
+        );
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn self_close_probe_request_coalesces_to_shortest_pending_delay() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut in_flight = true;
+        let mut pending = Some(Duration::from_secs(2));
+
+        request_self_close_probe(&tx, &mut in_flight, &mut pending, Duration::from_millis(50));
+
+        assert!(in_flight);
+        assert_eq!(pending, Some(Duration::from_millis(50)));
+    }
+
+    #[test]
+    fn self_close_probe_outcome_uses_the_existing_latch() {
+        let config = ServeConfig {
+            workspace_id: workspace(),
+            mux: MuxName::Zellij,
+            session_name: "rimz-test".to_owned(),
+            instance_id: SidebarInstanceId::new(),
+            tick_seconds: 2,
+            rimz_bin: PathBuf::from("rimz"),
+        };
+        let mut state = SelfCloseState::default();
+
+        assert!(!apply_self_close_probe_outcome(
+            &config,
+            SelfCloseProbeOutcome {
+                sibling_count: Some(1),
+                error: None,
+            },
+            &mut state,
+        ));
+        assert!(state.seen_sibling);
+        assert!(apply_self_close_probe_outcome(
+            &config,
+            SelfCloseProbeOutcome {
+                sibling_count: Some(0),
+                error: None,
+            },
+            &mut state,
+        ));
     }
 
     #[test]

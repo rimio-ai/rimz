@@ -825,8 +825,8 @@ fn sidebar_self_closes_when_its_tab_empties() {
         "expected sidebar + terminal before self-close for {name}",
     );
     assert!(
-        wait_for_nonplugin_panes(xdg.path(), &name, 0, Duration::from_secs(30)),
-        "lone sidebar did not close its own pane after the terminal exited for {name}",
+        wait_for_nonplugin_panes(xdg.path(), &name, 0, Duration::from_secs(7)),
+        "lone sidebar did not close promptly after the terminal exited for {name}",
     );
 
     // On exit the sidebar removes its heartbeat (RuntimeFileGuard); otherwise it
@@ -927,7 +927,10 @@ fn wait_for_no_sidebar_heartbeat(dir: &Path, timeout: Duration) -> bool {
 /// Both panes are `close_on_exit`, so each disappears when its command ends.
 fn self_close_layout(session: &str, rimz: &Path, sidebar: &Path, xdg: &Path) -> String {
     let q = |s: String| serde_json::to_string(&s).expect("kdl escape");
-    let serve = sidebar_serve_command(session, rimz, sidebar, xdg);
+    // Keep the data tick deliberately slow. The test should pass via the
+    // resize-triggered fast self-close probe, not by waiting for the normal
+    // snapshot backstop.
+    let serve = sidebar_serve_command_with_tick(session, rimz, sidebar, xdg, 20);
     format!(
         r#"layout {{
     default_tab_template split_direction="vertical" {{
@@ -986,10 +989,20 @@ fn sidebar_only_tab_layout(session: &str, rimz: &Path, sidebar: &Path, xdg: &Pat
 }
 
 fn sidebar_serve_command(session: &str, rimz: &Path, sidebar: &Path, xdg: &Path) -> String {
+    sidebar_serve_command_with_tick(session, rimz, sidebar, xdg, 1)
+}
+
+fn sidebar_serve_command_with_tick(
+    session: &str,
+    rimz: &Path,
+    sidebar: &Path,
+    xdg: &Path,
+    tick_seconds: u64,
+) -> String {
     format!(
         "XDG_STATE_HOME={xdg} XDG_RUNTIME_DIR={xdg} RIMZ_BIN={rimz} \
          exec {sidebar} serve --mux zellij --workspace-id ws_0123456789abcdef01234567 \
-         --session-name {session} --tick-seconds 1",
+         --session-name {session} --tick-seconds {tick_seconds}",
         xdg = xdg.display(),
         rimz = rimz.display(),
         sidebar = sidebar.display(),

@@ -19,6 +19,9 @@ pub(super) enum Wakeup {
     /// [`SNAPSHOT_WAKEUP`]; the loop folds the result waiting on its result
     /// channel. Keeps the fetch subprocess off the render thread.
     Snapshot,
+    /// A resize-triggered sibling-count probe finished. This carries only
+    /// pane-list metadata for the self-close latch, never a rendered snapshot.
+    SelfCloseProbe,
     Resize,
     /// `rimz reload` asks the renderer to re-exec its own binary in place so a
     /// freshly-installed build takes effect without a session rebirth.
@@ -45,6 +48,7 @@ pub(super) enum KeyAction {
 /// socket once a snapshot is ready to fold. Riding the same socket every other
 /// wakeup uses keeps the loop blocking in exactly one place.
 pub(super) const SNAPSHOT_WAKEUP: &[u8] = b"snapshot";
+pub(super) const SELF_CLOSE_WAKEUP: &[u8] = b"self_close_probe";
 
 pub(super) fn encode_key(code: KeyCode) -> Option<String> {
     let wire = match code {
@@ -93,6 +97,7 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
     }
     match raw {
         "snapshot" => Wakeup::Snapshot,
+        "self_close_probe" => Wakeup::SelfCloseProbe,
         "resize" => Wakeup::Resize,
         "reload" => Wakeup::Reload,
         "key:up" => Wakeup::Key(KeyAction::Up),
@@ -172,6 +177,11 @@ mod tests {
     }
 
     #[test]
+    fn self_close_probe_control_word_decodes_to_probe() {
+        assert_eq!(decode_wakeup(SELF_CLOSE_WAKEUP), Wakeup::SelfCloseProbe);
+    }
+
+    #[test]
     fn r_key_triggers_a_reload() {
         // Pressing `r` re-execs the renderer in place by riding the same
         // `reload` control word the CLI's wakeup posts.
@@ -196,6 +206,7 @@ mod tests {
             "resize".to_owned(),
             "reload".to_owned(),
             String::from_utf8(SNAPSHOT_WAKEUP.to_vec()).unwrap(),
+            String::from_utf8(SELF_CLOSE_WAKEUP.to_vec()).unwrap(),
             String::from_utf8(rimz::ledger::wakeup::RELOAD_WAKEUP.to_vec()).unwrap(),
         ];
         for code in [
