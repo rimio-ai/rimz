@@ -195,12 +195,24 @@ fn list_panes_with_session_returns_terminals() {
     let server = TmuxServer::new();
     server.ensure_with_shell("panes");
 
-    let panes = server
-        .backend
-        .list_panes(PaneListOptions {
-            session_name: Some("panes".to_owned()),
-        })
-        .expect("list_panes");
+    // `#{pane_current_command}` can read transiently as the launcher shell while
+    // the spawned `sh` is still exec'ing — surfaces only under heavy parallel
+    // load — so poll until the command settles before asserting on it.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let panes = loop {
+        let panes = server
+            .backend
+            .list_panes(PaneListOptions {
+                session_name: Some("panes".to_owned()),
+            })
+            .expect("list_panes");
+        if panes.first().and_then(|p| p.command.as_deref()) == Some("sh")
+            || Instant::now() >= deadline
+        {
+            break panes;
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
     assert_eq!(panes.len(), 1, "expected single shell pane, got {panes:?}");
     let pane = &panes[0];
     assert_eq!(pane.pane_id.mux(), MuxName::Tmux);
@@ -239,12 +251,17 @@ fn open_background_view_creates_named_window_idempotently() {
     };
     // Install the `after-new-window` sidebar hook the way `rimz start` does
     // before launching the host.
-    server.backend.open_sidebar(&sidebar).expect("open_sidebar");
+    server
+        .backend
+        .open_sidebar(&sidebar, None)
+        .expect("open_sidebar");
 
     let opts = rimz::mux::BackgroundViewOptions {
-        name: "rimz-rc".to_owned(),
-        host: vec!["sleep".to_owned(), "120".to_owned()],
-        host_cwd: std::env::temp_dir(),
+        name: "rimzd".to_owned(),
+        hosts: vec![rimz::mux::HostPane {
+            argv: vec!["sleep".to_owned(), "120".to_owned()],
+            cwd: std::env::temp_dir(),
+        }],
         sidebar,
     };
 
@@ -257,8 +274,18 @@ fn open_background_view_creates_named_window_idempotently() {
         server
             .window_names("rimz-bgview")
             .iter()
-            .any(|name| name == "rimz-rc"),
-        "expected a rimz-rc window after launch, got {:?}",
+            .any(|name| name == "rimzd"),
+        "expected a rimzd window after launch, got {:?}",
+        server.window_names("rimz-bgview"),
+    );
+    // Forced to the front: the daemon window leads the session.
+    assert_eq!(
+        server
+            .window_names("rimz-bgview")
+            .first()
+            .map(String::as_str),
+        Some("rimzd"),
+        "daemon window must lead the session, got {:?}",
         server.window_names("rimz-bgview"),
     );
     // Born `sidebar | host`: the hook-docked sidebar beside the host pane.
@@ -269,9 +296,9 @@ fn open_background_view_creates_named_window_idempotently() {
         })
         .expect("list panes")
         .into_iter()
-        .filter(|pane| pane.view_name.as_deref() == Some("rimz-rc"))
+        .filter(|pane| pane.view_name.as_deref() == Some("rimzd"))
         .count();
-    assert_eq!(rc_panes, 2, "rimz-rc window should be born sidebar | host");
+    assert_eq!(rc_panes, 2, "rimzd window should be born sidebar | host");
 
     let second = server
         .backend
@@ -384,14 +411,17 @@ fn open_sidebar_split_window_succeeds() {
 
     server
         .backend
-        .open_sidebar(&SidebarPaneOptions {
-            session_name: "sidebar".to_owned(),
-            workspace_id,
-            cwd: std::env::current_dir().expect("cwd"),
-            width_percent: 30,
-            rimz_bin: stub,
-            replace_existing: false,
-        })
+        .open_sidebar(
+            &SidebarPaneOptions {
+                session_name: "sidebar".to_owned(),
+                workspace_id,
+                cwd: std::env::current_dir().expect("cwd"),
+                width_percent: 30,
+                rimz_bin: stub,
+                replace_existing: false,
+            },
+            None,
+        )
         .expect("open_sidebar");
 
     let panes = server
@@ -521,14 +551,17 @@ fn new_window_is_born_with_a_sidebar_and_focused_terminal() {
     let (_stub_dir, stub) = sidebar_command_stub();
     server
         .backend
-        .open_sidebar(&SidebarPaneOptions {
-            session_name: "room".to_owned(),
-            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-newwindow")),
-            cwd: std::env::current_dir().expect("cwd"),
-            width_percent: 30,
-            rimz_bin: stub,
-            replace_existing: false,
-        })
+        .open_sidebar(
+            &SidebarPaneOptions {
+                session_name: "room".to_owned(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-newwindow")),
+                cwd: std::env::current_dir().expect("cwd"),
+                width_percent: 30,
+                rimz_bin: stub,
+                replace_existing: false,
+            },
+            None,
+        )
         .expect("open_sidebar");
 
     // The user opens a second window.

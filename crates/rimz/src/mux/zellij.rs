@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, MuxBackend, MuxErr, PaneCapture,
-    PaneListOptions, Result, SessionOptions, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions,
-    ensure_pane_backend,
+    BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, DaemonView, HostPane, MuxBackend,
+    MuxErr, PaneCapture, PaneListOptions, Result, SessionOptions, SidebarPaneOptions,
+    SidebarRecovery, SplitPaneOptions, ensure_pane_backend,
 };
 use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
@@ -213,8 +213,20 @@ impl ZellijBackend {
     /// `--create-background` client returns, so the temp layout file must
     /// outlive the call. We hold it through a bounded wait for the sidebar pane
     /// to appear, then let it drop.
-    fn create_session_with_sidebar(&self, opts: &SidebarPaneOptions) -> Result<()> {
-        let layout = TempLayoutFile::new(render_sidebar_layout(opts)?)?;
+    fn create_session_with_sidebar(
+        &self,
+        opts: &SidebarPaneOptions,
+        daemon: Option<&DaemonView>,
+    ) -> Result<()> {
+        // A daemon view leads only if it is born first: Zellij can't reorder
+        // tabs, so the session is born from a two-tab layout (`daemon` then the
+        // focused working tab) when one is supplied, and the single working-tab
+        // template otherwise.
+        let body = match daemon {
+            Some(daemon) => render_session_layout_with_daemon(opts, daemon)?,
+            None => render_sidebar_layout(opts)?,
+        };
+        let layout = TempLayoutFile::new(body)?;
         let spec = self.cmd().args([
             "attach".to_owned(),
             "--create-background".to_owned(),
@@ -277,9 +289,8 @@ impl ZellijBackend {
             .map(|_| ())
     }
 
-    /// `zellij --session <name> action go-to-tab <index>` (1-based). A
-    /// background view's working tab is the session's first, so this returns
-    /// focus there after `new-tab` steals it.
+    /// `zellij --session <name> action go-to-tab <index>` (1-based). Used to pull
+    /// focus off a freshly `new-tab`'d daemon tab back to the leading working tab.
     fn go_to_tab(&self, session: &str, index: u32) -> Result<()> {
         self.zellij_action(session)
             .args(["go-to-tab".to_owned(), index.to_string()])
@@ -449,15 +460,22 @@ impl ZellijBackend {
         false
     }
 
-    /// Whether `session` already holds a tab named `tab_name`. `query-tab-names`
-    /// prints one tab name per line; a Rimz background view is idempotent on its
-    /// name, so a relaunch into a session that already carries it is skipped.
-    fn session_has_named_tab(&self, session: &str, tab_name: &str) -> Result<bool> {
+    /// The session's tab names, in tab order. `query-tab-names` prints one name
+    /// per line; the ANSI banner newer Zellij ships is stripped.
+    fn tab_names(&self, session: &str) -> Result<Vec<String>> {
         let output = self.zellij_action(session).arg("query-tab-names").run()?;
         Ok(String::from_utf8_lossy(&output.stdout)
             .lines()
             .map(strip_ansi)
-            .any(|line| line.trim() == tab_name))
+            .map(|line| line.trim().to_owned())
+            .collect())
+    }
+
+    /// Whether `session` already holds a tab named `tab_name`. A Rimz background
+    /// view is idempotent on its name, so a relaunch into a session that already
+    /// carries it is skipped.
+    fn session_has_named_tab(&self, session: &str, tab_name: &str) -> Result<bool> {
+        Ok(self.tab_names(session)?.iter().any(|name| name == tab_name))
     }
 }
 
@@ -588,9 +606,11 @@ impl MuxBackend for ZellijBackend {
             .map(|_| ())
     }
 
-    fn open_sidebar(&self, opts: &SidebarPaneOptions) -> Result<()> {
+    fn open_sidebar(&self, opts: &SidebarPaneOptions, daemon: Option<&DaemonView>) -> Result<()> {
         // Zellij places a left pane only at session birth, so the sidebar is
-        // injected only by (re)creating the session from a layout:
+        // injected only by (re)creating the session from a layout. `daemon`, when
+        // present, leads the birth layout (the only way a tab can lead, since
+        // Zellij can't reorder tabs after birth):
         //   - Absent: first birth.
         //   - Exited: `attach` would resurrect a stale serialized layout (wrong
         //             geometry, suspended command panes), so delete and rebirth.
@@ -603,10 +623,10 @@ impl MuxBackend for ZellijBackend {
         //             --create`). A sidebar-less rimz session is non-functional
         //             and cannot gain a left pane in place, so rebirth it.
         match self.session_state(&opts.session_name) {
-            SessionState::Absent => self.create_session_with_sidebar(opts),
+            SessionState::Absent => self.create_session_with_sidebar(opts, daemon),
             SessionState::Exited => {
                 self.delete_session(&opts.session_name)?;
-                self.create_session_with_sidebar(opts)
+                self.create_session_with_sidebar(opts, daemon)
             }
             SessionState::Live
                 if self.session_has_healthy_sidebar(&opts.session_name)
@@ -616,7 +636,7 @@ impl MuxBackend for ZellijBackend {
             }
             SessionState::Live => {
                 self.delete_session(&opts.session_name)?;
-                self.create_session_with_sidebar(opts)
+                self.create_session_with_sidebar(opts, daemon)
             }
         }
     }
@@ -678,48 +698,43 @@ impl MuxBackend for ZellijBackend {
 
     fn open_background_view(&self, opts: &BackgroundViewOptions) -> Result<BackgroundViewLaunch> {
         let session = &opts.sidebar.session_name;
-        // Idempotent on the tab name: a relaunch into a session already carrying
-        // the view launches nothing. A failed query propagates rather than risk a
-        // duplicate launch.
-        let outcome = if self.session_has_named_tab(session, &opts.name)? {
-            BackgroundViewLaunch::AlreadyRunning
-        } else {
-            // `--layout` gives the tab its `sidebar | host` shape directly,
-            // bypassing the session's default tab template (which `--layout`
-            // overrides, so the sidebar must be spelled out here). `new-tab` is
-            // synchronous (it prints the new tab id), so the temp layout file
-            // can drop as soon as the call returns. Each pane carries its own
-            // `cwd`, so no tab-level `--cwd` is needed.
-            let layout = TempLayoutFile::new(render_background_view_layout(opts)?)?;
-            self.zellij_action(session)
-                .args([
-                    "new-tab".to_owned(),
-                    "--layout".to_owned(),
-                    layout.path().to_string_lossy().into_owned(),
-                    "--name".to_owned(),
-                    opts.name.clone(),
-                ])
-                .run()?;
-            drop(layout);
-            BackgroundViewLaunch::Launched
-        };
-        // Return focus to the session's first tab — the working tab — so neither
-        // a fresh launch (Zellij `new-tab` focuses the tab it creates) nor a
-        // relaunch (the user may be sitting on the host tab) strands the user on
-        // the host: the imminent `attach` lands on the shell. Unconditional on
-        // purpose: unlike `recover_sidebars` (run from inside the managed session
-        // via `rimz reload`), `rimz start` may run from a plain shell or a
-        // *different* mux session, so the caller's own pane is not a focus target
-        // here — the working tab always is. Best-effort: a focus hiccup never
-        // sinks an otherwise-launched view.
+        // Idempotent on the tab name. The lead position is owned by session birth
+        // ([`Self::open_sidebar`] with a `daemon`): `rimz start` births the session
+        // with this tab already leading, so the common case is a no-op here. A
+        // failed query propagates rather than risk a duplicate launch.
+        if self.session_has_named_tab(session, &opts.name)? {
+            return Ok(BackgroundViewLaunch::AlreadyRunning);
+        }
+        // Late add: the session was born without the daemon tab (e.g. a host
+        // became available after first start) and now carries one or more working
+        // tabs. Zellij can't move a tab to the front, so this appended tab does
+        // *not* lead — leading is a birth-time property. `--layout` gives the tab
+        // its `sidebar | hosts…` shape directly (bypassing the tab template, so the
+        // sidebar is spelled out); `new-tab` is synchronous (it prints the tab id),
+        // so the temp layout can drop once it returns. Each pane carries its own
+        // `cwd`, so no tab-level `--cwd` is needed.
+        let layout = TempLayoutFile::new(render_background_view_layout(opts)?)?;
+        self.zellij_action(session)
+            .args([
+                "new-tab".to_owned(),
+                "--layout".to_owned(),
+                layout.path().to_string_lossy().into_owned(),
+                "--name".to_owned(),
+                opts.name.clone(),
+            ])
+            .run()?;
+        drop(layout);
+        // `new-tab` focuses the tab it creates. Return focus to the leading tab so
+        // the imminent `attach` lands on a working pane, not this freshly-added
+        // daemon tab. Best-effort: a focus hiccup never sinks a launch.
         if let Err(err) = self.go_to_tab(session, 1) {
             tracing::warn!(
                 session = %session,
                 error = %err,
-                "could not return focus to the working tab after opening the background view",
+                "could not return focus off the freshly-added daemon tab",
             );
         }
-        Ok(outcome)
+        Ok(BackgroundViewLaunch::Launched)
     }
 
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()> {
@@ -933,12 +948,40 @@ impl Drop for TempLayoutFile {
     }
 }
 
-fn render_sidebar_layout(opts: &SidebarPaneOptions) -> Result<String> {
+/// The one-row compact-bar plugin pane. Supplying our own layout replaces
+/// Zellij's built-in tab/status bar, so every view re-adds the compact-bar or is
+/// born bar-less. Must stay multi-line: Zellij's KDL parser rejects the
+/// single-line `pane {{ plugin … }}` form.
+const COMPACT_BAR_KDL: &str = r#"pane size=1 borderless=true {
+        plugin location="zellij:compact-bar"
+    }"#;
+
+/// The left `rimz sidebar serve` pane every Zellij view carries, as a KDL `pane`
+/// block. `cwd` is spelled only when the pane can't inherit the session's
+/// `--default-cwd` — the `new-tab --layout` path ([`render_background_view_layout`]).
+/// Birth layouts set `--default-cwd` and pass `None`.
+fn sidebar_pane_kdl(opts: &SidebarPaneOptions, cwd: Option<&Path>) -> Result<String> {
     let rimz_bin = kdl_string(&opts.rimz_bin.to_string_lossy())?;
     let workspace_id = kdl_string(opts.workspace_id.as_str())?;
     let session_name = kdl_string(&opts.session_name)?;
     let size = kdl_string(&format!("{}%", opts.width_percent.clamp(10, 90)))?;
     let pane_name = kdl_string(SIDEBAR_PANE_NAME)?;
+    let cwd_attr = match cwd {
+        Some(cwd) => format!(" cwd={}", kdl_string(&cwd.to_string_lossy())?),
+        None => String::new(),
+    };
+    Ok(format!(
+        r#"pane size={size} name={pane_name}{cwd_attr} {{
+            command {rimz_bin}
+            args "sidebar" "serve" "--mux" "zellij" "--workspace-id" {workspace_id} "--session-name" {session_name}
+            start_suspended false
+            close_on_exit true
+        }}"#,
+    ))
+}
+
+fn render_sidebar_layout(opts: &SidebarPaneOptions) -> Result<String> {
+    let sidebar = sidebar_pane_kdl(opts, None)?;
     // The whole layout is the `default_tab_template`, so every tab — the first
     // one born with the session and any the user opens later — is identical:
     // the sidebar on the left and a focused terminal on the right. The working
@@ -949,28 +992,68 @@ fn render_sidebar_layout(opts: &SidebarPaneOptions) -> Result<String> {
     // on Zellij 0.44.3 it creates the right terminal but leaves focus stranded
     // on the sidebar in newly-created tabs. Spelling out the terminal makes the
     // product contract explicit and pins focus on the user's working pane.
-    //
-    // Supplying a `default_tab_template` replaces Zellij's built-in one, which
-    // is what carries the bottom bar — so the template re-adds the compact-bar
-    // plugin itself, or tabs are born with no tab/status bar at all. The body
-    // (sidebar + terminal) is a nested vertical split above that one-row bar.
-    // The `plugin` pane must stay multi-line: Zellij's KDL parser rejects the
-    // single-line `pane { plugin ... }` form.
     Ok(format!(
         r#"layout {{
     default_tab_template {{
         pane split_direction="vertical" {{
-            pane size={size} name={pane_name} {{
-                command {rimz_bin}
-                args "sidebar" "serve" "--mux" "zellij" "--workspace-id" {workspace_id} "--session-name" {session_name}
-                start_suspended false
-                close_on_exit true
-            }}
+            {sidebar}
             pane focus=true
         }}
-        pane size=1 borderless=true {{
-            plugin location="zellij:compact-bar"
+        {COMPACT_BAR_KDL}
+    }}
+}}
+"#,
+    ))
+}
+
+/// The session-birth layout when a daemon view ([`DaemonView`]) leads. Zellij
+/// can't reorder tabs after birth, so the lead order is fixed here: the daemon
+/// tab (`sidebar | hosts…`, first), then the focused working tab
+/// (`sidebar | terminal`). A `new_tab_template` — distinct from
+/// `default_tab_template`, applying only to tabs the user opens *later* — carries
+/// the same `sidebar | terminal` shape so future tabs keep their sidebar and
+/// terminal focus without the `children` focus-strand bug
+/// ([`render_sidebar_layout`] explains why `children` is avoided). All panes
+/// inherit the session's `--default-cwd` except the hosts, which carry their own.
+fn render_session_layout_with_daemon(
+    opts: &SidebarPaneOptions,
+    daemon: &DaemonView,
+) -> Result<String> {
+    if daemon.hosts.is_empty() {
+        return Err(MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: "daemon view has no host panes".to_owned(),
+        });
+    }
+    let sidebar = sidebar_pane_kdl(opts, None)?;
+    let daemon_name = kdl_string(&daemon.name)?;
+    let host_panes = daemon
+        .hosts
+        .iter()
+        .enumerate()
+        .map(|(index, host)| render_host_pane(host, index == 0))
+        .collect::<Result<String>>()?;
+    Ok(format!(
+        r#"layout {{
+    new_tab_template {{
+        pane split_direction="vertical" {{
+            {sidebar}
+            pane focus=true
         }}
+        {COMPACT_BAR_KDL}
+    }}
+    tab name={daemon_name} {{
+        pane split_direction="vertical" {{
+            {sidebar}
+{host_panes}        }}
+        {COMPACT_BAR_KDL}
+    }}
+    tab focus=true {{
+        pane split_direction="vertical" {{
+            {sidebar}
+            pane focus=true
+        }}
+        {COMPACT_BAR_KDL}
     }}
 }}
 "#,
@@ -984,62 +1067,68 @@ fn kdl_string(value: &str) -> Result<String> {
     })
 }
 
-/// A tab layout born `sidebar | host`: the global sidebar docked on the left,
-/// the view's host command on the focused right pane, and the compact-bar below
-/// — mirroring the session's working-tab template ([`render_sidebar_layout`]).
-/// Supplying this as `new-tab --layout` overrides that template, so the sidebar
-/// is spelled out here rather than inherited. The sidebar runs from its own
-/// worktree cwd and the host from `host_cwd` (the project root), so each pane
-/// carries an explicit `cwd`. The host closes with its process
-/// (`close_on_exit true`): an exit means the host is gone.
+/// A tab layout born `sidebar | hosts…`: the global sidebar docked on the left,
+/// the view's hosts side by side to its right (the first focused), and the
+/// compact-bar below — mirroring the session's working-tab template
+/// ([`render_sidebar_layout`]). Supplying this as `new-tab --layout` overrides
+/// that template, so the sidebar is spelled out here rather than inherited. The
+/// sidebar runs from its own worktree cwd and each host from its own `cwd`. Every
+/// host closes with its process (`close_on_exit true`): an exit means it is gone.
 fn render_background_view_layout(opts: &BackgroundViewOptions) -> Result<String> {
-    let (host_program, host_args) = opts.host.split_first().ok_or_else(|| MuxErr::Output {
+    if opts.hosts.is_empty() {
+        return Err(MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: "background view has no host panes".to_owned(),
+        });
+    }
+    // `new-tab --layout` does not set a tab `--default-cwd`, so the sidebar pane
+    // spells its own worktree cwd; each host carries its own.
+    let sidebar = sidebar_pane_kdl(&opts.sidebar, Some(&opts.sidebar.cwd))?;
+    let host_panes = opts
+        .hosts
+        .iter()
+        .enumerate()
+        .map(|(index, host)| render_host_pane(host, index == 0))
+        .collect::<Result<String>>()?;
+    // The body (sidebar + hosts) is a nested vertical split above the one-row
+    // compact-bar.
+    Ok(format!(
+        r#"layout {{
+    pane split_direction="vertical" {{
+        {sidebar}
+{host_panes}    }}
+    {COMPACT_BAR_KDL}
+}}
+"#,
+    ))
+}
+
+/// One host pane in the daemon view's right side, indented to nest under the
+/// vertical split. `focus` pins the view's focus on it (the first host).
+fn render_host_pane(host: &HostPane, focus: bool) -> Result<String> {
+    let (program, args) = host.argv.split_first().ok_or_else(|| MuxErr::Output {
         program: "zellij".to_owned(),
-        reason: "background view has no host command".to_owned(),
+        reason: "background view host has no command".to_owned(),
     })?;
-    let sidebar = &opts.sidebar;
-    let rimz_bin = kdl_string(&sidebar.rimz_bin.to_string_lossy())?;
-    let workspace_id = kdl_string(sidebar.workspace_id.as_str())?;
-    let session_name = kdl_string(&sidebar.session_name)?;
-    let size = kdl_string(&format!("{}%", sidebar.width_percent.clamp(10, 90)))?;
-    let pane_name = kdl_string(SIDEBAR_PANE_NAME)?;
-    let sidebar_cwd = kdl_string(&sidebar.cwd.to_string_lossy())?;
-    let host_cwd = kdl_string(&opts.host_cwd.to_string_lossy())?;
-    let host_program = kdl_string(host_program)?;
-    let host_args_line = if host_args.is_empty() {
+    let program = kdl_string(program)?;
+    let cwd = kdl_string(&host.cwd.to_string_lossy())?;
+    let focus_attr = if focus { " focus=true" } else { "" };
+    let args_line = if args.is_empty() {
         String::new()
     } else {
-        let rendered = host_args
+        let rendered = args
             .iter()
             .map(|arg| kdl_string(arg))
             .collect::<Result<Vec<_>>>()?
             .join(" ");
         format!("\n            args {rendered}")
     };
-    // The body (sidebar + host) is a nested vertical split above a one-row
-    // compact-bar. As in `render_sidebar_layout`, supplying our own layout drops
-    // Zellij's built-in bar, so the template re-adds it or the tab is born with
-    // no tab/status bar at all. The `plugin` pane must stay multi-line: Zellij's
-    // KDL parser rejects the single-line `pane { plugin ... }` form.
     Ok(format!(
-        r#"layout {{
-    pane split_direction="vertical" {{
-        pane size={size} name={pane_name} cwd={sidebar_cwd} {{
-            command {rimz_bin}
-            args "sidebar" "serve" "--mux" "zellij" "--workspace-id" {workspace_id} "--session-name" {session_name}
+        r#"        pane{focus_attr} cwd={cwd} {{
+            command {program}{args_line}
             start_suspended false
             close_on_exit true
         }}
-        pane focus=true cwd={host_cwd} {{
-            command {host_program}{host_args_line}
-            start_suspended false
-            close_on_exit true
-        }}
-    }}
-    pane size=1 borderless=true {{
-        plugin location="zellij:compact-bar"
-    }}
-}}
 "#,
     ))
 }
@@ -1244,12 +1333,18 @@ mod tests {
         );
     }
 
-    fn background_view_opts(host: Vec<String>) -> BackgroundViewOptions {
+    fn host(argv: &[&str], cwd: &str) -> HostPane {
+        HostPane {
+            argv: argv.iter().map(|arg| arg.to_string()).collect(),
+            cwd: PathBuf::from(cwd),
+        }
+    }
+
+    fn background_view_opts(hosts: Vec<HostPane>) -> BackgroundViewOptions {
         use crate::ids::WorkspaceId;
         BackgroundViewOptions {
-            name: "rimz-rc".to_owned(),
-            host,
-            host_cwd: PathBuf::from("/proj/root"),
+            name: "rimzd".to_owned(),
+            hosts,
             sidebar: SidebarPaneOptions {
                 session_name: "rimz-bg".to_owned(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/proj/root")),
@@ -1263,12 +1358,10 @@ mod tests {
 
     #[test]
     fn background_view_layout_runs_the_host_beside_the_sidebar() {
-        let layout = render_background_view_layout(&background_view_opts(vec![
-            "claude".to_owned(),
-            "remote-control".to_owned(),
-            "--spawn".to_owned(),
-            "worktree".to_owned(),
-        ]))
+        let layout = render_background_view_layout(&background_view_opts(vec![host(
+            &["claude", "remote-control", "--spawn", "worktree"],
+            "/proj/root",
+        )]))
         .expect("render background view layout");
         // The host is the focused right pane, born unsuspended, and closes with
         // its process — an exit means the host is gone.
@@ -1292,8 +1385,85 @@ mod tests {
     }
 
     #[test]
-    fn background_view_layout_rejects_an_empty_host() {
+    fn background_view_layout_stacks_two_hosts_focusing_the_first() {
+        let layout = render_background_view_layout(&background_view_opts(vec![
+            host(&["claude", "remote-control"], "/proj/root"),
+            host(
+                &["/usr/bin/rimz", "codex", "app-server", "serve"],
+                "/proj/worktree",
+            ),
+        ]))
+        .expect("render background view layout");
+        // Both hosts are present beside the sidebar.
+        assert!(layout.contains(r#"command "claude""#), "{layout}");
+        assert!(layout.contains(r#"command "/usr/bin/rimz""#), "{layout}");
+        assert!(
+            layout.contains(r#"args "codex" "app-server" "serve""#),
+            "{layout}",
+        );
+        // Exactly one pane takes focus — the first host (the interactive Claude
+        // host), never the broker.
+        assert_eq!(layout.matches("focus=true").count(), 1, "{layout}");
+    }
+
+    #[test]
+    fn background_view_layout_rejects_no_hosts() {
         assert!(render_background_view_layout(&background_view_opts(vec![])).is_err());
+    }
+
+    fn daemon_view(hosts: Vec<HostPane>) -> DaemonView {
+        DaemonView {
+            name: "rimzd".to_owned(),
+            hosts,
+        }
+    }
+
+    #[test]
+    fn session_layout_with_daemon_leads_with_the_daemon_tab() {
+        let bg = background_view_opts(vec![
+            host(&["claude", "remote-control"], "/proj/root"),
+            host(
+                &["/usr/bin/rimz", "codex", "app-server", "serve"],
+                "/proj/worktree",
+            ),
+        ]);
+        let layout = render_session_layout_with_daemon(&bg.sidebar, &daemon_view(bg.hosts.clone()))
+            .expect("render session layout with daemon");
+        // The daemon tab is declared first — before the focused working tab — so
+        // it leads. Zellij fixes tab order at birth (it can't reorder later).
+        let daemon_at = layout.find(r#"tab name="rimzd""#).expect("daemon tab");
+        let work_at = layout.find("tab focus=true").expect("working tab");
+        assert!(
+            daemon_at < work_at,
+            "daemon tab must precede the working tab\n{layout}",
+        );
+        // Future user tabs inherit a sidebar + focused terminal via the
+        // `new_tab_template`, which (unlike `default_tab_template` with explicit
+        // tabs) needs no `children` and so dodges the focus-strand bug.
+        assert!(layout.contains("new_tab_template"), "{layout}");
+        assert!(!layout.contains("children"), "{layout}");
+        // Both hosts and the sidebar are present beside each other.
+        assert!(layout.contains(r#"command "claude""#), "{layout}");
+        assert!(
+            layout.contains(r#"args "codex" "app-server" "serve""#),
+            "{layout}",
+        );
+        assert!(layout.contains(r#"name="rimz-sidebar""#), "{layout}");
+        assert!(layout.contains("compact-bar"), "{layout}");
+        // The host that leads the daemon view runs from the project root; the
+        // sidebars inherit the session `--default-cwd`, so they carry no cwd.
+        assert!(layout.contains(r#"cwd="/proj/root""#), "{layout}");
+    }
+
+    #[test]
+    fn session_layout_with_daemon_rejects_no_hosts() {
+        assert!(
+            render_session_layout_with_daemon(
+                &background_view_opts(vec![]).sidebar,
+                &daemon_view(vec![])
+            )
+            .is_err()
+        );
     }
 
     #[test]

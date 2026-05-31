@@ -25,7 +25,7 @@ use crate::ledger::RuntimePaths;
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
 use crate::ledger::wakeup::SIDEBAR_HEARTBEAT_TTL;
-use crate::mux::{MuxBackend, SidebarPaneOptions};
+use crate::mux::{DaemonView, MuxBackend, SidebarPaneOptions};
 use crate::schema::SIDEBAR_PROTOCOL_VERSION;
 use crate::schema::heartbeat::SidebarHeartbeat;
 
@@ -167,10 +167,15 @@ pub fn sweep_orphan_runtime(rt: &RuntimePaths) {
     }
 }
 
+/// Launch the workspace sidebar daemon if no fresh one is present, coalescing
+/// concurrent attaches through the single-flight election. `daemon` is forwarded
+/// to a session (re)birth so `rimz start` can lead the session with the daemon
+/// view (Zellij's only way to order it first); every other caller passes `None`.
 pub fn launch_sidebar_if_needed(
     backend: &dyn MuxBackend,
     runtime: &RuntimePaths,
     opts: &SidebarPaneOptions,
+    daemon: Option<&DaemonView>,
 ) -> SidebarLaunchOutcome {
     sweep_orphan_runtime(runtime);
     // Fast path before contending — `single_flight`'s contract is that the
@@ -194,7 +199,7 @@ pub fn launch_sidebar_if_needed(
         };
     let mut opts = opts.clone();
     opts.replace_existing = true;
-    match backend.open_sidebar(&opts) {
+    match backend.open_sidebar(&opts, daemon) {
         Ok(()) => {
             // Hold the election lock (`_guard`) until the new daemon publishes
             // its heartbeat, so an attach polling behind us reads it and skips.

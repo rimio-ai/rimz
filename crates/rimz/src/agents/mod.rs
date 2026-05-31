@@ -13,6 +13,7 @@ pub mod account;
 pub mod claude;
 pub mod codex;
 pub(crate) mod codex_app_server;
+pub mod codex_broker;
 pub mod context;
 pub mod statusline;
 

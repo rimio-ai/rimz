@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::mux::{
-    CommandSpec, MuxBackend, MuxErr, PaneCapture, PaneListOptions, SessionOptions,
+    CommandSpec, DaemonView, MuxBackend, MuxErr, PaneCapture, PaneListOptions, SessionOptions,
     SidebarPaneOptions, SplitPaneOptions,
 };
 use rimz::schema::SIDEBAR_PROTOCOL_VERSION;
@@ -21,7 +21,7 @@ fn sidebar_launch_skips_when_fresh_heartbeat_exists() {
     h.write_heartbeat();
     let backend = FakeBackend::default();
 
-    let outcome = launch_sidebar_if_needed(&backend, &h.runtime, &h.sidebar_opts());
+    let outcome = launch_sidebar_if_needed(&backend, &h.runtime, &h.sidebar_opts(), None);
 
     assert_eq!(outcome, SidebarLaunchOutcome::SkippedFresh);
     assert_eq!(backend.open_calls(), 0);
@@ -33,7 +33,7 @@ fn sidebar_launch_opens_once_without_heartbeat() {
     h.runtime.ensure_dirs().expect("runtime dirs");
     let backend = FakeBackend::default();
 
-    let outcome = launch_sidebar_if_needed(&backend, &h.runtime, &h.sidebar_opts());
+    let outcome = launch_sidebar_if_needed(&backend, &h.runtime, &h.sidebar_opts(), None);
 
     assert_eq!(outcome, SidebarLaunchOutcome::Opened);
     assert_eq!(backend.open_calls(), 1);
@@ -51,7 +51,7 @@ fn sidebar_launch_replaces_old_protocol_heartbeat() {
     h.write_heartbeat_with_protocol("rimz.plugin.v1");
     let backend = FakeBackend::default();
 
-    let outcome = launch_sidebar_if_needed(&backend, &h.runtime, &h.sidebar_opts());
+    let outcome = launch_sidebar_if_needed(&backend, &h.runtime, &h.sidebar_opts(), None);
 
     assert_eq!(outcome, SidebarLaunchOutcome::Opened);
     assert_eq!(backend.open_calls(), 1);
@@ -64,7 +64,7 @@ fn sidebar_launch_error_is_non_fatal() {
     h.runtime.ensure_dirs().expect("runtime dirs");
     let backend = FakeBackend::failing();
 
-    let outcome = launch_sidebar_if_needed(&backend, &h.runtime, &h.sidebar_opts());
+    let outcome = launch_sidebar_if_needed(&backend, &h.runtime, &h.sidebar_opts(), None);
 
     assert_eq!(outcome, SidebarLaunchOutcome::Failed);
     assert_eq!(backend.open_calls(), 1);
@@ -216,7 +216,11 @@ impl MuxBackend for FakeBackend {
         Ok(())
     }
 
-    fn open_sidebar(&self, opts: &SidebarPaneOptions) -> rimz::mux::Result<()> {
+    fn open_sidebar(
+        &self,
+        opts: &SidebarPaneOptions,
+        _daemon: Option<&DaemonView>,
+    ) -> rimz::mux::Result<()> {
         *self.open_calls.lock().expect("open calls") += 1;
         self.replace_existing_values
             .lock()

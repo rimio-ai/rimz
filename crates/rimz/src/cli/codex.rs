@@ -47,6 +47,30 @@ enum CodexSubcmd {
         #[arg(long)]
         model: Option<String>,
     },
+    /// Manage the per-session Codex app-server broker. `rimz start` runs this as
+    /// a pane in the `rimzd` daemon tab; humans do not run it.
+    #[command(hide = true)]
+    AppServer(AppServerArgs),
+}
+
+#[derive(Debug, Args)]
+struct AppServerArgs {
+    #[command(subcommand)]
+    command: AppServerSubcmd,
+}
+
+#[derive(Debug, Subcommand)]
+enum AppServerSubcmd {
+    /// Hold a warm `codex app-server` and serve it on this session's broker
+    /// socket. Long-lived: runs until the pane closes.
+    Serve {
+        /// Workspace the broker serves; the socket path derives from it.
+        #[arg(long)]
+        workspace_id: String,
+        /// Session name, for the pane's startup log only.
+        #[arg(long)]
+        session_name: Option<String>,
+    },
 }
 
 pub fn run(args: CodexArgs, _globals: &GlobalFlags) -> Result<()> {
@@ -56,7 +80,25 @@ pub fn run(args: CodexArgs, _globals: &GlobalFlags) -> Result<()> {
             workspace_id,
             model,
         } => refresh_context(&session_id, &workspace_id, model.as_deref()),
+        CodexSubcmd::AppServer(args) => match args.command {
+            AppServerSubcmd::Serve {
+                workspace_id,
+                session_name,
+            } => serve_app_server(&workspace_id, session_name.as_deref()),
+        },
     }
+}
+
+/// Run the per-session Codex app-server broker, bound to this workspace's socket.
+fn serve_app_server(workspace_id: &str, session_name: Option<&str>) -> Result<()> {
+    let workspace_id: WorkspaceId = workspace_id.parse().context("parsing workspace id")?;
+    let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
+    runtime.ensure_dirs().context("preparing runtime dirs")?;
+    if let Some(name) = session_name {
+        tracing::info!(session = name, "starting codex app-server broker");
+    }
+    rimz::agents::codex_broker::serve(&runtime.codex_app_server_socket_path())
+        .context("running codex app-server broker")
 }
 
 fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) -> Result<()> {
@@ -68,7 +110,10 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
         return Ok(());
     }
 
-    let Some(context) = codex::refresh_context(model) else {
+    // Prefer this session's warm broker socket; `refresh_context` falls back to
+    // the per-user daemon then a cold-spawn when it isn't up.
+    let broker_socket = runtime.codex_app_server_socket_path();
+    let Some(context) = codex::refresh_context(model, Some(&broker_socket)) else {
         // App-server unreachable / nothing to record. Best-effort: succeed.
         return Ok(());
     };

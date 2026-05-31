@@ -10,13 +10,15 @@
 //! ([`crate::ledger::agent_context`]) and the snapshot fold-in are
 //! transport-agnostic, exactly as for Claude.
 //!
-//! Daemon re-use: when a Codex app-server daemon is running — the one
-//! `codex remote-control start` brings up, which [`crate::remote_control`] can
-//! auto-launch — its control socket is preferred via `codex app-server proxy`,
-//! re-using that daemon instead of cold-spawning a throwaway server. A fresh
-//! `codex app-server` is always tried as the fallback, so enrichment never
-//! depends on the daemon being up; set `RIMZ_CODEX_APP_SERVER_SOCK` to an empty
-//! value to force the cold-spawn path.
+//! Connection preference (warmest first): this session's broker
+//! ([`crate::agents::codex_broker`]) over its unix socket — a held, already
+//! handshaked `codex app-server` that amortizes the per-datapoint handshake;
+//! then the per-user daemon `codex remote-control start` brings up (which
+//! [`crate::remote_control`] can auto-launch), re-used via `codex app-server
+//! proxy`; then a fresh cold-spawned `codex app-server`. The cold-spawn is always
+//! the final fallback, so enrichment never depends on either being up (headless /
+//! no-mux just cold-spawns). Set `RIMZ_CODEX_APP_SERVER_SOCK` to an empty value to
+//! drop the daemon from the order.
 //!
 //! Why no token gauge here: as of the pinned Codex app-server, token /
 //! context-window usage is exposed only on the live `thread/tokenUsage/updated`
@@ -29,8 +31,9 @@
 //! `None` record — it never fails a hook or a turn.
 
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
@@ -83,28 +86,101 @@ pub(crate) trait JsonRpcTransport {
 }
 
 /// Resolve the `codex` binary: explicit override, then `PATH`, then the bare
-/// name (which `Command` resolves against `PATH` at spawn).
-fn codex_bin() -> PathBuf {
+/// name (which `Command` resolves against `PATH` at spawn). Shared with the
+/// broker ([`crate::agents::codex_broker`]) so both resolve the same binary.
+pub(crate) fn codex_bin() -> PathBuf {
     if let Some(raw) = std::env::var_os(CODEX_BIN_ENV).filter(|v| !v.is_empty()) {
         return PathBuf::from(raw);
     }
     which::which("codex").unwrap_or_else(|_| PathBuf::from("codex"))
 }
 
-/// stdio transport over a spawned `codex` app-server invocation (`app-server`
-/// cold-spawn, or `app-server proxy --sock …` bridged to a running daemon). A
-/// background thread drains stdout into a channel so each request can wait with
-/// the remaining deadline and skip server-initiated frames (notifications /
-/// requests carry no `id` of ours).
-pub(crate) struct StdioTransport {
-    child: Child,
-    stdin: ChildStdin,
+/// Spawn a thread draining newline-framed lines from `reader` into a channel, so
+/// a request can wait with its remaining deadline. Shared by both transports and
+/// the broker ([`crate::agents::codex_broker`]).
+pub(crate) fn spawn_frame_reader<R: BufRead + Send + 'static>(reader: R) -> Receiver<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if tx.send(std::mem::take(&mut line)).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    rx
+}
+
+/// Write one newline-framed JSON-RPC frame and flush.
+pub(crate) fn write_frame(writer: &mut dyn Write, frame: &Value) -> Result<(), AppServerErr> {
+    let mut bytes =
+        serde_json::to_vec(frame).map_err(|err| AppServerErr::Protocol(err.to_string()))?;
+    bytes.push(b'\n');
+    writer.write_all(&bytes).map_err(AppServerErr::Io)?;
+    writer.flush().map_err(AppServerErr::Io)
+}
+
+/// Wait for the response frame matching `id`, skipping non-JSON noise,
+/// server notifications, and server-initiated requests (a different id or none),
+/// until `deadline`.
+pub(crate) fn recv_response(
+    rx: &Receiver<String>,
+    deadline: Instant,
+    id: i64,
+) -> Result<Value, AppServerErr> {
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or(AppServerErr::Timeout)?;
+        let line = rx.recv_timeout(remaining).map_err(|err| match err {
+            RecvTimeoutError::Timeout => AppServerErr::Timeout,
+            RecvTimeoutError::Disconnected => AppServerErr::Closed,
+        })?;
+        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        if value.get("id").and_then(Value::as_i64) != Some(id) {
+            continue;
+        }
+        if let Some(err) = value.get("error") {
+            return Err(AppServerErr::JsonRpc {
+                code: err.get("code").and_then(Value::as_i64).unwrap_or(0),
+                message: err
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+            });
+        }
+        return Ok(value.get("result").cloned().unwrap_or(Value::Null));
+    }
+}
+
+/// Newline-framed JSON-RPC over one byte stream, with a reader thread draining
+/// frames so each request can wait with its remaining deadline. Backs two
+/// sources: a spawned `codex` child (cold-spawn, or `app-server proxy --sock …`
+/// bridged to the per-user daemon) and a [`UnixStream`] to the per-session broker
+/// ([`crate::agents::codex_broker`]). Only the child case owns a process to reap.
+pub(crate) struct FramedTransport {
+    writer: Box<dyn Write + Send>,
     rx: Receiver<String>,
     next_id: i64,
     deadline: Instant,
+    /// `Some` when we spawned a `codex` child — killed and reaped on drop. `None`
+    /// for a unix-socket connection (dropping `writer` closes it; the broker
+    /// reaps the client on EOF).
+    child: Option<Child>,
 }
 
-impl StdioTransport {
+impl FramedTransport {
     /// Spawn `bin` with `args` (e.g. `["app-server"]` or
     /// `["app-server", "proxy", "--sock", <path>]`), giving the handshake +
     /// reads `total` wall-clock.
@@ -126,88 +202,59 @@ impl StdioTransport {
             .stdout
             .take()
             .ok_or_else(|| AppServerErr::Protocol("app-server stdout unavailable".to_owned()))?;
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut reader = BufReader::new(stdout);
-            let mut line = String::new();
-            loop {
-                line.clear();
-                match reader.read_line(&mut line) {
-                    Ok(0) => break,
-                    Ok(_) => {
-                        if tx.send(std::mem::take(&mut line)).is_err() {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
+        let rx = spawn_frame_reader(BufReader::new(stdout));
         Ok(Self {
-            child,
-            stdin,
+            writer: Box::new(stdin),
             rx,
             next_id: 1,
             deadline: Instant::now() + total,
+            child: Some(child),
         })
     }
 
-    fn write_frame(&mut self, frame: &Value) -> Result<(), AppServerErr> {
-        let mut bytes =
-            serde_json::to_vec(frame).map_err(|err| AppServerErr::Protocol(err.to_string()))?;
-        bytes.push(b'\n');
-        self.stdin.write_all(&bytes).map_err(AppServerErr::Io)?;
-        self.stdin.flush().map_err(AppServerErr::Io)
+    /// Connect to the per-session broker socket at `path`, giving the handshake +
+    /// reads `total` wall-clock. The broker is warm, so this is the fast path.
+    fn connect(path: &Path, total: Duration) -> Result<Self, AppServerErr> {
+        let stream = UnixStream::connect(path).map_err(AppServerErr::Io)?;
+        let reader = stream.try_clone().map_err(AppServerErr::Io)?;
+        let rx = spawn_frame_reader(BufReader::new(reader));
+        Ok(Self {
+            writer: Box::new(stream),
+            rx,
+            next_id: 1,
+            deadline: Instant::now() + total,
+            child: None,
+        })
     }
 }
 
-impl JsonRpcTransport for StdioTransport {
+impl JsonRpcTransport for FramedTransport {
     fn request(&mut self, method: &str, params: Value) -> Result<Value, AppServerErr> {
         let id = self.next_id;
         self.next_id += 1;
-        self.write_frame(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))?;
-        loop {
-            let remaining = self
-                .deadline
-                .checked_duration_since(Instant::now())
-                .ok_or(AppServerErr::Timeout)?;
-            let line = self.rx.recv_timeout(remaining).map_err(|err| match err {
-                RecvTimeoutError::Timeout => AppServerErr::Timeout,
-                RecvTimeoutError::Disconnected => AppServerErr::Closed,
-            })?;
-            let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
-                continue; // non-JSON noise on the stream — skip
-            };
-            // Only the frame answering this request; server notifications and
-            // server-initiated requests carry a different id (or none).
-            if value.get("id").and_then(Value::as_i64) != Some(id) {
-                continue;
-            }
-            if let Some(err) = value.get("error") {
-                return Err(AppServerErr::JsonRpc {
-                    code: err.get("code").and_then(Value::as_i64).unwrap_or(0),
-                    message: err
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned(),
-                });
-            }
-            return Ok(value.get("result").cloned().unwrap_or(Value::Null));
-        }
+        write_frame(
+            &mut self.writer,
+            &json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
+        )?;
+        recv_response(&self.rx, self.deadline, id)
     }
 
     fn notify(&mut self, method: &str, params: Value) -> Result<(), AppServerErr> {
-        self.write_frame(&json!({"jsonrpc": "2.0", "method": method, "params": params}))
+        write_frame(
+            &mut self.writer,
+            &json!({"jsonrpc": "2.0", "method": method, "params": params}),
+        )
     }
 }
 
-impl Drop for StdioTransport {
+impl Drop for FramedTransport {
     fn drop(&mut self) {
-        // A short-lived reader connection: closing stdin lets the server exit
-        // cleanly, but kill+reap guarantees no wedged child lingers.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // Kill+reap a spawned child so no wedged server lingers. A unix-socket
+        // connection has no child; dropping `writer` closes it.
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 
@@ -282,16 +329,36 @@ pub(crate) struct CodexAppServer<T: JsonRpcTransport> {
     user_agent: Option<String>,
 }
 
-impl CodexAppServer<StdioTransport> {
+/// One way [`CodexAppServer::connect`] tries to reach an app-server, in
+/// preference order.
+#[derive(Debug)]
+enum ConnectAttempt {
+    /// Connect to the warm per-session broker over its unix socket — the fast
+    /// path, on the short probe budget.
+    Broker(PathBuf),
+    /// Spawn a `codex` invocation: the per-user daemon via `proxy --sock …`, or
+    /// a throwaway cold-spawn fallback. Carries argv (program omitted) + budget.
+    Spawn(Vec<String>, Duration),
+}
+
+impl CodexAppServer<FramedTransport> {
     /// Connect to a Codex app-server and complete the initialize handshake,
-    /// trying each invocation in preference order — a running daemon's control
-    /// socket via `proxy` first, then a fresh cold-spawned `app-server`. The
-    /// first that handshakes wins. `None` when none do (codex missing, not
-    /// runnable, protocol mismatch) — best-effort enrichment.
-    pub(crate) fn connect() -> Option<Self> {
+    /// trying each attempt in preference order: the per-session broker socket
+    /// (warm) first, then the per-user daemon via `proxy`, then a fresh
+    /// cold-spawned `app-server`. The first that handshakes wins. `None` when none
+    /// do (codex missing, not runnable, protocol mismatch) — best-effort.
+    pub(crate) fn connect(broker_socket: Option<&Path>) -> Option<Self> {
         let bin = codex_bin();
-        for (args, deadline) in app_server_invocations() {
-            let Ok(transport) = StdioTransport::spawn(&bin, &args, deadline) else {
+        for attempt in connect_attempts(broker_socket) {
+            let transport = match &attempt {
+                ConnectAttempt::Broker(path) => {
+                    FramedTransport::connect(path, PROXY_PROBE_DEADLINE)
+                }
+                ConnectAttempt::Spawn(args, deadline) => {
+                    FramedTransport::spawn(&bin, args, *deadline)
+                }
+            };
+            let Ok(transport) = transport else {
                 continue;
             };
             let mut client = Self::new(transport);
@@ -303,30 +370,41 @@ impl CodexAppServer<StdioTransport> {
     }
 }
 
-/// The app-server invocations [`CodexAppServer::connect`] tries, in preference
-/// order, each paired with its wall-clock budget.
-fn app_server_invocations() -> Vec<(Vec<String>, Duration)> {
-    invocations_for(daemon_socket().filter(|path| path.exists()).as_deref())
+/// The attempts [`CodexAppServer::connect`] tries, in preference order, after
+/// resolving which sockets actually exist on disk.
+fn connect_attempts(broker_socket: Option<&Path>) -> Vec<ConnectAttempt> {
+    attempts_for(
+        broker_socket.filter(|path| path.exists()),
+        daemon_socket().filter(|path| path.exists()).as_deref(),
+    )
 }
 
-/// Pure core of [`app_server_invocations`]: given a reachable daemon control
-/// `socket` (when one exists), prefer `proxy` to re-use that daemon, always
-/// followed by a cold-spawned `app-server` fallback.
-fn invocations_for(socket: Option<&Path>) -> Vec<(Vec<String>, Duration)> {
-    let mut invocations = Vec::new();
-    if let Some(socket) = socket {
-        invocations.push((
+/// Pure core of [`connect_attempts`]: given a reachable per-session `broker`
+/// socket and/or per-user `daemon` socket (each present only when it exists on
+/// disk), order the attempts — broker (warm) first, then the daemon via `proxy`,
+/// always followed by a cold-spawned `app-server` fallback so enrichment never
+/// depends on either being up.
+fn attempts_for(broker: Option<&Path>, daemon: Option<&Path>) -> Vec<ConnectAttempt> {
+    let mut attempts = Vec::new();
+    if let Some(broker) = broker {
+        attempts.push(ConnectAttempt::Broker(broker.to_path_buf()));
+    }
+    if let Some(daemon) = daemon {
+        attempts.push(ConnectAttempt::Spawn(
             vec![
                 "app-server".to_owned(),
                 "proxy".to_owned(),
                 "--sock".to_owned(),
-                socket.to_string_lossy().into_owned(),
+                daemon.to_string_lossy().into_owned(),
             ],
             PROXY_PROBE_DEADLINE,
         ));
     }
-    invocations.push((vec!["app-server".to_owned()], APP_SERVER_DEADLINE));
-    invocations
+    attempts.push(ConnectAttempt::Spawn(
+        vec!["app-server".to_owned()],
+        APP_SERVER_DEADLINE,
+    ));
+    attempts
 }
 
 /// The daemon control socket to prefer: an explicit `RIMZ_CODEX_APP_SERVER_SOCK`
@@ -781,32 +859,77 @@ mod tests {
         assert_eq!(codex_version_from_user_agent("trailing/").as_deref(), None);
     }
 
-    #[test]
-    fn invocations_cold_spawn_only_without_a_daemon_socket() {
-        let invocations = invocations_for(None);
-        assert_eq!(invocations.len(), 1, "no daemon → cold-spawn only");
-        assert_eq!(invocations[0].0, vec!["app-server".to_owned()]);
-        assert_eq!(invocations[0].1, APP_SERVER_DEADLINE);
+    /// Assert a `Spawn` attempt's argv + budget; panics on a `Broker` attempt.
+    fn assert_spawn(attempt: &ConnectAttempt, args: &[&str], deadline: Duration) {
+        match attempt {
+            ConnectAttempt::Spawn(got_args, got_deadline) => {
+                assert_eq!(
+                    got_args,
+                    &args.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+                );
+                assert_eq!(*got_deadline, deadline);
+            }
+            ConnectAttempt::Broker(path) => panic!("expected a spawn attempt, got broker {path:?}"),
+        }
     }
 
     #[test]
-    fn invocations_prefer_proxy_then_cold_spawn_with_a_socket() {
+    fn attempts_cold_spawn_only_without_any_socket() {
+        let attempts = attempts_for(None, None);
+        assert_eq!(attempts.len(), 1, "no broker, no daemon → cold-spawn only");
+        assert_spawn(&attempts[0], &["app-server"], APP_SERVER_DEADLINE);
+    }
+
+    #[test]
+    fn attempts_prefer_daemon_proxy_then_cold_spawn() {
         let sock = Path::new("/run/codex/app-server-control.sock");
-        let invocations = invocations_for(Some(sock));
-        assert_eq!(invocations.len(), 2, "daemon → proxy then fallback");
-        // Proxy first, on the short probe budget, carrying the socket path.
-        assert_eq!(
-            invocations[0].0,
-            vec![
-                "app-server".to_owned(),
-                "proxy".to_owned(),
-                "--sock".to_owned(),
-                sock.to_string_lossy().into_owned(),
+        let attempts = attempts_for(None, Some(sock));
+        assert_eq!(attempts.len(), 2, "daemon → proxy then fallback");
+        assert_spawn(
+            &attempts[0],
+            &[
+                "app-server",
+                "proxy",
+                "--sock",
+                "/run/codex/app-server-control.sock",
             ],
+            PROXY_PROBE_DEADLINE,
         );
-        assert_eq!(invocations[0].1, PROXY_PROBE_DEADLINE);
-        // Cold-spawn fallback always trails, on the full budget.
-        assert_eq!(invocations[1].0, vec!["app-server".to_owned()]);
-        assert_eq!(invocations[1].1, APP_SERVER_DEADLINE);
+        assert_spawn(&attempts[1], &["app-server"], APP_SERVER_DEADLINE);
+    }
+
+    #[test]
+    fn attempts_prefer_broker_first_then_daemon_then_cold_spawn() {
+        let broker = Path::new("/run/user/1000/rimz/w/sock/codex-app-server.sock");
+        let daemon = Path::new("/run/codex/app-server-control.sock");
+        let attempts = attempts_for(Some(broker), Some(daemon));
+        assert_eq!(attempts.len(), 3, "broker → daemon proxy → cold-spawn");
+        match &attempts[0] {
+            ConnectAttempt::Broker(path) => assert_eq!(path, broker),
+            other => panic!("broker must come first, got a spawn attempt: {other:?}"),
+        }
+        assert_spawn(
+            &attempts[1],
+            &[
+                "app-server",
+                "proxy",
+                "--sock",
+                "/run/codex/app-server-control.sock",
+            ],
+            PROXY_PROBE_DEADLINE,
+        );
+        assert_spawn(&attempts[2], &["app-server"], APP_SERVER_DEADLINE);
+    }
+
+    #[test]
+    fn attempts_broker_then_cold_spawn_without_a_daemon() {
+        let broker = Path::new("/run/user/1000/rimz/w/sock/codex-app-server.sock");
+        let attempts = attempts_for(Some(broker), None);
+        assert_eq!(attempts.len(), 2, "broker → cold-spawn (no daemon)");
+        match &attempts[0] {
+            ConnectAttempt::Broker(path) => assert_eq!(path, broker),
+            other => panic!("broker must come first, got a spawn attempt: {other:?}"),
+        }
+        assert_spawn(&attempts[1], &["app-server"], APP_SERVER_DEADLINE);
     }
 }

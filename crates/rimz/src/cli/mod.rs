@@ -28,7 +28,8 @@ use rimz::ids::MuxName;
 use rimz::ledger::paths::workspaces_dir;
 use rimz::ledger::workspace_record;
 use rimz::mux::{
-    BackgroundViewLaunch, BackgroundViewOptions, MuxBackend, SessionOptions, SidebarPaneOptions,
+    BackgroundViewLaunch, BackgroundViewOptions, DaemonView, HostPane, MuxBackend, SessionOptions,
+    SidebarPaneOptions,
 };
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, RuntimePaths, StatePaths, WorkspaceRecord};
@@ -417,14 +418,26 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         session_name: workspace.session_name.clone(),
         cwd: workspace.worktree_root.clone(),
     })?;
+    // The daemon view (`rimzd`) is computed once, before the session is born: its
+    // hosts depend on config and which agents are on PATH. When present, it leads
+    // the session — on Zellij that order is fixed at birth (`open_sidebar` renders
+    // the daemon tab first), since Zellij can't reorder tabs afterwards.
+    let daemon_view = remote_control
+        .as_ref()
+        .and_then(|config| build_daemon_view(config, &workspace));
+    let daemon = daemon_view.as_ref().map(|view| DaemonView {
+        name: view.name.clone(),
+        hosts: view.hosts.clone(),
+    });
     launch_sidebar_for_workspace(
         backend.as_ref(),
         &workspace.workspace_id,
         &workspace.session_name,
         &workspace.worktree_root,
+        daemon.as_ref(),
     );
     if let Some(config) = &remote_control {
-        maybe_launch_remote_control(backend.as_ref(), &workspace, config);
+        maybe_launch_remote_control(backend.as_ref(), &workspace, config, daemon_view.as_ref());
     }
     let spec = backend.attach_command(&workspace.session_name);
     tracing::info!(
@@ -459,6 +472,7 @@ fn attach_cwd(mode: AttachMode, globals: &GlobalFlags) -> Result<()> {
         &workspace.workspace_id,
         &workspace.session_name,
         &workspace.worktree_root,
+        None,
     );
     let spec = backend.attach_command(&workspace.session_name);
     run_attach_action(&spec, mode, mux)
@@ -484,6 +498,7 @@ fn attach_named(session: &str, mode: AttachMode, globals: &GlobalFlags) -> Resul
                 &record.workspace_id,
                 &record.session_name,
                 &record.project_root,
+                None,
             );
         }
         Ok(None) => {
@@ -619,6 +634,7 @@ fn launch_sidebar_for_workspace(
     workspace_id: &rimz::WorkspaceId,
     session_name: &str,
     cwd: &Path,
+    daemon: Option<&DaemonView>,
 ) -> rimz::sidebar::SidebarLaunchOutcome {
     let runtime = match RuntimePaths::for_workspace(workspace_id.clone()) {
         Ok(runtime) => runtime,
@@ -650,7 +666,7 @@ fn launch_sidebar_for_workspace(
         rimz_bin,
         replace_existing: false,
     };
-    rimz::sidebar::launch_sidebar_if_needed(backend, &runtime, &opts)
+    rimz::sidebar::launch_sidebar_if_needed(backend, &runtime, &opts, daemon)
 }
 
 /// The per-machine remote-control config, or `None` (warned) when the
@@ -670,46 +686,52 @@ fn remote_control_config() -> Option<rimz::config::RemoteControlConfig> {
     }
 }
 
-/// Auto-launch the enabled remote-control hosts. The two have different
-/// lifecycles, so they launch differently and independently, best-effort:
+/// Build the `rimzd` daemon view for `rimz start`, or `None` when no host applies
+/// (so no view is opened and the working view leads alone). Three capabilities
+/// feed it:
 ///
-/// - **Codex** is a per-user app-server daemon (a singleton keyed by its control
-///   socket), so it is ensured once — detached, idempotent, never a pane — by
-///   [`rimz::remote_control::ensure_codex_daemon`]; enrichment reaches it over
-///   the socket. Its hard precondition (the standalone install) is enforced
-///   earlier by [`rimz::remote_control::preflight`].
-/// - **Claude** is a long-lived foreground host launched into the workspace
-///   session's one managed background view, from the project root (the main
-///   checkout) so `--spawn=worktree` carves new on-demand sessions off the
-///   canonical repo rather than the current worktree.
-fn maybe_launch_remote_control(
-    backend: &dyn MuxBackend,
-    workspace: &rimz::ResolvedWorkspace,
+/// - **Codex app-server broker** — a *local* read-only enrichment host (not the
+///   account-linking remote-control feature), so it is ungated: a pane in the
+///   daemon view whenever `codex` is on PATH.
+/// - **Claude remote-control host** — a long-lived foreground host, a pane in the
+///   daemon view when the `claude` toggle is on and `claude` is on PATH, run from
+///   the project root so `--spawn=worktree` carves sessions off the canonical repo.
+///
+/// (The third, the per-user **Codex remote-control daemon**, is not a pane — it is
+/// ensured separately by [`maybe_launch_remote_control`].)
+fn build_daemon_view(
     config: &rimz::config::RemoteControlConfig,
-) {
-    rimz::remote_control::ensure_codex_daemon(config);
-
-    let Some(host) = remote_control_host(config, which::which("claude").is_ok()) else {
-        return;
-    };
-    // The background view is born `sidebar | host`, so it carries the same global
-    // sidebar the working view runs (same session, workspace, and `rimz` bin).
-    // The sidebar renders from the worktree, the host from the project root.
+    workspace: &rimz::ResolvedWorkspace,
+) -> Option<BackgroundViewOptions> {
     let rimz_bin = match std::env::current_exe() {
         Ok(path) => path,
         Err(err) => {
             tracing::warn!(
                 session = %workspace.session_name,
                 error = %err,
-                "remote-control auto-launch skipped because current executable is unavailable",
+                "daemon view skipped because the current executable is unavailable",
             );
-            return;
+            return None;
         }
     };
-    let opts = BackgroundViewOptions {
+    let hosts = background_view_hosts(
+        config,
+        which::which("claude").is_ok(),
+        which::which("codex").is_ok(),
+        &rimz_bin,
+        &workspace.workspace_id,
+        &workspace.session_name,
+        &workspace.project_root,
+        &workspace.worktree_root,
+    );
+    if hosts.is_empty() {
+        return None;
+    }
+    // The daemon view is born `sidebar | hosts…`, so it carries the same global
+    // sidebar the working view runs (same session, workspace, and `rimz` bin).
+    Some(BackgroundViewOptions {
         name: rimz::remote_control::VIEW_NAME.to_owned(),
-        host,
-        host_cwd: workspace.project_root.clone(),
+        hosts,
         sidebar: SidebarPaneOptions {
             session_name: workspace.session_name.clone(),
             workspace_id: workspace.workspace_id.clone(),
@@ -718,36 +740,85 @@ fn maybe_launch_remote_control(
             rimz_bin,
             replace_existing: false,
         },
+    })
+}
+
+/// Ensure the per-user Codex remote-control daemon (a detached singleton keyed by
+/// its control socket — never a pane; its standalone-install precondition is
+/// enforced earlier by [`rimz::remote_control::preflight`]) and open the `rimzd`
+/// daemon view, best-effort. On Zellij the view already leads from session birth
+/// ([`MuxBackend::open_sidebar`] renders it first), so this is the idempotent
+/// `AlreadyRunning` no-op there; on tmux it opens the window and leads it via
+/// `swap-window`. Skipped when there is no host pane.
+fn maybe_launch_remote_control(
+    backend: &dyn MuxBackend,
+    workspace: &rimz::ResolvedWorkspace,
+    config: &rimz::config::RemoteControlConfig,
+    daemon_view: Option<&BackgroundViewOptions>,
+) {
+    rimz::remote_control::ensure_codex_daemon(config);
+
+    let Some(opts) = daemon_view else {
+        return;
     };
-    match backend.open_background_view(&opts) {
+    match backend.open_background_view(opts) {
         Ok(BackgroundViewLaunch::Launched) => tracing::info!(
             session = %workspace.session_name,
             view = rimz::remote_control::VIEW_NAME,
-            "launched remote-control host in a background view",
+            "launched the daemon view",
         ),
         Ok(BackgroundViewLaunch::AlreadyRunning) => tracing::debug!(
             session = %workspace.session_name,
-            "remote-control view already present; skipping",
+            "daemon view already present; skipping",
         ),
         Err(err) => tracing::warn!(
             session = %workspace.session_name,
             error = %err,
-            "remote-control auto-launch failed; continuing without it",
+            "daemon view launch failed; continuing without it",
         ),
     }
 }
 
-/// The remote-control host argv to launch into the
-/// [`rimz::remote_control::VIEW_NAME`] view, or `None` when nothing is enabled —
-/// split out pure for testing. Only Claude is a host: a long-lived foreground
-/// process, contributed when the `claude` toggle is on *and* `claude` is on
-/// PATH. Codex is never a host — it is a per-user daemon ensured by
-/// [`rimz::remote_control::ensure_codex_daemon`].
-fn remote_control_host(
+/// The host panes for the [`rimz::remote_control::VIEW_NAME`] daemon view, in
+/// display order (the first takes focus) — split out pure for testing. The Claude
+/// remote-control host leads when its toggle is on *and* `claude` is on PATH (the
+/// interactive host); the local Codex app-server broker follows whenever `codex`
+/// is on PATH (ungated — it links no account, only reads). Empty when neither
+/// applies, so the caller opens no view.
+#[allow(clippy::too_many_arguments)]
+fn background_view_hosts(
     config: &rimz::config::RemoteControlConfig,
     claude_present: bool,
-) -> Option<Vec<String>> {
-    (config.claude && claude_present).then(rimz::remote_control::claude_command)
+    codex_present: bool,
+    rimz_bin: &Path,
+    workspace_id: &rimz::WorkspaceId,
+    session_name: &str,
+    project_root: &Path,
+    worktree_root: &Path,
+) -> Vec<HostPane> {
+    let mut hosts = Vec::new();
+    if config.claude && claude_present {
+        hosts.push(HostPane {
+            argv: rimz::remote_control::claude_command(),
+            cwd: project_root.to_path_buf(),
+        });
+    }
+    if codex_present {
+        hosts.push(HostPane {
+            argv: vec![
+                rimz_bin.to_string_lossy().into_owned(),
+                "codex".to_owned(),
+                "app-server".to_owned(),
+                "serve".to_owned(),
+                "--workspace-id".to_owned(),
+                workspace_id.as_str().to_owned(),
+                "--session-name".to_owned(),
+                session_name.to_owned(),
+            ],
+            cwd: worktree_root.to_path_buf(),
+        });
+    }
+    hosts
 }
 
 fn run_attach_action(spec: &rimz::mux::CommandSpec, mode: AttachMode, mux: MuxName) -> Result<()> {
@@ -888,39 +959,60 @@ mod tests {
     }
 
     #[test]
-    fn remote_control_host_is_only_claude_when_opted_in_and_present() {
+    fn background_view_hosts_orders_claude_then_the_ungated_broker() {
         use rimz::config::RemoteControlConfig;
-        let program = |host: Option<Vec<String>>| host.and_then(|argv| argv.into_iter().next());
+        use rimz::ids::WorkspaceId;
 
-        // Both off → no host. Codex never contributes a host (it is a per-user
-        // daemon, ensured separately), so the codex toggle alone yields nothing.
-        assert!(remote_control_host(&RemoteControlConfig::default(), true).is_none());
-        let codex_only = RemoteControlConfig {
-            claude: false,
-            codex: true,
+        let rimz_bin = Path::new("/usr/bin/rimz");
+        let wid = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("valid id");
+        let project = Path::new("/proj");
+        let worktree = Path::new("/proj/wt");
+        let hosts = |config: &RemoteControlConfig, claude: bool, codex: bool| {
+            background_view_hosts(
+                config,
+                claude,
+                codex,
+                rimz_bin,
+                &wid,
+                "rimz-demo",
+                project,
+                worktree,
+            )
         };
-        assert!(remote_control_host(&codex_only, true).is_none());
 
-        // Claude needs both the toggle and `claude` on PATH.
+        // Nothing enabled or present → no view.
+        assert!(hosts(&RemoteControlConfig::default(), true, false).is_empty());
+
+        // Codex on PATH alone → the broker, ungated by the config (it is local
+        // enrichment, not remote control). It runs from the worktree.
+        let codex = hosts(&RemoteControlConfig::default(), false, true);
+        assert_eq!(codex.len(), 1);
+        assert_eq!(codex[0].argv[0], "/usr/bin/rimz");
+        assert!(codex[0].argv.iter().any(|arg| arg == "app-server"));
+        assert_eq!(codex[0].cwd.as_path(), worktree);
+
+        // Claude needs both the toggle and `claude` on PATH; it runs from the
+        // project root so `--spawn=worktree` carves off the canonical repo.
         let claude_only = RemoteControlConfig {
             claude: true,
             codex: false,
         };
-        assert!(remote_control_host(&claude_only, false).is_none());
-        assert_eq!(
-            program(remote_control_host(&claude_only, true)).as_deref(),
-            Some("claude"),
-        );
+        assert!(hosts(&claude_only, false, false).is_empty());
+        let claude = hosts(&claude_only, true, false);
+        assert_eq!(claude.len(), 1);
+        assert_eq!(claude[0].argv[0], "claude");
+        assert_eq!(claude[0].cwd.as_path(), project);
 
-        // Both toggles on → still just the Claude host.
+        // Both → Claude leads (it takes the view's focus), the broker follows.
         let both = RemoteControlConfig {
             claude: true,
             codex: true,
         };
-        assert_eq!(
-            program(remote_control_host(&both, true)).as_deref(),
-            Some("claude"),
-        );
+        let pair = hosts(&both, true, true);
+        assert_eq!(pair.len(), 2);
+        assert_eq!(pair[0].argv[0], "claude");
+        assert_eq!(pair[1].argv[0], "/usr/bin/rimz");
+        assert!(pair[1].argv.iter().any(|arg| arg == "app-server"));
     }
 
     #[test]

@@ -20,7 +20,9 @@ use std::time::{Duration, Instant};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, WorkspaceId};
-use rimz::mux::{MuxBackend, PaneListOptions, SidebarPaneOptions, ZellijBackend, zellij};
+use rimz::mux::{
+    DaemonView, HostPane, MuxBackend, PaneListOptions, SidebarPaneOptions, ZellijBackend, zellij,
+};
 use tempfile::TempDir;
 
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -238,14 +240,17 @@ fn open_sidebar_creates_native_pane() {
 
     let (_stub_dir, stub) = sidebar_command_stub();
     ZellijBackend::with_runtime_dir(xdg.path())
-        .open_sidebar(&SidebarPaneOptions {
-            session_name: name.clone(),
-            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-test")),
-            cwd: cwd.path().to_path_buf(),
-            width_percent: 30,
-            rimz_bin: stub,
-            replace_existing: false,
-        })
+        .open_sidebar(
+            &SidebarPaneOptions {
+                session_name: name.clone(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-test")),
+                cwd: cwd.path().to_path_buf(),
+                width_percent: 30,
+                rimz_bin: stub,
+                replace_existing: false,
+            },
+            None,
+        )
         .expect("open_sidebar");
 
     let panes = wait_for_pane_count(xdg.path(), &name, 2);
@@ -274,14 +279,17 @@ fn open_sidebar_installs_a_right_terminal_in_the_new_tab_template() {
     let (_stub_dir, stub) = sidebar_command_stub();
 
     ZellijBackend::with_runtime_dir(xdg.path())
-        .open_sidebar(&SidebarPaneOptions {
-            session_name: name.clone(),
-            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-template")),
-            cwd: cwd.path().to_path_buf(),
-            width_percent: 30,
-            rimz_bin: stub,
-            replace_existing: false,
-        })
+        .open_sidebar(
+            &SidebarPaneOptions {
+                session_name: name.clone(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-template")),
+                cwd: cwd.path().to_path_buf(),
+                width_percent: 30,
+                rimz_bin: stub,
+                replace_existing: false,
+            },
+            None,
+        )
         .expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
 
@@ -313,14 +321,17 @@ fn open_sidebar_starts_sidebar_without_a_run_prompt() {
     let (_stub_dir, stub) = sidebar_command_stub();
 
     ZellijBackend::with_runtime_dir(xdg.path())
-        .open_sidebar(&SidebarPaneOptions {
-            session_name: name.clone(),
-            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-runprompt")),
-            cwd: cwd.path().to_path_buf(),
-            width_percent: 30,
-            rimz_bin: stub,
-            replace_existing: false,
-        })
+        .open_sidebar(
+            &SidebarPaneOptions {
+                session_name: name.clone(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-runprompt")),
+                cwd: cwd.path().to_path_buf(),
+                width_percent: 30,
+                rimz_bin: stub,
+                replace_existing: false,
+            },
+            None,
+        )
         .expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
 
@@ -382,7 +393,9 @@ fn open_sidebar_on_live_session_is_idempotent() {
     };
 
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
-    backend.open_sidebar(&opts).expect("first open_sidebar");
+    backend
+        .open_sidebar(&opts, None)
+        .expect("first open_sidebar");
     let first = wait_for_pane_count(xdg.path(), &name, 2);
     assert!(
         first.len() >= 2,
@@ -390,7 +403,9 @@ fn open_sidebar_on_live_session_is_idempotent() {
     );
 
     // Second call sees a live session and must leave it untouched.
-    backend.open_sidebar(&opts).expect("second open_sidebar");
+    backend
+        .open_sidebar(&opts, None)
+        .expect("second open_sidebar");
     let second = wait_for_pane_count(xdg.path(), &name, 2);
     assert_eq!(
         second.len(),
@@ -438,14 +453,17 @@ fn open_sidebar_heals_a_live_session_with_a_held_sidebar() {
     );
 
     ZellijBackend::with_runtime_dir(xdg.path())
-        .open_sidebar(&SidebarPaneOptions {
-            session_name: name.clone(),
-            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-held-sidebar")),
-            cwd: cwd.path().to_path_buf(),
-            width_percent: 30,
-            rimz_bin: stub,
-            replace_existing: false,
-        })
+        .open_sidebar(
+            &SidebarPaneOptions {
+                session_name: name.clone(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-held-sidebar")),
+                cwd: cwd.path().to_path_buf(),
+                width_percent: 30,
+                rimz_bin: stub,
+                replace_existing: false,
+            },
+            None,
+        )
         .expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
 
@@ -501,14 +519,17 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
     // rebirth one that carries the sidebar.
     let (_stub_dir, stub) = sidebar_command_stub();
     ZellijBackend::with_runtime_dir(xdg.path())
-        .open_sidebar(&SidebarPaneOptions {
-            session_name: name.clone(),
-            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-nosb")),
-            cwd: cwd.path().to_path_buf(),
-            width_percent: 30,
-            rimz_bin: stub,
-            replace_existing: false,
-        })
+        .open_sidebar(
+            &SidebarPaneOptions {
+                session_name: name.clone(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-nosb")),
+                cwd: cwd.path().to_path_buf(),
+                width_percent: 30,
+                rimz_bin: stub,
+                replace_existing: false,
+            },
+            None,
+        )
         .expect("open_sidebar");
 
     let healed = wait_for_pane_count(xdg.path(), &name, 2);
@@ -538,14 +559,17 @@ fn new_tab_is_born_with_a_right_terminal() {
     let (_stub_dir, stub) = sidebar_command_stub();
 
     ZellijBackend::with_runtime_dir(xdg.path())
-        .open_sidebar(&SidebarPaneOptions {
-            session_name: name.clone(),
-            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-newtab-pane")),
-            cwd: cwd.path().to_path_buf(),
-            width_percent: 30,
-            rimz_bin: stub,
-            replace_existing: false,
-        })
+        .open_sidebar(
+            &SidebarPaneOptions {
+                session_name: name.clone(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-newtab-pane")),
+                cwd: cwd.path().to_path_buf(),
+                width_percent: 30,
+                rimz_bin: stub,
+                replace_existing: false,
+            },
+            None,
+        )
         .expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
 
@@ -583,14 +607,17 @@ fn tabs_focus_the_terminal_not_the_sidebar() {
     let (_stub_dir, stub) = sidebar_command_stub();
 
     ZellijBackend::with_runtime_dir(xdg.path())
-        .open_sidebar(&SidebarPaneOptions {
-            session_name: name.clone(),
-            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-focus-term")),
-            cwd: cwd.path().to_path_buf(),
-            width_percent: 30,
-            rimz_bin: stub,
-            replace_existing: false,
-        })
+        .open_sidebar(
+            &SidebarPaneOptions {
+                session_name: name.clone(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-focus-term")),
+                cwd: cwd.path().to_path_buf(),
+                width_percent: 30,
+                rimz_bin: stub,
+                replace_existing: false,
+            },
+            None,
+        )
         .expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
 
@@ -1143,9 +1170,11 @@ fn assert_sidebar_is_left_thirty_percent(xdg: &Path, session: &str) {
 /// faithful `sidebar | host`.
 fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundViewOptions {
     rimz::mux::BackgroundViewOptions {
-        name: "rimz-rc".to_owned(),
-        host: vec!["sleep".to_owned(), "120".to_owned()],
-        host_cwd: std::env::temp_dir(),
+        name: "rimzd".to_owned(),
+        hosts: vec![rimz::mux::HostPane {
+            argv: vec!["sleep".to_owned(), "120".to_owned()],
+            cwd: std::env::temp_dir(),
+        }],
         sidebar: SidebarPaneOptions {
             session_name: session.to_owned(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgview")),
@@ -1173,8 +1202,8 @@ fn open_background_view_creates_named_tab_idempotently() {
     let first = backend.open_background_view(&opts).expect("first launch");
     assert_eq!(first, rimz::mux::BackgroundViewLaunch::Launched);
     assert!(
-        wait_for_tab_named(session.xdg.path(), &name, "rimz-rc"),
-        "expected a rimz-rc tab after launch",
+        wait_for_tab_named(session.xdg.path(), &name, "rimzd"),
+        "expected a rimzd tab after launch",
     );
 
     let second = backend.open_background_view(&opts).expect("second launch");
@@ -1185,14 +1214,15 @@ fn open_background_view_creates_named_tab_idempotently() {
     );
 }
 
-/// `open_background_view` must not leave the user's focus on the host tab. Zellij
-/// `new-tab` creates *and focuses* the new tab, so without the focus restore the
-/// session's active tab becomes `rimz-rc` and the imminent `attach` dumps the
-/// user straight into a host pane. `ZellijSession` keeps a real client attached,
-/// so `dump-layout` marks the active tab `focus=true`; we assert it is not the
-/// `rimz-rc` tab.
+/// `open_background_view` (the *late-add* path: a session born without the daemon
+/// tab gains one later) must not leave the user's focus on the appended tab.
+/// Zellij `new-tab` creates *and focuses* the new tab, so without the focus
+/// restore the session's active tab becomes `rimzd` and the imminent `attach`
+/// dumps the user straight into a host pane. `ZellijSession` keeps a real client
+/// attached, so `dump-layout` marks the active tab `focus=true`; we assert it is
+/// not the `rimzd` tab.
 #[test]
-fn open_background_view_keeps_focus_off_the_host_tab() {
+fn open_background_view_keeps_focus_off_the_daemon_tab() {
     require_zellij!();
 
     let name = unique_session_name("bgfocus");
@@ -1203,15 +1233,70 @@ fn open_background_view_keeps_focus_off_the_host_tab() {
         .open_background_view(&background_view_opts(&name, &stub))
         .expect("open_background_view");
     assert!(
-        wait_for_tab_named(session.xdg.path(), &name, "rimz-rc"),
-        "expected a rimz-rc tab after launch",
+        wait_for_tab_named(session.xdg.path(), &name, "rimzd"),
+        "expected a rimzd tab after launch",
     );
 
-    let focused = wait_for_focused_tab_off_rc(session.xdg.path(), &name)
+    let focused = wait_for_focused_tab_off_daemon(session.xdg.path(), &name)
         .expect("an attached client should report a focused tab");
     assert_ne!(
-        focused, "rimz-rc",
-        "focus was left on the rimz-rc host tab; an attach would dump the user into a host pane",
+        focused, "rimzd",
+        "focus was left on the rimzd daemon tab; an attach would dump the user into a host pane",
+    );
+}
+
+/// `open_sidebar` with a daemon view leads the session with the daemon tab.
+/// Zellij can't reorder tabs after birth, so the session is born from a two-tab
+/// layout — the daemon (`rimzd`) tab first, the focused working tab second — and
+/// this asserts `rimzd` leads the resulting tab list.
+#[test]
+fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("bgfirst");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let (_stub_dir, stub) = sidebar_command_stub();
+
+    let daemon = DaemonView {
+        name: "rimzd".to_owned(),
+        hosts: vec![HostPane {
+            argv: vec!["sleep".to_owned(), "120".to_owned()],
+            cwd: cwd.path().to_path_buf(),
+        }],
+    };
+    ZellijBackend::with_runtime_dir(xdg.path())
+        .open_sidebar(
+            &SidebarPaneOptions {
+                session_name: name.clone(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgfirst")),
+                cwd: cwd.path().to_path_buf(),
+                width_percent: 30,
+                rimz_bin: stub,
+                replace_existing: false,
+            },
+            Some(&daemon),
+        )
+        .expect("open_sidebar with daemon");
+
+    assert!(
+        wait_for_tab_named(xdg.path(), &name, "rimzd"),
+        "expected a rimzd tab after birth",
+    );
+    assert!(
+        wait_for_first_tab(xdg.path(), &name, "rimzd"),
+        "daemon tab must lead the session; saw {:?}",
+        tab_names_in_order(xdg.path(), &name),
+    );
+    // Two tabs: the daemon tab and the working tab born beside it.
+    assert_eq!(
+        tab_names_in_order(xdg.path(), &name).len(),
+        2,
+        "birth layout should produce exactly the daemon + working tabs",
     );
 }
 
@@ -1238,22 +1323,53 @@ fn focused_tab_name(xdg: &Path, session: &str) -> Option<String> {
         })
 }
 
-/// Poll until the attached client's focused tab settles off `rimz-rc`, or time
+/// Poll until the attached client's focused tab settles off `rimzd`, or time
 /// out. Returns the last focused tab seen so the caller can assert on it: the
 /// fix settles it on the working tab quickly; the unfixed code leaves it pinned
-/// to `rimz-rc` until the deadline.
-fn wait_for_focused_tab_off_rc(xdg: &Path, session: &str) -> Option<String> {
+/// to `rimzd` until the deadline.
+fn wait_for_focused_tab_off_daemon(xdg: &Path, session: &str) -> Option<String> {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut last = None;
     loop {
         if let Some(tab) = focused_tab_name(xdg, session) {
-            if tab != "rimz-rc" {
+            if tab != "rimzd" {
                 return Some(tab);
             }
             last = Some(tab);
         }
         if Instant::now() >= deadline {
             return last;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+/// The session's tab names in tab order (`query-tab-names` prints one per line).
+fn tab_names_in_order(xdg: &Path, session: &str) -> Vec<String> {
+    let out = scoped_zellij(xdg)
+        .args(["--session", session, "action", "query-tab-names"])
+        .output();
+    out.ok()
+        .filter(|out| out.status.success())
+        .map(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(|line| line.trim().to_owned())
+                .filter(|line| !line.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Poll until the session's first tab is `expected`, or time out.
+fn wait_for_first_tab(xdg: &Path, session: &str, expected: &str) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if tab_names_in_order(xdg, session).first().map(String::as_str) == Some(expected) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
         }
         std::thread::sleep(Duration::from_millis(150));
     }

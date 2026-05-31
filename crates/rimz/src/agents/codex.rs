@@ -252,10 +252,15 @@ impl AgentIntegration for CodexIntegration {
 /// onto an [`AgentContext`] for the session sidecar. Spawned out-of-band by
 /// `rimz codex refresh-context` (never inline in a hook). `model_hint` is the
 /// session's model id from the lifecycle observation, used to resolve the
-/// model's display name + effort. `None` when the app-server is unreachable
-/// (codex missing, not runnable, handshake failed) — best-effort enrichment.
-pub fn refresh_context(model_hint: Option<&str>) -> Option<AgentContext> {
-    let mut client = CodexAppServer::connect()?;
+/// model's display name + effort. `broker_socket` is this session's broker
+/// socket (the preferred, warm transport); `None`/absent falls back to the
+/// per-user daemon then a cold-spawn. Returns `None` when the app-server is
+/// unreachable (codex missing, not runnable, handshake failed) — best-effort.
+pub fn refresh_context(
+    model_hint: Option<&str>,
+    broker_socket: Option<&Path>,
+) -> Option<AgentContext> {
+    let mut client = CodexAppServer::connect(broker_socket)?;
     Some(client.observe_context("codex", model_hint, Timestamp::now()))
 }
 

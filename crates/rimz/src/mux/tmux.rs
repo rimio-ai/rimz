@@ -15,9 +15,9 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, MuxBackend, MuxErr, PaneCapture,
-    PaneListOptions, Result, SessionOptions, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions,
-    ensure_pane_backend,
+    BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, DaemonView, MuxBackend, MuxErr,
+    PaneCapture, PaneListOptions, Result, SessionOptions, SidebarPaneOptions, SidebarRecovery,
+    SplitPaneOptions, ensure_pane_backend,
 };
 use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
@@ -130,6 +130,45 @@ impl TmuxBackend {
         Ok(String::from_utf8_lossy(&output.stdout)
             .lines()
             .any(|line| line.trim() == name))
+    }
+
+    /// Force the named window to the session's first slot. tmux opens the daemon
+    /// window last (`-d`, no focus change), so swap it with the base-index window
+    /// — `swap-window` always succeeds even when that slot is occupied, and `-d`
+    /// keeps the user on their working window, so no focus-return is needed.
+    /// Best-effort: a reorder hiccup never sinks an otherwise-launched view.
+    fn lead_window(&self, session: &str, name: &str) {
+        let base = self.base_index();
+        if let Err(err) = self
+            .cmd()
+            .args([
+                "swap-window".to_owned(),
+                "-d".to_owned(),
+                "-s".to_owned(),
+                format!("{session}:{name}"),
+                "-t".to_owned(),
+                format!("{session}:{base}"),
+            ])
+            .run()
+        {
+            tracing::warn!(
+                session = %session,
+                error = %err,
+                "could not move the daemon window to the front",
+            );
+        }
+    }
+
+    /// The session's first window index (`base-index`, default 0 — almost always
+    /// a global option).
+    fn base_index(&self) -> String {
+        self.cmd()
+            .args(["show-options", "-gv", "base-index"])
+            .run()
+            .ok()
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "0".to_owned())
     }
 }
 
@@ -316,7 +355,10 @@ impl MuxBackend for TmuxBackend {
             .map(|_| ())
     }
 
-    fn open_sidebar(&self, opts: &SidebarPaneOptions) -> Result<()> {
+    fn open_sidebar(&self, opts: &SidebarPaneOptions, _daemon: Option<&DaemonView>) -> Result<()> {
+        // tmux can reorder windows freely, so the daemon view leads via
+        // `open_background_view` (`swap-window`) rather than a birth layout; the
+        // `daemon` hint is Zellij's concern and ignored here.
         // Managed sidebar pane per docs/internals/multiplexers.md:
         //   tmux split-window -d -h -l <width>% -b -t <session> 'rimz sidebar serve ...'
         // `-d` keeps the spawning client focused on its existing pane;
@@ -395,38 +437,61 @@ impl MuxBackend for TmuxBackend {
     }
 
     fn open_background_view(&self, opts: &BackgroundViewOptions) -> Result<BackgroundViewLaunch> {
+        let session = &opts.sidebar.session_name;
         // Idempotent on the window name; a relaunch into a session already
-        // carrying the view is a no-op. A failed query propagates rather than
-        // risk a duplicate window. `-d` (below) never moves the user's focus, so
-        // a relaunch leaves them on their working window with nothing to restore.
-        if self.session_has_window(&opts.sidebar.session_name, &opts.name)? {
+        // carrying the view launches nothing, but still re-asserts its first
+        // position. A failed query propagates rather than risk a duplicate window.
+        if self.session_has_window(session, &opts.name)? {
+            self.lead_window(session, &opts.name);
             return Ok(BackgroundViewLaunch::AlreadyRunning);
         }
-        if opts.host.is_empty() {
+        let Some((first, rest)) = opts.hosts.split_first() else {
             return Err(MuxErr::Output {
                 program: "tmux".to_owned(),
-                reason: "background view has no host command".to_owned(),
+                reason: "background view has no host panes".to_owned(),
             });
-        }
-        // `-d` opens the window without pulling the user's focus to it; the host
-        // runs as the window's process from the project root. The session's
-        // `after-new-window` hook (installed by `open_sidebar`) docks the global
-        // sidebar on its left, so the window is born `sidebar | host` — the host
-        // is always reachable, never a bare trap. The Claude host closes with its
-        // process, so it gets no `remain-on-exit`.
-        self.cmd()
+        };
+        // `-d` opens the window without pulling the user's focus to it; `-P -F`
+        // prints the host pane id so extra hosts split beside it, never the
+        // sidebar. The session's `after-new-window` hook (installed by
+        // `open_sidebar`) docks the global sidebar on its left, so the window is
+        // born `sidebar | host0` — the host is always reachable, never a bare
+        // trap. Each host closes with its process, so no `remain-on-exit`.
+        let output = self
+            .cmd()
             .args([
                 "new-window".to_owned(),
                 "-d".to_owned(),
+                "-P".to_owned(),
+                "-F".to_owned(),
+                "#{pane_id}".to_owned(),
                 "-t".to_owned(),
-                opts.sidebar.session_name.clone(),
+                session.clone(),
                 "-n".to_owned(),
                 opts.name.clone(),
                 "-c".to_owned(),
-                opts.host_cwd.to_string_lossy().into_owned(),
+                first.cwd.to_string_lossy().into_owned(),
             ])
-            .args(opts.host.clone())
+            .args(first.argv.clone())
             .run()?;
+        let host0 = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        // Extra hosts (typically just the Codex broker) split beside host0,
+        // stacked left-to-right; `-d` keeps host0 the window's active pane.
+        for host in rest {
+            self.cmd()
+                .args([
+                    "split-window".to_owned(),
+                    "-d".to_owned(),
+                    "-h".to_owned(),
+                    "-t".to_owned(),
+                    host0.clone(),
+                    "-c".to_owned(),
+                    host.cwd.to_string_lossy().into_owned(),
+                ])
+                .args(host.argv.clone())
+                .run()?;
+        }
+        self.lead_window(session, &opts.name);
         Ok(BackgroundViewLaunch::Launched)
     }
 

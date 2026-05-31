@@ -15,8 +15,10 @@ pub use zellij::ZellijBackend;
 
 use std::collections::BTreeMap;
 use std::io;
+use std::io::Read as _;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -43,11 +45,27 @@ pub enum MuxErr {
     },
     #[error("could not parse mux output from `{program}`: {reason}")]
     Output { program: String, reason: String },
+    #[error("multiplexer command `{program} {args}` did not finish within {seconds}s; killed")]
+    Timeout {
+        program: String,
+        args: String,
+        seconds: u64,
+    },
     #[error(transparent)]
     Io(#[from] io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, MuxErr>;
+
+/// Upper bound on a single control-command round-trip ([`CommandSpec::run`]).
+/// Generous — a real `zellij`/`tmux` control command answers in milliseconds, so
+/// this only ever fires on a wedged child (a Zellij action client spinning
+/// against a dead server), bounding the hang instead of letting it run forever.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Poll granularity while waiting for a control command to exit — the most
+/// latency [`CommandSpec::run_bounded`] adds on the common (fast) path.
+const POLL_STEP: Duration = Duration::from_millis(10);
 
 /// A built-up command we can run or hand back to `exec(3)`.
 #[derive(Clone, Debug, Default)]
@@ -92,13 +110,16 @@ impl CommandSpec {
         command
     }
 
+    /// Run the command to completion and capture its output, bounded by
+    /// [`COMMAND_TIMEOUT`]. A control command (`zellij action …`, `tmux …`)
+    /// finishes in milliseconds; exceeding the bound means it wedged — a Zellij
+    /// action client busy-loops at 100% CPU when its session server dies, which
+    /// would otherwise hang the caller (and `rimz start`) forever. On the bound
+    /// the child is SIGKILLed and a [`MuxErr::Timeout`] returned, so callers — all
+    /// of which treat these best-effort — degrade instead of blocking. The
+    /// interactive attach never comes through here (it `exec`s).
     pub fn run(&self) -> Result<Output> {
-        let output = self.to_command().output().map_err(|err| match err.kind() {
-            io::ErrorKind::NotFound => MuxErr::NotInstalled {
-                program: self.program.clone(),
-            },
-            _ => MuxErr::Io(err),
-        })?;
+        let output = self.run_bounded(COMMAND_TIMEOUT)?;
         if !output.status.success() {
             return Err(MuxErr::Command {
                 program: self.program.clone(),
@@ -107,6 +128,73 @@ impl CommandSpec {
             });
         }
         Ok(output)
+    }
+
+    /// Spawn the child and wait at most `timeout` for it. Its stdout/stderr are
+    /// drained on threads so a full pipe never deadlocks the wait, while the child
+    /// handle stays here so a deadline can `kill()` it. Polling `try_wait` adds at
+    /// most [`POLL_STEP`] of latency on the common (fast) path; on the deadline the
+    /// child is killed and reaped and a [`MuxErr::Timeout`] returned.
+    fn run_bounded(&self, timeout: Duration) -> Result<Output> {
+        let mut child = self
+            .to_command()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|err| match err.kind() {
+                io::ErrorKind::NotFound => MuxErr::NotInstalled {
+                    program: self.program.clone(),
+                },
+                _ => MuxErr::Io(err),
+            })?;
+        let drain = |pipe: Option<Box<dyn io::Read + Send>>| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(mut pipe) = pipe {
+                    let _ = pipe.read_to_end(&mut buf);
+                }
+                buf
+            })
+        };
+        let stdout = drain(
+            child
+                .stdout
+                .take()
+                .map(|p| Box::new(p) as Box<dyn io::Read + Send>),
+        );
+        let stderr = drain(
+            child
+                .stderr
+                .take()
+                .map(|p| Box::new(p) as Box<dyn io::Read + Send>),
+        );
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match child.try_wait()? {
+                Some(status) => {
+                    let stdout = stdout.join().unwrap_or_default();
+                    let stderr = stderr.join().unwrap_or_default();
+                    return Ok(Output {
+                        status,
+                        stdout,
+                        stderr,
+                    });
+                }
+                None if std::time::Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stdout.join();
+                    let _ = stderr.join();
+                    return Err(MuxErr::Timeout {
+                        program: self.program.clone(),
+                        args: self.args.join(" "),
+                        seconds: timeout.as_secs(),
+                    });
+                }
+                None => std::thread::sleep(POLL_STEP),
+            }
+        }
     }
 }
 
@@ -188,28 +276,56 @@ pub struct SplitPaneOptions {
     pub env: BTreeMap<String, String>,
 }
 
-/// Options for launching the managed remote-control host into a single
-/// dedicated, named *view* of a session — a tmux window or a Zellij tab — out of
-/// the user's focus. The view is born with the global sidebar docked on its left
-/// and the host on its right, mirroring the working tab's `sidebar | shell`
-/// shape, so the host is always reachable and never traps the user in a bare
-/// pane. Today this hosts the Claude Remote Control host; Codex is a per-user
-/// daemon, never a pane.
+/// One managed long-lived process the daemon view hosts beside the sidebar — the
+/// Claude remote-control host, or the Codex app-server broker. The view stacks
+/// every host to the right of the global sidebar.
+#[derive(Clone, Debug)]
+pub struct HostPane {
+    /// Host argv, program first.
+    pub argv: Vec<String>,
+    /// Working directory the host runs in. The Claude host runs from the project
+    /// root so `--spawn=worktree` carves new sessions off the canonical repo (not
+    /// the current worktree); the broker runs from the worktree — so each pane
+    /// carries its own cwd.
+    pub cwd: PathBuf,
+}
+
+/// Options for launching the managed daemon hosts into a single dedicated, named
+/// *view* of a session — a tmux window or a Zellij tab — forced to the first
+/// position and out of the user's focus. The view is born with the global
+/// sidebar docked on its left and the hosts on its right, mirroring the working
+/// tab's `sidebar | shell` shape, so every host is reachable and never traps the
+/// user in a bare pane. It hosts the Claude remote-control host and/or the
+/// per-session Codex app-server broker.
 #[derive(Clone, Debug)]
 pub struct BackgroundViewOptions {
     /// View name. Doubles as the idempotency key: a live view by this name in
     /// the session suppresses a relaunch.
     pub name: String,
-    /// Host argv (program first) — the command the view hosts on its right.
-    pub host: Vec<String>,
-    /// Working directory the host runs in. The Claude host runs from the project
-    /// root so `--spawn=worktree` carves new sessions off the canonical repo, not
-    /// the current worktree — so this differs from the sidebar's worktree cwd.
-    pub host_cwd: PathBuf,
+    /// The hosts the view runs, left to right beside the sidebar. Must be
+    /// non-empty; the first host takes focus within the view. The caller decides
+    /// whether to open the view at all (it skips an empty host list).
+    pub hosts: Vec<HostPane>,
     /// The global sidebar docked on the view's left. Carries the session name
     /// (which is also the view's session), the workspace identity, the width, and
     /// the `rimz` bin the sidebar renderer runs.
     pub sidebar: SidebarPaneOptions,
+}
+
+/// The daemon view (the `rimzd` tab/window) to birth *ahead* of the working
+/// view, in the same session-creation step. On Zellij this is the only way the
+/// view can lead — Zellij can't reorder tabs after birth, so the lead position
+/// is owned by the birth layout, not a later move. tmux can reorder freely, so
+/// it ignores this and leads via [`MuxBackend::open_background_view`] instead.
+/// Only `rimz start` supplies one; every other sidebar launch passes `None`, and
+/// the working view leads as before.
+#[derive(Clone, Debug)]
+pub struct DaemonView {
+    /// View name — the idempotency key, matching [`BackgroundViewOptions::name`].
+    pub name: String,
+    /// The hosts the view runs, left to right beside the sidebar; the first takes
+    /// focus within the view. Non-empty (the caller skips an empty host list).
+    pub hosts: Vec<HostPane>,
 }
 
 /// Outcome of [`MuxBackend::open_background_view`].
@@ -238,19 +354,26 @@ pub trait MuxBackend: Send + Sync {
     fn focus_pane(&self, pane: &PaneId) -> Result<()>;
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture>;
     fn send_keys(&self, pane: &PaneId, text: &str) -> Result<()>;
-    fn open_sidebar(&self, opts: &SidebarPaneOptions) -> Result<()>;
+    /// Birth (or heal) the session's working view with its sidebar. When `daemon`
+    /// is `Some`, the session is born with that view leading and the working view
+    /// focused second — on Zellij the lead order is fixed here, at birth, since
+    /// tabs can't be reordered afterwards. tmux ignores `daemon` (it leads its
+    /// window via [`Self::open_background_view`]). Only `rimz start` passes a
+    /// `daemon`; other launches pass `None` and birth the working view alone.
+    fn open_sidebar(&self, opts: &SidebarPaneOptions, daemon: Option<&DaemonView>) -> Result<()>;
     /// Re-add a sidebar to every view (Zellij tab / tmux window) that holds
     /// working panes but lost its sidebar, in place and without disturbing
     /// existing panes. One best-effort pass: a view whose add fails is logged
     /// and skipped — never retried, never a session rebirth. Unlike
     /// [`Self::open_sidebar`], this never deletes or recreates the session.
     fn recover_sidebars(&self, opts: &SidebarPaneOptions) -> Result<SidebarRecovery>;
-    /// Launch the `opts.host` command in one dedicated, named background view
-    /// (tmux window / Zellij tab) of an existing session, born `sidebar | host`
-    /// and out of the user's focus. Idempotent: a second call while a view of
-    /// that name is present launches nothing, but still returns the user's focus
-    /// to the working view so a relaunch never strands them on the host. The view
-    /// never gates correctness — a failure here leaves the room intact.
+    /// Launch the `opts.hosts` in one dedicated, named background view (tmux
+    /// window / Zellij tab) of an existing session, born `sidebar | hosts…`,
+    /// forced to the first position, and out of the user's focus. Idempotent: a
+    /// second call while a view of that name is present launches nothing, but
+    /// still re-asserts its first position and returns focus to the working view
+    /// so a relaunch never strands the user on the daemon view. The view never
+    /// gates correctness — a failure here leaves the room intact.
     fn open_background_view(&self, opts: &BackgroundViewOptions) -> Result<BackgroundViewLaunch>;
     /// Best-effort wakeup; sockets are the channel of record per the docs.
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()>;

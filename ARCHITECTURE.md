@@ -88,7 +88,7 @@ General coding rules live in [AGENTS.md](./AGENTS.md); only crate-local constrai
 CLI binary, hook entrypoints, and the runtime/domain library. Start here for any non-sidebar behaviour.
 
 - `src/main.rs` — CLI bootstrap, top-level error reporting.
-- `src/cli/` — command parsing and per-subcommand handlers (`workspace`, `list`, `event`, `feed`, `gc`, `pane`, `resolver`, `sidebar`, `hooks`, `codex`, `trust`, `doctor`). `codex refresh-context` is the hidden entrypoint the Codex hook spawns to refresh the app-server `AgentContext` sidecar.
+- `src/cli/` — command parsing and per-subcommand handlers (`workspace`, `list`, `event`, `feed`, `gc`, `pane`, `resolver`, `sidebar`, `hooks`, `codex`, `trust`, `doctor`). `codex refresh-context` is the hidden entrypoint the Codex hook spawns to refresh the app-server `AgentContext` sidecar; `codex app-server serve` is the hidden entrypoint `rimz start` runs in the `rimzd` daemon tab to host the per-session app-server broker.
 - `src/workspace.rs` — project root, worktree root, workspace ID, session name.
 - `src/trust.rs` — executable-surface hash, per-machine grant record, trust state (no_config / untrusted / trusted / stale). `status` re-hashes every call so staleness is auto-detected.
 - `src/ids.rs` — typed identifier newtypes (workspace, request, event, resolver, sidebar instance, pane, mux).
@@ -113,7 +113,8 @@ CLI binary, hook entrypoints, and the runtime/domain library. Start here for any
 - `src/agents/mod.rs` — `AgentIntegration` trait.
 - `src/agents/claude.rs` — Claude wrapper, hook installer, classification, rendering.
 - `src/agents/codex.rs` — Codex hook install merge, classification, rendering.
-- `src/agents/codex_app_server.rs` — read-only Codex app-server JSON-RPC client (rate limits, model display name, version) behind a transport seam; the out-of-band `AgentContext` producer for Codex.
+- `src/agents/codex_app_server.rs` — read-only Codex app-server JSON-RPC client (rate limits, model display name, version) behind a transport seam; the out-of-band `AgentContext` producer for Codex. Prefers the per-session broker socket, then the per-user daemon, then a cold-spawn.
+- `src/agents/codex_broker.rs` — the per-session Codex app-server broker (`rimz codex app-server serve`): holds one warm `codex app-server` and serves it over a unix socket so enrichment skips the per-datapoint handshake. Runs as a pane in the `rimzd` daemon tab.
 - Additional agent adapters (OpenCode, Pi, etc.) land per [docs/contributing/roadmap.md](./docs/contributing/roadmap.md) once their hook surfaces and decision shapes are verified.
 - `src/resolver/mod.rs` — re-exports for the resolver subsystem.
 - `src/resolver/allowlist.rs` — per-machine TOML allowlist with atomic writes.

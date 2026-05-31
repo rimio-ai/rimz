@@ -10,6 +10,7 @@ mod common;
 
 mod backend;
 mod chain_advance;
+mod codex_broker;
 mod doctor;
 mod examples;
 mod feed_runtime;

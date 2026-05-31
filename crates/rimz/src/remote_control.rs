@@ -34,14 +34,20 @@ use crate::agents::codex_app_server::codex_home;
 use crate::config::RemoteControlConfig;
 use crate::feed::PaneRef;
 
-/// View name for the managed remote-control hosts. Shared by the launcher (the
-/// idempotency key for the tmux window / Zellij tab) and the sidebar classifier
-/// ([`pane_is_host`]), so both speak the same name. Claude and Codex share it.
-pub const VIEW_NAME: &str = "rimz-rc";
+/// View name for the managed daemon tab. Shared by the launcher (the idempotency
+/// key for the tmux window / Zellij tab) and the sidebar classifier
+/// ([`pane_is_host`]), so both speak the same name. The tab hosts the Claude
+/// remote-control host and the per-session Codex app-server broker side by side.
+pub const VIEW_NAME: &str = "rimzd";
 
-/// Substring marking a remote-control subcommand in a pane's command line. Only
-/// Claude is a host pane now, and it spells the subcommand `remote-control`.
+/// Substring marking the Claude remote-control host in a pane's command line —
+/// the subcommand it spells (`claude remote-control …`).
 const COMMAND_MARKER: &str = "remote-control";
+
+/// Substring marking the Codex app-server broker in a pane's command line
+/// (`rimz codex app-server serve …`). The broker is a per-session host pane in
+/// the same view, distinct from the per-user daemon [`ensure_codex_daemon`] runs.
+const APP_SERVER_MARKER: &str = "app-server";
 
 /// The Claude Remote Control argv (program first). `--spawn worktree` isolates
 /// each on-demand remote session in its own git worktree — the worktree mode.
@@ -191,18 +197,17 @@ fn preflight_decision(
     Ok(())
 }
 
-/// Whether `pane` hosts a remote-control server. Only Claude is a host pane now
-/// (Codex is a per-user daemon, never a pane).
+/// Whether `pane` hosts a managed daemon — the Claude remote-control host or the
+/// Codex app-server broker. Both live in the [`VIEW_NAME`] view.
 ///
 /// Two signals, because the backends expose different metadata: Zellij reports
-/// the full command line (so the `remote-control` subcommand is visible),
-/// while tmux reports only the foreground binary basename but names the window
-/// — which is the view name we launched it under.
+/// the full command line (so the `remote-control` / `app-server` subcommand is
+/// visible), while tmux reports only the foreground binary basename but names the
+/// window — which is the view name we launched it under, catching either host.
 pub fn pane_is_host(pane: &PaneRef) -> bool {
-    pane.command
-        .as_deref()
-        .is_some_and(|command| command.contains(COMMAND_MARKER))
-        || pane.view_name.as_deref() == Some(VIEW_NAME)
+    pane.command.as_deref().is_some_and(|command| {
+        command.contains(COMMAND_MARKER) || command.contains(APP_SERVER_MARKER)
+    }) || pane.view_name.as_deref() == Some(VIEW_NAME)
 }
 
 #[cfg(test)]
@@ -300,11 +305,15 @@ mod tests {
     }
 
     #[test]
-    fn detects_the_claude_host_by_full_command_line() {
-        // Zellij reports the full command line; Claude spells the subcommand
-        // `remote-control`.
+    fn detects_both_hosts_by_full_command_line() {
+        // Zellij reports the full command line. Claude spells the subcommand
+        // `remote-control`; the broker spells `app-server`.
         assert!(pane_is_host(&pane(
             Some("claude remote-control --spawn worktree"),
+            None,
+        )));
+        assert!(pane_is_host(&pane(
+            Some("rimz codex app-server serve --workspace-id w"),
             None,
         )));
     }
@@ -312,14 +321,14 @@ mod tests {
     #[test]
     fn detects_host_by_view_name_when_command_is_a_bare_basename() {
         // tmux reports only the basename, but the window carries the view name,
-        // so any pane in the rimz-rc view is a host regardless of its command.
+        // so any pane in the rimzd view is a host regardless of its command.
         assert!(pane_is_host(&pane(Some("claude"), Some(VIEW_NAME))));
-        assert!(pane_is_host(&pane(Some("node"), Some(VIEW_NAME))));
+        assert!(pane_is_host(&pane(Some("rimz"), Some(VIEW_NAME))));
     }
 
     #[test]
     fn a_plain_agent_is_not_the_host() {
-        // A real coding session: bare basename, no rimz-rc view. A plain `codex`
+        // A real coding session: bare basename, no rimzd view. A plain `codex`
         // agent pane must never be classified as a host.
         assert!(!pane_is_host(&pane(Some("claude"), Some("2"))));
         assert!(!pane_is_host(&pane(Some("codex"), Some("3"))));
