@@ -62,7 +62,7 @@ At hook fire time the hook filters the allowlist to entries with a fresh heartbe
 - the active resolver's per-step budget elapses without an answer (audit reason `budget_elapsed`),
 - the active resolver's heartbeat goes stale mid-flight (audit reason `heartbeat_stale`).
 
-Budget-elapse and heartbeat-stale handoffs run from inside the hook poll loop on a 1-second tick. Each transition appends a `feed.chain_elapse` event carrying `{ request_id, resolver_id, reason, next_resolver }` so the audit trail tells "the chain advanced because nobody answered" apart from "the chain advanced because the resolver said pass". If the chain runs out before the hook cap, the item moves to `timed_out` with reason `chain_exhausted` and the hook prints neutral; if the hook cap fires first the reason is `bridge_cap_elapsed`. A late answer is recorded `effective = false` either way.
+Budget-elapse and heartbeat-stale handoffs run from inside the hook poll loop on a 1-second tick. Each transition appends a `feed.chain_elapse` event carrying `{ request_id, resolver_id, reason, next_resolver }` so the audit trail tells "the chain advanced because nobody answered" apart from "the chain advanced because the resolver said pass". If the chain runs out before the hook cap, the item moves to `timed_out` with reason `chain_exhausted` and the hook returns neutral; if the hook cap fires first the reason is `bridge_cap_elapsed`. A late answer is recorded `effective = false` either way.
 
 Human override: pass `--override-chain` to `rimz feed resolve` to preempt the active link. The ledger records `override_chain: true` for audit.
 

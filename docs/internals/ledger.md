@@ -18,7 +18,7 @@ surface = native_ui         surface = bridge            surface = script
         │                            │                            │
         ▼                            ▼                            ▼
 wake sidebars               bind per-request socket     bind per-request socket
-print neutral payload       wait up to hook cap         wait up to --timeout
+return neutral no-op        wait up to hook cap         wait up to --timeout
 exit                                 │                            │
         │                            ▼                            ▼
         ▼                  resolver answers (CAS)      human/resolver answers
@@ -96,7 +96,7 @@ No fresh enrolled resolver heartbeat at hook fire time:
 1. Hook reads agent payload from stdin.
 2. Hook writes a feed item with `surface = native_ui`.
 3. Hook wakes any live sidebars.
-4. Hook prints the event-specific neutral payload.
+4. Hook returns the event-specific neutral no-op.
 5. Hook exits within milliseconds.
 6. Agent's own UI asks the human.
 
@@ -112,7 +112,7 @@ Fresh enrolled resolver heartbeat at hook fire time:
 4. CAS validates `status = pending`, active chain step, `workspace_id`, `request_id`, and nonce.
 5. The waiting hook unblocks and prints exactly one agent-native decision JSON.
 
-On hook-cap timeout (Claude 120s, Codex shorter — see [agent.md](./agent.md) for the exact value each adapter ships), the hook prints the neutral payload, the feed item moves to `timed_out`, and the sidebar labels it **"Delegated to native prompt"** — the agent's own UI takes over, exactly as in the default path.
+On hook-cap timeout (Claude 120s, Codex shorter — see [agent.md](./agent.md) for the exact value each adapter ships), the hook returns neutral, the feed item moves to `timed_out`, and the sidebar labels it **"Delegated to native prompt"** — the agent's own UI takes over, exactly as in the default path.
 
 ## Script path
 

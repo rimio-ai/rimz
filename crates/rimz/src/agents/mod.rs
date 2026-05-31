@@ -1,9 +1,9 @@
 //! Agent integration interface.
 //!
 //! Each adapter classifies an incoming hook event, observes lifecycle
-//! transitions (status + mode), renders the agent-native neutral stdout
-//! payload, and (when a resolver answer is available) renders the
-//! agent-native decision JSON. Adapters never touch the ledger directly;
+//! transitions (status + mode), renders the agent-native neutral no-op, and
+//! (when a resolver answer is available) renders the agent-native decision
+//! JSON. Adapters never touch the ledger directly;
 //! they're called by `rimz hooks <agent>` which owns the ledger writes.
 //!
 //! Adapters also own hook install and uninstall — translating the trait
@@ -212,11 +212,11 @@ pub trait AgentIntegration: Send + Sync {
     /// Render the agent-native decision JSON for this resolution. Called
     /// only when the hook is on the bridge and a resolver has answered.
     fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value>;
-    /// Render the neutral stdout payload — the "agent's own UI is the answer"
-    /// fallback path. `None` means the hook should print nothing on this event.
+    /// Render the neutral no-op — the "agent's own UI is the answer" fallback
+    /// path. `None` means the hook should print nothing on this event.
     fn render_neutral(&self, event_name: &str) -> Result<Option<Value>>;
     /// Maximum time the hook may block on the bridge before falling back to
-    /// the neutral payload. Defaults to [`DEFAULT_HOOK_CAP`].
+    /// the neutral no-op. Defaults to [`DEFAULT_HOOK_CAP`].
     fn hook_cap(&self) -> Duration {
         DEFAULT_HOOK_CAP
     }

@@ -356,7 +356,7 @@ pub struct FeedItem {
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     /// Hook cap from the agent's protocol. 0 means "no hook is waiting"
-    /// (the hook returned the neutral payload and exited).
+    /// (the hook returned its neutral no-op and exited).
     pub hook_wait_timeout_seconds: u64,
     /// Wall-clock deadline for `script`-surface items. None means no upper
     /// bound; the caller has not asked for a timeout.

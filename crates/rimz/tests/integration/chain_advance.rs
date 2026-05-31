@@ -219,10 +219,9 @@ fn chain_exhausted_falls_back_to_neutral() {
         "hook stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap().trim(),
-        "{}",
-        "single-link chain exhaustion should emit Claude's neutral payload"
+    assert!(
+        output.stdout.is_empty(),
+        "single-link chain exhaustion should keep neutral stdout empty"
     );
 
     let reasons = chain_elapse_reasons(&env);

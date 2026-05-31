@@ -76,7 +76,7 @@ For every supported agent event:
 All `insta` snapshots — CLI stdout, `--json` event payloads, hook stdout, sidebar render frames — share one set of rules.
 
 - **Redaction filter.** Every snapshot routes through `tests/integration/common/redact.rs` before comparison. The filter strips UUIDs (`[0-9a-f]{8}-[0-9a-f]{4}-...`), Unix and RFC3339 timestamps, absolute paths under `$HOME` / `$XDG_RUNTIME_DIR` / `$XDG_STATE_HOME`, the workspace ID, and the multiplexer session name. Snapshots compare semantic shape, not transient identifiers. Snapshot churn from a transient ID is a redactor bug; fix the redactor.
-- **Failure-shape snapshots.** Error messages, `--json` error envelopes, and hook neutral payloads are snapshotted alongside success cases. Wire-shape error changes are reviewed events, not silent regressions.
+- **Failure-shape snapshots.** Error messages, `--json` error envelopes, and hook neutral silence are snapshotted alongside success cases. Wire-shape error changes are reviewed events, not silent regressions.
 - **Sidebar render snapshots.** `crates/rimz-sidebar` snapshot tests render through a `vt100::Parser`-backed ratatui backend and assert on the parsed screen contents, never on widget internals. Resize the backend within the test to exercise wrapping and truncation.
 
 ## Sidebar tests

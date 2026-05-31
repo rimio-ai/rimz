@@ -67,9 +67,8 @@ fn python_resolver_abstain_path_exhausts_chain_to_neutral() {
         "hook stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap().trim(),
-        "{}",
-        "abstain on Bash should drain the chain and emit Claude's neutral payload"
+    assert!(
+        output.stdout.is_empty(),
+        "abstain on Bash should drain the chain and keep neutral stdout empty"
     );
 }

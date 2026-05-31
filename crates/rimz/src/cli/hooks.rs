@@ -8,7 +8,7 @@
 //! guard), pushes a `Surface::Bridge` feed item, and blocks on the socket
 //! for up to the agent's [`AgentIntegration::hook_cap`]. On resolver answer
 //! the hook prints the agent-native decision JSON; on cap or resolver loss
-//! it downgrades to `native_ui` and emits the neutral payload. See
+//! it downgrades to `native_ui` and returns the agent-native no-op. See
 //! `docs/internals/ledger.md` for the wire-level contract.
 
 use std::io::{self, Read};
@@ -107,11 +107,11 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
 
     if classified.class != AgentHookClass::BlockingFeed {
         // A non-blocking event records its observation on the ledger (status,
-        // mode, agent_id, task) before emitting the neutral stdout payload.
+        // mode, agent_id, task) and exits with no stdout.
         // `observe_lifecycle` returns `Some` only for transition-bearing
         // events, so high-frequency tool hooks stay silent. The neutral
-        // payload itself is the agent-native silent path — empty for Codex,
-        // `{}` for Claude.
+        // Lifecycle stdout is a model-visible/context surface in some agents,
+        // so it stays empty unless this path is rendering a real decision.
         //
         // Captured for the out-of-band Codex context refresh below: the model id
         // the observation resolved, used to look up the model's display name.
@@ -215,7 +215,6 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                 spawn_codex_context_refresh(&workspace, agent_id, model_hint.as_deref());
             }
         }
-        emit_neutral(agent.as_ref(), &event_name)?;
         return Ok(());
     }
 
@@ -399,7 +398,7 @@ fn handle_blocking_feed(
 
     if fresh.is_empty() {
         // No fresh enrolled resolver: native_ui path. The hook writes the feed
-        // item, wakes sidebars, prints the neutral payload, and exits — the
+        // item, wakes sidebars, returns the neutral no-op, and exits — the
         // agent's own UI is the answer surface.
         let item = build_item(workspace, Surface::NativeUi, feed_kind, agent, payload);
         ledger.push_feed_item(&item, &workspace.session_name)?;

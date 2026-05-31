@@ -6,9 +6,9 @@
 //! the prompt as task, `Stop` completes the turn — success, or failed on an
 //! error signal, or back to running when the payload's `background_tasks`
 //! still has work in flight, `SessionEnd` exits, `Notification` silent);
-//! renders the
-//! Claude-shaped `hookSpecificOutput` / `updatedInput` decision payload and the
-//! neutral fallback. Context budget is read from the transcript tail.
+//! renders the Claude-shaped `hookSpecificOutput` / `updatedInput` decision
+//! payload and the silent neutral fallback. Context budget is read from the
+//! transcript tail.
 //!
 //! Owns hook install / uninstall through a non-destructive merge into
 //! `~/.claude/settings.json` under per-matcher `_rimz_managed` markers. The
@@ -171,8 +171,9 @@ impl AgentIntegration for ClaudeIntegration {
     }
 
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
-        // Empty object is the documented safe no-op for Claude blocking hooks.
-        Ok(Some(json!({})))
+        // Claude treats stdout as a control/context surface. The safe no-op is
+        // exit 0 with no stdout; only resolver decisions write JSON.
+        Ok(None)
     }
 
     fn hook_cap(&self) -> Duration {
@@ -1096,15 +1097,15 @@ mod tests {
     }
 
     #[test]
-    fn neutral_payload_is_empty_object() {
+    fn neutral_payload_is_empty_stdout() {
         let value = ClaudeIntegration
             .render_neutral("PermissionRequest")
             .unwrap();
         insta::assert_snapshot!(
             serde_json::to_string(&value).unwrap(),
-            @"{}"
+            @"null"
         );
-        assert_eq!(value, Some(json!({})));
+        assert_eq!(value, None);
     }
 
     #[test]

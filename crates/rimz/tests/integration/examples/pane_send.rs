@@ -37,7 +37,7 @@ fn pane_send_resolver_abstains_when_item_has_no_pane() {
         return;
     }
     // Single-link chain with a short budget so the test ends quickly when
-    // the resolver abstains: chain exhausts and the hook emits neutral.
+    // the resolver abstains: chain exhausts and the hook returns neutral.
     env.enrol("pane-demo", 10, "1s");
 
     let mut resolver =
@@ -52,10 +52,9 @@ fn pane_send_resolver_abstains_when_item_has_no_pane() {
         "hook stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap().trim(),
-        "{}",
-        "pane-send resolver should abstain on no_pane; chain exhaustion emits Claude neutral"
+    assert!(
+        output.stdout.is_empty(),
+        "pane-send resolver should abstain on no_pane; neutral stdout stays empty"
     );
 
     // The abstain reason should appear in the audit log so unattended runs

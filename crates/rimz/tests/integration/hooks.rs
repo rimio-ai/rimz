@@ -52,10 +52,9 @@ fn hook_with_no_allowlisted_resolver_stays_native_ui() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap().trim(),
-        "{}",
-        "neutral payload expected"
+    assert!(
+        output.stdout.is_empty(),
+        "neutral hook stdout must stay empty"
     );
 
     let items = env.feed_list_json();
@@ -73,10 +72,9 @@ fn hook_with_stale_heartbeat_stays_native_ui() {
 
     let output = env.run_hook("claude", &permission_payload("Bash"));
     assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap().trim(),
-        "{}",
-        "fresh heartbeat is required to engage bridge"
+    assert!(
+        output.stdout.is_empty(),
+        "fresh heartbeat is required to engage bridge without stdout"
     );
     assert_eq!(env.feed_list_json()[0]["surface"], "native_ui");
 }
@@ -211,8 +209,8 @@ fn hook_with_fresh_resolver_engages_bridge_and_resolves() {
 // --- Codex parity ---
 //
 // The hook bridge wiring is agent-agnostic; the only differences between
-// adapters are the stdout payload shapes and the neutral payload. Codex
-// expects `{"decision":"allow"|"deny"}` and an empty stdout on neutral.
+// adapters are the decision stdout shapes and neutral handling. Codex
+// expects `{"decision":"allow"|"deny"}` and empty stdout on neutral.
 
 #[test]
 fn codex_hook_with_no_allowlisted_resolver_stays_native_ui() {
@@ -581,10 +579,9 @@ fn hook_bridge_cap_timeout_emits_neutral() {
         "hook stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap().trim(),
-        "{}",
-        "cap elapsed should emit Claude's neutral payload"
+    assert!(
+        output.stdout.is_empty(),
+        "cap elapsed should keep Claude neutral stdout empty"
     );
 
     let parsed = env.feed_list_json();
@@ -595,8 +592,8 @@ fn hook_bridge_cap_timeout_emits_neutral() {
 // --- Claude PreToolUse blocking events ---
 //
 // `ExitPlanMode` and `AskUserQuestion` are PreToolUse blocking hooks. The
-// agent expects the decision to carry `updatedInput`; the neutral payload
-// stays `{}` and the agent's own UI is the answer surface.
+// agent expects the decision to carry `updatedInput`; neutral keeps stdout
+// empty and the agent's own UI is the answer surface.
 
 #[test]
 fn claude_exit_plan_mode_default_path_pushes_plan_approval() {
@@ -607,10 +604,9 @@ fn claude_exit_plan_mode_default_path_pushes_plan_approval() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap().trim(),
-        "{}",
-        "neutral payload for Claude blocking hook"
+    assert!(
+        output.stdout.is_empty(),
+        "neutral Claude blocking hook must keep stdout empty"
     );
 
     let items = env.feed_list_json();
@@ -630,7 +626,7 @@ fn claude_ask_user_question_default_path_pushes_question() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "{}");
+    assert!(output.stdout.is_empty());
 
     let parsed = env.feed_list_json();
     assert_eq!(parsed[0]["kind"], "question");
@@ -746,9 +742,7 @@ fn claude_session_start_writes_agent_lifecycle_event() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    // Claude's neutral payload is `{}` — emitted even for lifecycle hooks so
-    // the agent always sees a well-formed JSON response.
-    assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "{}");
+    assert!(output.stdout.is_empty(), "lifecycle hook is silent");
 
     let parsed = env.snapshot_json();
     let agents = parsed["agents"].as_array().expect("agents array");
@@ -759,6 +753,38 @@ fn claude_session_start_writes_agent_lifecycle_event() {
     assert_eq!(agents[0]["status"], "idle");
     assert_eq!(agents[0]["permission_posture"], "default");
     assert_eq!(agents[0]["worktree_branch"], "feature-x");
+}
+
+#[test]
+fn claude_context_and_tool_lifecycle_hooks_are_silent() {
+    let env = Env::new();
+    let cases = [
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-claude-silent",
+            "prompt": "check the renderer",
+            "permission_mode": "default",
+        }),
+        json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "sess-claude-silent",
+            "tool_name": "Read",
+            "tool_input": { "file_path": "src/lib.rs" },
+            "tool_response": { "success": true },
+            "permission_mode": "default",
+        }),
+    ];
+
+    for payload in cases {
+        let payload = serde_json::to_string(&payload).expect("payload");
+        let output = env.run_hook("claude", &payload);
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty(), "lifecycle hook is silent");
+    }
 }
 
 #[test]

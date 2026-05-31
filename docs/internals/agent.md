@@ -14,7 +14,7 @@ Every agent — Claude, Codex, and every future one — speaks to Rimz through *
 install_hooks() / uninstall_hooks() / hooks_installed()   — own the per-user config write
 classify_hook(event, payload)   → lifecycle | blocking-feed | unknown
 observe_lifecycle(event, payload) → Option<AgentLifecycleObservation>   — the normalized event
-render_decision(feed_kind, resolution) / render_neutral(event)          — agent-native stdout
+render_decision(feed_kind, resolution) / render_neutral(event)          — decision stdout / neutral no-op
 hook_cap() / ends_session(event)
 ```
 
@@ -198,7 +198,7 @@ Install also manages the agent's statusline when it has one. For Claude it sets 
 
 OpenCode, Pi, Cursor, Gemini, Copilot, Amp, Rovo, Hermes, Factory, Qoder, and similar agents land through `AgentIntegration` once their hook surfaces and decision outputs are verified. The work is a new appendix below — the native-event → unified-interface mapping — plus the trait impl. Nothing else changes.
 
-Adding an agent requires tests for: install/uninstall, lifecycle mapping (native event → observation → state), feed classification, neutral stdout, decision stdout, PID attribution, and version drift behaviour. Pinned hook stdout shapes live as inline `insta::assert_*_snapshot!(... @"...")` goldens inside each adapter module — see [`claude.rs`](../../crates/rimz/src/agents/claude.rs) and [`codex.rs`](../../crates/rimz/src/agents/codex.rs).
+Adding an agent requires tests for: install/uninstall, lifecycle mapping (native event → observation → state), feed classification, neutral silence, decision stdout, PID attribution, and version drift behaviour. Pinned hook stdout shapes live as inline `insta::assert_*_snapshot!(... @"...")` goldens inside each adapter module — see [`claude.rs`](../../crates/rimz/src/agents/claude.rs) and [`codex.rs`](../../crates/rimz/src/agents/codex.rs).
 
 ---
 
