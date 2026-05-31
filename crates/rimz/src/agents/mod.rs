@@ -129,6 +129,11 @@ pub struct AgentLifecycleObservation {
     pub worktree_branch: Option<String>,
     /// Display-only task descriptor. It never drives routing or decisions.
     pub task: Option<String>,
+    /// The user's latest prompt for this session, carried only by the
+    /// prompt-bearing event. The reducer persists it (unlike the activity-bound
+    /// `task`), so the sidebar can label an unnamed session by its prompt once
+    /// the turn ends, until a real session name exists.
+    pub prompt: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
     /// Context-window utilization in percent reported by the agent (0..=100).

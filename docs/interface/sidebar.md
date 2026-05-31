@@ -142,7 +142,7 @@ An agent is a small stacked card. The resting card is three lines; selecting it 
 ```
 
 - **Line 1 — identity.** The animated leading cell, then the agent kind (dim — the glyph and its color carry identity), then capability: model, effort, and the posture pill. Capability degrades by width — a wide card carries model · effort · posture, a medium one drops effort, a narrow one keeps just the name. The session `$cost` pins right.
-- **Line 2 — what it's on.** The session name you gave it (`--name` / `/rename`), else the agent's task, else an em dash. On a wide card, todo dots pin right.
+- **Line 2 — what it's on.** The session name you gave it (`--name` / `/rename`), else the agent's task, else its latest prompt (which lingers once the turn ends and the task clears, so an unnamed session stays labelled until it earns a name), else an em dash. On a wide card, todo dots pin right.
 - **The context meter (`▣`).** The resting card's one bar. The bar fills as the window is *used*; its value is always the percent used. While the window is calm it splits into colored segments showing *where* the tokens went (cache writes / cache reads / fresh input); once it warns it goes a solid amber/red. The `▣` glyph reads *how full* the window is on its own ramp — blue while cold, warming as it fills.
 - **Selected / full lines.** The token breakdown (`◇` total · `↘` input · `↗` output · `◌` cached) and the work line (`◷` time worked · the agent's own diff · a coarse last-activity age pinned right). These are the only place an age appears — the resting card stays calm.
 
@@ -238,9 +238,9 @@ You don't read where to go; you go. Selecting a row focuses that pane — no mux
 
 ## Zone 3 — the provider dashboard
 
-The 5-hour and 7-day budgets are account-scoped — every session of a provider shares one account's budget — so they leave the rows for a pinned panel at the bottom. One block per provider, including any account that is logged in but idle this run, so your accounts and budgets show even between turns.
+The 5-hour and 7-day budgets are account-scoped — every session of a provider shares one account's budget — so they leave the rows for a pinned panel at the bottom. One block per provider, including any account that is logged in but idle this run, so your accounts and budgets show even between turns. A logged-in but idle provider whose budgets ride a live session it hasn't started this run (Codex) has them fetched out-of-band on start, so the bars fill within a frame or two rather than staying blank until something runs.
 
-A **metered account** drains two "mana" bars toward their resets. The bar fills with what's *left*, ramping green → amber → red as it empties — and a fully-spent window (0% left) flips its whole empty track red, so an exhausted budget never reads as an untouched one:
+A **metered account** drains two "mana" bars toward their resets. The bar fills with what's *left*, ramping green → amber → red as it empties — and a fully-spent window (0% left) flips its whole empty track red, so an exhausted budget never reads as an untouched one. The `5h`/`7d` label wears its own bar's color, so the row reads as one unit. A spent weekly cap gates the short window: once `7d` is exhausted the `5h` row is painted exhausted too — red, no countdown — regardless of its own reading, since that budget is unusable until the week resets.
 
 ```
  Claude Code v2.1.158 · Claude Max               ⇅ rc    header — product · version · plan, rc flag right

@@ -716,6 +716,7 @@ mod tests {
             worktree_path: worktree_path.map(ToOwned::to_owned),
             worktree_branch: branch.map(ToOwned::to_owned),
             task: task.map(ToOwned::to_owned),
+            prompt: None,
             model: None,
             effort: None,
             context_pct: None,
@@ -986,6 +987,31 @@ mod tests {
 
         assert!(rendered.contains("ledger refactor"));
         assert!(!rendered.contains("db migrate"));
+    }
+
+    /// An unnamed session whose turn has ended (the activity-bound `task` cleared)
+    /// keeps its latest prompt on line two instead of falling to an em dash, until
+    /// a real session name exists.
+    #[test]
+    fn line_two_falls_back_to_the_latest_prompt_when_unnamed() {
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            Some("/repo/main"),
+            Some("main"),
+            None, // idle cleared the task; no session name (no context)
+        );
+        claude.prompt = Some("wire the bridge".to_owned());
+        let snapshot = snapshot_with(Vec::new(), vec![claude]);
+        let rendered = snapshot_to_screen(&snapshot, 44, 10);
+
+        assert!(rendered.contains("wire the bridge"));
+        assert!(
+            !rendered.contains('—'),
+            "the prompt stands in for the em dash"
+        );
     }
 
     #[test]
@@ -1832,6 +1858,75 @@ mod tests {
         assert!(
             ends.iter().all(|&e| e == ends[0]),
             "provider bars share an end column: {ends:?}"
+        );
+    }
+
+    /// The metered bar rows of one panel (5h then 7d), rendered narrow so the art
+    /// column drops and each row's first span is its label. Filters to the lines
+    /// carrying bar glyphs.
+    fn metered_bar_rows(theme: &Theme, panel: &rimz::SidebarProviderPanel) -> Vec<Line<'static>> {
+        provider_panel_lines(theme, std::slice::from_ref(panel), 30)
+            .into_iter()
+            .filter(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.contains('▰') || span.content.contains('▱'))
+            })
+            .collect()
+    }
+
+    /// The label foreground, the first bar-glyph foreground, and whether the row
+    /// carries a `↻` reset countdown — the three things req 1/2 turn on.
+    fn bar_row_facts(line: &Line<'static>) -> (Option<Color>, Option<Color>, bool) {
+        let label_fg = line.spans.first().and_then(|span| span.style.fg);
+        let glyph_fg = line
+            .spans
+            .iter()
+            .find(|span| span.content.contains('▰') || span.content.contains('▱'))
+            .and_then(|span| span.style.fg);
+        let has_reset = line.spans.iter().any(|span| span.content.contains('↻'));
+        (label_fg, glyph_fg, has_reset)
+    }
+
+    /// Each `5h`/`7d` label mirrors its own bar's severity color, so a green and a
+    /// yellow window read as two differently-toned rows, not one dim slab.
+    #[test]
+    fn provider_label_mirrors_its_bar_color() {
+        let theme = Theme::fixed(false);
+        // 5h: 25% used → 75% left → green. 7d: 70% used → 30% left → yellow.
+        let panel = provider_panel("claude", "Claude Code", 173, true, false, Some((25, 70)));
+        let rows = metered_bar_rows(&theme, &panel);
+        assert_eq!(rows.len(), 2, "a metered panel draws a 5h and a 7d row");
+        let (five_label, five_glyph, _) = bar_row_facts(&rows[0]);
+        let (seven_label, seven_glyph, _) = bar_row_facts(&rows[1]);
+        assert_eq!(five_label, five_glyph, "5h label mirrors its bar");
+        assert_eq!(seven_label, seven_glyph, "7d label mirrors its bar");
+        assert_ne!(
+            five_label, seven_label,
+            "a green 5h and a yellow 7d label differ in tone"
+        );
+    }
+
+    /// A spent weekly cap gates the short window: with 7d exhausted the 5h row is
+    /// painted exhausted — red, a full empty track, and no reset countdown —
+    /// regardless of the 5h window's own (here untouched) reading.
+    #[test]
+    fn seven_day_exhaustion_reddens_and_silences_the_five_hour_row() {
+        let theme = Theme::fixed(false);
+        // 5h is untouched (would be green with a countdown); 7d is fully spent.
+        let panel = provider_panel("claude", "Claude Code", 173, true, false, Some((0, 100)));
+        let rows = metered_bar_rows(&theme, &panel);
+        assert_eq!(rows.len(), 2);
+        let (five_label, _, five_has_reset) = bar_row_facts(&rows[0]);
+        let (seven_label, _, _) = bar_row_facts(&rows[1]);
+        assert!(!five_has_reset, "the cascaded 5h row drops its countdown");
+        assert!(
+            !rows[0].spans.iter().any(|span| span.content.contains('▰')),
+            "the cascaded 5h bar is a full empty track, no fill"
+        );
+        assert_eq!(
+            five_label, seven_label,
+            "the cascaded 5h label reddens to match the exhausted 7d"
         );
     }
 

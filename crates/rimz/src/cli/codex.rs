@@ -47,6 +47,16 @@ enum CodexSubcmd {
         #[arg(long)]
         model: Option<String>,
     },
+    /// Refresh the account's 5h/7d rate-limit windows into the shared cache,
+    /// account-scoped (no session). The sidebar producer spawns this detached for
+    /// a logged-in but idle provider so its budgets paint without a live session;
+    /// humans do not run it.
+    #[command(hide = true)]
+    RefreshRateLimits {
+        /// Workspace whose runtime cache the windows are written into.
+        #[arg(long)]
+        workspace_id: String,
+    },
     /// Manage the per-session Codex app-server broker. `rimz start` runs this as
     /// a pane in the `rimzd` daemon tab; humans do not run it.
     #[command(hide = true)]
@@ -80,6 +90,7 @@ pub fn run(args: CodexArgs, _globals: &GlobalFlags) -> Result<()> {
             workspace_id,
             model,
         } => refresh_context(&session_id, &workspace_id, model.as_deref()),
+        CodexSubcmd::RefreshRateLimits { workspace_id } => refresh_rate_limits(&workspace_id),
         CodexSubcmd::AppServer(args) => match args.command {
             AppServerSubcmd::Serve {
                 workspace_id,
@@ -120,6 +131,27 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
     };
     rimz::ledger::agent_context::write(&runtime, "codex", session_id, &context)
         .context("writing agent-context sidecar")?;
+    Ok(())
+}
+
+/// Fetch the account's rate-limit windows from the app-server (account-scoped, no
+/// session/thread) and merge them into the shared `rate_limits.json` cache, so a
+/// logged-in but idle provider's 5h/7d bars paint from the next frame. Best-effort
+/// like `refresh_context`: an unreachable app-server, a logged-out or API-key
+/// account (no windows), or a write hiccup all succeed silently with nothing
+/// merged.
+fn refresh_rate_limits(workspace_id: &str) -> Result<()> {
+    let workspace_id: WorkspaceId = workspace_id.parse().context("parsing workspace id")?;
+    let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
+    runtime.ensure_dirs().context("preparing runtime dirs")?;
+
+    let broker_socket = runtime.codex_app_server_socket_path();
+    let Some(context) = codex::refresh_context(None, Some(&broker_socket)) else {
+        return Ok(());
+    };
+    if let Some(rate_limits) = context.rate_limits {
+        rimz::sidebar::snapshot::merge_account_rate_limits(&runtime, "codex", rate_limits);
+    }
     Ok(())
 }
 

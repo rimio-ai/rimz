@@ -295,6 +295,9 @@ impl AgentIntegration for ClaudeIntegration {
                 _ => background_task_label(&pending_background)
                     .or_else(|| optional_payload_string(payload, &["task", "prompt"])),
             },
+            // The raw prompt rides only its own event; every other event leaves
+            // it `None`, and the reducer carries the last one forward.
+            prompt: optional_payload_string(payload, &["prompt"]),
             model,
             effort: optional_payload_string(payload, &["thinking_level", "effort"]),
             context_pct,

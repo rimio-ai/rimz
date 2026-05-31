@@ -507,7 +507,88 @@ pub fn fold_machine_config_producing(
     // The producer owns the account-scoped window cache: it writes live readings
     // back so the 5h/7d budgets survive a session ending or going idle.
     apply_rate_limit_cache(&mut snapshot, runtime, true);
+    // A logged-in metered provider with no windows yet — no live session has ever
+    // reported its budgets this run — gets an out-of-band fetch so the dashboard
+    // shows a value even when nothing is running. Producer-only and detached.
+    refresh_idle_provider_windows(&snapshot, runtime);
     snapshot
+}
+
+/// Kick a detached, best-effort window fetch for every metered provider whose
+/// 5h/7d budgets are still blank after the cache fold — a logged-in-but-idle
+/// account whose windows ride a live session that never started this run. Only
+/// providers with an out-of-band read qualify (Codex today); Claude's windows
+/// have no source outside a live statusline, so it is skipped. Throttled per kind
+/// so a slow or unreachable app-server is retried, not hammered.
+fn refresh_idle_provider_windows(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
+    for panel in &snapshot.providers {
+        if !panel.metered || panel.five_hour.is_some() || panel.seven_day.is_some() {
+            continue;
+        }
+        if !provider_has_out_of_band_windows(&panel.kind) {
+            continue;
+        }
+        if !idle_window_probe_due(runtime, &panel.kind) {
+            continue;
+        }
+        spawn_idle_window_fetch(runtime, &panel.kind);
+    }
+}
+
+/// Whether a provider kind exposes an account-scoped, sessionless rate-limit read
+/// the producer can fetch out-of-band. Codex serves it from its app-server;
+/// Claude has none (its windows ride a live statusline), so it never qualifies.
+fn provider_has_out_of_band_windows(kind: &str) -> bool {
+    kind == "codex"
+}
+
+/// Throttle the out-of-band window fetch per kind via a marker file under the
+/// runtime root: skip when the last attempt is younger than the interval, touch
+/// it before spawning. Windows move on the scale of minutes, so a coarse gate
+/// loses no freshness while keeping a slow/unreachable app-server from spawning
+/// a helper every frame. A missing or unreadable marker reads as "due".
+fn idle_window_probe_due(runtime: &RuntimePaths, kind: &str) -> bool {
+    let path = runtime.root.join(format!("rate-limit-probe.{kind}"));
+    let due = std::fs::metadata(&path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+        .is_none_or(|age| age >= IDLE_WINDOW_PROBE_INTERVAL);
+    if due {
+        // Touch first so a fetch that never publishes still backs off this kind.
+        let _ = std::fs::write(&path, b"");
+    }
+    due
+}
+
+/// Spawn the detached, fresh-stdio helper that fetches `kind`'s account windows
+/// and merges them into the cache. Best-effort: a spawn failure is logged and
+/// dropped — the dashboard simply stays blank for this kind until the next due
+/// frame. Codex is the only kind reached today (gated by the caller).
+fn spawn_idle_window_fetch(runtime: &RuntimePaths, kind: &str) {
+    if kind != "codex" {
+        return;
+    }
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(err) => {
+            tracing::warn!(error = %err, "sidebar: cannot locate rimz to refresh codex windows");
+            return;
+        }
+    };
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args([
+        "codex",
+        "refresh-rate-limits",
+        "--workspace-id",
+        runtime.workspace_id.as_str(),
+    ])
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null());
+    if let Err(err) = cmd.spawn() {
+        tracing::warn!(error = %err, "sidebar: failed to spawn codex rate-limit refresh");
+    }
 }
 
 /// Resolve the provider-account map for the producer, single-flighted behind
@@ -663,6 +744,12 @@ fn write_accounts_cache(path: &Path, cache: &AccountsCache) {
 const FIVE_HOUR_WINDOW: SignedDuration = SignedDuration::from_hours(5);
 const SEVEN_DAY_WINDOW: SignedDuration = SignedDuration::from_hours(24 * 7);
 
+/// Minimum gap between out-of-band window fetches for one idle provider. Windows
+/// move on the scale of minutes, so a coarse throttle keeps a slow or
+/// unreachable app-server from spawning a helper every frame while still
+/// recovering promptly once it answers.
+const IDLE_WINDOW_PROBE_INTERVAL: Duration = Duration::from_secs(30);
+
 /// The producer's published per-provider rate-limit windows, account-scoped so
 /// the 5h/7d budgets outlive a session ending or going idle: the first frame
 /// after inactivity paints the last-known bars rather than an empty dashboard.
@@ -695,6 +782,25 @@ fn write_rate_limits_cache(path: &Path, cache: &RateLimitsCache) {
     if let Err(err) = crate::ledger::atomic::write_temp_then_rename_cache(path, cache) {
         tracing::warn!(path = %path.display(), error = %err, "sidebar rate-limits cache write failed");
     }
+}
+
+/// Seed one provider kind's account-scoped windows into the cache out-of-band, so
+/// a logged-in-but-idle provider's 5h/7d bars paint from the first frame instead
+/// of staying blank until a live session reports. Read-modify-write over the
+/// existing cache; other kinds are preserved untouched.
+///
+/// Best-effort and racy by contract: the producer rewrites this file each frame
+/// from the panels (live-reading-or-prior), so a write here can be clobbered by a
+/// concurrent producer frame. It converges within a frame or two because the
+/// producer carries the prior reading forward, and the out-of-band fetch is
+/// throttled — so a lost write is simply retried. Used by the detached
+/// `rimz codex refresh-rate-limits` helper, never on the per-tick path.
+pub fn merge_account_rate_limits(runtime: &RuntimePaths, kind: &str, windows: AgentRateLimits) {
+    let path = runtime.root.join("rate_limits.json");
+    let mut cache = read_rate_limits_cache(&path);
+    cache.refreshed_at_ms = unix_now_ms();
+    cache.windows.insert(kind.to_owned(), windows);
+    write_rate_limits_cache(&path, &cache);
 }
 
 /// Project one idle provider's cached window for display when no live session
@@ -1357,5 +1463,94 @@ mod tests {
             !after.windows.contains_key("codex"),
             "a logged-out provider's windows drop on the next write"
         );
+    }
+
+    /// The out-of-band helper seeds one kind's windows into the shared cache
+    /// without disturbing another kind's, so an idle provider's bars paint from
+    /// the next producer frame.
+    #[test]
+    fn merge_account_rate_limits_seeds_a_kind_without_clobbering_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let path = runtime.root.join("rate_limits.json");
+
+        // Claude already has cached windows from a live session this run.
+        write_rate_limits_cache(
+            &path,
+            &RateLimitsCache {
+                refreshed_at_ms: 1,
+                windows: BTreeMap::from([(
+                    "claude".to_owned(),
+                    AgentRateLimits {
+                        five_hour: Some(RateLimitWindow {
+                            used_percentage: Some(20),
+                            resets_at: None,
+                        }),
+                        seven_day: None,
+                    },
+                )]),
+            },
+        );
+
+        merge_account_rate_limits(
+            &runtime,
+            "codex",
+            AgentRateLimits {
+                five_hour: Some(RateLimitWindow {
+                    used_percentage: Some(55),
+                    resets_at: None,
+                }),
+                seven_day: None,
+            },
+        );
+
+        let cache = read_rate_limits_cache(&path);
+        assert_eq!(
+            cache
+                .windows
+                .get("codex")
+                .and_then(|w| w.five_hour.as_ref())
+                .and_then(|w| w.used_percentage),
+            Some(55),
+            "the idle provider's windows are seeded"
+        );
+        assert!(
+            cache.windows.contains_key("claude"),
+            "an existing kind's windows are preserved"
+        );
+    }
+
+    /// The per-kind throttle marker gates the out-of-band fetch: the first call is
+    /// due (and touches the marker), the immediate next is not.
+    #[test]
+    fn idle_window_probe_throttles_per_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+
+        assert!(
+            idle_window_probe_due(&runtime, "codex"),
+            "a cold kind is due and stamps the marker"
+        );
+        assert!(
+            !idle_window_probe_due(&runtime, "codex"),
+            "a freshly-stamped kind backs off"
+        );
+        assert!(
+            idle_window_probe_due(&runtime, "claude"),
+            "a different kind has its own marker"
+        );
+    }
+
+    /// Only Codex exposes an account-scoped window read today; Claude's windows
+    /// have no source outside a live statusline, so it never triggers a fetch.
+    #[test]
+    fn only_codex_has_an_out_of_band_window_read() {
+        assert!(provider_has_out_of_band_windows("codex"));
+        assert!(!provider_has_out_of_band_windows("claude"));
+        assert!(!provider_has_out_of_band_windows("pi"));
     }
 }

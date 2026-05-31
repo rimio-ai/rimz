@@ -69,6 +69,7 @@ Each field, where it comes from, and its **lifetime** — the rule the reducer f
 | `status`                            | 5-value rollup (below)            | derived from `event_name` (§ state machine)                       | activity      |
 | `permission_posture`                | `default`/`plan`/`auto`/`yolo`/`unknown` (`plan` → thinking) | every lifecycle event + per-tool heartbeat · `permission_mode`/`approval_policy`, last sample wins (§ Plan mode as a sticky posture) | carry-forward |
 | `task`                              | what it's working on              | `UserPromptSubmit` · `prompt`; `SubagentStart` · `agent_type`     | activity      |
+| `prompt`                            | latest user prompt (line-2 label past idle) | `UserPromptSubmit` · `prompt`                           | carry-forward |
 | `model`                             | `Opus`, `GPT-5.5`                 | lifecycle · `model` (canonicalized — § below)                     | carry-forward |
 | `effort`                            | `xhigh`/`high`/…                  | lifecycle · `thinking_level`/`model_reasoning_effort`             | carry-forward |
 | `context_pct`                       | context-window % gauge            | payload or transcript tail (§ enrichment)                         | carry-forward |

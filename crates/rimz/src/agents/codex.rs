@@ -191,6 +191,9 @@ impl AgentIntegration for CodexIntegration {
             worktree_path: optional_payload_string(payload, &["worktree_path", "cwd"]),
             worktree_branch: optional_payload_string(payload, &["worktree_branch"]),
             task: task_from_payload(event_name, payload),
+            // The raw prompt rides only its own event; the reducer carries the
+            // last one forward so an unnamed session keeps a label past idle.
+            prompt: optional_payload_string(payload, &["prompt"]),
             model: optional_payload_string(payload, &["model"]).or(usage.model),
             effort: optional_payload_string(
                 payload,

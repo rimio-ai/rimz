@@ -280,6 +280,10 @@ pub struct SidebarRow {
     pub request_id: Option<RequestId>,
     pub surface: Option<Surface>,
     pub task: Option<String>,
+    /// The session's latest user prompt, carried forward from `AgentState`. The
+    /// renderer labels an unnamed session by it once `task` clears on idle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
     /// Context-window % gauge value (0..=100). Agent rows default this to
@@ -1355,6 +1359,7 @@ fn idle_codex_row(pane: &PaneRef) -> SidebarRow {
         request_id: None,
         surface: None,
         task: None,
+        prompt: None,
         model: None,
         effort: None,
         // Agent rows draw the started-session gauge at `Some(0)` (see the
@@ -1646,6 +1651,7 @@ fn row_from_agent(agent: &AgentState) -> SidebarRow {
         request_id: None,
         surface: None,
         task: agent.task.clone(),
+        prompt: agent.prompt.clone(),
         model: agent.model.clone(),
         effort: agent.effort.clone(),
         context_pct: Some(agent.context_pct.unwrap_or(0)),
@@ -1680,6 +1686,7 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
         request_id: None,
         surface: None,
         task: None,
+        prompt: None,
         model: None,
         effort: None,
         context_pct: None,
@@ -1790,6 +1797,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         request_id: Some(item.request_id.clone()),
         surface: Some(item.surface),
         task,
+        prompt: matched.and_then(|agent| agent.prompt.clone()),
         model: matched.and_then(|agent| agent.model.clone()),
         effort: matched.and_then(|agent| agent.effort.clone()),
         context_pct: if is_agent_hook {
@@ -2373,6 +2381,10 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
         // Task is activity-bound, not identity: a fresh event replaces it
         // (idle clears it back to "—"); only capability fields persist.
         let task = param_string("task");
+        // The latest prompt, unlike `task`, persists: only the prompt-bearing
+        // event sets it, so carry the prior one forward to label an unnamed
+        // session past idle until it earns a real name.
+        let prompt = param_string("prompt").or_else(|| prior.and_then(|p| p.prompt.clone()));
         // Always store the canonical model id. The agent reports a suffixed id
         // (`claude-opus-4-8[1m]`) only on a fresh-launch SessionStart; every
         // other event (and the transcript fallback) carries the bare id, so the
@@ -2404,6 +2416,7 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             worktree_path,
             worktree_branch,
             task,
+            prompt,
             model,
             effort,
             context_pct,
@@ -2584,6 +2597,7 @@ mod tests {
             worktree_path: None,
             worktree_branch: None,
             task: None,
+            prompt: None,
             model: None,
             effort: None,
             context_pct: None,
@@ -3513,6 +3527,41 @@ mod tests {
         // The boundary is the prompt; the later Stop must not advance it (that is
         // what keeps a finished child visible until the *next* prompt).
         assert_eq!(agents[0].turn_started_at, Some(prompt_ts));
+    }
+
+    #[test]
+    fn prompt_persists_past_stop_while_task_clears() {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let lifecycle = |params: serde_json::Value| {
+            EventEnvelope::new(
+                workspace.clone(),
+                "session",
+                "claude",
+                "agent-hook",
+                "agent.lifecycle",
+                params,
+            )
+        };
+        let prompt = lifecycle(serde_json::json!({
+            "event_name": "UserPromptSubmit",
+            "agent_id": "s1",
+            "status": "running",
+            "task": "fix auth flow",
+            "prompt": "fix auth flow",
+        }));
+        // Stop carries neither task nor prompt: task is activity-bound and clears,
+        // but the prompt persists to label the unnamed session past its turn.
+        let stop = lifecycle(
+            serde_json::json!({ "event_name": "Stop", "agent_id": "s1", "status": "success" }),
+        );
+        let agents = reduce_agent_states(&[prompt, stop]);
+        let agent = agents.iter().find(|a| a.agent_id == "s1").expect("agent");
+        assert_eq!(agent.task, None, "the task clears on idle");
+        assert_eq!(
+            agent.prompt.as_deref(),
+            Some("fix auth flow"),
+            "the latest prompt persists past the Stop"
+        );
     }
 
     #[test]

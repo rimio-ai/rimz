@@ -143,6 +143,7 @@ mod tests {
             worktree_path: None,
             worktree_branch: None,
             task: None,
+            prompt: None,
             model: None,
             effort: None,
             context_pct: None,

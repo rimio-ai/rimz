@@ -380,19 +380,26 @@ pub(super) fn mana_bar_spans(theme: &Theme, remaining_pct: u8, width: usize) -> 
             theme.style(Color::Red, Modifier::empty()),
         )];
     }
-    let color = match remaining_pct.min(100) {
-        1..=20 => Color::Red,
-        21..=50 => Color::Yellow,
-        _ => Color::Green,
-    };
     two_tone_bar(
         theme,
         filled_cells(remaining_pct, width),
         width,
-        color,
+        mana_color(remaining_pct),
         MANA_FILLED,
         MANA_TRACK,
     )
+}
+
+/// The severity color for a mana bar at `remaining_pct` budget left: red when
+/// near-spent (or fully spent), amber mid-drain, sage green with plenty left.
+/// Shared by the bar fill and the `5h`/`7d` label beside it so the label mirrors
+/// its bar's tone.
+pub(super) fn mana_color(remaining_pct: u8) -> Color {
+    match remaining_pct.min(100) {
+        0..=20 => Color::Red,
+        21..=50 => Color::Yellow,
+        _ => Color::Green,
+    }
 }
 
 /// The unmetered ("infinite") bar: a full-width empty `▱` track in the same faint

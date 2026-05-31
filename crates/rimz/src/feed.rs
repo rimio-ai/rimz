@@ -592,6 +592,11 @@ pub struct AgentState {
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
     pub task: Option<String>,
+    /// The user's latest prompt, carried forward across events (unlike the
+    /// activity-bound `task`). Labels an unnamed session on the sidebar until a
+    /// real session name exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
     /// Context-window utilization in percent (0..=100). Reported by the

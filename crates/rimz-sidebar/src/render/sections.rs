@@ -24,7 +24,7 @@ use super::fmt::{
 use super::labels::{
     TOKENS_CACHED, TOKENS_IN, TOKENS_OUT, agent_glyph, agent_style, attention_glyph_style,
     context_severity_color, ctx_glyph_color, diff_spans, gauge_spans, infinite_bar_spans,
-    mana_bar_spans, posture_pill, posture_style, resolver_glyph, segmented_gauge_spans,
+    mana_bar_spans, mana_color, posture_pill, posture_style, resolver_glyph, segmented_gauge_spans,
     status_glyph, status_style, thinking_still, todo_spans, tokens_label, working_glyph,
 };
 use super::theme::Theme;
@@ -903,14 +903,16 @@ fn pin_right(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) 
 }
 
 /// The line-2 description: the user's session name when they set one (`--name` /
-/// `/rename`), else the agent's task, else an em dash. The name is what a human
-/// chose to call this session, so it reads better than the first-prompt task
-/// when present.
+/// `/rename`), else the agent's live task, else the latest prompt, else an em
+/// dash. The name is what a human chose to call this session, so it reads better
+/// than the task. The activity-bound `task` clears on idle, so the persisted
+/// prompt keeps an unnamed session labelled past its turn until it earns a name.
 fn descriptor(row: &SidebarRow) -> &str {
     ctx(row)
         .and_then(|context| context.session_name.as_deref())
         .filter(|name| !name.is_empty())
-        .or(row.task.as_deref())
+        .or(row.task.as_deref().filter(|task| !task.is_empty()))
+        .or(row.prompt.as_deref().filter(|prompt| !prompt.is_empty()))
         .unwrap_or("—")
 }
 
@@ -1416,6 +1418,14 @@ fn provider_bar_rows(
     if !panel.metered {
         return vec![infinite_bar_row(theme, panel.color, region)];
     }
+    // A spent weekly cap gates the 5-hour window: once 7d is exhausted the 5h
+    // budget is unusable regardless of its own reading, so paint the 5h row as
+    // exhausted (red, no countdown) rather than a misleading fresh bar.
+    let seven_exhausted = panel
+        .seven_day
+        .as_ref()
+        .and_then(|window| window.used_percentage)
+        .is_some_and(|used| used >= 100);
     let mut rows = Vec::new();
     if let Some(spans) = metered_bar_row(
         theme,
@@ -1423,6 +1433,7 @@ fn provider_bar_rows(
         panel.five_hour.as_ref(),
         reset_hours_minutes,
         region,
+        seven_exhausted,
     ) {
         rows.push(spans);
     }
@@ -1432,6 +1443,7 @@ fn provider_bar_rows(
         panel.seven_day.as_ref(),
         reset_days_hours,
         region,
+        false,
     ) {
         rows.push(spans);
     }
@@ -1440,23 +1452,38 @@ fn provider_bar_rows(
 
 /// One metered budget bar row: a `5h`/`7d` label, the draining mana bar (filled
 /// = remaining), and the `↻ <reset>` countdown right-aligned in the value
-/// column. `None` when the window reported no usage percentage.
+/// column. The label mirrors its bar's severity color. `force_exhausted` paints
+/// the row as fully spent — red, no countdown — regardless of the window's own
+/// reading (the 7d→5h cascade). `None` when the window reported no usage
+/// percentage and is not force-exhausted.
 fn metered_bar_row(
     theme: &Theme,
     label: &str,
     window: Option<&RateLimitWindow>,
     reset_fmt: fn(Timestamp) -> String,
     region: usize,
+    force_exhausted: bool,
 ) -> Option<Vec<Span<'static>>> {
     let window = window?;
-    let remaining = 100u8.saturating_sub(window.used_percentage?);
-    let value = window
-        .resets_at
-        .map(|at| format!("↻ {}", reset_fmt(at)))
-        .unwrap_or_default();
+    let remaining = if force_exhausted {
+        0
+    } else {
+        100u8.saturating_sub(window.used_percentage?)
+    };
+    let value = if force_exhausted {
+        String::new()
+    } else {
+        window
+            .resets_at
+            .map(|at| format!("↻ {}", reset_fmt(at)))
+            .unwrap_or_default()
+    };
     let bar_width = provider_bar_width(region);
     let mut spans = vec![
-        Span::styled(format!("{label:<PROVIDER_LABEL_WIDTH$}"), theme.dim()),
+        Span::styled(
+            format!("{label:<PROVIDER_LABEL_WIDTH$}"),
+            theme.style(mana_color(remaining), Modifier::empty()),
+        ),
         Span::raw(" "),
     ];
     spans.extend(mana_bar_spans(theme, remaining, bar_width));

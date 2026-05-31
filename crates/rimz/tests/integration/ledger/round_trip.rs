@@ -640,6 +640,7 @@ fn runtime_projection_reads_under_the_workspace_lock() {
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: Some("main".to_owned()),
         task: None,
+        prompt: None,
         model: None,
         effort: None,
         context_pct: None,

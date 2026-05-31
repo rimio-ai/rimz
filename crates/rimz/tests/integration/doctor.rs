@@ -29,6 +29,7 @@ fn inject_lifecycle(
         worktree_path: Some(env.project_root.display().to_string()),
         worktree_branch: branch.map(ToOwned::to_owned),
         task: None,
+        prompt: None,
         model: None,
         effort: None,
         context_pct: None,
