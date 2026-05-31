@@ -56,7 +56,7 @@ Full matrix in [docs/contributing/testing.md](./docs/contributing/testing.md).
 
 ## Documentation map
 
-Every other document is a leaf from here. The `docs/` tree groups by audience: **guide** (use it), **reference** (look it up), **internals** (how it works), **contributing** (work on it).
+Every other document is a leaf from here. The `docs/` tree groups by audience: **guide** (use it), **interface** (see it), **reference** (look it up), **internals** (how it works), **contributing** (work on it).
 
 **Root**
 - [README.md](./README.md) — product entry point.
@@ -68,6 +68,9 @@ Every other document is a leaf from here. The `docs/` tree groups by audience: *
 - [experience.md](./docs/guide/experience.md) — first-run-to-fleet experience, phase by phase.
 - [security.md](./docs/guide/security.md) — threat model and guardrails.
 
+**Interface** — `docs/interface/`
+- [sidebar.md](./docs/interface/sidebar.md) — the sidebar on screen: the cockpit, the agent cards, and the provider dashboard, with rendered frames and the glyph legend.
+
 **Reference** — `docs/reference/`
 - [cli.md](./docs/reference/cli.md) — every command, grouped by intent.
 - [configuration.md](./docs/reference/configuration.md) — project/per-machine config, layout IR, privacy.
@@ -75,7 +78,7 @@ Every other document is a leaf from here. The `docs/` tree groups by audience: *
 **Internals** — `docs/internals/`
 - [ledger.md](./docs/internals/ledger.md) — durable state and the blocking decision bridge.
 - [multiplexers.md](./docs/internals/multiplexers.md) — Zellij and tmux backend contracts.
-- [sidebar.md](./docs/internals/sidebar.md) — sidebar model, groups, actions, notifications.
+- [sidebar.md](./docs/internals/sidebar.md) — sidebar mechanics: presence, ranking, launch, reload recovery, view-model (the on-screen look lives in [interface/sidebar.md](./docs/interface/sidebar.md)).
 - [resolvers.md](./docs/internals/resolvers.md) — resolver protocol, chain, pane primitives.
 - [trust.md](./docs/internals/trust.md) — executable-surface hash, trust states, auto-revoke.
 - [agent.md](./docs/internals/agent.md) — unified hook interface, agent state machine, and liveness for Claude, Codex, and later agents.
