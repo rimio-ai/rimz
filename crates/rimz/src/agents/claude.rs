@@ -300,7 +300,9 @@ impl AgentIntegration for ClaudeIntegration {
             // A subagent event's `session_id` is the parent root the child nests
             // under; root events carry no parent.
             parent_agent_id: match event_name {
-                "SubagentStart" | "SubagentStop" => optional_payload_string(payload, &["session_id"]),
+                "SubagentStart" | "SubagentStop" => {
+                    optional_payload_string(payload, &["session_id"])
+                }
                 _ => None,
             },
         })

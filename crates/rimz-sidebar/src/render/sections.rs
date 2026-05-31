@@ -467,7 +467,11 @@ fn row_lines(
 /// indented line per child — its status glyph, its type, and the task when that
 /// adds anything. Children are subordinate to the parent card, so every line is
 /// dim and indented past the parent's own stat lines.
-fn sub_agent_lines(theme: &Theme, sub_agents: &[SidebarSubAgent], width: usize) -> Vec<Line<'static>> {
+fn sub_agent_lines(
+    theme: &Theme,
+    sub_agents: &[SidebarSubAgent],
+    width: usize,
+) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(trim_spans_to_width(
         vec![Span::styled(
             format!("  subagents ({})", sub_agents.len()),

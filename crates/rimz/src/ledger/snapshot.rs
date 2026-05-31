@@ -1043,10 +1043,7 @@ fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState]) {
 fn sub_agent_from_state(child: &AgentState) -> SidebarSubAgent {
     SidebarSubAgent {
         id: child.agent_id.clone(),
-        name: child
-            .task
-            .clone()
-            .unwrap_or_else(|| child.kind.clone()),
+        name: child.task.clone().unwrap_or_else(|| child.kind.clone()),
         status: child.status,
         task: child.task.clone(),
         last_activity: child.last_activity,
@@ -1756,7 +1753,8 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
         // hooks) so the child never loses its parent and surfaces as a spurious
         // top-level row. Root agents never carry one.
         let parent_agent_id = if establishes_identity {
-            param_string("parent_agent_id").or_else(|| prior.and_then(|p| p.parent_agent_id.clone()))
+            param_string("parent_agent_id")
+                .or_else(|| prior.and_then(|p| p.parent_agent_id.clone()))
         } else {
             prior.and_then(|p| p.parent_agent_id.clone())
         };
@@ -2903,14 +2901,16 @@ mod tests {
                 params,
             )
         };
-        let start =
-            lifecycle(serde_json::json!({ "event_name": "SessionStart", "agent_id": "s1", "status": "idle" }));
+        let start = lifecycle(
+            serde_json::json!({ "event_name": "SessionStart", "agent_id": "s1", "status": "idle" }),
+        );
         let prompt = lifecycle(
             serde_json::json!({ "event_name": "UserPromptSubmit", "agent_id": "s1", "status": "running" }),
         );
         let prompt_ts = prompt.timestamp;
-        let stop =
-            lifecycle(serde_json::json!({ "event_name": "Stop", "agent_id": "s1", "status": "success" }));
+        let stop = lifecycle(
+            serde_json::json!({ "event_name": "Stop", "agent_id": "s1", "status": "success" }),
+        );
         let agents = reduce_agent_states(&[start, prompt, stop]);
         // The boundary is the prompt; the later Stop must not advance it (that is
         // what keeps a finished child visible until the *next* prompt).
@@ -2976,7 +2976,11 @@ mod tests {
         let child = child_state("sess-root", "child-1", AgentStatus::Running, 60);
         let mut rows = vec![row_from_agent(&parent)];
         attach_sub_agents(&mut rows, &[parent.clone(), child]);
-        assert_eq!(rows[0].sub_agents.len(), 1, "a running child is always kept");
+        assert_eq!(
+            rows[0].sub_agents.len(),
+            1,
+            "a running child is always kept"
+        );
     }
 
     #[test]

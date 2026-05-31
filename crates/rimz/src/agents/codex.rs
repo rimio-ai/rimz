@@ -208,7 +208,9 @@ impl AgentIntegration for CodexIntegration {
             // A subagent event keys the child off `agent_id` (above); the
             // payload's `session_id` is the parent root the child nests under.
             parent_agent_id: match event_name {
-                "SubagentStart" | "SubagentStop" => optional_payload_string(payload, &["session_id"]),
+                "SubagentStart" | "SubagentStop" => {
+                    optional_payload_string(payload, &["session_id"])
+                }
                 _ => None,
             },
         })

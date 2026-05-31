@@ -501,24 +501,6 @@ fn parse_pane_line(line: &str) -> Option<PaneRef> {
     })
 }
 
-/// Parse the `#{window_id}\t#{pane_id}` line `new-window -P -F` prints, e.g.
-/// `@7\t%12`. Both ids are needed: the window id targets later splits, the pane
-/// id sets `remain-on-exit` on the first pane.
-fn parse_window_and_pane(stdout: &[u8]) -> Result<(String, String)> {
-    let text = String::from_utf8_lossy(stdout);
-    let line = text.trim();
-    let mut parts = line.split('\t');
-    match (parts.next(), parts.next()) {
-        (Some(window), Some(pane)) if !window.is_empty() && !pane.is_empty() => {
-            Ok((window.to_owned(), pane.to_owned()))
-        }
-        _ => Err(MuxErr::Output {
-            program: "tmux".to_owned(),
-            reason: format!("new-window printed no window/pane id: {line:?}"),
-        }),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
