@@ -99,6 +99,10 @@ const RIMZ_WRAPPED_KEY: &str = "_rimz_wrapped";
 /// install stays idempotent and snapshot-stable; the wrapped original lives
 /// under [`RIMZ_WRAPPED_KEY`], not embedded in this string.
 const STATUS_LINE_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source claude";
+/// Stable substring identifying Rimz's own statusline reader across command
+/// variants. A statusline command matching this marker is never a user command
+/// to wrap or pass through.
+const RIMZ_STATUS_LINE_MARKER: &str = "rimz statusline feed --source claude";
 
 #[derive(Clone, Debug, Default)]
 pub struct ClaudeIntegration;
@@ -901,17 +905,21 @@ fn is_rimz_managed_object(obj: &Map<String, Value>) -> bool {
 /// top-level object, which would otherwise lose them until uninstall. The whole
 /// original is still stored under `_rimz_wrapped` for exact restoration.
 fn upsert_rimz_status_line(root: &mut Map<String, Value>) {
-    let original = match root.remove(STATUS_LINE_KEY) {
-        Some(Value::Object(ref obj)) if is_rimz_managed_object(obj) => {
-            obj.get(RIMZ_WRAPPED_KEY).cloned()
-        }
-        Some(other) => Some(other),
+    let existing = root.remove(STATUS_LINE_KEY);
+    let original = match &existing {
+        Some(Value::Object(obj)) if is_rimz_managed_object(obj) => obj
+            .get(RIMZ_WRAPPED_KEY)
+            .cloned()
+            .and_then(non_recursive_status_line_value),
+        Some(other) => non_recursive_status_line_value(other.clone()),
         None => None,
     };
     let mut entry = Map::new();
-    // Carry the original's own rendering options forward (everything but the
-    // command we're replacing and our own markers).
-    if let Some(Value::Object(orig)) = &original {
+    // Carry rendering options forward (everything but the command we're
+    // replacing and our own markers). Prefer the currently effective object so
+    // a repaired managed statusline keeps its visual settings even when its
+    // wrapped command is discarded as recursive.
+    if let Some(Value::Object(orig)) = existing.as_ref().or(original.as_ref()) {
         for (key, value) in orig {
             if key == "command" || key == RIMZ_MANAGED_KEY || key == RIMZ_WRAPPED_KEY {
                 continue;
@@ -944,7 +952,9 @@ fn strip_rimz_status_line(root: &mut Map<String, Value>) -> bool {
         return false;
     }
     let original = match root.remove(STATUS_LINE_KEY) {
-        Some(Value::Object(mut obj)) => obj.remove(RIMZ_WRAPPED_KEY),
+        Some(Value::Object(mut obj)) => obj
+            .remove(RIMZ_WRAPPED_KEY)
+            .and_then(non_recursive_status_line_value),
         _ => None,
     };
     if let Some(original) = original {
@@ -993,15 +1003,32 @@ fn wrapped_status_line_command_from(root: &Map<String, Value>) -> Option<String>
 }
 
 fn extract_status_line_command(value: &Value) -> Option<String> {
+    status_line_command(value)
+        .filter(|command| !is_rimz_status_line_command(command))
+        .map(ToOwned::to_owned)
+}
+
+fn non_recursive_status_line_value(value: Value) -> Option<Value> {
+    if status_line_command(&value).is_some_and(is_rimz_status_line_command) {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn status_line_command(value: &Value) -> Option<&str> {
     match value {
-        Value::String(s) if !s.is_empty() => Some(s.clone()),
+        Value::String(s) if !s.is_empty() => Some(s),
         Value::Object(obj) => obj
             .get("command")
             .and_then(Value::as_str)
-            .filter(|c| !c.is_empty())
-            .map(ToOwned::to_owned),
+            .filter(|command| !command.is_empty()),
         _ => None,
     }
+}
+
+fn is_rimz_status_line_command(command: &str) -> bool {
+    command.contains(RIMZ_STATUS_LINE_MARKER)
 }
 
 #[cfg(test)]
@@ -1667,6 +1694,89 @@ mod tests {
                 .get("_rimz_wrapped")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn reinstall_repairs_recursive_status_line_wrap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "statusLine": {
+                    "_rimz_managed": true,
+                    "_rimz_wrapped": {
+                        "type": "command",
+                        "command": STATUS_LINE_COMMAND,
+                        "padding": 0,
+                        "refreshInterval": 10
+                    },
+                    "type": "command",
+                    "command": STATUS_LINE_COMMAND,
+                    "padding": 0,
+                    "refreshInterval": 10
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        install_into(&path).unwrap();
+        let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(parsed["statusLine"]["command"], STATUS_LINE_COMMAND);
+        assert!(
+            parsed["statusLine"].get("_rimz_wrapped").is_none(),
+            "a Rimz statusline command is not a user command to wrap"
+        );
+        assert_eq!(parsed["statusLine"]["padding"], 0);
+        assert_eq!(parsed["statusLine"]["refreshInterval"], 10);
+    }
+
+    #[test]
+    fn uninstall_removes_recursive_status_line_wrap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "statusLine": {
+                    "_rimz_managed": true,
+                    "_rimz_wrapped": {
+                        "type": "command",
+                        "command": STATUS_LINE_COMMAND
+                    },
+                    "type": "command",
+                    "command": STATUS_LINE_COMMAND
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        uninstall_from(&path).unwrap();
+        let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(
+            parsed.get("statusLine").is_none(),
+            "uninstall must not restore Rimz's own statusline command"
+        );
+    }
+
+    #[test]
+    fn wrapped_status_line_command_ignores_recursive_rimz_wrap() {
+        let root: Map<String, Value> = serde_json::from_value(json!({
+            "statusLine": {
+                "_rimz_managed": true,
+                "_rimz_wrapped": {
+                    "type": "command",
+                    "command": STATUS_LINE_COMMAND
+                },
+                "type": "command",
+                "command": STATUS_LINE_COMMAND
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(wrapped_status_line_command_from(&root), None);
     }
 
     #[test]
