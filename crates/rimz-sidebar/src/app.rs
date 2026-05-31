@@ -1337,8 +1337,10 @@ fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
 ///    tab's pane, is unchanged frame-to-frame — no edge — so it can never roll an
 ///    optimistic click back to the previous pane (the reported desync). A genuine
 ///    external focus move (a mux keybind) *is* an edge, so the highlight follows
-///    it. The observed focus is always recorded, even when it maps to no row, so
-///    the next real change still registers as an edge.
+///    it. Unknown focus (the sidebar itself, or a mux read that cannot name a
+///    working pane) does not reset the last known working focus; otherwise a
+///    later stale read naming the old pane would look like a fresh edge and roll
+///    back an optimistic click.
 /// 2. **Re-anchor.** Re-derive `selected_index` from `selected_pane` so a
 ///    status-churn reorder keeps the highlight on the same pane instead of
 ///    sliding it onto whatever row now sits at the old index.
@@ -1347,11 +1349,11 @@ fn reconcile_selection(
     snapshot: &SidebarSnapshot,
     focused_pane_id: Option<&PaneId>,
 ) {
-    if focused_pane_id != ui.last_focused_pane.as_ref() {
-        ui.last_focused_pane = focused_pane_id.cloned();
-        if let Some(focused) = focused_pane_id
-            && row_index_of_pane(snapshot, focused).is_some()
-        {
+    if let Some(focused) = focused_pane_id
+        && Some(focused) != ui.last_focused_pane.as_ref()
+    {
+        ui.last_focused_pane = Some(focused.clone());
+        if row_index_of_pane(snapshot, focused).is_some() {
             ui.selected_pane = Some(focused.clone());
         }
     }
@@ -2157,7 +2159,7 @@ mod tests {
         let mut ui = UiState {
             selected_index: 1,
             selected_pane: Some(clicked.clone()),
-            last_focused_pane: Some(prev_focus),
+            last_focused_pane: Some(prev_focus.clone()),
             ..Default::default()
         };
 
@@ -2165,7 +2167,52 @@ mod tests {
 
         assert_eq!(ui.selected_index, 1);
         assert_eq!(ui.selected_pane, Some(clicked));
-        assert_eq!(ui.last_focused_pane, None, "observed focus recorded");
+        assert_eq!(
+            ui.last_focused_pane,
+            Some(prev_focus),
+            "unknown focus must not reset the stale-focus guard"
+        );
+    }
+
+    #[test]
+    fn stale_old_focus_after_sidebar_focus_does_not_roll_back_click() {
+        // A real click can briefly focus the sidebar pane itself before the
+        // async jump lands on the target. If that unknown-focus snapshot reset
+        // the edge baseline, a later stale read naming the old pane would look
+        // like a new focus edge and flicker the highlight back.
+        let ws = workspace();
+        let old_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 1,
+            selected_pane: Some(clicked.clone()),
+            last_focused_pane: Some(old_focus.clone()),
+            ..Default::default()
+        };
+
+        reconcile_selection(&mut ui, &snapshot, None);
+        reconcile_selection(&mut ui, &snapshot, Some(&old_focus));
+
+        assert_eq!(ui.selected_index, 1);
+        assert_eq!(ui.selected_pane, Some(clicked.clone()));
+        assert_eq!(
+            ui.last_focused_pane,
+            Some(old_focus),
+            "the old focus remains the baseline until a real working-pane edge"
+        );
+
+        reconcile_selection(&mut ui, &snapshot, Some(&clicked));
+
+        assert_eq!(ui.selected_index, 1);
+        assert_eq!(ui.selected_pane, Some(clicked.clone()));
+        assert_eq!(ui.last_focused_pane, Some(clicked));
     }
 
     #[test]

@@ -58,10 +58,12 @@ pub struct UiState {
     /// pane instead of sliding it onto a neighbour.
     pub selected_pane: Option<PaneId>,
     /// The last *observed* external focus, for edge detection. The mirror adopts
-    /// the snapshot's focused pane only when it differs from this — so a
+    /// the snapshot's focused working pane only when it differs from this — so a
     /// briefly-stale post-click focus, or a cross-tab focus that never names
     /// this tab's pane, holds the level and can never roll an optimistic click
-    /// back. A genuine external focus move is an edge, so the highlight follows.
+    /// back. Focus on the sidebar itself is ignored for this baseline: resetting
+    /// it to "unknown" would make a later stale old-pane read look like a fresh
+    /// edge. A genuine external focus move is an edge, so the highlight follows.
     pub last_focused_pane: Option<PaneId>,
 }
 
