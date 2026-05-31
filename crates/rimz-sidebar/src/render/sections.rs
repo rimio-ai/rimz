@@ -18,14 +18,14 @@ use rimz::{
 };
 
 use super::fmt::{
-    age_secs, age_short, clip, dollars2, duration_worked, duration_worked_coarse, model_label,
-    pct_label, reset_days_hours, reset_hours_minutes, time_remaining, tokens_short,
+    activity_short, age_secs, age_short, clip, dollars2, duration_worked, duration_worked_coarse,
+    model_label, pct_label, reset_days_hours, reset_hours_minutes, time_remaining, tokens_short,
 };
 use super::labels::{
     TOKENS_CACHED, TOKENS_IN, TOKENS_OUT, agent_glyph, agent_style, attention_glyph_style,
-    context_severity_color, diff_spans, dominant_segment_color, gauge_spans, infinite_bar_spans,
+    context_severity_color, ctx_glyph_color, diff_spans, gauge_spans, infinite_bar_spans,
     mana_bar_spans, posture_pill, posture_style, resolver_glyph, segmented_gauge_spans,
-    status_glyph, status_style, thinking_still, todo_spans, tokens_label,
+    status_glyph, status_style, thinking_still, todo_spans, tokens_label, working_glyph,
 };
 use super::theme::Theme;
 
@@ -483,13 +483,9 @@ pub(super) fn worktree_group_lines(
         .then_some(*row_index);
     map.push(header_target);
     let tier = Tier::for_width(content_width(width));
-    for (index, row) in group.rows.iter().enumerate() {
-        // A blank line between stacked cards so they read apart; inside the
-        // selected lane it carries the spine so the bracket stays unbroken.
-        if index > 0 {
-            lines.push(with_gutter(theme, Line::from(""), lane));
-            map.push(None);
-        }
+    // Cards stack directly with no separating blank line — each card's trailing
+    // `▣` meter row sets it apart, and the lane spine runs unbroken down the group.
+    for row in &group.rows {
         let selected = *row_index == selected_index;
         let this_row = *row_index;
         *row_index += 1;
@@ -721,7 +717,7 @@ fn identity_line(
     redden_secs: i64,
 ) -> Line<'static> {
     if row.row_kind == SidebarRowKind::Process {
-        return process_row_line(theme, row, width);
+        return process_row_line(theme, row, width, animation_phase);
     }
 
     if let Some(resolver) = &row.resolver {
@@ -927,11 +923,25 @@ fn with_gutter(theme: &Theme, line: Line<'static>, gutter: Gutter) -> Line<'stat
     Line::from(spans)
 }
 
-fn process_row_line(theme: &Theme, row: &SidebarRow, width: usize) -> Line<'static> {
+fn process_row_line(
+    theme: &Theme,
+    row: &SidebarRow,
+    width: usize,
+    animation_phase: u64,
+) -> Line<'static> {
     let dim = theme.dim();
     let label = clip(&row.name, width.saturating_sub(2).max(1));
+    // An active pane (a build, a test, a script) gets the running braille spinner
+    // so live work reads at a glance — but in the dim chrome tone, never the
+    // agent's clay, so a process stays secondary to an agent. An idle shell or a
+    // TUI the user just sits in keeps the quiet `·`.
+    let lead = if row.process_active {
+        working_glyph(animation_phase)
+    } else {
+        "·"
+    };
     Line::from(vec![
-        Span::styled("·", dim),
+        Span::styled(lead, dim),
         Span::raw(" "),
         Span::styled(label, dim),
     ])
@@ -1020,47 +1030,28 @@ fn bar_row(
 fn gauge_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     let percent = gauge_percent(row)?;
     let value = pct_label(precise_context_pct(row), percent);
-    // The meter's tone takes the worse of the fill percentage and the absolute
-    // token volume (a window gets pricey past 200k, dear past 400k). The
-    // composition segments (where the window went) only paint while the window is
-    // calm-green; once it warns, the bar goes solid severity. The `▣` glyph always
-    // mirrors whatever color the bar reads as.
-    let color = context_severity_color(percent, context_used_tokens(row));
-    let (segments, glyph_color) = gauge_palette(color, gauge_segments(row));
+    let used = context_used_tokens(row);
+    // The bar's severity decides composition-vs-solid and the solid color: the
+    // composition segments (where the window went) paint only while it is
+    // calm-green; once it warns the bar goes solid severity.
+    let bar_color = context_severity_color(percent, used);
+    let segments = (bar_color == Color::Green)
+        .then(|| gauge_segments(row))
+        .flatten();
+    // The `▣` glyph follows *total* usage (blue when calm), decoupled from the
+    // bar's dominant segment — it reads how full the window is, not where it went.
+    let glyph_color = ctx_glyph_color(percent, used);
     Some(bar_row(
         theme,
         CONTEXT_GLYPH,
         theme.style(glyph_color, Modifier::empty()),
         &value,
         |bar_width| match &segments {
-            Some(segments) => segmented_gauge_spans(theme, segments, color, percent, bar_width),
-            None => gauge_spans(theme, color, percent, bar_width),
+            Some(segments) => segmented_gauge_spans(theme, segments, bar_color, percent, bar_width),
+            None => gauge_spans(theme, bar_color, percent, bar_width),
         },
         width,
     ))
-}
-
-/// Decide the ctx meter's bar composition and its `▣` glyph color from the
-/// severity `color`: the colored composition segments survive only while the
-/// window is calm-green; once severity warns (yellow/red — pricey past 200k by
-/// tokens, or high by percent) the bar drops to its solid severity color so a
-/// warning never reads as a calm cache-read-blue bar. The glyph then mirrors the
-/// bar — the dominant segment's tone when composed, else the solid severity tone
-/// — so the `▣` and its bar are always one color.
-fn gauge_palette(
-    color: Color,
-    segments: Option<[(u64, Color); 3]>,
-) -> (Option<[(u64, Color); 3]>, Color) {
-    let segments = if color == Color::Green {
-        segments
-    } else {
-        None
-    };
-    let glyph = segments
-        .as_ref()
-        .and_then(|segments| dominant_segment_color(segments))
-        .unwrap_or(color);
-    (segments, glyph)
 }
 
 /// A precise context-used fraction (0..=100) from the current-message token
@@ -1198,7 +1189,11 @@ fn work_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'stat
         ));
         printed = true;
     }
-    printed.then(|| Line::from(trim_spans_to_width(spans, width)))
+    // Last-activity age pinned right — the one coarse "how long since this agent
+    // did something" readout, kept to this detail line so the compact row stays
+    // calm.
+    let age = Span::styled(activity_short(row.last_activity), theme.dim());
+    printed.then(|| pin_right(spans, vec![age], width))
 }
 
 /// Total display width of a span run, in terminal cells.
@@ -1339,24 +1334,19 @@ fn provider_body_lines(
     lines
 }
 
-/// The provider's aggregate stats line: bold money-green spend (two decimals)
-/// and the `◇` token total, each dropped when the provider reported none. The
-/// summed `+/- ` churn is intentionally absent — a noisy per-account aggregate;
-/// per-worktree churn lives on the group headers and per-agent churn on the work
-/// line.
+/// The provider's aggregate stats line: bold money-green spend (two decimals) and
+/// the `◇` token total — always rendered, reading `$0.00 · ◇ 0` for an idle
+/// account so the line above the budget bars is never blank. The summed `+/-`
+/// churn is intentionally absent — a noisy per-account aggregate; per-worktree
+/// churn lives on the group headers and per-agent churn on the work line.
 fn provider_stats_spans(theme: &Theme, panel: &SidebarProviderPanel) -> Vec<Span<'static>> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    if let Some(cost) = panel.total_cost_usd {
-        spans.push(Span::styled(
-            dollars2(cost),
-            theme.style(Color::Green, Modifier::BOLD),
-        ));
-    }
+    let mut spans: Vec<Span<'static>> = vec![Span::styled(
+        dollars2(panel.total_cost_usd.unwrap_or(0.0)),
+        theme.style(Color::Green, Modifier::BOLD),
+    )];
     let tokens = panel.total_input_tokens.unwrap_or(0) + panel.total_output_tokens.unwrap_or(0);
-    if tokens > 0 {
-        push_dot(&mut spans, theme);
-        spans.extend(tokens_label(theme, tokens));
-    }
+    push_dot(&mut spans, theme);
+    spans.extend(tokens_label(theme, tokens));
     spans
 }
 
@@ -1463,54 +1453,5 @@ fn pad_to(value: &str, width: usize) -> String {
         let mut padded = value.to_owned();
         padded.extend(std::iter::repeat_n(' ', width - count));
         padded
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A long session's breakdown (cache-reads dominant): the composition
-    /// segments are blue-dominant.
-    fn cache_heavy_segments() -> [(u64, Color); 3] {
-        [
-            (20_000, Color::Yellow), // cache writes
-            (48_000, Color::Blue),   // cache reads — heaviest
-            (8_500, Color::Red),     // fresh input
-        ]
-    }
-
-    /// While the window is calm-green the bar shows its composition and the `▣`
-    /// glyph mirrors the bar's dominant tone — blue when cache-reads dominate, so
-    /// the glyph and its bar read as one color.
-    #[test]
-    fn gauge_palette_glyph_matches_a_calm_composed_bar() {
-        let (segments, glyph) = gauge_palette(Color::Green, Some(cache_heavy_segments()));
-        assert!(segments.is_some(), "a calm window keeps its composition");
-        assert_eq!(
-            glyph,
-            Color::Blue,
-            "glyph mirrors the dominant cache-read run"
-        );
-    }
-
-    /// Once the window warns (yellow/red — e.g. past 200k tokens) the composition
-    /// is dropped: the bar goes solid severity and the glyph follows it, so a
-    /// pricey window never reads as a calm-blue cache-read bar.
-    #[test]
-    fn gauge_palette_warning_drops_segments_and_never_reads_blue() {
-        for severity in [Color::Yellow, Color::Red] {
-            let (segments, glyph) = gauge_palette(severity, Some(cache_heavy_segments()));
-            assert!(segments.is_none(), "a warning window paints a solid bar");
-            assert_eq!(glyph, severity, "glyph matches the solid severity bar");
-            assert_ne!(glyph, Color::Blue);
-        }
-    }
-
-    /// With no breakdown the glyph just takes the solid severity color.
-    #[test]
-    fn gauge_palette_solid_bar_glyph_is_severity() {
-        assert_eq!(gauge_palette(Color::Green, None), (None, Color::Green));
-        assert_eq!(gauge_palette(Color::Red, None), (None, Color::Red));
     }
 }

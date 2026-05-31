@@ -226,12 +226,22 @@ fn two_tone_bar(
     spans
 }
 
-/// The context meter's tone, combining two severities and taking the worse: the
-/// fill-percentage ramp (green ≤40, amber ≤75, red above) and an absolute-token
-/// overlay — a context window gets pricey past 200k tokens and dear past 400k,
-/// regardless of its size, so a large-window model that still reads green by
-/// percentage warns by sheer volume. Red beats yellow beats green.
+/// The context **bar's** tone — the calm green / amber / red severity ramp from
+/// the shared [`severity_tier`]. Decides whether the bar shows its composition
+/// (only while calm-green) or goes solid, and the solid color once it warns.
 pub(super) fn context_severity_color(percent: u8, used_tokens: Option<u64>) -> Color {
+    match severity_tier(percent, used_tokens) {
+        0 => Color::Green,
+        1 => Color::Yellow,
+        _ => Color::Red,
+    }
+}
+
+/// The shared usage tier (0 calm / 1 warn / 2 alarm) behind both the bar's
+/// severity color and the `▣` glyph's tone: the worse of the fill-percentage ramp
+/// (≤40 / ≤75 / above) and the absolute-token overlay (≤200k / ≤400k / above), so
+/// a large-window model green by percentage still climbs by sheer volume.
+fn severity_tier(percent: u8, used_tokens: Option<u64>) -> u8 {
     let by_percent = match percent.min(100) {
         0..=40 => 0u8,
         41..=75 => 1,
@@ -242,23 +252,21 @@ pub(super) fn context_severity_color(percent: u8, used_tokens: Option<u64>) -> C
         200_001..=400_000 => 1,
         _ => 2,
     };
-    match by_percent.max(by_tokens) {
-        0 => Color::Green,
+    by_percent.max(by_tokens)
+}
+
+/// The context meter's `▣` glyph tone — driven by *total* window usage, never by
+/// which composition segment fills the most cells. The calm tier reads **blue**
+/// ("cold — plenty of headroom"), not green, so a barely-used window whose bar is
+/// dominated by amber cache-writes still flags its `▣` blue; it warms to amber
+/// then red only as the window genuinely fills. Decoupling glyph from bar is
+/// deliberate: the bar shows *where* the tokens went, the glyph *how full* it is.
+pub(super) fn ctx_glyph_color(percent: u8, used_tokens: Option<u64>) -> Color {
+    match severity_tier(percent, used_tokens) {
+        0 => Color::Blue,
         1 => Color::Yellow,
         _ => Color::Red,
     }
-}
-
-/// The tone the heaviest segment paints, so the `▣` glyph can match the color
-/// the bar visibly reads as: the color of the largest-weight segment (the run
-/// that fills the most cells). `None` when every segment is empty — the bar then
-/// falls back to its single severity color and the glyph follows that instead.
-pub(super) fn dominant_segment_color(segments: &[(u64, Color)]) -> Option<Color> {
-    segments
-        .iter()
-        .filter(|(weight, _)| *weight > 0)
-        .max_by_key(|(weight, _)| *weight)
-        .map(|(_, color)| *color)
 }
 
 /// Context bar: a thin rule whose filled run grows left-to-right as the window
@@ -547,34 +555,19 @@ mod tests {
         assert_eq!(context_severity_color(10, None), Color::Green);
     }
 
-    /// The dominant-segment color is the heaviest non-empty segment's tone — the
-    /// color the bar reads as — so the `▣` glyph can mirror it. All-empty yields
-    /// `None` (the glyph falls back to the solid severity color).
+    /// The `▣` glyph follows total usage on a blue → amber → red ramp (no green),
+    /// independent of the bar's composition: a calm window's glyph is blue even
+    /// when its bar is amber cache-write dominant, and it warms only as the window
+    /// genuinely fills — including the absolute-token overlay.
     #[test]
-    fn dominant_segment_color_picks_the_heaviest() {
-        // Cache reads (blue) dominate a long session → the glyph reads blue.
-        assert_eq!(
-            dominant_segment_color(&[
-                (20_000, Color::Yellow),
-                (48_000, Color::Blue),
-                (8_500, Color::Red),
-            ]),
-            Some(Color::Blue)
-        );
-        // Fresh input (red) dominates a hot turn.
-        assert_eq!(
-            dominant_segment_color(&[
-                (1_000, Color::Yellow),
-                (2_000, Color::Blue),
-                (9_000, Color::Red)
-            ]),
-            Some(Color::Red)
-        );
-        // No weight anywhere → no dominant tone.
-        assert_eq!(
-            dominant_segment_color(&[(0, Color::Blue), (0, Color::Red)]),
-            None
-        );
+    fn ctx_glyph_color_is_calm_blue_then_warms() {
+        assert_eq!(ctx_glyph_color(0, None), Color::Blue);
+        assert_eq!(ctx_glyph_color(16, Some(40_000)), Color::Blue);
+        assert_eq!(ctx_glyph_color(40, Some(200_000)), Color::Blue);
+        assert_eq!(ctx_glyph_color(60, None), Color::Yellow);
+        assert_eq!(ctx_glyph_color(10, Some(250_000)), Color::Yellow); // token overlay
+        assert_eq!(ctx_glyph_color(90, None), Color::Red);
+        assert_eq!(ctx_glyph_color(10, Some(500_000)), Color::Red);
     }
 
     /// Largest-remainder apportionment always sums to the requested total.

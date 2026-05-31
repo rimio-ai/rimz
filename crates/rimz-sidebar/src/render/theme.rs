@@ -24,6 +24,7 @@ const BLUE: Color = Color::Indexed(75); // sky — the cautious `plan` posture p
 const VIOLET: Color = Color::Indexed(141); // soft purple — the provider `⇅ rc` flag
 const DIM: Color = Color::Indexed(244); // mid gray — labels, ages, values
 const FAINT: Color = Color::Indexed(240); // deep gray — recedes below DIM: bar tracks, `·` separators, dividers
+const RULE: Color = Color::Indexed(237); // darkest chrome — the borderless section hairlines, quieter than a dotted divider
 
 /// Claude clay — the running agent's animated working/thinking head, so the
 /// live cell reads in the agent's own brand orange. Closest muted 256-color
@@ -87,6 +88,14 @@ impl Theme {
     /// (a light `─` track, a thin `·`) carries the reading without the tone.
     pub(crate) fn faint(&self) -> Style {
         self.style(FAINT, Modifier::DIM)
+    }
+
+    /// The faintest *solid* chrome — the borderless section hairline rules (`─`).
+    /// A step below [`faint`] so a full-width solid rule recedes to about the
+    /// apparent weight of the dotted `┄ external` divider instead of reading as a
+    /// bright bar. Under `NO_COLOR` it collapses to the dim modifier like the rest.
+    pub(crate) fn rule(&self) -> Style {
+        self.style(RULE, Modifier::DIM)
     }
 
     /// Accent style for the selected-row left bar (`▎`). Under `NO_COLOR` the

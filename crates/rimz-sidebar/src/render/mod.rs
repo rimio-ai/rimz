@@ -182,12 +182,10 @@ pub(crate) fn compose_lines(
         );
     }
     if !active {
-        let footer = footer_lines(snapshot, inner);
+        let footer = footer_lines(snapshot, &theme, inner);
         if !footer.is_empty() {
-            // Seal the panel from the footer only when both are present.
-            if !snapshot.providers.is_empty() {
-                bottom.push(pad_chrome(hairline_rule(&theme, inner)));
-            }
+            // No rule above the footer — it sits quietly under the dashboard's own
+            // top rule.
             bottom.extend(footer.into_iter().map(pad_chrome));
         }
     }
@@ -462,10 +460,12 @@ fn abbreviate_under(path: &str, home: Option<&str>) -> String {
     }
 }
 
-/// A faint full-width `─` hairline rule. Seals the header from the cockpit and
-/// brackets the bottom chrome — the structure the dropped border once carried.
+/// A very faint full-width `─` hairline rule (a step below the dim chrome, so it
+/// recedes to about the weight of the dotted `┄` divider). Seals the header from
+/// the cockpit and brackets the provider dashboard — the structure the dropped
+/// border once carried.
 fn hairline_rule(theme: &Theme, width: usize) -> Line<'static> {
-    Line::styled("─".repeat(width.max(1)), theme.faint())
+    Line::styled("─".repeat(width.max(1)), theme.rule())
 }
 
 fn alert_lines(theme: &Theme, alert: &Alert) -> Vec<Line<'static>> {
@@ -509,35 +509,30 @@ fn is_known_agent_process(row: &rimz::SidebarRow) -> bool {
         && (rimz::agents::KNOWN_AGENTS.contains(&row.name.as_str()) || row.name == "node")
 }
 
-fn footer_lines(snapshot: &SidebarSnapshot, width: usize) -> Vec<Line<'static>> {
-    let attention = snapshot
+fn footer_lines(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> Vec<Line<'static>> {
+    let needs_attention = snapshot
         .worktree_groups
         .iter()
         .flat_map(|group| &group.rows)
-        .filter(|row| {
+        .any(|row| {
             matches!(
                 row.status,
                 Some(rimz::feed::AgentStatus::Waiting | rimz::feed::AgentStatus::Failed)
             )
-        })
-        .collect::<Vec<_>>();
-    let jumpable = snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .filter(|row| row.pane.is_some())
-        .count();
-    let dim = Style::default()
-        .fg(Color::Indexed(244))
-        .add_modifier(Modifier::DIM);
-    let text = if attention.len() == 1 {
-        format!("↵ jump to {}", attention[0].name)
-    } else if attention.len() > 1 || jumpable > 0 {
-        "↵ jump   ␣ next ?!   ? keys".to_owned()
+        });
+    // The faintest chrome — quieter than the old dim footer. `? for help` is the
+    // resting hint; the `␣ next ?!` triage key joins it only when something
+    // actually needs you, so the signature key stays discoverable without
+    // shouting at rest. The full key model lives behind the `?` overlay.
+    let text = if needs_attention {
+        "␣ next ?!   ? for help"
     } else {
-        return Vec::new();
+        "? for help"
     };
-    vec![center_line(Line::styled(text, dim), width)]
+    vec![center_line(
+        Line::styled(text.to_owned(), theme.faint()),
+        width,
+    )]
 }
 
 /// Center a single line within `width` by prepending padding — used to pin the
@@ -1203,7 +1198,10 @@ mod tests {
         native.worktree_branch = Some("main".to_owned());
         let snapshot = snapshot_with(vec![native], Vec::new());
         let rendered = snapshot_to_screen(&snapshot, 80, 18);
-        assert!(rendered.contains("↵ jump to codex"));
+        // A waiting permission is an attention row, so the footer carries the
+        // triage key alongside the resting help hint.
+        assert!(rendered.contains("␣ next ?!"), "{rendered}");
+        assert!(rendered.contains("? for help"), "{rendered}");
 
         let help = snapshot_to_screen_with_alert_and_ui(
             &snapshot,
@@ -1269,8 +1267,8 @@ mod tests {
             .collect::<Vec<_>>();
         let snapshot = snapshot_with(Vec::new(), agents);
 
-        // Tall enough that the six capped rows (3 compact lines each, now with a
-        // blank line between cards) plus the `+3 more` overflow all fit, so the
+        // Tall enough that the six capped rows (3 compact lines each, stacked
+        // with no inter-card gap) plus the `+3 more` overflow all fit, so the
         // indicator the test is named for actually renders.
         let rendered = snapshot_to_screen(&snapshot, 36, 38);
         assert!(rendered.contains("+3 more"), "{rendered}");

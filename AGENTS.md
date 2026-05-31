@@ -42,6 +42,7 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 
 ## Testing requirements
 
+- Run the suite with `cargo xtask test` (wraps `cargo nextest run`) — nextest is the only suite runner; never bare `cargo test`. Doctests go through `cargo xtask doctest`.
 - Unit tests around state machines, schema rendering, and trust decisions.
 - Integration tests for ledger CAS, bridge timeouts, socket wakeups, and backend parity.
 - Golden tests for every agent hook stdout shape, including neutral timeout output.

@@ -30,6 +30,24 @@ pub(super) fn age_short(at: Timestamp) -> String {
     age_label(age_secs(at))
 }
 
+/// A row's last-activity age for the work line: floors at `1m` (a sub-minute span
+/// reads `1m`, never seconds), shows whole hours `{h}h` from 1h on, and caps at
+/// `>1d` from a day on — a coarse "how long since this agent did something" that
+/// never competes with the precise worked-time on the same line.
+pub(super) fn activity_label(seconds: i64) -> String {
+    if seconds < 60 * 60 {
+        format!("{}m", (seconds / 60).max(1))
+    } else if seconds < 60 * 60 * 24 {
+        format!("{}h", seconds / 3_600)
+    } else {
+        ">1d".to_owned()
+    }
+}
+
+pub(super) fn activity_short(at: Timestamp) -> String {
+    activity_label(age_secs(at))
+}
+
 pub(super) fn time_remaining(deadline: Timestamp) -> String {
     let seconds = deadline.duration_since(Timestamp::now()).as_secs();
     if seconds <= 0 {
@@ -341,5 +359,20 @@ mod tests {
         assert_eq!(duration_worked(4_320_000), "1h12m"); // 1h12m
         assert_eq!(duration_worked(0), "0s");
         assert_eq!(duration_worked(500), "0s"); // sub-second floors to 0s, not "now"
+    }
+
+    #[test]
+    fn activity_label_floors_at_one_minute_and_caps_at_a_day() {
+        // Sub-minute and the first minute both floor to `1m` — never seconds.
+        assert_eq!(activity_label(0), "1m");
+        assert_eq!(activity_label(59), "1m");
+        assert_eq!(activity_label(90), "1m");
+        assert_eq!(activity_label(120), "2m");
+        assert_eq!(activity_label(59 * 60), "59m");
+        // Whole hours from 1h on, capped at `>1d` from a day on.
+        assert_eq!(activity_label(60 * 60), "1h");
+        assert_eq!(activity_label(23 * 3_600), "23h");
+        assert_eq!(activity_label(24 * 3_600), ">1d");
+        assert_eq!(activity_label(100 * 3_600), ">1d");
     }
 }

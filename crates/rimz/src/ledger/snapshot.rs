@@ -313,6 +313,13 @@ pub struct SidebarRow {
     /// expanded card. Empty for every non-parent row.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sub_agents: Vec<SidebarSubAgent>,
+    /// A `process` row whose foreground command is genuine work (a build, a
+    /// test, a script) rather than a bare shell or interactive TUI — so the
+    /// renderer can give it the running spinner in a dim tone. Always `false`
+    /// for agent rows and for idle shells/editors; never enters `status_counts`
+    /// (a process row keeps `status: None`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub process_active: bool,
 }
 
 /// A compact summary of a child agent, nested under its parent's row. Subagents
@@ -963,7 +970,7 @@ fn stable_window(
 
 /// Built-in `(product_name, art lines, color)` for a provider kind, used when
 /// the per-machine config overrides none of them. Ships the brand emblems and
-/// colors: Claude clay (173), Codex deep blue (26), Pi forest green (28).
+/// colors: Claude clay (173), Codex blue (32), Pi forest green (28).
 fn default_provider_style(kind: &str) -> (String, Vec<String>, u8) {
     let lines = |art: &str| art.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
     match kind {
@@ -975,7 +982,7 @@ fn default_provider_style(kind: &str) -> (String, Vec<String>, u8) {
         "codex" => (
             "Codex".to_owned(),
             lines(" ▗▛███▜▖\n ▜▌ ▚ ▐▛\n ▝▙███▟▘"),
-            26,
+            32,
         ),
         "pi" => ("Pi".to_owned(), lines(" ▗▛████▜▖\n  ▐▌  ▐▌\n  ▝▘  ▝▘"), 28),
         other => (provider_title_case(other), Vec::new(), 244),
@@ -1358,6 +1365,7 @@ fn idle_codex_row(pane: &PaneRef) -> SidebarRow {
         resolver: None,
         options: Vec::new(),
         sub_agents: Vec::new(),
+        process_active: false,
     }
 }
 
@@ -1646,6 +1654,7 @@ fn row_from_agent(agent: &AgentState) -> SidebarRow {
         resolver: None,
         options: Vec::new(),
         sub_agents: Vec::new(),
+        process_active: false,
     }
 }
 
@@ -1679,6 +1688,11 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
         resolver: None,
         options: Vec::new(),
         sub_agents: Vec::new(),
+        process_active: pane
+            .command
+            .as_deref()
+            .filter(|command| !command.is_empty())
+            .is_some_and(process_is_active),
     }
 }
 
@@ -1686,6 +1700,30 @@ fn process_label(command: &str) -> String {
     command_agent_kind(command)
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| command_label(command))
+}
+
+/// Whether a `process` pane is doing genuine work — worth the running spinner —
+/// rather than sitting idle. Classified by the command's base name: bare shells
+/// and the interactive TUIs a user just sits in stay quiet; everything else (a
+/// build, a test, a script) reads as active, so real work never hides as idle
+/// chrome. An unknown command is active by default.
+fn process_is_active(command: &str) -> bool {
+    // A known agent kind (claude/codex) or the shared `node` host is a transient
+    // pre-enrichment state that becomes a proper agent row — never animate it as a
+    // process. Shells and the interactive TUIs a user just sits in stay quiet too;
+    // everything else (a build, a test, a script) reads as active work.
+    if command_agent_kind(command).is_some() {
+        return false;
+    }
+    const IDLE: &[&str] = &[
+        // Shells — a bare prompt is presence, not work.
+        "zsh", "bash", "fish", "sh", "dash", "ksh", "csh", "tcsh", "nu", "pwsh", "xonsh",
+        // The shared agent host before hook enrichment claims the pane.
+        "node", // Interactive TUIs the user lives in, not work in flight.
+        "vim", "nvim", "vi", "nano", "emacs", "helix", "hx", "less", "more", "most", "man", "top",
+        "htop", "btop", "btm", "atop", "lazygit", "gitui", "tig", "k9s",
+    ];
+    !IDLE.contains(&command_label(command).as_str())
 }
 
 fn command_label(command: &str) -> String {
@@ -1770,6 +1808,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         resolver: active_resolver_state(item),
         options: item.options.clone(),
         sub_agents: Vec::new(),
+        process_active: false,
     })
 }
 

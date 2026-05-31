@@ -159,7 +159,7 @@ They go get coffee, or open a second agent.
 
 **Thinks:** *"Green means go, it's working, I don't need to watch it."*
 
-> **Design law — age is the honesty signal.** There is no global "updated 2s ago" stamp anywhere in the product. Freshness is per-row (the age) and fetch health is the degraded banner's job. A growing age on a `running` row is how a stuck agent outs itself without Rimz ever pretending to know more than it does.
+> **Design law — age is the honesty signal.** There is no global "updated 2s ago" stamp anywhere in the product. Freshness is per-row, and fetch health is the degraded banner's job. The resting card stays calm — no age on the compact row; a wedged `running` agent outs itself by escalating to `!`, not by a creeping timestamp. The one place a coarse last-activity age surfaces is the expanded work line, a deep-dive detail you opt into by selecting the row — never Rimz pretending to know more than it does.
 
 ---
 
