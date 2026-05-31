@@ -110,10 +110,10 @@ fn phase1_launch_registers_idle_no_prompt() {
     room.onboard(&["codex"]);
     room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
 
-    // Wait for the agent *row* (`○ codex`), never the bare substring "codex" —
-    // the first-run hint "run claude or codex" contains it, so a loose
-    // predicate would return the empty room before the row paints.
-    let screen = room.wait_for(|s| s.contains("○ codex"), SETTLE);
+    // Wait for the lifecycle-backed agent row, not the bare substring "codex"
+    // (the first-run hint contains it) or the synthesized idle Codex row that
+    // can appear from live-pane presence before the event-fresh model folds in.
+    let screen = room.wait_for(|s| s.contains("○ codex") && s.contains("GPT-5.5"), SETTLE);
     assert!(
         screen.contains("main ┄"),
         "the agent groups under its worktree:\n{screen}"
