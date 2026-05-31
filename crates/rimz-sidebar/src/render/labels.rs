@@ -365,10 +365,23 @@ fn apportion(weights: impl IntoIterator<Item = u64>, total: usize) -> Vec<usize>
 /// no brackets. A full bar means budget *left*: it shortens as the window is
 /// spent, and the reset countdown beside it says when it refills. Ramps green →
 /// yellow → red by how much remains, so a near-spent window reddens regardless
-/// of which window it is.
+/// of which window it is. At 0% remaining — the budget fully spent — the whole
+/// empty track turns red, so an exhausted window can never be mistaken for a
+/// faint untouched one.
 pub(super) fn mana_bar_spans(theme: &Theme, remaining_pct: u8, width: usize) -> Vec<Span<'static>> {
+    // A fully spent window (0% remaining) reads as a full-width *red* empty track,
+    // not the faint "no fill" track a plain drain leaves — `two_tone_bar` always
+    // paints the track faint, so an absent fill alone would read as the same calm
+    // gray as a barely-touched window. Alarm the track itself so "used up" is
+    // unmistakable; it stays the empty `▱` glyph (no fill), only its tone changes.
+    if remaining_pct == 0 {
+        return vec![Span::styled(
+            std::iter::repeat_n(MANA_TRACK, width.max(1)).collect::<String>(),
+            theme.style(Color::Red, Modifier::empty()),
+        )];
+    }
     let color = match remaining_pct.min(100) {
-        0..=20 => Color::Red,
+        1..=20 => Color::Red,
         21..=50 => Color::Yellow,
         _ => Color::Green,
     };
@@ -598,6 +611,29 @@ mod tests {
         assert_eq!(fg(80), Color::Indexed(108));
         assert_eq!(fg(40), Color::Indexed(179));
         assert_eq!(fg(10), Color::Indexed(167));
+    }
+
+    /// A fully spent window (0% remaining) is a full-width *empty* `▱` track —
+    /// never a `▰` fill — painted red, so "used up" never reads as the faint
+    /// untouched track a plain absent-fill would leave. The reset-time text is a
+    /// separate span the row owns, so it stays unalarmed; only the bar reddens.
+    #[test]
+    fn mana_bar_spent_is_a_full_width_red_empty_track() {
+        let plain = Theme::fixed(true);
+        let spans = mana_bar_spans(&plain, 0, 10);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        // Still an empty track (no `▰`), spanning the full width as one run.
+        assert_eq!(text, "▱▱▱▱▱▱▱▱▱▱");
+        assert_eq!(spans.len(), 1);
+        // Under NO_COLOR the red is suppressed; the empty-track shape still reads.
+        assert!(spans[0].style.fg.is_none());
+
+        // With color on, the spent track shares the mana ramp's red — not the
+        // faint track tone a non-spent drain leaves behind.
+        let lit = Theme::fixed(false);
+        let spent = mana_bar_spans(&lit, 0, 10);
+        assert_eq!(spent[0].style.fg, Some(Color::Indexed(167)));
+        assert_ne!(spent[0].style.fg, lit.faint().fg);
     }
 
     /// The infinite bar is a full-width empty `▱` track in the same faint tone as
