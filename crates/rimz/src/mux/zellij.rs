@@ -42,6 +42,13 @@ const SIDEBAR_PANE_NAME: &str = "rimz-sidebar";
 const LIST_PANES_ATTEMPTS: u32 = 3;
 const LIST_PANES_RETRY_DELAY: Duration = Duration::from_millis(50);
 
+/// `query-tab-names` can hit the same action-client startup race as
+/// `list-panes`. Treat an empty successful response as transient; otherwise
+/// `open_background_view` may miss an existing daemon tab and launch a
+/// duplicate.
+const TAB_NAMES_ATTEMPTS: u32 = 5;
+const TAB_NAMES_RETRY_DELAY: Duration = Duration::from_millis(50);
+
 /// Ceiling on how long `create_session_with_sidebar` holds the temp layout file
 /// on disk while waiting for Zellij to parse it (Zellij reads `--default-layout`
 /// asynchronously, after the create call returns). A *ceiling*, not a fixed
@@ -237,33 +244,66 @@ impl ZellijBackend {
             "--default-layout".to_owned(),
             layout.path().to_string_lossy().into_owned(),
         ]);
-        let mut command = spec.to_command();
-        command.current_dir(&opts.cwd);
-        let output = command.output().map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => MuxErr::NotInstalled {
-                program: spec.program.clone(),
-            },
-            _ => MuxErr::Io(err),
-        })?;
-        if !output.status.success() {
+        let spawn = || -> Result<bool> {
+            let mut command = spec.to_command();
+            command.current_dir(&opts.cwd);
+            let output = command.output().map_err(|err| match err.kind() {
+                std::io::ErrorKind::NotFound => MuxErr::NotInstalled {
+                    program: spec.program.clone(),
+                },
+                _ => MuxErr::Io(err),
+            })?;
+            if output.status.success() {
+                return Ok(true);
+            }
+
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             let lower = stderr.to_ascii_lowercase();
             // A racing `rimz` may have created the session first; treat that as
             // success rather than re-injecting.
-            if !(lower.contains("already exists")
-                || (lower.contains("session") && lower.contains("exists")))
+            if lower.contains("already exists")
+                || (lower.contains("session") && lower.contains("exists"))
             {
-                return Err(MuxErr::Command {
-                    program: spec.program,
-                    args: spec.args.join(" "),
-                    stderr,
-                });
+                return Ok(false);
+            }
+
+            Err(MuxErr::Command {
+                program: spec.program.clone(),
+                args: spec.args.join(" "),
+                stderr,
+            })
+        };
+
+        let created = spawn()?;
+        if self.wait_for_sidebar_layout(&opts.session_name) {
+            drop(layout);
+            return Ok(());
+        }
+
+        if created {
+            tracing::warn!(
+                session = %opts.session_name,
+                "sidebar layout did not materialize within the ceiling; retrying session birth \
+                 before dropping the temp layout",
+            );
+            self.delete_session(&opts.session_name)?;
+            spawn()?;
+            if self.wait_for_sidebar_layout(&opts.session_name) {
+                drop(layout);
+                return Ok(());
             }
         }
-        if !self.wait_for_sidebar_layout(&opts.session_name) {
+
+        if !created {
             tracing::warn!(
                 session = %opts.session_name,
                 "sidebar layout did not materialize within the ceiling; dropping the temp \
+                 layout may leave the session sidebar-less — it self-heals on the next open_sidebar",
+            );
+        } else {
+            tracing::warn!(
+                session = %opts.session_name,
+                "sidebar layout still did not materialize after retry; dropping the temp \
                  layout may leave the session sidebar-less — it self-heals on the next open_sidebar",
             );
         }
@@ -463,12 +503,25 @@ impl ZellijBackend {
     /// The session's tab names, in tab order. `query-tab-names` prints one name
     /// per line; the ANSI banner newer Zellij ships is stripped.
     fn tab_names(&self, session: &str) -> Result<Vec<String>> {
-        let output = self.zellij_action(session).arg("query-tab-names").run()?;
-        Ok(String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(strip_ansi)
-            .map(|line| line.trim().to_owned())
-            .collect())
+        for attempt in 0..TAB_NAMES_ATTEMPTS {
+            if attempt > 0 {
+                std::thread::sleep(TAB_NAMES_RETRY_DELAY);
+            }
+            let output = self.zellij_action(session).arg("query-tab-names").run()?;
+            let names: Vec<String> = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(strip_ansi)
+                .map(|line| line.trim().to_owned())
+                .filter(|line| !line.is_empty())
+                .collect();
+            if !names.is_empty() {
+                return Ok(names);
+            }
+        }
+        Err(MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: format!("query-tab-names returned no tabs after {TAB_NAMES_ATTEMPTS} attempts"),
+        })
     }
 
     /// Whether `session` already holds a tab named `tab_name`. A Rimz background

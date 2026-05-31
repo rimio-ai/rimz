@@ -173,9 +173,9 @@ Both helpers live next to the durability contract they enforce. No module hand-r
 
 ## Tests
 
-Local runner: `cargo xtask test` (wraps `cargo nextest run`). nextest is the only suite runner — install it with `cargo install cargo-nextest --locked`. Doctests, which nextest does not run, go through `cargo test --workspace --doc` in the `doctest` task.
+Local runner: `cargo xtask test` (wraps `cargo nextest run`). nextest is the only suite runner — install it with `cargo install cargo-nextest --locked`. Doctests, which nextest does not run, go through `cargo xtask doctest`.
 
-Three tiers, each with a clear discipline:
+Core test shapes keep their own discipline:
 
 - **Unit tests** — `#[cfg(test)] mod tests` inline in the module under test. Pure logic only: state-machine transitions, parser shapes, schema round-trips. No filesystem, no network, no subprocess.
 - **Integration tests** — one binary per crate at `tests/integration/main.rs`, where each suite is a module (`mod hooks;`) and related suites group under a subdirectory module (`mod backend;` over `backend/{tmux,zellij}.rs`). The shared harness is declared once in `tests/integration/common/`. Real subprocesses, real temp directories under `tempfile::TempDir`, real ledger files. Spawn `rimz` through the `Env` harness in `tests/integration/common/` (an `assert_cmd` `cargo-bin` builder). The M0 matrix is in [testing.md](./testing.md).
@@ -219,7 +219,7 @@ Every gate runs in CI with warnings treated as errors. Local equivalent is `carg
 - `cargo fmt --all -- --check` — formatting.
 - `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` — lint.
 - `cargo nextest run --workspace --all-features --locked` — test runner (the `test` task; the standalone fast signal and the mux-backend job).
-- `cargo test --workspace --doc --all-features --locked` — doctests.
+- `cargo xtask doctest` — doctests.
 - `cargo deny check` — licence, advisory, and ban check.
 - `cargo machete` — unused dependency check.
 - `cargo vet` — supply-chain audit.

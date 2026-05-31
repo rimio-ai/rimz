@@ -12,18 +12,13 @@
 //! pane I/O). So firing `rimz hooks feed --source claude` through an installed
 //! hook is the end-user act of running an agent.
 //!
-//! Where the documented experience diverges from today's code, the test
-//! asserts the doc and carries `#[ignore]` with a reason (a TDD target) so the
-//! enforced gate stays green; un-ignore each as the behaviour ships. Run the
-//! targets on demand with `cargo nextest run -- journey:: --run-ignored all`.
-
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 mod deep;
 mod sidebar_phases;
 
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -50,12 +45,6 @@ const COLS: u16 = 36;
 /// its first frame.
 pub const SETTLE: Duration = Duration::from_secs(15);
 
-/// Budget for asserting something stays *absent*. Long enough to ride out a
-/// few serve ticks (the loop polls every second), short enough that a negative
-/// assertion does not dominate the suite. Only spent in full on a passing
-/// negative; a regression that makes the row appear trips the assert.
-pub const SETTLE_SHORT: Duration = Duration::from_secs(3);
-
 /// A live Rimz "room": a real `rimz-sidebar serve` renderer in a
 /// `portable-pty`, reading the [`Env`] ledger that hooks mutate.
 ///
@@ -68,7 +57,6 @@ pub const SETTLE_SHORT: Duration = Duration::from_secs(3);
 pub struct RoomHarness<'a> {
     env: &'a Env,
     parser: Arc<Mutex<vt100::Parser>>,
-    input: Arc<Mutex<Box<dyn Write + Send>>>,
     pane_file: PathBuf,
     pane_roster: Arc<Mutex<PaneRoster>>,
     mux: MuxName,
@@ -152,7 +140,6 @@ impl<'a> RoomHarness<'a> {
         // accumulated byte stream (which is O(n²) over a 15 s wait loop).
         let parser = Arc::new(Mutex::new(vt100::Parser::new(ROWS, COLS, 0)));
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
-        let input = Arc::new(Mutex::new(pair.master.take_writer().expect("pty writer")));
         let sink = Arc::clone(&parser);
         let reader = std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
@@ -167,7 +154,6 @@ impl<'a> RoomHarness<'a> {
         Self {
             env,
             parser,
-            input,
             pane_file,
             pane_roster,
             mux,
@@ -195,15 +181,6 @@ impl<'a> RoomHarness<'a> {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-    }
-
-    /// Send raw key bytes to the sidebar PTY. Future interaction tests use the
-    /// same path a user does (`↵`, `␣`, `?`) instead of reaching into renderer
-    /// internals.
-    pub fn send_keys(&self, text: &str) {
-        let mut input = self.input.lock().expect("pty input");
-        input.write_all(text.as_bytes()).expect("write pty input");
-        input.flush().expect("flush pty input");
     }
 
     /// Wire the room the way the user does on first run: `rimz hooks install`
@@ -464,14 +441,6 @@ pub fn permission_request(session_id: &str, secret: &str) -> Value {
         "hook_event_name": "PermissionRequest",
         "tool_name": "shell",
         "command": ["echo", secret],
-        "session_id": session_id,
-    })
-}
-
-/// Claude-shaped session end payload used by liveness target tests.
-pub fn session_end(session_id: &str) -> Value {
-    json!({
-        "hook_event_name": "SessionEnd",
         "session_id": session_id,
     })
 }

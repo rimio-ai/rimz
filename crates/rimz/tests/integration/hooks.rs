@@ -3,7 +3,7 @@
 //! binary; XDG roots are scoped under a tempdir so allowlist, state, and
 //! runtime files don't escape.
 
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use assert_cmd::cargo::CommandCargoExt;
@@ -13,6 +13,9 @@ use serde_json::{Value, json};
 use crate::common::{
     Env, claude_pre_tool_use_payload, codex_permission_payload, permission_payload,
 };
+
+const BRIDGE_ITEM_WAIT: Duration = Duration::from_secs(5);
+const TEST_HOOK_CAP_MILLIS: &str = "50";
 
 #[test]
 fn hooks_install_is_discoverable_but_feed_entrypoint_is_hidden() {
@@ -43,40 +46,113 @@ fn hooks_install_is_discoverable_but_feed_entrypoint_is_hidden() {
     );
 }
 
-#[test]
-fn hook_with_no_allowlisted_resolver_stays_native_ui() {
-    let env = Env::new();
-    let output = env.run_hook("claude", &permission_payload("Bash"));
+fn permission_cases() -> [(&'static str, String); 2] {
+    [
+        ("claude", permission_payload("Bash")),
+        ("codex", codex_permission_payload()),
+    ]
+}
+
+fn assert_hook_succeeded_neutral(source: &str, output: Output) {
     assert!(
         output.status.success(),
-        "stderr: {}",
+        "{source} hook stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
         output.stdout.is_empty(),
-        "neutral hook stdout must stay empty"
+        "{source} neutral stdout must stay empty, got: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+fn bridge_permission_to_allow(env: &Env, source: &str, payload: &str) -> Value {
+    env.enrol("opus-policy", 10, "30s");
+    env.write_heartbeat("opus-policy", Timestamp::now());
+
+    let child = env.spawn_hook(source, payload);
+    let request_id = env
+        .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
+        .expect("bridge item should appear in feed");
+
+    let resolve = env.resolve(
+        &request_id,
+        r#"{"choice":"allow"}"#,
+        "opus-policy",
+        "hook-bridge",
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve failed: {}",
+        String::from_utf8_lossy(&resolve.stderr)
     );
 
-    let items = env.feed_list_json();
-    let items = items.as_array().expect("array");
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0]["surface"], "native_ui");
-    assert_eq!(items[0]["status"], "pending");
+    let output = child.wait_with_output().expect("wait child");
+    assert!(
+        output.status.success(),
+        "{source} hook stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+    serde_json::from_str(stdout.trim()).expect("agent json")
+}
+
+fn assert_permission_allow_decision(source: &str, decision: &Value) {
+    assert_eq!(
+        decision["hookSpecificOutput"]["hookEventName"],
+        "PermissionRequest"
+    );
+    assert_eq!(
+        decision["hookSpecificOutput"]["decision"]["behavior"],
+        "allow"
+    );
+    if source == "codex" {
+        // Reserved-key invariant — Codex PermissionRequest must never see
+        // fields reserved for future behavior.
+        assert!(decision.get("updatedInput").is_none());
+        assert!(decision.get("updatedPermissions").is_none());
+        assert!(decision.get("interrupt").is_none());
+    }
+}
+
+fn run_cap_timeout(env: &Env, source: &str, payload: &str) -> Output {
+    env.enrol("opus-policy", 10, "30s");
+    env.write_heartbeat("opus-policy", Timestamp::now());
+
+    let mut cmd = env.hook_command(source);
+    cmd.env("RIMZ_HOOK_CAP_MILLIS", TEST_HOOK_CAP_MILLIS);
+    env.spawn_payload(cmd, payload)
+        .wait_with_output()
+        .expect("wait child")
 }
 
 #[test]
-fn hook_with_stale_heartbeat_stays_native_ui() {
-    let env = Env::new();
-    env.enrol("opus-policy", 10, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now() - Duration::from_secs(60));
+fn permission_hook_with_no_allowlisted_resolver_stays_native_ui() {
+    for (source, payload) in permission_cases() {
+        let env = Env::new();
+        let output = env.run_hook(source, &payload);
+        assert_hook_succeeded_neutral(source, output);
 
-    let output = env.run_hook("claude", &permission_payload("Bash"));
-    assert!(output.status.success());
-    assert!(
-        output.stdout.is_empty(),
-        "fresh heartbeat is required to engage bridge without stdout"
-    );
-    assert_eq!(env.feed_list_json()[0]["surface"], "native_ui");
+        let items = env.feed_list_json();
+        let items = items.as_array().expect("array");
+        assert_eq!(items.len(), 1, "{source} should create one feed item");
+        assert_eq!(items[0]["surface"], "native_ui");
+        assert_eq!(items[0]["status"], "pending");
+        assert_eq!(items[0]["source"], source);
+    }
+}
+
+#[test]
+fn permission_hook_with_stale_heartbeat_stays_native_ui() {
+    for (source, payload) in permission_cases() {
+        let env = Env::new();
+        env.enrol("opus-policy", 10, "30s");
+        env.write_heartbeat("opus-policy", Timestamp::now() - Duration::from_secs(60));
+
+        let output = env.run_hook(source, &payload);
+        assert_hook_succeeded_neutral(source, output);
+        assert_eq!(env.feed_list_json()[0]["surface"], "native_ui");
+    }
 }
 
 #[test]
@@ -93,7 +169,7 @@ fn hook_with_resolver_chain_rejects_out_of_turn_and_advances_on_abstain() {
     let child = env.spawn_hook("claude", &permission_payload("Bash"));
 
     let request_id = env
-        .poll_pending_request_id(Instant::now() + Duration::from_secs(5))
+        .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
         .expect("bridge item should appear in feed");
 
     let initial = env.feed_show_json(&request_id);
@@ -162,173 +238,34 @@ fn hook_with_resolver_chain_rejects_out_of_turn_and_advances_on_abstain() {
 }
 
 #[test]
-fn hook_with_fresh_resolver_engages_bridge_and_resolves() {
-    let env = Env::new();
-    if env.skip_if_sandboxed() {
-        return;
+fn permission_hook_with_fresh_resolver_engages_bridge_and_resolves() {
+    for (source, payload) in permission_cases() {
+        let env = Env::new();
+        if env.skip_if_sandboxed() {
+            continue;
+        }
+
+        let decision = bridge_permission_to_allow(&env, source, &payload);
+        assert_permission_allow_decision(source, &decision);
     }
-    env.enrol("opus-policy", 10, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now());
-
-    let child = env.spawn_hook("claude", &permission_payload("Bash"));
-
-    let request_id = env
-        .poll_pending_request_id(Instant::now() + Duration::from_secs(5))
-        .expect("bridge item should appear in feed");
-
-    let resolve = env.resolve(
-        &request_id,
-        r#"{"choice":"allow"}"#,
-        "opus-policy",
-        "hook-bridge",
-    );
-    assert!(
-        resolve.status.success(),
-        "resolve failed: {}",
-        String::from_utf8_lossy(&resolve.stderr)
-    );
-
-    let output = child.wait_with_output().expect("wait child");
-    assert!(
-        output.status.success(),
-        "hook stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-    let decision: Value = serde_json::from_str(stdout.trim()).expect("agent json");
-    assert_eq!(
-        decision["hookSpecificOutput"]["decision"]["behavior"],
-        "allow"
-    );
-    assert_eq!(
-        decision["hookSpecificOutput"]["hookEventName"],
-        "PermissionRequest"
-    );
-}
-
-// --- Codex parity ---
-//
-// The hook bridge wiring is agent-agnostic; the only differences between
-// adapters are the decision stdout shapes and neutral handling. Codex
-// expects `{"decision":"allow"|"deny"}` and empty stdout on neutral.
-
-#[test]
-fn codex_hook_with_no_allowlisted_resolver_stays_native_ui() {
-    let env = Env::new();
-    let output = env.run_hook("codex", &codex_permission_payload());
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        output.stdout.is_empty(),
-        "Codex neutral must be empty stdout, got: {:?}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-
-    let items = env.feed_list_json();
-    let items = items.as_array().expect("array");
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0]["surface"], "native_ui");
-    assert_eq!(items[0]["status"], "pending");
-    assert_eq!(items[0]["source"], "codex");
 }
 
 #[test]
-fn codex_hook_with_stale_heartbeat_stays_native_ui() {
-    let env = Env::new();
-    env.enrol("opus-policy", 10, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now() - Duration::from_secs(60));
+fn permission_hook_bridge_cap_timeout_emits_neutral() {
+    for (source, payload) in permission_cases() {
+        let env = Env::new();
+        if env.skip_if_sandboxed() {
+            continue;
+        }
 
-    let output = env.run_hook("codex", &codex_permission_payload());
-    assert!(output.status.success());
-    assert!(
-        output.stdout.is_empty(),
-        "stale heartbeat must still emit Codex neutral (empty)"
-    );
-    assert_eq!(env.feed_list_json()[0]["surface"], "native_ui");
-}
+        let output = run_cap_timeout(&env, source, &payload);
+        assert_hook_succeeded_neutral(source, output);
 
-#[test]
-fn codex_hook_with_fresh_resolver_engages_bridge_and_resolves() {
-    let env = Env::new();
-    if env.skip_if_sandboxed() {
-        return;
+        let parsed = env.feed_list_json();
+        assert_eq!(parsed[0]["status"], "timed_out");
+        assert_eq!(parsed[0]["surface"], "bridge");
+        assert_eq!(parsed[0]["source"], source);
     }
-    env.enrol("opus-policy", 10, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now());
-
-    let child = env.spawn_hook("codex", &codex_permission_payload());
-
-    let request_id = env
-        .poll_pending_request_id(Instant::now() + Duration::from_secs(5))
-        .expect("bridge item should appear in feed");
-
-    let resolve = env.resolve(
-        &request_id,
-        r#"{"choice":"allow"}"#,
-        "opus-policy",
-        "hook-bridge",
-    );
-    assert!(
-        resolve.status.success(),
-        "resolve failed: {}",
-        String::from_utf8_lossy(&resolve.stderr)
-    );
-
-    let output = child.wait_with_output().expect("wait child");
-    assert!(
-        output.status.success(),
-        "hook stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-    let decision: Value = serde_json::from_str(stdout.trim()).expect("agent json");
-    assert_eq!(
-        decision["hookSpecificOutput"]["hookEventName"],
-        "PermissionRequest"
-    );
-    assert_eq!(
-        decision["hookSpecificOutput"]["decision"]["behavior"],
-        "allow"
-    );
-    // Reserved-key invariant — Codex PermissionRequest must never see fields
-    // reserved for future behavior.
-    assert!(decision.get("updatedInput").is_none());
-    assert!(decision.get("updatedPermissions").is_none());
-    assert!(decision.get("interrupt").is_none());
-}
-
-#[test]
-fn codex_hook_bridge_cap_timeout_emits_neutral() {
-    let env = Env::new();
-    if env.skip_if_sandboxed() {
-        return;
-    }
-    env.enrol("opus-policy", 10, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now());
-
-    let mut cmd = env.hook_command("codex");
-    cmd.env("RIMZ_HOOK_CAP_MILLIS", "200");
-    let output = env
-        .spawn_payload(cmd, &codex_permission_payload())
-        .wait_with_output()
-        .expect("wait child");
-    assert!(
-        output.status.success(),
-        "hook stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        output.stdout.is_empty(),
-        "Codex cap-elapsed should emit empty stdout (neutral)"
-    );
-
-    let parsed = env.feed_list_json();
-    assert_eq!(parsed[0]["status"], "timed_out");
-    assert_eq!(parsed[0]["surface"], "bridge");
-    assert_eq!(parsed[0]["source"], "codex");
 }
 
 #[test]
@@ -559,36 +496,6 @@ fn codex_session_start_with_never_policy_observes_yolo_posture() {
     assert_eq!(parsed["agents"][0]["permission_posture"], "yolo");
 }
 
-#[test]
-fn hook_bridge_cap_timeout_emits_neutral() {
-    let env = Env::new();
-    if env.skip_if_sandboxed() {
-        return;
-    }
-    env.enrol("opus-policy", 10, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now());
-
-    let mut cmd = env.hook_command("claude");
-    cmd.env("RIMZ_HOOK_CAP_MILLIS", "200");
-    let output = env
-        .spawn_payload(cmd, &permission_payload("Bash"))
-        .wait_with_output()
-        .expect("wait child");
-    assert!(
-        output.status.success(),
-        "hook stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        output.stdout.is_empty(),
-        "cap elapsed should keep Claude neutral stdout empty"
-    );
-
-    let parsed = env.feed_list_json();
-    assert_eq!(parsed[0]["status"], "timed_out");
-    assert_eq!(parsed[0]["surface"], "bridge");
-}
-
 // --- Claude PreToolUse blocking events ---
 //
 // `ExitPlanMode` and `AskUserQuestion` are PreToolUse blocking hooks. The
@@ -645,7 +552,7 @@ fn claude_exit_plan_mode_bridge_path_renders_updated_input() {
     let child = env.spawn_hook("claude", &claude_pre_tool_use_payload("ExitPlanMode"));
 
     let request_id = env
-        .poll_pending_request_id(Instant::now() + Duration::from_secs(5))
+        .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
         .expect("bridge item should appear in feed");
 
     let resolve = env.resolve(
@@ -694,7 +601,7 @@ fn claude_ask_user_question_bridge_path_renders_updated_input() {
     let child = env.spawn_hook("claude", &claude_pre_tool_use_payload("AskUserQuestion"));
 
     let request_id = env
-        .poll_pending_request_id(Instant::now() + Duration::from_secs(5))
+        .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
         .expect("bridge item should appear in feed");
 
     let resolve = env.resolve(

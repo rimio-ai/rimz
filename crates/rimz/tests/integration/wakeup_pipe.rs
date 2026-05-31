@@ -39,7 +39,7 @@ fn wakeup_walk_sends_datagram_and_spawns_no_zellij_pipe() {
     assert!(
         trace_bin.is_file(),
         "zellij-trace shim binary not found at {}; \
-         `cargo test` should build it via the `[[bin]] name = \"zellij-trace\"` \
+         `cargo xtask test` should build it via the `[[bin]] name = \"zellij-trace\"` \
          declaration in crates/rimz/Cargo.toml",
         trace_bin.display(),
     );

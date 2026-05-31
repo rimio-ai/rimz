@@ -4,7 +4,17 @@
 
 The contract this suite enforces is in [DESIGN.md](../../DESIGN.md). Tests prove it before real agent integrations ship.
 
-Local runner: `cargo xtask test` (wraps `cargo nextest run`). Doctests run separately via `cargo test --workspace --doc --all-features --locked`. Inside `cargo xtask ci` the suite runs once under coverage (`cargo llvm-cov nextest`), not as a second uninstrumented pass. The full gate stack is in [rust-conventions.md](./rust-conventions.md).
+Local runner: `cargo xtask test` (wraps `cargo nextest run`). Doctests run separately via `cargo xtask doctest`. Inside `cargo xtask ci` the suite runs once under coverage (`cargo llvm-cov nextest`), not as a second uninstrumented pass. The full gate stack is in [rust-conventions.md](./rust-conventions.md).
+
+## Test tiers
+
+- **Function/unit tests** live inline with the module under test and cover pure state transitions, parsers, render helpers, trust hashing, and formatting rules. They do not spawn subprocesses or touch real ledgers.
+- **Integration tests** live under `crates/rimz/tests/integration/` and cover public CLI, ledger files, sockets, hooks, resolvers, and subprocess round trips through the shared harness.
+- **Journey tests** live under `tests/integration/journey/` and assert rendered end-user flows through a real `rimz-sidebar serve` process and `vt100` screen capture.
+- **Live-backend tests** cover real tmux/Zellij behavior and self-skip when the backend binary or socket permissions are unavailable. They stay narrow and backend-specific.
+- **Performance tests** assert bounded work, fork counts, cache behavior, or single-flight behavior. They do not duplicate product semantics already covered by unit or journey tests.
+
+Do not land ignored tests for future product targets. Keep planned behaviour in the roadmap or design docs, then add the executable test when the implementation is ready to pass in the normal nextest suite.
 
 ## M0 synthetic matrix
 
@@ -108,7 +118,7 @@ All `insta` snapshots — CLI stdout, `--json` event payloads, hook stdout, side
 - **Content** (`sidebar_phases.rs`) drives the real `rimz-sidebar serve` renderer through a `portable-pty` over a real ledger and asserts on the `vt100`-parsed pane (the `resize_redraw.rs` pattern). The renderer gets its own short `XDG_RUNTIME_DIR` so the per-instance wakeup socket stays under the AF_UNIX limit.
 - **Deep smokes** (`deep.rs`) birth a real tmux/zellij session with a real sidebar pane, fire a hook, and capture the live pane content; they self-skip without the mux binary. They poll for a *complete* frame (every expected token) so a partial repaint captured mid-paint under load never reads as a failure.
 - **Layout, tabs, and focus** live in `backend/zellij.rs` (left-30% sidebar, focused right terminal, every new tab born with the same split); tmux per-window parity — every new window born with its own sidebar via the `after-new-window` hook — is `backend/tmux.rs::new_window_is_born_with_a_sidebar_and_focused_terminal`.
-- The whole journey suite is green against `main`. When a phase needs to assert a documented experience *ahead* of its implementation, it lands `#[ignore = "TDD: <gap>"]` so the enforced gate stays green, and un-ignores when the behaviour ships; run any such targets with `cargo nextest run -- journey:: --run-ignored all`.
+- The whole journey suite is green against `main`, with no ignored future-target tests. Document planned phases in the roadmap until implementation makes the executable journey assertion pass under the normal nextest suite.
 
 ## Attach tests
 

@@ -45,6 +45,8 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 - Run the suite with `cargo xtask test` (wraps `cargo nextest run`) — nextest is the only suite runner; never bare `cargo test`. Doctests go through `cargo xtask doctest`.
 - Unit tests around state machines, schema rendering, and trust decisions.
 - Integration tests for ledger CAS, bridge timeouts, socket wakeups, and backend parity.
+- Keep test tiers separate: function/unit tests stay inline and pure, integration tests own subprocess/filesystem behavior, journey tests own rendered user flows, live-backend tests own real tmux/Zellij behavior, and performance tests assert bounded resource use rather than product semantics.
+- Do not land ignored tests for future product targets. Capture planned behaviour in docs/roadmap, then add the executable test when the implementation is ready to make it pass under nextest.
 - Golden tests for every agent hook stdout shape, including neutral timeout output.
 - Every command-executing config field projected into `ExecutableSurface` (asserted by the `hash_covers_every_documented_surface_field` unit test in `crates/rimz/src/trust.rs`).
 - Grep-style CI invariants reject:

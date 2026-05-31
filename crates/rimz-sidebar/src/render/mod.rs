@@ -633,8 +633,17 @@ mod tests {
         parser.screen().contents()
     }
 
+    fn snapshot_text(screen: &str) -> String {
+        screen
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn assert_snapshot(name: &str, screen: String) {
         // Row ages and degraded elapsed values are intentionally relative.
+        let screen = snapshot_text(&screen);
         insta::with_settings!({
             filters => vec![
                 (r"degraded for \d+[smhd]", "degraded for <elapsed>"),
