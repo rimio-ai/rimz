@@ -361,13 +361,12 @@ fn apportion(weights: impl IntoIterator<Item = u64>, total: usize) -> Vec<usize>
 }
 
 /// The provider dashboard's draining budget ("mana / stamina") bar:
-/// `remaining_pct` of the width in solid `█`, the rest a light `░` track, with
-/// no brackets. A full bar means budget *left*: it shortens as the window is
-/// spent, and the reset countdown beside it says when it refills. Ramps green →
-/// yellow → red by how much remains, so a near-spent window reddens regardless
-/// of which window it is. At 0% remaining — the budget fully spent — the whole
-/// empty track turns red, so an exhausted window can never be mistaken for a
-/// faint untouched one.
+/// `remaining_pct` of the width in `▰`, the rest a `▱` track, with no brackets.
+/// A full bar means budget *left*: it shortens as the window is spent, and the
+/// reset countdown beside it says when it refills. Ramps green → yellow → red by
+/// how much remains, so a near-spent window reddens regardless of which window it
+/// is. At 0% remaining — the budget fully spent — the whole empty track turns
+/// red; any nonzero remaining budget keeps at least one filled cell.
 pub(super) fn mana_bar_spans(theme: &Theme, remaining_pct: u8, width: usize) -> Vec<Span<'static>> {
     // A fully spent window (0% remaining) reads as a full-width *red* empty track,
     // not the faint "no fill" track a plain drain leaves — `two_tone_bar` always
@@ -380,9 +379,10 @@ pub(super) fn mana_bar_spans(theme: &Theme, remaining_pct: u8, width: usize) -> 
             theme.style(Color::Red, Modifier::empty()),
         )];
     }
+    let filled = filled_cells(remaining_pct, width).max(1);
     two_tone_bar(
         theme,
-        filled_cells(remaining_pct, width),
+        filled,
         width,
         mana_color(remaining_pct),
         MANA_FILLED,
@@ -641,6 +641,18 @@ mod tests {
         let spent = mana_bar_spans(&lit, 0, 10);
         assert_eq!(spent[0].style.fg, Some(Color::Indexed(167)));
         assert_ne!(spent[0].style.fg, lit.faint().fg);
+    }
+
+    /// Any nonzero remaining budget gets at least one filled cell, even on a
+    /// narrow sidebar where percentage rounding would otherwise erase it. The
+    /// bar still uses the red near-spent ramp, but it no longer looks fully
+    /// exhausted while a sliver remains.
+    #[test]
+    fn mana_bar_nonzero_remaining_keeps_one_filled_cell() {
+        let plain = Theme::fixed(true);
+        let spans = mana_bar_spans(&plain, 1, 10);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "▰▱▱▱▱▱▱▱▱▱");
     }
 
     /// The infinite bar is a full-width empty `▱` track in the same faint tone as

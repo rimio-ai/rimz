@@ -129,6 +129,18 @@ fn clamp_pct(value: Option<f64>) -> Option<u8> {
     value.map(|v| v.round().clamp(0.0, 100.0) as u8)
 }
 
+/// Round rate-limit usage without turning a still-live sliver into exhaustion.
+fn clamp_rate_limit_used_pct(value: Option<f64>) -> Option<u8> {
+    value.map(|v| {
+        let clamped = v.clamp(0.0, 100.0);
+        if clamped > 0.0 && clamped < 100.0 {
+            clamped.round().min(99.0) as u8
+        } else {
+            clamped.round() as u8
+        }
+    })
+}
+
 fn non_empty<T: Default + PartialEq>(value: T) -> Option<T> {
     (value != T::default()).then_some(value)
 }
@@ -136,7 +148,7 @@ fn non_empty<T: Default + PartialEq>(value: T) -> Option<T> {
 fn rate_window(field: Option<RateWindowField>) -> Option<RateLimitWindow> {
     let field = field?;
     non_empty(RateLimitWindow {
-        used_percentage: clamp_pct(field.used_percentage),
+        used_percentage: clamp_rate_limit_used_pct(field.used_percentage),
         resets_at: field.resets_at.and_then(|s| Timestamp::from_second(s).ok()),
     })
 }
@@ -346,5 +358,26 @@ mod tests {
         let five = ctx.rate_limits.unwrap().five_hour.unwrap();
         assert_eq!(five.used_percentage, Some(10));
         assert!(five.resets_at.is_none());
+    }
+
+    #[test]
+    fn rate_limit_percentage_keeps_near_full_sliver_live() {
+        let ctx = parse(json!({
+            "rate_limits": {
+                "five_hour": { "used_percentage": 99.5, "resets_at": 1738425600i64 },
+                "seven_day": { "used_percentage": 100.0, "resets_at": 1738857600i64 }
+            }
+        }));
+        let rate = ctx.rate_limits.unwrap();
+        assert_eq!(
+            rate.five_hour.unwrap().used_percentage,
+            Some(99),
+            "99.5% used still leaves visible remaining budget"
+        );
+        assert_eq!(
+            rate.seven_day.unwrap().used_percentage,
+            Some(100),
+            "exactly 100% used remains exhausted"
+        );
     }
 }
