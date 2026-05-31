@@ -27,7 +27,7 @@ Local runner: `cargo xtask test` (wraps `cargo nextest run`). Doctests run separ
 - session birth from a layout via `attach --create-background ... --default-layout` (left 30% `rimz-sidebar` pane + focused terminal); a second launch on the existing session is a no-op,
 - self-close: a real `rimz-sidebar` whose tab's last terminal pane exits closes its own pane (non-plugin pane count drops to zero),
 - sidebar heartbeat socket,
-- broadcast `zellij pipe` fast path,
+- the wakeup walk fans out one datagram per fresh instance and spawns no `zellij pipe` (the consumerless broadcast was removed; re-arms only with the future rail),
 - `list-panes -j` parsing of `pane_command` and `pane_cwd` into `PaneRef`,
 - minimum Zellij version detection.
 

@@ -17,7 +17,6 @@
 //! propagate. Stale heartbeats (older than [`SIDEBAR_HEARTBEAT_TTL`]) are
 //! skipped.
 
-use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::os::unix::net::UnixDatagram;
@@ -30,9 +29,8 @@ use tracing::debug;
 
 use crate::bridge::{WakeupFrame, feed_socket_path};
 use crate::feed::FeedItem;
-use crate::ids::{EventId, MuxName, RequestId, WorkspaceId};
+use crate::ids::{EventId, RequestId, WorkspaceId};
 use crate::ledger::RuntimePaths;
-use crate::mux::backend_for;
 use crate::schema::SIDEBAR_PROTOCOL_VERSION;
 use crate::schema::heartbeat::SidebarHeartbeat;
 
@@ -134,12 +132,8 @@ fn wake_sidebars_inner(
         protocol_version: crate::schema::SIDEBAR_PROTOCOL_VERSION,
     })?;
 
-    let mut piped_zellij_sessions: HashSet<String> = HashSet::new();
     for hb in collect_fresh_sidebars(rt)? {
         send_datagram(&payload, &hb.wakeup_socket);
-        if hb.mux == MuxName::Zellij && piped_zellij_sessions.insert(hb.session_name.clone()) {
-            dispatch_zellij_pipe(&hb.session_name, &payload);
-        }
     }
     Ok(())
 }
@@ -218,22 +212,6 @@ fn collect_fresh_sidebars(rt: &RuntimePaths) -> Result<Vec<SidebarHeartbeat>> {
         fresh.push(hb);
     }
     Ok(fresh)
-}
-
-/// Issue the broadcast `zellij pipe` fast path described in
-/// `docs/internals/ledger.md:108–114`. The UDP datagram above is the
-/// channel of record; this is purely a latency hint. Per-call failures
-/// are swallowed at `debug` — never error the ledger write that
-/// triggered us.
-fn dispatch_zellij_pipe(session_name: &str, payload: &[u8]) {
-    let backend = backend_for(MuxName::Zellij);
-    if let Err(err) = backend.wake_sidebar(session_name, payload) {
-        debug!(
-            session = session_name,
-            error = %err,
-            "wakeup: zellij pipe broadcast failed (UDP wakeup already sent)"
-        );
-    }
 }
 
 /// Re-stat the heartbeat file to confirm it's still on disk and its mtime
