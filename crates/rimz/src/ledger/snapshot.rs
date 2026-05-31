@@ -130,14 +130,6 @@ pub struct SidebarOwnView {
     pub sibling_count: usize,
     pub own_is_focused: bool,
     pub focused_pane_id: Option<PaneId>,
-    /// Whether the calling sidebar's own pane is visible to an attached client:
-    /// its view is the session's active view AND the session has a client. The
-    /// renderer suppresses its animation repaint while this is `Some(false)`.
-    /// `None` when either signal is unknown (Zellij, or a degraded `list-panes`
-    /// row) — the renderer then paints as usual. Display/perf only; self-close
-    /// and selection-sync never read it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub visible: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -617,19 +609,10 @@ impl SidebarOwnView {
             .iter()
             .find(|pane| pane.is_focused)
             .map(|pane| pane.pane_id.clone());
-        // Visible only when the backend reports both signals and both hold: the
-        // own pane's view is the session's active one AND a client is attached.
-        // Either being unknown collapses to `None` (the renderer always paints),
-        // which is the cross-backend floor for Zellij and degraded reads.
-        let visible = match (own_pane.view_active, own_pane.session_attached) {
-            (Some(active), Some(attached)) => Some(active && attached),
-            _ => None,
-        };
         Some(Self {
             sibling_count: siblings.len(),
             own_is_focused: own_pane.is_focused,
             focused_pane_id,
-            visible,
         })
     }
 }
@@ -1294,8 +1277,6 @@ fn pane_ref_from_id(pane_id: PaneId) -> PaneRef {
         cwd: None,
         pane_pid: None,
         pane_process_start: None,
-        view_active: None,
-        session_attached: None,
     }
 }
 
@@ -1998,8 +1979,6 @@ mod tests {
             cwd: Some(cwd.to_owned()),
             pane_pid: None,
             pane_process_start: None,
-            view_active: None,
-            session_attached: None,
         }
     }
 
@@ -4016,8 +3995,6 @@ mod tests {
                         cwd: Some("/repo/main".to_owned()),
                         pane_pid: None,
                         pane_process_start: None,
-                        view_active: None,
-                        session_attached: None,
                     });
                 }
                 agent
@@ -4386,8 +4363,6 @@ mod tests {
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
             pane_process_start: None,
-            view_active: None,
-            session_attached: None,
         }
     }
 
@@ -4429,31 +4404,5 @@ mod tests {
         let panes = vec![view_pane("terminal_1", "tab_0", true)];
 
         assert!(SidebarOwnView::from_panes(&own, &panes).is_none());
-    }
-
-    #[test]
-    fn own_view_visible_only_when_view_active_and_session_attached() {
-        let own = PaneId::from_parts(MuxName::Zellij, "p");
-        let vis_pane = |va, sa| PaneRef {
-            view_active: va,
-            session_attached: sa,
-            ..view_pane("p", "tab_0", false)
-        };
-        let visible = |va, sa| {
-            SidebarOwnView::from_panes(&own, &[vis_pane(va, sa)])
-                .expect("own pane present")
-                .visible
-        };
-        // Both signals known and true → visible.
-        assert_eq!(visible(Some(true), Some(true)), Some(true));
-        // Either known-false → hidden (inactive window, or detached session).
-        assert_eq!(visible(Some(false), Some(true)), Some(false));
-        assert_eq!(visible(Some(true), Some(false)), Some(false));
-        assert_eq!(visible(Some(false), Some(false)), Some(false));
-        // Either signal unknown (Zellij / degraded row) → unknown, so the
-        // renderer falls back to always painting.
-        assert_eq!(visible(None, Some(true)), None);
-        assert_eq!(visible(Some(true), None), None);
-        assert_eq!(visible(None, None), None);
     }
 }

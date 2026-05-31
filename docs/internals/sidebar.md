@@ -94,7 +94,7 @@ Data access splits by role (see [performance.md → Principles](./performance.md
 rimz sidebar snapshot --workspace-id <id> --exclude-pane-id <own>
 ```
 
-Every other per-tab renderer is a **consumer**: it reads that published frame **in process** through `rimz::sidebar::snapshot::read_published_snapshot`, folding only its own-pane exclusion — no subprocess fork, no `list-panes`/git, no ledger lock. The `rimz sidebar snapshot --no-produce` CLI path (the plugin rail's read) shares the same implementation. The producer's first publish is what a fresh consumer waits on; until then it holds its last good frame.
+Every other per-tab renderer is a **consumer**: it reads that published frame **in process** through `rimz::sidebar::snapshot::read_published_snapshot`, folding only its own-pane exclusion — no subprocess fork, no `list-panes`/git, no ledger lock. The `rimz sidebar snapshot --no-produce` CLI path (the plugin rail's read) shares the same implementation. The producer's first publish is what a fresh consumer waits on; until then it holds its last good frame. A consumer trusts that frame only while it stays fresh: if the elder's `snapshot.json` stops advancing past `PUBLISHED_FRAME_STALE_AFTER` — a producer wedged in a mux call, killed without a taker, or split off by a protocol-version bump — the consumer stops holding it and produces locally through the same single-flight lock (`run_fetch` → `published_frame_is_stale`), so a stalled producer can never freeze a tab indefinitely.
 
 The renderer refreshes its own liveness heartbeat **in process** — no `rimz` fork per tick — through the `rimz::sidebar::write_heartbeat` liveness helper (a runtime-file write, never a ledger-writer import). The renderer binds `sock/sidebar.<instance_id>.sock` and the heartbeat carries:
 
@@ -197,7 +197,7 @@ You don't read where to go; you go. Selecting a row focuses that agent's pane vi
 - `1`–`9` jump by the row's visible ordinal (its position in the column, not a mux pane id).
 - `␣` jumps to the *next item that needs you* — the next `waiting`/`failed` row in ranking order — without first selecting it. This is the fleet-scale triage key (Phase 4): one keystroke to the oldest blocked pane, again for the next. It is bound only inside the Rimz session, so it never touches the user's global mux config.
 - `x` dismisses the sticky [health alert](#reload-recovery) once it has recovered; an active failure re-arms it.
-- `r` re-execs the renderer in place, picking up a freshly-installed build without leaving the pane — the keypress scope of `rimz reload`, which the renderer reaches by riding the same `reload` wakeup word the CLI posts.
+- `r` reloads the tab. When a freshly-installed build is on disk it re-execs the renderer in place to pick it up — the keypress scope of `rimz reload`, which the renderer reaches by riding the same `reload` wakeup word the CLI posts. When there is no new binary it instead forces an immediate producing refetch (bypassing the consumer cache), so `r` always pulls live data and reliably un-sticks a tab whose producer has stalled rather than doing nothing.
 - `?` toggles a legend-and-keys overlay, so the glyph vocabulary and the key model are learnable in place without leaving the room.
 
 Per renderer this is the same model over different input plumbing:
@@ -207,7 +207,7 @@ Per renderer this is the same model over different input plumbing:
 
 The rail reconciles pane id *and* `pane_process_start` so a reused pane id never silently focuses a stranger (see [Action rules](#action-rules)).
 
-On every refresh, the native pane mirrors selection to the focused working pane in its own mux view. If focus is on the sidebar itself or focus cannot be discovered, the current manual selection stays in place.
+On every refresh, the native pane mirrors selection to the focused working pane in its own mux view, so a focus change made outside the sidebar moves the highlight too. If focus is on the sidebar itself or focus cannot be discovered, the current manual selection stays in place. A click is the exception while it propagates: the click jumps the highlight optimistically and fires the focus asynchronously, but the next snapshot still reports the *previous* focus until the mux catches up, so an unguarded mirror would roll the selection back. A pane-id-keyed guard (`UiState::pending_focus`) holds the highlight on the clicked pane until a snapshot confirms the focus landed; it releases on confirmation, when the pane leaves the room, after a short deadline (so a focus that never lands can't pin the highlight forever), or the moment the user navigates with `↑/↓`.
 
 ### Live enrichments and density
 

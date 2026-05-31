@@ -250,7 +250,7 @@ impl MuxBackend for TmuxBackend {
             "list-panes",
             "-a",
             "-F",
-            "#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_start_time}\t#{pane_active}\t#{window_name}\t#{window_active}\t#{session_attached}",
+            "#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_start_time}\t#{pane_active}\t#{window_name}",
         ]);
         if let Some(session) = opts.session_name {
             spec = spec.args(["-t".to_owned(), session]);
@@ -457,10 +457,9 @@ impl MuxBackend for TmuxBackend {
 /// `None` for a row missing the three load-bearing leading columns (session,
 /// window, pane id) — a degraded answer the caller skips rather than surfaces.
 ///
-/// Trailing columns are read with `.get(i).map(...)`, so a short row (an older
-/// tmux, or a mid-tick race that truncated the line) yields `None` for the
-/// missing field rather than a false value — important for the visibility
-/// columns, where a spurious `Some(false)` would wrongly suppress a repaint.
+/// Trailing columns are read with `.get(i)`, so a short row (an older tmux, or a
+/// mid-tick race that truncated the line) yields `None`/default for the missing
+/// field rather than erroring the whole read.
 fn parse_pane_line(line: &str) -> Option<PaneRef> {
     let cols: Vec<_> = line.split('\t').collect();
     if cols.len() < 3 {
@@ -488,16 +487,6 @@ fn parse_pane_line(line: &str) -> Option<PaneRef> {
             .get(6)
             .and_then(|value| value.trim().parse::<i64>().ok())
             .and_then(|seconds| Timestamp::from_second(seconds).ok()),
-        // `#{window_active}` is `1` when this pane's window is the session's
-        // current window. `.map` (not `.is_some_and`) keeps a missing column
-        // `None` = unknown, never a false `Some(false)`.
-        view_active: cols.get(9).map(|value| value.trim() == "1"),
-        // `#{session_attached}` is the client count on the session; `0` means
-        // fully detached. Folded to a bool, `None` when the column is absent.
-        session_attached: cols
-            .get(10)
-            .and_then(|value| value.trim().parse::<u32>().ok())
-            .map(|clients| clients > 0),
     })
 }
 
@@ -521,38 +510,36 @@ mod tests {
         assert!((3, 1, 9) < MIN_TMUX_VERSION);
     }
 
-    fn pane_line(active_window: &str, attached: &str) -> String {
-        // session, window_id, pane_id, command, cwd, pid, start, pane_active,
-        // window_name, window_active, session_attached.
-        format!(
-            "rimz-qe\t@1\t%3\tnvim\t/home/u/qe\t4242\t1700000000\t1\tqe\t{active_window}\t{attached}"
-        )
-    }
-
     #[test]
-    fn parse_pane_line_reads_visibility_columns() {
-        // Active window, one client attached → visible inputs both true.
-        let pane = parse_pane_line(&pane_line("1", "1")).expect("full row parses");
-        assert_eq!(pane.view_active, Some(true));
-        assert_eq!(pane.session_attached, Some(true));
+    fn parse_pane_line_reads_core_fields() {
+        // session, window_id, pane_id, command, cwd, pid, start, pane_active,
+        // window_name.
+        let row = "rimz-qe\t@1\t%3\tnvim\t/home/u/qe\t4242\t1700000000\t1\tqe";
+        let pane = parse_pane_line(row).expect("full row parses");
+        assert_eq!(pane.pane_id.raw(), "%3");
+        assert_eq!(pane.session_name, "rimz-qe");
+        assert_eq!(pane.view_id.as_deref(), Some("@1"));
+        assert_eq!(pane.view_name.as_deref(), Some("qe"));
         assert_eq!(pane.command.as_deref(), Some("nvim"));
+        assert_eq!(pane.cwd.as_deref(), Some("/home/u/qe"));
+        assert_eq!(pane.pane_pid, Some(4242));
         assert!(pane.is_focused, "pane_active=1 is focused");
 
-        // Inactive window, detached session → both false.
-        let hidden = parse_pane_line(&pane_line("0", "0")).expect("row parses");
-        assert_eq!(hidden.view_active, Some(false));
-        assert_eq!(hidden.session_attached, Some(false));
+        // A pane_active=0 row is not focused.
+        let other = "rimz-qe\t@1\t%4\tzsh\t/home/u/qe\t4243\t1700000000\t0\tqe";
+        assert!(!parse_pane_line(other).expect("row parses").is_focused);
     }
 
     #[test]
-    fn parse_pane_line_missing_visibility_columns_is_unknown() {
-        // An older tmux (or a truncated race row) without the trailing two
-        // columns must read as `None`, not a false `Some(false)` that would
-        // wrongly suppress a repaint.
-        let short = "rimz-qe\t@1\t%3\tnvim\t/home/u/qe\t4242\t1700000000\t1\tqe";
+    fn parse_pane_line_tolerates_a_short_trailing_row() {
+        // A truncated row that still carries the three load-bearing columns
+        // parses; the absent optional fields read as `None`/default.
+        let short = "rimz-qe\t@1\t%3";
         let pane = parse_pane_line(short).expect("the leading columns still parse");
-        assert_eq!(pane.view_active, None);
-        assert_eq!(pane.session_attached, None);
+        assert_eq!(pane.pane_id.raw(), "%3");
+        assert_eq!(pane.command, None);
+        assert_eq!(pane.view_name, None);
+        assert!(!pane.is_focused);
     }
 
     #[test]

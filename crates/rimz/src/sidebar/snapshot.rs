@@ -39,6 +39,16 @@ pub const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
 /// sidebar's backstop poll.
 pub const DIFF_STATS_TTL: Duration = Duration::from_secs(5);
 
+/// How long a consumer keeps trusting the elected producer's published frame
+/// before it stops holding it and produces locally instead. A healthy producer
+/// rewrites `snapshot.json` every backstop tick (~2s), so several ticks of slack
+/// never trips on a live fleet; but a producer that wedged, died without a
+/// taker, or was split off by a protocol bump stops advancing the file, and a
+/// consumer must not freeze on that last frame forever. Past this age the
+/// consumer self-heals by taking the producer path (single-flighted, so the
+/// fleet still elects one local producer rather than a fork storm).
+pub const PUBLISHED_FRAME_STALE_AFTER: Duration = Duration::from_secs(8);
+
 /// Shared, single-flight snapshot cache. Holds the ledger rollup plus the live
 /// pane list keyed to one `(workspace, session)` — the per-workspace runtime
 /// root scopes the workspace; `session_name` guards against serving one
@@ -124,6 +134,26 @@ fn read_published_base(
 ) -> Option<(SidebarSnapshot, Vec<PaneRef>)> {
     let cache_path = runtime.root.join("snapshot.json");
     read_snapshot_cache(&cache_path, session).map(|cache| (cache.snapshot, cache.panes))
+}
+
+/// Whether the producer's published same-session frame has gone stale — older
+/// than [`PUBLISHED_FRAME_STALE_AFTER`] at `now_ms`. A consumer that sees this
+/// stops holding the frame and produces locally, so a stalled producer can never
+/// freeze a tab indefinitely. `false` when no same-session frame exists yet
+/// (cold start, or a session-handoff mismatch): that path is the producer
+/// election's job, not this self-heal's, and the renderer's degraded-exit safety
+/// still covers a consumer that can never read a frame at all.
+pub fn published_frame_is_stale(runtime: &RuntimePaths, session: &str, now_ms: u64) -> bool {
+    let cache_path = runtime.root.join("snapshot.json");
+    read_snapshot_cache(&cache_path, session)
+        .is_some_and(|cache| frame_age_exceeds(cache.produced_at_ms, now_ms))
+}
+
+/// Whether `produced_at_ms` is older than [`PUBLISHED_FRAME_STALE_AFTER`] at
+/// `now_ms`. Saturating, so a clock that ran backwards reads as fresh (age 0)
+/// rather than wrapping to a huge age and forcing a needless local produce.
+fn frame_age_exceeds(produced_at_ms: u64, now_ms: u64) -> bool {
+    now_ms.saturating_sub(produced_at_ms) > PUBLISHED_FRAME_STALE_AFTER.as_millis() as u64
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -367,8 +397,6 @@ mod tests {
             cwd: Some(cwd.to_owned()),
             pane_pid: None,
             pane_process_start: None,
-            view_active: None,
-            session_attached: None,
         }
     }
 
@@ -377,6 +405,73 @@ mod tests {
             view_id: Some(view_id.to_owned()),
             ..pane(id, "zsh", "/tmp")
         }
+    }
+
+    #[test]
+    fn frame_age_exceeds_is_saturating() {
+        let max = PUBLISHED_FRAME_STALE_AFTER.as_millis() as u64;
+        assert!(!frame_age_exceeds(100, 100), "age 0 is fresh");
+        assert!(
+            !frame_age_exceeds(100, 100 + max),
+            "exactly at the window is fresh"
+        );
+        assert!(
+            frame_age_exceeds(100, 100 + max + 1),
+            "one ms past is stale"
+        );
+        // A clock that ran backwards saturates to age 0 rather than wrapping huge.
+        assert!(!frame_age_exceeds(100, 50));
+    }
+
+    #[test]
+    fn published_frame_is_stale_only_past_the_window_and_for_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+
+        let produced_at_ms = 1_700_000_000_000;
+        let cache = SnapshotCache {
+            produced_at_ms,
+            session_name: "rimz-test".to_owned(),
+            panes: Vec::new(),
+            snapshot: SidebarSnapshot::build(workspace, Vec::new(), Vec::new()),
+        };
+        atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &cache).unwrap();
+        let max = PUBLISHED_FRAME_STALE_AFTER.as_millis() as u64;
+
+        // Fresh within the window, stale just past it.
+        assert!(!published_frame_is_stale(
+            &runtime,
+            "rimz-test",
+            produced_at_ms + max
+        ));
+        assert!(published_frame_is_stale(
+            &runtime,
+            "rimz-test",
+            produced_at_ms + max + 1
+        ));
+        // A frame stamped for another session never matches: the producer
+        // election owns the handoff, so this never forces a spurious local
+        // produce on a session mismatch.
+        assert!(!published_frame_is_stale(
+            &runtime,
+            "other-session",
+            produced_at_ms + max + 1
+        ));
+
+        // No published frame at all → not "stale" (cold start is the election's
+        // job; the renderer's degraded-exit safety covers a never-readable frame).
+        let empty = tempfile::tempdir().unwrap();
+        let empty_rt =
+            RuntimePaths::under(WorkspaceId::from_project_root(empty.path()), empty.path())
+                .unwrap();
+        empty_rt.ensure_dirs().unwrap();
+        assert!(!published_frame_is_stale(
+            &empty_rt,
+            "rimz-test",
+            produced_at_ms + max + 1
+        ));
     }
 
     #[test]
@@ -479,44 +574,6 @@ mod tests {
             snapshot.own_view.map(|view| view.sibling_count),
             Some(0),
             "an orphan sidebar sees zero siblings in its own tab so self-close can fire"
-        );
-    }
-
-    #[test]
-    fn consumer_own_view_reads_its_own_pane_visibility() {
-        // The producer publishes the session-wide pane list with per-pane
-        // visibility; each consumer must derive its *own* pane's visibility, not
-        // the producer's. Here the producer's pane is on the active window but the
-        // consumer's is on an inactive one — the consumer must see `Some(false)`.
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
-
-        let vis = |id: &str, view: &str, view_active: bool| PaneRef {
-            view_id: Some(view.to_owned()),
-            view_active: Some(view_active),
-            session_attached: Some(true),
-            ..pane(id, "zsh", "/tmp")
-        };
-        let base = SnapshotCache {
-            produced_at_ms: unix_now_ms(),
-            session_name: "rimz-test".to_owned(),
-            // Producer pane on the active window; consumer pane on an inactive one.
-            panes: vec![
-                vis("producer_sb", "@0", true),
-                vis("consumer_sb", "@1", false),
-            ],
-            snapshot: SidebarSnapshot::build(workspace, Vec::new(), Vec::new()),
-        };
-        atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
-
-        let own = PaneId::from_parts(MuxName::Zellij, "consumer_sb");
-        let snapshot = read_published_snapshot(&runtime, "rimz-test", Some(&own)).expect("base");
-        assert_eq!(
-            snapshot.own_view.and_then(|view| view.visible),
-            Some(false),
-            "the consumer reads its own (inactive-window) pane, not the producer's",
         );
     }
 

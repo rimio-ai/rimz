@@ -102,7 +102,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // block on them. The worker posts `SNAPSHOT_WAKEUP` when a result is ready;
     // `in_flight`/`refetch_pending` coalesce requests so a ledger-delta storm or
     // a slow fetch can never queue more than one extra run.
-    let (request_tx, request_rx) = std::sync::mpsc::channel::<()>();
+    let (request_tx, request_rx) = std::sync::mpsc::channel::<FetchRequest>();
     let (result_tx, result_rx) = std::sync::mpsc::channel::<FetchOutcome>();
     spawn_fetch_worker(
         config.clone(),
@@ -122,7 +122,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // `rejected` here.
     let mut should_exit = apply_fetch_outcome(
         &config,
-        run_fetch(&config, &runtime, &socket_path),
+        run_fetch(&config, &runtime, &socket_path, false),
         &mut last_snapshot,
         &mut current,
         &mut health,
@@ -141,15 +141,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // or swallows a keypress.
     while !should_exit {
         let animating = render::has_live_animation(&current);
-        // A known-hidden pane (tmux: its window is inactive or its session is
-        // detached) neither paints the spin nor needs the fast wakeup: fall back
-        // to the slow data tick so a background sidebar isn't waking ~10×/sec
-        // only to skip a paint. It still folds the backstop fetch on that tick,
-        // so it is current the moment it returns to view. Unknown visibility
-        // (`None` — Zellij, a degraded read) keeps the fast tick, exactly as
-        // before this gate.
-        let fast_tick = should_draw_tick(animating, own_visibility(&current));
-        let timeout = if fast_tick {
+        let timeout = if animating {
             ANIMATION_FRAME.min(tick)
         } else {
             tick
@@ -185,7 +177,13 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 }
                 if !should_exit && refetch_pending {
                     refetch_pending = false;
-                    request_fetch(&request_tx, &mut in_flight, &mut refetch_pending, false);
+                    request_fetch(
+                        &request_tx,
+                        &mut in_flight,
+                        &mut refetch_pending,
+                        false,
+                        false,
+                    );
                 }
                 // A held transient regression: ask for one more read so the
                 // last-known-good cache heals to the next good frame. Single-
@@ -193,7 +191,13 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 // opens, the fetch is accepted and `rejected` clears, so this
                 // never spins.
                 if !should_exit && rejected {
-                    request_fetch(&request_tx, &mut in_flight, &mut refetch_pending, false);
+                    request_fetch(
+                        &request_tx,
+                        &mut in_flight,
+                        &mut refetch_pending,
+                        false,
+                        false,
+                    );
                 }
             }
             // The poll timeout drives two decoupled layers. Render: while a
@@ -207,16 +211,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             // delta. `request_fetch` is a no-op while a fetch is in flight, so the
             // backstop can neither double-fire nor stall.
             Wakeup::Tick => {
-                // Advance the spin only on a fast tick — there is motion to show
-                // AND this sidebar's own pane is not known-hidden (its view is
-                // inactive or its session is detached; tmux only, Zellij/unknown
-                // always paints, the cross-backend floor). A hidden pane skips the
-                // repaint nobody can see; the data backstop below still fires, so
-                // it keeps folding fresh snapshots and the accepted fold repaints
-                // it the moment it returns to view, already at the right phase.
-                // `current` is unchanged since `fast_tick` was computed at the top
-                // of this iteration (only the other arms mutate it), so reuse it.
-                if fast_tick {
+                // Advance the spin whenever there is motion to show — a pure
+                // in-process redraw on the cached snapshot, decoupled from fetch
+                // state so it stays smooth at `ANIMATION_FRAME` regardless of
+                // fetch latency.
+                if animating {
                     ui.animation_phase = wall_clock_phase(anim_start);
                     render::draw_to_terminal_with_ui(
                         &mut terminal,
@@ -226,14 +225,26 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     )?;
                 }
                 if fetched_at.elapsed() >= tick {
-                    request_fetch(&request_tx, &mut in_flight, &mut refetch_pending, false);
+                    request_fetch(
+                        &request_tx,
+                        &mut in_flight,
+                        &mut refetch_pending,
+                        false,
+                        false,
+                    );
                 }
             }
             // A ledger delta means new committed data: refetch, forcing one more
             // run if a fetch is already in flight so the delta is never lost. A
             // burst of deltas collapses to a single fetch via `in_flight`.
             Wakeup::Ledger => {
-                request_fetch(&request_tx, &mut in_flight, &mut refetch_pending, true);
+                request_fetch(
+                    &request_tx,
+                    &mut in_flight,
+                    &mut refetch_pending,
+                    true,
+                    false,
+                );
             }
             Wakeup::Reload => {
                 if let Some(target) = reexec_target() {
@@ -247,10 +258,19 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 }
                 // A reload that cannot find its replacement (a partial or
                 // in-flight install) must never make the sidebar vanish — keep
-                // serving the current build.
+                // serving the current build. Still honour the reload intent: force
+                // an immediate producing refetch so `r` always pulls live data and
+                // un-sticks a tab whose producer stalled, instead of doing nothing.
                 warn!(
                     session = %config.session_name,
-                    "reload requested but no renderer binary is on disk; keeping the current build",
+                    "reload requested but no renderer binary is on disk; refetching in place",
+                );
+                request_fetch(
+                    &request_tx,
+                    &mut in_flight,
+                    &mut refetch_pending,
+                    true,
+                    true,
                 );
             }
             wakeup => {
@@ -667,20 +687,6 @@ fn tick_for(seconds: u64) -> Duration {
     Duration::from_secs(seconds.max(1))
 }
 
-/// This sidebar's own-pane visibility from the current snapshot: `Some(true)`
-/// visible, `Some(false)` known-hidden, `None` unknown (Zellij, a degraded
-/// read, or the pre-publish placeholder, which carries no `own_view`).
-fn own_visibility(snapshot: &SidebarSnapshot) -> Option<bool> {
-    snapshot.own_view.as_ref().and_then(|view| view.visible)
-}
-
-/// Whether the animation tick should repaint: only when there is motion to show
-/// and the pane is not *known* hidden. Unknown visibility (`None`) paints, so a
-/// backend that cannot report visibility behaves exactly as before this gate.
-fn should_draw_tick(animating: bool, visible: Option<bool>) -> bool {
-    animating && visible != Some(false)
-}
-
 fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
     let display_name = workspace_id.as_str().to_owned();
     SidebarSnapshot {
@@ -769,13 +775,31 @@ struct FetchOutcome {
 /// runs `list-panes`/git, and never exits — a per-tab renderer stays alive and
 /// paints. The mux/git round-trip is paid once per workspace; a consumer with no
 /// published frame yet reports a soft miss so the gate holds its last good frame.
-fn run_fetch(config: &ServeConfig, runtime: &RuntimePaths, socket_path: &Path) -> FetchOutcome {
+fn run_fetch(
+    config: &ServeConfig,
+    runtime: &RuntimePaths,
+    socket_path: &Path,
+    force_produce: bool,
+) -> FetchOutcome {
     let heartbeat_err = write_heartbeat(config, runtime, socket_path)
         .err()
         .map(|err| err.to_string());
     let is_producer = !rimz::sidebar::elder_sidebar_present(runtime, &config.instance_id);
     let exclude = own_pane_id(config.mux);
-    let snapshot = if is_producer {
+    // Take the producer path — fork the real `list-panes`/git snapshot — when we
+    // are the elected producer, when the user forced a reload (`r`), or when the
+    // producer's published frame has gone stale. The last is the consumer
+    // self-heal: rather than hold a stalled producer's last frame forever (the
+    // freeze), a consumer produces its own current frame; `cached_base_or_produce`
+    // single-flights, so a fleet self-healing at once still elects one producer.
+    let produce = is_producer
+        || force_produce
+        || rimz::sidebar::snapshot::published_frame_is_stale(
+            runtime,
+            &config.session_name,
+            rimz::sidebar::snapshot::unix_now_ms(),
+        );
+    let snapshot = if produce {
         fetch_snapshot_for(
             &resolve_snapshot_bin(&config.rimz_bin),
             &config.workspace_id,
@@ -798,6 +822,14 @@ fn run_fetch(config: &ServeConfig, runtime: &RuntimePaths, socket_path: &Path) -
     }
 }
 
+/// One request to the fetch worker. `force_produce` makes the run take the
+/// producer path (real `list-panes`/git) regardless of election or cache
+/// freshness — the manual `r` reload sets it so the user always pulls live data.
+#[derive(Clone, Copy, Debug, Default)]
+struct FetchRequest {
+    force_produce: bool,
+}
+
 /// Spawn the background fetch worker. It blocks for a request, coalesces any
 /// that piled up (a ledger-delta storm collapses to one fetch), runs one
 /// [`run_fetch`], hands the result back over `result_tx`, and pokes the loop's
@@ -807,14 +839,20 @@ fn spawn_fetch_worker(
     config: ServeConfig,
     runtime: RuntimePaths,
     socket_path: PathBuf,
-    request_rx: std::sync::mpsc::Receiver<()>,
+    request_rx: std::sync::mpsc::Receiver<FetchRequest>,
     result_tx: std::sync::mpsc::Sender<FetchOutcome>,
 ) {
     std::thread::spawn(move || {
         let waker = UnixDatagram::unbound().ok();
-        while request_rx.recv().is_ok() {
-            while request_rx.try_recv().is_ok() {}
-            let outcome = run_fetch(&config, &runtime, &socket_path);
+        while let Ok(first) = request_rx.recv() {
+            // Coalesce any requests that piled up into one run, but keep the
+            // strongest intent: if any of them forced a produce, the single run
+            // produces.
+            let mut force_produce = first.force_produce;
+            while let Ok(extra) = request_rx.try_recv() {
+                force_produce |= extra.force_produce;
+            }
+            let outcome = run_fetch(&config, &runtime, &socket_path, force_produce);
             if result_tx.send(outcome).is_err() {
                 return;
             }
@@ -829,14 +867,16 @@ fn spawn_fetch_worker(
 /// requests while one is already running; `force_after` (set by a ledger delta,
 /// i.e. new committed data) guarantees one more fetch once the in-flight one
 /// returns, so a delta that races an in-flight fetch is never lost.
+/// `force_produce` rides the immediate request, marking it a producer-path run.
 fn request_fetch(
-    request_tx: &std::sync::mpsc::Sender<()>,
+    request_tx: &std::sync::mpsc::Sender<FetchRequest>,
     in_flight: &mut bool,
     refetch_pending: &mut bool,
     force_after: bool,
+    force_produce: bool,
 ) {
     if !*in_flight {
-        if request_tx.send(()).is_ok() {
+        if request_tx.send(FetchRequest { force_produce }).is_ok() {
             *in_flight = true;
         }
     } else if force_after {
@@ -927,6 +967,7 @@ fn apply_fetch_outcome(
         own_view
             .filter(|view| !view.own_is_focused)
             .and_then(|view| view.focused_pane_id.as_ref()),
+        Timestamp::now(),
     );
     if self_close_decision(self_close, own_view.map(|view| view.sibling_count)) {
         debug!(
@@ -1052,7 +1093,12 @@ fn apply_input(
         render::draw_to_terminal_with_ui(terminal, snapshot, health.alert.as_ref(), ui)?;
     }
     if let Some(index) = outcome.focus_index {
-        focus_selected_row(snapshot, index);
+        // Arm the optimistic-focus guard on the pane we just jumped to, so the
+        // next fetch fold holds the highlight here until the snapshot confirms
+        // the focus rather than rolling it back to the previous pane.
+        if let Some(pane_id) = focus_selected_row(snapshot, index) {
+            arm_pending_focus(ui, pane_id);
+        }
     }
     Ok(())
 }
@@ -1108,6 +1154,10 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
     match action {
         KeyAction::Up => {
             if ui.selected_index > 0 {
+                // Manual navigation is the user driving selection directly, so
+                // drop any optimistic-focus guard rather than letting it snap
+                // the highlight back to the clicked pane.
+                clear_pending_focus(ui);
                 ui.selected_index -= 1;
                 return InputOutcome::redraw();
             }
@@ -1116,6 +1166,7 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
         KeyAction::Down => {
             let len = visible_row_count(snapshot);
             if ui.selected_index + 1 < len {
+                clear_pending_focus(ui);
                 ui.selected_index += 1;
                 return InputOutcome::redraw();
             }
@@ -1167,21 +1218,83 @@ fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
     }
 }
 
+/// How long an optimistic click holds the highlight before the fold gives up
+/// waiting for the snapshot to confirm the focus. Comfortably longer than one
+/// producer republish plus a consumer fold (~2s each) so a healthy round-trip
+/// always confirms first, yet short enough that a focus that never lands (the
+/// pane closed mid-jump) frees the highlight promptly.
+const PENDING_FOCUS_TIMEOUT_SECS: i64 = 5;
+
+/// Move the highlight to follow the snapshot's focused pane, honouring an
+/// optimistic [`UiState::pending_focus`] click in flight.
+///
+/// Without a pending guard this tracks `focused_pane_id` exactly as before, so a
+/// focus change made outside the sidebar still moves the highlight. With one, a
+/// click already jumped the highlight and fired an async `focus_pane`; until the
+/// next published snapshot reflects that focus, `focused_pane_id` still names the
+/// *previous* pane. Adopting it would roll the selection back — the reported
+/// desync. So while the guard holds we keep the highlight on the clicked pane
+/// (re-anchored to its current row, in case the list reordered) and ignore the
+/// stale focus. The guard releases when the focus lands, when the pane leaves the
+/// room, or when it has waited past [`PENDING_FOCUS_TIMEOUT_SECS`] without
+/// confirmation — never pinning the highlight forever.
 fn sync_selection_to_focused_pane(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
     focused_pane_id: Option<&PaneId>,
+    now: Timestamp,
 ) {
+    if let Some(pending) = ui.pending_focus.clone() {
+        let landed = focused_pane_id == Some(&pending);
+        let expired = ui
+            .pending_focus_since
+            .is_some_and(|since| now.duration_since(since).as_secs() >= PENDING_FOCUS_TIMEOUT_SECS);
+        match row_index_of_pane(snapshot, &pending) {
+            // The clicked pane is still on screen and the focus has neither
+            // landed nor timed out: hold the highlight on it and ignore the
+            // stale snapshot focus.
+            Some(index) if !landed && !expired => {
+                ui.selected_index = index;
+                return;
+            }
+            // Landed, gone, or timed out: drop the guard and fall through to
+            // track the snapshot focus normally.
+            _ => clear_pending_focus(ui),
+        }
+    }
+    select_focused(ui, snapshot, focused_pane_id);
+}
+
+/// Set the highlight to the row backing `focused_pane_id`, if any. The plain
+/// follow-the-focus path, with no optimistic guard.
+fn select_focused(ui: &mut UiState, snapshot: &SidebarSnapshot, focused_pane_id: Option<&PaneId>) {
     let Some(focused_pane_id) = focused_pane_id else {
         return;
     };
-    if let Some(index) = visible_rows(snapshot).position(|row| {
-        row.pane
-            .as_ref()
-            .is_some_and(|pane| pane.pane_id == *focused_pane_id)
-    }) {
+    if let Some(index) = row_index_of_pane(snapshot, focused_pane_id) {
         ui.selected_index = index;
     }
+}
+
+/// The visible-row index backing `pane_id`, in `visible_rows` order.
+fn row_index_of_pane(snapshot: &SidebarSnapshot, pane_id: &PaneId) -> Option<usize> {
+    visible_rows(snapshot).position(|row| {
+        row.pane
+            .as_ref()
+            .is_some_and(|pane| pane.pane_id == *pane_id)
+    })
+}
+
+/// Arm the optimistic-focus guard on the pane a click/Enter just focused.
+fn arm_pending_focus(ui: &mut UiState, pane_id: PaneId) {
+    ui.pending_focus = Some(pane_id);
+    ui.pending_focus_since = Some(Timestamp::now());
+}
+
+/// Drop the optimistic-focus guard, returning to plain follow-the-focus.
+fn clear_pending_focus(ui: &mut UiState) {
+    ui.pending_focus = None;
+    ui.pending_focus_since = None;
 }
 
 fn row_index_at_screen_position(ui: &UiState, column: u16, row: u16) -> Option<usize> {
@@ -1223,13 +1336,10 @@ fn next_attention_index(snapshot: &SidebarSnapshot, selected: usize) -> Option<u
     })
 }
 
-fn focus_selected_row(snapshot: &SidebarSnapshot, selected: usize) {
-    let Some(row) = visible_rows(snapshot).nth(selected) else {
-        return;
-    };
-    let Some(pane) = &row.pane else {
-        return;
-    };
+/// Focus the pane backing the selected row and return its id so the caller can
+/// arm the optimistic-focus guard. `None` when the row has no pane to focus.
+fn focus_selected_row(snapshot: &SidebarSnapshot, selected: usize) -> Option<PaneId> {
+    let pane = &visible_rows(snapshot).nth(selected)?.pane.as_ref()?.pane_id;
     // Jump off the render thread: `focus_pane` still forks the mux client
     // (`zellij action focus-pane-id` / the tmux equivalent), which must never
     // block the loop. The highlight is already redrawn, so the jump is
@@ -1237,7 +1347,8 @@ fn focus_selected_row(snapshot: &SidebarSnapshot, selected: usize) {
     // `rimz pane focus` child, no per-click `list-panes` re-validation. A pane
     // recycled in the sub-second window since the snapshot self-corrects on the
     // next refresh.
-    spawn_pane_focus(pane.pane_id.clone());
+    spawn_pane_focus(pane.clone());
+    Some(pane.clone())
 }
 
 /// Focus the pane on a detached thread so the keypress/click returns instantly.
@@ -1316,8 +1427,6 @@ mod tests {
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
             pane_process_start: None,
-            view_active: None,
-            session_attached: None,
         }
     }
 
@@ -1733,33 +1842,6 @@ mod tests {
     }
 
     #[test]
-    fn should_draw_tick_paints_unless_known_hidden() {
-        // Nothing animating: never the fast tick, whatever the visibility.
-        assert!(!should_draw_tick(false, Some(true)));
-        assert!(!should_draw_tick(false, None));
-        // Animating + visible, or animating + unknown (Zellij / degraded read):
-        // paint, exactly as before the gate existed.
-        assert!(should_draw_tick(true, Some(true)));
-        assert!(should_draw_tick(true, None));
-        // Animating + *known hidden*: the one case the gate suppresses.
-        assert!(!should_draw_tick(true, Some(false)));
-    }
-
-    #[test]
-    fn own_visibility_reads_through_to_the_own_view() {
-        let mut snapshot = placeholder_snapshot(workspace());
-        // The placeholder carries no own_view → unknown, so it always paints.
-        assert_eq!(own_visibility(&snapshot), None);
-        snapshot.own_view = Some(rimz::SidebarOwnView {
-            sibling_count: 0,
-            own_is_focused: false,
-            focused_pane_id: None,
-            visible: Some(false),
-        });
-        assert_eq!(own_visibility(&snapshot), Some(false));
-    }
-
-    #[test]
     fn self_close_waits_for_a_sibling_before_ever_closing() {
         let mut state = SelfCloseState::default();
         // Startup: no sibling yet (terminal pane not materialized). Give Zellij
@@ -1822,9 +1904,10 @@ mod tests {
             help_visible: false,
             animation_phase: 0,
             line_map: Vec::new(),
+            ..Default::default()
         };
 
-        sync_selection_to_focused_pane(&mut ui, &snapshot, Some(&focused));
+        sync_selection_to_focused_pane(&mut ui, &snapshot, Some(&focused), Timestamp::now());
 
         assert_eq!(ui.selected_index, 1);
     }
@@ -1844,11 +1927,158 @@ mod tests {
             help_visible: false,
             animation_phase: 0,
             line_map: Vec::new(),
+            ..Default::default()
         };
 
-        sync_selection_to_focused_pane(&mut ui, &snapshot, None);
+        sync_selection_to_focused_pane(&mut ui, &snapshot, None, Timestamp::now());
 
         assert_eq!(ui.selected_index, 1);
+    }
+
+    /// Build two timestamps `gap` seconds apart on the deterministic test clock.
+    fn since_and_now(gap: i64) -> (Timestamp, Timestamp) {
+        let base = 1_700_000_000;
+        (
+            Timestamp::from_second(base).unwrap(),
+            Timestamp::from_second(base + gap).unwrap(),
+        )
+    }
+
+    #[test]
+    fn pending_focus_holds_selection_against_a_stale_snapshot() {
+        let ws = workspace();
+        let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let stale_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let (since, now) = since_and_now(1);
+        let mut ui = UiState {
+            selected_index: 1,
+            pending_focus: Some(target.clone()),
+            pending_focus_since: Some(since),
+            ..Default::default()
+        };
+
+        // The snapshot still reports the previous focus (the click has not
+        // propagated): the guard must keep the highlight on the clicked pane.
+        sync_selection_to_focused_pane(&mut ui, &snapshot, Some(&stale_focus), now);
+
+        assert_eq!(ui.selected_index, 1, "held on the clicked pane");
+        assert_eq!(ui.pending_focus, Some(target), "guard still armed");
+    }
+
+    #[test]
+    fn pending_focus_clears_when_the_snapshot_confirms_the_focus() {
+        let ws = workspace();
+        let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", true),
+            ],
+        );
+        let (since, now) = since_and_now(1);
+        let mut ui = UiState {
+            selected_index: 1,
+            pending_focus: Some(target.clone()),
+            pending_focus_since: Some(since),
+            ..Default::default()
+        };
+
+        sync_selection_to_focused_pane(&mut ui, &snapshot, Some(&target), now);
+
+        assert_eq!(ui.selected_index, 1);
+        assert_eq!(ui.pending_focus, None, "guard released once focus landed");
+    }
+
+    #[test]
+    fn pending_focus_releases_after_the_timeout() {
+        let ws = workspace();
+        let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let real_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", true),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let (since, now) = since_and_now(PENDING_FOCUS_TIMEOUT_SECS + 1);
+        let mut ui = UiState {
+            selected_index: 1,
+            pending_focus: Some(target),
+            pending_focus_since: Some(since),
+            ..Default::default()
+        };
+
+        // The focus never reached the target; past the deadline the guard gives
+        // up and the highlight follows the real focus again.
+        sync_selection_to_focused_pane(&mut ui, &snapshot, Some(&real_focus), now);
+
+        assert_eq!(ui.pending_focus, None);
+        assert_eq!(ui.selected_index, 0, "fell back to the snapshot focus");
+    }
+
+    #[test]
+    fn pending_focus_clears_when_the_pending_pane_leaves() {
+        let ws = workspace();
+        let gone = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+        let real_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", true),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let (since, now) = since_and_now(1);
+        let mut ui = UiState {
+            selected_index: 1,
+            pending_focus: Some(gone),
+            pending_focus_since: Some(since),
+            ..Default::default()
+        };
+
+        sync_selection_to_focused_pane(&mut ui, &snapshot, Some(&real_focus), now);
+
+        assert_eq!(ui.pending_focus, None, "guard released, the pane is gone");
+        assert_eq!(ui.selected_index, 0, "followed the snapshot focus");
+    }
+
+    #[test]
+    fn pending_focus_reanchors_to_the_clicked_pane_after_a_reorder() {
+        let ws = workspace();
+        let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let stale_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        // terminal_2 moved from row 1 to row 0 between snapshots.
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_2", "tab_0", false),
+                pane("terminal_1", "tab_0", false),
+            ],
+        );
+        let (since, now) = since_and_now(1);
+        let mut ui = UiState {
+            selected_index: 1,
+            pending_focus: Some(target.clone()),
+            pending_focus_since: Some(since),
+            ..Default::default()
+        };
+
+        sync_selection_to_focused_pane(&mut ui, &snapshot, Some(&stale_focus), now);
+
+        assert_eq!(
+            ui.selected_index, 0,
+            "highlight re-anchored to the clicked pane's new row"
+        );
+        assert_eq!(ui.pending_focus, Some(target));
     }
 
     /// Lay out `snapshot` at a generous size through the real render path,
@@ -1861,6 +2091,7 @@ mod tests {
             help_visible: false,
             animation_phase: 0,
             line_map: Vec::new(),
+            ..Default::default()
         };
         let (_lines, map) = render::compose_lines(snapshot, None, &ui, 54, 64);
         map
@@ -1980,6 +2211,7 @@ mod tests {
             help_visible: false,
             animation_phase: 0,
             line_map: line_map_for(&snapshot, 0),
+            ..Default::default()
         };
         let row1 = ui.line_map.iter().position(|m| *m == Some(1)).unwrap();
 
@@ -2004,6 +2236,7 @@ mod tests {
             help_visible: false,
             animation_phase: 0,
             line_map: Vec::new(),
+            ..Default::default()
         };
 
         let outcome = handle_key(KeyAction::Down, &mut ui, &snapshot);
@@ -2042,6 +2275,7 @@ mod tests {
             help_visible: false,
             animation_phase: 0,
             line_map: Vec::new(),
+            ..Default::default()
         };
 
         let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);

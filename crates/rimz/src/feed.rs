@@ -326,19 +326,6 @@ pub struct PaneRef {
     /// Used to detect reused pane IDs across mux restarts.
     #[serde(default)]
     pub pane_process_start: Option<Timestamp>,
-    /// Whether this pane's view (its tmux window) is the session's active view.
-    /// Advisory visibility metadata, never correctness: a sidebar on a
-    /// non-active view is hidden from any attached client, so it can suppress
-    /// its animation repaint. `None` when the backend cannot report it (Zellij
-    /// exposes no per-pane view-active signal) or a degraded `list-panes` row
-    /// dropped it — the renderer then paints as usual.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub view_active: Option<bool>,
-    /// Whether the pane's session has at least one client attached (a fully
-    /// detached session reports `false`). Pairs with [`Self::view_active`] for
-    /// the renderer's visibility gate. `None` = unknown → always render.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_attached: Option<bool>,
 }
 
 fn is_false(value: &bool) -> bool {

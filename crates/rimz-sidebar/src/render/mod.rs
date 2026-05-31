@@ -26,6 +26,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
+use rimz::ids::PaneId;
 use rimz::{SidebarRowKind, SidebarSnapshot};
 
 use self::fmt::age_short;
@@ -46,6 +47,17 @@ pub struct UiState {
     /// it as a byproduct of every draw; the mouse hit-test reads it. Empty
     /// before the first draw.
     pub line_map: Vec<Option<usize>>,
+    /// The pane a click/Enter optimistically focused, held until a folded
+    /// snapshot confirms the mux focus landed there. While set, the fetch fold
+    /// keeps the highlight pinned to this pane instead of adopting the
+    /// snapshot's briefly-stale focused pane — so an in-flight focus can't roll
+    /// the selection back. Cleared on confirmation, when the pane leaves the
+    /// room, after the focus deadline lapses, or on manual up/down navigation.
+    pub pending_focus: Option<PaneId>,
+    /// When the current `pending_focus` was registered. The fold abandons an
+    /// unconfirmed guard once this is older than the focus deadline, so a focus
+    /// that never lands can't pin the highlight forever.
+    pub pending_focus_since: Option<Timestamp>,
 }
 
 /// A sticky health alert pinned to the bottom of the sidebar.
@@ -573,8 +585,6 @@ mod tests {
             cwd: Some(cwd.to_owned()),
             pane_pid: None,
             pane_process_start: None,
-            view_active: None,
-            session_attached: None,
         }
     }
 
@@ -757,6 +767,7 @@ mod tests {
                 help_visible: false,
                 animation_phase: 0,
                 line_map: Vec::new(),
+                ..Default::default()
             },
             54,
             14,
@@ -838,6 +849,7 @@ mod tests {
                 help_visible: false,
                 animation_phase: 0,
                 line_map: Vec::new(),
+                ..Default::default()
             },
             44,
             12,
@@ -879,6 +891,7 @@ mod tests {
                 help_visible: false,
                 animation_phase: 0,
                 line_map: Vec::new(),
+                ..Default::default()
             },
             54,
             14,
@@ -1038,6 +1051,7 @@ mod tests {
                 help_visible: true,
                 animation_phase: 0,
                 line_map: Vec::new(),
+                ..Default::default()
             },
             80,
             18,
@@ -1141,6 +1155,7 @@ mod tests {
             help_visible: false,
             animation_phase: phase,
             line_map: Vec::new(),
+            ..Default::default()
         }
     }
 

@@ -188,8 +188,6 @@ impl MuxBackend for FakeBackend {
             cwd: None,
             pane_pid: None,
             pane_process_start: None,
-            view_active: None,
-            session_attached: None,
         }])
     }
 
