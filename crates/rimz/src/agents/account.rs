@@ -27,31 +27,53 @@ use serde::Deserialize;
 
 use super::AgentAccount;
 
-/// The provider account for `kind`, probed out-of-band. `None` when the provider
-/// exposes no out-of-band account here (e.g. an unknown kind) or the probe found
-/// none. A pure probe — the producer single-flights it behind the `accounts.json`
-/// cache, so it forks at most once per refresh, never on the per-tick hot path.
-pub fn probe(kind: &str) -> Option<AgentAccount> {
+/// The outcome of an out-of-band account probe. The three arms drive the
+/// producer's cache TTL: a `Found` or `LoggedOut` answer is authoritative and
+/// rides the long success TTL, while `Unavailable` — a binary that would not run,
+/// a non-zero exit, an unreadable file — is a transient failure the producer
+/// retries on the short failure TTL instead of pinning the dashboard empty for
+/// the full success window.
+#[derive(Debug)]
+pub enum AccountProbe {
+    /// A logged-in account with its plan/metering resolved.
+    Found(AgentAccount),
+    /// The probe ran and authoritatively found no login (logged out, or an auth
+    /// file naming no credential). Cache it like a success: it changes about never.
+    LoggedOut,
+    /// The probe could not complete — the binary is missing, it exited non-zero,
+    /// or its file was unreadable. Retry soon; absence here is not logged-out.
+    Unavailable,
+}
+
+/// The provider account for `kind`, probed out-of-band. A pure probe — the
+/// producer single-flights it behind the `accounts.json` cache, so it forks at
+/// most once per refresh, never on the per-tick hot path. An unknown kind has no
+/// probe here yet and reads as `LoggedOut` (nothing to retry).
+pub fn probe(kind: &str) -> AccountProbe {
     match kind {
         "claude" => probe_claude(),
         "codex" => probe_codex(),
         // Every other provider has no out-of-band login probe here yet.
-        _ => None,
+        _ => AccountProbe::LoggedOut,
     }
 }
 
 /// Probe Claude's account via `claude auth status` (JSON on stdout). Captures
-/// stdout only — never inherits stdio — so it stays quiet in a TUI.
-fn probe_claude() -> Option<AgentAccount> {
-    let output = Command::new("claude")
+/// stdout only — never inherits stdio — so it stays quiet in a TUI. A spawn
+/// failure or non-zero exit is `Unavailable` (transient), not a logged-out
+/// account, so a missing-then-installed binary recovers on the short retry TTL.
+fn probe_claude() -> AccountProbe {
+    let Ok(output) = Command::new("claude")
         .args(["auth", "status"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .output()
-        .ok()?;
+    else {
+        return AccountProbe::Unavailable;
+    };
     if !output.status.success() {
-        return None;
+        return AccountProbe::Unavailable;
     }
     parse_claude_auth(&output.stdout)
 }
@@ -67,33 +89,42 @@ struct ClaudeAuthStatus {
     subscription_type: Option<String>,
 }
 
-/// Map a `claude auth status` JSON payload onto an account. A subscription tier
-/// marks a metered (rate-limited) account; an API-key login carries no tier and
-/// is unmetered — the dashboard's "infinite" bar. `None` when logged out or the
-/// payload names neither a tier nor an auth method.
-fn parse_claude_auth(stdout: &[u8]) -> Option<AgentAccount> {
-    let status: ClaudeAuthStatus = serde_json::from_slice(stdout).ok()?;
+/// Map a `claude auth status` JSON payload onto a probe outcome. A subscription
+/// tier marks a metered (rate-limited) account; an API-key login carries no tier
+/// and is unmetered — the dashboard's "infinite" bar. A logged-out, or a valid
+/// payload naming neither a tier nor an auth method, is `LoggedOut`; unparseable
+/// output is `Unavailable` (the CLI misbehaved — retry), not a confident logout.
+fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
+    let Ok(status) = serde_json::from_slice::<ClaudeAuthStatus>(stdout) else {
+        return AccountProbe::Unavailable;
+    };
     if status.logged_in == Some(false) {
-        return None;
+        return AccountProbe::LoggedOut;
     }
     let plan = status.subscription_type.filter(|tier| !tier.is_empty());
     if plan.is_none() && status.auth_method.is_none() {
-        return None;
+        return AccountProbe::LoggedOut;
     }
     let metered = plan.is_some() && status.auth_method.as_deref() != Some("apiKey");
-    Some(AgentAccount {
+    AccountProbe::Found(AgentAccount {
         plan,
         metered: Some(metered),
     })
 }
 
 /// Probe Codex's login from `~/.codex/auth.json` (honoring `CODEX_HOME`). A file
-/// read only — never a subprocess — so it is cheap enough to call for an idle
-/// provider on every fold. `None` when the file is absent, unreadable, or names
-/// no login.
-fn probe_codex() -> Option<AgentAccount> {
-    let path = super::codex_app_server::codex_home()?.join("auth.json");
-    parse_codex_auth(&std::fs::read(path).ok()?)
+/// read only — never a subprocess. A missing file or a no-login payload is
+/// `LoggedOut` (an authoritative answer); only an unexpected IO error — e.g. a
+/// permission failure on an existing file — is the transient `Unavailable`.
+fn probe_codex() -> AccountProbe {
+    let Some(home) = super::codex_app_server::codex_home() else {
+        return AccountProbe::LoggedOut;
+    };
+    match std::fs::read(home.join("auth.json")) {
+        Ok(bytes) => parse_codex_auth(&bytes),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => AccountProbe::LoggedOut,
+        Err(_) => AccountProbe::Unavailable,
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -110,19 +141,23 @@ struct CodexTokens {
     access_token: Option<String>,
 }
 
-/// Map a `~/.codex/auth.json` payload onto an account by login shape: a non-empty
-/// `OPENAI_API_KEY` is an unmetered API-key login (the dashboard's `∞` bar), and
-/// a `tokens` block is a metered ChatGPT subscription login. The plan tier and
-/// budget windows ride the live app-server context, so an idle login carries no
-/// plan label here. `None` when neither login is present (logged out).
-fn parse_codex_auth(auth_json: &[u8]) -> Option<AgentAccount> {
-    let auth: CodexAuth = serde_json::from_slice(auth_json).ok()?;
+/// Map a `~/.codex/auth.json` payload onto a probe outcome by login shape: a
+/// non-empty `OPENAI_API_KEY` is an unmetered API-key login (the dashboard's `∞`
+/// bar), and a `tokens` block is a metered ChatGPT subscription login. The plan
+/// tier and budget windows ride the live app-server context, so an idle login
+/// carries no plan label here. `LoggedOut` when neither login is present, or the
+/// file is unparseable — a corrupt auth file is rewritten on the next login, and
+/// the read is cheap, so there is nothing a short retry would recover.
+fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
+    let Ok(auth) = serde_json::from_slice::<CodexAuth>(auth_json) else {
+        return AccountProbe::LoggedOut;
+    };
     if auth
         .openai_api_key
         .as_deref()
         .is_some_and(|key| !key.is_empty())
     {
-        return Some(AgentAccount {
+        return AccountProbe::Found(AgentAccount {
             plan: None,
             metered: Some(false),
         });
@@ -132,17 +167,25 @@ fn parse_codex_auth(auth_json: &[u8]) -> Option<AgentAccount> {
         .and_then(|tokens| tokens.access_token)
         .is_some_and(|token| !token.is_empty())
     {
-        return Some(AgentAccount {
+        return AccountProbe::Found(AgentAccount {
             plan: None,
             metered: Some(true),
         });
     }
-    None
+    AccountProbe::LoggedOut
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pull the account out of a `Found` outcome, or fail the test with `label`.
+    fn found(probe: AccountProbe, label: &str) -> AgentAccount {
+        match probe {
+            AccountProbe::Found(account) => account,
+            other => panic!("expected {label}, got {other:?}"),
+        }
+    }
 
     #[test]
     fn parses_a_subscription_account_as_metered() {
@@ -153,7 +196,7 @@ mod tests {
             "email": "rimio.ai@gmail.com",
             "subscriptionType": "max"
         }"#;
-        let account = parse_claude_auth(json).expect("metered account");
+        let account = found(parse_claude_auth(json), "metered account");
         assert_eq!(account.plan.as_deref(), Some("max"));
         assert_eq!(account.metered, Some(true));
     }
@@ -161,26 +204,29 @@ mod tests {
     #[test]
     fn parses_an_api_key_account_as_unmetered() {
         let json = br#"{ "loggedIn": true, "authMethod": "apiKey" }"#;
-        let account = parse_claude_auth(json).expect("api-key account");
+        let account = found(parse_claude_auth(json), "api-key account");
         assert_eq!(account.plan, None);
         assert_eq!(account.metered, Some(false));
     }
 
     #[test]
-    fn logged_out_is_no_account() {
+    fn logged_out_is_logged_out_not_a_failure() {
         let json = br#"{ "loggedIn": false }"#;
-        assert!(parse_claude_auth(json).is_none());
+        assert!(matches!(parse_claude_auth(json), AccountProbe::LoggedOut));
     }
 
     #[test]
-    fn garbage_output_is_no_account() {
-        assert!(parse_claude_auth(b"not json").is_none());
+    fn garbage_output_is_unavailable_so_it_retries_soon() {
+        assert!(matches!(
+            parse_claude_auth(b"not json"),
+            AccountProbe::Unavailable
+        ));
     }
 
     #[test]
     fn parses_a_codex_api_key_login_as_unmetered() {
         let json = br#"{ "OPENAI_API_KEY": "sk-abc", "tokens": null }"#;
-        let account = parse_codex_auth(json).expect("api-key login");
+        let account = found(parse_codex_auth(json), "api-key login");
         assert_eq!(account.plan, None);
         assert_eq!(account.metered, Some(false));
     }
@@ -191,16 +237,28 @@ mod tests {
             "OPENAI_API_KEY": null,
             "tokens": { "access_token": "ya29-token", "account_id": "acc_1" }
         }"#;
-        let account = parse_codex_auth(json).expect("chatgpt login");
+        let account = found(parse_codex_auth(json), "chatgpt login");
         // The plan tier and budgets ride the live app-server context, not the file.
         assert_eq!(account.plan, None);
         assert_eq!(account.metered, Some(true));
     }
 
     #[test]
-    fn codex_logged_out_or_garbage_is_no_account() {
-        assert!(parse_codex_auth(br#"{ "OPENAI_API_KEY": null }"#).is_none());
-        assert!(parse_codex_auth(br#"{ "tokens": { "access_token": "" } }"#).is_none());
-        assert!(parse_codex_auth(b"not json").is_none());
+    fn codex_logged_out_or_garbage_is_logged_out() {
+        // A codex auth file read is cheap and never a subprocess, so an absent
+        // credential — or an unparseable file — is an authoritative logged-out,
+        // not the transient `Unavailable` that drives a short retry.
+        assert!(matches!(
+            parse_codex_auth(br#"{ "OPENAI_API_KEY": null }"#),
+            AccountProbe::LoggedOut
+        ));
+        assert!(matches!(
+            parse_codex_auth(br#"{ "tokens": { "access_token": "" } }"#),
+            AccountProbe::LoggedOut
+        ));
+        assert!(matches!(
+            parse_codex_auth(b"not json"),
+            AccountProbe::LoggedOut
+        ));
     }
 }
