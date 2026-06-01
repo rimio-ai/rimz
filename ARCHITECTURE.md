@@ -110,7 +110,7 @@ CLI binary, hook entrypoints, and the runtime/domain library. Start here for any
 - `src/mux/zellij.rs` — Zellij commands, background session creation, native sidebar pane launch, pipe fast path.
 - `src/mux/tmux.rs` — tmux commands, native managed sidebar pane, popup/status integrations.
 - `src/mux/selection.rs` — backend selection precedence.
-- `src/agents/` — the agent integration layer; conventions in its own [`AGENTS.md`](./crates/rimz/src/agents/AGENTS.md), the decision boundary in [docs/internals/hooks.md](./docs/internals/hooks.md), the context read-path in [docs/internals/transcript.md](./docs/internals/transcript.md).
+- `src/agents/` — the agent integration layer; conventions in its own [`AGENTS.md`](./crates/rimz/src/agents/AGENTS.md), the decision boundary in [docs/internals/hooks.md](./docs/internals/hooks.md), the context read-path in [docs/internals/transcript.md](./docs/internals/transcript.md), the account/balance mapping in [docs/internals/account.md](./docs/internals/account.md).
 - `src/agents/mod.rs` — `AgentIntegration` trait; the shared bounded transcript-tail reader.
 - `src/agents/claude.rs` — Claude wrapper, hook installer, classification, rendering, transcript `message.usage` parsing.
 - `src/agents/codex.rs` — Codex hook install merge, classification, rendering, rollout-tail parsing and discovery.
@@ -118,6 +118,7 @@ CLI binary, hook entrypoints, and the runtime/domain library. Start here for any
 - `src/agents/statusline.rs` — Claude statusline payload parser and the wrap/restore of an existing `statusLine`.
 - `src/agents/codex_app_server.rs` — read-only Codex app-server JSON-RPC client (rate limits, model display name, version) behind a transport seam; the out-of-band `AgentContext` producer for Codex. Prefers the per-session broker socket, then the per-user daemon, then a cold-spawn.
 - `src/agents/codex_broker.rs` — the per-session Codex app-server broker (`rimz codex app-server serve`): holds one warm `codex app-server` and serves it over a unix socket so enrichment skips the per-datapoint handshake. Runs as a pane in the `rimzd` daemon tab.
+- `src/agents/account.rs` — the out-of-band provider account probe (`claude auth status`, `~/.codex/auth.json`) behind the `AccountProbe` outcome; producer-only, cached as `accounts.json`. The account/balance model and dashboard aggregation are in [docs/internals/account.md](./docs/internals/account.md).
 - Additional agent adapters (OpenCode, Pi, etc.) land per [docs/contributing/roadmap.md](./docs/contributing/roadmap.md) once their hook surfaces and decision shapes are verified (the mapping recipe is in [docs/internals/hooks.md](./docs/internals/hooks.md#adding-an-agent)).
 - `src/resolver/mod.rs` — re-exports for the resolver subsystem.
 - `src/resolver/allowlist.rs` — per-machine TOML allowlist with atomic writes.

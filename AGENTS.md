@@ -87,6 +87,7 @@ Every other document is a leaf from here. The `docs/` tree groups by audience: *
 - [hooks.md](./docs/internals/hooks.md) — the agent boundary: the integration trait, the two hook channels, install, and the Claude/Codex native-event mappings.
 - [agent.md](./docs/internals/agent.md) — agent state model: the rollup, state machine, posture, and liveness.
 - [transcript.md](./docs/internals/transcript.md) — agent context read-path: transcript discovery, tail parsing, the Claude/Codex JSONL→internal mapping, and the statusline / app-server rich-context transports.
+- [account.md](./docs/internals/account.md) — agent accounts and balances: the plan/metered model, the per-provider auth and rate-limit mapping, the out-of-band account probe, and the provider-dashboard aggregation.
 - [web.md](./docs/internals/web.md) — Zellij-only browser access and session-route design.
 - [performance.md](./docs/internals/performance.md) — render-thread hot path, the cost map, and the rules a performance change follows.
 
