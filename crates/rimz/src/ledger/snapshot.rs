@@ -1272,6 +1272,10 @@ fn agent_for_pane<'a>(
                 stamped.pane_id == pane.pane_id && pane_start_matches(stamped, pane)
             })
         })
+        // A subagent runs in its parent's pane and is stamped with the parent's
+        // pane id; it nests under the parent via `attach_sub_agents` and must
+        // never win the pane as a top-level row. Panes bind root agents only.
+        .filter(|agent| agent.parent_agent_id.is_none())
         .filter(|agent| !bound.contains(&(agent.kind.clone(), agent.agent_id.clone())))
         .max_by_key(|agent| agent.last_activity)
 }
@@ -4198,6 +4202,52 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
         assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "%1");
+    }
+
+    #[test]
+    fn subagent_never_steals_its_parents_pane() {
+        // A subagent runs in its parent's pane, so its lifecycle hooks stamp the
+        // parent's pane id — parent and child both claim `%1`. The child here is
+        // strictly more recently active than the parked parent, which would let
+        // `max_by_key(last_activity)` bind the pane to the child. Panes bind root
+        // agents only: `%1` stays the parent's row and the child nests under it.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut parent = agent(
+            "claude",
+            "sess-root",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            1_000,
+        );
+        parent.worktree_path = Some("/repo/main".to_owned());
+        parent.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+        // Newer activity than the parent (5s ago vs ~99s ago) — the flip trigger.
+        let mut child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
+        child.worktree_path = Some("/repo/main".to_owned());
+        child.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+
+        let snapshot = SidebarSnapshot::build_with_carryover(
+            workspace,
+            Vec::new(),
+            Vec::new(),
+            vec![parent, child],
+        )
+        .with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
+
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert_eq!(rows.len(), 1, "one pane binds exactly one top-level row");
+        assert_eq!(
+            rows[0].id, "sess-root",
+            "the pane binds the root, not the child"
+        );
+        assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "%1");
+        assert_eq!(
+            rows[0].sub_agents.len(),
+            1,
+            "the child nests under the parent"
+        );
+        assert_eq!(rows[0].sub_agents[0].id, "child-1");
+        assert_eq!(rows[0].sub_agents[0].name, "Explore");
     }
 
     #[test]
