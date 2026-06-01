@@ -23,7 +23,7 @@ All multiplexer-specific operations live behind one trait. Everything correctnes
 ```text
 name()
 ensure_session(session_name, cwd)
-attach_command(name) -> CommandSpec
+attach_command(name, config) -> CommandSpec
 detach(name)
 list_sessions()
 list_panes(session)               id, view, foreground command, cwd
@@ -76,8 +76,10 @@ Normalized IDs travel through env vars (`RIMZ_PANE_ID`), feed items, snapshots, 
 `ensure_session` is a no-op: Zellij creates sessions lazily, and the sidebar launch owns first birth. `open_sidebar` branches on the session's liveness, reported by `zellij list-sessions`:
 
 ```text
-zellij attach --create-background <session> options --default-cwd <cwd> --default-layout <layout>
+zellij attach --create-background <session> options <room-options> --default-cwd <cwd> --default-layout <layout>
 ```
+
+`<room-options>` comes from per-machine `[zellij]` config and is also present on `zellij attach --create <session> options …`: mouse mode, mouse click-through, focus-follows-mouse, pane frames, force-close behaviour, scrollback size, startup/release-note suppression, OSC52 clipboard target, copy-on-select, Kitty keyboard protocol, and OSC8 hyperlinks. `mouse-click-through` is version-gated because older Zellij builds reject the flag; omitting it degrades to focus-then-click rather than aborting launch.
 
 The default birth layout is the `default_tab_template`: a vertical split — a left `rimz-sidebar` pane at the configured width percentage and a focused terminal on the right — above a one-row `zellij:compact-bar` plugin pane. Because supplying a `default_tab_template` replaces Zellij's built-in one, which is what carries the tab/status bar, the layout re-adds the compact bar itself or every tab is born bare. The template — not a separate `tab` node — defines every tab, so the first tab and any the user opens later are born identically. The sidebar pane is `close_on_exit`, so it disappears when its own process exits (the self-close loop in [sidebar.md](./sidebar.md)). A Zellij layout applies only at session birth, so the branch is:
 
@@ -117,6 +119,8 @@ tmux split-window -d -h -l <width>% -b -t <session> \
 tmux set-hook -t <session> after-new-window \
   "split-window -h -b -d -l <width>% '<rimz-bin> sidebar serve ...'"
 ```
+
+`ensure_session` also applies per-machine `[tmux]` room options. Session and window options stay scoped to the Rimz session (`mouse`, `history-limit`, `renumber-windows`, `allow-passthrough`, `aggressive-resize`, and pane border shape). Server-scoped options (`focus-events`, `set-clipboard`, `extended-keys`, `extended-keys-format`, `escape-time`) are runtime-global inside the tmux server because tmux has no per-session equivalent for clipboard and rich-key handling.
 
 `open_sidebar` does both: it splits the sidebar into the initial window and installs a session-scoped `after-new-window` hook that re-runs the same left split in every window opened later. tmux has no tab template, so the hook is how it matches Zellij's `default_tab_template` parity — every view the user opens is born with a left sidebar and a focused right terminal (`-b` keeps the sidebar left, `-d` keeps focus on the new window's terminal).
 

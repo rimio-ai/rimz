@@ -767,6 +767,7 @@ fn fold_machine_config_with(
     let crate::config::MachineConfig {
         remote_control,
         sidebar,
+        ..
     } = config;
     snapshot.sidebar = sidebar;
 

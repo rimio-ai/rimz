@@ -234,6 +234,7 @@ fn open_sidebar_births_native_layout_and_template() {
                 width_percent: 30,
                 rimz_bin: stub,
                 replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
             },
             None,
         )
@@ -303,6 +304,7 @@ fn open_sidebar_on_live_session_is_idempotent() {
         width_percent: 30,
         rimz_bin: stub,
         replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
     };
 
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
@@ -382,6 +384,7 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
                 width_percent: 30,
                 rimz_bin: stub,
                 replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
             },
             None,
         )
@@ -833,6 +836,7 @@ fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundView
             width_percent: 30,
             rimz_bin: stub.to_path_buf(),
             replace_existing: false,
+            config: rimz::config::MultiplexerConfig::default(),
         },
     }
 }
@@ -929,6 +933,7 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
                 width_percent: 30,
                 rimz_bin: stub,
                 replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
             },
             Some(&daemon),
         )

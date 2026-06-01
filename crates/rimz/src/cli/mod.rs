@@ -402,13 +402,13 @@ fn join_agent_names(names: impl IntoIterator<Item = &'static str>) -> String {
 fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(&args.path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", args.path.display()))?;
-    let remote_control = remote_control_config();
-    if let Some(config) = &remote_control {
-        // Fail-fast precondition: an enabled host that cannot start aborts the
-        // launch here, with the fix, before any hook-install or session side
-        // effects — never bring a workspace up around a doomed host.
-        rimz::remote_control::preflight(config)?;
-    }
+    let machine_config = machine_config();
+    let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
+    let remote_control = &machine_config.remote_control;
+    // Fail-fast precondition: an enabled host that cannot start aborts the
+    // launch here, with the fix, before any hook-install or session side
+    // effects — never bring a workspace up around a doomed host.
+    rimz::remote_control::preflight(remote_control)?;
     ensure_detected_agent_hooks()?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
@@ -417,14 +417,13 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     backend.ensure_session(&SessionOptions {
         session_name: workspace.session_name.clone(),
         cwd: workspace.worktree_root.clone(),
+        config: mux_config.clone(),
     })?;
     // The daemon view (`rimzd`) is computed once, before the session is born: its
     // hosts depend on config and which agents are on PATH. When present, it leads
     // the session — on Zellij that order is fixed at birth (`open_sidebar` renders
     // the daemon tab first), since Zellij can't reorder tabs afterwards.
-    let daemon_view = remote_control
-        .as_ref()
-        .and_then(|config| build_daemon_view(config, &workspace));
+    let daemon_view = build_daemon_view(remote_control, &workspace, &mux_config);
     let daemon = daemon_view.as_ref().map(|view| DaemonView {
         name: view.name.clone(),
         hosts: view.hosts.clone(),
@@ -434,12 +433,16 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         &workspace.workspace_id,
         &workspace.session_name,
         &workspace.worktree_root,
+        &mux_config,
         daemon.as_ref(),
     );
-    if let Some(config) = &remote_control {
-        maybe_launch_remote_control(backend.as_ref(), &workspace, config, daemon_view.as_ref());
-    }
-    let spec = backend.attach_command(&workspace.session_name);
+    maybe_launch_remote_control(
+        backend.as_ref(),
+        &workspace,
+        remote_control,
+        daemon_view.as_ref(),
+    );
+    let spec = backend.attach_command(&workspace.session_name, &mux_config);
     tracing::info!(
         workspace = %workspace.workspace_id,
         session = %workspace.session_name,
@@ -459,6 +462,8 @@ fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
 
 fn attach_cwd(mode: AttachMode, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
+    let machine_config = machine_config();
+    let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
     retire_renamed_session(backend.as_ref(), &workspace);
@@ -466,15 +471,17 @@ fn attach_cwd(mode: AttachMode, globals: &GlobalFlags) -> Result<()> {
     backend.ensure_session(&SessionOptions {
         session_name: workspace.session_name.clone(),
         cwd: workspace.worktree_root.clone(),
+        config: mux_config.clone(),
     })?;
     launch_sidebar_for_workspace(
         backend.as_ref(),
         &workspace.workspace_id,
         &workspace.session_name,
         &workspace.worktree_root,
+        &mux_config,
         None,
     );
-    let spec = backend.attach_command(&workspace.session_name);
+    let spec = backend.attach_command(&workspace.session_name, &mux_config);
     run_attach_action(&spec, mode, mux)
 }
 
@@ -485,6 +492,8 @@ fn attach_named(session: &str, mode: AttachMode, globals: &GlobalFlags) -> Resul
     } else {
         MissingSessionReport::Warn
     };
+    let machine_config = machine_config();
+    let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let mux = pick_mux_for_session(session, globals.mux, missing_report)?;
     let backend = rimz::mux::backend_for(mux);
     match record {
@@ -492,12 +501,14 @@ fn attach_named(session: &str, mode: AttachMode, globals: &GlobalFlags) -> Resul
             backend.ensure_session(&SessionOptions {
                 session_name: record.session_name.clone(),
                 cwd: record.project_root.clone(),
+                config: mux_config.clone(),
             })?;
             launch_sidebar_for_workspace(
                 backend.as_ref(),
                 &record.workspace_id,
                 &record.session_name,
                 &record.project_root,
+                &mux_config,
                 None,
             );
         }
@@ -515,7 +526,7 @@ fn attach_named(session: &str, mode: AttachMode, globals: &GlobalFlags) -> Resul
             );
         }
     }
-    let spec = backend.attach_command(session);
+    let spec = backend.attach_command(session, &mux_config);
     run_attach_action(&spec, mode, mux)
 }
 
@@ -634,6 +645,7 @@ fn launch_sidebar_for_workspace(
     workspace_id: &rimz::WorkspaceId,
     session_name: &str,
     cwd: &Path,
+    mux_config: &rimz::config::MultiplexerConfig,
     daemon: Option<&DaemonView>,
 ) -> rimz::sidebar::SidebarLaunchOutcome {
     let runtime = match RuntimePaths::for_workspace(workspace_id.clone()) {
@@ -665,23 +677,23 @@ fn launch_sidebar_for_workspace(
         width_percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
         rimz_bin,
         replace_existing: false,
+        config: mux_config.clone(),
     };
     rimz::sidebar::launch_sidebar_if_needed(backend, &runtime, &opts, daemon)
 }
 
-/// The per-machine remote-control config, or `None` (warned) when the
-/// per-machine config can't be read. A malformed config opts the workspace out
-/// of the managed hosts — it never aborts a start, and the preflight is skipped
-/// (nothing is enabled to fail on).
-fn remote_control_config() -> Option<rimz::config::RemoteControlConfig> {
+/// The per-machine config. A malformed config falls back to defaults after a
+/// warning, preserving the existing "config read is best-effort" contract for
+/// personal preferences.
+fn machine_config() -> rimz::config::MachineConfig {
     match rimz::config::MachineConfig::load() {
-        Ok(config) => Some(config.remote_control),
+        Ok(config) => config,
         Err(err) => {
             tracing::warn!(
                 error = %err,
-                "reading per-machine config; skipping remote-control auto-launch",
+                "reading per-machine config; using built-in defaults",
             );
-            None
+            rimz::config::MachineConfig::default()
         }
     }
 }
@@ -702,6 +714,7 @@ fn remote_control_config() -> Option<rimz::config::RemoteControlConfig> {
 fn build_daemon_view(
     config: &rimz::config::RemoteControlConfig,
     workspace: &rimz::ResolvedWorkspace,
+    mux_config: &rimz::config::MultiplexerConfig,
 ) -> Option<BackgroundViewOptions> {
     let rimz_bin = match std::env::current_exe() {
         Ok(path) => path,
@@ -739,6 +752,7 @@ fn build_daemon_view(
             width_percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
             rimz_bin,
             replace_existing: false,
+            config: mux_config.clone(),
         },
     })
 }

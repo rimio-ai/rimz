@@ -156,6 +156,7 @@ fn ensure_and_list_sessions_round_trip() {
         .ensure_session(&SessionOptions {
             session_name: "rimz-test".to_owned(),
             cwd: cwd.path().to_path_buf(),
+            config: rimz::config::MultiplexerConfig::default(),
         })
         .expect("ensure");
 
@@ -248,6 +249,7 @@ fn open_background_view_creates_named_window_idempotently() {
         width_percent: 30,
         rimz_bin: stub,
         replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
     };
     // Install the `after-new-window` sidebar hook the way `rimz start` does
     // before launching the host.
@@ -419,6 +421,7 @@ fn open_sidebar_split_window_succeeds() {
                 width_percent: 30,
                 rimz_bin: stub,
                 replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
             },
             None,
         )
@@ -467,6 +470,7 @@ fn recover_sidebars_adds_one_to_a_sidebarless_window() {
             width_percent: 30,
             rimz_bin: stub,
             replace_existing: false,
+            config: rimz::config::MultiplexerConfig::default(),
         })
         .expect("recover_sidebars");
 
@@ -559,6 +563,7 @@ fn new_window_is_born_with_a_sidebar_and_focused_terminal() {
                 width_percent: 30,
                 rimz_bin: stub,
                 replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
             },
             None,
         )

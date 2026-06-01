@@ -23,6 +23,7 @@ use super::{
     MuxErr, PaneCapture, PaneListOptions, Result, SessionOptions, SidebarPaneOptions,
     SidebarRecovery, SplitPaneOptions, ensure_pane_backend,
 };
+use crate::config::ZellijConfig;
 use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
 
@@ -102,12 +103,51 @@ fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
 /// the version is older or unparseable — older Zellij does not know the flag, so
 /// passing it would abort the launch; degrading to focus-then-click is the
 /// floor.
-fn mouse_click_through_args(parsed: Option<(u32, u32, u32)>) -> Vec<String> {
-    if parsed.is_some_and(|v| v >= MIN_MOUSE_CLICK_THROUGH_VERSION) {
+fn mouse_click_through_args(enabled: bool, parsed: Option<(u32, u32, u32)>) -> Vec<String> {
+    if enabled && parsed.is_some_and(|v| v >= MIN_MOUSE_CLICK_THROUGH_VERSION) {
         vec!["--mouse-click-through".to_owned(), "true".to_owned()]
     } else {
         Vec::new()
     }
+}
+
+/// Zellij `options` flags Rimz owns for its rooms. `mouse-click-through` is
+/// version-gated separately because older supported Zellij builds reject the
+/// unknown option; the rest are present at Rimz's Zellij floor.
+fn zellij_options_args(
+    config: &ZellijConfig,
+    parsed_version: Option<(u32, u32, u32)>,
+) -> Vec<String> {
+    let bool_value = |value: bool| if value { "true" } else { "false" }.to_owned();
+    let mut args = vec![
+        "--mouse-mode".to_owned(),
+        bool_value(config.mouse_mode),
+        "--focus-follows-mouse".to_owned(),
+        bool_value(config.focus_follows_mouse),
+        "--pane-frames".to_owned(),
+        bool_value(config.pane_frames),
+        "--on-force-close".to_owned(),
+        config.on_force_close.as_str().to_owned(),
+        "--scroll-buffer-size".to_owned(),
+        config.scroll_buffer_size.to_string(),
+        "--show-startup-tips".to_owned(),
+        bool_value(config.show_startup_tips),
+        "--show-release-notes".to_owned(),
+        bool_value(config.show_release_notes),
+        "--copy-clipboard".to_owned(),
+        config.copy_clipboard.as_str().to_owned(),
+        "--copy-on-select".to_owned(),
+        bool_value(config.copy_on_select),
+        "--support-kitty-keyboard-protocol".to_owned(),
+        bool_value(config.support_kitty_keyboard_protocol),
+        "--osc8-hyperlinks".to_owned(),
+        bool_value(config.osc8_hyperlinks),
+    ];
+    args.extend(mouse_click_through_args(
+        config.mouse_click_through,
+        parsed_version,
+    ));
+    args
 }
 
 #[derive(Clone, Debug, Default)]
@@ -148,12 +188,12 @@ impl ZellijBackend {
         spec
     }
 
-    /// Probe the installed Zellij and resolve the `mouse_click_through` flags for
-    /// it. Empty on a probe failure or an unparseable version — never block a
-    /// launch on the optional mouse passthrough.
-    fn mouse_click_through_args_probed(&self) -> Vec<String> {
+    /// Probe the installed Zellij and resolve the session `options` flags for
+    /// it. Empty version-gated flags on a probe failure or an unparseable
+    /// version — never block a launch on optional mouse passthrough.
+    fn zellij_options_args_probed(&self, config: &ZellijConfig) -> Vec<String> {
         let parsed = self.version().ok().as_deref().and_then(parse_version);
-        mouse_click_through_args(parsed)
+        zellij_options_args(config, parsed)
     }
 
     fn list_panes_with_session(&self, session: Option<&str>) -> Result<Vec<RawPane>> {
@@ -256,14 +296,14 @@ impl ZellijBackend {
             "--create-background".to_owned(),
             opts.session_name.clone(),
             "options".to_owned(),
+        ];
+        option_args.extend(self.zellij_options_args_probed(&opts.config.zellij));
+        option_args.extend([
             "--default-cwd".to_owned(),
             opts.cwd.to_string_lossy().into_owned(),
             "--default-layout".to_owned(),
             layout.path().to_string_lossy().into_owned(),
-        ];
-        // Forward a single click through the sidebar pane to the renderer so a
-        // jump lands on the first click. Version-gated; empty on older Zellij.
-        option_args.extend(self.mouse_click_through_args_probed());
+        ]);
         let spec = self.cmd().args(option_args);
         let spawn = || -> Result<bool> {
             let mut command = spec.to_command();
@@ -565,19 +605,15 @@ impl MuxBackend for ZellijBackend {
         Ok(())
     }
 
-    fn attach_command(&self, name: &str) -> CommandSpec {
-        let mut spec =
-            self.cmd()
-                .args(["attach".to_owned(), "--create".to_owned(), name.to_owned()]);
-        // Carry mouse passthrough onto an already-running session: the next
-        // attach applies the `options` so a single click reaches the renderer.
-        // Empty on older Zellij, so the bare `attach --create` stands.
-        let mouse = self.mouse_click_through_args_probed();
-        if !mouse.is_empty() {
-            spec = spec.arg("options");
-            spec = spec.args(mouse);
-        }
-        spec
+    fn attach_command(&self, name: &str, config: &crate::config::MultiplexerConfig) -> CommandSpec {
+        self.cmd()
+            .args([
+                "attach".to_owned(),
+                "--create".to_owned(),
+                name.to_owned(),
+                "options".to_owned(),
+            ])
+            .args(self.zellij_options_args_probed(&config.zellij))
     }
 
     fn detach(&self, _name: &str) -> Result<()> {
@@ -1331,13 +1367,29 @@ mod tests {
     #[test]
     fn mouse_click_through_args_gate_on_version() {
         // Older or unknown Zellij does not know the flag — omit it.
-        assert!(mouse_click_through_args(None).is_empty());
-        assert!(mouse_click_through_args(Some((0, 43, 9))).is_empty());
-        assert!(mouse_click_through_args(Some((0, 41, 0))).is_empty());
+        assert!(mouse_click_through_args(true, None).is_empty());
+        assert!(mouse_click_through_args(true, Some((0, 43, 9))).is_empty());
+        assert!(mouse_click_through_args(true, Some((0, 41, 0))).is_empty());
+        assert!(mouse_click_through_args(false, Some((0, 44, 3))).is_empty());
         // The release that added the option, and newer, carry it.
         let expected = vec!["--mouse-click-through".to_owned(), "true".to_owned()];
-        assert_eq!(mouse_click_through_args(Some((0, 44, 0))), expected);
-        assert_eq!(mouse_click_through_args(Some((0, 44, 3))), expected);
+        assert_eq!(mouse_click_through_args(true, Some((0, 44, 0))), expected);
+        assert_eq!(mouse_click_through_args(true, Some((0, 44, 3))), expected);
+    }
+
+    #[test]
+    fn zellij_options_render_room_defaults() {
+        let args = zellij_options_args(&ZellijConfig::default(), Some((0, 44, 3)));
+        let has = |flag: &str, value: &str| {
+            args.windows(2)
+                .any(|pair| pair[0] == flag && pair[1] == value)
+        };
+        assert!(has("--mouse-mode", "true"));
+        assert!(has("--mouse-click-through", "true"));
+        assert!(has("--focus-follows-mouse", "true"));
+        assert!(has("--pane-frames", "false"));
+        assert!(has("--copy-clipboard", "system"));
+        assert!(has("--support-kitty-keyboard-protocol", "true"));
     }
 
     #[test]
@@ -1487,6 +1539,7 @@ mod tests {
             width_percent: 30,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
+            config: crate::config::MultiplexerConfig::default(),
         };
         let layout = render_sidebar_layout(&opts).expect("render layout");
         assert!(
@@ -1506,6 +1559,7 @@ mod tests {
             width_percent: 30,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
+            config: crate::config::MultiplexerConfig::default(),
         };
         let layout = render_sidebar_layout(&opts).expect("render layout");
         // The template must spell out the focused terminal instead of relying
@@ -1547,6 +1601,7 @@ mod tests {
                 width_percent: 30,
                 rimz_bin: PathBuf::from("/usr/bin/rimz"),
                 replace_existing: false,
+                config: crate::config::MultiplexerConfig::default(),
             },
         }
     }
@@ -1671,6 +1726,7 @@ mod tests {
             width_percent: 30,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
+            config: crate::config::MultiplexerConfig::default(),
         };
         let layout = render_sidebar_layout(&opts).expect("render layout");
         assert!(

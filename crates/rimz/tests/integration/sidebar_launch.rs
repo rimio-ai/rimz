@@ -98,6 +98,7 @@ impl SidebarHarness {
             width_percent: 30,
             rimz_bin: PathBuf::from("rimz"),
             replace_existing: false,
+            config: rimz::config::MultiplexerConfig::default(),
         }
     }
 
@@ -160,7 +161,7 @@ impl MuxBackend for FakeBackend {
         Ok(())
     }
 
-    fn attach_command(&self, name: &str) -> CommandSpec {
+    fn attach_command(&self, name: &str, _config: &rimz::config::MultiplexerConfig) -> CommandSpec {
         CommandSpec::new("fake").arg(name)
     }
 

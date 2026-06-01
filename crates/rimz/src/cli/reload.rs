@@ -52,6 +52,10 @@ fn recover_lost_sidebars(globals: &GlobalFlags, workspace: &ResolvedWorkspace) -
         tracing::warn!(error = %err, "current executable unavailable; recovery uses bare `rimz`");
         std::path::PathBuf::from("rimz")
     });
+    let machine_config = rimz::config::MachineConfig::load().unwrap_or_else(|err| {
+        tracing::warn!(error = %err, "reading per-machine config; using built-in defaults");
+        rimz::config::MachineConfig::default()
+    });
     let opts = SidebarPaneOptions {
         session_name: workspace.session_name.clone(),
         workspace_id: workspace.workspace_id.clone(),
@@ -59,6 +63,7 @@ fn recover_lost_sidebars(globals: &GlobalFlags, workspace: &ResolvedWorkspace) -
         width_percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
         rimz_bin,
         replace_existing: false,
+        config: rimz::config::MultiplexerConfig::from(&machine_config),
     };
     rimz::mux::backend_for(mux)
         .recover_sidebars(&opts)

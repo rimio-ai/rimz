@@ -214,6 +214,7 @@ pub struct PaneListOptions {
 pub struct SessionOptions {
     pub session_name: String,
     pub cwd: PathBuf,
+    pub config: crate::config::MultiplexerConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -224,6 +225,7 @@ pub struct SidebarPaneOptions {
     pub width_percent: u16,
     pub rimz_bin: PathBuf,
     pub replace_existing: bool,
+    pub config: crate::config::MultiplexerConfig,
 }
 
 /// Tally of one in-place sidebar recovery pass ([`MuxBackend::recover_sidebars`]).
@@ -342,7 +344,7 @@ pub enum BackgroundViewLaunch {
 pub trait MuxBackend: Send + Sync {
     fn name(&self) -> MuxName;
     fn ensure_session(&self, opts: &SessionOptions) -> Result<()>;
-    fn attach_command(&self, name: &str) -> CommandSpec;
+    fn attach_command(&self, name: &str, config: &crate::config::MultiplexerConfig) -> CommandSpec;
     fn detach(&self, name: &str) -> Result<()>;
     /// Force-remove a session by name. A missing session is success — the goal
     /// state is "no session by that name", so callers can retire a stale or

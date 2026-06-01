@@ -45,6 +45,214 @@ pub type Result<T> = std::result::Result<T, ConfigErr>;
 pub struct MachineConfig {
     pub remote_control: RemoteControlConfig,
     pub sidebar: SidebarConfig,
+    pub zellij: ZellijConfig,
+    pub tmux: TmuxConfig,
+}
+
+/// Multiplexer-only preferences, split out so CLI launch code can thread just
+/// the settings a backend needs instead of the whole per-machine config.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MultiplexerConfig {
+    pub zellij: ZellijConfig,
+    pub tmux: TmuxConfig,
+}
+
+impl From<&MachineConfig> for MultiplexerConfig {
+    fn from(config: &MachineConfig) -> Self {
+        Self {
+            zellij: config.zellij.clone(),
+            tmux: config.tmux.clone(),
+        }
+    }
+}
+
+/// Rimz-owned Zellij room defaults. These are passed as `zellij attach …
+/// options …` when a Rimz session is born or reattached, so they do not require
+/// editing `~/.config/zellij/config.kdl`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ZellijConfig {
+    pub mouse_mode: bool,
+    pub mouse_click_through: bool,
+    pub focus_follows_mouse: bool,
+    pub pane_frames: bool,
+    pub on_force_close: ZellijForceClose,
+    pub scroll_buffer_size: u32,
+    pub show_startup_tips: bool,
+    pub show_release_notes: bool,
+    pub copy_clipboard: ZellijClipboard,
+    pub copy_on_select: bool,
+    pub support_kitty_keyboard_protocol: bool,
+    pub osc8_hyperlinks: bool,
+}
+
+impl Default for ZellijConfig {
+    fn default() -> Self {
+        Self {
+            mouse_mode: true,
+            mouse_click_through: true,
+            focus_follows_mouse: true,
+            pane_frames: false,
+            on_force_close: ZellijForceClose::Detach,
+            scroll_buffer_size: 100_000,
+            show_startup_tips: false,
+            show_release_notes: false,
+            copy_clipboard: ZellijClipboard::System,
+            copy_on_select: true,
+            support_kitty_keyboard_protocol: true,
+            osc8_hyperlinks: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZellijForceClose {
+    #[default]
+    Detach,
+    Quit,
+}
+
+impl ZellijForceClose {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Detach => "detach",
+            Self::Quit => "quit",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZellijClipboard {
+    #[default]
+    System,
+    Primary,
+}
+
+impl ZellijClipboard {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Primary => "primary",
+        }
+    }
+}
+
+/// Rimz-owned tmux room defaults. Session/window options stay scoped to the
+/// Rimz session. tmux server options are runtime-global inside the tmux server;
+/// Rimz sets them because clipboard and rich-key support are server-scoped.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TmuxConfig {
+    pub mouse: bool,
+    pub focus_events: bool,
+    pub history_limit: u32,
+    pub allow_passthrough: bool,
+    pub set_clipboard: TmuxSetClipboard,
+    pub extended_keys: bool,
+    pub extended_keys_format: TmuxExtendedKeysFormat,
+    pub escape_time_ms: u32,
+    pub renumber_windows: bool,
+    pub aggressive_resize: bool,
+    pub pane_border_status: TmuxPaneBorderStatus,
+    pub pane_border_lines: TmuxPaneBorderLines,
+}
+
+impl Default for TmuxConfig {
+    fn default() -> Self {
+        Self {
+            mouse: true,
+            focus_events: true,
+            history_limit: 100_000,
+            allow_passthrough: true,
+            set_clipboard: TmuxSetClipboard::On,
+            extended_keys: true,
+            extended_keys_format: TmuxExtendedKeysFormat::CsiU,
+            escape_time_ms: 0,
+            renumber_windows: true,
+            aggressive_resize: true,
+            pane_border_status: TmuxPaneBorderStatus::Off,
+            pane_border_lines: TmuxPaneBorderLines::Simple,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TmuxSetClipboard {
+    Off,
+    External,
+    #[default]
+    On,
+}
+
+impl TmuxSetClipboard {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::External => "external",
+            Self::On => "on",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub enum TmuxExtendedKeysFormat {
+    #[default]
+    #[serde(rename = "csi-u")]
+    CsiU,
+    #[serde(rename = "xterm")]
+    Xterm,
+}
+
+impl TmuxExtendedKeysFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CsiU => "csi-u",
+            Self::Xterm => "xterm",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TmuxPaneBorderStatus {
+    #[default]
+    Off,
+    Top,
+    Bottom,
+}
+
+impl TmuxPaneBorderStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TmuxPaneBorderLines {
+    Single,
+    Double,
+    Heavy,
+    #[default]
+    Simple,
+}
+
+impl TmuxPaneBorderLines {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Single => "single",
+            Self::Double => "double",
+            Self::Heavy => "heavy",
+            Self::Simple => "simple",
+        }
+    }
 }
 
 /// How much of each agent card the sidebar renders by default (unselected).
@@ -235,6 +443,84 @@ mod tests {
         let config = MachineConfig::load_from(&write(&dir, text)).expect("load");
         assert!(config.remote_control.codex);
         assert!(!config.remote_control.claude);
+    }
+
+    #[test]
+    fn zellij_room_defaults_are_agent_friendly() {
+        let dir = tempdir().expect("tempdir");
+        let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+        assert!(config.zellij.mouse_mode);
+        assert!(config.zellij.mouse_click_through);
+        assert!(config.zellij.focus_follows_mouse);
+        assert!(!config.zellij.pane_frames);
+        assert_eq!(config.zellij.on_force_close, ZellijForceClose::Detach);
+        assert_eq!(config.zellij.scroll_buffer_size, 100_000);
+        assert!(!config.zellij.show_startup_tips);
+        assert!(!config.zellij.show_release_notes);
+        assert_eq!(config.zellij.copy_clipboard, ZellijClipboard::System);
+        assert!(config.zellij.copy_on_select);
+        assert!(config.zellij.support_kitty_keyboard_protocol);
+        assert!(config.zellij.osc8_hyperlinks);
+    }
+
+    #[test]
+    fn zellij_room_options_parse() {
+        let dir = tempdir().expect("tempdir");
+        let config = MachineConfig::load_from(&write(
+            &dir,
+            "[zellij]\n\
+             pane_frames = true\n\
+             focus_follows_mouse = false\n\
+             copy_clipboard = \"primary\"\n\
+             on_force_close = \"quit\"\n",
+        ))
+        .expect("load");
+        assert!(config.zellij.pane_frames);
+        assert!(!config.zellij.focus_follows_mouse);
+        assert_eq!(config.zellij.copy_clipboard, ZellijClipboard::Primary);
+        assert_eq!(config.zellij.on_force_close, ZellijForceClose::Quit);
+    }
+
+    #[test]
+    fn tmux_room_defaults_are_agent_friendly() {
+        let dir = tempdir().expect("tempdir");
+        let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+        assert!(config.tmux.mouse);
+        assert!(config.tmux.focus_events);
+        assert_eq!(config.tmux.history_limit, 100_000);
+        assert!(config.tmux.allow_passthrough);
+        assert_eq!(config.tmux.set_clipboard, TmuxSetClipboard::On);
+        assert!(config.tmux.extended_keys);
+        assert_eq!(
+            config.tmux.extended_keys_format,
+            TmuxExtendedKeysFormat::CsiU,
+        );
+        assert_eq!(config.tmux.escape_time_ms, 0);
+        assert!(config.tmux.renumber_windows);
+        assert!(config.tmux.aggressive_resize);
+        assert_eq!(config.tmux.pane_border_status, TmuxPaneBorderStatus::Off);
+        assert_eq!(config.tmux.pane_border_lines, TmuxPaneBorderLines::Simple);
+    }
+
+    #[test]
+    fn tmux_room_options_parse() {
+        let dir = tempdir().expect("tempdir");
+        let config = MachineConfig::load_from(&write(
+            &dir,
+            "[tmux]\n\
+             set_clipboard = \"external\"\n\
+             extended_keys_format = \"xterm\"\n\
+             pane_border_status = \"top\"\n\
+             pane_border_lines = \"heavy\"\n",
+        ))
+        .expect("load");
+        assert_eq!(config.tmux.set_clipboard, TmuxSetClipboard::External);
+        assert_eq!(
+            config.tmux.extended_keys_format,
+            TmuxExtendedKeysFormat::Xterm,
+        );
+        assert_eq!(config.tmux.pane_border_status, TmuxPaneBorderStatus::Top);
+        assert_eq!(config.tmux.pane_border_lines, TmuxPaneBorderLines::Heavy);
     }
 
     #[test]

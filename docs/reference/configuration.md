@@ -57,6 +57,7 @@ projects/<sha256(project_root)>/    per-project, per-machine state
 `config.toml` may define:
 
 - remote-control auto-launch, per agent (`[remote_control] claude` / `codex`),
+- Rimz room multiplexer options (`[zellij]`, `[tmux]`),
 - sidebar row density (`[sidebar] density`),
 - local workspace display name,
 - sound profile,
@@ -78,6 +79,44 @@ Each toggle is independent. The two hosts launch differently, because their life
 - **Codex** runs `remote-control start`, which brings up the Codex app-server daemon with remote control enabled, then returns. That daemon is a **per-user singleton** (keyed by one control socket), so `rimz start` does *not* park it in a per-workspace pane: it spawns the (idempotent) start command detached, with null stdio, once — no pane, no terminal output. `remote-control start` boots and updates the app-server from the *managed standalone install* at `$CODEX_HOME/packages/standalone/current/codex` (CODEX_HOME defaults to `~/.codex`), so a distro `codex` on PATH (e.g. `/usr/bin/codex`) is a different binary and does not satisfy it. **Fail-fast:** when `codex = true` but that install is absent, `rimz start` refuses up front rather than ensuring a daemon that only errors — install it with `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, then re-run (or set `codex = false`). `rimz doctor` reports the same gap and fix ahead of time.
 
 This tier is per-machine on purpose: remote control links *your* agent accounts and accepts remote spawn commands, so a clone never inherits it and it never enters the project trust hash.
+
+### Multiplexer room options
+
+Rimz applies a small set of per-machine multiplexer defaults when it creates or reattaches a room, so the room has the mouse, clipboard, rich-key, and scrollback behaviour agents need without editing your global Zellij/tmux config files.
+
+```toml
+[zellij]
+mouse_mode = true
+mouse_click_through = true
+focus_follows_mouse = true
+pane_frames = false
+on_force_close = "detach"              # "detach" | "quit"
+scroll_buffer_size = 100000
+show_startup_tips = false
+show_release_notes = false
+copy_clipboard = "system"              # "system" | "primary"
+copy_on_select = true
+support_kitty_keyboard_protocol = true
+osc8_hyperlinks = true
+
+[tmux]
+mouse = true
+focus_events = true
+history_limit = 100000
+allow_passthrough = true
+set_clipboard = "on"                   # "on" | "external" | "off"
+extended_keys = true
+extended_keys_format = "csi-u"          # "csi-u" | "xterm"
+escape_time_ms = 0
+renumber_windows = true
+aggressive_resize = true
+pane_border_status = "off"              # "off" | "top" | "bottom"
+pane_border_lines = "simple"            # "simple" | "single" | "double" | "heavy"
+```
+
+Zellij receives these as `zellij attach … options …` on both session birth and attach. `copy_clipboard = "system"` uses Zellij's OSC52 path unless your Zellij config sets `copy_command`, which deliberately replaces OSC52 with that command.
+
+tmux splits the same idea across scopes. `mouse`, `history_limit`, and `renumber_windows` are set on the Rimz session; `allow_passthrough`, `aggressive_resize`, and pane border options are set on the Rimz session's window options; `focus_events`, `set_clipboard`, `extended_keys`, `extended_keys_format`, and `escape_time_ms` are tmux server options because tmux has no per-session equivalent for clipboard and rich-key handling.
 
 ### The `rimzd` daemon tab
 

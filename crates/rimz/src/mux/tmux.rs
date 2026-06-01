@@ -19,6 +19,7 @@ use super::{
     PaneCapture, PaneListOptions, Result, SessionOptions, SidebarPaneOptions, SidebarRecovery,
     SplitPaneOptions, ensure_pane_backend,
 };
+use crate::config::TmuxConfig;
 use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
 
@@ -170,6 +171,49 @@ impl TmuxBackend {
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "0".to_owned())
     }
+
+    /// Apply Rimz's tmux room options. tmux splits these across server,
+    /// session, and window scopes; server options affect every session in this
+    /// tmux server because tmux offers no per-session equivalent for clipboard
+    /// and rich-key handling.
+    fn apply_room_options(&self, session: &str, config: &TmuxConfig) -> Result<()> {
+        for (key, value) in tmux_server_options(config) {
+            self.cmd()
+                .args([
+                    "set-option".to_owned(),
+                    "-s".to_owned(),
+                    key.to_owned(),
+                    value,
+                ])
+                .run()
+                .map(|_| ())?;
+        }
+        for (key, value) in tmux_session_options(config) {
+            self.cmd()
+                .args([
+                    "set-option".to_owned(),
+                    "-t".to_owned(),
+                    session.to_owned(),
+                    key.to_owned(),
+                    value,
+                ])
+                .run()
+                .map(|_| ())?;
+        }
+        for (key, value) in tmux_window_options(config) {
+            self.cmd()
+                .args([
+                    "set-window-option".to_owned(),
+                    "-t".to_owned(),
+                    session.to_owned(),
+                    key.to_owned(),
+                    value,
+                ])
+                .run()
+                .map(|_| ())?;
+        }
+        Ok(())
+    }
 }
 
 /// Binary name a tmux sidebar pane runs in the foreground. The launching `rimz
@@ -197,6 +241,46 @@ fn is_tmux_sidebar(pane: &PaneRef) -> bool {
     pane.command.as_deref() == Some(SIDEBAR_BIN_NAME)
 }
 
+fn tmux_bool(value: bool) -> String {
+    if value { "on" } else { "off" }.to_owned()
+}
+
+fn tmux_server_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {
+    vec![
+        ("focus-events", tmux_bool(config.focus_events)),
+        ("set-clipboard", config.set_clipboard.as_str().to_owned()),
+        ("extended-keys", tmux_bool(config.extended_keys)),
+        (
+            "extended-keys-format",
+            config.extended_keys_format.as_str().to_owned(),
+        ),
+        ("escape-time", config.escape_time_ms.to_string()),
+    ]
+}
+
+fn tmux_session_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {
+    vec![
+        ("mouse", tmux_bool(config.mouse)),
+        ("history-limit", config.history_limit.to_string()),
+        ("renumber-windows", tmux_bool(config.renumber_windows)),
+    ]
+}
+
+fn tmux_window_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {
+    vec![
+        ("allow-passthrough", tmux_bool(config.allow_passthrough)),
+        ("aggressive-resize", tmux_bool(config.aggressive_resize)),
+        (
+            "pane-border-status",
+            config.pane_border_status.as_str().to_owned(),
+        ),
+        (
+            "pane-border-lines",
+            config.pane_border_lines.as_str().to_owned(),
+        ),
+    ]
+}
+
 impl MuxBackend for TmuxBackend {
     fn name(&self) -> MuxName {
         MuxName::Tmux
@@ -216,10 +300,15 @@ impl MuxBackend for TmuxBackend {
                 opts.cwd.to_string_lossy().into_owned(),
             ])
             .run()
-            .map(|_| ())
+            .map(|_| ())?;
+        self.apply_room_options(&opts.session_name, &opts.config.tmux)
     }
 
-    fn attach_command(&self, name: &str) -> CommandSpec {
+    fn attach_command(
+        &self,
+        name: &str,
+        _config: &crate::config::MultiplexerConfig,
+    ) -> CommandSpec {
         self.cmd().args(["attach", "-t", name])
     }
 
@@ -602,6 +691,38 @@ mod tests {
         assert!((3, 2, 0) >= MIN_TMUX_VERSION);
         assert!((3, 5, 0) >= MIN_TMUX_VERSION);
         assert!((3, 1, 9) < MIN_TMUX_VERSION);
+    }
+
+    #[test]
+    fn tmux_options_render_room_defaults() {
+        let config = TmuxConfig::default();
+        assert_eq!(
+            tmux_server_options(&config),
+            vec![
+                ("focus-events", "on".to_owned()),
+                ("set-clipboard", "on".to_owned()),
+                ("extended-keys", "on".to_owned()),
+                ("extended-keys-format", "csi-u".to_owned()),
+                ("escape-time", "0".to_owned()),
+            ],
+        );
+        assert_eq!(
+            tmux_session_options(&config),
+            vec![
+                ("mouse", "on".to_owned()),
+                ("history-limit", "100000".to_owned()),
+                ("renumber-windows", "on".to_owned()),
+            ],
+        );
+        assert_eq!(
+            tmux_window_options(&config),
+            vec![
+                ("allow-passthrough", "on".to_owned()),
+                ("aggressive-resize", "on".to_owned()),
+                ("pane-border-status", "off".to_owned()),
+                ("pane-border-lines", "simple".to_owned()),
+            ],
+        );
     }
 
     #[test]
