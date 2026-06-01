@@ -1001,6 +1001,42 @@ fn codex_context_refresh_is_noop_when_binary_missing() {
     );
 }
 
+/// The sidebar's idle/account-only refresh path calls the hidden
+/// `refresh-rate-limits` helper, which reads the same app-server method and
+/// merges the windows into the shared provider cache.
+#[test]
+fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
+    let env = Env::new();
+    let out = env
+        .rimz()
+        .env("RIMZ_CODEX_BIN", codex_appserver_stub())
+        .args([
+            "codex",
+            "refresh-rate-limits",
+            "--workspace-id",
+            env.workspace_id.as_str(),
+        ])
+        .output()
+        .expect("spawn codex refresh-rate-limits");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let cache_path = env.runtime_paths().root.join("rate_limits.json");
+    let cache: Value = serde_json::from_slice(&std::fs::read(cache_path).expect("rate cache"))
+        .expect("rate cache json");
+    assert_eq!(
+        cache["windows"]["codex"]["five_hour"]["used_percentage"], 42,
+        "5h window comes from the app-server primary window"
+    );
+    assert_eq!(
+        cache["windows"]["codex"]["seven_day"]["used_percentage"], 7,
+        "7d window comes from the app-server secondary window"
+    );
+}
+
 /// A nonzero exit from the wrapped command is forwarded, so a broken user
 /// statusline surfaces as it would without Rimz in the middle.
 #[test]

@@ -115,7 +115,8 @@ fn serve_app_server(workspace_id: &str, session_name: Option<&str>) -> Result<()
 
 fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) -> Result<()> {
     let workspace_id: WorkspaceId = workspace_id.parse().context("parsing workspace id")?;
-    let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
+    let runtime =
+        RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
 
     if recent_sidecar(&runtime, session_id, REFRESH_THROTTLE_SECS) {
@@ -131,6 +132,7 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
     };
     rimz::ledger::agent_context::write(&runtime, "codex", session_id, &context)
         .context("writing agent-context sidecar")?;
+    let _ = rimz::ledger::wakeup::wake_sidebars_for_context(&runtime, &workspace_id);
     Ok(())
 }
 
@@ -142,7 +144,8 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
 /// merged.
 fn refresh_rate_limits(workspace_id: &str) -> Result<()> {
     let workspace_id: WorkspaceId = workspace_id.parse().context("parsing workspace id")?;
-    let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
+    let runtime =
+        RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
 
     let broker_socket = runtime.codex_app_server_socket_path();
@@ -151,6 +154,7 @@ fn refresh_rate_limits(workspace_id: &str) -> Result<()> {
     };
     if let Some(rate_limits) = context.rate_limits {
         rimz::sidebar::snapshot::merge_account_rate_limits(&runtime, "codex", rate_limits);
+        let _ = rimz::ledger::wakeup::wake_sidebars_for_context(&runtime, &workspace_id);
     }
     Ok(())
 }

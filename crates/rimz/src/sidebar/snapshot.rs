@@ -19,6 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::agents::{AgentRateLimits, RateLimitWindow};
 use crate::feed::PaneRef;
@@ -507,32 +508,66 @@ pub fn fold_machine_config_producing(
     // The producer owns the account-scoped window cache: it writes live readings
     // back so the 5h/7d budgets survive a session ending or going idle.
     apply_rate_limit_cache(&mut snapshot, runtime, true);
-    // A logged-in metered provider with no windows yet — no live session has ever
-    // reported its budgets this run — gets an out-of-band fetch so the dashboard
-    // shows a value even when nothing is running. Producer-only and detached.
-    refresh_idle_provider_windows(&snapshot, runtime);
+    // Codex's 5h/7d windows live behind the app-server. The producer refreshes
+    // active session sidecars and the idle account cache on a coarse cadence so a
+    // long-running task does not wait for the next turn boundary to repaint.
+    refresh_codex_rate_limits(&snapshot, runtime);
     snapshot
 }
 
-/// Kick a detached, best-effort window fetch for every metered provider whose
-/// 5h/7d budgets are still blank after the cache fold — a logged-in-but-idle
-/// account whose windows ride a live session that never started this run. Only
-/// providers with an out-of-band read qualify (Codex today); Claude's windows
-/// have no source outside a live statusline, so it is skipped. Throttled per kind
-/// so a slow or unreachable app-server is retried, not hammered.
-fn refresh_idle_provider_windows(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
-    for panel in &snapshot.providers {
-        if !panel.metered || panel.five_hour.is_some() || panel.seven_day.is_some() {
+/// Kick detached, best-effort Codex 5h/7d refreshes. A live/root Codex session
+/// refreshes its `AgentContext` sidecar because provider aggregation prefers live
+/// session readings over the shared cache. A logged-in metered Codex account with
+/// no root session refreshes the account cache instead, so idle dashboards stay
+/// current. Both paths are producer-only and throttled per target.
+fn refresh_codex_rate_limits(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
+    for refresh in codex_rate_limit_refreshes(snapshot) {
+        if !codex_rate_limit_probe_due(runtime, &refresh) {
             continue;
         }
-        if !provider_has_out_of_band_windows(&panel.kind) {
-            continue;
+        match refresh {
+            CodexRateLimitRefresh::Session {
+                session_id,
+                model_hint,
+            } => spawn_codex_context_refresh(runtime, &session_id, model_hint.as_deref()),
+            CodexRateLimitRefresh::Account => spawn_codex_account_window_fetch(runtime),
         }
-        if !idle_window_probe_due(runtime, &panel.kind) {
-            continue;
-        }
-        spawn_idle_window_fetch(runtime, &panel.kind);
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CodexRateLimitRefresh {
+    Session {
+        session_id: String,
+        model_hint: Option<String>,
+    },
+    Account,
+}
+
+fn codex_rate_limit_refreshes(snapshot: &SidebarSnapshot) -> Vec<CodexRateLimitRefresh> {
+    let sessions = snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.kind == "codex" && agent.parent_agent_id.is_none())
+        .filter(|agent| !agent.agent_id.is_empty())
+        .map(|agent| CodexRateLimitRefresh::Session {
+            session_id: agent.agent_id.clone(),
+            model_hint: agent
+                .model
+                .clone()
+                .or_else(|| agent.context.as_ref().and_then(|ctx| ctx.model_id.clone())),
+        })
+        .collect::<Vec<_>>();
+    if !sessions.is_empty() {
+        return sessions;
+    }
+
+    snapshot
+        .providers
+        .iter()
+        .filter(|panel| provider_has_out_of_band_windows(&panel.kind) && panel.metered)
+        .map(|_| CodexRateLimitRefresh::Account)
+        .collect()
 }
 
 /// Whether a provider kind exposes an account-scoped, sessionless rate-limit read
@@ -542,33 +577,79 @@ fn provider_has_out_of_band_windows(kind: &str) -> bool {
     kind == "codex"
 }
 
-/// Throttle the out-of-band window fetch per kind via a marker file under the
+/// Throttle one Codex rate-limit refresh target via a marker file under the
 /// runtime root: skip when the last attempt is younger than the interval, touch
-/// it before spawning. Windows move on the scale of minutes, so a coarse gate
-/// loses no freshness while keeping a slow/unreachable app-server from spawning
-/// a helper every frame. A missing or unreadable marker reads as "due".
-fn idle_window_probe_due(runtime: &RuntimePaths, kind: &str) -> bool {
-    let path = runtime.root.join(format!("rate-limit-probe.{kind}"));
+/// it before spawning. Windows move on the scale of minutes, so a one-minute
+/// gate keeps a slow/unreachable app-server from spawning a helper every frame
+/// while still updating during long-running turns.
+fn codex_rate_limit_probe_due(runtime: &RuntimePaths, refresh: &CodexRateLimitRefresh) -> bool {
+    let path = codex_rate_limit_probe_marker(runtime, refresh);
     let due = std::fs::metadata(&path)
         .and_then(|meta| meta.modified())
         .ok()
         .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-        .is_none_or(|age| age >= IDLE_WINDOW_PROBE_INTERVAL);
+        .is_none_or(|age| age >= CODEX_RATE_LIMIT_REFRESH_INTERVAL);
     if due {
-        // Touch first so a fetch that never publishes still backs off this kind.
+        // Touch first so a fetch that never publishes still backs off this target.
         let _ = std::fs::write(&path, b"");
     }
     due
 }
 
-/// Spawn the detached, fresh-stdio helper that fetches `kind`'s account windows
-/// and merges them into the cache. Best-effort: a spawn failure is logged and
-/// dropped — the dashboard simply stays blank for this kind until the next due
-/// frame. Codex is the only kind reached today (gated by the caller).
-fn spawn_idle_window_fetch(runtime: &RuntimePaths, kind: &str) {
-    if kind != "codex" {
-        return;
+fn codex_rate_limit_probe_marker(
+    runtime: &RuntimePaths,
+    refresh: &CodexRateLimitRefresh,
+) -> PathBuf {
+    match refresh {
+        CodexRateLimitRefresh::Account => runtime.root.join("rate-limit-probe.codex"),
+        CodexRateLimitRefresh::Session { session_id, .. } => {
+            let mut hasher = Sha256::new();
+            hasher.update(b"codex-session");
+            hasher.update([0]);
+            hasher.update(session_id.as_bytes());
+            let digest = hex::encode(hasher.finalize());
+            runtime
+                .root
+                .join(format!("rate-limit-probe.codex.{}", &digest[..32]))
+        }
     }
+}
+
+/// Spawn the detached, fresh-stdio helper that refreshes one active Codex
+/// session's `AgentContext` sidecar. Best-effort: a spawn failure is logged and
+/// dropped — the dashboard keeps the prior reading until the next due frame.
+fn spawn_codex_context_refresh(runtime: &RuntimePaths, session_id: &str, model_hint: Option<&str>) {
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(err) => {
+            tracing::warn!(error = %err, "sidebar: cannot locate rimz to refresh codex context");
+            return;
+        }
+    };
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args([
+        "codex",
+        "refresh-context",
+        "--session-id",
+        session_id,
+        "--workspace-id",
+        runtime.workspace_id.as_str(),
+    ]);
+    if let Some(model) = model_hint {
+        cmd.args(["--model", model]);
+    }
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if let Err(err) = cmd.spawn() {
+        tracing::warn!(error = %err, "sidebar: failed to spawn codex context refresh");
+    }
+}
+
+/// Spawn the detached, fresh-stdio helper that fetches Codex's account windows
+/// and merges them into the shared cache. Best-effort: a spawn failure is logged
+/// and dropped — the dashboard keeps the prior reading until the next due frame.
+fn spawn_codex_account_window_fetch(runtime: &RuntimePaths) {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(err) => {
@@ -744,11 +825,10 @@ fn write_accounts_cache(path: &Path, cache: &AccountsCache) {
 const FIVE_HOUR_WINDOW: SignedDuration = SignedDuration::from_hours(5);
 const SEVEN_DAY_WINDOW: SignedDuration = SignedDuration::from_hours(24 * 7);
 
-/// Minimum gap between out-of-band window fetches for one idle provider. Windows
-/// move on the scale of minutes, so a coarse throttle keeps a slow or
-/// unreachable app-server from spawning a helper every frame while still
-/// recovering promptly once it answers.
-const IDLE_WINDOW_PROBE_INTERVAL: Duration = Duration::from_secs(30);
+/// Minimum gap between out-of-band Codex rate-limit refreshes for one target
+/// (active session sidecar or idle account cache). The producer checks every
+/// sidebar data tick, but 5h/7d windows move on the scale of minutes.
+const CODEX_RATE_LIMIT_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// The producer's published per-provider rate-limit windows, account-scoped so
 /// the 5h/7d budgets outlive a session ending or going idle: the first frame
@@ -900,6 +980,7 @@ pub fn unix_now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feed::{AgentState, AgentStatus, PermissionPosture};
     use crate::ids::{MuxName, WorkspaceId};
     use crate::ledger::atomic;
 
@@ -1265,6 +1346,35 @@ mod tests {
         snapshot
     }
 
+    fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> AgentState {
+        let now = Timestamp::now();
+        AgentState {
+            agent_id: agent_id.to_owned(),
+            kind: kind.to_owned(),
+            status: AgentStatus::Running,
+            permission_posture: PermissionPosture::Default,
+            pane: None,
+            agent_pid: None,
+            agent_process_start: None,
+            runtime_owner: None,
+            parent_agent_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            model: model.map(ToOwned::to_owned),
+            effort: None,
+            context_pct: None,
+            total_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            context: None,
+            turn_started_at: None,
+            last_seen: now,
+            last_activity: now,
+        }
+    }
+
     /// A window whose reset instant is still in the future projects unchanged —
     /// the last-known drained reading stands while the budget is genuinely spent.
     #[test]
@@ -1522,26 +1632,138 @@ mod tests {
         );
     }
 
-    /// The per-kind throttle marker gates the out-of-band fetch: the first call is
+    #[test]
+    fn active_codex_session_refreshes_context_even_when_windows_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let mut snapshot = snapshot_with_panels(
+            workspace,
+            vec![provider_panel(
+                "codex",
+                Some(RateLimitWindow {
+                    used_percentage: Some(42),
+                    resets_at: None,
+                }),
+                None,
+            )],
+        );
+        snapshot
+            .agents
+            .push(root_agent("codex", "sess-active", Some("gpt-5.5-codex")));
+
+        assert_eq!(
+            codex_rate_limit_refreshes(&snapshot),
+            vec![CodexRateLimitRefresh::Session {
+                session_id: "sess-active".to_owned(),
+                model_hint: Some("gpt-5.5-codex".to_owned()),
+            }],
+            "active Codex sessions refresh their sidecars even when the dashboard already has windows"
+        );
+    }
+
+    #[test]
+    fn idle_metered_codex_refreshes_account_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let snapshot = snapshot_with_panels(
+            workspace,
+            vec![provider_panel(
+                "codex",
+                Some(RateLimitWindow {
+                    used_percentage: Some(25),
+                    resets_at: None,
+                }),
+                None,
+            )],
+        );
+
+        assert_eq!(
+            codex_rate_limit_refreshes(&snapshot),
+            vec![CodexRateLimitRefresh::Account],
+            "idle Codex accounts refresh the shared cache even with prior windows"
+        );
+    }
+
+    #[test]
+    fn active_codex_sessions_win_over_account_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let mut snapshot =
+            snapshot_with_panels(workspace, vec![provider_panel("codex", None, None)]);
+        snapshot
+            .agents
+            .push(root_agent("codex", "sess-active", None));
+
+        assert_eq!(
+            codex_rate_limit_refreshes(&snapshot),
+            vec![CodexRateLimitRefresh::Session {
+                session_id: "sess-active".to_owned(),
+                model_hint: None,
+            }],
+            "a stale account cache cannot refresh underneath a live Codex sidecar"
+        );
+    }
+
+    #[test]
+    fn unmetered_or_non_codex_providers_do_not_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let mut unmetered_codex = provider_panel("codex", None, None);
+        unmetered_codex.metered = false;
+        let snapshot = snapshot_with_panels(
+            workspace,
+            vec![unmetered_codex, provider_panel("claude", None, None)],
+        );
+
+        assert!(
+            codex_rate_limit_refreshes(&snapshot).is_empty(),
+            "only metered Codex has an out-of-band 5h/7d read"
+        );
+    }
+
+    /// The per-target throttle marker gates the out-of-band fetch: the first call is
     /// due (and touches the marker), the immediate next is not.
     #[test]
-    fn idle_window_probe_throttles_per_kind() {
+    fn codex_rate_limit_probe_throttles_per_target() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
         let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
+        let account = CodexRateLimitRefresh::Account;
+        let session = CodexRateLimitRefresh::Session {
+            session_id: "sess/one".to_owned(),
+            model_hint: None,
+        };
+        let other_session = CodexRateLimitRefresh::Session {
+            session_id: "sess/two".to_owned(),
+            model_hint: None,
+        };
 
+        assert!(codex_rate_limit_probe_due(&runtime, &account));
         assert!(
-            idle_window_probe_due(&runtime, "codex"),
-            "a cold kind is due and stamps the marker"
+            !codex_rate_limit_probe_due(&runtime, &account),
+            "a freshly-stamped account backs off"
+        );
+        assert!(codex_rate_limit_probe_due(&runtime, &session));
+        assert!(
+            !codex_rate_limit_probe_due(&runtime, &session),
+            "a freshly-stamped session backs off"
         );
         assert!(
-            !idle_window_probe_due(&runtime, "codex"),
-            "a freshly-stamped kind backs off"
+            codex_rate_limit_probe_due(&runtime, &other_session),
+            "a different session has its own marker"
         );
+
+        let old = SystemTime::now()
+            .checked_sub(CODEX_RATE_LIMIT_REFRESH_INTERVAL + Duration::from_secs(1))
+            .unwrap();
+        std::fs::File::open(codex_rate_limit_probe_marker(&runtime, &session))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
         assert!(
-            idle_window_probe_due(&runtime, "claude"),
-            "a different kind has its own marker"
+            codex_rate_limit_probe_due(&runtime, &session),
+            "the session becomes due again after the 60s interval"
         );
     }
 

@@ -238,7 +238,7 @@ You don't read where to go; you go. Selecting a row focuses that pane — no mux
 
 ## Zone 3 — the provider dashboard
 
-The 5-hour and 7-day budgets are account-scoped — every session of a provider shares one account's budget — so they leave the rows for a pinned panel at the bottom. One block per provider, including any account that is logged in but idle this run, so your accounts and budgets show even between turns. A logged-in but idle provider whose budgets ride a live session it hasn't started this run (Codex) has them fetched out-of-band on start, so the bars fill within a frame or two rather than staying blank until something runs.
+The 5-hour and 7-day budgets are account-scoped — every session of a provider shares one account's budget — so they leave the rows for a pinned panel at the bottom. One block per provider, including any account that is logged in but idle this run, so your accounts and budgets show even between turns. Codex budgets are pulled out-of-band from the app-server: active sessions refresh during long turns, and a logged-in idle account refreshes from the shared cache path.
 
 A **metered account** drains two "mana" bars toward their resets. The bar fills with what's *left*, ramping green → amber → red as it empties — and a fully-spent window (0% left) flips its whole empty track red, so an exhausted budget never reads as an untouched one. The `5h`/`7d` label wears its own bar's color, so the row reads as one unit. A spent weekly cap gates the short window: once `7d` is exhausted the `5h` row is painted exhausted too — red, no countdown — regardless of its own reading, since that budget is unusable until the week resets.
 
