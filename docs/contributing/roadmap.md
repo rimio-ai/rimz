@@ -22,13 +22,13 @@ At M1, scripts and remote workflows work without any agent integrations.
 
 ## M2 — Codex adapter
 
-Internal proof of the agent integration interface. Lifecycle hooks, `PermissionRequest` default and bridge paths, neutral and decision goldens, permission-posture observation, both backends.
+Internal proof of the agent integration interface. Lifecycle hooks, the blocking-feed permission path (default and bridge), neutral and decision goldens, permission-posture observation, both backends. Mapping in [hooks.md → Appendix Codex](../internals/hooks.md#appendix--codex).
 
 Codex alone is not the public agent-coding launch bar.
 
 ## M3 — Claude Code adapter
 
-Public agent-coding bar. Lifecycle hooks, `PermissionRequest`, `PreToolUse: ExitPlanMode`, `PreToolUse: AskUserQuestion`, default and bridge paths for each, `updatedInput` goldens, both backends.
+Public agent-coding bar. Lifecycle hooks and all three blocking-feed kinds (permission, plan approval, user question), default and bridge paths for each, modified-input decision goldens, both backends. Mapping in [hooks.md → Appendix Claude](../internals/hooks.md#appendix--claude-code).
 
 At M3, Claude and Codex are peers on the integration interface.
 
@@ -53,7 +53,7 @@ The approved design in [sidebar.md](../internals/sidebar.md) now drives the nati
 
 ## M6 — Sub-agent observability
 
-Done: Claude `Task` children and Codex thread events both flow through `SubagentStart`/`SubagentStop`, keyed by child `agent_id` with the root captured as `parent_agent_id`; the snapshot nests each child under its parent and the expanded card lists them with turn-scoped retention (see [agent.md](../internals/agent.md) and [sidebar.md → Sub-agent lists](../internals/sidebar.md#sub-agent-lists)).
+Done: both agents' subagents flow through subagent-start/stop observations, keyed by child `agent_id` with the root captured as `parent_agent_id`; the snapshot nests each child under its parent and the expanded card lists them with turn-scoped retention (mapping in [hooks.md](../internals/hooks.md); rollup in [agent.md](../internals/agent.md) and [sidebar.md → Sub-agent lists](../internals/sidebar.md#sub-agent-lists)).
 
 Remaining: gated auto-open of a subagent surface only when preconditions are met.
 

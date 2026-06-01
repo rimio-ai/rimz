@@ -77,7 +77,7 @@ asked — *additive*, *reversible*, *"never answers for you."*
 **Thinks:** *"OK, it's not going to hijack my agents. It just watches. Fine."*
 
 > **Design laws for the consent gate.**
-> - **Show the exact diff, framed as additive.** The fear is "it overwrites my hooks." Naming the preserved keys kills that fear in one line.
+> - **Show the exact diff, framed as additive.** The fear is "it overwrites my hooks." Naming the preserved keys kills that fear in one line. The frame above is illustrative; the authoritative wired set and config shape are in [hooks.md](../internals/hooks.md#hook-install--the-visible-security-step).
 > - **State the boundary in the consent itself:** hooks *report*, they don't *answer*. This is the product invariant, surfaced at the exact moment the reader is deciding whether to trust it.
 > - **Always offer `skip`.** Declining installs nothing and still drops them into the room — an agent then shows up as a plain process row with no status, and the empty-room hint tells them how to wire it later. Consent is never a wall.
 > - **Once per machine, never again.** Hook install is per-machine, per-agent state. Subsequent `rimz` runs go straight to the room. `rimz doctor` reports per-agent install status for anyone who forgets where they're at.
@@ -142,17 +142,17 @@ The reader types `claude` in the shell pane and just looks at its input box — 
 **Does:** Nothing. That's the point.
 
 **Feels:** The first small hit of delight. *They did nothing extra* and their
-agent showed up in the sidebar, correctly named, with its model and effort. The `SessionStart` hook fired, the ledger overlaid identity onto the pane, and the row updated — no config, no flag, no restart.
+agent showed up in the sidebar, correctly named, with its model and effort. The session-start hook fired, the ledger overlaid identity onto the pane, and the row updated — no config, no flag, no restart.
 
 **Thinks:** *"Oh — it just knows. And it knows it's Opus on xhigh. Nice."*
 
-> **This is the activation moment.** Everything before it was setup; this is the first time the product *does something for them*. The latency budget here is tight: the row must update within a second or two of `SessionStart`, or the magic reads as lag. Idle never fills an attention bucket, because an idle agent is not a cue.
+> **This is the activation moment.** Everything before it was setup; this is the first time the product *does something for them*. The latency budget here is tight: the row must update within a second or two of the session-start hook, or the magic reads as lag. Idle never fills an attention bucket, because an idle agent is not a cue.
 
 ---
 
 ## Phase 4 — Prompted and working
 
-The reader gives Claude a task. `UserPromptSubmit` then `PreToolUse` move the row to `⢿ running`; the task slot fills with the agent's reported task (or the first ~20 chars of the prompt). A *wedged* `running` agent betrays itself by escalating to the static `!` attention state once it falls silent past the stall window, rather than spinning forever.
+The reader gives Claude a task. The prompt then the first tool call move the row to `⢿ running`; the task slot fills with the agent's reported task (or the first ~20 chars of the prompt). A *wedged* `running` agent betrays itself by escalating to the static `!` attention state once it falls silent past the stall window, rather than spinning forever.
 
 ```
  ⌘ query-engine

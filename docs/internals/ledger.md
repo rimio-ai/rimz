@@ -100,7 +100,7 @@ No fresh enrolled resolver heartbeat at hook fire time:
 5. Hook exits within milliseconds.
 6. Agent's own UI asks the human.
 
-No per-request socket is bound, and the human answers in the agent's own UI — Rimz never learns the decision, so the item never reaches `resolved`. Instead the next ledger event that proves the session moved on expires it: a fresh ask supersedes it before being pushed, a `Stop`/`UserPromptSubmit` clears it at the turn boundary, and `SessionEnd` clears every surface the session left pending. Each match moves to `abandoned` with an `agent_moved_on` (or `agent_session_ended`) reason, so a session can never stack more than one native_ui row. The broad `PostToolUse` hook is silent on the ledger, so it is *not* a trigger; the read-side snapshot also collapses a session's pending asks to one row as a backstop.
+No per-request socket is bound, and the human answers in the agent's own UI — Rimz never learns the decision, so the item never reaches `resolved`. Instead the next ledger event that proves the session moved on expires it: a fresh ask supersedes it before being pushed, a turn-boundary lifecycle event (a fresh prompt or a turn's end) clears it, and a session-end event clears every surface the session left pending (the adapter marks these events via `moves_on` / `ends_session` — see [hooks.md](./hooks.md)). Each match moves to `abandoned` with an `agent_moved_on` (or `agent_session_ended`) reason, so a session can never stack more than one native_ui row. The broad per-tool hook is silent on the ledger, so it is *not* a trigger; the read-side snapshot also collapses a session's pending asks to one row as a backstop.
 
 ## Bridge path
 
@@ -112,7 +112,7 @@ Fresh enrolled resolver heartbeat at hook fire time:
 4. CAS validates `status = pending`, active chain step, `workspace_id`, `request_id`, and nonce.
 5. The waiting hook unblocks and prints exactly one agent-native decision JSON.
 
-On hook-cap timeout (Claude 120s, Codex shorter — see [agent.md](./agent.md) for the exact value each adapter ships), the hook returns neutral, the feed item moves to `timed_out`, and the sidebar labels it **"Delegated to native prompt"** — the agent's own UI takes over, exactly as in the default path.
+On hook-cap timeout (the per-agent ceiling — see [hooks.md](./hooks.md) for the value each adapter ships), the hook returns neutral, the feed item moves to `timed_out`, and the sidebar labels it **"Delegated to native prompt"** — the agent's own UI takes over, exactly as in the default path.
 
 ## Script path
 

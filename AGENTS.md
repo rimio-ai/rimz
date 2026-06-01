@@ -83,7 +83,8 @@ Every other document is a leaf from here. The `docs/` tree groups by audience: *
 - [sidebar.md](./docs/internals/sidebar.md) — sidebar mechanics: presence, ranking, launch, reload recovery, view-model (the on-screen look lives in [interface/sidebar.md](./docs/interface/sidebar.md)).
 - [resolvers.md](./docs/internals/resolvers.md) — resolver protocol, chain, pane primitives.
 - [trust.md](./docs/internals/trust.md) — executable-surface hash, trust states, auto-revoke.
-- [agent.md](./docs/internals/agent.md) — unified hook interface, agent state machine, and liveness for Claude, Codex, and later agents.
+- [hooks.md](./docs/internals/hooks.md) — the agent boundary: the integration trait, the two hook channels, install, and the Claude/Codex native-event mappings.
+- [agent.md](./docs/internals/agent.md) — agent state model: the rollup, state machine, posture, and liveness.
 - [web.md](./docs/internals/web.md) — Zellij-only browser access and session-route design.
 - [performance.md](./docs/internals/performance.md) — render-thread hot path, the cost map, and the rules a performance change follows.
 

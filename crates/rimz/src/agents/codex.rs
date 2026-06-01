@@ -123,7 +123,7 @@ impl AgentIntegration for CodexIntegration {
 
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
         // Codex permission hooks expect empty stdout on the neutral path —
-        // the agent's own UI then asks the human. Per docs/internals/agent.md:
+        // the agent's own UI then asks the human. Per docs/internals/hooks.md:
         // never emit `updatedInput` / `interrupt` for Codex permission hooks.
         Ok(None)
     }

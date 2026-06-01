@@ -72,7 +72,7 @@ Do not land ignored tests for future product targets. Keep planned behaviour in 
 
 ## Agent goldens
 
-For every supported agent event:
+The native-event surface each adapter wires is in [hooks.md](../internals/hooks.md). For every supported agent event:
 
 - neutral timeout stdout,
 - allowed decision stdout,
