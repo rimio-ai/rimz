@@ -2735,8 +2735,9 @@ mod tests {
             agent_id: "sess-1.sub".to_owned(),
             at: last_seen + std::time::Duration::from_secs(15),
         };
-        let snap = SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![parent, subagent])
-            .with_agent_activity(&[subagent_touch]);
+        let snap =
+            SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![parent, subagent])
+                .with_agent_activity(&[subagent_touch]);
         let parent_posture = snap
             .agents
             .iter()
