@@ -22,7 +22,7 @@ A session's context data has two origins. Both flow through one adapter — the 
 | Codex               | `~/.codex/sessions/…/rollout-*.jsonl` (by id)    | `codex app-server` JSON-RPC (read-only)        |
 | frequency           | turn boundaries, after a session id appears      | every render / poll                            |
 | produces            | `context_pct`, `total_tokens`, `model`           | the full `AgentContext` (gauges, cost, limits) |
-| target              | observation gauge fields ([agent.md](./agent.md#attribute-catalog)) | `AgentContext` ([context.rs](../../crates/rimz/src/agents/context.rs)) |
+| target              | observation gauge fields ([agent.md](./agent.md#the-rollup)) | `AgentContext` ([context.rs](../../crates/rimz/src/agents/context.rs)) |
 
 ## Reading rules
 
