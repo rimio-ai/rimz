@@ -2,15 +2,11 @@
 //! a tempdir for tests that drive ledger APIs directly without spawning the
 //! `rimz` binary.
 
-use std::path::PathBuf;
-
 use rimz::{Ledger, RuntimePaths, StatePaths, WorkspaceId};
 use tempfile::TempDir;
 
 /// In-process ledger fixture for tests that drive `Ledger` APIs directly.
 pub struct Harness {
-    pub state_root: PathBuf,
-    pub runtime_root: PathBuf,
     pub workspace_id: WorkspaceId,
     pub runtime_paths: RuntimePaths,
     pub ledger: Ledger,
@@ -29,8 +25,6 @@ impl Harness {
         let ledger = Ledger::open(paths, runtime_paths.clone()).expect("open ledger");
 
         Self {
-            state_root,
-            runtime_root,
             workspace_id,
             runtime_paths,
             ledger,

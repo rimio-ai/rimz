@@ -70,13 +70,6 @@ impl Env {
         self.workspace_runtime().join("sock")
     }
 
-    pub fn events_log_path(&self) -> PathBuf {
-        self.state_root()
-            .join("rimz")
-            .join(self.workspace_id.as_str())
-            .join("events.log.jsonl")
-    }
-
     fn workspace_runtime(&self) -> PathBuf {
         self.runtime_root
             .join("rimz")
@@ -231,12 +224,6 @@ impl Env {
         self.run_installed_hook_in_pane(source, payload, &[])
     }
 
-    /// Spawn the installed-hook command, returning the live child so a test
-    /// can drive the ledger while a blocking hook holds open on the bridge.
-    pub fn spawn_installed_hook(&self, source: &str, payload: &str) -> Child {
-        self.spawn_installed_hook_in_pane(source, payload, &[])
-    }
-
     /// Fire an installed hook with the per-pane env the mux exports
     /// (`TMUX_PANE` / `ZELLIJ_PANE_ID`), so the hook stamps the pane it ran
     /// inside exactly as it does under a real multiplexer. Any mux pane var
@@ -347,21 +334,6 @@ impl Env {
             ])
             .output()
             .expect("spawn feed resolve")
-    }
-
-    pub fn resolve_from_sidebar(&self, request_id: &str, decision: &str) -> Output {
-        self.rimz()
-            .args([
-                "feed",
-                "resolve",
-                request_id,
-                "--decision",
-                decision,
-                "--method",
-                "sidebar",
-            ])
-            .output()
-            .expect("spawn feed resolve --method sidebar")
     }
 
     pub fn abstain(&self, request_id: &str, resolver_id: &str, reason: &str) -> Output {

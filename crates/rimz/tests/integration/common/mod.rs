@@ -12,8 +12,6 @@
 //! `payloads` holds the agent hook-payload fixtures and environment probes
 //! shared across tiers.
 
-#![allow(dead_code)]
-
 mod command;
 mod env;
 mod harness;
