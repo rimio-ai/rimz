@@ -51,9 +51,8 @@ pub use crate::ledger::feed_store::FeedStoreErr;
 pub use crate::ledger::paths::{RuntimePaths, StatePaths};
 pub use crate::ledger::runtime::{RuntimeProjection, RuntimeScope};
 pub use crate::ledger::snapshot::{
-    SidebarActivity, SidebarOwnView, SidebarProviderPanel, SidebarResolverState, SidebarRow,
-    SidebarRowKind, SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
-    SidebarWorktreeKind,
+    SidebarOwnView, SidebarProviderPanel, SidebarResolverState, SidebarRow, SidebarRowKind,
+    SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind,
 };
 pub use crate::ledger::workspace_record::WorkspaceRecord;
 
@@ -863,7 +862,6 @@ impl Ledger {
         let mut snapshot = snapshot::SidebarSnapshot::build_with_agents(
             self.inner.paths.workspace_id.clone(),
             projection.items,
-            projection.events,
             projection.agents,
         );
         snapshot.reap_stale_sessions(Timestamp::now());
@@ -898,8 +896,8 @@ impl Ledger {
     ///    crash leaves both files coherent.
     /// 2. Rename the active log into `events.log.archive/`. UUIDv7 filenames
     ///    keep archives sorted chronologically without an external index.
-    /// 3. Rebuild the snapshot so the sidebar's `recent_activity` no longer
-    ///    references the rotated log.
+    /// 3. Rebuild the persisted snapshot (`latest.json`) from the merged
+    ///    rollup so it no longer depends on the rotated log.
     /// 4. Prune archives older than `archive_older_than` when set.
     #[must_use = "durability barrier; check the result"]
     pub fn rotate_event_log(

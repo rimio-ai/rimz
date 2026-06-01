@@ -4,7 +4,7 @@
 
 use rimz::{
     AbandonReason, EventEnvelope, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod,
-    ResolverId, ResolverStep, ResolverStepState, SidebarActivity, Surface,
+    ResolverId, ResolverStep, ResolverStepState, Surface,
 };
 use serde_json::json;
 
@@ -231,28 +231,6 @@ fn wakeup_failure_does_not_fail_committed_push() {
         .load_feed_item(&request_id)
         .expect("committed item");
     assert_eq!(after.title, "wakeups are best effort");
-}
-
-#[test]
-fn standalone_events_rebuild_recent_activity_snapshot() {
-    let h = crate::common::Harness::new();
-    let event = EventEnvelope::new(
-        h.workspace_id.clone(),
-        "rimz-test",
-        "rimz",
-        "cli",
-        "event.emit",
-        json!({ "kind": "build.started", "title": "Building web" }),
-    );
-
-    h.ledger.append_event(&event).expect("append event");
-
-    let snapshot = h.ledger.snapshot().expect("snapshot");
-    assert!(snapshot.recent_activity.iter().any(|activity| matches!(
-        activity,
-        SidebarActivity::Event { event: seen }
-            if seen.event_id == event.event_id && seen.session_name == "rimz-test"
-    )));
 }
 
 #[test]

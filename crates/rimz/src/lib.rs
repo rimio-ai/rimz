@@ -32,10 +32,9 @@ pub use crate::ids::{
     EventId, MuxName, PaneId, RequestId, ResolverId, SidebarInstanceId, ViewKind, WorkspaceId,
 };
 pub use crate::ledger::{
-    Ledger, RuntimePaths, RuntimeProjection, RuntimeScope, SidebarActivity, SidebarOwnView,
-    SidebarProviderPanel, SidebarResolverState, SidebarRow, SidebarRowKind, SidebarSnapshot,
-    SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, StatePaths,
-    WorkspaceRecord,
+    Ledger, RuntimePaths, RuntimeProjection, RuntimeScope, SidebarOwnView, SidebarProviderPanel,
+    SidebarResolverState, SidebarRow, SidebarRowKind, SidebarSnapshot, SidebarStatusCount,
+    SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, StatePaths, WorkspaceRecord,
 };
 pub use crate::schema::event::EventEnvelope;
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

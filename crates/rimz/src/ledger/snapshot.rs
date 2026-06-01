@@ -59,10 +59,7 @@ pub type Result<T> = std::result::Result<T, SnapshotErr>;
 /// `needs_attention` and `resolver_working` are load-bearing: they are the
 /// reducer inputs the group rebuild reads when panes are folded in
 /// (`with_live_panes`) or dead agents are reaped (`drop_dead_agents_with`).
-/// `recently_answered` and `recent_activity` are retained only to keep the
-/// `sidebar snapshot --json` wire shape stable; no renderer consumes them, and
-/// they are candidates to drop once the shape can change (see
-/// `docs/internals/sidebar.md`). The sidebar renderer reads `worktree_groups`.
+/// The sidebar renderer reads `worktree_groups`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SidebarSnapshot {
     pub workspace_id: WorkspaceId,
@@ -71,8 +68,6 @@ pub struct SidebarSnapshot {
     pub worktree_groups: Vec<SidebarWorktreeGroup>,
     pub needs_attention: Vec<FeedItem>,
     pub resolver_working: Vec<FeedItem>,
-    pub recently_answered: Vec<FeedItem>,
-    pub recent_activity: Vec<SidebarActivity>,
     pub agents: Vec<AgentState>,
     /// Whether any supported agent has its Rimz hooks wired. The sidebar's
     /// first-run hint reads it: with no hooks installed, running an agent
@@ -356,22 +351,6 @@ pub struct SidebarResolverState {
     pub budget_until: Option<Timestamp>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum SidebarActivity {
-    Feed { item: Box<FeedItem> },
-    Event { event: Box<EventEnvelope> },
-}
-
-impl SidebarActivity {
-    pub fn timestamp(&self) -> Timestamp {
-        match self {
-            Self::Feed { item } => item.updated_at,
-            Self::Event { event } => event.timestamp,
-        }
-    }
-}
-
 impl SidebarSnapshot {
     pub fn build(
         workspace_id: WorkspaceId,
@@ -391,21 +370,18 @@ impl SidebarSnapshot {
         carryover_agents: Vec<AgentState>,
     ) -> Self {
         let agents = agent_rollup_with_carryover(&events, carryover_agents);
-        Self::build_with_agents(workspace_id, items, events, agents)
+        Self::build_with_agents(workspace_id, items, agents)
     }
 
     pub fn build_with_agents(
         workspace_id: WorkspaceId,
         mut items: Vec<FeedItem>,
-        events: Vec<EventEnvelope>,
         agents: Vec<AgentState>,
     ) -> Self {
         items.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
 
         let mut needs_attention = Vec::new();
         let mut resolver_working = Vec::new();
-        let mut recently_answered = Vec::new();
-        let mut recent_activity = Vec::new();
 
         for item in items {
             // A pending agent-hook ask outlives its agent only as data: once the
@@ -424,22 +400,12 @@ impl SidebarSnapshot {
                     needs_attention.push(item);
                 }
                 (FeedStatus::Pending, Surface::Bridge) if !stale => resolver_working.push(item),
-                (FeedStatus::Resolved, _) => recently_answered.push(item),
-                _ => recent_activity.push(SidebarActivity::Feed {
-                    item: Box::new(item),
-                }),
+                // Resolved and otherwise-inactive items are history, not
+                // presence or attention: the sidebar never renders them, so they
+                // are dropped here rather than carried in the view-model.
+                _ => {}
             }
         }
-
-        recent_activity.extend(
-            events
-                .into_iter()
-                .filter(|event| !event.method.starts_with("feed."))
-                .map(|event| SidebarActivity::Event {
-                    event: Box::new(event),
-                }),
-        );
-        recent_activity.sort_by_key(|activity| std::cmp::Reverse(activity.timestamp()));
 
         let display_name = workspace_id.as_str().to_owned();
         // The pure reducer has no project root or worktree set, so every cwd
@@ -455,8 +421,6 @@ impl SidebarSnapshot {
             worktree_groups,
             needs_attention,
             resolver_working,
-            recently_answered,
-            recent_activity,
             agents,
             agent_hooks_ready: false,
             codex_hooks_ready: false,
@@ -2317,16 +2281,13 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             .map(|v| v.min(u32::MAX as u64) as u32)
             .or_else(|| prior.and_then(|p| p.todo_total));
         let establishes_identity = matches!(event_name, Some("SessionStart" | "SubagentStart"));
-        // The parent link is pure identity: a `SubagentStart` establishes it,
-        // and it must survive every later child event (`SubagentStop`, per-tool
-        // hooks) so the child never loses its parent and surfaces as a spurious
-        // top-level row. Root agents never carry one.
-        let parent_agent_id = if establishes_identity {
-            param_string("parent_agent_id")
-                .or_else(|| prior.and_then(|p| p.parent_agent_id.clone()))
-        } else {
-            prior.and_then(|p| p.parent_agent_id.clone())
-        };
+        // The parent link is pure identity: only ever set, never cleared. Adopt
+        // it from any event that carries it, then carry it forward. `SubagentStop`
+        // can be the first child event Claude reports; without its parent link,
+        // that Stop-only child would masquerade as a root session on its parent's
+        // pane. Root agents never carry one.
+        let parent_agent_id = param_string("parent_agent_id")
+            .or_else(|| prior.and_then(|p| p.parent_agent_id.clone()));
         // The current turn's start instant — advanced only by `UserPromptSubmit`,
         // never by `Stop`. It is the "next prompt" boundary the subagent-list
         // retention reads; carried forward across all other events.
@@ -2456,7 +2417,6 @@ pub fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
     let mut snapshot = SidebarSnapshot::build_with_agents(
         paths.workspace_id.clone(),
         projection.items,
-        projection.events,
         projection.agents,
     );
     snapshot.reap_stale_sessions(Timestamp::now());
@@ -2677,10 +2637,11 @@ mod tests {
             vec![native, bridge, answered, timed],
             Vec::new(),
         );
+        // Pending native + bridge asks surface as attention/working; the
+        // resolved and timed-out items are history, so they are dropped — they
+        // never become rows.
         assert_eq!(snap.needs_attention.len(), 1);
         assert_eq!(snap.resolver_working.len(), 1);
-        assert_eq!(snap.recently_answered.len(), 1);
-        assert_eq!(snap.recent_activity.len(), 1);
         assert_eq!(snap.worktree_groups.len(), 1);
         assert_eq!(snap.worktree_groups[0].kind, SidebarWorktreeKind::Workspace);
         assert_eq!(snap.worktree_groups[0].label, "external");
@@ -2704,9 +2665,8 @@ mod tests {
             agent_id: agent.agent_id.clone(),
             at,
         };
-        let snap =
-            SidebarSnapshot::build_with_agents(workspace, Vec::new(), Vec::new(), vec![agent])
-                .with_agent_activity(&[touch]);
+        let snap = SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![agent])
+            .with_agent_activity(&[touch]);
 
         assert_eq!(snap.agents[0].permission_posture, PermissionPosture::Plan);
         assert_eq!(snap.agents[0].last_activity, at);
@@ -2775,13 +2735,8 @@ mod tests {
             agent_id: "sess-1.sub".to_owned(),
             at: last_seen + std::time::Duration::from_secs(15),
         };
-        let snap = SidebarSnapshot::build_with_agents(
-            workspace,
-            Vec::new(),
-            Vec::new(),
-            vec![parent, subagent],
-        )
-        .with_agent_activity(&[subagent_touch]);
+        let snap = SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![parent, subagent])
+            .with_agent_activity(&[subagent_touch]);
         let parent_posture = snap
             .agents
             .iter()
@@ -2811,7 +2766,6 @@ mod tests {
 
         assert!(snap.needs_attention.is_empty());
         assert!(snap.worktree_groups.is_empty());
-        assert_eq!(snap.recent_activity.len(), 1);
     }
 
     #[test]
@@ -3016,27 +2970,6 @@ mod tests {
             rows.is_empty(),
             "a host-only pane set produces no rows: {rows:?}",
         );
-    }
-
-    #[test]
-    fn build_includes_non_feed_events_in_recent_activity() {
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let event = EventEnvelope::new(
-            workspace.clone(),
-            "session",
-            "rimz",
-            "cli",
-            "event.emit",
-            serde_json::json!({ "kind": "build.started", "title": "Building web" }),
-        );
-
-        let snap = SidebarSnapshot::build(workspace, Vec::new(), vec![event]);
-
-        assert_eq!(snap.recent_activity.len(), 1);
-        assert!(matches!(
-            snap.recent_activity[0],
-            SidebarActivity::Event { .. }
-        ));
     }
 
     #[test]
@@ -3398,6 +3331,67 @@ mod tests {
             .expect("child row");
         assert_eq!(child.parent_agent_id.as_deref(), Some("sess-root"));
         assert_eq!(child.status, AgentStatus::Idle);
+    }
+
+    #[test]
+    fn subagent_stop_without_start_keeps_parent_link_and_spares_the_parent() {
+        // Claude can report a child only at `SubagentStop`. That Stop still
+        // carries `parent_agent_id`; adopting it keeps the finished child nested
+        // instead of letting it supersede the parent as a newer root on the same
+        // pane.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let lifecycle = |params: serde_json::Value| {
+            EventEnvelope::new(
+                workspace.clone(),
+                "session",
+                "claude",
+                "agent-hook",
+                "agent.lifecycle",
+                params,
+            )
+        };
+        let pane = "tmux:%1";
+        let root_start = lifecycle(serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "sess-root",
+            "status": "idle",
+            "model": "claude-opus-4-8",
+            "pane_id": pane,
+            "worktree_path": "/repo/wt",
+            "worktree_branch": "feature",
+        }));
+        let root_prompt = lifecycle(serde_json::json!({
+            "event_name": "UserPromptSubmit",
+            "agent_id": "sess-root",
+            "status": "running",
+            "pane_id": pane,
+            "worktree_path": "/repo/wt",
+            "worktree_branch": "feature",
+        }));
+        let child_stop = lifecycle(serde_json::json!({
+            "event_name": "SubagentStop",
+            "agent_id": "child-1",
+            "status": "idle",
+            "parent_agent_id": "sess-root",
+            "pane_id": pane,
+            "worktree_path": "/repo/wt",
+            "worktree_branch": "feature",
+        }));
+
+        let agents = reduce_agent_states(&[root_start, root_prompt, child_stop]);
+        let child = agents
+            .iter()
+            .find(|a| a.agent_id == "child-1")
+            .expect("child row");
+        assert_eq!(child.parent_agent_id.as_deref(), Some("sess-root"));
+
+        let mut snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), agents);
+        snapshot.reap_stale_sessions(Timestamp::now());
+        assert!(
+            snapshot.agents.iter().any(|a| a.agent_id == "sess-root"),
+            "a Stop-only child must not reap its live parent",
+        );
     }
 
     #[test]

@@ -823,8 +823,6 @@ fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
         worktree_groups: Vec::new(),
         needs_attention: Vec::new(),
         resolver_working: Vec::new(),
-        recently_answered: Vec::new(),
-        recent_activity: Vec::new(),
         agents: Vec::new(),
         agent_hooks_ready: false,
         codex_hooks_ready: false,
