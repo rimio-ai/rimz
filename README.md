@@ -44,7 +44,7 @@ Rimz pins every repo to one durable room — a Zellij or tmux session with a sid
             ␣ next ?!   ? for help
 ```
 
-> Product invariant lives in [DESIGN.md](./DESIGN.md). The short version: the agent's own UI stays the answer surface unless you explicitly enrol a resolver. Nothing in Rimz silently approves a tool call.
+> Product invariant lives in [DESIGN.md](./DESIGN.md). The short version: Rimz shows you which agent needs you and takes you to its pane, where you answer in the agent's own UI. Enrol a resolver when you want routine answers handled ahead of you — the chain still ends with you.
 
 Every glyph, meter, and frame above is broken down in the [interface reference](./docs/interface/sidebar.md).
 
@@ -66,7 +66,7 @@ That's the whole loop. Everything else is variations on those five commands.
 
 ## Why Rimz
 
-- **Agent users.** See at a glance which of four parallel Claude or Codex sessions needs you, and answer in the agent's own UI. No silent auto-approve. No tab roulette.
+- **Agent users.** See at a glance which of four parallel Claude or Codex sessions needs you, jump straight to its pane, and answer in the agent's own UI — no more flipping tabs to find the blocked one.
 - **Remote developers.** Start the room on a host or container, walk away, reattach from a laptop, tablet, or SSH client on a phone. Pickup is zero-cost.
 - **Script and tool authors.** Make a `terraform apply`, a 4-hour migration, or a CI gate a first-class citizen of the sidebar through `rimz event emit` and `rimz feed ask`. No UI to build.
 

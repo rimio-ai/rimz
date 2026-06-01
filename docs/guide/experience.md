@@ -7,7 +7,7 @@ The reader of this doc is the primary audience: an engineer who runs Claude Code
 Three experience laws hold the whole walk together. They're the lens for every frame:
 
 1. **Never blank, never lying.** The column always shows the truth about what's running — and when it *can't* (a failed fetch), it says so out loud instead of showing a stale frame.
-2. **Notify and route; never answer.** The sidebar's whole job is to get you to the pane that needs you. It never reproduces the agent's question. The agent's own UI stays the answer surface. (The one exception: a script that explicitly chose Rimz as its surface.)
+2. **Notify and route.** The sidebar's whole job is to get you to the pane that needs you — it names who needs you and takes you straight there, and you answer in the agent's own UI where the full context lives. (A script that chose Rimz as its surface is the one item you answer from the sidebar itself.)
 3. **The row is the link.** You don't read a pane number and go type it into the mux. You select the row and you're there.
 
 ---
@@ -212,18 +212,14 @@ tapped them on the shoulder with exactly the right pane, one keystroke away. The
 these."*
 
 > **Design laws for the attention moment.**
-> - **The sidebar notifies and navigates; it never reproduces the question.** The row says *who* needs you and *what task* — and *is* the jump to that pane. You read and answer the real prompt in the agent's UI, where the full context and the safe defaults live. Rimz showing a fake "Approve / Deny" would be a strictly worse, lossy copy of what's already in the pane.
-> - **The exception proves the rule:** a script's `rimz feed ask` *chose* Rimz as its surface, so its declared options are answerable straight from the sidebar. An agent's prompt never is.
+> - **The sidebar notifies and navigates you to the question.** The row says *who* needs you and *what task* — and *is* the jump to that pane. You read and answer the real prompt in the agent's UI, where the full context and the safe defaults already live.
+> - **A script's `feed ask` is the one item answerable in place:** it *chose* Rimz as its surface, so its declared options render right on the row.
 > - **Notifications are best-effort polish, never truth.** Clicking one focuses the terminal (best-effort) and pre-selects that row, so even if the OS can't focus an exact mux pane, the sidebar already has it highlighted. The ledger, not the notification, is authoritative — a missed notification loses nothing.
 > - **Coalesce, then escalate.** Three agents going `waiting` at once is one notification (*"3 agents need you · query-engine"*), not three. An agent that stays `waiting` past a threshold earns one nudge, not a stream.
 
-### With a resolver in front (the upgrade, previewed)
+### With a resolver in front (previewed)
 
-Once the reader enrols a resolver (Phase 9), the same waiting row shows the chain working instead of demanding them: the glyph becomes a braille resolver spinner (`⠙`) and the task slot reads the resolver and its remaining budget. It still counts in the `?` tally — the item is pending, just being handled — and flips back to `? waiting` if the chain exhausts or misses the agent's hook cap.
-
-```
-? claude · Opus      →      ⠙ claude  opus-policy 24s
-```
+Enrol a resolver later (Phase 10) and this same waiting row shows the chain *working* the item instead of asking you: the glyph becomes a braille spinner and the task slot reads the resolver and its remaining budget. It still counts in the `?` tally — the item is pending, just being handled — and returns to `? waiting` only if the chain comes up empty. The full story is Phase 10.
 
 ---
 
@@ -375,7 +371,7 @@ because the broken ones are labeled."*
 
 By now the reader is hooked on the observe-and-route loop. The product grows with them along three paths they discover when they need them — each is an *addition* to the same feed, never a new mental model.
 
-- **Resolvers (the morning-after upgrade).** Tired of approving `cargo check` for the eighth time, they wrap a smarter model and enrol it once: `rimz resolver add opus-policy --order 10 --budget 30s --binary …`. Now routine permissions get answered ahead of them; the hard ones abstain back to their pane exactly as before. The framing that keeps it safe: in Phases 1–8 they were *already* the answerer — the resolver just slots ahead of them, and **the chain always ends with them.** Deeper chains (Slack, PagerDuty) follow the same shape. Mechanics in [resolvers.md](../internals/resolvers.md).
+- **Resolvers (the morning-after upgrade).** Tired of approving `cargo check` for the eighth time, they enrol a resolver once — either one of the two that ship ready-made (**auto-approve** for routine permissions, **rate-limit-resume** to pick a stalled run back up when its 5-hour window resets) or a small process of their own wrapping a smarter model: `rimz resolver add opus-policy --order 10 --budget 30s --binary …`. Now routine answers happen ahead of them; the hard ones abstain back to their pane exactly as before. The framing that keeps it safe: in Phases 1–8 they were *already* the answerer — the resolver just slots ahead of them, and **the chain always ends with them.** Deeper chains (Slack, PagerDuty) follow the same shape. Mechanics in [resolvers.md](../internals/resolvers.md).
 - **Scripts as citizens.** A deploy or migration script posts to the same sidebar with `rimz event emit` and blocks on `rimz feed ask` — and *because the script chose Rimz as its surface*, its options are answerable straight from the column. No agent involved; same triage, same UX. This is the one case where the sidebar answers, by design.
 - **Unattended / CI.** No human at the end of the chain: launch agents with their own bypass flag, or enrol a permissive resolver for a real per-decision audit trail. Rimz observes both and renders the `yolo` posture so the audit story stays honest. Detail in [product.md → Unattended runs](./product.md#unattended-runs-in-ci--sandbox).
 
@@ -405,7 +401,7 @@ on the very first screen.
 | 2 Empty room | looks left | `· zsh`, hint | oriented | never blank |
 | 3 First agent | types `claude` | row re-skins to `○ claude` | delight | it just knows |
 | 4 Working | prompts | `⢿ running`, animated head | calm | a wedged agent escalates to `!` |
-| 5 Question | gets notified, jumps | `? waiting`, OS notify | *the pitch* | notify & route, never answer |
+| 5 Question | gets notified, jumps | `? waiting`, OS notify | *the pitch* | notify & route to the pane |
 | 6 Fleet | hits "next ?!" | grouped roster, `? 2  ! 1` | in control | one key tames the fleet |
 | 7 Tabs | opens a tab | same room everywhere | coherent | tabs are viewports |
 | 8 Detach | closes laptop, ssh back | reconstructed column | relief, trust | ledger is truth |

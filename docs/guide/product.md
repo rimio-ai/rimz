@@ -48,7 +48,7 @@ Rimz gives every project one room — a Zellij or tmux session with a sidebar �
 
 > Product invariant lives in [DESIGN.md](../../DESIGN.md). Every glyph and meter in this frame is broken down, zone by zone, in the [interface reference](../interface/sidebar.md).
 
-The sidebar is a worktree-keyed presence and attention map: every pane is a row — a bare shell shows as `· zsh`, and becomes the agent's row the moment you run one — and each agent shows its status (a colored glyph), the task it's on, and its context meter, grouped by the worktree it lives in. Each worktree is a bold header, and the worktree you have selected reads as one bracketed lane — a thin accent spine down its whole height with a faint dotted seal capping its header — while the selected card inside it lights up with a bolder spine. Other worktrees stay quiet, so the lane is the only marker on screen and the selection is unmistakable. Account-scoped usage budgets (5-hour / 7-day) leave the rows for the pinned per-provider dashboard at the bottom — one block per provider with its plan, spend, and draining "mana" bars. When an agent exits, its row reverts to the shell, so the column always mirrors what's actually running. It **routes you to the pane that needs you** — select a row to jump there — and you read the actual prompt and answer in the agent's own UI. That safety net never breaks. Resolvers can slot ahead of you when you want help; the chain ends with you.
+The sidebar is a worktree-keyed presence and attention map: every pane is a row — a bare shell shows as `· zsh`, and becomes the agent's row the moment you run one — and each agent shows its status (a colored glyph), the task it's on, and its context meter, grouped by the worktree it lives in. Each worktree is a bold header, and the worktree you have selected reads as one bracketed lane — a thin accent spine down its whole height with a faint dotted seal capping its header — while the selected card inside it lights up with a bolder spine. Other worktrees stay quiet, so the lane is the only marker on screen and the selection is unmistakable. Account-scoped usage budgets (5-hour / 7-day) leave the rows for the pinned per-provider dashboard at the bottom — one block per provider with its plan, spend, and draining "mana" bars. When an agent exits, its row reverts to the shell, so the column always mirrors what's actually running. It **routes you to the pane that needs you** — select a row to jump there, then read the prompt and answer in the agent's own UI.
 
 ## Three audiences, one room
 
@@ -60,9 +60,9 @@ The sidebar is a worktree-keyed presence and attention map: every pane is a row 
 
 Every actionable item travels one of three paths. The schema names (`native_ui`, `bridge`, `script`) and the wire-level details live in [ledger.md](../internals/ledger.md); the human story is:
 
-1. **Default — the agent asks in its own UI.** No resolver enrolled. Rimz writes the feed item, wakes the sidebar, and gets out of the way. You see "claude · waiting · permission" in the sidebar; you focus that pane and answer Claude's prompt. The sidebar clears when the agent moves on.
-2. **Bridge — a resolver answers first, you're the fallback.** You've enrolled a resolver (e.g. an Opus-backed policy script) on this machine. When an agent hook fires, Rimz holds the hook open and asks the resolver. If the resolver answers, the decision flows back to the agent and you don't see it. If it abstains or runs out its budget, the chain advances — Slack, on-call, you — until someone answers. The agent's native UI is the last fallback if the whole chain misses the agent's hook cap.
-3. **Script — your script chose Rimz as its decision surface.** A deploy script calls `rimz feed ask --title "Promote?"` and blocks. The question lands in the sidebar with answer buttons (because the script declared its options). Anyone with shell access can answer through the CLI; resolvers can answer too. No agent is involved.
+1. **Default — the agent asks in its own UI.** This is the everyday path, with nothing extra enrolled. Rimz writes the feed item, wakes the sidebar, and points you at the pane. You see "claude · waiting · permission", focus that pane, and answer Claude's prompt; the sidebar clears when the agent moves on.
+2. **Bridge — a resolver answers ahead of you.** Once you enrol a resolver on this machine, Rimz holds the agent's hook open and lets the resolver answer routine items first; anything it passes on falls through to you, with the agent's own UI as the final fallback. This is the opt-in upgrade — see [resolver chains](#resolver-chains--the-morning-after) below.
+3. **Script — your script chose Rimz as its decision surface.** A deploy script calls `rimz feed ask --title "Promote?"` and blocks. Because it declared its options, the question lands in the sidebar with answer buttons; anyone with shell access (or a resolver) can answer through the CLI. No agent is involved.
 
 ## Five-minute tour
 
@@ -128,7 +128,12 @@ Each link has its own budget. When the budget elapses (or the resolver explicitl
 
 The morning after six overnight agents: "Opus answered 47 routine permissions, abstained on 3 architecture-shaped questions, Slack pinged my co-lead who answered two of them in his timezone, and one fell through to me in the sidebar." Your team's attention bandwidth scales with the chain, not with the agent count.
 
-Chain mechanics and the heartbeat protocol live in [resolvers.md](../internals/resolvers.md). Trust gates and the allowlist are in [security.md](./security.md).
+Two reference resolvers ship with Rimz, ready to enrol and adapt:
+
+- **auto-approve** — answers routine permission requests against a policy you set. It is the audited form of yolo mode: every approval flows through the bridge and lands in the ledger as a real decision, so you keep a per-decision record instead of skipping the prompt at the source.
+- **rate-limit-resume** — watches an agent that stalled on its provider's 5-hour limit and nudges it to continue the moment the window resets, off the same `↻` countdown the provider dashboard shows. Long runs pick themselves back up overnight instead of waiting for you.
+
+Both are starting points you copy and edit. The chain mechanics, the heartbeat protocol, and the two examples live in [resolvers.md](../internals/resolvers.md); trust gates and the allowlist are in [security.md](./security.md).
 
 ## Unattended runs in CI / sandbox
 
@@ -136,14 +141,10 @@ Inside a sandboxed CI runner there's no human to ask. Two patterns work:
 
 **Agent-native bypass.** Launch each agent with its own bypass flag — `claude --dangerously-skip-permissions`, `codex --ask-for-approval never --sandbox danger-full-access`. The agent never blocks. Rimz still observes everything the agent reports through lifecycle hooks (sessions, completions, failures); the sidebar's permission posture renders `yolo` so the audit record is clear. The tradeoff: the agent skips permission events at the source, so the ledger records only what other hooks report — not a complete per-decision audit trail.
 
-**Permissive resolver.** Enrol a resolver that answers `allow` to anything (or anything matching a policy). Every permission request still flows through Rimz, gets a decision attributed to that resolver, and lands in the ledger as a real audit record. Prefer this when you need full audit fidelity.
+**Permissive resolver.** Enrol a resolver that answers `allow` to anything (or anything matching a policy) — the bundled **auto-approve** resolver is exactly this. Every permission request still flows through Rimz, gets a decision attributed to that resolver, and lands in the ledger as a real audit record. Prefer this when you need full audit fidelity.
 
 The two patterns compose: a permissive resolver for routine cases with the agent's bypass flag as the ultimate fallback for anything the resolver doesn't catch in time. `rimz doctor` reports the permission posture it sees per agent so the audit story stays unambiguous.
 
-## Product principles (recap)
+## The design behind it
 
-- **Observability is the default.** The agent's own prompt stays yours to answer in the agent's own tab.
-- **The ledger owns durability, and works headless.** Every feed item survives detach, sidebar reload, and no-client mode.
-- **Generic primitives, agent adapters on top.** Anything an agent integration can do, a shell script can do through the same CLI.
-- **The agent's native UI is the safety net.** Whatever else gets wired into Rimz later, the agent's own prompt always works as the answer surface of last resort.
-- **State comes from explicit events.** Transcripts and pane content enrich display only — they never drive blocking decisions, permissions, or correctness-critical state.
+The principles these flows rest on — observe by default, ledger-owned durability, one set of primitives shared by agents and scripts, and transcripts that enrich display without driving decisions — are spelled out in [DESIGN.md](../../DESIGN.md).

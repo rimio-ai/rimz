@@ -2,13 +2,18 @@
 
 > See [DESIGN.md](../../DESIGN.md) for the commitments this doc operationalizes.
 
-A resolver is an external process that answers feed items on your behalf. Rimz ships none. You enrol the ones you trust on the machine that runs the workspace. The chain ends with you.
+A resolver is an external process that answers feed items on your behalf. Rimz ships no resolver as product, but two reference examples come in the box — **auto-approve** and **rate-limit-resume** — ready to enrol and adapt. You enrol the ones you trust on the machine that runs the workspace, and the chain ends with you.
 
 > Product invariant lives in [DESIGN.md](../../DESIGN.md). A resolver is the explicit, opt-in way to delegate routine answers.
 
 ## Why you want one
 
 You're answering "can I run `cargo check`?" for the eighth time today and you've got six more agents waking up tomorrow morning. Write a small process that wraps a smarter model (Opus, GPT-class) or encodes a policy, enrol it once, and it handles the routine permissions. Hard questions — anything outside the resolver's confidence band — fall through to the next link in the chain, and ultimately to you.
+
+The two reference examples are concrete starting points you copy and edit:
+
+- **auto-approve** — a [hook-bridge](#hook-bridge-answer-path) policy that approves routine permission requests. It is the audited form of yolo mode: every approval flows through the bridge and lands in the ledger as a real decision.
+- **rate-limit-resume** — a [pane-send](#pane-primitives--the-universal-answer-surface) resolver that watches an agent stalled on its provider's 5-hour limit and resumes it when the window resets — the same `↻` countdown the provider dashboard shows — so a long run picks itself back up overnight.
 
 ```text
 [ opus-policy ]  →  [ slack-on-call ]  →  [ pagerduty ]  →  [ you ]

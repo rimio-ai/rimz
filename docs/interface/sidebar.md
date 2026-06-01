@@ -1,6 +1,6 @@
 # The sidebar, on screen
 
-> What the sidebar *looks like*, section by section, with the real frames it draws. For how it is built — presence model, launch, reload recovery, the view-model — see [docs/internals/sidebar.md](../internals/sidebar.md). For the glyph law it obeys, see [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape).
+> What the sidebar *looks like*, section by section, with the real frames it draws. For how it is built — presence model, launch, reload recovery, the view-model — see [docs/internals/sidebar.md](../internals/sidebar.md). For the design rationale behind the glyph law, see [DESIGN.md → Attention at a glance](../../DESIGN.md#attention-at-a-glance).
 
 The sidebar is one narrow column that answers a single question: **which pane needs you, right now.** Every pane in the room is a row; agents are enriched from the ledger; everything groups by the worktree it lives in. It routes you to the pane — you read and answer in the agent's own UI.
 
@@ -43,7 +43,7 @@ The rest of this doc reads that frame zone by zone.
 
 ## Reading the glyphs
 
-One vocabulary runs through the whole sidebar: a shape carries the meaning, color reinforces it. This is the whole legend — the `?` overlay inside the app shows a short version of it in place.
+One vocabulary runs through the whole sidebar: a shape carries the meaning, color reinforces it. This is the complete legend, and the canonical home for it — every other doc points here, and the `?` overlay inside the app shows a short version in place.
 
 **Status — the leading cell of every agent row.**
 
@@ -58,7 +58,7 @@ One vocabulary runs through the whole sidebar: a shape carries the meaning, colo
 | `✓`   | done       | finished cleanly | no |
 | `·`   | process    | a pane with no agent (shell, editor); shows the `⢿` spinner while genuinely busy | no |
 
-Only live states move. The two attention glyphs (`?` / `!`) hold still and **redden from yellow to red** once a row sits unanswered past the neglect window (default 30 min) — a fresh ask reads calm-urgent, a long-ignored one heats up. A working agent that goes silent past the stall window does not freeze its spinner; it escalates to a static `!`.
+Only live states move. The two attention glyphs (`?` / `!`) hold still and **redden from yellow to red** once a row sits unanswered past the neglect window (`[sidebar] attention_redden_secs`) — a fresh ask reads calm-urgent, a long-ignored one heats up. A working agent that goes silent past the stall window escalates to a static `!` instead of spinning on.
 
 **Posture — the permission pill, sized by blast radius.**
 
@@ -173,7 +173,7 @@ A waiting or failed agent is the whole point. Its glyph leads, bold, and the car
 ▌  ▣ ──────────────────────    0%
 ```
 
-A `?` waiting row reads the same with a `?` glyph. The row never shows the agent's question or an approve/deny button — Rimz cannot answer the agent's own UI, so the row's job is to *route* you there. The exception is a script's `feed ask`, which chose Rimz as its surface and so carries its own answerable options.
+A `?` waiting row reads the same with a `?` glyph. The row carries *who* needs you and *what task*, and selecting it lands you in the agent's pane, where the full prompt and its safe defaults live — that is the row's job, to route you there. A script's `feed ask` is the one item answerable from the sidebar itself: it chose Rimz as its surface, so its declared options render as buttons on the row.
 
 **A resolver answering** replaces the `?` with a braille spinner and fills the task slot with the resolver name and its remaining budget — the item is pending, just being handled. It flips back to `? waiting` if the chain exhausts:
 
@@ -214,7 +214,7 @@ The `external` block is the catch-all for panes outside the project — untether
 
 **Ranking is automatic: the most attention-hungry rises, nothing else moves.** Within a worktree, rows sort `waiting → failed → idle → done → working` (a working agent is the least needy, so it settles to the bottom). Attention rows sort oldest-first, so the longest-overdue is always on top. Worktrees themselves sort by their most-urgent member.
 
-**The cap.** Each worktree shows at most ~6 rows with a dim `+K more`. The cap only ever truncates the calm tail — every `waiting`/`failed` row is exempt, so the cap can never hide something that needs you:
+**The cap.** Each worktree shows a capped number of rows (configurable) with a dim `+K more`. The cap trims only the calm tail; every `waiting`/`failed` row is always shown, so the cap can never hide something that needs you:
 
 ```
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄

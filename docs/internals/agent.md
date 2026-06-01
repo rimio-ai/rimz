@@ -33,7 +33,7 @@ The reducer takes each observation's `status` verbatim; the adapter decides whic
 - `success` — last turn completed cleanly
 - `running` — actively working a task
 
-The glyph, animation, and color for each are the canonical table in [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape); this doc owns the transitions, not the painting.
+The glyph, animation, and color for each are the canonical table in [the interface legend](../interface/sidebar.md#reading-the-glyphs); this doc owns the transitions, not the painting.
 
 ```text
    (none) ──registers──► idle ──turn starts / subagent starts──► running
@@ -61,7 +61,7 @@ The displayed cell refines `running` two ways without changing the rollup: a `ru
 - **Shift-tabbing out of `plan`** mid-turn may raise no observation, so the sidebar can lag until the next one. That bounded latency is intentional — the sidebar is observational, and the simpler model avoids transcript/prompt heuristics.
 - **Subagents** own separate `agent_id`s, so a child observation never mutates its parent's posture.
 
-The agent owns status and posture; Rimz observes and renders. `yolo` is read from the agent's own bypass flag; `interactive` folds into `default`. The vocabulary is defined once in [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape).
+The agent owns status and posture; Rimz observes and renders. `yolo` is read from the agent's own bypass flag; `interactive` folds into `default`. The vocabulary is defined once in [the interface legend](../interface/sidebar.md#reading-the-glyphs).
 
 ## Enrichment is display-only
 

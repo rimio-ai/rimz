@@ -1,6 +1,6 @@
 # Sidebar renderer
 
-Local contract for `crates/rimz-sidebar/` — the renderer. Extends the root [AGENTS.md](../../AGENTS.md); it never restates parent rules. The mechanics — presence, ranking, the runtime loop, recovery — are [docs/internals/sidebar.md](../../docs/internals/sidebar.md); the on-screen look is [docs/interface/sidebar.md](../../docs/interface/sidebar.md); the glyph/status/posture table is [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape); the agent-state rollup it projects is [docs/internals/agent.md](../../docs/internals/agent.md).
+Local contract for `crates/rimz-sidebar/` — the renderer. Extends the root [AGENTS.md](../../AGENTS.md); it never restates parent rules. The mechanics — presence, ranking, the runtime loop, recovery — are [docs/internals/sidebar.md](../../docs/internals/sidebar.md); the on-screen look is [docs/interface/sidebar.md](../../docs/interface/sidebar.md); the glyph/status/posture table is [docs/interface/sidebar.md → reading the glyphs](../../docs/interface/sidebar.md#reading-the-glyphs); the agent-state rollup it projects is [docs/internals/agent.md](../../docs/internals/agent.md).
 
 ## The boundary
 
@@ -9,7 +9,7 @@ This crate is a **pure projection** over the `SidebarSnapshot` view-model. It ow
 - **The view-model owns every decision.** Grouping, ranking, and pane→row binding are resolved once in the producer ([`ledger/snapshot.rs`](../rimz/src/ledger/snapshot.rs) in the `rimz` crate). Never re-derive them here — a renderer maps view-model fields to glyphs and nothing more. The view-model types (`SidebarSnapshot`, `SidebarRow`, …) live in `rimz`; this crate consumes them.
 - **Read-only on the ledger.** Reach state only through `rimz sidebar snapshot` or the in-process consumer read (`rimz::sidebar::snapshot`); never import a ledger-writer module (CI grep). The only write is this renderer's own liveness heartbeat, via `rimz::sidebar::write_heartbeat`.
 - **Panes are opaque.** Pane presence arrives in the snapshot; never call `pane capture` / `pane send`. The lone mux call is the metadata-only sibling count for self-close, which never updates the rendered snapshot.
-- **The semantic→glyph mapping is the one cross-renderer discipline.** It lives in [`render/labels.rs`](./src/render/labels.rs) and must track the canonical table in DESIGN.md so the native pane, the Zellij rail, and the CLI read the same.
+- **The semantic→glyph mapping is the one cross-renderer discipline.** It lives in [`render/labels.rs`](./src/render/labels.rs) and must track the canonical table in [docs/interface/sidebar.md](../../docs/interface/sidebar.md#reading-the-glyphs) so the native pane, the Zellij rail, and the CLI read the same.
 
 ## The loop
 

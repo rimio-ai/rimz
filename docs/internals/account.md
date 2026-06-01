@@ -1,6 +1,6 @@
 # Agent accounts and balances
 
-> See [DESIGN.md → Sidebar shape](../../DESIGN.md#sidebar-shape) for the account-scoped-budget invariant this doc operationalizes, [transcript.md](./transcript.md) for the transport plumbing that carries the rich context this doc interprets, and [the interface reference](../interface/sidebar.md#zone-3--the-provider-dashboard) for what the provider dashboard looks like on screen.
+> See [DESIGN.md → Attention at a glance](../../DESIGN.md#attention-at-a-glance) for the account-scoped-budget invariant this doc operationalizes, [transcript.md](./transcript.md) for the transport plumbing that carries the rich context this doc interprets, and [the interface reference](../interface/sidebar.md#zone-3--the-provider-dashboard) for what the provider dashboard looks like on screen.
 
 A coding agent runs against a **provider account** — a login, on a plan, that may or may not be metered — and that account has a **balance**: the rate-limit windows the plan draws against.
 This doc owns both: the account/balance model, where each provider's facts come from, how they map onto Rimz's internal types, and how the producer folds them into the provider dashboard.

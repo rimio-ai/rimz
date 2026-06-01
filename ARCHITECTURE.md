@@ -160,8 +160,8 @@ Crate-local rules:
 
 Reference resolver artifacts for tests and documentation. Not shipped as product.
 
-- `hook_bridge_resolver.py` — heartbeat loop, polls `rimz feed list`, runs a static `tool_name` allowlist policy, calls `rimz feed resolve --method hook-bridge` or `feed abstain`.
-- `pane_send_resolver.py` — heartbeat loop, captures the active pane, matches against a bounded regex list, calls `rimz pane send` + `feed resolve --method pane-send`.
+- `hook_bridge_resolver.py` (**auto-approve**) — heartbeat loop, polls `rimz feed list`, runs a `tool_name` allowlist policy, approves matching permission requests via `rimz feed resolve --method hook-bridge` (else `feed abstain`).
+- `pane_send_resolver.py` (**rate-limit-resume**) — heartbeat loop, captures the active pane, matches a bounded prompt-shape list, resumes the agent via `rimz pane send` + `feed resolve --method pane-send`.
 
 Both scripts are stdlib-only Python 3 single files, not built or shipped — the workspace `Cargo.toml` excludes them. They exist to prove the resolver protocol from `docs/internals/resolvers.md` is implementable through the public CLI alone.
 

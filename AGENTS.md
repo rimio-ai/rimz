@@ -2,13 +2,15 @@
 
 Working contract for humans and coding agents contributing to Rimz. Read on entry. Topic detail lives in the leaves linked from the [documentation map](#documentation-map); never duplicate it here.
 
-> **Invariant.** Rimz routes attention. By default, it does not answer for you. The agent's own UI stays the answer surface unless a resolver is explicitly enrolled.
+> **Invariant.** Rimz routes attention: it surfaces which agent needs you and takes you straight to its pane, where you answer in the agent's own UI. A resolver delegates routine answers only when you explicitly enrol one, and the chain ends with you.
 
 If a child `AGENTS.md` appears under a subtree, it extends this file with local-only constraints — it never restates parent rules.
 
 ## Tone
 
 Declarative, present tense. State the contract; don't narrate history. Prefer imperatives (`Use Result.`, `Resolvers own pane I/O.`) over prohibitions where the meaning carries.
+
+Say what it is. Describe Rimz by what it does, builds, and offers — lead with the capability. Reader-facing docs especially: open on the value, not the guardrail. Avoid "X is a Y, not a Z" framing and defensive "we don't…" / "it never…" constructions; state a real safety boundary as a positive commitment (`Resolvers own pane I/O.`) rather than a prohibition. Reserve negation for genuine disambiguation a reader would otherwise get wrong.
 
 Markdown prose uses one logical line per paragraph, list item, and blockquote paragraph. Do not hard-wrap prose.
 
@@ -63,7 +65,7 @@ Every other document is a leaf from here. The `docs/` tree groups by audience: *
 
 **Root**
 - [README.md](./README.md) — product entry point.
-- [DESIGN.md](./DESIGN.md) — invariant, three operating paths, commitments, non-goals.
+- [DESIGN.md](./DESIGN.md) — what Rimz offers, the attention problem, the design choices that answer it, the three operating paths, commitments, non-goals.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — runtime shape, repository layout, module ownership.
 
 **Guide** — `docs/guide/`
