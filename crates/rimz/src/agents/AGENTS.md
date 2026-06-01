@@ -1,6 +1,6 @@
 # Agent adapters
 
-Local contract for `crates/rimz/src/agents/` — the integration layer. Extends the root [AGENTS.md](../../../../AGENTS.md); it never restates parent rules. Provider mapping and the full hook model live in [docs/internals/hooks.md](../../../../docs/internals/hooks.md); the agent-state rollup is [docs/internals/agent.md](../../../../docs/internals/agent.md).
+Local contract for `crates/rimz/src/agents/` — the integration layer. Extends the root [AGENTS.md](../../../../AGENTS.md); it never restates parent rules. The decision/lifecycle hook model lives in [docs/internals/hooks.md](../../../../docs/internals/hooks.md); the context read-path — transcript-tail parsing and the rich-context transports — is [docs/internals/transcript.md](../../../../docs/internals/transcript.md); the agent-state rollup is [docs/internals/agent.md](../../../../docs/internals/agent.md).
 
 ## The boundary
 
