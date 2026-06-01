@@ -7,6 +7,7 @@ use std::io;
 use std::os::unix::net::UnixDatagram;
 
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
+use serde::Deserialize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Wakeup {
@@ -14,7 +15,9 @@ pub(super) enum Wakeup {
     /// A ledger mutation posted a `ledger_delta` datagram. Distinct from `Tick`
     /// (the poll timeout) so the loop can coalesce a burst of deltas from one
     /// mutation into a single refetch instead of one refetch per event.
-    Ledger,
+    Ledger {
+        fresh_panes: bool,
+    },
     /// The background fetch worker finished a snapshot and posted
     /// [`SNAPSHOT_WAKEUP`]; the loop folds the result waiting on its result
     /// channel. Keeps the fetch subprocess off the render thread.
@@ -84,7 +87,7 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
     // word starts with `{` (asserted by `control_words_never_start_with_brace`),
     // so the leading brace is an unambiguous, allocation-free discriminator.
     if bytes.first() == Some(&b'{') {
-        return Wakeup::Ledger;
+        return decode_ledger_wakeup(bytes);
     }
     let raw = std::str::from_utf8(bytes).unwrap_or_default();
     if let Some(mouse) = decode_mouse_click(raw) {
@@ -107,6 +110,29 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         "key:help" => Wakeup::Key(KeyAction::Help),
         "key:dismiss" => Wakeup::Key(KeyAction::Dismiss),
         _ => Wakeup::Tick,
+    }
+}
+
+#[derive(Deserialize)]
+struct LedgerWakeup<'a> {
+    #[serde(borrow)]
+    kind: Option<&'a str>,
+    event_method: Option<&'a str>,
+    agent_event_name: Option<&'a str>,
+}
+
+fn decode_ledger_wakeup(bytes: &[u8]) -> Wakeup {
+    let fresh_panes = serde_json::from_slice::<LedgerWakeup<'_>>(bytes)
+        .ok()
+        .is_some_and(|frame| frame.needs_fresh_panes());
+    Wakeup::Ledger { fresh_panes }
+}
+
+impl LedgerWakeup<'_> {
+    fn needs_fresh_panes(&self) -> bool {
+        self.kind == Some("ledger_delta")
+            && self.event_method == Some("agent.lifecycle")
+            && matches!(self.agent_event_name, Some("SessionStart" | "SessionEnd"))
     }
 }
 
@@ -194,8 +220,20 @@ mod tests {
         // The real wire shape `wake_sidebars` posts is a JSON object.
         let envelope =
             br#"{"kind":"ledger_delta","workspace_id":"ws_x","protocol_version":"rimz.plugin.v2"}"#;
-        assert_eq!(decode_wakeup(envelope), Wakeup::Ledger);
-        assert_eq!(decode_wakeup(b"{}"), Wakeup::Ledger);
+        assert_eq!(
+            decode_wakeup(envelope),
+            Wakeup::Ledger { fresh_panes: false }
+        );
+        assert_eq!(decode_wakeup(b"{}"), Wakeup::Ledger { fresh_panes: false });
+    }
+
+    #[test]
+    fn agent_session_boundary_ledger_delta_requests_fresh_panes() {
+        let start = br#"{"kind":"ledger_delta","event_method":"agent.lifecycle","agent_event_name":"SessionStart","protocol_version":"rimz.plugin.v2"}"#;
+        assert_eq!(decode_wakeup(start), Wakeup::Ledger { fresh_panes: true });
+
+        let status = br#"{"kind":"ledger_delta","event_method":"agent.lifecycle","agent_event_name":"UserPromptSubmit","protocol_version":"rimz.plugin.v2"}"#;
+        assert_eq!(decode_wakeup(status), Wakeup::Ledger { fresh_panes: false });
     }
 
     #[test]

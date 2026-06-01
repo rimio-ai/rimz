@@ -977,11 +977,7 @@ impl Ledger {
     }
 
     fn wake_sidebars_for_event_best_effort(&self, event: &EventEnvelope) {
-        if let Err(err) = wakeup::wake_sidebars_for_event(
-            &self.inner.runtime,
-            &event.workspace_id,
-            &event.event_id,
-        ) {
+        if let Err(err) = wakeup::wake_sidebars_for_event(&self.inner.runtime, event) {
             warn!(
                 event_id = %event.event_id,
                 error = %err,

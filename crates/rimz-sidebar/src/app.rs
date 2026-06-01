@@ -105,7 +105,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // The snapshot subprocess (workspace resolve + `list-panes` + git) and the
     // heartbeat write run on a background worker, so animation and input never
     // block on them. The worker posts `SNAPSHOT_WAKEUP` when a result is ready;
-    // `in_flight`/`refetch_pending` coalesce requests so a ledger-delta storm or
+    // `in_flight`/`pending_refetch` coalesce requests so a ledger-delta storm or
     // a slow fetch can never queue more than one extra run.
     let (request_tx, request_rx) = std::sync::mpsc::channel::<FetchRequest>();
     let (result_tx, result_rx) = std::sync::mpsc::channel::<FetchOutcome>();
@@ -117,7 +117,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         result_tx,
     );
     let mut in_flight = false;
-    let mut refetch_pending = false;
+    let mut pending_refetch: Option<FetchRequest> = None;
 
     // Resize is the earliest signal that a sibling pane closed and Zellij/tmux
     // gave the sidebar the freed space. Probe only the live pane list on a
@@ -144,7 +144,13 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // `rejected` here.
     let mut should_exit = apply_fetch_outcome(
         &config,
-        run_fetch(&config, &runtime, &socket_path, false),
+        run_fetch(
+            &config,
+            &runtime,
+            &socket_path,
+            FetchRequest::default(),
+            true,
+        ),
         &mut last_snapshot,
         &mut current,
         &mut health,
@@ -207,13 +213,12 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     should_exit = applied.should_exit;
                     rejected = applied.rejected;
                 }
-                if !should_exit && refetch_pending {
-                    refetch_pending = false;
+                if !should_exit && let Some(request) = pending_refetch.take() {
                     request_fetch(
                         &request_tx,
                         &mut in_flight,
-                        &mut refetch_pending,
-                        false,
+                        &mut pending_refetch,
+                        request,
                         false,
                     );
                 }
@@ -226,8 +231,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     request_fetch(
                         &request_tx,
                         &mut in_flight,
-                        &mut refetch_pending,
-                        false,
+                        &mut pending_refetch,
+                        FetchRequest::default(),
                         false,
                     );
                 }
@@ -277,22 +282,28 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     request_fetch(
                         &request_tx,
                         &mut in_flight,
-                        &mut refetch_pending,
-                        false,
+                        &mut pending_refetch,
+                        FetchRequest::default(),
                         false,
                     );
                 }
             }
             // A ledger delta means new committed data: refetch, forcing one more
-            // run if a fetch is already in flight so the delta is never lost. A
-            // burst of deltas collapses to a single fetch via `in_flight`.
-            Wakeup::Ledger => {
+            // run if a fetch is already in flight so the delta is never lost.
+            // Pane-sensitive lifecycle deltas bypass the pane cache so a
+            // just-started or just-ended agent is not pinned to the next TTL.
+            // A burst of deltas collapses to a single fetch via `in_flight`.
+            Wakeup::Ledger { fresh_panes } => {
                 request_fetch(
                     &request_tx,
                     &mut in_flight,
-                    &mut refetch_pending,
+                    &mut pending_refetch,
+                    if fresh_panes {
+                        FetchRequest::fresh_panes()
+                    } else {
+                        FetchRequest::default()
+                    },
                     true,
-                    false,
                 );
             }
             Wakeup::Resize => {
@@ -308,6 +319,18 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     &mut self_close_probe_in_flight,
                     &mut pending_self_close_probe,
                     Duration::ZERO,
+                );
+                // A resize is the mux telling us topology changed: a split
+                // opened/closed, or the sidebar got space back. Pull a fresh
+                // pane list immediately and require a cache produced after this
+                // signal; otherwise a just-closed/just-opened agent can linger
+                // until the pane-cache TTL or the next data tick.
+                request_fetch(
+                    &request_tx,
+                    &mut in_flight,
+                    &mut pending_refetch,
+                    FetchRequest::fresh_panes(),
+                    true,
                 );
             }
             Wakeup::Reload => {
@@ -332,8 +355,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 request_fetch(
                     &request_tx,
                     &mut in_flight,
-                    &mut refetch_pending,
-                    true,
+                    &mut pending_refetch,
+                    FetchRequest::fresh_panes(),
                     true,
                 );
             }
@@ -833,6 +856,7 @@ fn fetch_snapshot_for(
     mux: Option<MuxName>,
     session_name: Option<&str>,
     exclude_pane_id: Option<PaneId>,
+    min_pane_cache_ms: Option<u64>,
 ) -> Result<SidebarSnapshot> {
     let mut command = Command::new(rimz_bin);
     command
@@ -846,6 +870,11 @@ fn fetch_snapshot_for(
     }
     if let Some(pane_id) = exclude_pane_id {
         command.args(["--exclude-pane-id", pane_id.as_str()]);
+    }
+    if let Some(min_pane_cache_ms) = min_pane_cache_ms {
+        command
+            .arg("--min-pane-cache-ms")
+            .arg(min_pane_cache_ms.to_string());
     }
     command.arg("--json");
     let output = command
@@ -886,11 +915,16 @@ fn run_fetch(
     config: &ServeConfig,
     runtime: &RuntimePaths,
     socket_path: &Path,
-    force_produce: bool,
+    request: FetchRequest,
+    write_heartbeat_now: bool,
 ) -> FetchOutcome {
-    let heartbeat_err = write_heartbeat(config, runtime, socket_path)
-        .err()
-        .map(|err| err.to_string());
+    let heartbeat_err = if write_heartbeat_now {
+        write_heartbeat(config, runtime, socket_path)
+            .err()
+            .map(|err| err.to_string())
+    } else {
+        None
+    };
     let is_producer = !rimz::sidebar::elder_sidebar_present(runtime, &config.instance_id);
     let exclude = own_pane_id(config.mux);
     // Take the producer path — fork the real `list-panes`/git snapshot — when we
@@ -900,7 +934,7 @@ fn run_fetch(
     // freeze), a consumer produces its own current frame; `cached_base_or_produce`
     // single-flights, so a fleet self-healing at once still elects one producer.
     let produce = is_producer
-        || force_produce
+        || request.force_produce
         || rimz::sidebar::snapshot::published_frame_is_stale(
             runtime,
             &config.session_name,
@@ -913,6 +947,7 @@ fn run_fetch(
             Some(config.mux),
             Some(&config.session_name),
             exclude,
+            request.min_pane_cache_ms,
         )
         .map_err(|err| err.to_string())
     } else {
@@ -938,12 +973,38 @@ fn run_fetch(
 }
 
 /// One request to the fetch worker. `force_produce` makes the run take the
-/// producer path (real `list-panes`/git) regardless of election or cache
-/// freshness — the manual `r` reload sets it so the user always pulls live data.
+/// producer path (real `list-panes`/git) regardless of election. When it is
+/// paired with `min_pane_cache_ms`, the producer ignores a pane cache older
+/// than the signal that asked for fresh topology.
 #[derive(Clone, Copy, Debug, Default)]
 struct FetchRequest {
     force_produce: bool,
+    min_pane_cache_ms: Option<u64>,
 }
+
+impl FetchRequest {
+    fn fresh_panes() -> Self {
+        Self {
+            force_produce: true,
+            min_pane_cache_ms: Some(rimz::sidebar::snapshot::unix_now_ms()),
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.force_produce |= other.force_produce;
+        self.min_pane_cache_ms = match (self.min_pane_cache_ms, other.min_pane_cache_ms) {
+            (Some(current), Some(next)) => Some(current.max(next)),
+            (Some(current), None) => Some(current),
+            (None, Some(next)) => Some(next),
+            (None, None) => None,
+        };
+    }
+}
+
+/// Write this renderer's heartbeat at most this often. The heartbeat TTL is 5s;
+/// 2s keeps two missed writes of slack while avoiding an atomic file write for
+/// every ledger-delta fetch in a busy fleet.
+const HEARTBEAT_WRITE_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Spawn the background fetch worker. It blocks for a request, coalesces any
 /// that piled up (a ledger-delta storm collapses to one fetch), runs one
@@ -959,15 +1020,25 @@ fn spawn_fetch_worker(
 ) {
     std::thread::spawn(move || {
         let waker = UnixDatagram::unbound().ok();
+        let mut last_heartbeat: Option<Instant> = None;
         while let Ok(first) = request_rx.recv() {
-            // Coalesce any requests that piled up into one run, but keep the
-            // strongest intent: if any of them forced a produce, the single run
-            // produces.
-            let mut force_produce = first.force_produce;
+            // Coalesce any requests that piled up into one run, keeping the
+            // strongest intent and the newest pane-freshness floor.
+            let mut request = first;
             while let Ok(extra) = request_rx.try_recv() {
-                force_produce |= extra.force_produce;
+                request.merge(extra);
             }
-            let outcome = run_fetch(&config, &runtime, &socket_path, force_produce);
+            let write_heartbeat_now = heartbeat_write_due(last_heartbeat);
+            if write_heartbeat_now {
+                last_heartbeat = Some(Instant::now());
+            }
+            let outcome = run_fetch(
+                &config,
+                &runtime,
+                &socket_path,
+                request,
+                write_heartbeat_now,
+            );
             if result_tx.send(outcome).is_err() {
                 return;
             }
@@ -976,6 +1047,10 @@ fn spawn_fetch_worker(
             }
         }
     });
+}
+
+fn heartbeat_write_due(last_heartbeat: Option<Instant>) -> bool {
+    last_heartbeat.is_none_or(|last| last.elapsed() >= HEARTBEAT_WRITE_INTERVAL)
 }
 
 fn spawn_self_close_probe_worker(
@@ -1033,20 +1108,23 @@ fn run_self_close_probe(config: &ServeConfig) -> SelfCloseProbeOutcome {
 /// requests while one is already running; `force_after` (set by a ledger delta,
 /// i.e. new committed data) guarantees one more fetch once the in-flight one
 /// returns, so a delta that races an in-flight fetch is never lost.
-/// `force_produce` rides the immediate request, marking it a producer-path run.
+/// `request` carries the strongest freshness requirement currently known.
 fn request_fetch(
     request_tx: &std::sync::mpsc::Sender<FetchRequest>,
     in_flight: &mut bool,
-    refetch_pending: &mut bool,
+    pending_refetch: &mut Option<FetchRequest>,
+    request: FetchRequest,
     force_after: bool,
-    force_produce: bool,
 ) {
     if !*in_flight {
-        if request_tx.send(FetchRequest { force_produce }).is_ok() {
+        if request_tx.send(request).is_ok() {
             *in_flight = true;
         }
     } else if force_after {
-        *refetch_pending = true;
+        match pending_refetch {
+            Some(pending) => pending.merge(request),
+            None => *pending_refetch = Some(request),
+        }
     }
 }
 
@@ -1388,7 +1466,7 @@ fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -
         // ledger delta is the re-fetch trigger, worker completions are folded,
         // and a reload re-execs.
         Wakeup::Tick
-        | Wakeup::Ledger
+        | Wakeup::Ledger { .. }
         | Wakeup::Reload
         | Wakeup::Snapshot
         | Wakeup::SelfCloseProbe => InputOutcome::default(),
@@ -2169,6 +2247,44 @@ mod tests {
     #[test]
     fn tick_for_clamps_zero_to_one() {
         assert_eq!(tick_for(0), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn heartbeat_write_due_on_first_or_aged_write_only() {
+        assert!(heartbeat_write_due(None));
+        assert!(!heartbeat_write_due(Some(Instant::now())));
+        assert!(heartbeat_write_due(Some(
+            Instant::now() - HEARTBEAT_WRITE_INTERVAL
+        )));
+    }
+
+    #[test]
+    fn fetch_request_sends_immediately_when_idle() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut in_flight = false;
+        let mut pending = None;
+        let request = FetchRequest::fresh_panes();
+
+        request_fetch(&tx, &mut in_flight, &mut pending, request, true);
+
+        assert!(in_flight);
+        assert!(rx.try_recv().unwrap().force_produce);
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn fetch_request_preserves_forced_pane_refresh_while_in_flight() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut in_flight = true;
+        let mut pending = Some(FetchRequest::default());
+        let request = FetchRequest::fresh_panes();
+        let min_pane_cache_ms = request.min_pane_cache_ms;
+
+        request_fetch(&tx, &mut in_flight, &mut pending, request, true);
+
+        let pending = pending.expect("pending refetch");
+        assert!(pending.force_produce);
+        assert_eq!(pending.min_pane_cache_ms, min_pane_cache_ms);
     }
 
     #[test]

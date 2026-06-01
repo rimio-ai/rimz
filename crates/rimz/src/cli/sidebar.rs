@@ -39,6 +39,9 @@ enum SidebarSubcmd {
         session_name: Option<String>,
         #[arg(long)]
         exclude_pane_id: Option<String>,
+        /// Require a pane cache produced at or after this Unix millisecond.
+        #[arg(long, hide = true)]
+        min_pane_cache_ms: Option<u64>,
         #[arg(long)]
         json: bool,
         /// Render read-only from the producer's published cache: never fork
@@ -56,7 +59,7 @@ enum SidebarSubcmd {
         mux: Option<MuxName>,
         #[arg(long)]
         session_name: Option<String>,
-        #[arg(long, default_value_t = 2)]
+        #[arg(long, default_value_t = 1)]
         tick_seconds: u64,
     },
 }
@@ -68,6 +71,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             mux,
             session_name,
             exclude_pane_id,
+            min_pane_cache_ms,
             json,
             no_produce,
         } => {
@@ -174,7 +178,12 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                             .or(globals.mux)
                             .or_else(|| rimz::mux::auto_detect_backend(None).ok());
                         match mux {
-                            Some(mux) => match cached_base_or_produce(&ledger, mux, session) {
+                            Some(mux) => match cached_base_or_produce(
+                                &ledger,
+                                mux,
+                                session,
+                                min_pane_cache_ms,
+                            ) {
                                 Ok((rollup, panes)) => (rollup, Some(panes)),
                                 // The serve loop owns a live session, so a
                                 // discovery failure there is real: fail hard and
@@ -334,11 +343,16 @@ const SNAPSHOT_CACHE_WAIT_STEPS: u32 = 10;
 
 /// Return a same-session cache entry younger than [`SNAPSHOT_CACHE_TTL`], or
 /// `None` when it is absent, stale, for another session, or unreadable.
-fn fresh_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotCache> {
+fn fresh_snapshot_cache(
+    cache_path: &Path,
+    session: &str,
+    min_produced_at_ms: Option<u64>,
+) -> Option<SnapshotCache> {
     let cache = read_snapshot_cache(cache_path, session)?;
     let fresh =
         unix_now_ms().saturating_sub(cache.produced_at_ms) <= SNAPSHOT_CACHE_TTL.as_millis() as u64;
-    fresh.then_some(cache)
+    let new_enough = min_produced_at_ms.is_none_or(|min| cache.produced_at_ms >= min);
+    (fresh && new_enough).then_some(cache)
 }
 
 /// The session's live panes from the mux — the `list-panes` round-trip the
@@ -405,8 +419,9 @@ fn cached_base_or_produce(
     ledger: &Ledger,
     mux: MuxName,
     session: &str,
+    min_pane_cache_ms: Option<u64>,
 ) -> Result<(rimz::SidebarSnapshot, Vec<rimz::feed::PaneRef>)> {
-    let panes = cached_panes_or_produce(ledger, mux, session)?;
+    let panes = cached_panes_or_produce(ledger, mux, session, min_pane_cache_ms)?;
     let rollup = ledger.snapshot_cached()?;
     Ok((rollup, panes))
 }
@@ -422,12 +437,13 @@ fn cached_panes_or_produce(
     ledger: &Ledger,
     mux: MuxName,
     session: &str,
+    min_pane_cache_ms: Option<u64>,
 ) -> Result<Vec<rimz::feed::PaneRef>> {
     let runtime = ledger.runtime_paths();
     let cache_path = runtime.root.join("snapshot.json");
 
     // Fast path: a fresh same-session entry needs no mux work.
-    if let Some(cache) = fresh_snapshot_cache(&cache_path, session) {
+    if let Some(cache) = fresh_snapshot_cache(&cache_path, session, min_pane_cache_ms) {
         return Ok(cache.panes);
     }
 
@@ -435,7 +451,8 @@ fn cached_panes_or_produce(
     // Losers read its write back; if it wedges, they fall back to an uncached
     // local produce rather than block.
     let lock_path = runtime.root.join("snapshot.lock");
-    let fresh = || fresh_snapshot_cache(&cache_path, session).map(|cache| cache.panes);
+    let fresh =
+        || fresh_snapshot_cache(&cache_path, session, min_pane_cache_ms).map(|cache| cache.panes);
     match single_flight::coalesce(
         &lock_path,
         SNAPSHOT_CACHE_WAIT_STEP,
@@ -1039,7 +1056,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("snapshot.json");
         write_snapshot_cache(&path, "rimz-query-engine", unix_now_ms());
-        assert!(fresh_snapshot_cache(&path, "rimz-query-engine").is_some());
+        assert!(fresh_snapshot_cache(&path, "rimz-query-engine", None).is_some());
     }
 
     #[test]
@@ -1050,7 +1067,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("snapshot.json");
         write_snapshot_cache(&path, "rimz-query-engine", unix_now_ms());
-        assert!(fresh_snapshot_cache(&path, "rimz-other").is_none());
+        assert!(fresh_snapshot_cache(&path, "rimz-other", None).is_none());
     }
 
     #[test]
@@ -1059,16 +1076,38 @@ mod tests {
         let path = dir.path().join("snapshot.json");
         let stale = unix_now_ms().saturating_sub(SNAPSHOT_CACHE_TTL.as_millis() as u64 + 1);
         write_snapshot_cache(&path, "rimz-query-engine", stale);
-        assert!(fresh_snapshot_cache(&path, "rimz-query-engine").is_none());
+        assert!(fresh_snapshot_cache(&path, "rimz-query-engine", None).is_none());
+    }
+
+    #[test]
+    fn snapshot_cache_misses_before_requested_pane_freshness_floor() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.json");
+        let produced_at_ms = unix_now_ms();
+        write_snapshot_cache(&path, "rimz-query-engine", produced_at_ms);
+
+        assert!(
+            fresh_snapshot_cache(&path, "rimz-query-engine", Some(produced_at_ms)).is_some(),
+            "a cache produced at the requested floor is usable"
+        );
+        assert!(
+            fresh_snapshot_cache(
+                &path,
+                "rimz-query-engine",
+                Some(produced_at_ms.saturating_add(1)),
+            )
+            .is_none(),
+            "a pane-sensitive wakeup rejects the pre-signal pane cache"
+        );
     }
 
     #[test]
     fn snapshot_cache_misses_when_absent_or_unreadable() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("snapshot.json");
-        assert!(fresh_snapshot_cache(&path, "rimz-query-engine").is_none());
+        assert!(fresh_snapshot_cache(&path, "rimz-query-engine", None).is_none());
         std::fs::write(&path, b"{ not json").unwrap();
-        assert!(fresh_snapshot_cache(&path, "rimz-query-engine").is_none());
+        assert!(fresh_snapshot_cache(&path, "rimz-query-engine", None).is_none());
     }
 
     #[test]
@@ -1082,7 +1121,7 @@ mod tests {
         let stale = unix_now_ms().saturating_sub(SNAPSHOT_CACHE_TTL.as_millis() as u64 + 1);
         write_snapshot_cache(&path, "rimz-query-engine", stale);
         assert!(
-            fresh_snapshot_cache(&path, "rimz-query-engine").is_none(),
+            fresh_snapshot_cache(&path, "rimz-query-engine", None).is_none(),
             "the producer's fresh-only fast path skips a stale entry"
         );
         assert!(

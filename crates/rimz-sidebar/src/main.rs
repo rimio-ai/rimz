@@ -54,7 +54,7 @@ enum Subcmd {
         mux: Option<MuxName>,
         #[arg(long)]
         session_name: Option<String>,
-        #[arg(long, default_value_t = 2)]
+        #[arg(long, default_value_t = 1)]
         tick_seconds: u64,
     },
 }

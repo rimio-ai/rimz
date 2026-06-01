@@ -32,6 +32,7 @@ use crate::feed::FeedItem;
 use crate::ids::{EventId, RequestId, WorkspaceId};
 use crate::ledger::RuntimePaths;
 use crate::schema::SIDEBAR_PROTOCOL_VERSION;
+use crate::schema::event::EventEnvelope;
 use crate::schema::heartbeat::SidebarHeartbeat;
 
 /// Maximum age of a sidebar heartbeat before we treat it as dead and skip
@@ -48,6 +49,10 @@ pub struct SidebarWakeup {
     pub request_id: Option<RequestId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_id: Option<EventId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_event_name: Option<String>,
     pub protocol_version: &'static str,
 }
 
@@ -98,15 +103,18 @@ pub fn wake_sidebars(
     workspace_id: &WorkspaceId,
     request_id: &RequestId,
 ) -> Result<()> {
-    wake_sidebars_inner(rt, workspace_id, Some(request_id), None)
+    wake_sidebars_inner(rt, workspace_id, Some(request_id), None, None, None)
 }
 
-pub fn wake_sidebars_for_event(
-    rt: &RuntimePaths,
-    workspace_id: &WorkspaceId,
-    event_id: &EventId,
-) -> Result<()> {
-    wake_sidebars_inner(rt, workspace_id, None, Some(event_id))
+pub fn wake_sidebars_for_event(rt: &RuntimePaths, event: &EventEnvelope) -> Result<()> {
+    wake_sidebars_inner(
+        rt,
+        &event.workspace_id,
+        None,
+        Some(&event.event_id),
+        Some(&event.method),
+        agent_event_name(event),
+    )
 }
 
 /// Wake every fresh sidebar after a context-sidecar write (Claude's statusline
@@ -115,7 +123,7 @@ pub fn wake_sidebars_for_event(
 /// the renderer folds into one refetch, so a cost change repaints within a
 /// wakeup instead of waiting for the renderer's next poll tick.
 pub fn wake_sidebars_for_context(rt: &RuntimePaths, workspace_id: &WorkspaceId) -> Result<()> {
-    wake_sidebars_inner(rt, workspace_id, None, None)
+    wake_sidebars_inner(rt, workspace_id, None, None, None, None)
 }
 
 fn wake_sidebars_inner(
@@ -123,19 +131,36 @@ fn wake_sidebars_inner(
     workspace_id: &WorkspaceId,
     request_id: Option<&RequestId>,
     event_id: Option<&EventId>,
+    event_method: Option<&str>,
+    agent_event_name: Option<&str>,
 ) -> Result<()> {
     let payload = serde_json::to_vec(&SidebarWakeup {
         kind: "ledger_delta",
         workspace_id: workspace_id.clone(),
         request_id: request_id.cloned(),
         event_id: event_id.cloned(),
+        event_method: event_method.map(str::to_owned),
+        agent_event_name: agent_event_name.map(str::to_owned),
         protocol_version: crate::schema::SIDEBAR_PROTOCOL_VERSION,
     })?;
 
-    for hb in collect_fresh_sidebars(rt)? {
-        send_datagram(&payload, &hb.wakeup_socket);
-    }
+    let sidebars = collect_fresh_sidebars(rt)?;
+    send_datagrams(
+        &payload,
+        sidebars.iter().map(|hb| hb.wakeup_socket.as_path()),
+    );
     Ok(())
+}
+
+fn agent_event_name(event: &EventEnvelope) -> Option<&str> {
+    (event.method == "agent.lifecycle")
+        .then(|| {
+            event
+                .params
+                .get("event_name")
+                .and_then(serde_json::Value::as_str)
+        })
+        .flatten()
 }
 
 /// Tell every fresh sidebar of this workspace to re-exec its own binary, so it
@@ -145,11 +170,12 @@ fn wake_sidebars_inner(
 /// signaled. A wedged or already-dead sidebar receives nothing; relaunch it via
 /// `rimz start`/`rimz attach` instead.
 pub fn reload_sidebars(rt: &RuntimePaths) -> Result<usize> {
-    let mut signaled = 0;
-    for hb in collect_fresh_sidebars(rt)? {
-        send_datagram(RELOAD_WAKEUP, &hb.wakeup_socket);
-        signaled += 1;
-    }
+    let sidebars = collect_fresh_sidebars(rt)?;
+    let signaled = sidebars.len();
+    send_datagrams(
+        RELOAD_WAKEUP,
+        sidebars.iter().map(|hb| hb.wakeup_socket.as_path()),
+    );
     Ok(signaled)
 }
 
@@ -252,7 +278,33 @@ fn heartbeat_still_fresh(path: &Path) -> bool {
 }
 
 fn send_datagram(payload: &[u8], target: &Path) {
-    match UnixDatagram::unbound().and_then(|s| s.send_to(payload, target)) {
+    let Some(sender) = sender_socket() else {
+        return;
+    };
+    send_datagram_with(&sender, payload, target);
+}
+
+fn send_datagrams<'a>(payload: &[u8], targets: impl IntoIterator<Item = &'a Path>) {
+    let Some(sender) = sender_socket() else {
+        return;
+    };
+    for target in targets {
+        send_datagram_with(&sender, payload, target);
+    }
+}
+
+fn sender_socket() -> Option<UnixDatagram> {
+    match UnixDatagram::unbound() {
+        Ok(sender) => Some(sender),
+        Err(e) => {
+            debug!(error = %e, "wakeup: creating sender socket failed");
+            None
+        }
+    }
+}
+
+fn send_datagram_with(sender: &UnixDatagram, payload: &[u8], target: &Path) {
+    match sender.send_to(payload, target) {
         Ok(_) => {}
         Err(e) => {
             debug!(
