@@ -192,16 +192,6 @@ pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotC
     (cache.session_name == session).then_some(cache)
 }
 
-/// The producer's last published live pane list for a consumer renderer.
-/// Returns the same-session cache regardless of freshness — a non-producer holds
-/// the last good pane set rather than forking its own `list-panes`; the elder's
-/// next publish refreshes it. `None` when no same-session cache exists yet, so
-/// the caller holds its last good frame until the producer's first publish.
-fn read_published_panes(runtime: &RuntimePaths, session: &str) -> Option<Vec<PaneRef>> {
-    let cache_path = runtime.root.join("snapshot.json");
-    read_snapshot_cache(&cache_path, session).map(|cache| cache.panes)
-}
-
 /// The event-fresh ledger rollup for a consumer, read in process: `latest.json`
 /// when it reflects the log (lock-free, O(snapshot)), else a full re-projection
 /// (the cold/empty room, or a write that raced the freshness check). The
@@ -435,9 +425,29 @@ pub fn read_published_snapshot(
     session: &str,
     exclude: Option<&PaneId>,
 ) -> Option<SidebarSnapshot> {
-    let panes = read_published_panes(runtime, session)?;
+    let cache_path = runtime.root.join("snapshot.json");
+    let cache = read_snapshot_cache(&cache_path, session)?;
     let base = consumer_rollup(state)?;
-    Some(enrich_consumer(base, Some(panes), runtime, exclude))
+    // The cache's production time is when the producer sampled focus; carry it as
+    // the observation time so a consumer's read time never masquerades as a fresh
+    // external focus and rolls back a recent local selection.
+    let observed_at = ms_to_timestamp(cache.produced_at_ms);
+    Some(enrich_consumer(
+        base,
+        Some(cache.panes),
+        runtime,
+        exclude,
+        observed_at,
+    ))
+}
+
+/// Convert epoch milliseconds (the snapshot cache stamp) to a `Timestamp`,
+/// falling back to now on the impossible out-of-range case.
+fn ms_to_timestamp(ms: u64) -> Timestamp {
+    i64::try_from(ms)
+        .ok()
+        .and_then(|ms| Timestamp::from_millisecond(ms).ok())
+        .unwrap_or_else(Timestamp::now)
 }
 
 /// Fold the read-only enrichments onto a consumer's base snapshot: the cached
@@ -452,6 +462,7 @@ pub fn enrich_consumer(
     panes: Option<Vec<PaneRef>>,
     runtime: &RuntimePaths,
     exclude: Option<&PaneId>,
+    observed_at: Timestamp,
 ) -> SidebarSnapshot {
     if snapshot.project_root.is_some() {
         snapshot = snapshot.with_worktree_roots(cached_worktree_roots(runtime));
@@ -466,7 +477,7 @@ pub fn enrich_consumer(
     snapshot.codex_hooks_ready = codex_hooks_ready();
     if let Some(panes) = panes {
         if let Some(own) = exclude {
-            snapshot.own_view = SidebarOwnView::from_panes(own, &panes);
+            snapshot.own_view = SidebarOwnView::from_panes(own, &panes, observed_at);
         }
         // Recompute from the published pane list (pre-exclusion) rather than
         // trusting the producer's base bit, for producer/consumer symmetry.

@@ -203,6 +203,14 @@ pub struct SidebarOwnView {
     pub sibling_count: usize,
     pub own_is_focused: bool,
     pub focused_pane_id: Option<PaneId>,
+    /// When the focus sample backing `focused_pane_id` was taken — the snapshot
+    /// production time, so a consumer reading a published frame inherits the
+    /// producer's sample time rather than its own read time. The renderer uses
+    /// it as the external-focus timestamp in its timestamped selection model
+    /// (see `rimz-sidebar`'s `reconcile_selection`), so a local selection made
+    /// after this instant wins over a lagging focus report.
+    #[serde(default = "Timestamp::now")]
+    pub focused_observed_at: Timestamp,
     /// Whether the caller's own view is the `rimzd` daemon view: its siblings,
     /// after dropping any sidebar pane, are non-empty and all managed hosts
     /// ([`crate::remote_control::pane_is_host`]). The daemon-view sidebar gates
@@ -1004,10 +1012,11 @@ fn provider_title_case(value: &str) -> String {
 impl SidebarOwnView {
     /// Summarize the panes sharing `own`'s view (tab/window) from a live pane
     /// list. Pure and backend-agnostic: callers own pane discovery and pass the
-    /// result in. Returns `None` when `own` is absent from `panes` — the caller
-    /// cannot reason about a view it cannot find itself in, so it must not
-    /// self-close.
-    pub fn from_panes(own: &PaneId, panes: &[PaneRef]) -> Option<Self> {
+    /// result in, along with `observed_at` — when the focus sample was taken, so
+    /// the renderer can order it against a local selection. Returns `None` when
+    /// `own` is absent from `panes` — the caller cannot reason about a view it
+    /// cannot find itself in, so it must not self-close.
+    pub fn from_panes(own: &PaneId, panes: &[PaneRef], observed_at: Timestamp) -> Option<Self> {
         let own_pane = panes.iter().find(|pane| pane.pane_id == *own)?;
         let own_view = own_pane.view_id.as_deref();
         let siblings = panes
@@ -1043,6 +1052,7 @@ impl SidebarOwnView {
             sibling_count: siblings.len(),
             own_is_focused: own_pane.client_focused,
             focused_pane_id,
+            focused_observed_at: observed_at,
             own_view_is_daemon,
         })
     }
@@ -5198,11 +5208,27 @@ mod tests {
             view_pane("terminal_3", "tab_1", true), // another tab — not a sibling
         ];
 
-        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane is present");
+        let view = SidebarOwnView::from_panes(&own, &panes, Timestamp::now())
+            .expect("own pane is present");
 
         assert_eq!(view.sibling_count, 1);
         assert!(!view.own_is_focused);
         assert_eq!(view.focused_pane_id, Some(focused_here));
+    }
+
+    #[test]
+    fn own_view_stamps_the_passed_observation_time() {
+        let own = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let panes = vec![
+            view_pane("terminal_1", "tab_0", false),
+            view_pane("terminal_2", "tab_0", true),
+        ];
+        let observed_at = Timestamp::from_second(2_000_000_000).unwrap();
+
+        let view =
+            SidebarOwnView::from_panes(&own, &panes, observed_at).expect("own pane is present");
+
+        assert_eq!(view.focused_observed_at, observed_at);
     }
 
     #[test]
@@ -5213,7 +5239,8 @@ mod tests {
             view_pane("terminal_2", "tab_0", false),
         ];
 
-        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane is present");
+        let view = SidebarOwnView::from_panes(&own, &panes, Timestamp::now())
+            .expect("own pane is present");
 
         assert!(view.own_is_focused);
         assert_eq!(view.focused_pane_id, None);
@@ -5225,7 +5252,7 @@ mod tests {
         let own = PaneId::from_parts(MuxName::Zellij, "terminal_404");
         let panes = vec![view_pane("terminal_1", "tab_0", true)];
 
-        assert!(SidebarOwnView::from_panes(&own, &panes).is_none());
+        assert!(SidebarOwnView::from_panes(&own, &panes, Timestamp::now()).is_none());
     }
 
     #[test]
@@ -5242,7 +5269,8 @@ mod tests {
         };
         let panes = vec![view_pane("terminal_52", "tab_11", false), sibling];
 
-        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane is present");
+        let view = SidebarOwnView::from_panes(&own, &panes, Timestamp::now())
+            .expect("own pane is present");
 
         assert!(!view.own_is_focused);
         assert_eq!(view.focused_pane_id, None);
@@ -5344,7 +5372,8 @@ mod tests {
             ),
             pane_cmd("terminal_2", "tab_0", "rimz codex app-server serve", None),
         ];
-        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane present");
+        let view =
+            SidebarOwnView::from_panes(&own, &panes, Timestamp::now()).expect("own pane present");
         assert!(view.own_view_is_daemon);
     }
 
@@ -5357,7 +5386,8 @@ mod tests {
             pane_cmd("terminal_0", "rimzd", "rimz-sidebar serve", Some("rimzd")),
             pane_cmd("terminal_1", "rimzd", "claude", Some("rimzd")),
         ];
-        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane present");
+        let view =
+            SidebarOwnView::from_panes(&own, &panes, Timestamp::now()).expect("own pane present");
         assert!(view.own_view_is_daemon);
     }
 
@@ -5368,7 +5398,8 @@ mod tests {
             pane_cmd("terminal_0", "tab_1", "rimz-sidebar serve", None),
             pane_cmd("terminal_1", "tab_1", "zsh", None),
         ];
-        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane present");
+        let view =
+            SidebarOwnView::from_panes(&own, &panes, Timestamp::now()).expect("own pane present");
         assert!(!view.own_view_is_daemon);
     }
 

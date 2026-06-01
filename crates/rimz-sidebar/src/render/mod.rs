@@ -51,20 +51,24 @@ pub struct UiState {
     /// before the first draw.
     pub line_map: Vec<Option<usize>>,
     /// The pane the highlight is pinned to — selection keyed by identity, not
-    /// position. Set by every local selection action (click, `↵`, a digit, `␣`,
-    /// or arrow navigation) and moved otherwise only by an *external* focus
-    /// change (edge-triggered, see `app::reconcile_selection`). Keying on the
-    /// pane means a status-churn reorder re-anchors the highlight to the same
-    /// pane instead of sliding it onto a neighbour.
+    /// position. Re-derived each fold from the timestamped contest between
+    /// `local_selection` and `external_focus` (see `app::reconcile_selection`).
+    /// Keying on the pane means a status-churn reorder re-anchors the highlight
+    /// to the same pane instead of sliding it onto a neighbour.
     pub selected_pane: Option<PaneId>,
-    /// The last *observed* external focus, for edge detection. The mirror adopts
-    /// the snapshot's focused working pane only when it differs from this — so a
-    /// briefly-stale post-click focus, or a cross-tab focus that never names
-    /// this tab's pane, holds the level and can never roll an optimistic click
-    /// back. Focus on the sidebar itself is ignored for this baseline: resetting
-    /// it to "unknown" would make a later stale old-pane read look like a fresh
-    /// edge. A genuine external focus move is an edge, so the highlight follows.
-    pub last_focused_pane: Option<PaneId>,
+    /// The pane and instant of the last *local* selection action — a click, `↵`,
+    /// a digit, `␣`, or arrow navigation. The newer of this and `external_focus`
+    /// wins the highlight, so a fresh local pick holds through the briefly-stale
+    /// focus window a click-through jump opens.
+    pub local_selection: Option<(PaneId, Timestamp)>,
+    /// The pane and observation instant of the last *valid* external focus — a
+    /// non-sidebar agent row the producer sampled the client focused on. A
+    /// sidebar-self focus, an undiscoverable focus, or a focus on a non-row
+    /// helper pane (`claude rc`, `codex app-server`) is invalid and leaves this
+    /// untouched, so it can never roll a fresh local selection back. Adopted
+    /// only on a genuine new move (a different pane than the one last trusted)
+    /// with a newer timestamp than the stored sample.
+    pub external_focus: Option<(PaneId, Timestamp)>,
 }
 
 /// A sticky health alert pinned to the bottom of the sidebar.

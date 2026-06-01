@@ -30,6 +30,11 @@ use crate::ids::{MuxName, PaneId, ViewKind};
 /// as a best-effort wakeup optimization.
 pub const MIN_ZELLIJ_VERSION: (u32, u32, u32) = (0, 41, 0);
 
+/// Minimum Zellij version that ships the `mouse_click_through` option. Below
+/// this the flag is unknown, so we omit it — a single click then focuses the
+/// sidebar without reaching the renderer (degrade, never error).
+const MIN_MOUSE_CLICK_THROUGH_VERSION: (u32, u32, u32) = (0, 44, 0);
+
 /// Pane name the sidebar layout assigns, and the title Zellij reports back for
 /// it. The sole source of truth for both rendering the layout and detecting
 /// whether a live session still carries its sidebar.
@@ -92,6 +97,19 @@ fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
     Some((major, minor, patch))
 }
 
+/// `options` flags that forward a single click through the sidebar pane to the
+/// renderer, gated on `parsed >= MIN_MOUSE_CLICK_THROUGH_VERSION`. Empty when
+/// the version is older or unparseable — older Zellij does not know the flag, so
+/// passing it would abort the launch; degrading to focus-then-click is the
+/// floor.
+fn mouse_click_through_args(parsed: Option<(u32, u32, u32)>) -> Vec<String> {
+    if parsed.is_some_and(|v| v >= MIN_MOUSE_CLICK_THROUGH_VERSION) {
+        vec!["--mouse-click-through".to_owned(), "true".to_owned()]
+    } else {
+        Vec::new()
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ZellijBackend {
     /// Override for `XDG_RUNTIME_DIR`, where Zellij locates its server socket.
@@ -128,6 +146,14 @@ impl ZellijBackend {
             spec = spec.env("XDG_RUNTIME_DIR", dir.to_string_lossy().into_owned());
         }
         spec
+    }
+
+    /// Probe the installed Zellij and resolve the `mouse_click_through` flags for
+    /// it. Empty on a probe failure or an unparseable version — never block a
+    /// launch on the optional mouse passthrough.
+    fn mouse_click_through_args_probed(&self) -> Vec<String> {
+        let parsed = self.version().ok().as_deref().and_then(parse_version);
+        mouse_click_through_args(parsed)
     }
 
     fn list_panes_with_session(&self, session: Option<&str>) -> Result<Vec<RawPane>> {
@@ -234,7 +260,7 @@ impl ZellijBackend {
             None => render_sidebar_layout(opts)?,
         };
         let layout = TempLayoutFile::new(body)?;
-        let spec = self.cmd().args([
+        let mut option_args = vec![
             "attach".to_owned(),
             "--create-background".to_owned(),
             opts.session_name.clone(),
@@ -243,7 +269,11 @@ impl ZellijBackend {
             opts.cwd.to_string_lossy().into_owned(),
             "--default-layout".to_owned(),
             layout.path().to_string_lossy().into_owned(),
-        ]);
+        ];
+        // Forward a single click through the sidebar pane to the renderer so a
+        // jump lands on the first click. Version-gated; empty on older Zellij.
+        option_args.extend(self.mouse_click_through_args_probed());
+        let spec = self.cmd().args(option_args);
         let spawn = || -> Result<bool> {
             let mut command = spec.to_command();
             command.current_dir(&opts.cwd);
@@ -545,7 +575,18 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn attach_command(&self, name: &str) -> CommandSpec {
-        self.cmd().args(["attach", "--create", name])
+        let mut spec =
+            self.cmd()
+                .args(["attach".to_owned(), "--create".to_owned(), name.to_owned()]);
+        // Carry mouse passthrough onto an already-running session: the next
+        // attach applies the `options` so a single click reaches the renderer.
+        // Empty on older Zellij, so the bare `attach --create` stands.
+        let mouse = self.mouse_click_through_args_probed();
+        if !mouse.is_empty() {
+            spec = spec.arg("options");
+            spec = spec.args(mouse);
+        }
+        spec
     }
 
     fn detach(&self, _name: &str) -> Result<()> {
@@ -1283,6 +1324,18 @@ mod tests {
         assert!((0, 41, 0) >= MIN_ZELLIJ_VERSION);
         assert!((0, 44, 3) >= MIN_ZELLIJ_VERSION);
         assert!((0, 40, 9) < MIN_ZELLIJ_VERSION);
+    }
+
+    #[test]
+    fn mouse_click_through_args_gate_on_version() {
+        // Older or unknown Zellij does not know the flag — omit it.
+        assert!(mouse_click_through_args(None).is_empty());
+        assert!(mouse_click_through_args(Some((0, 43, 9))).is_empty());
+        assert!(mouse_click_through_args(Some((0, 41, 0))).is_empty());
+        // The release that added the option, and newer, carry it.
+        let expected = vec!["--mouse-click-through".to_owned(), "true".to_owned()];
+        assert_eq!(mouse_click_through_args(Some((0, 44, 0))), expected);
+        assert_eq!(mouse_click_through_args(Some((0, 44, 3))), expected);
     }
 
     #[test]

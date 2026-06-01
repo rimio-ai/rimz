@@ -1016,7 +1016,9 @@ fn run_self_close_probe(config: &ServeConfig) -> SelfCloseProbeOutcome {
         session_name: Some(config.session_name.clone()),
     }) {
         Ok(panes) => SelfCloseProbeOutcome {
-            sibling_count: rimz::SidebarOwnView::from_panes(&own, &panes)
+            // This probe reads only `sibling_count`; the focus timestamp is
+            // irrelevant here, so stamp it now.
+            sibling_count: rimz::SidebarOwnView::from_panes(&own, &panes, Timestamp::now())
                 .map(|view| view.sibling_count),
             error: None,
         },
@@ -1160,12 +1162,16 @@ fn apply_fetch_outcome(
     // selection to its row (so a status-churn reorder never slides it onto a
     // neighbour) and apply the edge-triggered external-focus mirror. Running it
     // before the draw means an external focus move paints this frame, not next.
-    let focused_pane_id = current
+    let external_focus = current
         .own_view
         .as_ref()
         .filter(|view| !view.own_is_focused)
-        .and_then(|view| view.focused_pane_id.clone());
-    reconcile_selection(ui, current, focused_pane_id.as_ref());
+        .and_then(|view| {
+            view.focused_pane_id
+                .clone()
+                .map(|pane| (pane, view.focused_observed_at))
+        });
+    reconcile_selection(ui, current, external_focus);
     ui.animation_phase = wall_clock_phase(anim_start);
     render::draw_to_terminal_with_ui(terminal, current, health.alert.as_ref(), ui)?;
 
@@ -1439,7 +1445,13 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
             }
             InputOutcome::default()
         }
-        KeyAction::Enter => InputOutcome::focus(ui.selected_index),
+        KeyAction::Enter => {
+            // Local selection + jump on the current row: re-stamp so the
+            // highlight holds on it through the briefly-stale post-jump focus,
+            // identical to a click.
+            select_row(ui, snapshot, ui.selected_index);
+            InputOutcome::focus(ui.selected_index)
+        }
         KeyAction::Space => {
             if let Some(index) = next_attention_index(snapshot, ui.selected_index) {
                 select_row(ui, snapshot, index);
@@ -1478,14 +1490,20 @@ fn handle_mouse_click(
 
 /// Point the highlight at a visible row by index — the identity-keyed selection
 /// (`selected_pane`) plus its derived render index. Every local selection action
-/// (click, digit, `␣`, arrow navigation) routes through here so the highlight is
-/// always anchored to a pane, never a bare position.
+/// (click, `↵`, digit, `␣`, arrow navigation) routes through here, so each one
+/// stamps `local_selection` with the chosen pane and the current instant: the
+/// newest local pick contests the last valid external focus by timestamp in
+/// `reconcile_selection`, and the highlight is always anchored to a pane, never
+/// a bare position.
 fn select_row(ui: &mut UiState, snapshot: &SidebarSnapshot, index: usize) {
     ui.selected_index = index;
     ui.selected_pane = visible_rows(snapshot)
         .nth(index)
         .and_then(|row| row.pane.as_ref())
         .map(|pane| pane.pane_id.clone());
+    if let Some(pane) = ui.selected_pane.clone() {
+        ui.local_selection = Some((pane, Timestamp::now()));
+    }
 }
 
 fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
@@ -1497,36 +1515,79 @@ fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
     }
 }
 
-/// Reconcile the highlight after folding a new snapshot, in two steps that are
-/// both keyed on pane identity rather than position.
+/// Reconcile the highlight after folding a new snapshot by contesting two
+/// timestamped values — the last local selection and the last *valid* external
+/// focus — and letting the newer one win. Keyed on pane identity, never
+/// position.
 ///
-/// 1. **Edge-triggered external mirror.** Adopt the snapshot's focused pane only
-///    when it has *changed* since the last fold (`last_focused_pane`). A
-///    briefly-stale post-click focus, or a cross-tab focus that never names this
-///    tab's pane, is unchanged frame-to-frame — no edge — so it can never roll an
-///    optimistic click back to the previous pane (the reported desync). A genuine
-///    external focus move (a mux keybind) *is* an edge, so the highlight follows
-///    it. Unknown focus (the sidebar itself, or a mux read that cannot name a
-///    working pane) does not reset the last known working focus; otherwise a
-///    later stale read naming the old pane would look like a fresh edge and roll
-///    back an optimistic click.
-/// 2. **Re-anchor.** Re-derive `selected_index` from `selected_pane` so a
-///    status-churn reorder keeps the highlight on the same pane instead of
-///    sliding it onto whatever row now sits at the old index.
+/// `external` is the snapshot's focus report `(pane, observed_at)`, already
+/// filtered to a non-sidebar focus (`!own_is_focused` with a `Some` pane). It is
+/// folded into `external_focus` only when it is a **genuine new external move**:
+///
+/// 1. **Row guard.** The pane must be an agent row in this snapshot. A focus on
+///    a non-row helper pane (`claude rc`, `codex app-server`) — or no report at
+///    all (sidebar-self / undiscoverable focus) — is inert and leaves
+///    `external_focus` untouched, so a fresh local selection still wins during
+///    the click-through focus window.
+/// 2. **Identity guard.** The pane must differ from the one `external_focus` was
+///    last trusted on (the pane we jumped *from*); an equal report is
+///    steady-state or a lagging re-report, not a move. A `None`/cold-start
+///    `external_focus` adopts the first valid report.
+/// 3. **Monotonic guard.** Its `observed_at` must be newer than the stored
+///    sample, rejecting a reordered older one.
+///
+/// The winner is the value with the newer `Timestamp`; the lone present value
+/// wins if only one exists; with neither, the current `selected_pane` holds.
+/// Finally a `local_selection`/`external_focus` whose pane has left the snapshot
+/// is dropped, and `anchor_selection` re-derives `selected_index` by identity.
 fn reconcile_selection(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
-    focused_pane_id: Option<&PaneId>,
+    external: Option<(PaneId, Timestamp)>,
 ) {
-    if let Some(focused) = focused_pane_id
-        && Some(focused) != ui.last_focused_pane.as_ref()
+    if let Some((pane, observed_at)) = external
+        && row_index_of_pane(snapshot, &pane).is_some()
     {
-        ui.last_focused_pane = Some(focused.clone());
-        if row_index_of_pane(snapshot, focused).is_some() {
-            ui.selected_pane = Some(focused.clone());
+        let genuine_move = match &ui.external_focus {
+            Some((prev_pane, prev_at)) => pane != *prev_pane && observed_at > *prev_at,
+            None => true,
+        };
+        if genuine_move {
+            ui.external_focus = Some((pane, observed_at));
         }
     }
+
+    if let Some(pane) = newer_selection(ui.local_selection.as_ref(), ui.external_focus.as_ref()) {
+        ui.selected_pane = Some(pane);
+    }
+
+    drop_absent_selection(&mut ui.local_selection, snapshot);
+    drop_absent_selection(&mut ui.external_focus, snapshot);
     anchor_selection(ui, snapshot);
+}
+
+/// The pane of the timestamped value that was set most recently; the lone
+/// present value if only one exists; `None` when neither is set.
+fn newer_selection(
+    local: Option<&(PaneId, Timestamp)>,
+    external: Option<&(PaneId, Timestamp)>,
+) -> Option<PaneId> {
+    match (local, external) {
+        (Some((lp, lt)), Some((ep, et))) => Some(if et > lt { ep.clone() } else { lp.clone() }),
+        (Some((lp, _)), None) => Some(lp.clone()),
+        (None, Some((ep, _))) => Some(ep.clone()),
+        (None, None) => None,
+    }
+}
+
+/// Clear a timestamped selection whose pane has left the snapshot, so the other
+/// value can win the next contest instead of being shadowed by a dangling pick.
+fn drop_absent_selection(slot: &mut Option<(PaneId, Timestamp)>, snapshot: &SidebarSnapshot) {
+    if let Some((pane, _)) = slot
+        && row_index_of_pane(snapshot, pane).is_none()
+    {
+        *slot = None;
+    }
 }
 
 /// Re-derive `selected_index` from the identity-keyed `selected_pane`. When the
@@ -2270,10 +2331,15 @@ mod tests {
         );
     }
 
+    /// A timestamp `secs` seconds past a fixed epoch, for ordering selections.
+    fn ts(secs: i64) -> Timestamp {
+        Timestamp::from_second(2_000_000_000 + secs).unwrap()
+    }
+
     #[test]
-    fn first_fold_adopts_the_focused_pane() {
-        // Cold start: no focus observed yet, so the first reported focus is an
-        // edge and seeds the selection.
+    fn cold_start_adopts_the_first_valid_external_focus() {
+        // No local selection and no prior external focus: the first valid report
+        // seeds both `external_focus` and the highlight.
         let ws = workspace();
         let focused = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let snapshot = snapshot_with_panes(
@@ -2285,18 +2351,19 @@ mod tests {
         );
         let mut ui = UiState::default();
 
-        reconcile_selection(&mut ui, &snapshot, Some(&focused));
+        reconcile_selection(&mut ui, &snapshot, Some((focused.clone(), ts(0))));
 
         assert_eq!(ui.selected_index, 1);
         assert_eq!(ui.selected_pane, Some(focused.clone()));
-        assert_eq!(ui.last_focused_pane, Some(focused));
+        assert_eq!(ui.external_focus, Some((focused, ts(0))));
     }
 
     #[test]
-    fn external_focus_edge_moves_the_highlight() {
-        // A genuine external focus move — the observed focus changes — follows.
+    fn external_focus_newer_than_the_click_is_adopted() {
+        // A genuine external focus move stamped after the local click wins by
+        // timestamp and moves the highlight.
         let ws = workspace();
-        let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let moved = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let snapshot = snapshot_with_panes(
             &ws,
@@ -2307,25 +2374,29 @@ mod tests {
         );
         let mut ui = UiState {
             selected_index: 0,
-            selected_pane: Some(first.clone()),
-            last_focused_pane: Some(first),
+            selected_pane: Some(clicked.clone()),
+            local_selection: Some((clicked, ts(1))),
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, Some(&moved));
+        reconcile_selection(&mut ui, &snapshot, Some((moved.clone(), ts(2))));
 
         assert_eq!(ui.selected_index, 1);
-        assert_eq!(ui.selected_pane, Some(moved));
+        assert_eq!(ui.selected_pane, Some(moved.clone()));
+        assert_eq!(ui.external_focus, Some((moved, ts(2))));
     }
 
     #[test]
-    fn stale_post_click_focus_holds_the_selection() {
-        // The reported desync: a click pinned terminal_2, but the snapshot still
-        // names the previous focus (terminal_1). That focus is unchanged from the
-        // last observation, so it is no edge and must not roll the click back.
+    fn click_newer_than_a_lagging_from_pane_report_holds() {
+        // The rollback case, stale-*after* the jump. A click pinned terminal_2 at
+        // ts(2); terminal_1 is the pane it jumped from, last trusted at ts(0). A
+        // lagging re-report of that from-pane lands *after* the click (ts(3)) —
+        // newer, but the same pane, so the identity guard reads it as steady
+        // state, not a move. `external_focus` does not refresh and the click
+        // holds.
         let ws = workspace();
         let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let stale_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let from_pane = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
@@ -2336,20 +2407,28 @@ mod tests {
         let mut ui = UiState {
             selected_index: 1,
             selected_pane: Some(clicked.clone()),
-            last_focused_pane: Some(stale_focus.clone()),
+            local_selection: Some((clicked.clone(), ts(2))),
+            external_focus: Some((from_pane.clone(), ts(0))),
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, Some(&stale_focus));
+        reconcile_selection(&mut ui, &snapshot, Some((from_pane.clone(), ts(3))));
 
         assert_eq!(ui.selected_index, 1, "held on the clicked pane");
         assert_eq!(ui.selected_pane, Some(clicked));
+        assert_eq!(
+            ui.external_focus,
+            Some((from_pane, ts(0))),
+            "a lagging re-report of the from-pane never refreshes external_focus"
+        );
     }
 
     #[test]
-    fn cross_tab_click_never_rolls_back() {
-        // A click on a pane in another tab: this tab's focus never changes, so no
-        // edge ever fires and the highlight holds — no timeout, no rollback.
+    fn cross_tab_click_holds_against_a_repeated_stale_focus() {
+        // A click on a pane in another tab pins terminal_3 at ts(2). The producer
+        // keeps reporting the from-tab's focus (terminal_1) at ts(1); the first
+        // adopts into external_focus, every repeat is steady-state (identity
+        // guard), and the newer local pick wins every fold — no rollback.
         let ws = workspace();
         let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_3");
         let own_tab_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
@@ -2364,13 +2443,12 @@ mod tests {
         let mut ui = UiState {
             selected_index: 2,
             selected_pane: Some(clicked.clone()),
-            last_focused_pane: Some(own_tab_focus.clone()),
+            local_selection: Some((clicked.clone(), ts(2))),
             ..Default::default()
         };
 
-        // Fold repeatedly with the same (unchanged) focus: the highlight stays.
         for _ in 0..3 {
-            reconcile_selection(&mut ui, &snapshot, Some(&own_tab_focus));
+            reconcile_selection(&mut ui, &snapshot, Some((own_tab_focus.clone(), ts(1))));
         }
 
         assert_eq!(ui.selected_index, 2, "held on the cross-tab clicked pane");
@@ -2378,12 +2456,12 @@ mod tests {
     }
 
     #[test]
-    fn focus_going_unknown_holds_the_selection() {
-        // Focus on the sidebar itself (or undiscoverable) arrives as `None`. That
-        // is an edge, but there is no row to adopt, so the selection holds.
+    fn sidebar_self_or_unknown_focus_is_inert() {
+        // Focus on the sidebar itself (or an undiscoverable focus) arrives as
+        // `None`. It leaves `external_focus` untouched, so the local click holds.
         let ws = workspace();
         let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let prev_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let baseline = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
@@ -2394,7 +2472,8 @@ mod tests {
         let mut ui = UiState {
             selected_index: 1,
             selected_pane: Some(clicked.clone()),
-            last_focused_pane: Some(prev_focus.clone()),
+            local_selection: Some((clicked.clone(), ts(2))),
+            external_focus: Some((baseline.clone(), ts(0))),
             ..Default::default()
         };
 
@@ -2403,21 +2482,21 @@ mod tests {
         assert_eq!(ui.selected_index, 1);
         assert_eq!(ui.selected_pane, Some(clicked));
         assert_eq!(
-            ui.last_focused_pane,
-            Some(prev_focus),
-            "unknown focus must not reset the stale-focus guard"
+            ui.external_focus,
+            Some((baseline, ts(0))),
+            "an inert report must not touch external_focus"
         );
     }
 
     #[test]
-    fn stale_old_focus_after_sidebar_focus_does_not_roll_back_click() {
-        // A real click can briefly focus the sidebar pane itself before the
-        // async jump lands on the target. If that unknown-focus snapshot reset
-        // the edge baseline, a later stale read naming the old pane would look
-        // like a new focus edge and flicker the highlight back.
+    fn focus_on_a_non_row_helper_pane_is_inert() {
+        // Zellij can focus a non-agent helper pane (`claude rc`, `codex
+        // app-server`) that the sidebar never renders as a row. Such a focus is
+        // not a jump target: it leaves external_focus untouched, so a fresh local
+        // click holds even though the helper focus is newer.
         let ws = workspace();
-        let old_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let helper = PaneId::from_parts(MuxName::Zellij, "terminal_99");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
@@ -2428,26 +2507,80 @@ mod tests {
         let mut ui = UiState {
             selected_index: 1,
             selected_pane: Some(clicked.clone()),
-            last_focused_pane: Some(old_focus.clone()),
+            local_selection: Some((clicked.clone(), ts(1))),
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, None);
-        reconcile_selection(&mut ui, &snapshot, Some(&old_focus));
+        reconcile_selection(&mut ui, &snapshot, Some((helper, ts(2))));
 
         assert_eq!(ui.selected_index, 1);
-        assert_eq!(ui.selected_pane, Some(clicked.clone()));
-        assert_eq!(
-            ui.last_focused_pane,
-            Some(old_focus),
-            "the old focus remains the baseline until a real working-pane edge"
+        assert_eq!(ui.selected_pane, Some(clicked));
+        assert_eq!(ui.external_focus, None, "a non-row focus never adopts");
+    }
+
+    #[test]
+    fn external_move_to_a_third_pane_newer_than_the_click_adopts() {
+        // From an established external_focus (terminal_1), a genuine move to a
+        // different row (terminal_3) stamped after the click is adopted — the
+        // identity guard passes (different pane) and the timestamp wins.
+        let ws = workspace();
+        let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let from = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let third = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+                pane("terminal_3", "tab_0", false),
+            ],
         );
+        let mut ui = UiState {
+            selected_index: 1,
+            selected_pane: Some(clicked.clone()),
+            local_selection: Some((clicked, ts(1))),
+            external_focus: Some((from, ts(0))),
+            ..Default::default()
+        };
 
-        reconcile_selection(&mut ui, &snapshot, Some(&clicked));
+        reconcile_selection(&mut ui, &snapshot, Some((third.clone(), ts(2))));
+
+        assert_eq!(ui.selected_index, 2);
+        assert_eq!(ui.selected_pane, Some(third.clone()));
+        assert_eq!(ui.external_focus, Some((third, ts(2))));
+    }
+
+    #[test]
+    fn monotonic_guard_ignores_a_reordered_older_sample() {
+        // external_focus was last trusted on terminal_2 at ts(2). A focus sample
+        // for a different pane (terminal_1) arrives reordered with an *older*
+        // stamp (ts(1)); the monotonic guard rejects it, so the highlight holds.
+        let ws = workspace();
+        let held = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let older = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 1,
+            selected_pane: Some(held.clone()),
+            external_focus: Some((held.clone(), ts(2))),
+            ..Default::default()
+        };
+
+        reconcile_selection(&mut ui, &snapshot, Some((older, ts(1))));
 
         assert_eq!(ui.selected_index, 1);
-        assert_eq!(ui.selected_pane, Some(clicked.clone()));
-        assert_eq!(ui.last_focused_pane, Some(clicked));
+        assert_eq!(ui.selected_pane, Some(held.clone()));
+        assert_eq!(
+            ui.external_focus,
+            Some((held, ts(2))),
+            "a reordered older sample never refreshes external_focus"
+        );
     }
 
     #[test]
@@ -2467,11 +2600,12 @@ mod tests {
         let mut ui = UiState {
             selected_index: 1,
             selected_pane: Some(clicked.clone()),
-            last_focused_pane: Some(focus.clone()),
+            local_selection: Some((clicked.clone(), ts(2))),
+            external_focus: Some((focus.clone(), ts(0))),
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, Some(&focus));
+        reconcile_selection(&mut ui, &snapshot, Some((focus, ts(0))));
 
         assert_eq!(ui.selected_index, 0, "re-anchored to the pane's new row");
         assert_eq!(ui.selected_pane, Some(clicked));
@@ -2479,11 +2613,10 @@ mod tests {
 
     #[test]
     fn selection_drops_when_its_pane_leaves_the_room() {
-        // The selected pane is gone from the snapshot: drop the dangling identity
-        // and clamp, so the next external edge can re-seat it.
+        // The locally-selected pane is gone from the snapshot: drop the dangling
+        // identity and clamp, so the next selection can re-seat it.
         let ws = workspace();
         let gone = PaneId::from_parts(MuxName::Zellij, "terminal_9");
-        let focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
@@ -2493,14 +2626,15 @@ mod tests {
         );
         let mut ui = UiState {
             selected_index: 1,
-            selected_pane: Some(gone),
-            last_focused_pane: Some(focus.clone()),
+            selected_pane: Some(gone.clone()),
+            local_selection: Some((gone, ts(2))),
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, Some(&focus));
+        reconcile_selection(&mut ui, &snapshot, None);
 
         assert_eq!(ui.selected_pane, None, "dangling identity dropped");
+        assert_eq!(ui.local_selection, None, "absent local selection cleared");
         assert!(ui.selected_index < 2, "clamped to a valid row");
     }
 
