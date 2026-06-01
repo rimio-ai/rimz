@@ -126,8 +126,6 @@ fn zellij_options_args(
 ) -> Vec<String> {
     let bool_value = |value: bool| if value { "true" } else { "false" }.to_owned();
     let mut args = vec![
-        "--mouse-mode".to_owned(),
-        bool_value(config.mouse_mode),
         "--focus-follows-mouse".to_owned(),
         bool_value(config.focus_follows_mouse),
         "--pane-frames".to_owned(),
@@ -156,6 +154,12 @@ fn zellij_options_args(
         "--session-serialization".to_owned(),
         bool_value(config.session_serialization),
     ];
+    // Zellij's default is mouse_mode=true. On 0.44.3, passing
+    // `--mouse-mode true` suppresses the terminal mouse-enable sequences, so
+    // keep the enabled case implicit and emit only the user's opt-out.
+    if !config.mouse_mode {
+        args.extend(["--mouse-mode".to_owned(), "false".to_owned()]);
+    }
     args.extend(mouse_click_through_args(
         config.mouse_click_through,
         parsed_version,
@@ -1470,13 +1474,30 @@ mod tests {
             args.windows(2)
                 .any(|pair| pair[0] == flag && pair[1] == value)
         };
-        assert!(has("--mouse-mode", "true"));
+        assert!(
+            !args.iter().any(|arg| arg == "--mouse-mode"),
+            "`--mouse-mode true` disables mouse reporting on Zellij 0.44.3; \
+             rely on Zellij's default enabled state"
+        );
         assert!(has("--mouse-click-through", "true"));
         assert!(has("--focus-follows-mouse", "false"));
         assert!(has("--pane-frames", "false"));
         assert!(has("--copy-clipboard", "system"));
         assert!(has("--support-kitty-keyboard-protocol", "true"));
         assert!(has("--session-serialization", "false"));
+    }
+
+    #[test]
+    fn zellij_options_render_mouse_opt_out() {
+        let config = ZellijConfig {
+            mouse_mode: false,
+            ..ZellijConfig::default()
+        };
+        let args = zellij_options_args(&config, Some((0, 44, 3)));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "--mouse-mode" && pair[1] == "false")
+        );
     }
 
     #[test]

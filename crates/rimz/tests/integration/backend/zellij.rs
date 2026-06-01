@@ -173,6 +173,37 @@ fn wait_until_session_ready(xdg: &Path, name: &str) {
     }
 }
 
+fn capture_pty_output(spec: &rimz::mux::CommandSpec, duration: Duration) -> Vec<u8> {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("openpty");
+    let mut cmd = CommandBuilder::new(&spec.program);
+    cmd.args(spec.args.iter().map(String::as_str));
+    for (key, value) in &spec.env {
+        cmd.env(key, value);
+    }
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn zellij");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone reader");
+    let reader_thread = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = reader.read_to_end(&mut output);
+        output
+    });
+
+    std::thread::sleep(duration);
+    let _ = child.kill();
+    let _ = child.wait();
+    drop(pair.master);
+    reader_thread.join().expect("join reader")
+}
+
 fn unique_session_name(prefix: &str) -> String {
     let id = uuid::Uuid::now_v7().simple().to_string();
     format!("rimz-{prefix}-{}", &id[..12])
@@ -207,6 +238,42 @@ fn ensure_and_list_sessions_round_trip() {
     assert!(
         listed.iter().any(|s| s == &name),
         "expected session {name} in {listed:?}",
+    );
+}
+
+/// Zellij 0.44.3 suppresses terminal mouse reporting when an attach command
+/// explicitly passes `options --mouse-mode true`. Rimz keeps the enabled case
+/// implicit so clicks reach the tab bar and sidebar, while still applying the
+/// rest of the room options.
+#[test]
+fn attach_command_keeps_terminal_mouse_reporting_enabled() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("mouse");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let spec = ZellijBackend::with_runtime_dir(xdg.path())
+        .attach_command(&name, &rimz::config::MultiplexerConfig::default());
+    assert!(
+        !spec
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "--mouse-mode" && pair[1] == "true"),
+        "Zellij 0.44.3 disables mouse reporting for `--mouse-mode true`: {spec:?}",
+    );
+
+    let output = capture_pty_output(&spec, Duration::from_millis(900));
+    assert!(
+        output
+            .windows(b"\x1b[?1006h".len())
+            .any(|w| w == b"\x1b[?1006h")
+            && output
+                .windows(b"\x1b[?1000h".len())
+                .any(|w| w == b"\x1b[?1000h"),
+        "attach output did not enable terminal mouse reporting",
     );
 }
 

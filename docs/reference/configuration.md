@@ -115,7 +115,7 @@ pane_border_status = "off"              # "off" | "top" | "bottom"
 pane_border_lines = "simple"            # "simple" | "single" | "double" | "heavy"
 ```
 
-Zellij receives these as `zellij attach … options …` on both session birth and attach. `copy_clipboard = "system"` uses Zellij's OSC52 path unless your Zellij config sets `copy_command`, which deliberately replaces OSC52 with that command.
+Zellij receives these as `zellij attach … options …` on both session birth and attach. `mouse_mode = true` rides Zellij's default enabled state; `mouse_mode = false` emits `--mouse-mode false`. `copy_clipboard = "system"` uses Zellij's OSC52 path unless your Zellij config sets `copy_command`, which deliberately replaces OSC52 with that command.
 
 tmux splits the same idea across scopes. `mouse`, `history_limit`, and `renumber_windows` are set on the Rimz session; `allow_passthrough`, `aggressive_resize`, and pane border options are set on the Rimz session's window options; `focus_events`, `set_clipboard`, `extended_keys`, `extended_keys_format`, and `escape_time_ms` are tmux server options because tmux has no per-session equivalent for clipboard and rich-key handling.
 
