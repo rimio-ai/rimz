@@ -78,6 +78,8 @@ pub(super) fn encode_mouse(kind: MouseEventKind, column: u16, row: u16) -> Optio
         // between the two events, the second landed on a now-shifted row and the
         // highlight flashed to the wrong card. One event per click fixes it.
         MouseEventKind::Down(MouseButton::Left) => Some(format!("mouse:left:{column}:{row}")),
+        MouseEventKind::ScrollUp => Some("key:up".to_owned()),
+        MouseEventKind::ScrollDown => Some("key:down".to_owned()),
         _ => None,
     }
 }
@@ -176,7 +178,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mouse_left_press_is_the_only_click_event() {
+    fn mouse_events_encode_clicks_and_scrolls() {
         let encoded = encode_mouse(MouseEventKind::Down(MouseButton::Left), 4, 7)
             .expect("left button down is encoded");
         assert_eq!(
@@ -189,6 +191,22 @@ mod tests {
         assert_eq!(
             encode_mouse(MouseEventKind::Up(MouseButton::Left), 4, 7),
             None
+        );
+        assert_eq!(
+            decode_wakeup(
+                encode_mouse(MouseEventKind::ScrollUp, 4, 7)
+                    .unwrap()
+                    .as_bytes()
+            ),
+            Wakeup::Key(KeyAction::Up)
+        );
+        assert_eq!(
+            decode_wakeup(
+                encode_mouse(MouseEventKind::ScrollDown, 4, 7)
+                    .unwrap()
+                    .as_bytes()
+            ),
+            Wakeup::Key(KeyAction::Down)
         );
     }
 

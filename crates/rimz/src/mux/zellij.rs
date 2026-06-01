@@ -20,8 +20,8 @@ use serde_json::Value;
 
 use super::{
     BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, DaemonView, HostPane, MuxBackend,
-    MuxErr, PaneCapture, PaneListOptions, Result, SessionOptions, SidebarPaneOptions,
-    SidebarRecovery, SplitPaneOptions, ensure_pane_backend,
+    MuxErr, PaneCapture, PaneListOptions, Result, SessionHealth, SessionOptions,
+    SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, ensure_pane_backend,
 };
 use crate::config::ZellijConfig;
 use crate::feed::PaneRef;
@@ -47,6 +47,12 @@ const SIDEBAR_PANE_NAME: &str = "rimz-sidebar";
 /// flashes a "could not parse mux output: EOF" alert for a single blip.
 const LIST_PANES_ATTEMPTS: u32 = 3;
 const LIST_PANES_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+/// Per-attempt bound for the pre-attach health probe. A healthy action client
+/// answers `list-panes` in milliseconds; a wedged one (busy-looping against a
+/// dead session server) is SIGKILLed here and reads as "not clean" so `rimz
+/// start` heals instead of hanging on the full [`super::COMMAND_TIMEOUT`].
+const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// `query-tab-names` can hit the same action-client startup race as
 /// `list-panes`. Treat an empty successful response as transient; otherwise
@@ -142,6 +148,13 @@ fn zellij_options_args(
         bool_value(config.support_kitty_keyboard_protocol),
         "--osc8-hyperlinks".to_owned(),
         bool_value(config.osc8_hyperlinks),
+        // Unconditional: `--session-serialization` predates Rimz's Zellij floor
+        // (MIN_ZELLIJ_VERSION), so unlike `mouse-click-through` it needs no
+        // version gate. Off keeps Zellij from minting a resurrectable corpse on
+        // server death, so the next start births clean rather than resurrecting
+        // suspended panes.
+        "--session-serialization".to_owned(),
+        bool_value(config.session_serialization),
     ];
     args.extend(mouse_click_through_args(
         config.mouse_click_through,
@@ -197,6 +210,13 @@ impl ZellijBackend {
     }
 
     fn list_panes_with_session(&self, session: Option<&str>) -> Result<Vec<RawPane>> {
+        self.list_panes_bounded(session, super::COMMAND_TIMEOUT)
+    }
+
+    /// `list-panes` with a caller-chosen per-attempt bound. The pre-attach health
+    /// probe passes [`HEALTH_PROBE_TIMEOUT`] so a hung server cannot stall the
+    /// launch; everyone else inherits [`super::COMMAND_TIMEOUT`].
+    fn list_panes_bounded(&self, session: Option<&str>, timeout: Duration) -> Result<Vec<RawPane>> {
         let mut spec = self.cmd();
         if let Some(name) = session {
             spec = spec.args(["--session".to_owned(), name.to_owned()]);
@@ -206,7 +226,7 @@ impl ZellijBackend {
             if attempt > 0 {
                 std::thread::sleep(LIST_PANES_RETRY_DELAY);
             }
-            let output = spec.run()?;
+            let output = spec.run_with_timeout(timeout)?;
             if is_transient_empty(&output.stdout) {
                 continue;
             }
@@ -223,16 +243,18 @@ impl ZellijBackend {
         })
     }
 
-    /// Whether `name`'s session currently carries a running `rimz-sidebar`
-    /// pane. A held sidebar is still broken: Zellij is waiting for the user to
-    /// approve the command, so the renderer is not producing heartbeats and
-    /// future tabs inherit the bad launch behavior.
+    /// Whether `name`'s live room is clean: a running (non-held) `rimz-sidebar`
+    /// pane **and** no command pane suspended at a "Waiting to run" prompt. A held
+    /// sidebar means Zellij is waiting on the user (no heartbeats); a held command
+    /// pane is the resurrection fingerprint — Zellij brought a serialized room back
+    /// with `start_suspended` panes. Either makes the room non-functional.
     ///
-    /// Best-effort: a failed listing reads as "unhealthy" so the caller heals
-    /// rather than trusts a session it cannot inspect.
-    fn session_has_healthy_sidebar(&self, name: &str) -> bool {
-        self.list_panes_with_session(Some(name))
-            .map(|panes| has_healthy_sidebar(&panes))
+    /// Bounded by [`HEALTH_PROBE_TIMEOUT`] and best-effort: a failed or timed-out
+    /// listing reads as "not clean" so the caller heals rather than trusts a
+    /// session it cannot inspect (e.g. a wedged server).
+    fn session_is_clean(&self, name: &str) -> bool {
+        self.list_panes_bounded(Some(name), HEALTH_PROBE_TIMEOUT)
+            .map(|panes| has_healthy_sidebar(&panes) && !has_suspended_command_pane(&panes))
             .unwrap_or(false)
     }
 
@@ -764,8 +786,7 @@ impl MuxBackend for ZellijBackend {
                 self.create_session_with_sidebar(opts, daemon)
             }
             SessionState::Live
-                if self.session_has_healthy_sidebar(&opts.session_name)
-                    && !opts.replace_existing =>
+                if self.session_is_clean(&opts.session_name) && !opts.replace_existing =>
             {
                 Ok(())
             }
@@ -774,6 +795,62 @@ impl MuxBackend for ZellijBackend {
                 self.create_session_with_sidebar(opts, daemon)
             }
         }
+    }
+
+    fn probe_session_health(&self, name: &str) -> Result<SessionHealth> {
+        Ok(match self.session_state(name) {
+            // Nothing to attach to — a fresh birth will produce a clean room.
+            SessionState::Absent => SessionHealth::Healthy,
+            // `attach --create` would resurrect a serialized, suspended layout.
+            SessionState::Exited => SessionHealth::Stuck,
+            SessionState::Live => {
+                if self.session_is_clean(name) {
+                    SessionHealth::Healthy
+                } else {
+                    SessionHealth::Stuck
+                }
+            }
+        })
+    }
+
+    fn ensure_clean_session(
+        &self,
+        opts: &SidebarPaneOptions,
+        daemon: Option<&DaemonView>,
+    ) -> Result<SessionHealth> {
+        let state = self.session_state(&opts.session_name);
+        // A clean, live room is left untouched — never rebirth working panes.
+        if matches!(state, SessionState::Live) && self.session_is_clean(&opts.session_name) {
+            return Ok(SessionHealth::Healthy);
+        }
+        // Absent → first birth; Exited / Live-but-suspended / hung → delete and
+        // rebirth from the layout so the room comes up clean and RUNNING (with
+        // serialization off, a rebirth can never resurrect). A rebirth that still
+        // fails to talk to Zellij reads as Stuck so the caller offers a reset.
+        let rebirth = || -> Result<()> {
+            if !matches!(state, SessionState::Absent) {
+                self.delete_session(&opts.session_name)?;
+            }
+            self.create_session_with_sidebar(opts, daemon)
+        };
+        match rebirth() {
+            Ok(()) => Ok(SessionHealth::Reborn),
+            Err(err) => {
+                tracing::warn!(
+                    session = %opts.session_name,
+                    error = %err,
+                    "session rebirth failed; a destructive reset is required",
+                );
+                Ok(SessionHealth::Stuck)
+            }
+        }
+    }
+
+    fn purge_resurrection_cache(&self, name: &str) -> Vec<PathBuf> {
+        // `delete-session --force` already drops the serialized session, but a
+        // crashed server can leave the cache behind with no live session to
+        // delete, so reset removes it directly as well.
+        super::recovery::purge_zellij_session_cache_in(&crate::ledger::paths::cache_home(), name)
     }
 
     fn recover_sidebars(&self, opts: &SidebarPaneOptions) -> Result<SidebarRecovery> {
@@ -940,7 +1017,7 @@ fn session_state_from_line(line: &str, name: &str) -> Option<SessionState> {
 }
 
 /// A live, non-plugin sidebar pane is one Zellij still titles with the layout's
-/// [`SIDEBAR_PANE_NAME`] — the same signal `session_has_healthy_sidebar` trusts.
+/// [`SIDEBAR_PANE_NAME`] — the same signal `session_is_clean` trusts.
 fn is_sidebar_pane(pane: &RawPane) -> bool {
     !pane.is_plugin && pane.title.as_deref() == Some(SIDEBAR_PANE_NAME)
 }
@@ -954,6 +1031,15 @@ fn has_healthy_sidebar(panes: &[RawPane]) -> bool {
         }
     }
     found
+}
+
+/// Any non-sidebar terminal pane Zellij is holding at a "Waiting to run" prompt —
+/// the fingerprint of a resurrected (serialized) room, where every command pane
+/// comes back `start_suspended`. A clean rebirth has none: every command runs.
+fn has_suspended_command_pane(panes: &[RawPane]) -> bool {
+    panes
+        .iter()
+        .any(|pane| pane.is_terminal() && !is_sidebar_pane(pane) && pane.is_held)
 }
 
 /// `ZELLIJ_PANE_ID` is the bare integer of the pane the caller runs in. `rimz
@@ -1386,10 +1472,25 @@ mod tests {
         };
         assert!(has("--mouse-mode", "true"));
         assert!(has("--mouse-click-through", "true"));
-        assert!(has("--focus-follows-mouse", "true"));
+        assert!(has("--focus-follows-mouse", "false"));
         assert!(has("--pane-frames", "false"));
         assert!(has("--copy-clipboard", "system"));
         assert!(has("--support-kitty-keyboard-protocol", "true"));
+        assert!(has("--session-serialization", "false"));
+    }
+
+    #[test]
+    fn session_serialization_is_not_version_gated() {
+        // Unlike `mouse-click-through`, the flag predates Rimz's Zellij floor, so
+        // it must be present even when the version probe returns nothing.
+        let args = zellij_options_args(&ZellijConfig::default(), None);
+        let has = |flag: &str, value: &str| {
+            args.windows(2)
+                .any(|pair| pair[0] == flag && pair[1] == value)
+        };
+        assert!(has("--session-serialization", "false"));
+        // And the gated option is correctly absent at an unknown version.
+        assert!(!args.iter().any(|arg| arg == "--mouse-click-through"));
     }
 
     #[test]
@@ -1468,6 +1569,35 @@ mod tests {
         ]"#;
         let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
         assert!(has_healthy_sidebar(&parsed));
+    }
+
+    #[test]
+    fn held_command_pane_is_the_resurrection_fingerprint() {
+        // A resurrected room: the sidebar runs, but a command pane is held at a
+        // "Waiting to run" prompt. `has_healthy_sidebar` alone would miss it, so
+        // `session_is_clean` also checks for a suspended command pane.
+        let resurrected = r#"[
+          {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": false, "tab_id": 0},
+          {"id": 1, "is_plugin": false, "title": "claude", "is_held": true, "tab_id": 0}
+        ]"#;
+        let parsed: Vec<RawPane> = serde_json::from_str(resurrected).unwrap();
+        assert!(has_healthy_sidebar(&parsed));
+        assert!(has_suspended_command_pane(&parsed));
+
+        // A clean room: sidebar and command pane both running.
+        let clean = r#"[
+          {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": false, "tab_id": 0},
+          {"id": 1, "is_plugin": false, "title": "claude", "is_held": false, "tab_id": 0}
+        ]"#;
+        let parsed: Vec<RawPane> = serde_json::from_str(clean).unwrap();
+        assert!(!has_suspended_command_pane(&parsed));
+
+        // A held *sidebar* is the sidebar signal, not a command-pane signal.
+        let held_sidebar = r#"[
+          {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": true, "tab_id": 0}
+        ]"#;
+        let parsed: Vec<RawPane> = serde_json::from_str(held_sidebar).unwrap();
+        assert!(!has_suspended_command_pane(&parsed));
     }
 
     #[test]

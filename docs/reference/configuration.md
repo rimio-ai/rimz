@@ -88,7 +88,7 @@ Rimz applies a small set of per-machine multiplexer defaults when it creates or 
 [zellij]
 mouse_mode = true
 mouse_click_through = true
-focus_follows_mouse = true
+focus_follows_mouse = false
 pane_frames = false
 on_force_close = "detach"              # "detach" | "quit"
 scroll_buffer_size = 100000
@@ -98,6 +98,7 @@ copy_clipboard = "system"              # "system" | "primary"
 copy_on_select = true
 support_kitty_keyboard_protocol = true
 osc8_hyperlinks = true
+session_serialization = false          # Rimz owns rebirth; a resurrected room comes back suspended
 
 [tmux]
 mouse = true

@@ -22,6 +22,7 @@ mod list;
 mod performance;
 mod property;
 mod reload;
+mod reset;
 mod resolver;
 mod sidebar_launch;
 mod trust;

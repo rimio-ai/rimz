@@ -84,6 +84,13 @@ pub struct ZellijConfig {
     pub copy_on_select: bool,
     pub support_kitty_keyboard_protocol: bool,
     pub osc8_hyperlinks: bool,
+    /// Whether Zellij serializes this room to disk for later resurrection. Rimz
+    /// keeps it off: a resurrected room comes back with every command pane
+    /// `start_suspended` ("Waiting to run") and a dead mouse. Rimz owns rebirth,
+    /// so a dead server leaves nothing to resurrect and the next start comes up
+    /// clean and running. Passed as `--session-serialization false` on birth and
+    /// attach.
+    pub session_serialization: bool,
 }
 
 impl Default for ZellijConfig {
@@ -91,7 +98,7 @@ impl Default for ZellijConfig {
         Self {
             mouse_mode: true,
             mouse_click_through: true,
-            focus_follows_mouse: true,
+            focus_follows_mouse: false,
             pane_frames: false,
             on_force_close: ZellijForceClose::Detach,
             scroll_buffer_size: 100_000,
@@ -101,6 +108,7 @@ impl Default for ZellijConfig {
             copy_on_select: true,
             support_kitty_keyboard_protocol: true,
             osc8_hyperlinks: true,
+            session_serialization: false,
         }
     }
 }
@@ -451,7 +459,7 @@ mod tests {
         let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
         assert!(config.zellij.mouse_mode);
         assert!(config.zellij.mouse_click_through);
-        assert!(config.zellij.focus_follows_mouse);
+        assert!(!config.zellij.focus_follows_mouse);
         assert!(!config.zellij.pane_frames);
         assert_eq!(config.zellij.on_force_close, ZellijForceClose::Detach);
         assert_eq!(config.zellij.scroll_buffer_size, 100_000);
@@ -461,6 +469,7 @@ mod tests {
         assert!(config.zellij.copy_on_select);
         assert!(config.zellij.support_kitty_keyboard_protocol);
         assert!(config.zellij.osc8_hyperlinks);
+        assert!(!config.zellij.session_serialization);
     }
 
     #[test]

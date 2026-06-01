@@ -11,6 +11,7 @@ mod list;
 mod pane;
 mod parse;
 mod reload;
+mod reset;
 mod resolver;
 mod sidebar;
 mod statusline;
@@ -28,8 +29,8 @@ use rimz::ids::MuxName;
 use rimz::ledger::paths::workspaces_dir;
 use rimz::ledger::workspace_record;
 use rimz::mux::{
-    BackgroundViewLaunch, BackgroundViewOptions, DaemonView, HostPane, MuxBackend, SessionOptions,
-    SidebarPaneOptions,
+    BackgroundViewLaunch, BackgroundViewOptions, DaemonView, HostPane, MuxBackend, SessionHealth,
+    SessionOptions, SidebarPaneOptions,
 };
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, RuntimePaths, StatePaths, WorkspaceRecord};
@@ -47,6 +48,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Feed(args)) => feed::run(args, &globals),
         Some(Subcmd::Gc(args)) => gc::run(args, &globals),
         Some(Subcmd::Reload(args)) => reload::run(args, &globals),
+        Some(Subcmd::Reset(args)) => reset::run(args, &globals),
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
         Some(Subcmd::Resolver(args)) => resolver::run(args, &globals),
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
@@ -120,6 +122,9 @@ enum Subcmd {
     Gc(gc::GcArgs),
     /// Reload running sidebars in place (pick up a freshly-installed build).
     Reload(reload::ReloadArgs),
+    /// Force a clean rebirth of this workspace's room, destroying a stuck or
+    /// resurrected Zellij session and sweeping its orphaned processes.
+    Reset(reset::ResetArgs),
     /// Pane primitives backed by the selected mux backend.
     Pane(pane::PaneArgs),
     /// Manage the per-machine resolver allowlist.
@@ -442,6 +447,17 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         remote_control,
         daemon_view.as_ref(),
     );
+    // Authoritative gate before the resurrecting `attach --create`: rebirth a
+    // stuck/serialized room, and on one that cannot self-heal, offer a reset
+    // (interactive) or fail fast with the fix (non-interactive).
+    gate_room_before_attach(
+        backend.as_ref(),
+        &workspace.workspace_id,
+        &workspace.session_name,
+        &workspace.worktree_root,
+        &mux_config,
+        daemon.as_ref(),
+    )?;
     let spec = backend.attach_command(&workspace.session_name, &mux_config);
     tracing::info!(
         workspace = %workspace.workspace_id,
@@ -481,6 +497,14 @@ fn attach_cwd(mode: AttachMode, globals: &GlobalFlags) -> Result<()> {
         &mux_config,
         None,
     );
+    gate_room_before_attach(
+        backend.as_ref(),
+        &workspace.workspace_id,
+        &workspace.session_name,
+        &workspace.worktree_root,
+        &mux_config,
+        None,
+    )?;
     let spec = backend.attach_command(&workspace.session_name, &mux_config);
     run_attach_action(&spec, mode, mux)
 }
@@ -511,6 +535,16 @@ fn attach_named(session: &str, mode: AttachMode, globals: &GlobalFlags) -> Resul
                 &mux_config,
                 None,
             );
+            // Only a session Rimz owns (a matching record) is force-reset; a bare
+            // external session by this name is never torn down.
+            gate_room_before_attach(
+                backend.as_ref(),
+                &record.workspace_id,
+                &record.session_name,
+                &record.project_root,
+                &mux_config,
+                None,
+            )?;
         }
         Ok(None) => {
             tracing::warn!(
@@ -640,6 +674,26 @@ fn workspace_record_for_session(session: &str) -> Result<Option<WorkspaceRecord>
     Ok(None)
 }
 
+/// Build the sidebar/room options shared by the best-effort sidebar launch and
+/// the authoritative pre-attach health gate, so the room shape is defined once.
+fn build_sidebar_opts(
+    workspace_id: &rimz::WorkspaceId,
+    session_name: &str,
+    cwd: &Path,
+    mux_config: &rimz::config::MultiplexerConfig,
+) -> Result<SidebarPaneOptions> {
+    let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
+    Ok(SidebarPaneOptions {
+        session_name: session_name.to_owned(),
+        workspace_id: workspace_id.clone(),
+        cwd: cwd.to_path_buf(),
+        width_percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
+        rimz_bin,
+        replace_existing: false,
+        config: mux_config.clone(),
+    })
+}
+
 fn launch_sidebar_for_workspace(
     backend: &dyn MuxBackend,
     workspace_id: &rimz::WorkspaceId,
@@ -659,28 +713,180 @@ fn launch_sidebar_for_workspace(
             return rimz::sidebar::SidebarLaunchOutcome::Failed;
         }
     };
-    let rimz_bin = match std::env::current_exe() {
-        Ok(path) => path,
+    let opts = match build_sidebar_opts(workspace_id, session_name, cwd, mux_config) {
+        Ok(opts) => opts,
         Err(err) => {
             tracing::warn!(
                 workspace = %workspace_id,
                 error = %err,
-                "sidebar launch skipped because current executable is unavailable",
+                "sidebar launch skipped because room options are unavailable",
             );
             return rimz::sidebar::SidebarLaunchOutcome::Failed;
         }
     };
-    let opts = SidebarPaneOptions {
-        session_name: session_name.to_owned(),
-        workspace_id: workspace_id.clone(),
-        cwd: cwd.to_path_buf(),
-        width_percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
-        rimz_bin,
-        replace_existing: false,
-        config: mux_config.clone(),
-    };
     rimz::sidebar::launch_sidebar_if_needed(backend, &runtime, &opts, daemon)
 }
+
+/// Authoritative pre-attach gate: guarantee the imminent `attach` lands on a
+/// clean, running room rather than resurrecting a stale serialized one. The
+/// best-effort sidebar launch above can skip (a fresh heartbeat short-circuits
+/// it) or fail without rebirthing, so this is the un-bypassable check. A probe
+/// failure degrades to today's behaviour (attach anyway) rather than blocking.
+fn ensure_clean_room(
+    backend: &dyn MuxBackend,
+    workspace_id: &rimz::WorkspaceId,
+    session_name: &str,
+    cwd: &Path,
+    mux_config: &rimz::config::MultiplexerConfig,
+    daemon: Option<&DaemonView>,
+) -> SessionHealth {
+    let opts = match build_sidebar_opts(workspace_id, session_name, cwd, mux_config) {
+        Ok(opts) => opts,
+        Err(err) => {
+            tracing::warn!(error = %err, "session health gate skipped; attaching as-is");
+            return SessionHealth::Healthy;
+        }
+    };
+    match backend.ensure_clean_session(&opts, daemon) {
+        Ok(health) => health,
+        Err(err) => {
+            tracing::warn!(error = %err, "session health gate failed; attaching as-is");
+            SessionHealth::Healthy
+        }
+    }
+}
+
+/// Run the pre-attach health gate and, if the room cannot self-heal, handle the
+/// stuck case (offer a reset, or fail fast). The single entry the attach flows
+/// call before building the attach command.
+fn gate_room_before_attach(
+    backend: &dyn MuxBackend,
+    workspace_id: &rimz::WorkspaceId,
+    session_name: &str,
+    cwd: &Path,
+    mux_config: &rimz::config::MultiplexerConfig,
+    daemon: Option<&DaemonView>,
+) -> Result<()> {
+    if let SessionHealth::Stuck =
+        ensure_clean_room(backend, workspace_id, session_name, cwd, mux_config, daemon)
+    {
+        recover_stuck_room(backend, workspace_id, session_name, cwd, mux_config, daemon)?;
+    }
+    Ok(())
+}
+
+/// Handle a room the pre-attach gate could not make clean. Interactively, offer
+/// the destructive reset and, on consent, run it and re-gate once. Without a
+/// terminal to confirm, fail fast with the fix — never destroy a room unattended.
+fn recover_stuck_room(
+    backend: &dyn MuxBackend,
+    workspace_id: &rimz::WorkspaceId,
+    session_name: &str,
+    cwd: &Path,
+    mux_config: &rimz::config::MultiplexerConfig,
+    daemon: Option<&DaemonView>,
+) -> Result<()> {
+    if !std::io::stdin().is_terminal() {
+        return Err(ResetRequired {
+            session: session_name.to_owned(),
+        }
+        .into());
+    }
+    if !confirm_reset(session_name)? {
+        anyhow::bail!("room left untouched; run `rimz reset` when ready");
+    }
+    let runtime = RuntimePaths::for_workspace(workspace_id.clone())?;
+    let report = rimz::mux::recovery::teardown_room(backend, workspace_id, session_name, &runtime);
+    print_reset_report(&report)?;
+    match ensure_clean_room(backend, workspace_id, session_name, cwd, mux_config, daemon) {
+        SessionHealth::Stuck => {
+            anyhow::bail!("the room is still stuck after a reset; inspect with `rimz doctor`")
+        }
+        SessionHealth::Healthy | SessionHealth::Reborn => Ok(()),
+    }
+}
+
+/// Single y/N confirmation, modelled on the hook consent prompt: written to
+/// stderr (stdout stays clean for scripting), default No. The caller is expected
+/// to have already checked `stdin().is_terminal()`.
+pub(crate) fn confirm(prompt: &str) -> Result<bool> {
+    let mut stderr = std::io::stderr().lock();
+    write!(stderr, "{prompt} [y/N] ")?;
+    stderr.flush()?;
+    drop(stderr);
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "YES" | "Yes"))
+}
+
+/// The `rimz start` auto-offer confirmation for a stuck room.
+fn confirm_reset(session: &str) -> Result<bool> {
+    confirm(&format!(
+        "Rimz must reset the '{session}' room to clear a stuck Zellij session \
+         (every command pane is suspended). Reset now?"
+    ))
+}
+
+/// Rebuild and attach the room from scratch — the rebirth half of `rimz reset`,
+/// run after teardown so the session comes up clean and running.
+pub(crate) fn rebirth_room(path: PathBuf, globals: &GlobalFlags) -> Result<()> {
+    start(
+        StartArgs {
+            attach: AttachFlags::default(),
+            path,
+        },
+        globals,
+    )
+}
+
+/// Report what a teardown removed, to stderr (diagnostic, not stdout output).
+pub(crate) fn print_reset_report(report: &rimz::mux::recovery::TeardownReport) -> Result<()> {
+    let mut stderr = std::io::stderr().lock();
+    writeln!(
+        stderr,
+        "Reset: session {}, {} cache entr{} removed, {} orphan process{} swept.",
+        if report.session_killed {
+            "deleted"
+        } else {
+            "absent"
+        },
+        report.cache_removed.len(),
+        if report.cache_removed.len() == 1 {
+            "y"
+        } else {
+            "ies"
+        },
+        report.processes_swept.len(),
+        if report.processes_swept.len() == 1 {
+            ""
+        } else {
+            "es"
+        },
+    )?;
+    Ok(())
+}
+
+/// No terminal is available to confirm a destructive reset of a stuck room.
+/// `Display` carries the fix, mirroring [`rimz::remote_control::PreflightError`].
+#[derive(Debug)]
+struct ResetRequired {
+    session: String,
+}
+
+impl std::fmt::Display for ResetRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "The '{}' Zellij room is stuck in a resurrected/suspended state — every command \
+             pane is held at a \"Waiting to run\" prompt — and cannot self-heal without a \
+             destructive reset.\n\
+             No terminal is available to confirm one. Run `rimz reset` to rebuild it cleanly.",
+            self.session,
+        )
+    }
+}
+
+impl std::error::Error for ResetRequired {}
 
 /// The per-machine config. A malformed config falls back to defaults after a
 /// warning, preserving the existing "config read is best-effort" contract for

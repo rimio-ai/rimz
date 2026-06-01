@@ -1,0 +1,69 @@
+//! `rimz reset` — the explicit escape hatch for a wedged room. Tears the Zellij
+//! session down to a clean slate (delete + cache purge + orphan sweep) and, by
+//! default, rebuilds and re-enters it. The `rimz start` auto-offer runs the same
+//! [`rimz::mux::recovery::teardown_room`] routine.
+
+use std::io::{IsTerminal, Write};
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+use clap::Args;
+
+use super::GlobalFlags;
+use rimz::RuntimePaths;
+use rimz::workspace::WorkspaceResolver;
+
+#[derive(Debug, Args)]
+pub struct ResetArgs {
+    /// Skip the confirmation prompt (for scripts).
+    #[arg(long)]
+    pub yes: bool,
+    /// Tear the room down but do not rebuild or attach — just print the rerun hint.
+    #[arg(long)]
+    pub no_start: bool,
+    /// Path to use as the workspace cwd.
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+}
+
+pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
+    let workspace = WorkspaceResolver::resolve(&args.path, globals.root.clone())
+        .with_context(|| format!("resolving workspace at {}", args.path.display()))?;
+
+    if !args.yes {
+        if !std::io::stdin().is_terminal() {
+            anyhow::bail!(
+                "`rimz reset` deletes the session and sweeps its processes; \
+                 pass --yes to confirm without a terminal"
+            );
+        }
+        if !super::confirm(&format!(
+            "Reset the '{}' room? This deletes the Zellij session, purges its \
+             resurrection cache, and signals its orphaned processes.",
+            workspace.session_name
+        ))? {
+            writeln!(std::io::stderr().lock(), "Reset aborted; nothing changed.")?;
+            return Ok(());
+        }
+    }
+
+    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
+    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+    let backend = rimz::mux::backend_for(mux);
+    let report = rimz::mux::recovery::teardown_room(
+        backend.as_ref(),
+        &workspace.workspace_id,
+        &workspace.session_name,
+        &runtime,
+    );
+    super::print_reset_report(&report)?;
+
+    if args.no_start {
+        writeln!(
+            std::io::stderr().lock(),
+            "Room torn down. Run `rimz start` to rebuild it.",
+        )?;
+        return Ok(());
+    }
+    super::rebirth_room(args.path, globals)
+}

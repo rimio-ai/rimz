@@ -21,7 +21,8 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, WorkspaceId};
 use rimz::mux::{
-    DaemonView, HostPane, MuxBackend, PaneListOptions, SidebarPaneOptions, ZellijBackend, zellij,
+    DaemonView, HostPane, MuxBackend, PaneListOptions, SessionHealth, SidebarPaneOptions,
+    ZellijBackend, zellij,
 };
 use tempfile::TempDir;
 
@@ -328,6 +329,71 @@ fn open_sidebar_on_live_session_is_idempotent() {
         "re-opening a live session must not add or drop panes: {second:?}",
     );
     assert_sidebar_is_left_thirty_percent(xdg.path(), &name);
+}
+
+/// The pre-attach health gate: an absent room is born clean and RUNNING
+/// (`Reborn`), a probe of the resulting live room reports `Healthy`, and a second
+/// gate call leaves the working panes untouched (`Healthy`, no rebirth). This is
+/// the un-bypassable check that replaces the old "attach and hope" path.
+#[test]
+fn ensure_clean_session_births_running_then_is_idempotent() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("cleanroom");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let opts = SidebarPaneOptions {
+        session_name: name.clone(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-cleanroom")),
+        cwd: cwd.path().to_path_buf(),
+        width_percent: 30,
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+    };
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+
+    // Absent → born clean and running.
+    assert_eq!(
+        backend
+            .ensure_clean_session(&opts, None)
+            .expect("ensure_clean_session births the absent room"),
+        SessionHealth::Reborn,
+    );
+    let born = wait_for_pane_count(xdg.path(), &name, 2);
+    assert!(
+        born.len() >= 2,
+        "the gate should birth a sidebar + terminal pane: {born:?}",
+    );
+    // No pane is held at a "Waiting to run" prompt — the room came up running.
+    assert_sidebars_not_held(xdg.path(), &name, "reborn room");
+
+    // A read-only probe of the now-live, clean room reports healthy.
+    assert_eq!(
+        backend
+            .probe_session_health(&name)
+            .expect("probe a live clean room"),
+        SessionHealth::Healthy,
+    );
+
+    // A clean live room is left untouched — the gate never rebirths working panes.
+    assert_eq!(
+        backend
+            .ensure_clean_session(&opts, None)
+            .expect("ensure_clean_session on a clean live room"),
+        SessionHealth::Healthy,
+    );
+    let again = wait_for_pane_count(xdg.path(), &name, 2);
+    assert_eq!(
+        again.len(),
+        born.len(),
+        "the gate must not add or drop panes on a clean room: {again:?}",
+    );
 }
 
 /// A *live* session that has no sidebar (the renderer self-closed or crashed

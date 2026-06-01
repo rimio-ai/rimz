@@ -49,7 +49,7 @@ sha2 = "0.11"
 hex = "0.4"
 
 # OS integration (cfg(unix))
-nix = { version = "0.31", features = ["fs", "socket", "user"] }
+nix = { version = "0.31", features = ["fs", "signal", "socket", "user"] }
 
 # Process detection
 which = "8"

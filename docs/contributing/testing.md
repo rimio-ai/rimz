@@ -35,6 +35,7 @@ Do not land ignored tests for future product targets. Keep planned behaviour in 
 **M0b** runs the same matrix under Zellij and adds:
 
 - session birth from a layout via `attach --create-background ... --default-layout` (left 30% `rimz-sidebar` pane + focused terminal); a second launch on the existing session is a no-op,
+- the pre-attach health gate: `ensure_clean_session` births an absent room RUNNING (`Reborn`, no held panes), `probe_session_health` reports the live room `Healthy`, and a second gate call leaves a clean room untouched; `--session-serialization false` is on every birth/attach and is not version-gated; `rimz reset` purges the serialized-session cache and refuses without a tty unless `--yes`,
 - self-close: a real `rimz-sidebar` whose tab's last terminal pane exits closes its own pane (non-plugin pane count drops to zero),
 - sidebar heartbeat socket,
 - the wakeup walk fans out one datagram per fresh instance and spawns no `zellij pipe` (the consumerless broadcast was removed; re-arms only with the future rail),

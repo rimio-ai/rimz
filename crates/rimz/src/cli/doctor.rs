@@ -12,6 +12,7 @@ use rimz::feed::AgentState;
 use rimz::ids::{MuxName, ResolverId};
 use rimz::ledger::event_log;
 use rimz::mux::{
+    MuxBackend, SessionHealth,
     tmux::{self as tmux_mod, MIN_TMUX_VERSION},
     zellij::{self as zellij_mod, MIN_ZELLIJ_VERSION},
 };
@@ -68,6 +69,9 @@ pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
                 match mux {
                     MuxName::Zellij => report_zellij_capabilities(),
                     MuxName::Tmux => report_tmux_capabilities(),
+                }
+                if let Ok(ws) = &workspace {
+                    report_session_health(backend.as_ref(), &ws.session_name);
                 }
             }
             Err(err) => println!("  multiplexer   : unavailable ({err})"),
@@ -264,6 +268,22 @@ fn age_short(now: Timestamp, then: Timestamp) -> String {
         format!("{}h ago", secs / 3600)
     } else {
         format!("{}d ago", secs / 86400)
+    }
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
+)]
+fn report_session_health(backend: &dyn MuxBackend, session_name: &str) {
+    match backend.probe_session_health(session_name) {
+        // `probe_session_health` never returns `Reborn` (it does not mutate), so
+        // the live verdict is just clean-or-stuck.
+        Ok(SessionHealth::Healthy | SessionHealth::Reborn) => println!("  session health: ok"),
+        Ok(SessionHealth::Stuck) => println!(
+            "  session health: stuck (resurrected/suspended panes) — run `rimz reset` to rebuild",
+        ),
+        Err(err) => println!("  session health: unavailable ({err})"),
     }
 }
 

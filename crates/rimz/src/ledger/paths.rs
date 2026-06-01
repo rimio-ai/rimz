@@ -219,6 +219,19 @@ pub fn config_home() -> PathBuf {
     env::temp_dir().join("rimz-config")
 }
 
+/// Per-user cache root, where Zellij keeps its serialized-session cache
+/// (`<cache>/zellij/<contract_version>/session_info/<name>`). `rimz reset` wipes
+/// the matching entry so a stuck room cannot be resurrected.
+pub fn cache_home() -> PathBuf {
+    if let Some(value) = env_path("XDG_CACHE_HOME") {
+        return value;
+    }
+    if let Some(home) = env_path("HOME") {
+        return home.join(".cache");
+    }
+    env::temp_dir().join("rimz-cache")
+}
+
 /// Read an environment variable as a path, treating an empty value as unset.
 pub fn env_path(key: &str) -> Option<PathBuf> {
     env::var_os(key)

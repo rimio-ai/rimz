@@ -5,6 +5,7 @@
 //! only inside the adapter — see [`crate::ids::PaneId`] for the normalized
 //! form that travels everywhere else.
 
+pub mod recovery;
 mod selection;
 pub mod tmux;
 pub mod zellij;
@@ -119,7 +120,15 @@ impl CommandSpec {
     /// of which treat these best-effort — degrade instead of blocking. The
     /// interactive attach never comes through here (it `exec`s).
     pub fn run(&self) -> Result<Output> {
-        let output = self.run_bounded(COMMAND_TIMEOUT)?;
+        self.run_with_timeout(COMMAND_TIMEOUT)
+    }
+
+    /// Like [`Self::run`], but with a caller-chosen bound. The health probe at
+    /// `rimz start` uses a tight one so a wedged action client (spinning against
+    /// a dead server) is killed in a few seconds rather than stalling the launch
+    /// for the full [`COMMAND_TIMEOUT`].
+    pub fn run_with_timeout(&self, timeout: Duration) -> Result<Output> {
+        let output = self.run_bounded(timeout)?;
         if !output.status.success() {
             return Err(MuxErr::Command {
                 program: self.program.clone(),
@@ -339,6 +348,20 @@ pub enum BackgroundViewLaunch {
     Launched,
 }
 
+/// Health verdict for a backend session. [`MuxBackend::probe_session_health`]
+/// returns `Healthy` or `Stuck` (read-only); [`MuxBackend::ensure_clean_session`]
+/// adds `Reborn` when it rebirthed a stuck room into a clean one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionHealth {
+    /// Clean and running — or absent, with nothing to heal.
+    Healthy,
+    /// Was stuck; a rebirth brought it back clean and running.
+    Reborn,
+    /// Stuck (resurrected/suspended/hung) and even a rebirth could not clear it,
+    /// so a destructive reset is required.
+    Stuck,
+}
+
 /// Backend-neutral mux operations. Every Zellij/tmux command lives behind
 /// one of these methods.
 pub trait MuxBackend: Send + Sync {
@@ -374,6 +397,39 @@ pub trait MuxBackend: Send + Sync {
     /// window via [`Self::open_background_view`]). Only `rimz start` passes a
     /// `daemon`; other launches pass `None` and birth the working view alone.
     fn open_sidebar(&self, opts: &SidebarPaneOptions, daemon: Option<&DaemonView>) -> Result<()>;
+    /// Read-only health verdict for `name`'s room. Zellij detects a resurrected/
+    /// suspended/hung room (every command pane held at a "Waiting to run" prompt
+    /// after a server death); tmux has no resurrection, so the default is always
+    /// [`SessionHealth::Healthy`]. `rimz doctor` reports this;
+    /// [`Self::ensure_clean_session`] acts on it. Never mutates the session.
+    fn probe_session_health(&self, name: &str) -> Result<SessionHealth> {
+        let _ = name;
+        Ok(SessionHealth::Healthy)
+    }
+    /// Guarantee the next [`Self::attach_command`] lands on a clean, running
+    /// room. Probe `opts.session_name`; a clean live room is left untouched
+    /// ([`SessionHealth::Healthy`]); a stuck or absent one is (re)birthed from the
+    /// layout ([`SessionHealth::Reborn`]); a room that a rebirth still cannot make
+    /// clean returns [`SessionHealth::Stuck`] so the caller can prompt for, or
+    /// direct the user to, `rimz reset`. This is the authoritative pre-attach gate
+    /// that the best-effort sidebar launch cannot bypass. tmux has no
+    /// resurrection, so the default is a no-op `Healthy`.
+    fn ensure_clean_session(
+        &self,
+        opts: &SidebarPaneOptions,
+        daemon: Option<&DaemonView>,
+    ) -> Result<SessionHealth> {
+        let _ = (opts, daemon);
+        Ok(SessionHealth::Healthy)
+    }
+    /// Remove the backend's on-disk resurrection cache for `name`, returning the
+    /// paths removed (for the `rimz reset` report). tmux has no such cache, so the
+    /// default removes nothing. Best-effort: a missing or unreadable cache is not
+    /// an error.
+    fn purge_resurrection_cache(&self, name: &str) -> Vec<PathBuf> {
+        let _ = name;
+        Vec::new()
+    }
     /// Re-add a sidebar to every view (Zellij tab / tmux window) that holds
     /// working panes but lost its sidebar, in place and without disturbing
     /// existing panes. One best-effort pass: a view whose add fails is logged
