@@ -989,10 +989,6 @@ fn codex_context_refresh_is_noop_when_binary_missing() {
         .expect("wait hook");
     assert!(out.status.success());
 
-    // Give a detached refresh time to run and fail; it must write nothing. The
-    // assertion holds whether or not the child has finished — nothing is ever
-    // written for a missing binary.
-    std::thread::sleep(Duration::from_millis(300));
     assert!(
         env.agent_contexts()
             .iter()

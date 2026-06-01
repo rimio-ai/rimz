@@ -13,7 +13,7 @@ use tempfile::tempdir;
 use rimz::ids::{EventId, PaneId, RequestId, SidebarInstanceId, WorkspaceId};
 use rimz::ledger::event_log::{self, EventLogErr};
 use rimz::schema::event::EventEnvelope;
-use rimz::{FeedKind, FeedStatus, MuxName, Surface};
+use rimz::{FeedStatus, MuxName};
 
 fn arb_status() -> impl Strategy<Value = FeedStatus> {
     prop_oneof![
@@ -148,11 +148,4 @@ proptest! {
             Err(other) => prop_assert!(false, "unexpected event-log error: {other:?}"),
         }
     }
-}
-
-/// Suppress dead-code warning for the unused enums/types pulled in for
-/// completeness above — keeps the file self-contained.
-#[allow(dead_code)]
-fn _touch() {
-    let _ = (Surface::Bridge, FeedKind::Permission);
 }

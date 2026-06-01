@@ -178,11 +178,11 @@ Local runner: `cargo xtask test` (wraps `cargo nextest run`). nextest is the onl
 Core test shapes keep their own discipline:
 
 - **Unit tests** — `#[cfg(test)] mod tests` inline in the module under test. Pure logic only: state-machine transitions, parser shapes, schema round-trips. No filesystem, no network, no subprocess.
-- **Integration tests** — one binary per crate at `tests/integration/main.rs`, where each suite is a module (`mod hooks;`) and related suites group under a subdirectory module (`mod backend;` over `backend/{tmux,zellij}.rs`). The shared harness is declared once in `tests/integration/common/`. Real subprocesses, real temp directories under `tempfile::TempDir`, real ledger files. Spawn `rimz` through the `Env` harness in `tests/integration/common/` (an `assert_cmd` `cargo-bin` builder). The M0 matrix is in [testing.md](./testing.md).
-- **Snapshot tests** — `insta::assert_snapshot!` for every protocol stdout (CLI, hook, `--json` events) **including failure shapes**. Use the shared redactor in `tests/integration/common/redact.rs` to strip UUIDs, timestamps, and absolute paths before snapshotting. Sidebar render tests draw through a `vt100::Parser`-backed ratatui backend and snapshot the resulting screen contents — never widget internals.
+- **Integration tests** — one binary per crate at `crates/rimz/tests/integration/main.rs`, where each suite is a module (`mod hooks;`) and related suites group under a subdirectory module (`mod backend;` over `backend/{tmux,zellij}.rs`). The shared harness is declared once in `crates/rimz/tests/integration/common/`. Real subprocesses, real temp directories under `tempfile::TempDir`, real ledger files. Spawn `rimz` through the `Env` harness in `crates/rimz/tests/integration/common/` (an `assert_cmd` `cargo-bin` builder). The M0 matrix is in [testing.md](./testing.md).
+- **Snapshot tests** — `insta::assert_snapshot!` for every protocol stdout (CLI, hook, `--json` events) **including failure shapes**. Normalize UUIDs, timestamps, absolute paths, and other transient identifiers at the assertion boundary before snapshotting; introduce a shared helper only when multiple suites need the same normalization. Sidebar render tests draw through a `vt100::Parser`-backed ratatui backend and snapshot the resulting screen contents — never widget internals.
 - **Property tests** — `proptest` for parsers (TOML override values, agent payloads, framing), serializers (round-trip schema types), and state-machine transitions (no path leaves a final state).
 
-Snapshot churn caused by transient IDs is a redactor bug, not a test failure — fix the redactor.
+Snapshot churn caused by transient IDs is a test-helper bug, not a product failure — fix the normalization.
 
 ## Dependency budget — current snapshot
 
@@ -194,7 +194,7 @@ Current snapshot — entries move when a better-designed alternative wins on des
 | **Runtime — utility** | `tempfile`, `fs4`, `which`, `sha2`, `hex`, `nix` (Unix sockets, sigaction) on `cfg(unix)` |
 | **Binary boundary only** | `anyhow` — permitted in `crates/rimz/src/main.rs`, the private `cli/` module tree, `crates/rimz-sidebar/src/main.rs`, and `xtask/` |
 | **Sidebar runtime** | `ratatui` (via its `crossterm_0_29` feature); direct `crossterm` only when sidebar I/O actually requires it |
-| **Tests** | `insta`, `proptest`, `assert_cmd`, `predicates`, `vt100`, `tempfile`, `pretty_assertions`, `portable-pty` |
+| **Tests** | `insta`, `proptest`, `assert_cmd`, `predicates`, `vt100`, `tempfile`, `portable-pty` |
 
 Rules:
 

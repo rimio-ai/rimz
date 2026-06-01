@@ -37,8 +37,8 @@ test = false
 bench = false
 
 # Test-only fixture: a `git`-shaped shim that logs argv to `$RIMZ_TEST_GIT_LOG`
-# then execs the real git. Used by `tests/integration/sidebar_diff_stats.rs` to
-# count the cross-process git fork rate and prove the diff-stats single-flight.
+# then execs the real git. Used by `tests/integration/performance/` to count
+# the cross-process git fork rate and prove the diff-stats single-flight.
 [[bin]]
 name = "git-trace"
 path = "tests/fixtures/git-trace/main.rs"
@@ -85,9 +85,7 @@ assert_cmd.workspace = true
 insta.workspace = true
 portable-pty.workspace = true
 predicates.workspace = true
-pretty_assertions.workspace = true
 proptest.workspace = true
-regex.workspace = true
 tempfile.workspace = true
 tracing.workspace = true
 vt100.workspace = true

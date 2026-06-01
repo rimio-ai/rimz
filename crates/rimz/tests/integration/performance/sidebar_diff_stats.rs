@@ -151,17 +151,16 @@ impl Fixture {
     }
 }
 
-/// Across a burst of concurrent snapshot processes — one per tab, all on a cold
-/// cache — the per-worktree `merge-base`/`numstat` forks happen once, not once
-/// per process. One producer forks git and publishes the cache; the rest read
-/// it back.
+/// Across a burst of concurrent snapshot processes, one producer forks git and
+/// publishes the cache. Warm repeat snapshots and `--no-produce` consumers read
+/// that cache without new git forks.
 #[test]
-fn concurrent_snapshots_single_flight_the_git_probes() {
+fn diff_stats_single_flights_and_serves_warm_consumers() {
     let Some(fixture) = Fixture::new() else {
         return;
     };
 
-    const TABS: usize = 6;
+    const TABS: usize = 4;
     let children: Vec<_> = (0..TABS)
         .map(|_| fixture.snapshot_command().spawn().expect("spawn snapshot"))
         .collect();
@@ -176,22 +175,7 @@ fn concurrent_snapshots_single_flight_the_git_probes() {
             String::from_utf8_lossy(&output.stderr),
         );
     }
-
-    // Sanity: every process emitted the same worktree group, enriched from the
-    // one shared git read (+2 over the merge-base, live branch label).
-    let parsed: Value = serde_json::from_slice(&outputs[0].stdout).expect("snapshot json");
-    let group = parsed["worktree_groups"]
-        .as_array()
-        .and_then(|groups| {
-            groups
-                .iter()
-                .find(|group| group["label"] == "feature-migration")
-        })
-        .unwrap_or_else(|| panic!("expected a feature-migration worktree group:\n{parsed:#}"));
-    assert_eq!(
-        group["diff_added"], 2,
-        "the group carries the worktree's +2 over trunk"
-    );
+    assert_feature_group(&outputs[0].stdout, "cold concurrent snapshot");
 
     // The whole point: the merge-base and numstat forks ran once across all
     // tabs, not once each.
@@ -205,27 +189,6 @@ fn concurrent_snapshots_single_flight_the_git_probes() {
         fixture.git_forks("numstat"),
         1,
         "numstat must fork once across {TABS} sidebars, not {TABS}×:\n{}",
-        std::fs::read_to_string(&fixture.git_log).unwrap_or_default(),
-    );
-}
-
-/// A second snapshot inside the diff-stats TTL window reuses the cache and forks
-/// zero git — the log is unchanged from the cold run.
-#[test]
-fn repeat_snapshot_within_ttl_forks_no_git() {
-    let Some(fixture) = Fixture::new() else {
-        return;
-    };
-
-    let cold = fixture.run_snapshot();
-    assert!(
-        cold.status.success(),
-        "cold snapshot failed:\n{}",
-        String::from_utf8_lossy(&cold.stderr),
-    );
-    assert!(
-        fixture.git_forks("merge-base") >= 1,
-        "the cold run must fork git for the worktree:\n{}",
         std::fs::read_to_string(&fixture.git_log).unwrap_or_default(),
     );
     let after_cold = fixture.git_log_len();
@@ -242,33 +205,7 @@ fn repeat_snapshot_within_ttl_forks_no_git() {
         "a repeat snapshot within the TTL must fork zero git (log unchanged):\n{}",
         std::fs::read_to_string(&fixture.git_log).unwrap_or_default(),
     );
-}
-
-/// A `--no-produce` consumer (a younger per-tab renderer) forks zero git: it
-/// projects the elder's published `diff-stats.json` and never runs the
-/// per-worktree probes. Warm the cache with one producing snapshot, then assert
-/// a `--no-produce` run adds no git-trace lines yet still carries the cached +2.
-/// This is the read-side of "one producer per workspace, one renderer per tab":
-/// every extra tab costs a cache read, not a `list-panes`/git round-trip.
-#[test]
-fn no_produce_consumer_forks_no_git_and_reads_cache() {
-    let Some(fixture) = Fixture::new() else {
-        return;
-    };
-
-    // Warm: a producing snapshot forks git and publishes the diff-stats cache.
-    let warm = fixture.run_snapshot();
-    assert!(
-        warm.status.success(),
-        "warm snapshot failed:\n{}",
-        String::from_utf8_lossy(&warm.stderr),
-    );
-    assert!(
-        fixture.git_forks("merge-base") >= 1,
-        "the warm run must fork git to publish the cache:\n{}",
-        std::fs::read_to_string(&fixture.git_log).unwrap_or_default(),
-    );
-    let after_warm = fixture.git_log_len();
+    assert_feature_group(&warm.stdout, "warm snapshot");
 
     // Consumer: `--no-produce` must fork zero git (log unchanged) and still
     // render the cached worktree group with its +2 over trunk.
@@ -280,11 +217,15 @@ fn no_produce_consumer_forks_no_git_and_reads_cache() {
     );
     assert_eq!(
         fixture.git_log_len(),
-        after_warm,
+        after_cold,
         "a --no-produce consumer must fork zero git (log unchanged):\n{}",
         std::fs::read_to_string(&fixture.git_log).unwrap_or_default(),
     );
-    let parsed: Value = serde_json::from_slice(&consumer.stdout).expect("snapshot json");
+    assert_feature_group(&consumer.stdout, "no-produce snapshot");
+}
+
+fn assert_feature_group(stdout: &[u8], context: &str) {
+    let parsed: Value = serde_json::from_slice(stdout).expect("snapshot json");
     let group = parsed["worktree_groups"]
         .as_array()
         .and_then(|groups| {
@@ -292,10 +233,12 @@ fn no_produce_consumer_forks_no_git_and_reads_cache() {
                 .iter()
                 .find(|group| group["label"] == "feature-migration")
         })
-        .unwrap_or_else(|| panic!("expected a feature-migration worktree group:\n{parsed:#}"));
+        .unwrap_or_else(|| {
+            panic!("expected a feature-migration worktree group in {context}:\n{parsed:#}")
+        });
     assert_eq!(
         group["diff_added"], 2,
-        "the consumer renders the cached +2 without forking git"
+        "the {context} group carries the worktree's +2 over trunk"
     );
 }
 

@@ -191,22 +191,6 @@ fn sidebar_command_stub() -> (TempDir, PathBuf) {
     (dir, path)
 }
 
-fn held_sidebar_layout(stub: &Path) -> String {
-    let stub = serde_json::to_string(&stub.to_string_lossy()).expect("kdl escape");
-    format!(
-        r#"layout {{
-    pane split_direction="vertical" {{
-        pane command={stub} name="rimz-sidebar" size="30%" {{
-            args "sidebar" "serve" "--mux" "zellij"
-            start_suspended true
-        }}
-        pane focus=true
-    }}
-}}
-"#,
-    )
-}
-
 /// Sanity: spawn a session, see it in `list_sessions`. Establishes that the
 /// portable-pty harness can reach a usable Zellij.
 #[test]
@@ -225,11 +209,11 @@ fn ensure_and_list_sessions_round_trip() {
     );
 }
 
-/// `open_sidebar` births the session from a layout: a left ~30% native
-/// `rimz-sidebar` pane plus a focused terminal pane. No pre-create, no WASM
-/// plugin, no post-creation move/resize.
+/// `open_sidebar` births the full Zellij room shape once: left sidebar, focused
+/// right terminal, bottom bar, running command panes, and a default tab template
+/// that gives future tabs the same sidebar + terminal pair.
 #[test]
-fn open_sidebar_creates_native_pane() {
+fn open_sidebar_births_native_layout_and_template() {
     require_zellij!();
 
     let xdg = scoped_runtime_dir();
@@ -262,38 +246,7 @@ fn open_sidebar_creates_native_pane() {
     );
     assert_sidebar_is_left_thirty_percent(xdg.path(), &name);
     assert_session_has_bottom_bar(xdg.path(), &name);
-}
-
-/// `dump-layout` exposes the template Zellij will use for future user-created
-/// tabs. It must contain the explicit focused terminal, not just the sidebar
-/// split; otherwise existing attached sessions create sidebar-only tabs.
-#[test]
-fn open_sidebar_installs_a_right_terminal_in_the_new_tab_template() {
-    require_zellij!();
-
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("template");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
-    let cwd = TempDir::new().expect("cwd tempdir");
-    let (_stub_dir, stub) = sidebar_command_stub();
-
-    ZellijBackend::with_runtime_dir(xdg.path())
-        .open_sidebar(
-            &SidebarPaneOptions {
-                session_name: name.clone(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-template")),
-                cwd: cwd.path().to_path_buf(),
-                width_percent: 30,
-                rimz_bin: stub,
-                replace_existing: false,
-            },
-            None,
-        )
-        .expect("open_sidebar");
-    wait_for_pane_count(xdg.path(), &name, 2);
+    assert_sidebars_not_held(xdg.path(), &name, "initial tab");
 
     let template = new_tab_template_dump(xdg.path(), &name);
     assert!(
@@ -304,68 +257,26 @@ fn open_sidebar_installs_a_right_terminal_in_the_new_tab_template() {
         template.contains("pane focus=true"),
         "new tab template should carry an explicit focused right terminal:\n{template}",
     );
-}
-
-/// Zellij treats command panes as held until the user presses Enter unless the
-/// layout opts out. Rimz sidebars must start immediately in attached and
-/// background-created sessions.
-#[test]
-fn open_sidebar_starts_sidebar_without_a_run_prompt() {
-    require_zellij!();
-
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("runprompt");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
-    let cwd = TempDir::new().expect("cwd tempdir");
-    let (_stub_dir, stub) = sidebar_command_stub();
-
-    ZellijBackend::with_runtime_dir(xdg.path())
-        .open_sidebar(
-            &SidebarPaneOptions {
-                session_name: name.clone(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-runprompt")),
-                cwd: cwd.path().to_path_buf(),
-                width_percent: 30,
-                rimz_bin: stub,
-                replace_existing: false,
-            },
-            None,
-        )
-        .expect("open_sidebar");
-    wait_for_pane_count(xdg.path(), &name, 2);
-
-    assert_sidebars_not_held(xdg.path(), &name, "initial tab");
 
     open_new_tab(xdg.path(), &name);
     wait_for_tab_count(xdg.path(), &name, 2);
     assert_sidebars_not_held(xdg.path(), &name, "new tab");
-}
 
-/// The sidebar layout replaces Zellij's default tab template, so it must re-add
-/// the bottom bar plugin itself. Assert the born session actually carries it —
-/// not just that the layout string mentions it.
-fn assert_session_has_bottom_bar(xdg: &Path, session: &str) {
-    let output = scoped_zellij(xdg)
-        .args(["--session", session, "action", "list-panes", "-j", "-a"])
-        .bounded_output()
-        .expect("list-panes for bar check");
-    assert!(output.status.success(), "list-panes for bar check failed");
-    let panes: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("list-panes bar json");
-    let has_bar = panes.as_array().expect("pane array").iter().any(|pane| {
-        pane.get("is_plugin").and_then(|v| v.as_bool()) == Some(true)
-            && pane
-                .get("title")
-                .and_then(|v| v.as_str())
-                .is_some_and(|title| title.contains("compact-bar"))
-    });
-    assert!(
-        has_bar,
-        "session {session} should carry a bottom bar plugin: {panes:?}"
-    );
+    for tab in tab_ids(xdg.path(), &name) {
+        let terminals = nonplugin_titles_in_tab(xdg.path(), &name, tab);
+        let has_sidebar = terminals.iter().any(|t| t == "rimz-sidebar");
+        let has_terminal = terminals.iter().any(|t| t != "rimz-sidebar");
+        assert!(
+            has_sidebar && has_terminal,
+            "tab {tab} should carry the sidebar and a right terminal, got {terminals:?}",
+        );
+        let focused = focused_nonplugin_title_in_tab(xdg.path(), &name, tab)
+            .unwrap_or_else(|| panic!("tab {tab} has no focused terminal pane"));
+        assert_ne!(
+            focused, "rimz-sidebar",
+            "tab {tab} focuses the sidebar; focus must land on the right terminal",
+        );
+    }
 }
 
 /// Re-running `open_sidebar` against a *live* session takes the no-op arm of the
@@ -415,64 +326,6 @@ fn open_sidebar_on_live_session_is_idempotent() {
         "re-opening a live session must not add or drop panes: {second:?}",
     );
     assert_sidebar_is_left_thirty_percent(xdg.path(), &name);
-}
-
-/// A session with a `rimz-sidebar` pane is still broken if that pane is held at
-/// Zellij's "Waiting to run" prompt. Re-running `open_sidebar` must treat it
-/// as unhealthy and rebirth the session from the current layout.
-#[test]
-fn open_sidebar_heals_a_live_session_with_a_held_sidebar() {
-    require_zellij!();
-
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("heldsidebar");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
-    let cwd = TempDir::new().expect("cwd tempdir");
-    let (_stub_dir, stub) = sidebar_command_stub();
-    let layout = cwd.path().join("held-sidebar.kdl");
-    std::fs::write(&layout, held_sidebar_layout(&stub)).expect("write held layout");
-
-    let output = scoped_zellij(xdg.path())
-        .args(["attach", "--create-background", &name, "options"])
-        .arg("--default-cwd")
-        .arg(cwd.path())
-        .arg("--default-layout")
-        .arg(&layout)
-        .bounded_output()
-        .expect("spawn held-sidebar session");
-    assert!(
-        output.status.success(),
-        "spawn held-sidebar session failed: {}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-    wait_for_pane_count(xdg.path(), &name, 2);
-    assert!(
-        session_has_held_sidebar(xdg.path(), &name),
-        "test setup should produce a held sidebar pane",
-    );
-
-    ZellijBackend::with_runtime_dir(xdg.path())
-        .open_sidebar(
-            &SidebarPaneOptions {
-                session_name: name.clone(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-held-sidebar")),
-                cwd: cwd.path().to_path_buf(),
-                width_percent: 30,
-                rimz_bin: stub,
-                replace_existing: false,
-            },
-            None,
-        )
-        .expect("open_sidebar");
-    wait_for_pane_count(xdg.path(), &name, 2);
-
-    assert_sidebars_not_held(xdg.path(), &name, "recreated session");
-    open_new_tab(xdg.path(), &name);
-    wait_for_tab_count(xdg.path(), &name, 2);
-    assert_sidebars_not_held(xdg.path(), &name, "new tab after recreate");
 }
 
 /// A *live* session that has no sidebar (the renderer self-closed or crashed
@@ -542,99 +395,28 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
     assert_sidebar_is_left_thirty_percent(xdg.path(), &name);
 }
 
-/// Every tab born from the sidebar layout — the initial one *and* any the user
-/// opens later — must carry a right terminal pane next to the sidebar.
-/// Regression test for "a new tab in an existing session shows only the
-/// sidebar, no right panel": the template must spell out the right pane instead
-/// of relying on Zellij's `children` placeholder semantics.
-#[test]
-fn new_tab_is_born_with_a_right_terminal() {
-    require_zellij!();
-
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("newtabpane");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
-    let cwd = TempDir::new().expect("cwd tempdir");
-    let (_stub_dir, stub) = sidebar_command_stub();
-
-    ZellijBackend::with_runtime_dir(xdg.path())
-        .open_sidebar(
-            &SidebarPaneOptions {
-                session_name: name.clone(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-newtab-pane")),
-                cwd: cwd.path().to_path_buf(),
-                width_percent: 30,
-                rimz_bin: stub,
-                replace_existing: false,
-            },
-            None,
-        )
-        .expect("open_sidebar");
-    wait_for_pane_count(xdg.path(), &name, 2);
-
-    open_new_tab(xdg.path(), &name);
-    wait_for_tab_count(xdg.path(), &name, 2);
-
-    // Every tab must have a sidebar *and* at least one terminal beside it.
-    for tab in tab_ids(xdg.path(), &name) {
-        let terminals = nonplugin_titles_in_tab(xdg.path(), &name, tab);
-        let has_sidebar = terminals.iter().any(|t| t == "rimz-sidebar");
-        let has_terminal = terminals.iter().any(|t| t != "rimz-sidebar");
-        assert!(
-            has_sidebar && has_terminal,
-            "tab {tab} should carry the sidebar and a right terminal, got {terminals:?}",
-        );
-    }
-}
-
-/// Focus must land on the right terminal, never the sidebar — on launch and on
-/// every tab opened afterwards. Regression test for "on launch the focus is the
-/// sidebar, not the right panel": with the old layout a tab born from the
-/// template could strand focus on the sidebar even when Zellij materialized the
-/// right pane.
-#[test]
-fn tabs_focus_the_terminal_not_the_sidebar() {
-    require_zellij!();
-
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("focusterm");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
-    let cwd = TempDir::new().expect("cwd tempdir");
-    let (_stub_dir, stub) = sidebar_command_stub();
-
-    ZellijBackend::with_runtime_dir(xdg.path())
-        .open_sidebar(
-            &SidebarPaneOptions {
-                session_name: name.clone(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-focus-term")),
-                cwd: cwd.path().to_path_buf(),
-                width_percent: 30,
-                rimz_bin: stub,
-                replace_existing: false,
-            },
-            None,
-        )
-        .expect("open_sidebar");
-    wait_for_pane_count(xdg.path(), &name, 2);
-
-    open_new_tab(xdg.path(), &name);
-    wait_for_tab_count(xdg.path(), &name, 2);
-
-    // Each tab tracks its own focused pane; none may be the sidebar.
-    for tab in tab_ids(xdg.path(), &name) {
-        let focused = focused_nonplugin_title_in_tab(xdg.path(), &name, tab)
-            .unwrap_or_else(|| panic!("tab {tab} has no focused terminal pane"));
-        assert_ne!(
-            focused, "rimz-sidebar",
-            "tab {tab} focuses the sidebar; focus must land on the right terminal",
-        );
-    }
+/// The sidebar layout replaces Zellij's default tab template, so it must re-add
+/// the bottom bar plugin itself. Assert the born session actually carries it —
+/// not just that the layout string mentions it.
+fn assert_session_has_bottom_bar(xdg: &Path, session: &str) {
+    let output = scoped_zellij(xdg)
+        .args(["--session", session, "action", "list-panes", "-j", "-a"])
+        .bounded_output()
+        .expect("list-panes for bar check");
+    assert!(output.status.success(), "list-panes for bar check failed");
+    let panes: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("list-panes bar json");
+    let has_bar = panes.as_array().expect("pane array").iter().any(|pane| {
+        pane.get("is_plugin").and_then(|v| v.as_bool()) == Some(true)
+            && pane
+                .get("title")
+                .and_then(|v| v.as_str())
+                .is_some_and(|title| title.contains("compact-bar"))
+    });
+    assert!(
+        has_bar,
+        "session {session} should carry a bottom bar plugin: {panes:?}"
+    );
 }
 
 /// Open a second tab the way a user would, from the default tab template.
@@ -683,19 +465,6 @@ fn assert_sidebars_not_held(xdg: &Path, session: &str, context: &str) {
             "sidebar command pane is waiting for Enter instead of running in {context}:\n{sidebar}",
         );
     }
-}
-
-fn session_has_held_sidebar(xdg: &Path, session: &str) -> bool {
-    list_panes_json(xdg, session)
-        .as_array()
-        .map(|panes| {
-            panes.iter().any(|pane| {
-                pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false)
-                    && pane.get("title").and_then(|value| value.as_str()) == Some("rimz-sidebar")
-                    && pane.get("is_held").and_then(|value| value.as_bool()) == Some(true)
-            })
-        })
-        .unwrap_or(false)
 }
 
 /// Dump just the `new_tab_template` section for readable assertions.
@@ -846,57 +615,6 @@ fn sidebar_self_closes_when_its_tab_empties() {
     );
 }
 
-/// A tab born with only the sidebar has no useful work surface. The sidebar
-/// must close itself even though it never saw a sibling pane first. Regression
-/// test for a user-created second tab that showed only a full-width sidebar and
-/// stayed open forever.
-#[test]
-fn sidebar_self_closes_when_its_tab_starts_empty() {
-    require_zellij!();
-
-    let rimz = assert_cmd::cargo::cargo_bin("rimz");
-    let sidebar = assert_cmd::cargo::cargo_bin("rimz-sidebar");
-    if !rimz.exists() || !sidebar.exists() {
-        eprintln!("rimz/rimz-sidebar binaries not built; skipping sidebar-only test");
-        return;
-    }
-
-    let name = unique_session_name("emptytab");
-    let cwd = TempDir::new().expect("cwd tempdir");
-    let xdg = scoped_runtime_dir();
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
-
-    let layout = sidebar_only_tab_layout(&name, &rimz, &sidebar, xdg.path());
-    let layout_path = cwd.path().join("layout.kdl");
-    std::fs::write(&layout_path, layout).expect("write layout");
-
-    let created = scoped_zellij(xdg.path())
-        .args(["attach", "--create-background", &name, "options"])
-        .arg("--default-cwd")
-        .arg(cwd.path())
-        .arg("--default-layout")
-        .arg(&layout_path)
-        .bounded_status()
-        .expect("create background session");
-    assert!(created.success(), "create-background failed for {name}");
-
-    assert!(
-        wait_for_nonplugin_panes_in_tab(xdg.path(), &name, "main", 2, Duration::from_secs(15)),
-        "expected main tab to keep sidebar + terminal for {name}",
-    );
-    assert!(
-        wait_for_nonplugin_panes_in_tab(xdg.path(), &name, "orphan", 0, Duration::from_secs(10)),
-        "sidebar-only orphan tab did not close its own pane for {name}",
-    );
-    assert!(
-        wait_for_nonplugin_panes_in_tab(xdg.path(), &name, "main", 2, Duration::from_secs(2)),
-        "orphan cleanup must not close the populated main tab for {name}",
-    );
-}
-
 /// Poll until no `sidebar.*.json` heartbeat remains in `dir` (a missing dir
 /// counts as none), or the timeout elapses.
 fn wait_for_no_sidebar_heartbeat(dir: &Path, timeout: Duration) -> bool {
@@ -952,44 +670,6 @@ fn self_close_layout(session: &str, rimz: &Path, sidebar: &Path, xdg: &Path) -> 
 "#,
         serve = q(serve),
     )
-}
-
-/// Layout with one healthy tab and one orphan sidebar-only tab. The healthy tab
-/// proves the self-close decision is scoped to the sidebar's own tab.
-fn sidebar_only_tab_layout(session: &str, rimz: &Path, sidebar: &Path, xdg: &Path) -> String {
-    let q = |s: String| serde_json::to_string(&s).expect("kdl escape");
-    let serve = sidebar_serve_command(session, rimz, sidebar, xdg);
-    format!(
-        r#"layout {{
-    tab name="main" {{
-        pane split_direction="vertical" {{
-            pane size="30%" name="rimz-sidebar" {{
-                command "sh"
-                args "-c" {serve}
-                close_on_exit true
-            }}
-            pane focus=true {{
-                command "sleep"
-                args "30"
-                close_on_exit true
-            }}
-        }}
-    }}
-    tab name="orphan" {{
-        pane name="rimz-sidebar" {{
-            command "sh"
-            args "-c" {serve}
-            close_on_exit true
-        }}
-    }}
-}}
-"#,
-        serve = q(serve),
-    )
-}
-
-fn sidebar_serve_command(session: &str, rimz: &Path, sidebar: &Path, xdg: &Path) -> String {
-    sidebar_serve_command_with_tick(session, rimz, sidebar, xdg, 1)
 }
 
 fn sidebar_serve_command_with_tick(
@@ -1075,56 +755,12 @@ fn session_nonplugin_count(xdg: &Path, name: &str) -> usize {
         .unwrap_or(0)
 }
 
-/// Count a runtime-scoped session's non-plugin panes in a named tab.
-fn tab_nonplugin_count(xdg: &Path, name: &str, tab_name: &str) -> usize {
-    scoped_zellij(xdg)
-        .args(["--session", name, "action", "list-panes", "-j", "-a"])
-        .bounded_output()
-        .ok()
-        .filter(|out| out.status.success())
-        .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok())
-        .and_then(|panes| {
-            panes.as_array().map(|panes| {
-                panes
-                    .iter()
-                    .filter(|pane| {
-                        pane.get("tab_name").and_then(|name| name.as_str()) == Some(tab_name)
-                            && pane.get("is_plugin").and_then(|b| b.as_bool()) == Some(false)
-                            && pane.get("is_suppressed").and_then(|b| b.as_bool()) != Some(true)
-                    })
-                    .count()
-            })
-        })
-        .unwrap_or(0)
-}
-
 /// Poll until the session's non-plugin pane count equals `target`, or the
 /// timeout elapses.
 fn wait_for_nonplugin_panes(xdg: &Path, name: &str, target: usize, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
         if session_nonplugin_count(xdg, name) == target {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(150));
-    }
-}
-
-/// Poll until the named tab's non-plugin pane count equals `target`, or the
-/// timeout elapses.
-fn wait_for_nonplugin_panes_in_tab(
-    xdg: &Path,
-    name: &str,
-    tab_name: &str,
-    target: usize,
-    timeout: Duration,
-) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if tab_nonplugin_count(xdg, name, tab_name) == target {
             return true;
         }
         if Instant::now() >= deadline {

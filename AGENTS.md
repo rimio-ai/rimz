@@ -43,6 +43,7 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 ## Testing requirements
 
 - Run the suite with `cargo xtask test` (wraps `cargo nextest run`) — nextest is the only suite runner; never bare `cargo test`. Doctests go through `cargo xtask doctest`.
+- Routine validation defaults to the fast relevant nextest subset plus lightweight gates; run journey, live-backend, performance, or full CI only when the change touches those surfaces, their fixtures, or shared infrastructure.
 - Unit tests around state machines, schema rendering, and trust decisions.
 - Integration tests for ledger CAS, bridge timeouts, socket wakeups, and backend parity.
 - Keep test tiers separate: function/unit tests stay inline and pure, integration tests own subprocess/filesystem behavior, journey tests own rendered user flows, live-backend tests own real tmux/Zellij behavior, and performance tests assert bounded resource use rather than product semantics.

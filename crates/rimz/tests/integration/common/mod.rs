@@ -10,11 +10,9 @@
 //!   library tier) for tests that drive ledger APIs directly.
 //!
 //! `payloads` holds the agent hook-payload fixtures and environment probes
-//! shared across tiers; `redact` normalizes volatile output for snapshots.
+//! shared across tiers.
 
 #![allow(dead_code)]
-
-pub mod redact;
 
 mod command;
 mod env;

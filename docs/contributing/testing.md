@@ -10,9 +10,9 @@ Local runner: `cargo xtask test` (wraps `cargo nextest run`). Doctests run separ
 
 - **Function/unit tests** live inline with the module under test and cover pure state transitions, parsers, render helpers, trust hashing, and formatting rules. They do not spawn subprocesses or touch real ledgers.
 - **Integration tests** live under `crates/rimz/tests/integration/` and cover public CLI, ledger files, sockets, hooks, resolvers, and subprocess round trips through the shared harness.
-- **Journey tests** live under `tests/integration/journey/` and assert rendered end-user flows through a real `rimz-sidebar serve` process and `vt100` screen capture.
+- **Journey tests** live under `crates/rimz/tests/integration/journey/` and assert rendered end-user flows through a real `rimz-sidebar serve` process and `vt100` screen capture.
 - **Live-backend tests** cover real tmux/Zellij behavior and self-skip when the backend binary or socket permissions are unavailable. They stay narrow and backend-specific.
-- **Performance tests** assert bounded work, fork counts, cache behavior, or single-flight behavior. They do not duplicate product semantics already covered by unit or journey tests.
+- **Performance tests** live under `crates/rimz/tests/integration/performance/` and assert bounded work, fork counts, cache behavior, or single-flight behavior. They do not duplicate product semantics already covered by unit or journey tests.
 
 Do not land ignored tests for future product targets. Keep planned behaviour in the roadmap or design docs, then add the executable test when the implementation is ready to pass in the normal nextest suite.
 
@@ -85,7 +85,7 @@ The native-event surface each adapter wires is in [hooks.md](../internals/hooks.
 
 All `insta` snapshots — CLI stdout, `--json` event payloads, hook stdout, sidebar render frames — share one set of rules.
 
-- **Redaction filter.** Every snapshot routes through `tests/integration/common/redact.rs` before comparison. The filter strips UUIDs (`[0-9a-f]{8}-[0-9a-f]{4}-...`), Unix and RFC3339 timestamps, absolute paths under `$HOME` / `$XDG_RUNTIME_DIR` / `$XDG_STATE_HOME`, the workspace ID, and the multiplexer session name. Snapshots compare semantic shape, not transient identifiers. Snapshot churn from a transient ID is a redactor bug; fix the redactor.
+- **Volatile output.** Normalize UUIDs, timestamps, absolute paths, workspace IDs, multiplexer session names, and other transient identifiers at the assertion boundary before snapshotting. Add a shared redaction helper only when more than one suite needs the same normalization. Snapshots compare semantic shape, not transient identifiers.
 - **Failure-shape snapshots.** Error messages, `--json` error envelopes, and hook neutral silence are snapshotted alongside success cases. Wire-shape error changes are reviewed events, not silent regressions.
 - **Sidebar render snapshots.** `crates/rimz-sidebar` snapshot tests render through a `vt100::Parser`-backed ratatui backend and assert on the parsed screen contents, never on widget internals. Resize the backend within the test to exercise wrapping and truncation.
 
@@ -113,7 +113,7 @@ All `insta` snapshots — CLI stdout, `--json` event payloads, hook stdout, side
 
 ## End-user journey suite
 
-`tests/integration/journey/` tells the session as a story from `docs/guide/product.md` and `docs/guide/experience.md`: launch the room, onboard, run an agent, watch the column move through `shell → idle → running → waiting → fleet`. `docs/internals/sidebar.md` owns renderer mechanics, not the story source. "Running an agent" fires its *installed* hook, never a hand-rolled `rimz hooks feed`: the harness onboards with `rimz hooks install` and then runs the exact `rimz hooks feed --source <agent> --event <event>` command the agent's config wires. An un-onboarded `agent_hook` is a no-op — exactly what a real agent does with no Rimz hook configured — so the suite fails when "I ran codex and nothing showed up" would. That faithfulness is non-negotiable: a journey test that fires hooks an un-wired agent could never fire would pass against a broken product.
+`crates/rimz/tests/integration/journey/` tells the session as a story from `docs/guide/product.md` and `docs/guide/experience.md`: launch the room, onboard, run an agent, watch the column move through `shell → idle → running → waiting → fleet`. `docs/internals/sidebar.md` owns renderer mechanics, not the story source. "Running an agent" fires its *installed* hook, never a hand-rolled `rimz hooks feed`: the harness onboards with `rimz hooks install` and then runs the exact `rimz hooks feed --source <agent> --event <event>` command the agent's config wires. An un-onboarded `agent_hook` is a no-op — exactly what a real agent does with no Rimz hook configured — so the suite fails when "I ran codex and nothing showed up" would. That faithfulness is non-negotiable: a journey test that fires hooks an un-wired agent could never fire would pass against a broken product.
 
 - **Content** (`sidebar_phases.rs`) drives the real `rimz-sidebar serve` renderer through a `portable-pty` over a real ledger and asserts on the `vt100`-parsed pane (the `resize_redraw.rs` pattern). The renderer gets its own short `XDG_RUNTIME_DIR` so the per-instance wakeup socket stays under the AF_UNIX limit.
 - **Deep smokes** (`deep.rs`) birth a real tmux/zellij session with a real sidebar pane, fire a hook, and capture the live pane content; they self-skip without the mux binary. They poll for a *complete* frame (every expected token) so a partial repaint captured mid-paint under load never reads as a failure.

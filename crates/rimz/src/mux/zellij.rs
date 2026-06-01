@@ -192,16 +192,7 @@ impl ZellijBackend {
     /// rather than trusts a session it cannot inspect.
     fn session_has_healthy_sidebar(&self, name: &str) -> bool {
         self.list_panes_with_session(Some(name))
-            .map(|panes| {
-                let mut found = false;
-                for pane in panes.iter().filter(|pane| is_sidebar_pane(pane)) {
-                    found = true;
-                    if pane.is_held {
-                        return false;
-                    }
-                }
-                found
-            })
+            .map(|panes| has_healthy_sidebar(&panes))
             .unwrap_or(false)
     }
 
@@ -918,6 +909,17 @@ fn is_sidebar_pane(pane: &RawPane) -> bool {
     !pane.is_plugin && pane.title.as_deref() == Some(SIDEBAR_PANE_NAME)
 }
 
+fn has_healthy_sidebar(panes: &[RawPane]) -> bool {
+    let mut found = false;
+    for pane in panes.iter().filter(|pane| is_sidebar_pane(pane)) {
+        found = true;
+        if pane.is_held {
+            return false;
+        }
+    }
+    found
+}
+
 /// `ZELLIJ_PANE_ID` is the bare integer of the pane the caller runs in. `rimz
 /// reload` runs in the user's pane, so refocusing it restores their visible tab.
 fn own_zellij_pane_id() -> Option<u64> {
@@ -1394,6 +1396,35 @@ mod tests {
         // Only the plain live terminal pane survives; plugin, suppressed, held,
         // and exited panes are all dropped.
         assert_eq!(live, vec![0]);
+    }
+
+    #[test]
+    fn held_sidebar_is_not_healthy() {
+        let json = r#"[
+          {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": true, "tab_id": 0},
+          {"id": 1, "is_plugin": false, "title": "bash", "tab_id": 0}
+        ]"#;
+        let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
+        assert!(!has_healthy_sidebar(&parsed));
+    }
+
+    #[test]
+    fn running_sidebar_is_healthy() {
+        let json = r#"[
+          {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": false, "tab_id": 0},
+          {"id": 1, "is_plugin": true, "title": "compact-bar", "tab_id": 0}
+        ]"#;
+        let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
+        assert!(has_healthy_sidebar(&parsed));
+    }
+
+    #[test]
+    fn missing_sidebar_is_not_healthy() {
+        let json = r#"[
+          {"id": 0, "is_plugin": false, "title": "bash", "tab_id": 0}
+        ]"#;
+        let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
+        assert!(!has_healthy_sidebar(&parsed));
     }
 
     #[test]

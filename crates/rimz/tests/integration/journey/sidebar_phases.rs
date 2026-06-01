@@ -15,30 +15,6 @@ use super::{
 };
 use crate::common::Env;
 
-/// Phase 0 — today's empty snapshot on a fresh machine. A healthy empty room
-/// points at the real next step. With no hooks wired yet, that step is `rimz
-/// hooks install` — "run claude or codex" would be a lie until the hooks land
-/// (covered by the onboarding test below).
-#[test]
-fn phase0_empty_snapshot_shows_first_run_hint() {
-    let env = Env::new();
-    if env.skip_if_sandboxed() {
-        return;
-    }
-    let room = RoomHarness::launch(&env, MuxName::Tmux);
-
-    let screen = room.wait_for(|s| s.contains("rimz hooks install"), SETTLE);
-    assert!(
-        !screen.contains("all clear"),
-        "the empty-room nudge should not spend the top line on all-clear copy:\n{screen}"
-    );
-    assert!(
-        screen.contains("rimz hooks install"),
-        "an un-wired empty room must point at hook install, not a dead-end \
-         'run claude or codex':\n{screen}"
-    );
-}
-
 /// Phase 0 → 1 onboarding. Running an agent before wiring its hooks is not
 /// invisible: the pane is live, so it shows as a dim `· codex` process row, and
 /// because a known agent is visible the first-run hint steps aside. But no
@@ -68,6 +44,10 @@ fn phase0_onboarding_hint_then_wire_then_agent_appears() {
         "an empty room must point the user at `rimz hooks install`; agents are \
          invisible until their hooks are wired:\n{screen}"
     );
+    assert!(
+        !screen.contains("all clear"),
+        "the empty-room nudge should not spend the top line on all-clear copy:\n{screen}"
+    );
 
     // The user runs codex before wiring it. The pane is live, so it shows as a
     // process row and the first-run hint steps aside — but with no installed
@@ -95,10 +75,11 @@ fn phase0_onboarding_hint_then_wire_then_agent_appears() {
     );
 }
 
-/// Phase 1 — launched, no prompt. `SessionStart` registers the agent as
-/// `○ idle` with no task; no attention summary is rendered.
+/// Phases 1 → 3 — an onboarded agent registers idle, moves to running with the
+/// prompt, then waits on a permission request without rendering the raw
+/// question.
 #[test]
-fn phase1_launch_registers_idle_no_prompt() {
+fn phase1_to_3_agent_moves_from_idle_to_running_to_waiting() {
     let env = Env::new();
     if env.skip_if_sandboxed() {
         return;
@@ -127,19 +108,7 @@ fn phase1_launch_registers_idle_no_prompt() {
         !screen.contains("all clear"),
         "idle never demands an all-clear attention line:\n{screen}"
     );
-}
 
-/// Phase 2 — prompted and working. `UserPromptSubmit` moves the agent to
-/// `⢿ running` with the prompt as its task.
-#[test]
-fn phase2_prompt_moves_to_running_with_task() {
-    let env = Env::new();
-    if env.skip_if_sandboxed() {
-        return;
-    }
-    let room = RoomHarness::launch(&env, MuxName::Tmux);
-    room.onboard(&["codex"]);
-    room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
     room.agent_hook("codex", &user_prompt_submit("sess-1", "fix auth flow"));
 
     let screen = room.wait_for(|s| s.contains("fix auth flow"), SETTLE);
@@ -151,21 +120,7 @@ fn phase2_prompt_moves_to_running_with_task() {
         screen.contains("fix auth flow"),
         "the task descriptor is the prompt:\n{screen}"
     );
-}
 
-/// Phase 3 — a question waits on you. A `PermissionRequest` (no resolver) writes
-/// a feed item: the row flips to `? waiting`, the attention line counts it, and
-/// the sidebar never reproduces the question. (Implemented.)
-#[test]
-fn phase3_question_waits_and_counts_attention() {
-    let env = Env::new();
-    if env.skip_if_sandboxed() {
-        return;
-    }
-    let room = RoomHarness::launch(&env, MuxName::Tmux);
-    room.onboard(&["codex"]);
-    room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
-    room.agent_hook("codex", &user_prompt_submit("sess-1", "fix auth flow"));
     room.agent_hook("codex", &permission_request("sess-1", "DO_NOT_RENDER_ME"));
 
     let screen = room.wait_for(
