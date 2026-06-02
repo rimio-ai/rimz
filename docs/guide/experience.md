@@ -97,7 +97,7 @@ The column is never blank. Their shell pane is itself a row. With nothing needin
  ────────────────────────────────────────────
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-▌· zsh
+▌○ zsh
 
  no agents yet
  run claude or codex
@@ -123,7 +123,7 @@ does."*
 
 ## Phase 3 — The first agent appears by itself
 
-The reader types `claude` in the shell pane and just looks at its input box — hasn't prompted it yet. Within about a second, the pane that read `· zsh` *becomes* the agent's row. Same row, re-skinned — never a second entry.
+The reader types `claude` in the shell pane and just looks at its input box — hasn't prompted it yet. Within about a second, the pane that read `○ zsh` *becomes* the agent's row. Same row, re-skinned — never a second entry.
 
 ```
  ⌘ query-engine
@@ -288,7 +288,7 @@ The footer advertises `?`. Pressing it overlays the legend and keys, so the glyp
  ↑/↓ select   1-9 jump   ↵ jump
  ␣ next ?!   x dismiss   r reload   ? close
  ⢿ working   ✽ thinking   ? waiting
- ! attention   ○ idle   ✓ done   · process
+ ! attention   ○ idle   ✓ done   dim = process
  posture: plan · auto · yolo
 ```
 
@@ -398,7 +398,7 @@ on the very first screen.
 | --- | --- | --- | --- | --- |
 | 0 Discovery | installs | 3-line pitch, 1 command | low-commitment | one line in, `rimz` to start |
 | 1 Consent | runs `rimz` | additive-diff gate | reassured | report, don't answer; reversible |
-| 2 Empty room | looks left | `· zsh`, hint | oriented | never blank |
+| 2 Empty room | looks left | `○ zsh`, hint | oriented | never blank |
 | 3 First agent | types `claude` | row re-skins to `○ claude` | delight | it just knows |
 | 4 Working | prompts | `⢿ running`, animated head | calm | a wedged agent escalates to `!` |
 | 5 Question | gets notified, jumps | `? waiting`, OS notify | *the pitch* | notify & route to the pane |

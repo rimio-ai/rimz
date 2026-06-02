@@ -678,6 +678,14 @@ fn row_lines(
         animation_phase,
         redden_secs,
     )];
+    // An active process row carries its full command on a dim second line under
+    // the shell anchor — the build or `sudo` install reads in full while line 1
+    // stays the stable shell label. Idle process rows have no detail to add.
+    if row.row_kind == SidebarRowKind::Process
+        && let Some(line) = process_detail_line(theme, row, cw)
+    {
+        inner.push(line);
+    }
     if row.row_kind == SidebarRowKind::Agent {
         inner.push(description_line(theme, row, tier, cw));
         // A just-started idle agent sits on the 0% baseline gauge with nothing
@@ -1026,19 +1034,33 @@ fn process_row_line(
     let dim = theme.dim();
     let label = clip(&row.name, width.saturating_sub(2).max(1));
     // An active pane (a build, a test, a script) gets the running braille spinner
-    // so live work reads at a glance — but in the dim chrome tone, never the
-    // agent's clay, so a process stays secondary to an agent. An idle shell or a
-    // TUI the user just sits in keeps the quiet `·`.
+    // so live work reads at a glance; an idle shell or a TUI the user just sits in
+    // rests on the same hollow `○` an idle agent shows, so the lead column reads
+    // and aligns alike across the two. Both stay in the dim chrome tone, never the
+    // agent's clay, so a process stays secondary to an agent.
     let lead = if row.process_active {
         working_glyph(animation_phase)
     } else {
-        "·"
+        status_glyph(AgentStatus::Idle)
     };
     Line::from(vec![
         Span::styled(lead, dim),
         Span::raw(" "),
         Span::styled(label, dim),
     ])
+}
+
+/// Line 2 for an *active* process row: the full foreground command, dim and
+/// indented under the shell anchor, so a build or a `sudo` install reads in full
+/// while the primary line keeps the stable shell label. `None` when the producer
+/// left no detail (an idle pane, or a command already shown whole on line 1).
+fn process_detail_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
+    let detail = row.command_detail.as_deref()?;
+    let left = vec![
+        Span::raw("  "),
+        Span::styled(detail.to_owned(), theme.dim()),
+    ];
+    Some(Line::from(trim_spans_to_width(left, width)))
 }
 
 fn composed_row(

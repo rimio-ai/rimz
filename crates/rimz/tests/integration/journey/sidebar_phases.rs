@@ -16,14 +16,14 @@ use super::{
 use crate::common::Env;
 
 /// Phase 0 → 1 onboarding. Running an agent before wiring its hooks is not
-/// invisible: the pane is live, so it shows as a dim `· codex` process row, and
-/// because a known agent is visible the first-run hint steps aside. But no
-/// `○ codex` *agent* row registers — without an installed hook nothing reaches
-/// the ledger, so the agent carries no status, model, or task. Only after
-/// `rimz hooks install` does a fresh `SessionStart` light up the agent row. The
-/// room is deliberately correct to require `rimz hooks install` (Rimz never
-/// silently rewrites the user's agent config); the empty-room hint says exactly
-/// that.
+/// invisible: the pane is live, so it shows as a dim `○ codex` process row (the
+/// same hollow idle glyph an agent shows, set apart by the dim process tone), and
+/// because a known agent is visible the first-run hint steps aside. But the row
+/// carries no agent enrichment — without an installed hook nothing reaches the
+/// ledger, so no model, status, or task folds in. Only after `rimz hooks install`
+/// does a fresh `SessionStart` light up the agent row with its model. The room is
+/// deliberately correct to require `rimz hooks install` (Rimz never silently
+/// rewrites the user's agent config); the empty-room hint says exactly that.
 ///
 /// The harness fires agents through their *installed* hook, so an un-onboarded
 /// `agent_hook` reaches the ledger as a no-op — exactly what a real agent does
@@ -50,17 +50,20 @@ fn phase0_onboarding_hint_then_wire_then_agent_appears() {
     );
 
     // The user runs codex before wiring it. The pane is live, so it shows as a
-    // process row and the first-run hint steps aside — but with no installed
-    // hook nothing reaches the ledger, so no `○ codex` agent row registers.
+    // process row and the first-run hint steps aside — but with no installed hook
+    // nothing reaches the ledger, so the row carries no agent enrichment. The
+    // idle process row and an idle agent row share the hollow `○`, so the model
+    // (`GPT-5.5`), which only an enriched agent row shows, is what tells them
+    // apart here.
     room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
-    let screen = room.wait_for(|s| s.contains("· codex"), SETTLE);
+    let screen = room.wait_for(|s| s.contains("○ codex"), SETTLE);
     assert!(
-        screen.contains("· codex"),
+        screen.contains("○ codex"),
         "an un-onboarded codex is still a live pane, so it shows as a process row:\n{screen}"
     );
     assert!(
-        !screen.contains("○ codex"),
-        "with no installed hook nothing reaches the ledger, so no agent row registers:\n{screen}"
+        !screen.contains("GPT-5.5"),
+        "with no installed hook nothing reaches the ledger, so the process row carries no agent model:\n{screen}"
     );
 
     // The user follows the hint, installs hooks, and runs codex again. Now the

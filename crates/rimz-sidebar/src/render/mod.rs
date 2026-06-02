@@ -103,7 +103,8 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Al
 }
 
 /// Whether any visible row is in an animated state — a running agent (working
-/// or plan-mode thinking) or a resolver mid-flight. The serve loop uses this to
+/// or plan-mode thinking), a resolver mid-flight, or an active process spinning
+/// on real work (a build, a test, a `sudo` install). The serve loop uses this to
 /// switch to the fast animation tick only while there is live motion to paint;
 /// a calm sidebar (only idle/waiting/done/failed rows, all static) keeps idling
 /// on the slow data tick. A stalled agent is projected to `failed` upstream, so
@@ -113,9 +114,11 @@ pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {
         .worktree_groups
         .iter()
         .flat_map(|group| &group.rows)
-        .any(|row| {
-            row.row_kind == SidebarRowKind::Agent
-                && (row.resolver.is_some() || row.status == Some(rimz::feed::AgentStatus::Running))
+        .any(|row| match row.row_kind {
+            SidebarRowKind::Agent => {
+                row.resolver.is_some() || row.status == Some(rimz::feed::AgentStatus::Running)
+            }
+            SidebarRowKind::Process => row.process_active,
         })
 }
 
@@ -574,7 +577,7 @@ fn help_lines() -> Vec<Line<'static>> {
         Line::styled("↑/↓ select   1-9 jump   ↵ jump", dim),
         Line::styled("␣ next ?!   x dismiss   r reload   ? close", dim),
         Line::styled("⢿ working   ✽ thinking   ? waiting", dim),
-        Line::styled("! attention   ○ idle   ✓ done   · process", dim),
+        Line::styled("! attention   ○ idle   ✓ done   dim = process", dim),
         Line::styled("posture: plan · auto · yolo", dim),
     ]
 }
@@ -686,11 +689,11 @@ mod tests {
         );
         let screen = snapshot_to_screen(&snapshot, 32, 24);
         assert!(
-            screen.contains("· zsh"),
+            screen.contains("○ zsh"),
             "the plain shell still renders:\n{screen}"
         );
         assert!(
-            !screen.contains("· claude"),
+            !screen.contains("○ claude"),
             "the rc host must not read as a claude process row:\n{screen}",
         );
         assert!(
@@ -1210,7 +1213,7 @@ mod tests {
             .with_live_panes(vec![pane("%1", "zsh", "/repo/main")], None);
         let rendered = snapshot_to_screen(&snapshot, 80, 18);
 
-        assert!(rendered.contains("· zsh"));
+        assert!(rendered.contains("○ zsh"));
         assert!(rendered.contains("rimz hooks install"));
     }
 
@@ -1225,11 +1228,28 @@ mod tests {
         );
         let rendered = snapshot_to_screen(&snapshot, 80, 18);
 
-        assert!(rendered.contains("· claude"));
-        assert!(rendered.contains("· node"));
+        assert!(rendered.contains("○ claude"));
+        assert!(rendered.contains("○ node"));
         assert!(!rendered.contains("no agents yet"));
         assert!(!rendered.contains("rimz hooks install"));
         assert!(!rendered.contains("run claude or codex"));
+    }
+
+    #[test]
+    fn active_process_row_keeps_the_animation_tick_alive() {
+        // A pane doing real work spins a braille frame, so the serve loop must hold
+        // the fast animation tick for it just as it does for a running agent —
+        // otherwise the spin crawls on the slow data tick.
+        let busy = snapshot_with(Vec::new(), Vec::new()).with_live_panes(
+            vec![pane("%1", "cargo build --release", "/repo/main")],
+            None,
+        );
+        assert!(has_live_animation(&busy));
+
+        // A bare shell is presence, not motion: it stays on the calm data tick.
+        let idle = snapshot_with(Vec::new(), Vec::new())
+            .with_live_panes(vec![pane("%1", "zsh", "/repo/main")], None);
+        assert!(!has_live_animation(&idle));
     }
 
     #[test]
@@ -1267,7 +1287,7 @@ mod tests {
         assert!(help.contains("keys & legend"));
         assert!(help.contains("? waiting"));
         assert!(help.contains("○ idle"));
-        assert!(help.contains("· process"));
+        assert!(help.contains("dim = process"));
         assert!(help.contains("posture: plan · auto · yolo"));
     }
 

@@ -1,6 +1,7 @@
-//! Minimal `/proc` reader for the `rimz reset` orphan sweep. Linux-only; other
-//! platforms return an empty process list, so the sweep no-ops there rather than
-//! guessing without `/proc`.
+//! Minimal `/proc` reader. The `rimz reset` orphan sweep walks every process
+//! ([`list_processes`]); the sidebar resolves a pane's owning shell from its root
+//! pid ([`comm`]). Linux-only; other platforms return an empty list / `None`, so
+//! callers fall back rather than guessing without `/proc`.
 
 /// One process as the reset sweep needs to see it: its pid, its parent, the real
 /// uid that owns it, and its full command line (argv joined by spaces).
@@ -40,6 +41,29 @@ pub fn list_processes() -> Vec<ProcInfo> {
     Vec::new()
 }
 
+/// The base command name of `pid` from `/proc/<pid>/comm`. A pane's root process
+/// is the shell that owns it, so this names the shell anchor a process row shows
+/// on its primary line while a command runs underneath. Non-Linux, or an
+/// unreadable `/proc`, yields `None` and the caller falls back to the foreground
+/// program.
+#[cfg(target_os = "linux")]
+pub fn comm(pid: u32) -> Option<String> {
+    parse_comm(&std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn comm(_pid: u32) -> Option<String> {
+    None
+}
+
+/// Trim the trailing newline `/proc/<pid>/comm` always carries; an empty name is
+/// no name.
+#[cfg(target_os = "linux")]
+fn parse_comm(raw: &str) -> Option<String> {
+    let name = raw.trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
 #[cfg(target_os = "linux")]
 fn read_proc(pid: u32) -> Option<ProcInfo> {
     let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
@@ -71,4 +95,21 @@ fn read_proc(pid: u32) -> Option<ProcInfo> {
         real_uid: real_uid?,
         cmdline,
     })
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_comm_trims_trailing_newline() {
+        assert_eq!(parse_comm("zsh\n").as_deref(), Some("zsh"));
+        assert_eq!(parse_comm("bash").as_deref(), Some("bash"));
+    }
+
+    #[test]
+    fn parse_comm_rejects_blank() {
+        assert_eq!(parse_comm("\n"), None);
+        assert_eq!(parse_comm("   "), None);
+    }
 }

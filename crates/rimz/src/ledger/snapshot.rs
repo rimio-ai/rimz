@@ -327,6 +327,12 @@ pub struct SidebarRow {
     /// (a process row keeps `status: None`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub process_active: bool,
+    /// The full foreground command of an *active* `process` row (`sudo npm install
+    /// -g @openai/codex`, `cargo build --release`), shown dim on the row's second
+    /// line beneath the shell anchor on `name`. `None` for idle process rows —
+    /// where the single label already says everything — and for every agent row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_detail: Option<String>,
     /// The agent is condensing its context window right now (Claude `PreCompact`,
     /// Codex `SessionStart:compact`). A short-lived transient the renderer paints
     /// as a pulsing head over the base status; never a status bucket of its own,
@@ -617,7 +623,7 @@ impl SidebarSnapshot {
             let is_sidebar = pane
                 .command
                 .as_deref()
-                .is_some_and(|command| command_label(command) == "rimz-sidebar");
+                .is_some_and(|command| program_label(command) == "rimz-sidebar");
             if is_sidebar {
                 continue;
             }
@@ -649,7 +655,7 @@ impl SidebarSnapshot {
             .filter(|pane| {
                 pane.command
                     .as_deref()
-                    .is_none_or(|command| command_label(command) != "rimz-sidebar")
+                    .is_none_or(|command| program_label(command) != "rimz-sidebar")
             })
             // The remote-control host is ambient infrastructure, not work: it no
             // longer renders as a row. Its presence surfaces as the `⇅ rc` flag
@@ -1011,7 +1017,7 @@ impl SidebarOwnView {
             .filter(|pane| {
                 pane.command
                     .as_deref()
-                    .is_none_or(|command| command_label(command) != "rimz-sidebar")
+                    .is_none_or(|command| program_label(command) != "rimz-sidebar")
             })
             .collect();
         let own_view_is_daemon = !non_sidebar_siblings.is_empty()
@@ -1262,9 +1268,11 @@ enum CodexPaneRow<'a> {
     Agent(&'a AgentState),
     /// A wired-but-never-prompted Codex. Codex registers its session lazily on the
     /// first prompt, so the pane has no rollup entry yet; synthesize an idle row
-    /// so it reads `○ codex` at rest instead of a bare `· codex` process row. The
-    /// first turn then swaps in the real bound `Agent` row. Boxed so the rare
-    /// synthesized row doesn't bloat the common `Agent` (a thin reference) variant.
+    /// so it reads as a proper idle *agent* at rest — `○ codex` with its
+    /// started-session gauge and a cockpit tally — instead of a bare, dim `○ codex`
+    /// process row. The first turn then swaps in the real bound `Agent` row. Boxed
+    /// so the rare synthesized row doesn't bloat the common `Agent` (a thin
+    /// reference) variant.
     Idle(Box<SidebarRow>),
 }
 
@@ -1339,6 +1347,7 @@ fn idle_codex_row(pane: &PaneRef) -> SidebarRow {
         options: Vec::new(),
         sub_agents: Vec::new(),
         process_active: false,
+        command_detail: None,
         compacting: false,
     }
 }
@@ -1711,6 +1720,7 @@ fn row_from_agent(agent: &AgentState) -> SidebarRow {
         options: Vec::new(),
         sub_agents: Vec::new(),
         process_active: false,
+        command_detail: None,
         compacting: is_compacting(agent, Timestamp::now()),
     }
 }
@@ -1725,12 +1735,31 @@ fn is_compacting(agent: &AgentState, now: Timestamp) -> bool {
 }
 
 fn row_from_process(pane: &PaneRef) -> SidebarRow {
-    let name = pane
+    let command = pane
         .command
         .as_deref()
-        .filter(|command| !command.is_empty())
-        .map(process_label)
+        .filter(|command| !command.is_empty());
+    let program = command
+        .map(program_label)
         .unwrap_or_else(|| "process".to_owned());
+    let active = command.is_some_and(process_is_active);
+    // An active pane anchors its primary line on the shell that owns it (its root
+    // process), so the line stays put as commands come and go while the live
+    // command rides the second line. An idle pane keeps its foreground program as
+    // its one label. Where `/proc` can't name the shell, fall back to the program.
+    let name = if active {
+        pane.pane_pid
+            .and_then(crate::proc::comm)
+            .unwrap_or_else(|| program.clone())
+    } else {
+        program.clone()
+    };
+    // The full command earns a second line only when it adds something past the
+    // primary label — an active pane whose command isn't already its whole name.
+    let command_detail = command
+        .filter(|_| active)
+        .map(ToOwned::to_owned)
+        .filter(|full| *full != name);
     SidebarRow {
         row_kind: SidebarRowKind::Process,
         id: pane.pane_id.to_string(),
@@ -1755,26 +1784,17 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
         resolver: None,
         options: Vec::new(),
         sub_agents: Vec::new(),
-        process_active: pane
-            .command
-            .as_deref()
-            .filter(|command| !command.is_empty())
-            .is_some_and(process_is_active),
+        process_active: active,
+        command_detail,
         compacting: false,
     }
 }
 
-fn process_label(command: &str) -> String {
-    command_agent_kind(command)
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| command_label(command))
-}
-
 /// Whether a `process` pane is doing genuine work — worth the running spinner —
-/// rather than sitting idle. Classified by the command's base name: bare shells
-/// and the interactive TUIs a user just sits in stay quiet; everything else (a
-/// build, a test, a script) reads as active, so real work never hides as idle
-/// chrome. An unknown command is active by default.
+/// rather than sitting idle. Classified by the program it runs (past any `sudo`):
+/// bare shells and the interactive TUIs a user just sits in stay quiet;
+/// everything else (a build, a test, a script) reads as active, so real work
+/// never hides as idle chrome. An unknown command is active by default.
 fn process_is_active(command: &str) -> bool {
     // A known agent kind (claude/codex) or the shared `node` host is a transient
     // pre-enrichment state that becomes a proper agent row — never animate it as a
@@ -1791,31 +1811,83 @@ fn process_is_active(command: &str) -> bool {
         "vim", "nvim", "vi", "nano", "emacs", "helix", "hx", "less", "more", "most", "man", "top",
         "htop", "btop", "btm", "atop", "lazygit", "gitui", "tig", "k9s",
     ];
-    !IDLE.contains(&command_label(command).as_str())
+    !IDLE.contains(&program_label(command).as_str())
 }
 
-fn command_label(command: &str) -> String {
-    let command = command
-        .split_whitespace()
-        .next()
-        .filter(|part| !part.is_empty())
-        .unwrap_or(command);
-    std::path::Path::new(command)
+/// The base name of the program a command runs, seeing past a `sudo` wrapper and
+/// through a JS launcher to its script: `npm` for `sudo npm install …`, `codex`
+/// for `node /usr/bin/codex`, `cargo` for `/usr/bin/cargo build`. The label a
+/// process row shows and the token its agent-kind match keys off.
+fn program_label(command: &str) -> String {
+    basename(effective_program(command)).to_owned()
+}
+
+/// The file name of a path-or-bare token (`codex` from `/usr/bin/codex`), or the
+/// token itself when it has no path component.
+fn basename(token: &str) -> &str {
+    std::path::Path::new(token)
         .file_name()
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
-        .unwrap_or(command)
-        .to_owned()
+        .unwrap_or(token)
 }
 
+/// The program a command names — seeing past a leading `sudo` and its options,
+/// and, for a JS launcher (`node`/`npx`), through to the script it runs. So
+/// `node /usr/bin/codex` is the codex script, while `sudo npm install -g
+/// @openai/codex` is `npm` (an install whose argument is a package, not a program
+/// being run). Falls back to the whole command when nothing names a program (a
+/// bare `sudo`).
+fn effective_program(command: &str) -> &str {
+    let mut tokens = command.split_whitespace();
+    let Some(mut program) = tokens.next() else {
+        return command;
+    };
+    // Step past a `sudo` wrapper and its options to the wrapped program.
+    if basename(program) == "sudo" {
+        while let Some(token) = tokens.next() {
+            if let Some(flag) = token.strip_prefix('-') {
+                // `-u user`, `-g group`, … carry their value in the next token.
+                if SUDO_VALUE_FLAGS.contains(&flag) {
+                    tokens.next();
+                }
+            } else if token.contains('=') {
+                // `sudo VAR=val cmd` — environment assignments precede the program.
+            } else {
+                program = token;
+                break;
+            }
+        }
+    }
+    // A JS launcher runs the script named by its first non-flag argument, so the
+    // agent is that script (`node /usr/bin/codex` → codex), not the launcher.
+    if LAUNCHERS.contains(&basename(program))
+        && let Some(script) = tokens.find(|token| !token.starts_with('-'))
+    {
+        return script;
+    }
+    program
+}
+
+/// Single-letter `sudo` options that consume the following token as their value,
+/// so it is skipped rather than mistaken for the wrapped program.
+const SUDO_VALUE_FLAGS: &[&str] = &["u", "g", "h", "p", "C", "U", "r", "t", "T", "R"];
+
+/// JS launchers whose agent identity is the script they run, not the launcher
+/// binary — so `node …/codex` reads as codex. A package manager like `npm` is not
+/// here: `npm install -g @openai/codex` installs a package, it does not run one.
+const LAUNCHERS: &[&str] = &["node", "nodejs", "npx"];
+
+/// The agent kind a command launches, matched against the program it runs (past
+/// any `sudo`, and through a `node`/`npx` launcher to its script) — never an
+/// install target, so `sudo npm install -g @openai/codex` is an npm process while
+/// `codex`, `sudo codex`, and `node /usr/bin/codex` are codex.
 fn command_agent_kind(command: &str) -> Option<&'static str> {
-    command.split_whitespace().find_map(|part| {
-        let label = command_label(part);
-        crate::agents::KNOWN_AGENTS
-            .iter()
-            .copied()
-            .find(|agent| label == *agent)
-    })
+    let program = program_label(command);
+    crate::agents::KNOWN_AGENTS
+        .iter()
+        .copied()
+        .find(|agent| program == *agent)
 }
 
 /// A standalone attention row for a pending ask. Two callers, two shapes: an
@@ -1878,6 +1950,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         options: item.options.clone(),
         sub_agents: Vec::new(),
         process_active: false,
+        command_detail: None,
         compacting: false,
     })
 }
@@ -2718,6 +2791,82 @@ mod tests {
         let mut agent = agent("claude", id, status, PermissionPosture::Default, rank);
         agent.worktree_path = Some(path.to_owned());
         agent
+    }
+
+    #[test]
+    fn classifier_sees_past_sudo_to_the_real_program() {
+        // The bug: a `codex` token buried in install args misread the pane as a
+        // codex agent. Classification keys off the program, never the arguments.
+        assert_eq!(
+            command_agent_kind("sudo npm install -g @openai/codex"),
+            None
+        );
+        assert_eq!(program_label("sudo npm install -g @openai/codex"), "npm");
+        // A real agent under sudo is still that agent; a bare invocation too.
+        assert_eq!(command_agent_kind("sudo codex"), Some("codex"));
+        assert_eq!(command_agent_kind("codex --foo"), Some("codex"));
+        assert_eq!(command_agent_kind("claude"), Some("claude"));
+        // A JS launcher runs its script, so `node …/codex` is codex — the script
+        // is the program, unlike npm's install *target*.
+        assert_eq!(command_agent_kind("node /usr/bin/codex"), Some("codex"));
+        assert_eq!(
+            command_agent_kind("node --inspect /usr/bin/codex"),
+            Some("codex")
+        );
+        assert_eq!(program_label("node /usr/bin/codex"), "codex");
+        // A bare launcher with no script is just the host (handled as idle `node`).
+        assert_eq!(command_agent_kind("node"), None);
+        // sudo options, including a value-taking `-u user`, skip to the program.
+        assert_eq!(
+            program_label("sudo -E -u root npm i -g @openai/codex"),
+            "npm"
+        );
+        assert_eq!(
+            command_agent_kind("sudo -u root npm i -g @openai/codex"),
+            None
+        );
+        assert_eq!(
+            command_agent_kind("sudo node /usr/bin/codex"),
+            Some("codex")
+        );
+        // A path-qualified program resolves to its basename.
+        assert_eq!(program_label("/usr/bin/cargo build"), "cargo");
+    }
+
+    #[test]
+    fn process_activity_follows_the_real_program() {
+        // A sudo-wrapped build is real work; an agent host and bare shells are not.
+        assert!(process_is_active("sudo npm install -g @openai/codex"));
+        assert!(process_is_active("cargo build --release"));
+        assert!(!process_is_active("codex"));
+        assert!(!process_is_active("sudo codex"));
+        assert!(!process_is_active("zsh"));
+        assert!(!process_is_active("nvim src/main.rs"));
+    }
+
+    #[test]
+    fn process_row_carries_the_full_command_only_when_active() {
+        // Active: line 2 shows the full command; line 1 falls back to the program
+        // when `/proc` can't name the owning shell (no pid in tests).
+        let active = row_from_process(&pane("%1", "sudo npm install -g @openai/codex", "/repo"));
+        assert_eq!(active.row_kind, SidebarRowKind::Process);
+        assert_eq!(active.name, "npm");
+        assert!(active.process_active);
+        assert_eq!(
+            active.command_detail.as_deref(),
+            Some("sudo npm install -g @openai/codex")
+        );
+
+        // Idle shell: one clean line, no detail.
+        let idle = row_from_process(&pane("%2", "zsh", "/repo"));
+        assert_eq!(idle.name, "zsh");
+        assert!(!idle.process_active);
+        assert_eq!(idle.command_detail, None);
+
+        // An active command already equal to its label adds no redundant line.
+        let bare = row_from_process(&pane("%3", "cargo", "/repo"));
+        assert!(bare.process_active);
+        assert_eq!(bare.command_detail, None);
     }
 
     #[test]
@@ -4827,8 +4976,9 @@ mod tests {
     fn wired_unprompted_codex_pane_renders_as_idle_agent() {
         // Codex registers its session lazily — `SessionStart` rides in with the
         // first prompt — so a launched-but-never-prompted `codex` pane has no
-        // agent state. When Codex is wired it must read as an idle agent
-        // (`○ codex`), not a bare `· codex` process row, the moment it opens.
+        // agent state. When Codex is wired it must read as an idle agent (`○ codex`
+        // with its gauge and a cockpit tally), not a bare, dim process row, the
+        // moment it opens.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let mut snapshot =
             SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), Vec::new());

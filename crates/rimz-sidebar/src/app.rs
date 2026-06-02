@@ -254,11 +254,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     );
                 }
             }
-            // The poll timeout drives two decoupled layers. Render: while a
-            // running agent animates, advance the spin frame on the cached
-            // snapshot — pure in-process redraw, never gated on fetch state, so
-            // the spin stays smooth at `ANIMATION_FRAME` regardless of fetch
-            // latency. Data: a latency-tolerant backstop refetch, fired only when
+            // The poll timeout drives two decoupled layers. Render: while a row
+            // animates (a running agent, a resolver, or an active process),
+            // advance the spin frame on the cached snapshot — pure in-process
+            // redraw, never gated on fetch state, so the spin stays smooth at
+            // `ANIMATION_FRAME` regardless of fetch latency. Data: a latency-tolerant backstop refetch, fired only when
             // nothing has refreshed data for a full `tick`. Ledger deltas (which
             // include the statusline `$`/token push) are the primary data
             // channel; this backstop only catches pane/git drift that fires no
@@ -794,7 +794,8 @@ fn next_health(previous: &Health, failure: Option<String>) -> Health {
     }
 }
 
-/// Animation tick: how often a running agent's head advances a spin frame. Pure
+/// Animation tick: how often an animated row advances a spin frame — a running
+/// agent's head, a resolver, or an active process spinning on real work. Pure
 /// in-process redraw from the cached snapshot — it never forks a fetch — so the
 /// spin layer is decoupled from the data layer and stays smooth regardless of
 /// fetch latency. Clamped against the data tick so a slow `tick_seconds` never
@@ -1859,6 +1860,7 @@ mod tests {
                     options: Vec::new(),
                     sub_agents: Vec::new(),
                     process_active: false,
+                    command_detail: None,
                     compacting: false,
                 })
                 .collect(),
@@ -1897,6 +1899,7 @@ mod tests {
             options: Vec::new(),
             sub_agents: Vec::new(),
             process_active: false,
+            command_detail: None,
             compacting: false,
         };
         snapshot.worktree_groups = vec![rimz::SidebarWorktreeGroup {
@@ -1948,6 +1951,7 @@ mod tests {
             options: Vec::new(),
             sub_agents: Vec::new(),
             process_active: false,
+            command_detail: None,
             compacting: false,
         };
         let process = rimz::SidebarRow {
@@ -1975,6 +1979,7 @@ mod tests {
             options: Vec::new(),
             sub_agents: Vec::new(),
             process_active: false,
+            command_detail: None,
             compacting: false,
         };
         snapshot.worktree_groups = vec![rimz::SidebarWorktreeGroup {

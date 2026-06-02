@@ -57,7 +57,7 @@ One vocabulary runs through the whole sidebar: a shape carries the meaning, colo
 | `⠙`   | resolving  | a resolver is answering on the bridge — braille spin | pending, being handled |
 | `○`   | idle       | alive, nothing to do | no |
 | `✓`   | done       | finished cleanly | no |
-| `·`   | process    | a pane with no agent (shell, editor); shows the `⢿` spinner while genuinely busy | no |
+| `○`/`⢿` dim | process | a pane with no agent (shell, editor); idle shows the hollow `○`, real work the `⢿` spinner — both in the dim process tone | no |
 
 Two short-lived heads ride over the base status on the leading cell, so they never earn a cockpit bucket of their own:
 
@@ -191,14 +191,15 @@ A `?` waiting row reads the same with a `?` glyph. The row carries *who* needs y
 
 ### Process rows
 
-A pane no agent has stamped is a single dim line — a quiet `·` for an idle shell or editor, the `⢿` spinner (in dim chrome, never the agent's clay) for a pane doing real work like a build or test:
+A pane no agent has stamped reads in the dim process tone — a hollow `○` (the same idle glyph an agent shows, never the agent's clay) for an idle shell or editor, the `⢿` spinner for a pane doing real work like a build, test, or install. An active pane anchors its primary line on the shell that owns it, so the line stays put as commands come and go, and carries the live command in full on a dim second line:
 
 ```
-· zsh
-⢿ cargo
+○ zsh
+⢿ zsh
+    sudo npm install -g @openai/codex
 ```
 
-No status, no meter, never counted in the cockpit — it is presence, not a cue. It is still a jump target, and the moment an agent's hook stamps that pane it becomes that agent's card.
+The label is the program the pane runs, read past a `sudo` wrapper and through a `node`/`npx` launcher (`sudo npm install -g @openai/codex` is an `npm` install, not a codex agent; `node …/codex` is codex). No status, no meter, never counted in the cockpit — it is presence, not a cue. It is still a jump target, and the moment an agent's hook stamps that pane it becomes that agent's card.
 
 ### Worktree groups and the selection lane
 
@@ -286,7 +287,7 @@ Pinned to the bottom edge, below all three zones. The body is truncated before t
  ↑/↓ select   1-9 jump   ↵ jump
  ␣ next ?!   x dismiss   r reload   ? close
  ⢿ working   ✽ thinking   ? waiting
- ! attention   ○ idle   ✓ done   · process
+ ! attention   ○ idle   ✓ done   dim = process
  posture: plan · auto · yolo
 ```
 
