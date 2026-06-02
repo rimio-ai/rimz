@@ -512,7 +512,14 @@ impl FeedItem {
     }
 }
 
-/// Five-value agent status rollup; the agent owns this, Rimz observes it.
+/// Agent status as the sidebar reads it. The first five are the lifecycle
+/// rollup the agent owns and Rimz observes; [`RateLimited`](AgentStatus::RateLimited)
+/// is the one Rimz-*derived* projection — never emitted by a hook, only
+/// projected at snapshot time when a resting agent's account budget is spent
+/// (see [`is_rate_limited`]), the same way a stalled `Running` agent is
+/// projected to `Failed`. It lives in the one status enum so it shares the
+/// cockpit tally, ranking, and glyph machinery the lifecycle states flow
+/// through.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentStatus {
@@ -521,6 +528,11 @@ pub enum AgentStatus {
     Idle,
     Success,
     Failed,
+    /// Resting while the account's rate-limit window is spent — parked until the
+    /// window resets, auto-resumable with a single `continue`. Attention-class
+    /// but non-actionable: there is nothing to do but wait. Projected from a
+    /// resting status by [`is_rate_limited`], never reported by the agent.
+    RateLimited,
 }
 
 /// How long a `running` agent may record no activity before the sidebar treats
@@ -540,10 +552,34 @@ pub const STALL_WINDOW_SECS: i64 = 10 * 60;
 /// `running` can stall: every other status is terminal, idle, or already an
 /// attention state. The sidebar projects a stalled agent to the attention
 /// bucket so a wedged agent becomes actionable instead of a frozen spinner.
+///
+/// A `running` agent that has merely delegated to subagents is *not* stalled —
+/// its work is the children's heartbeats, not its own — so the projection
+/// caller suppresses this while the agent has a live child (see the sidebar's
+/// "waiting for subagents" derivation).
 pub fn is_stalled(status: AgentStatus, last_activity: Timestamp, now: Timestamp) -> bool {
     status == AgentStatus::Running
         && now.duration_since(last_activity).as_secs() >= STALL_WINDOW_SECS
 }
+
+/// Whether a resting agent should project to [`AgentStatus::RateLimited`]: its
+/// account's rate-limit budget is spent (`account_limited`) while it sits in a
+/// calm, non-actionable state — `Idle` or `Success`. A `Running` agent is still
+/// working (the window may have just tipped; its turn finishes first), a
+/// `Waiting` agent needs a human answer, and a `Failed` agent has its own
+/// problem to surface — none of those are overridden. Like [`is_stalled`], this
+/// is a Rimz-derived projection over enrichment, never a status the agent
+/// reports.
+pub fn is_rate_limited(status: AgentStatus, account_limited: bool) -> bool {
+    account_limited && matches!(status, AgentStatus::Idle | AgentStatus::Success)
+}
+
+/// How long after its last compaction hook an agent still reads as
+/// "compacting". Compaction is bracketed — the next lifecycle event clears
+/// [`AgentState::compacting_since`] — but a crash mid-compact would otherwise
+/// leave the head pulsing forever, so the projection also expires it past this
+/// window. Generous: a large context can take a while to condense.
+pub const COMPACTING_WINDOW_SECS: i64 = 90;
 
 /// Permission posture pill: which position the agent's permission slider sits
 /// in. The agent owns this; Rimz observes and surfaces it. It is the single
@@ -631,6 +667,13 @@ pub struct AgentState {
     /// past turn and drops from the parent's expanded list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_started_at: Option<Timestamp>,
+    /// When this agent last began compacting its context window — the timestamp
+    /// of its most-recent compaction hook (Claude `PreCompact`, Codex
+    /// `SessionStart:compact`). Set by the rollup, cleared by the next lifecycle
+    /// event (compaction done); the sidebar renders a transient "compacting"
+    /// head while it is recent (see [`COMPACTING_WINDOW_SECS`]). Display-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compacting_since: Option<Timestamp>,
     pub last_seen: Timestamp,
     pub last_activity: Timestamp,
 }
@@ -685,5 +728,41 @@ mod tests {
         assert!(!FeedStatus::Resolved.allows_resolution());
         assert!(FeedStatus::Resolved.is_terminal());
         assert!(!FeedStatus::Pending.is_terminal());
+    }
+
+    #[test]
+    fn agent_status_round_trips_including_rate_limited() {
+        for status in [
+            AgentStatus::Running,
+            AgentStatus::Waiting,
+            AgentStatus::Idle,
+            AgentStatus::Success,
+            AgentStatus::Failed,
+            AgentStatus::RateLimited,
+        ] {
+            let wire = serde_json::to_string(&status).unwrap();
+            let back: AgentStatus = serde_json::from_str(&wire).unwrap();
+            assert_eq!(status, back);
+        }
+        // The derived state has a stable snake_case wire form like the rest.
+        assert_eq!(
+            serde_json::to_string(&AgentStatus::RateLimited).unwrap(),
+            "\"rate_limited\""
+        );
+    }
+
+    #[test]
+    fn rate_limited_only_overrides_resting_states() {
+        // A spent account parks a calm agent — nothing to do but wait.
+        assert!(is_rate_limited(AgentStatus::Idle, true));
+        assert!(is_rate_limited(AgentStatus::Success, true));
+        // ...but never one that is working, blocked on a human, or already
+        // failed: those are not resting, or carry a more urgent meaning.
+        assert!(!is_rate_limited(AgentStatus::Running, true));
+        assert!(!is_rate_limited(AgentStatus::Waiting, true));
+        assert!(!is_rate_limited(AgentStatus::Failed, true));
+        // No spent budget, no projection.
+        assert!(!is_rate_limited(AgentStatus::Idle, false));
+        assert!(!is_rate_limited(AgentStatus::Success, false));
     }
 }

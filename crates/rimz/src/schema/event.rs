@@ -95,6 +95,7 @@ impl EventEnvelope {
             "todo_total": observation.todo_total,
             "pane_id": observation.pane_id.as_ref().map(|id| id.as_str()),
             "parent_agent_id": observation.parent_agent_id,
+            "compacting": observation.compacting,
         });
         Self::new(
             workspace_id,

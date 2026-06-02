@@ -77,6 +77,10 @@ Balance is account-scoped, but the *freshest* session is not the truest reading:
 [`stable_window`](../../crates/rimz/src/ledger/snapshot.rs) instead picks each window deterministically across every session of the kind: it drops any reading whose reset has already passed (stale), then keeps the **most-drained survivor** (highest `used_percentage`, so the bar never over-promises remaining budget).
 Same inputs, same bar, regardless of which session reported last.
 
+### Spent-window verdict → the rate-limited head
+
+A window is **spent** at `used_percentage == 100` with its reset still ahead ([`RateLimitWindow::is_spent`](../../crates/rimz/src/agents/context.rs)). When either window of a kind is spent, the sidebar parks every *resting* (`idle`/`success`) agent of that kind to the derived `rate_limited` status — account-scoped, so a session that just launched into a spent account is parked too. This is display, not correctness: the rollup keeps each agent's true lifecycle status, and the projection and its glyph live in [agent.md → The state machine](./agent.md#the-state-machine) and [the interface legend](../interface/sidebar.md#reading-the-glyphs).
+
 ### Persistence across idle sessions
 
 A session ending or going idle would otherwise empty the dashboard, so the producer mirrors each resolved window into an account-scoped `rate_limits.json` cache (atomic write, single-flighted, reaped with the workspace runtime dir like the other caches) and reads it back when no live session reports one:

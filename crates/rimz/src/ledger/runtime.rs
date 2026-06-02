@@ -152,6 +152,7 @@ mod tests {
             todo_total: None,
             context: None,
             turn_started_at: None,
+            compacting_since: None,
             last_seen: Timestamp::UNIX_EPOCH,
             last_activity: Timestamp::UNIX_EPOCH,
         }

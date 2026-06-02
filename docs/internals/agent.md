@@ -17,6 +17,8 @@ The observation is agent-agnostic by construction, so everything below is too: a
 
 [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs) and [`AgentState`](../../crates/rimz/src/feed.rs) are the field catalog; the lifetimes above are the rule those types do not state.
 
+A compaction hook (`compacting: true`) is a fifth, transient lifetime: it stamps `compacting_since` and keeps the prior status (compaction is a head the sidebar paints, not a transition), and the next lifecycle event clears it. The projection also expires the marker past a short window, so a crash mid-compact can never pulse the head forever.
+
 `model` is stored **canonicalized** — a trailing capability tag is stripped (`claude-opus-4-8[1m]` → `claude-opus-4-8`). The tag rides only the fresh-launch payload; later events carry the bare id, so without canonicalization the `model` carry-forward would flip `…[1m]` → `…` the first time a suffix-less event arrived. Canonicalizing at reduce time pins one stable label while the event log stays faithful to the raw payload.
 
 ### Instance identity and age
@@ -51,7 +53,14 @@ A turn-end observation resolves the turn to `success`, or `failed` on an error s
 
 `waiting` is **not** a lifecycle transition — it is a pending blocking feed item joined to the agent (the feed channel; see [hooks.md → Two hook channels](./hooks.md#two-hook-channels)). The lifecycle channel drives the other four.
 
-The displayed cell refines `running` two ways without changing the rollup: a `running` agent whose permission slider is `plan` renders as **thinking**, and one silent past the stall window escalates to the attention `!` (see [Liveness and presence](#liveness-and-presence)).
+The **displayed** status refines the rollup without changing it — `snapshot.agents` keeps the agent-owned truth; the projection ([sidebar.md](./sidebar.md)) decides what the row shows:
+
+- a `running` agent whose permission slider is `plan` renders as **thinking**;
+- a `running` agent silent past the stall window escalates to the attention `!` (see [Liveness and presence](#liveness-and-presence)) — *unless* it has a live subagent, in which case it is **waiting on its children** (a quiet wave, exempt from the stall escalation) rather than wedged;
+- a resting (`idle`/`success`) agent on an account whose rate-limit window is spent projects to **`rate_limited`** — a sixth, Rimz-*derived* status ([`is_rate_limited`](../../crates/rimz/src/feed.rs)), never emitted by a hook, that joins the cockpit tally and ranks just under the actionable attention states (account-spread: every resting agent of a spent kind is parked, including one that just launched into it);
+- a `compacting` head pulses over any base status while the agent condenses its context window.
+
+`rate_limited` is the rate-limit analogue of the stall projection: both read enrichment plus liveness to refine the displayed cell, and both leave `snapshot.agents` holding the true lifecycle status.
 
 ### Plan mode as a sticky posture
 

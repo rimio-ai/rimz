@@ -51,6 +51,7 @@ One vocabulary runs through the whole sidebar: a shape carries the meaning, colo
 |-------|-------|---------|-----------|
 | `?`   | waiting    | the agent asked something; answer in its pane | yes — yellow, reddens when ignored |
 | `!`   | attention  | a failed turn, or a working agent gone silent past the stall window | yes — yellow, reddens when ignored |
+| `⏸`   | rate-limited | resting on an account whose rate-limit window is spent — parked until it resets, resumes with a `continue` | waiting on the reset — held amber, never reddens |
 | `⢿`   | working    | running and editing — animates `⣾⣽⣻⢿⡿⣟⣯⣷` in clay | no |
 | `✽`   | thinking   | running in read-only plan mode — sparkles `· ✢ ✳ ✶ ✻ ✽` in clay | no |
 | `⠙`   | resolving  | a resolver is answering on the bridge — braille spin | pending, being handled |
@@ -58,7 +59,14 @@ One vocabulary runs through the whole sidebar: a shape carries the meaning, colo
 | `✓`   | done       | finished cleanly | no |
 | `·`   | process    | a pane with no agent (shell, editor); shows the `⢿` spinner while genuinely busy | no |
 
-Only live states move. The two attention glyphs (`?` / `!`) hold still and **redden from yellow to red** once a row sits unanswered past the neglect window (`[sidebar] attention_redden_secs`) — a fresh ask reads calm-urgent, a long-ignored one heats up. A working agent that goes silent past the stall window escalates to a static `!` instead of spinning on.
+Two short-lived heads ride over the base status on the leading cell, so they never earn a cockpit bucket of their own:
+
+| head | meaning |
+|------|---------|
+| `▇` compacting | condensing its context window — pulses `▁▃▄▅▆▇▆▅▄▃` in violet, then returns to its resting head |
+| `´` waiting on subagents | the main agent delegated to its children; the work is in the rows below — a low clay wave (`_` bobbing up to `´` and back) |
+
+Only live states move. The two actionable attention glyphs (`?` / `!`) hold still and **redden from yellow to red** once a row sits unanswered past the neglect window (`[sidebar] attention_redden_secs`) — a fresh ask reads calm-urgent, a long-ignored one heats up. A working agent that goes silent past the stall window escalates to a static `!` instead of spinning on. The `⏸` rate-limited head is attention-class but parked: it holds still in a held amber and never reddens, since waiting for the reset is the only move. A parent waiting on subagents is exempt from the stall escalation — its quiet wave is the children's work, not a wedge.
 
 **Posture — the permission pill, sized by blast radius.**
 
@@ -108,7 +116,7 @@ The top block. Fixed height, so the rows below it never jump as agents change st
 
 - **Identity.** The workspace name behind `⌘`, with the project path dim on the right edge (home-abbreviated to `~/…`; it left-truncates with a leading `…` before it ever crowds the name).
 - **Head-count and spend.** `✦` is the agents you launched; `✧` (only when present) is the subagents they spawned this turn. The fleet's total spend pins right. An empty room reads `✦ 0` with no spend.
-- **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (yellow, reddening when any of their rows goes stale), then a free `○` idle agent grouped at its right edge — calm, but a free agent wants work. The **right cluster** is the busy tail: `✽` thinking before `⢿` working (you read a plan before it acts), then `✓` done. Every bucket always shows, so a zero reads a faint `? 0` and the line is scannable by position.
+- **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (yellow, reddening when any of their rows goes stale), a `⏸` rate-limited count right after them (held amber, parked), then a free `○` idle agent grouped at its right edge — calm, but a free agent wants work. The **right cluster** is the busy tail: `✽` thinking before `⢿` working (you read a plan before it acts), then `✓` done. The fixed buckets always show, so a zero reads a faint `? 0` and the line is scannable by position; the `⏸` bucket is the one exception — a rare, non-actionable state, it appears only when an agent is actually parked, so it never costs width on a narrow rail.
 - **Fleet totals.** Time worked behind a teal `◷`, the `◇` token total, and `◆` commits ahead of trunk. A field that no agent reported is dropped.
 
 An **empty room** has no make-up line at all — just identity and the `✦ 0` head-count:

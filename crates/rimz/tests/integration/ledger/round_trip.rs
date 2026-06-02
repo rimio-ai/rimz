@@ -627,6 +627,7 @@ fn runtime_projection_reads_under_the_workspace_lock() {
         todo_total: None,
         pane_id: None,
         parent_agent_id: None,
+        compacting: false,
     };
     let envelope = EventEnvelope::agent_lifecycle(
         h.workspace_id.clone(),

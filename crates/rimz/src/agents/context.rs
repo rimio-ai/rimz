@@ -155,6 +155,34 @@ pub struct RateLimitWindow {
     pub resets_at: Option<Timestamp>,
 }
 
+impl RateLimitWindow {
+    /// Whether this window's budget is spent — the provider reports the cap as
+    /// `used_percentage == 100` once it starts refusing requests, so any agent
+    /// on the account can only wait for [`resets_at`](Self::resets_at). The
+    /// sidebar projects every resting agent of the kind to
+    /// [`AgentStatus::RateLimited`](crate::feed::AgentStatus::RateLimited) when
+    /// this is true.
+    pub fn is_spent(&self) -> bool {
+        self.used_percentage.is_some_and(|pct| pct >= 100)
+    }
+}
+
+impl AgentRateLimits {
+    /// Whether either the 5-hour or the 7-day window is
+    /// [`spent`](RateLimitWindow::is_spent) — the account-level "nothing to do
+    /// but wait" verdict the sidebar projects onto every resting agent of the
+    /// kind.
+    pub fn any_spent(&self) -> bool {
+        self.five_hour
+            .as_ref()
+            .is_some_and(RateLimitWindow::is_spent)
+            || self
+                .seven_day
+                .as_ref()
+                .is_some_and(RateLimitWindow::is_spent)
+    }
+}
+
 /// The pull request the agent associates with the session, when it reports one.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentPullRequest {
@@ -164,4 +192,53 @@ pub struct AgentPullRequest {
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_state: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn window(used: Option<u8>) -> RateLimitWindow {
+        RateLimitWindow {
+            used_percentage: used,
+            resets_at: None,
+        }
+    }
+
+    #[test]
+    fn window_is_spent_only_at_the_cap() {
+        assert!(window(Some(100)).is_spent());
+        assert!(!window(Some(99)).is_spent());
+        assert!(!window(Some(0)).is_spent());
+        // An unreported window is not a spent one.
+        assert!(!window(None).is_spent());
+    }
+
+    #[test]
+    fn any_spent_reads_either_window() {
+        let spent = || Some(window(Some(100)));
+        let fresh = || Some(window(Some(10)));
+        assert!(
+            AgentRateLimits {
+                five_hour: spent(),
+                seven_day: fresh()
+            }
+            .any_spent()
+        );
+        assert!(
+            AgentRateLimits {
+                five_hour: fresh(),
+                seven_day: spent()
+            }
+            .any_spent()
+        );
+        assert!(
+            !AgentRateLimits {
+                five_hour: fresh(),
+                seven_day: fresh()
+            }
+            .any_spent()
+        );
+        assert!(!AgentRateLimits::default().any_spent());
+    }
 }

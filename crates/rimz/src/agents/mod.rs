@@ -174,6 +174,12 @@ pub struct AgentLifecycleObservation {
     /// agents. Identity lifetime in the reducer, so a child row links to its
     /// parent row by `(kind, parent_agent_id)` for the whole child's life.
     pub parent_agent_id: Option<String>,
+    /// Whether this event marks the agent compacting its context window (Claude
+    /// `PreCompact`, Codex `SessionStart:compact`). The reducer stamps
+    /// [`AgentState::compacting_since`](crate::feed::AgentState::compacting_since)
+    /// from it without changing the agent's lifecycle status — compaction is a
+    /// transient head the sidebar shows, not a state transition.
+    pub compacting: bool,
 }
 
 impl AgentLifecycleObservation {
@@ -197,6 +203,7 @@ impl AgentLifecycleObservation {
             todo_total: None,
             pane_id: None,
             parent_agent_id: None,
+            compacting: false,
         }
     }
 }

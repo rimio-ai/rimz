@@ -1382,6 +1382,7 @@ mod tests {
             todo_total: None,
             context: None,
             turn_started_at: None,
+            compacting_since: None,
             last_seen: now,
             last_activity: now,
         }

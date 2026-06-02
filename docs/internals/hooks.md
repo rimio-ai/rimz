@@ -89,6 +89,7 @@ Native event → internal mapping. The appendix says *which native events are wi
 | `Notification`                | lifecycle     | none (silent) -                                                                                                             |
 | `PreToolUse` (broad)          | lifecycle     | none - audit depth                                                                                                          |
 | `PostToolUse`                 | lifecycle     | none - `TodoWrite` todos; context/tokens; per-tool posture sample                                                           |
+| `PreCompact`                  | lifecycle     | unchanged - sets `compacting` (keeps the prior status; the head pulses, see [agent.md](./agent.md#the-state-machine))       |
 | `PermissionRequest`           | blocking-feed | `waiting` - sync                                                                                                            |
 | `PreToolUse: ExitPlanMode`    | blocking-feed | `waiting` - plan approval                                                                                                   |
 | `PreToolUse: AskUserQuestion` | blocking-feed | `waiting` - user question                                                                                                   |
@@ -119,7 +120,7 @@ The neutral path is empty stdout. Exact bytes are the inline goldens in [`claude
 
 | Native event                         | Channel       | `observe_lifecycle` → status | Normalized fields                                |
 | ------------------------------------ | ------------- | ---------------------------- | ------------------------------------------------ |
-| `SessionStart`                       | lifecycle     | `idle`                       | posture, model, effort                           |
+| `SessionStart`                       | lifecycle     | `idle`                       | posture, model, effort; `source = "compact"` sets `compacting` |
 | `UserPromptSubmit`                   | lifecycle     | `running`                    | `task`/`prompt`                                  |
 | `SubagentStart`                      | lifecycle     | `running`                    | keyed by child `agent_id`; `task` = `agent_type` |
 | `SubagentStop`                       | lifecycle     | `idle`                       | child row; clear task                            |
@@ -140,6 +141,8 @@ Never emit `updatedInput`, `updatedPermissions`, or `interrupt` for a Codex perm
 **Cap & install.** `hook_cap` is 60s (`CODEX_HOOK_CAP`); chain budgets must account for the shorter ceiling. Install writes inline `[[hooks.Event]]` tables in `~/.codex/config.toml` with the same `--event`-free command and substring reclaim as Claude; the legacy `[hooks.rimz]` table is ignored by Codex and removed on uninstall.
 
 **Subagents.** Codex 0.134 routes thread-spawned subagents through `SubagentStart`/`SubagentStop` (a child `agent_id`, the parent root as `session_id` → `parent_agent_id`), keyed by the child so a subagent permission request replaces the subagent row, not the parent.
+
+**Compaction.** Codex has no dedicated pre-compaction hook; it re-fires `SessionStart` with `source = "compact"` once the context is condensed. That source flags `compacting` (the other sources — `startup`/`resume`/`clear` — do not), so the sidebar shows a brief compacting head. Claude instead fires a true `PreCompact` *before* compaction (see the Claude appendix), so its head leads the work rather than trailing it.
 
 ### Context enrichment
 

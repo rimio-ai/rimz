@@ -23,9 +23,10 @@ use super::fmt::{
 };
 use super::labels::{
     TOKENS_CACHED, TOKENS_IN, TOKENS_OUT, agent_glyph, agent_style, attention_glyph_style,
-    context_severity_color, ctx_glyph_color, diff_spans, gauge_spans, infinite_bar_spans,
-    mana_bar_spans, mana_color, posture_pill, posture_style, resolver_glyph, segmented_gauge_spans,
-    status_glyph, status_style, thinking_still, todo_spans, tokens_label, working_glyph,
+    compacting_glyph, compacting_style, context_severity_color, ctx_glyph_color, diff_spans,
+    gauge_spans, infinite_bar_spans, mana_bar_spans, mana_color, posture_pill, posture_style,
+    resolver_glyph, segmented_gauge_spans, status_glyph, status_style, subagent_glyph,
+    subagent_style, thinking_still, todo_spans, tokens_label, working_glyph,
 };
 use super::theme::Theme;
 
@@ -130,9 +131,10 @@ pub(super) fn fleet_header_lines(
     let working = running.saturating_sub(thinking);
     let waiting = status_total(groups, AgentStatus::Waiting);
     let failed = status_total(groups, AgentStatus::Failed);
+    let rate_limited = status_total(groups, AgentStatus::RateLimited);
     let idle = status_total(groups, AgentStatus::Idle);
     let success = status_total(groups, AgentStatus::Success);
-    let total = working + thinking + waiting + failed + idle + success;
+    let total = working + thinking + waiting + failed + rate_limited + idle + success;
 
     // An empty (or process-only) room has no cockpit at all — the `✦ 0` head-count
     // lives on the dashboard above. The two-line cockpit is reserved for a room
@@ -168,6 +170,21 @@ pub(super) fn fleet_header_lines(
             any_attention_stale(groups, AgentStatus::Failed, redden_secs),
         ),
     );
+    // Rate-limited sits right after `!`: attention-class, but parked. Unlike the
+    // always-on buckets it shows *only when populated* — it is a rare,
+    // non-actionable state, and the cockpit's width is precious (a permanent
+    // `⏸ 0` would push the busy tail off a narrow sidebar). When it does appear
+    // it takes the held-amber resting tone — never the reddening
+    // `attention_bucket_style` — since there is nothing to do but wait.
+    if rate_limited > 0 {
+        push_count(
+            theme,
+            &mut left,
+            status_glyph(AgentStatus::RateLimited),
+            rate_limited,
+            status_style(theme, AgentStatus::RateLimited),
+        );
+    }
     push_count(
         theme,
         &mut left,
@@ -798,6 +815,38 @@ fn identity_line(
     )
 }
 
+/// The leading status cell for an agent row, applying the two transient render
+/// overlays before the base status glyph: a **compacting** head (a violet bar
+/// pulsing as the context window condenses) and a **waiting-on-subagents** head
+/// (a quiet clay wave while a live child runs). Both are short-lived and stay
+/// out of the cockpit tally — they ride over the row's base status here. A
+/// human-blocked `?`/`!` always wins, so the overlays defer to those; otherwise
+/// the cell is the animated working/thinking fill or the static status glyph.
+fn agent_lead_cell(
+    theme: &Theme,
+    row: &SidebarRow,
+    status: AgentStatus,
+    animation_phase: u64,
+    redden_secs: i64,
+) -> Span<'static> {
+    let actionable = matches!(status, AgentStatus::Waiting | AgentStatus::Failed);
+    if !actionable && row.compacting {
+        return Span::styled(compacting_glyph(animation_phase), compacting_style(theme));
+    }
+    if status == AgentStatus::Running
+        && row
+            .sub_agents
+            .iter()
+            .any(|child| child.status == AgentStatus::Running)
+    {
+        return Span::styled(subagent_glyph(animation_phase), subagent_style(theme));
+    }
+    Span::styled(
+        agent_glyph(status, row.permission_posture, animation_phase),
+        attention_glyph_style(theme, status, age_secs(row.last_activity), redden_secs),
+    )
+}
+
 /// Line 1 for an agent: the leading cell (animated only while the agent is
 /// actively working or plan-mode thinking — attention markers stay still), the
 /// agent name, then the dim capability tokens (`· model · effort`) and the
@@ -836,10 +885,7 @@ fn agent_identity_line(
     // repeated and low-information, so it dims to chrome; the leading glyph and
     // its color carry identity, and the bright slot is saved for the task below.
     let mut left: Vec<Span<'static>> = vec![
-        Span::styled(
-            agent_glyph(status, row.permission_posture, animation_phase),
-            attention_glyph_style(theme, status, age_secs(row.last_activity), redden_secs),
-        ),
+        agent_lead_cell(theme, row, status, animation_phase, redden_secs),
         Span::raw(" "),
         Span::styled(
             clip(&row.name, NAME_MAX),

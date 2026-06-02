@@ -205,6 +205,12 @@ impl AgentIntegration for CodexIntegration {
             "SubagentStart" | "SubagentStop" => optional_payload_string(payload, &["session_id"]),
             _ => None,
         };
+        // Codex has no dedicated pre-compaction hook; it re-fires `SessionStart`
+        // with `source = "compact"` once the context has been condensed, so the
+        // sidebar shows a brief "compacting" head then. The reducer keeps the
+        // prior status and only stamps `compacting_since`.
+        observation.compacting = event_name == "SessionStart"
+            && payload.get("source").and_then(Value::as_str) == Some("compact");
         Some(observation)
     }
 
@@ -824,6 +830,31 @@ mod tests {
         assert_eq!(obs.status, AgentStatus::Idle);
         assert_eq!(obs.task, None);
         assert_eq!(obs.permission_posture, Some(PermissionPosture::Default));
+        // A plain startup is not a compaction.
+        assert!(!obs.compacting);
+    }
+
+    #[test]
+    fn session_start_compact_source_flags_compaction() {
+        // Codex re-fires `SessionStart` with `source = "compact"` once the
+        // context has been condensed; that is the one SessionStart that flags the
+        // compaction marker, the others (startup/resume/clear) do not.
+        let compact = CodexIntegration
+            .observe_lifecycle(
+                "SessionStart",
+                &json!({ "session_id": "sess-1", "source": "compact" }),
+            )
+            .unwrap();
+        assert!(compact.compacting);
+        for source in ["startup", "resume", "clear"] {
+            let obs = CodexIntegration
+                .observe_lifecycle(
+                    "SessionStart",
+                    &json!({ "session_id": "sess-1", "source": source }),
+                )
+                .unwrap();
+            assert!(!obs.compacting, "{source} is not a compaction");
+        }
     }
 
     #[test]

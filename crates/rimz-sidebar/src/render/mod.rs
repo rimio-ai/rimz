@@ -738,6 +738,7 @@ mod tests {
             todo_total: None,
             context: None,
             turn_started_at: None,
+            compacting_since: None,
             last_seen: now,
             last_activity: now,
         }
@@ -1415,6 +1416,106 @@ mod tests {
         assert_ne!(
             first, second,
             "a running agent's head must advance with the phase"
+        );
+    }
+
+    /// An idle agent on a spent account projects to rate-limited: the row leads
+    /// with the `⏸` pause and the cockpit gains an `⏸` bucket. It is static —
+    /// parked, with nothing to do but wait for the reset.
+    #[test]
+    fn rate_limited_agent_reads_as_a_static_pause() {
+        let now = fixed_now();
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Idle,
+            PermissionPosture::Default,
+            Some("/repo/main"),
+            Some("main"),
+            None,
+        );
+        claude.context = Some(AgentContext {
+            rate_limits: Some(AgentRateLimits {
+                five_hour: Some(RateLimitWindow {
+                    used_percentage: Some(100),
+                    resets_at: Some(now + Duration::from_secs(2 * 3_600)),
+                }),
+                seven_day: None,
+            }),
+            ..claude_context(now)
+        });
+        let snapshot = snapshot_with(Vec::new(), vec![claude]);
+        let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 44, 10);
+        let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 44, 10);
+        assert_eq!(first, second, "a parked agent's head must not animate");
+        assert!(
+            first.contains('⏸'),
+            "the rate-limited row and cockpit show the pause:\n{first}"
+        );
+    }
+
+    /// A running agent mid-compaction shows the pulsing compacting head instead
+    /// of the working spinner: it animates, and the working braille never
+    /// appears (the overlay replaced it). Short-lived, so it never enters the
+    /// cockpit tally.
+    #[test]
+    fn compacting_head_pulses_over_the_working_spinner() {
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            Some("/repo/main"),
+            Some("main"),
+            Some("condensing context"),
+        );
+        claude.compacting_since = Some(fixed_now());
+        let snapshot = snapshot_with(Vec::new(), vec![claude]);
+        let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 44, 10);
+        let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 44, 10);
+        assert_ne!(first, second, "the compacting head animates");
+        // The pulse bar (`▁` at phase 0) leads the row — unique to the compacting
+        // head, so its presence proves the overlay replaced the working spinner.
+        // (The cockpit's working *bucket* still shows `⢿`, which is expected.)
+        assert!(
+            first.contains('▁'),
+            "the compacting head shows the pulse bar:\n{first}"
+        );
+    }
+
+    /// A running parent with a live subagent shows the quiet delegated-wait head,
+    /// not the working spinner — the work is in the child below. It animates, and
+    /// the working braille never appears on the parent's collapsed row.
+    #[test]
+    fn waiting_on_subagents_head_replaces_the_working_spinner() {
+        let parent = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            Some("/repo/main"),
+            Some("main"),
+            Some("orchestrating"),
+        );
+        let mut kid = agent(
+            "kid-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            None,
+            None,
+            Some("Explore"),
+        );
+        kid.parent_agent_id = Some("claude-1".to_owned());
+        let snapshot = snapshot_with(Vec::new(), vec![parent, kid]);
+        // Phase 2 of the wave is a distinctive backtick, unique to the
+        // delegated-wait head (the cockpit's working bucket still shows `⢿`).
+        let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 44, 10);
+        let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(4), 44, 10);
+        assert_ne!(first, second, "the delegated-wait head animates");
+        assert!(
+            first.contains('`'),
+            "the parent shows the delegated-wait wave, not the working spinner:\n{first}"
         );
     }
 

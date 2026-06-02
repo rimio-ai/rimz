@@ -327,6 +327,12 @@ pub struct SidebarRow {
     /// (a process row keeps `status: None`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub process_active: bool,
+    /// The agent is condensing its context window right now (Claude `PreCompact`,
+    /// Codex `SessionStart:compact`). A short-lived transient the renderer paints
+    /// as a pulsing head over the base status; never a status bucket of its own,
+    /// so it stays out of the cockpit tally. Always `false` for process rows.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub compacting: bool,
 }
 
 /// A compact summary of a child agent, nested under its parent's row. Subagents
@@ -1333,6 +1339,7 @@ fn idle_codex_row(pane: &PaneRef) -> SidebarRow {
         options: Vec::new(),
         sub_agents: Vec::new(),
         process_active: false,
+        compacting: false,
     }
 }
 
@@ -1451,6 +1458,10 @@ fn build_worktree_groups_from_rows(
     // (`rows_from_ledger`) builders share, so nesting behaves identically on
     // either path.
     attach_sub_agents(&mut rows, agents);
+    // Project the displayed status now that each row knows its subagents (the
+    // delegated-wait exemption) and the full agent set is in hand (the account
+    // rate-limit verdict). The one place display state diverges from the rollup.
+    project_display_status(&mut rows, agents, Timestamp::now());
     // A worktree dir holds one branch at a time, so rows under one path
     // normally share a branch and group together — the agent and its shell
     // panes alike. Only when stale ledger rows put two distinct branches under
@@ -1574,6 +1585,88 @@ fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState]) {
     }
 }
 
+/// Project each agent row's *displayed* status from its raw lifecycle status,
+/// its liveness, its live subagents, and its account's rate-limit budget. This
+/// is the one place display state diverges from the rollup truth kept in
+/// `snapshot.agents`; a pending ask already folded `waiting` onto the row
+/// upstream and always wins.
+///
+/// - A `running` agent with a live subagent is *waiting on its children*, not
+///   wedged — its own heartbeat is silent because the work is theirs — so it
+///   keeps `running` (the renderer paints the delegated-wait head) and is exempt
+///   from the stall escalation.
+/// - A `running` agent silent past the stall window is projected to `failed`, so
+///   a wedge becomes actionable instead of a frozen spinner.
+/// - A resting (`idle`/`success`) agent on a rate-limited account is projected
+///   to `rate_limited` — parked until the window resets, auto-resumable.
+fn project_display_status(rows: &mut [SidebarRow], agents: &[AgentState], now: Timestamp) {
+    let limited_kinds = rate_limited_kinds(agents, now);
+    for row in rows.iter_mut() {
+        if row.row_kind != SidebarRowKind::Agent {
+            continue;
+        }
+        let Some(status) = row.status else {
+            continue;
+        };
+        // A human-blocked `waiting` ask outranks every derived state.
+        if status == AgentStatus::Waiting {
+            continue;
+        }
+        let has_live_child = row
+            .sub_agents
+            .iter()
+            .any(|child| child.status == AgentStatus::Running);
+        // `row.name` is the agent kind for an agent row (see `row_from_agent`),
+        // and the rate-limit verdict is account- (kind-) scoped.
+        let projected = if status == AgentStatus::Running && has_live_child {
+            AgentStatus::Running
+        } else if crate::feed::is_stalled(status, row.last_activity, now) {
+            AgentStatus::Failed
+        } else if crate::feed::is_rate_limited(status, limited_kinds.contains(&row.name)) {
+            AgentStatus::RateLimited
+        } else {
+            status
+        };
+        row.status = Some(projected);
+    }
+}
+
+/// The set of provider kinds whose account rate-limit budget is spent: a live
+/// session of the kind reports a 5-hour or 7-day window used to the cap whose
+/// reset has not yet passed. Account-scoped — every session of a kind shares the
+/// budget — so the verdict flips *every* resting agent of the kind, including one
+/// that launched straight into a spent account. Reads the same window source as
+/// the provider dashboard (`agent.context.rate_limits`), so the cockpit tally and
+/// the dashboard bars never disagree.
+fn rate_limited_kinds(agents: &[AgentState], now: Timestamp) -> BTreeSet<String> {
+    let mut limited = BTreeSet::new();
+    for agent in agents {
+        if agent.parent_agent_id.is_some() || limited.contains(&agent.kind) {
+            continue;
+        }
+        let Some(limits) = agent
+            .context
+            .as_ref()
+            .and_then(|ctx| ctx.rate_limits.as_ref())
+        else {
+            continue;
+        };
+        if window_spent_unreset(limits.five_hour.as_ref(), now)
+            || window_spent_unreset(limits.seven_day.as_ref(), now)
+        {
+            limited.insert(agent.kind.clone());
+        }
+    }
+    limited
+}
+
+/// Whether a window is spent and has not yet reset — the budget is gone *now*. A
+/// spent window whose `resets_at` has already passed is stale, not limiting.
+fn window_spent_unreset(window: Option<&RateLimitWindow>, now: Timestamp) -> bool {
+    window
+        .is_some_and(|window| window.is_spent() && window.resets_at.is_none_or(|reset| reset > now))
+}
+
 /// A child `AgentState` projected to the compact summary the parent's expanded
 /// card paints. The subagent's type rode in as its `task` (set on both
 /// `SubagentStart` and `SubagentStop`), so it stays labeled after it finishes.
@@ -1588,21 +1681,16 @@ fn sub_agent_from_state(child: &AgentState) -> SidebarSubAgent {
 }
 
 fn row_from_agent(agent: &AgentState) -> SidebarRow {
-    // `SidebarRow.status` is the *displayed* status, not the raw rollup (a
-    // pending ask folds it to `waiting` below). A `running` agent silent past
-    // the stall window is likely wedged, so project it to the attention bucket
-    // here: it then surfaces as `!`, joins the attention tally, and rises in the
-    // ranking. The rollup in `snapshot.agents` keeps the true `running` status.
-    let status = if crate::feed::is_stalled(agent.status, agent.last_activity, Timestamp::now()) {
-        AgentStatus::Failed
-    } else {
-        agent.status
-    };
+    // `SidebarRow.status` is the *displayed* status. It starts as the raw rollup
+    // value and is projected in `project_display_status` once the row knows its
+    // subagents and its account's rate-limit budget (stall → `failed`,
+    // spent-budget → `rate_limited`); a pending ask folds `waiting` on upstream.
+    // The rollup in `snapshot.agents` always keeps the true status.
     SidebarRow {
         row_kind: SidebarRowKind::Agent,
         id: agent.agent_id.clone(),
         name: agent.kind.clone(),
-        status: Some(status),
+        status: Some(agent.status),
         permission_posture: Some(agent.permission_posture),
         pane: agent.pane.clone(),
         request_id: None,
@@ -1623,7 +1711,17 @@ fn row_from_agent(agent: &AgentState) -> SidebarRow {
         options: Vec::new(),
         sub_agents: Vec::new(),
         process_active: false,
+        compacting: is_compacting(agent, Timestamp::now()),
     }
+}
+
+/// Whether the agent is mid-compaction: it stamped `compacting_since` and the
+/// marker is still fresh. The next lifecycle event clears the stamp; this window
+/// is the crash backstop so a missed terminator can't pulse the head forever.
+fn is_compacting(agent: &AgentState, now: Timestamp) -> bool {
+    agent.compacting_since.is_some_and(|since| {
+        now.duration_since(since).as_secs() < crate::feed::COMPACTING_WINDOW_SECS
+    })
 }
 
 fn row_from_process(pane: &PaneRef) -> SidebarRow {
@@ -1662,6 +1760,7 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
             .as_deref()
             .filter(|command| !command.is_empty())
             .is_some_and(process_is_active),
+        compacting: false,
     }
 }
 
@@ -1779,6 +1878,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         options: item.options.clone(),
         sub_agents: Vec::new(),
         process_active: false,
+        compacting: false,
     })
 }
 
@@ -1961,6 +2061,7 @@ fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
     [
         AgentStatus::Waiting,
         AgentStatus::Failed,
+        AgentStatus::RateLimited,
         AgentStatus::Running,
         AgentStatus::Idle,
         AgentStatus::Success,
@@ -2020,7 +2121,10 @@ fn within_bucket(left: &SidebarRow, right: &SidebarRow) -> Ordering {
 }
 
 fn is_attention(status: Option<AgentStatus>) -> bool {
-    matches!(status, Some(AgentStatus::Waiting | AgentStatus::Failed))
+    matches!(
+        status,
+        Some(AgentStatus::Waiting | AgentStatus::Failed | AgentStatus::RateLimited)
+    )
 }
 
 fn pane_start(row: &SidebarRow) -> Option<Timestamp> {
@@ -2071,19 +2175,22 @@ fn group_earliest_start(group: &SidebarWorktreeGroup) -> Option<Timestamp> {
 fn row_rank(row: &SidebarRow) -> u8 {
     match row.status {
         Some(status) => status_rank(status),
-        None => 6,
+        None => 7,
     }
 }
 
 fn status_rank(status: AgentStatus) -> u8 {
     // Working agents are the least attention-hungry, so `running` ranks below the
-    // calm-but-settled `idle`/`success`. Attention (`waiting`/`failed`) leads.
+    // calm-but-settled `idle`/`success`. Actionable attention (`waiting`/`failed`)
+    // leads; `rate_limited` sits just under it — attention-class, but parked with
+    // nothing to do but wait, so it ranks below a real failure and above calm.
     match status {
         AgentStatus::Waiting => 0,
         AgentStatus::Failed => 1,
-        AgentStatus::Idle => 2,
-        AgentStatus::Success => 3,
-        AgentStatus::Running => 4,
+        AgentStatus::RateLimited => 2,
+        AgentStatus::Idle => 3,
+        AgentStatus::Success => 4,
+        AgentStatus::Running => 5,
     }
 }
 
@@ -2227,14 +2334,32 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             continue;
         }
         let prior = map.get(&(kind.clone(), agent_id.clone()));
-        let status: AgentStatus = event
+        // A compaction event (`compacting: true`) is a transient head, not a
+        // lifecycle transition: keep the agent's prior status (it resumes there
+        // when compaction finishes) and only stamp `compacting_since`. Every
+        // other event takes its status verbatim, defaulting to idle when absent.
+        let is_compaction = event
             .params
-            .get("status")
-            // Deserialize straight from the borrowed `&Value` (itself a
-            // `Deserializer`) rather than `from_value(v.clone())` — no per-event
-            // Value clone on the rebuild path.
-            .and_then(|v| AgentStatus::deserialize(v).ok())
-            .unwrap_or(AgentStatus::Idle);
+            .get("compacting")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let status: AgentStatus = if is_compaction {
+            prior.map(|p| p.status).unwrap_or(AgentStatus::Idle)
+        } else {
+            event
+                .params
+                .get("status")
+                // Deserialize straight from the borrowed `&Value` (itself a
+                // `Deserializer`) rather than `from_value(v.clone())` — no
+                // per-event Value clone on the rebuild path.
+                .and_then(|v| AgentStatus::deserialize(v).ok())
+                .unwrap_or(AgentStatus::Idle)
+        };
+        // Compaction stamps the moment it began; any other lifecycle event for
+        // the agent means compaction is done, so it clears the marker. A crashed
+        // mid-compact can't stick — the projection also expires it past
+        // `COMPACTING_WINDOW_SECS`.
+        let compacting_since = is_compaction.then_some(event.timestamp);
         // The permission slider is sticky and carried forward: an event that
         // names no posture keeps the prior value. Back-compat: an event an older
         // binary wrote encoded plan as a separate `plan_mode: true` flag riding a
@@ -2381,6 +2506,7 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             // statusline context in via `with_agent_context`.
             context: None,
             turn_started_at,
+            compacting_since,
             last_seen: event.timestamp,
             last_activity: event.timestamp,
         };
@@ -2559,6 +2685,7 @@ mod tests {
             todo_total: None,
             context: None,
             turn_started_at: None,
+            compacting_since: None,
             last_seen: timestamp,
             last_activity: timestamp,
         }
@@ -4120,6 +4247,266 @@ mod tests {
             AgentStatus::Running,
             "the rollup keeps the true running status; only the display row escalates"
         );
+    }
+
+    fn ctx_with_limits(
+        five_hour: Option<RateLimitWindow>,
+        seven_day: Option<RateLimitWindow>,
+    ) -> AgentContext {
+        AgentContext {
+            source: "claude".to_owned(),
+            session_name: None,
+            model_id: None,
+            model_display_name: None,
+            effort: None,
+            thinking_enabled: None,
+            output_style: None,
+            vim_mode: None,
+            agent_version: None,
+            exceeds_200k_tokens: None,
+            cost: None,
+            tokens: None,
+            rate_limits: Some(crate::agents::AgentRateLimits {
+                five_hour,
+                seven_day,
+            }),
+            pr: None,
+            account: None,
+            observed_at: Timestamp::now(),
+        }
+    }
+
+    #[test]
+    fn spent_account_parks_every_resting_agent_of_the_kind() {
+        // Account-scoped: one claude session reports a spent 5-hour window, so
+        // the whole kind is rate-limited — including a *fresh* idle session that
+        // carries no context of its own yet (the "launched into a spent account"
+        // case). A working session is left alone; its turn finishes before it can
+        // park.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut reporter = agent(
+            "claude",
+            "sess-spent",
+            AgentStatus::Success,
+            PermissionPosture::Default,
+            1_000,
+        );
+        reporter.worktree_path = Some("/repo/main".to_owned());
+        reporter.context = Some(ctx_with_limits(Some(window(100, 3_600)), None));
+        let mut fresh = agent(
+            "claude",
+            "sess-fresh",
+            AgentStatus::Idle,
+            PermissionPosture::Default,
+            1_100,
+        );
+        fresh.worktree_path = Some("/repo/main".to_owned());
+        let mut working = agent(
+            "claude",
+            "sess-busy",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            1_200,
+        );
+        working.worktree_path = Some("/repo/main".to_owned());
+
+        let snapshot = SidebarSnapshot::build_with_agents(
+            workspace,
+            Vec::new(),
+            vec![reporter, fresh, working],
+        );
+        let status_of = |id: &str| {
+            snapshot
+                .worktree_groups
+                .iter()
+                .flat_map(|group| &group.rows)
+                .find(|row| row.id == id)
+                .unwrap_or_else(|| panic!("row {id} present"))
+                .status
+        };
+        assert_eq!(status_of("sess-spent"), Some(AgentStatus::RateLimited));
+        assert_eq!(
+            status_of("sess-fresh"),
+            Some(AgentStatus::RateLimited),
+            "a fresh idle session inherits the account verdict"
+        );
+        assert_eq!(
+            status_of("sess-busy"),
+            Some(AgentStatus::Running),
+            "a working session is never parked"
+        );
+        // The rollup keeps the true lifecycle status; only the display projects.
+        assert_eq!(
+            snapshot
+                .agents
+                .iter()
+                .find(|a| a.agent_id == "sess-fresh")
+                .unwrap()
+                .status,
+            AgentStatus::Idle
+        );
+    }
+
+    #[test]
+    fn a_window_spent_but_already_reset_does_not_park() {
+        // A spent reading whose reset has passed is stale, not limiting — the
+        // budget has refilled, so a resting agent reads idle, not parked.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut idle = agent(
+            "claude",
+            "sess-1",
+            AgentStatus::Idle,
+            PermissionPosture::Default,
+            1_000,
+        );
+        idle.worktree_path = Some("/repo/main".to_owned());
+        idle.context = Some(ctx_with_limits(Some(window(100, -60)), None));
+
+        let snapshot = SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![idle]);
+        assert_eq!(
+            snapshot.worktree_groups[0].rows[0].status,
+            Some(AgentStatus::Idle),
+            "a passed reset means the budget refilled — not rate-limited"
+        );
+    }
+
+    #[test]
+    fn running_parent_with_a_live_subagent_waits_instead_of_stalling() {
+        // A running parent that has delegated to a live child shows no heartbeat
+        // of its own, so the stall window would falsely escalate it. The
+        // delegated-wait exemption keeps it `running` while a child runs; the
+        // renderer paints the waiting-on-subagents head from `sub_agents`.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut parent = agent(
+            "claude",
+            "root",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            1_000,
+        );
+        parent.worktree_path = Some("/repo/main".to_owned());
+        parent.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+        // Silent past the stall window — its heartbeat is quiet because the work
+        // is the child's, not a wedge.
+        parent.last_activity = Timestamp::now()
+            - std::time::Duration::from_secs(crate::feed::STALL_WINDOW_SECS as u64 + 60);
+        let mut child = child_state("root", "child-1", AgentStatus::Running, 5);
+        child.kind = "claude".to_owned();
+
+        let snapshot = SidebarSnapshot::build_with_carryover(
+            workspace,
+            Vec::new(),
+            Vec::new(),
+            vec![parent, child],
+        )
+        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+
+        let row = &snapshot.worktree_groups[0].rows[0];
+        assert_eq!(
+            row.status,
+            Some(AgentStatus::Running),
+            "a parent delegating to a live child is waiting on it, not stalled"
+        );
+        assert!(
+            row.sub_agents
+                .iter()
+                .any(|child| child.status == AgentStatus::Running),
+            "the live child is nested so the renderer can paint the wait head"
+        );
+    }
+
+    #[test]
+    fn compacting_marker_lights_the_head_then_expires() {
+        // A fresh compaction marker pulses the head; one older than the window
+        // has expired (the crash backstop), so the head returns to its base.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut fresh = agent(
+            "claude",
+            "compacting-now",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            1_000,
+        );
+        fresh.worktree_path = Some("/repo/main".to_owned());
+        fresh.compacting_since = Some(Timestamp::now());
+        let mut stale = agent(
+            "claude",
+            "compacted-long-ago",
+            AgentStatus::Idle,
+            PermissionPosture::Default,
+            1_100,
+        );
+        stale.worktree_path = Some("/repo/main".to_owned());
+        stale.compacting_since = Some(
+            Timestamp::now()
+                - std::time::Duration::from_secs(crate::feed::COMPACTING_WINDOW_SECS as u64 + 10),
+        );
+
+        let snapshot =
+            SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![fresh, stale]);
+        let row = |id: &str| {
+            snapshot
+                .worktree_groups
+                .iter()
+                .flat_map(|group| &group.rows)
+                .find(|row| row.id == id)
+                .unwrap_or_else(|| panic!("row {id} present"))
+        };
+        assert!(row("compacting-now").compacting, "a fresh marker pulses");
+        assert!(
+            !row("compacted-long-ago").compacting,
+            "a marker past the window has expired"
+        );
+    }
+
+    #[test]
+    fn compaction_event_stamps_then_a_later_event_clears_the_marker() {
+        // The reducer treats a `compacting` event as a transient: it stamps
+        // `compacting_since` and keeps the prior status (not a transition); the
+        // next lifecycle event means compaction is done and clears the marker.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let lifecycle = |params: serde_json::Value| {
+            EventEnvelope::new(
+                workspace.clone(),
+                "session",
+                "claude",
+                "agent-hook",
+                "agent.lifecycle",
+                params,
+            )
+        };
+        let prompt = lifecycle(serde_json::json!({
+            "event_name": "UserPromptSubmit",
+            "agent_id": "sess-1",
+            "status": "running",
+        }));
+        let compact = lifecycle(serde_json::json!({
+            "event_name": "PreCompact",
+            "agent_id": "sess-1",
+            "compacting": true,
+        }));
+        let after_compact = reduce_agent_states(&[prompt.clone(), compact.clone()]);
+        assert!(
+            after_compact[0].compacting_since.is_some(),
+            "the compaction marker is stamped"
+        );
+        assert_eq!(
+            after_compact[0].status,
+            AgentStatus::Running,
+            "compaction keeps the prior status — it is not a transition"
+        );
+
+        let stop = lifecycle(serde_json::json!({
+            "event_name": "Stop",
+            "agent_id": "sess-1",
+            "status": "success",
+        }));
+        let after_stop = reduce_agent_states(&[prompt, compact, stop]);
+        assert!(
+            after_stop[0].compacting_since.is_none(),
+            "the next lifecycle event clears the marker"
+        );
+        assert_eq!(after_stop[0].status, AgentStatus::Success);
     }
 
     #[test]

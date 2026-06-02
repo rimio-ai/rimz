@@ -67,6 +67,10 @@ const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
     // `SubagentStop` returns it to idle. Both carry the parent root `session_id`.
     ("SubagentStart", None),
     ("SubagentStop", None),
+    // Fires before the agent compacts its context window (manual `/compact` or
+    // auto): the sidebar shows a transient "compacting" head while it condenses.
+    // The next lifecycle event clears it.
+    ("PreCompact", None),
 ];
 
 /// Events that hold the agent open while the bridge waits for an answer.
@@ -137,6 +141,7 @@ impl AgentIntegration for ClaudeIntegration {
                 "PostToolUse",
                 "SubagentStart",
                 "SubagentStop",
+                "PreCompact",
             ],
         )
     }
@@ -230,6 +235,10 @@ impl AgentIntegration for ClaudeIntegration {
                 stop_status_with_background(payload, &pending_background),
                 posture_from_payload(payload),
             ),
+            // Compaction is a transient head, not a transition: the reducer
+            // keeps the agent's prior status and only stamps `compacting_since`.
+            // The status here is a placeholder the reducer overrides.
+            "PreCompact" => (AgentStatus::Running, posture_from_payload(payload)),
             "SessionEnd" => (AgentStatus::Idle, None),
             _ => return None,
         };
@@ -299,6 +308,7 @@ impl AgentIntegration for ClaudeIntegration {
             "SubagentStart" | "SubagentStop" => optional_payload_string(payload, &["session_id"]),
             _ => None,
         };
+        observation.compacting = event_name == "PreCompact";
         Some(observation)
     }
 
@@ -1174,6 +1184,20 @@ mod tests {
     }
 
     #[test]
+    fn pre_compact_is_a_lifecycle_compaction_marker() {
+        let c = ClaudeIntegration.classify_hook("PreCompact", &json!({ "session_id": "sess-1" }));
+        assert_eq!(c.class, AgentHookClass::Lifecycle);
+        assert_eq!(c.feed_kind, None);
+        let obs = ClaudeIntegration
+            .observe_lifecycle("PreCompact", &json!({ "session_id": "sess-1" }))
+            .unwrap();
+        assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
+        // It flags compaction; the reducer keeps the prior status (the placeholder
+        // status here is overridden), so it never paints a false transition.
+        assert!(obs.compacting);
+    }
+
+    #[test]
     fn subagent_start_observes_running_child_keyed_by_agent_id() {
         let obs = ClaudeIntegration
             .observe_lifecycle(
@@ -1283,6 +1307,19 @@ mod tests {
               }
             ],
             "PostToolUse": [
+              {
+                "_rimz_managed": true,
+                "_rimz_sync": false,
+                "hooks": [
+                  {
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
+                    "timeout": 120,
+                    "type": "command"
+                  }
+                ]
+              }
+            ],
+            "PreCompact": [
               {
                 "_rimz_managed": true,
                 "_rimz_sync": false,

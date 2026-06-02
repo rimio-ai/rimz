@@ -24,14 +24,23 @@ use super::theme::{ORANGE, Theme};
 pub(super) fn status_glyph(status: AgentStatus) -> &'static str {
     match status {
         // `?` needs your answer; `!` needs a look (a failed turn or a wedged
-        // agent). These two carry every attention state.
+        // agent); `⏸` is parked on a spent account. The three attention-class
+        // states — the first two actionable, the last a non-actionable wait.
         AgentStatus::Waiting => "?",
         AgentStatus::Failed => "!",
         AgentStatus::Running => WORKING_FRAMES[3],
         AgentStatus::Idle => "○",
         AgentStatus::Success => "✓",
+        AgentStatus::RateLimited => RATE_LIMITED_GLYPH,
     }
 }
+
+/// Rate-limited: a media `pause` mark carrying the text-presentation selector
+/// (`U+FE0E`) so it renders as a single-cell monochrome glyph, never a
+/// double-width color emoji that would shift the cockpit columns after it. The
+/// account's budget is spent, so the agent is parked until the window resets —
+/// auto-resumable with a `continue`, nothing to do but wait.
+const RATE_LIMITED_GLYPH: &str = "⏸\u{FE0E}";
 
 /// Working: a braille spinner cycling its dots. Spans the most time of any
 /// state, so it is the steady motion the eye learns to ignore until something
@@ -49,6 +58,19 @@ const THINKING_FRAMES: [&str; 8] = ["·", "✢", "✳", "✶", "✻", "✽", "�
 /// which stays still.
 const RESOLVER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/// Compacting: a single bar pulsing taller then shorter, like a compression
+/// meter squeezing the context window down. Short-lived — the next lifecycle
+/// event returns the agent to its resting head — so it never earns a cockpit
+/// bucket; it paints in cool violet (the token/context-domain color) to read as
+/// housekeeping, not the clay working fill.
+const COMPACTING_FRAMES: [&str; 10] = ["▁", "▃", "▄", "▅", "▆", "▇", "▆", "▅", "▄", "▃"];
+
+/// Waiting on subagents: a low tick bobbing up off the baseline and back — a
+/// quiet wave that reads as "the work is in the children below", distinct from
+/// the dense working braille. Stays in the agent's clay: the parent is still its
+/// live head, just delegating.
+const SUBAGENT_FRAMES: [&str; 8] = ["_", "-", "`", "´", "'", "´", "`", "-"];
+
 fn frame(frames: &[&'static str], animation_phase: u64) -> &'static str {
     frames[(animation_phase as usize) % frames.len()]
 }
@@ -63,6 +85,14 @@ pub(super) fn thinking_glyph(animation_phase: u64) -> &'static str {
 
 pub(super) fn resolver_glyph(animation_phase: u64) -> &'static str {
     frame(&RESOLVER_FRAMES, animation_phase)
+}
+
+pub(super) fn compacting_glyph(animation_phase: u64) -> &'static str {
+    frame(&COMPACTING_FRAMES, animation_phase)
+}
+
+pub(super) fn subagent_glyph(animation_phase: u64) -> &'static str {
+    frame(&SUBAGENT_FRAMES, animation_phase)
 }
 
 /// The still sparkle representing the thinking (plan-mode) bucket in the fleet
@@ -101,7 +131,26 @@ pub(super) fn status_style(theme: &Theme, status: AgentStatus) -> Style {
         // the dim weight keeps them from competing with live attention.
         AgentStatus::Idle => theme.style(Color::Green, Modifier::DIM),
         AgentStatus::Success => theme.style(Color::Green, Modifier::DIM),
+        // Rate-limited stays in the amber attention family but at rest weight
+        // (not bold, and `attention_glyph_style` never reddens it): it is
+        // attention-class, but parked with nothing to do but wait — the held
+        // tone sets it apart from the loud, actionable `?`/`!`.
+        AgentStatus::RateLimited => theme.style(Color::Yellow, Modifier::empty()),
     }
+}
+
+/// The compacting head's tone: cool violet, the token/context-domain color the
+/// `◇` token glyph already uses, so a pulsing context-condense reads as
+/// housekeeping rather than the clay working fill.
+pub(super) fn compacting_style(theme: &Theme) -> Style {
+    theme.style(Color::Magenta, Modifier::empty())
+}
+
+/// The waiting-on-subagents head's tone: the agent's clay, same as the working
+/// fill — the parent is still its live head, just delegating; the quiet wave
+/// motion, not the color, carries "the work is in the children".
+pub(super) fn subagent_style(theme: &Theme) -> Style {
+    theme.style(ORANGE, Modifier::empty())
 }
 
 /// Style for an agent row's leading cell. A running agent's working spinner and
@@ -775,11 +824,58 @@ mod tests {
             resolver_glyph(RESOLVER_FRAMES.len() as u64),
             RESOLVER_FRAMES[0]
         );
+        // The two transient heads cycle and wrap on the same shared phase.
+        for (phase, expected) in COMPACTING_FRAMES.iter().enumerate() {
+            assert_eq!(compacting_glyph(phase as u64), *expected);
+        }
+        assert_eq!(
+            compacting_glyph(COMPACTING_FRAMES.len() as u64),
+            COMPACTING_FRAMES[0]
+        );
+        for (phase, expected) in SUBAGENT_FRAMES.iter().enumerate() {
+            assert_eq!(subagent_glyph(phase as u64), *expected);
+        }
+        assert_eq!(
+            subagent_glyph(SUBAGENT_FRAMES.len() as u64),
+            SUBAGENT_FRAMES[0]
+        );
         // The phase can grow without bound and still indexes a frame.
         assert_eq!(
             working_glyph(u64::MAX),
             WORKING_FRAMES[(u64::MAX % WORKING_FRAMES.len() as u64) as usize]
         );
+    }
+
+    /// The rate-limited glyph is the media `pause` mark carrying the
+    /// text-presentation selector (`U+FE0E`), so it renders single-cell
+    /// monochrome and the cockpit columns never drift when it appears.
+    #[test]
+    fn rate_limited_glyph_carries_the_text_presentation_selector() {
+        assert_eq!(status_glyph(AgentStatus::RateLimited), RATE_LIMITED_GLYPH);
+        let mut chars = RATE_LIMITED_GLYPH.chars();
+        assert_eq!(chars.next(), Some('⏸'));
+        assert_eq!(chars.next(), Some('\u{FE0E}'));
+        assert_eq!(chars.next(), None);
+        // Measured by ratatui's own layout width (the selector is zero-width),
+        // it occupies exactly one cell like every other status glyph — so the
+        // cockpit columns never drift when the `⏸` bucket appears.
+        assert_eq!(Span::raw(RATE_LIMITED_GLYPH).width(), 1);
+        assert_eq!(Span::raw(status_glyph(AgentStatus::Waiting)).width(), 1);
+    }
+
+    /// Rate-limited rests in held amber — the attention family, but *not* the
+    /// bold, reddening weight of `?`/`!`. It is attention-class yet parked, so
+    /// neglect never escalates it: even long past the redden window it stays
+    /// amber, since there is nothing to do but wait for the reset.
+    #[test]
+    fn rate_limited_rests_in_held_amber_and_never_reddens() {
+        let theme = Theme::fixed(false);
+        let style = status_style(&theme, AgentStatus::RateLimited);
+        assert_eq!(style.fg, Some(Color::Indexed(179)));
+        assert!(!style.add_modifier.contains(Modifier::BOLD));
+        let long_parked = attention_glyph_style(&theme, AgentStatus::RateLimited, 60 * 60, 30 * 60);
+        assert_eq!(long_parked.fg, Some(Color::Indexed(179)));
+        assert!(!long_parked.add_modifier.contains(Modifier::BOLD));
     }
 
     /// A running agent animates the working fill; with a `plan` posture it
