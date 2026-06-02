@@ -21,16 +21,24 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use jiff::Timestamp;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
+#[cfg(test)]
+use serde_json::json;
 
+use super::claude_payloads::{
+    ClaudePermissionBehavior, ClaudePermissionDecisionOutput, ClaudePermissionHookOutput,
+    ClaudePreToolUseDecisionOutput, ClaudePreToolUseHookOutput, parse_pre_compact, parse_pre_tool_use,
+    parse_session_start, parse_stop, parse_subagent_start, parse_subagent_stop,
+    parse_user_prompt_submit,
+};
+use super::hook_types::BackgroundTask;
 use super::{
     AgentContext, AgentErr, AgentIntegration, AgentLifecycleObservation, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, Result, StatusLineChange,
     agent_config_path, choice_is_allow, classify_agent_hook, optional_payload_string,
-    permission_decision, permission_posture_from_payload, read_optional_file, read_transcript_tail,
-    stop_status_from_payload,
+    posture_from_mode, read_optional_file, read_transcript_tail, stop_status_from_payload,
 };
-use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution};
+use crate::feed::{AgentStatus, FeedItem, FeedKind, Resolution};
 use crate::ledger::atomic;
 
 /// Claude's effective hook cap. The upstream cap is ~125s; we leave a small
@@ -120,7 +128,9 @@ impl AgentIntegration for ClaudeIntegration {
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
         let feed_kind = match event_name {
             "PermissionRequest" => Some(FeedKind::Permission),
-            "PreToolUse" => match payload.get("tool_name").and_then(Value::as_str) {
+            // ExitPlanMode / AskUserQuestion self-classify off the tool name on
+            // the broad PreToolUse hook; every other tool call is plain lifecycle.
+            "PreToolUse" => match parse_pre_tool_use(payload).tool_name.as_deref() {
                 Some("ExitPlanMode") => Some(FeedKind::PlanApproval),
                 Some("AskUserQuestion") => Some(FeedKind::Question),
                 _ => None,
@@ -148,7 +158,19 @@ impl AgentIntegration for ClaudeIntegration {
 
     fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
         match item.kind {
-            FeedKind::Permission => Ok(permission_decision(resolution)),
+            FeedKind::Permission => {
+                let output = ClaudePermissionDecisionOutput {
+                    hook_specific_output: ClaudePermissionHookOutput {
+                        hook_event_name: "PermissionRequest",
+                        decision: ClaudePermissionBehavior {
+                            behavior: if choice_is_allow(resolution) { "allow" } else { "deny" },
+                            updated_input: None,
+                            applied_rule: None,
+                        },
+                    },
+                };
+                Ok(serde_json::to_value(output).expect("ClaudePermissionDecisionOutput is infallible"))
+            }
             FeedKind::PlanApproval | FeedKind::Question => {
                 let updated_input = resolution
                     .decision
@@ -159,13 +181,14 @@ impl AgentIntegration for ClaudeIntegration {
                         field: "updatedInput",
                     })?
                     .clone();
-                Ok(json!({
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": if choice_is_allow(resolution) { "allow" } else { "deny" },
-                        "updatedInput": updated_input,
-                    }
-                }))
+                let output = ClaudePreToolUseDecisionOutput {
+                    hook_specific_output: ClaudePreToolUseHookOutput {
+                        hook_event_name: "PreToolUse",
+                        permission_decision: if choice_is_allow(resolution) { "allow" } else { "deny" },
+                        updated_input,
+                    },
+                };
+                Ok(serde_json::to_value(output).expect("ClaudePreToolUseDecisionOutput is infallible"))
             }
             other => Err(AgentErr::Render {
                 agent: "claude",
@@ -214,32 +237,64 @@ impl AgentIntegration for ClaudeIntegration {
         // reports back. While any task is in flight the turn is not over, so we
         // label the row with the background work and (below) keep it running —
         // never paint a false `success` on an agent that is still busy.
-        let pending_background = if event_name == "Stop" {
-            pending_background_tasks(payload)
-        } else {
-            Vec::new()
-        };
-        // Sample the agent-reported mode on lifecycle events only. An event that
-        // names no slider returns `None`, so the reducer carries the prior
-        // posture forward. `SessionEnd` drops the row, so its posture carries no
-        // meaning.
+        // Parse each event that yields an observation through its own struct;
+        // every per-event struct flattens `ClaudeCommon`, so the posture sample
+        // reads `common.permission_mode` off whichever one matched. Silent events
+        // (PostToolUse, Notification) and the blocking PermissionRequest emit
+        // nothing here — their structs in `claude_payloads` stay parse-ready for
+        // future wiring rather than being parsed and discarded.
+        let session_start = (event_name == "SessionStart").then(|| parse_session_start(payload));
+        let user_prompt = (event_name == "UserPromptSubmit").then(|| parse_user_prompt_submit(payload));
+        let subagent_start = (event_name == "SubagentStart").then(|| parse_subagent_start(payload));
+        let subagent_stop = (event_name == "SubagentStop").then(|| parse_subagent_stop(payload));
+        let stop = (event_name == "Stop").then(|| parse_stop(payload));
+        let pending_background = stop
+            .as_ref()
+            .map(|p| pending_background_tasks(&p.background_tasks))
+            .unwrap_or_default();
+        // The agent-reported permission mode rides every event via the flattened
+        // common; `None` (no slider named) makes the reducer carry the prior
+        // posture forward rather than reset it.
         let (status, posture) = match event_name {
-            "SessionStart" => (AgentStatus::Idle, posture_from_payload(payload)),
-            "UserPromptSubmit" => (AgentStatus::Running, posture_from_payload(payload)),
+            "SessionStart" => {
+                let p = session_start.as_ref().unwrap();
+                (AgentStatus::Idle, posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]))
+            }
+            "UserPromptSubmit" => {
+                let p = user_prompt.as_ref().unwrap();
+                (AgentStatus::Running, posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]))
+            }
             // A subagent fires before the child model request, so it registers
             // running under the child `agent_id`; a finished child returns to
             // idle. Parity with the Codex adapter.
-            "SubagentStart" => (AgentStatus::Running, posture_from_payload(payload)),
-            "SubagentStop" => (AgentStatus::Idle, posture_from_payload(payload)),
-            "Stop" => (
-                stop_status_with_background(payload, &pending_background),
-                posture_from_payload(payload),
-            ),
+            "SubagentStart" => {
+                let p = subagent_start.as_ref().unwrap();
+                (AgentStatus::Running, posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]))
+            }
+            "SubagentStop" => {
+                let p = subagent_stop.as_ref().unwrap();
+                (AgentStatus::Idle, posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]))
+            }
+            "Stop" => {
+                let p = stop.as_ref().unwrap();
+                (
+                    stop_status_with_background(payload, &pending_background),
+                    posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
+                )
+            }
             // Compaction is a transient head, not a transition: the reducer
             // keeps the agent's prior status and only stamps `compacting_since`.
             // The status here is a placeholder the reducer overrides.
-            "PreCompact" => (AgentStatus::Running, posture_from_payload(payload)),
+            "PreCompact" => {
+                let p = parse_pre_compact(payload);
+                (AgentStatus::Running, posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]))
+            }
+            // SessionEnd drops the row from the rollup, so its posture carries no
+            // meaning; `ends_session` then expires any asks the dead session left.
             "SessionEnd" => (AgentStatus::Idle, None),
+            // Silent events (PostToolUse, Notification) and the blocking
+            // PermissionRequest emit no lifecycle observation. Their structs in
+            // claude_payloads stay parse-ready for future wiring.
             _ => return None,
         };
         // Context budget lives in the transcript, not the hook payload. Read its
@@ -251,8 +306,14 @@ impl AgentIntegration for ClaudeIntegration {
             .map(|path| usage_from_transcript(&path))
             .unwrap_or_default();
         // Resolve the model before the gauge: the payload id carries the `[1m]`
-        // marker that sets the window, the transcript id never does.
-        let model = optional_payload_string(payload, &["model"]).or(usage.model);
+        // marker that sets the window, the transcript id never does. SessionStart
+        // carries the authoritative model id; the typed struct's field is used
+        // directly to keep `session_start.common.model` live.
+        let model = session_start
+            .as_ref()
+            .and_then(|p| p.common.model.clone())
+            .or_else(|| optional_payload_string(payload, &["model"]))
+            .or(usage.model);
         let context_pct = payload
             .get("context_pct")
             .or_else(|| payload.get("context_window_pct"))
@@ -270,42 +331,60 @@ impl AgentIntegration for ClaudeIntegration {
             .and_then(Value::as_u64)
             .or(usage.total_tokens);
         let (todo_done, todo_total) = todos_from_payload(payload);
-        // Root events key on `session_id`; a subagent event keys on the child's
+        // Root events key on `session_id`; subagent events key on the child's
         // own `agent_id` so the child gets its own row. (`session_id` on a
         // subagent event is the parent root captured below.)
-        let agent_id = match event_name {
-            "SubagentStart" | "SubagentStop" => optional_payload_string(payload, &["agent_id"])
-                .or_else(|| optional_payload_string(payload, &["session_id"])),
+        let agent_id = match (subagent_start.as_ref(), subagent_stop.as_ref()) {
+            (Some(p), _) => p.common.agent_id.clone().or_else(|| optional_payload_string(payload, &["session_id"])),
+            (_, Some(p)) => p.common.agent_id.clone().or_else(|| optional_payload_string(payload, &["session_id"])),
             _ => optional_payload_string(payload, &["session_id"]),
         };
         let mut observation = AgentLifecycleObservation::new(agent_id, status);
         observation.permission_posture = posture;
         observation.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
         observation.worktree_branch = optional_payload_string(payload, &["worktree_branch"]);
-        // A subagent labels its row with what it is (`subagent_type`) or what it
+        // A subagent labels its row with what it is (`agent_type`) or what it
         // was asked (`description`). The type rides both start and stop so a
         // finished child keeps its label while it lingers in the parent's list.
-        observation.task = match event_name {
-            "SubagentStart" | "SubagentStop" => optional_payload_string(
-                payload,
-                &["subagent_type", "agent_type", "description", "task"],
-            ),
+        observation.task = match (subagent_start.as_ref(), subagent_stop.as_ref()) {
+            (Some(p), _) => p
+                .common
+                .agent_type
+                .clone()
+                .or_else(|| optional_payload_string(payload, &["subagent_type", "description", "task"])),
+            (_, Some(p)) => p
+                .common
+                .agent_type
+                .clone()
+                .or_else(|| optional_payload_string(payload, &["subagent_type", "description", "task"])),
             _ => background_task_label(&pending_background)
                 .or_else(|| optional_payload_string(payload, &["task", "prompt"])),
         };
-        // The raw prompt rides only its own event; every other event leaves it
-        // `None`, and the reducer carries the last one forward.
-        observation.prompt = optional_payload_string(payload, &["prompt"]);
+        // The raw prompt rides only its own event; the reducer carries the last
+        // one forward so an unnamed session keeps a label past idle.
+        observation.prompt = user_prompt
+            .as_ref()
+            .and_then(|p| p.prompt.clone())
+            .or_else(|| optional_payload_string(payload, &["prompt"]));
         observation.model = model;
-        observation.effort = optional_payload_string(payload, &["thinking_level", "effort"]);
+        // `effort` is a `{ "level": … }` object that rides the tool-use-context
+        // events (Stop / SubagentStop among the ones that yield observations); a
+        // flat `thinking_level` string is the legacy fallback.
+        observation.effort = stop
+            .as_ref()
+            .and_then(|p| p.common.effort.as_ref())
+            .or_else(|| subagent_stop.as_ref().and_then(|p| p.common.effort.as_ref()))
+            .and_then(|e| e.level.clone())
+            .or_else(|| optional_payload_string(payload, &["thinking_level"]));
         observation.context_pct = context_pct;
         observation.total_tokens = total_tokens;
         observation.todo_done = todo_done;
         observation.todo_total = todo_total;
         // A subagent event's `session_id` is the parent root the child nests
         // under; root events carry no parent.
-        observation.parent_agent_id = match event_name {
-            "SubagentStart" | "SubagentStop" => optional_payload_string(payload, &["session_id"]),
+        observation.parent_agent_id = match (subagent_start.as_ref(), subagent_stop.as_ref()) {
+            (Some(p), _) => p.common.common.session_id.clone(),
+            (_, Some(p)) => p.common.common.session_id.clone(),
             _ => None,
         };
         observation.compacting = event_name == "PreCompact";
@@ -368,31 +447,27 @@ fn hooks_installed_at(path: &Path) -> bool {
         })
 }
 
-/// In-flight background tasks reported on a Claude `Stop` payload
+/// In-flight background tasks from a typed Claude `Stop` payload
 /// (`background_tasks`, Claude Code v2.1.145+), as display labels. A `Stop`
 /// with pending background work is the main thread parking, not a turn end —
 /// it reawakens when the work reports back — so the row must stay live. Each
 /// in-flight entry's label is its `description`, else `command`, else `id`; an
 /// entry with a terminal `status` (`completed`/`failed`) is no longer in
-/// flight and is skipped. An absent or all-terminal array yields an empty vec:
+/// flight and is skipped. An all-terminal or empty slice yields an empty vec:
 /// a genuine turn end. Older Claude builds omit the field entirely, which
-/// degrades to the same empty vec.
-fn pending_background_tasks(payload: &Value) -> Vec<String> {
-    let Some(tasks) = payload.get("background_tasks").and_then(Value::as_array) else {
-        return Vec::new();
-    };
+/// degrades to the same empty vec via the typed struct's `Vec::default()`.
+fn pending_background_tasks(tasks: &[BackgroundTask]) -> Vec<String> {
     tasks
         .iter()
         .filter(|task| {
-            task.get("status")
-                .and_then(Value::as_str)
+            task.status
+                .as_deref()
                 .is_none_or(|status| !matches!(status, "completed" | "failed"))
         })
         .map(|task| {
-            ["description", "command", "id"]
+            [&task.description, &task.command, &task.id]
                 .into_iter()
-                .find_map(|key| task.get(key).and_then(Value::as_str))
-                .filter(|label| !label.is_empty())
+                .find_map(|opt| opt.as_deref().filter(|label| !label.is_empty()))
                 .unwrap_or("background task")
                 .to_owned()
         })
@@ -419,15 +494,6 @@ fn background_task_label(pending: &[String]) -> Option<String> {
         [one] => Some(one.clone()),
         many => Some(format!("{} background tasks", many.len())),
     }
-}
-
-/// Sample a Claude payload's permission slider onto the posture enum.
-/// `permission_mode = "bypassPermissions"` (the value
-/// `--dangerously-skip-permissions` surfaces) maps to `Yolo`; `plan` is its own
-/// first-class read-only posture. `None` when the payload names no slider field,
-/// so the reducer carries the prior posture forward rather than resetting it.
-fn posture_from_payload(payload: &Value) -> Option<PermissionPosture> {
-    permission_posture_from_payload(payload, &["permission_mode", "mode"])
 }
 
 /// Read a Claude `TodoWrite` payload's `tool_input.todos` (or the post-hook
@@ -1019,7 +1085,7 @@ fn is_rimz_status_line_command(command: &str) -> bool {
 mod tests {
     use super::*;
     use crate::agents::AgentHookClass;
-    use crate::feed::{ResolutionMethod, Surface};
+    use crate::feed::{PermissionPosture, ResolutionMethod, Surface};
     use crate::ids::WorkspaceId;
     use std::path::Path;
 

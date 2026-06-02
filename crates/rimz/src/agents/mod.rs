@@ -12,10 +12,13 @@
 pub mod account;
 pub mod adapter;
 pub mod claude;
+pub(crate) mod claude_payloads;
 pub mod codex;
 pub(crate) mod codex_app_server;
 pub mod codex_broker;
+pub(crate) mod codex_payloads;
 pub mod context;
+pub(crate) mod hook_types;
 pub mod spending;
 pub mod statusline;
 
@@ -24,10 +27,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution, RuntimeOwner};
 use crate::ids::PaneId;
+use hook_types::PermissionMode;
 
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
@@ -233,6 +237,31 @@ fn permission_posture_from_str(raw: &str) -> PermissionPosture {
             PermissionPosture::Default
         }
         _ => PermissionPosture::Unknown,
+    }
+}
+
+/// Map a typed permission slider onto the unified posture enum, falling back to
+/// raw string parsing for an absent or unknown value. The typed path canonicalizes
+/// every documented `permission_mode` value; the fallback covers an absent slider
+/// and the per-agent alternate keys (`mode`, Codex's `approval_policy`) that the
+/// typed `permission_mode` field never captures. Shared by both adapters so the
+/// enum→posture mapping lives in one place.
+pub(crate) fn posture_from_mode(
+    mode: Option<&PermissionMode>,
+    payload: &Value,
+    fallback_keys: &[&str],
+) -> Option<PermissionPosture> {
+    mode.and_then(permission_mode_posture)
+        .or_else(|| permission_posture_from_payload(payload, fallback_keys))
+}
+
+fn permission_mode_posture(mode: &PermissionMode) -> Option<PermissionPosture> {
+    match mode {
+        PermissionMode::DontAsk | PermissionMode::BypassPermissions => Some(PermissionPosture::Yolo),
+        PermissionMode::Auto | PermissionMode::AcceptEdits => Some(PermissionPosture::Auto),
+        PermissionMode::Plan => Some(PermissionPosture::Plan),
+        PermissionMode::Default => Some(PermissionPosture::Default),
+        PermissionMode::Unknown => None,
     }
 }
 
@@ -488,20 +517,6 @@ pub(crate) fn choice_is_allow(resolution: &Resolution) -> bool {
         .and_then(Value::as_str)
         .map(|v| matches!(v, "allow" | "yes" | "approve"))
         .unwrap_or(false)
-}
-
-/// The agent-native `PermissionRequest` decision envelope, shared by every
-/// adapter whose permission hook speaks the `hookSpecificOutput.decision`
-/// shape. `allow`/`deny` is projected from the resolver's choice.
-pub(crate) fn permission_decision(resolution: &Resolution) -> Value {
-    json!({
-        "hookSpecificOutput": {
-            "hookEventName": "PermissionRequest",
-            "decision": {
-                "behavior": if choice_is_allow(resolution) { "allow" } else { "deny" }
-            }
-        }
-    })
 }
 
 /// Status a `Stop`-style turn-end event records. A `Stop` only fires after a
