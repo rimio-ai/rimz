@@ -488,9 +488,8 @@ fn codex_line_kind(line: &[u8]) -> Option<CodexLineKind> {
 }
 
 /// Return `true` when `line` is a Codex session entry worth parsing for token
-/// usage. A cheap classifier exposed for the upcoming transcript-history
-/// consumer and covered directly by tests; `parse_codex_session` applies the
-/// same classification internally.
+/// usage. A cheap classifier covered directly by tests; `parse_codex_session`
+/// applies the same classification internally.
 pub fn is_codex_token_line(line: &[u8]) -> bool {
     codex_line_kind(line).is_some()
 }

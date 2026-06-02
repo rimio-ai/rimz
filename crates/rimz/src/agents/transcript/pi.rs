@@ -1,10 +1,8 @@
 //! Pi agent JSONL transcript parser.
 //!
-//! Staged ahead of its consumer — see [`super`] for the layer-wide rationale.
-//! The parser yields a `costUSD` directly and is already dispatched from
-//! `parse_jsonl` in [`spending`](super::super::spending); it only awaits the
-//! live path feeding it Pi session files (pending with the upcoming
-//! transcript-history analysis).
+//! [`spending`](super::super::spending) consumes this parser through `parse_for`,
+//! fed every Pi session fleet-wide by the producer. Pi logs `costUSD` directly,
+//! so each entry carries a cost as parsed — no pricing table needed.
 //!
 //! Pi session files live at `~/.pi/agent/sessions/` (or `PI_AGENT_DIR` env).
 //! JSONL shape (one entry per assistant turn):

@@ -142,14 +142,15 @@ pub struct SidebarSnapshot {
     /// snapshot leaves it empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<SidebarProviderPanel>,
-    /// Fleet-wide JSONL-computed spend and token tally across every visible
-    /// agent's repo worktrees — today / week / month / all-time. Built on the
-    /// producer by the `rimz sidebar snapshot` spending enrichment
-    /// (`cli::sidebar::enrich_agent_spending`, via
-    /// [`crate::agents::spending::compute_spending`]); `None` until the cache is
-    /// seeded (the first producer tick after startup) or when nothing has been
-    /// recorded. The cockpit reads `today.usd` so its `$X.XX` reflects all
-    /// sessions today; the value corner reads the all-time pile.
+    /// Fleet-wide JSONL-computed spend and token tally — today / week / month /
+    /// all-time — summing every provider (Claude scoped to the visible worktrees,
+    /// Codex and Pi fleet-wide). Built on the producer by the `rimz sidebar
+    /// snapshot` spending enrichment (`cli::sidebar::compute_fleet_spending` then
+    /// `apply_spending`, via [`crate::agents::spending::compute_spending`]);
+    /// `None` until the cache is seeded (the first producer tick after startup)
+    /// or when nothing has been recorded. The cockpit reads `today.usd` so its
+    /// `$X.XX` reflects all sessions today; the value corner reads the all-time
+    /// pile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_tally: Option<SpendTally>,
 }
