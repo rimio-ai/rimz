@@ -581,15 +581,30 @@ fn parse_loaded_threads(result: &Value) -> Result<Vec<String>, AppServerErr> {
     const ID_LIST_KEYS: [&str; 4] = ["threadIds", "threads", "loadedThreadIds", "ids"];
     for key in ID_LIST_KEYS {
         if let Some(array) = result.get(key).and_then(Value::as_array) {
-            return Ok(array.iter().filter_map(extract_thread_id).collect());
+            return ids_from_array(array);
         }
     }
     if let Some(array) = result.as_array() {
-        return Ok(array.iter().filter_map(extract_thread_id).collect());
+        return ids_from_array(array);
     }
     Err(AppServerErr::Protocol(
         "thread/loaded/list: no recognized thread-id field".to_owned(),
     ))
+}
+
+/// Map a recognized id array to its ids. An empty array is a trusted "zero
+/// loaded" — every daemon session is reapable against it. A *non-empty* array we
+/// could read no id from is a wire-shape drift, not zero, so it is **untrusted**:
+/// error rather than hand the caller an empty set that would mass-reap every
+/// daemon session against a list it never actually read.
+fn ids_from_array(array: &[Value]) -> Result<Vec<String>, AppServerErr> {
+    let ids: Vec<String> = array.iter().filter_map(extract_thread_id).collect();
+    if ids.is_empty() && !array.is_empty() {
+        return Err(AppServerErr::Protocol(
+            "thread/loaded/list: array entries carry no recognized thread id".to_owned(),
+        ));
+    }
+    Ok(ids)
 }
 
 /// One loaded-thread entry: a bare string id, or an object carrying it under a
@@ -1029,6 +1044,18 @@ mod tests {
         assert!(parse_loaded_threads(&json!({ "foo": 1 })).is_err());
         assert!(parse_loaded_threads(&json!({})).is_err());
         assert!(parse_loaded_threads(&Value::Null).is_err());
+    }
+
+    #[test]
+    fn parse_loaded_threads_errors_on_a_nonempty_unreadable_array() {
+        // A recognized key holding a non-empty array we can read no id from is a
+        // wire-shape drift, not "zero loaded" — untrusted, so the caller keeps
+        // every session rather than mass-reaping against a list it never read. An
+        // empty `[]` stays trusted-zero (see the test above); the discriminator is
+        // strictly empty-vs-unreadable.
+        assert!(parse_loaded_threads(&json!({ "threadIds": [{ "sessionId": "x" }] })).is_err());
+        assert!(parse_loaded_threads(&json!({ "threadIds": [""] })).is_err());
+        assert!(parse_loaded_threads(&json!([{ "weird": 1 }])).is_err());
     }
 
     /// Assert a `Spawn` attempt's argv + budget; panics on a `Broker` attempt.
