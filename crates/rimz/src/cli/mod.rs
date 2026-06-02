@@ -447,9 +447,10 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         remote_control,
         daemon_view.as_ref(),
     );
-    // Authoritative gate before the resurrecting `attach --create`: rebirth a
-    // stuck/serialized room, and on one that cannot self-heal, offer a reset
-    // (interactive) or fail fast with the fix (non-interactive).
+    // Authoritative gate before the resurrecting `attach --create`: rebirth an
+    // inspected stale/serialized room, and on one that cannot self-heal or
+    // cannot be inspected, offer a reset (interactive) or fail fast with the fix
+    // (non-interactive).
     gate_room_before_attach(
         backend.as_ref(),
         &workspace.workspace_id,
@@ -731,7 +732,9 @@ fn launch_sidebar_for_workspace(
 /// clean, running room rather than resurrecting a stale serialized one. The
 /// best-effort sidebar launch above can skip (a fresh heartbeat short-circuits
 /// it) or fail without rebirthing, so this is the un-bypassable check. A probe
-/// failure degrades to today's behaviour (attach anyway) rather than blocking.
+/// command error degrades to today's behaviour (attach anyway) rather than
+/// blocking; bounded backend health failures return [`SessionHealth::Stuck`] so
+/// the reset path can preserve an uninspectable live room.
 fn ensure_clean_room(
     backend: &dyn MuxBackend,
     workspace_id: &rimz::WorkspaceId,
@@ -822,8 +825,8 @@ pub(crate) fn confirm(prompt: &str) -> Result<bool> {
 /// The `rimz start` auto-offer confirmation for a stuck room.
 fn confirm_reset(session: &str) -> Result<bool> {
     confirm(&format!(
-        "Rimz must reset the '{session}' room to clear a stuck Zellij session \
-         (every command pane is suspended). Reset now?"
+        "Rimz must reset the '{session}' room to clear a stuck or uninspectable \
+         Zellij session. Reset now?"
     ))
 }
 
@@ -877,9 +880,8 @@ impl std::fmt::Display for ResetRequired {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "The '{}' Zellij room is stuck in a resurrected/suspended state — every command \
-             pane is held at a \"Waiting to run\" prompt — and cannot self-heal without a \
-             destructive reset.\n\
+            "The '{}' Zellij room is stuck or cannot be inspected safely enough to self-heal \
+             without a destructive reset.\n\
              No terminal is available to confirm one. Run `rimz reset` to rebuild it cleanly.",
             self.session,
         )

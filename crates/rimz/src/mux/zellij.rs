@@ -50,8 +50,8 @@ const LIST_PANES_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 /// Per-attempt bound for the pre-attach health probe. A healthy action client
 /// answers `list-panes` in milliseconds; a wedged one (busy-looping against a
-/// dead session server) is SIGKILLed here and reads as "not clean" so `rimz
-/// start` heals instead of hanging on the full [`super::COMMAND_TIMEOUT`].
+/// dead session server) is SIGKILLed here and reads as uninspectable so `rimz
+/// start` stops before deleting a room that may still hold live panes.
 const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// `query-tab-names` can hit the same action-client startup race as
@@ -247,19 +247,19 @@ impl ZellijBackend {
         })
     }
 
-    /// Whether `name`'s live room is clean: a running (non-held) `rimz-sidebar`
-    /// pane **and** no command pane suspended at a "Waiting to run" prompt. A held
+    /// Classify `name`'s live room from a bounded pane listing. A running
+    /// (non-held) `rimz-sidebar` pane plus no held command pane is clean. A held
     /// sidebar means Zellij is waiting on the user (no heartbeats); a held command
-    /// pane is the resurrection fingerprint — Zellij brought a serialized room back
-    /// with `start_suspended` panes. Either makes the room non-functional.
+    /// pane is the resurrection fingerprint — Zellij brought a serialized room
+    /// back with `start_suspended` panes. Either inspected condition makes the
+    /// room non-functional and safe to rebirth.
     ///
-    /// Bounded by [`HEALTH_PROBE_TIMEOUT`] and best-effort: a failed or timed-out
-    /// listing reads as "not clean" so the caller heals rather than trusts a
-    /// session it cannot inspect (e.g. a wedged server).
-    fn session_is_clean(&self, name: &str) -> bool {
+    /// A failed or timed-out listing is different: the room is uninspectable, not
+    /// proven stale. Preserve it and let the caller surface the stuck-room path
+    /// rather than force-deleting panes it could not see.
+    fn session_cleanliness(&self, name: &str) -> Result<SessionCleanliness> {
         self.list_panes_bounded(Some(name), HEALTH_PROBE_TIMEOUT)
-            .map(|panes| has_healthy_sidebar(&panes) && !has_suspended_command_pane(&panes))
-            .unwrap_or(false)
+            .map(|panes| classify_session_panes(&panes))
     }
 
     /// Classify `name`'s liveness from `zellij list-sessions`. A present session
@@ -802,15 +802,21 @@ impl MuxBackend for ZellijBackend {
                 self.delete_session(&opts.session_name)?;
                 self.create_session_with_sidebar(opts, daemon)
             }
-            SessionState::Live
-                if self.session_is_clean(&opts.session_name) && !opts.replace_existing =>
-            {
-                Ok(())
-            }
-            SessionState::Live => {
-                self.delete_session(&opts.session_name)?;
-                self.create_session_with_sidebar(opts, daemon)
-            }
+            SessionState::Live => match self.session_cleanliness(&opts.session_name) {
+                Ok(SessionCleanliness::Clean) if !opts.replace_existing => Ok(()),
+                Ok(_) => {
+                    self.delete_session(&opts.session_name)?;
+                    self.create_session_with_sidebar(opts, daemon)
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        session = %opts.session_name,
+                        error = %err,
+                        "live zellij room could not be inspected; leaving it untouched",
+                    );
+                    Err(err)
+                }
+            },
         }
     }
 
@@ -820,13 +826,13 @@ impl MuxBackend for ZellijBackend {
             SessionState::Absent => SessionHealth::Healthy,
             // `attach --create` would resurrect a serialized, suspended layout.
             SessionState::Exited => SessionHealth::Stuck,
-            SessionState::Live => {
-                if self.session_is_clean(name) {
-                    SessionHealth::Healthy
-                } else {
-                    SessionHealth::Stuck
-                }
-            }
+            SessionState::Live => match self.session_cleanliness(name) {
+                Ok(SessionCleanliness::Clean) => SessionHealth::Healthy,
+                Ok(
+                    SessionCleanliness::MissingSidebar | SessionCleanliness::SuspendedCommandPane,
+                )
+                | Err(_) => SessionHealth::Stuck,
+            },
         })
     }
 
@@ -837,13 +843,28 @@ impl MuxBackend for ZellijBackend {
     ) -> Result<SessionHealth> {
         let state = self.session_state(&opts.session_name);
         // A clean, live room is left untouched — never rebirth working panes.
-        if matches!(state, SessionState::Live) && self.session_is_clean(&opts.session_name) {
-            return Ok(SessionHealth::Healthy);
+        if matches!(state, SessionState::Live) {
+            match self.session_cleanliness(&opts.session_name) {
+                Ok(SessionCleanliness::Clean) => return Ok(SessionHealth::Healthy),
+                Ok(
+                    SessionCleanliness::MissingSidebar | SessionCleanliness::SuspendedCommandPane,
+                ) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        session = %opts.session_name,
+                        error = %err,
+                        "live zellij room could not be inspected; reset confirmation is required",
+                    );
+                    return Ok(SessionHealth::Stuck);
+                }
+            }
         }
-        // Absent → first birth; Exited / Live-but-suspended / hung → delete and
-        // rebirth from the layout so the room comes up clean and RUNNING (with
-        // serialization off, a rebirth can never resurrect). A rebirth that still
-        // fails to talk to Zellij reads as Stuck so the caller offers a reset.
+        // Absent → first birth; Exited / inspected Live-but-suspended → delete
+        // and rebirth from the layout so the room comes up clean and RUNNING
+        // (with serialization off, a rebirth can never resurrect). An
+        // uninspectable live room returns Stuck above so the caller offers a
+        // reset before any destructive action. A rebirth that still fails to
+        // talk to Zellij reads as Stuck so the caller offers a reset.
         let rebirth = || -> Result<()> {
             if !matches!(state, SessionState::Absent) {
                 self.delete_session(&opts.session_name)?;
@@ -1031,6 +1052,17 @@ enum SessionState {
     Exited,
 }
 
+/// Cleanliness of a live room after a successful pane inspection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionCleanliness {
+    /// Sidebar and command panes are running.
+    Clean,
+    /// The sidebar is absent or held at a "Waiting to run" prompt.
+    MissingSidebar,
+    /// At least one non-sidebar command pane is held at a "Waiting to run" prompt.
+    SuspendedCommandPane,
+}
+
 /// Parse one `list-sessions` line for `name`. Lines look like
 /// `name [Created 6m ago]` (live) or
 /// `name [Created 6m ago] (EXITED - attach to resurrect)`. `strip_ansi` guards
@@ -1058,7 +1090,7 @@ fn live_session_name_from_line(line: &str) -> Option<String> {
 }
 
 /// A live, non-plugin sidebar pane is one Zellij still titles with the layout's
-/// [`SIDEBAR_PANE_NAME`] — the same signal `session_is_clean` trusts.
+/// [`SIDEBAR_PANE_NAME`] — the same signal `classify_session_panes` trusts.
 fn is_sidebar_pane(pane: &RawPane) -> bool {
     !pane.is_plugin && pane.title.as_deref() == Some(SIDEBAR_PANE_NAME)
 }
@@ -1089,6 +1121,16 @@ fn views_with_sidebars(panes: &[RawPane]) -> Vec<ViewSidebars> {
         }
     }
     views
+}
+
+fn classify_session_panes(panes: &[RawPane]) -> SessionCleanliness {
+    if !has_healthy_sidebar(panes) {
+        return SessionCleanliness::MissingSidebar;
+    }
+    if has_suspended_command_pane(panes) {
+        return SessionCleanliness::SuspendedCommandPane;
+    }
+    SessionCleanliness::Clean
 }
 
 fn has_healthy_sidebar(panes: &[RawPane]) -> bool {
@@ -1691,7 +1733,7 @@ mod tests {
     fn held_command_pane_is_the_resurrection_fingerprint() {
         // A resurrected room: the sidebar runs, but a command pane is held at a
         // "Waiting to run" prompt. `has_healthy_sidebar` alone would miss it, so
-        // `session_is_clean` also checks for a suspended command pane.
+        // `classify_session_panes` also checks for a suspended command pane.
         let resurrected = r#"[
           {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": false, "tab_id": 0},
           {"id": 1, "is_plugin": false, "title": "claude", "is_held": true, "tab_id": 0}
@@ -1714,6 +1756,45 @@ mod tests {
         ]"#;
         let parsed: Vec<RawPane> = serde_json::from_str(held_sidebar).unwrap();
         assert!(!has_suspended_command_pane(&parsed));
+    }
+
+    #[test]
+    fn session_panes_classify_clean_sidebar_and_suspended_commands() {
+        let clean = r#"[
+          {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": false, "tab_id": 0},
+          {"id": 1, "is_plugin": false, "title": "claude", "is_held": false, "tab_id": 0}
+        ]"#;
+        let parsed: Vec<RawPane> = serde_json::from_str(clean).unwrap();
+        assert_eq!(classify_session_panes(&parsed), SessionCleanliness::Clean);
+
+        let held_sidebar = r#"[
+          {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": true, "tab_id": 0},
+          {"id": 1, "is_plugin": false, "title": "claude", "is_held": false, "tab_id": 0}
+        ]"#;
+        let parsed: Vec<RawPane> = serde_json::from_str(held_sidebar).unwrap();
+        assert_eq!(
+            classify_session_panes(&parsed),
+            SessionCleanliness::MissingSidebar,
+        );
+
+        let no_sidebar = r#"[
+          {"id": 1, "is_plugin": false, "title": "claude", "is_held": false, "tab_id": 0}
+        ]"#;
+        let parsed: Vec<RawPane> = serde_json::from_str(no_sidebar).unwrap();
+        assert_eq!(
+            classify_session_panes(&parsed),
+            SessionCleanliness::MissingSidebar,
+        );
+
+        let suspended_command = r#"[
+          {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": false, "tab_id": 0},
+          {"id": 1, "is_plugin": false, "title": "claude", "is_held": true, "tab_id": 0}
+        ]"#;
+        let parsed: Vec<RawPane> = serde_json::from_str(suspended_command).unwrap();
+        assert_eq!(
+            classify_session_panes(&parsed),
+            SessionCleanliness::SuspendedCommandPane,
+        );
     }
 
     #[test]

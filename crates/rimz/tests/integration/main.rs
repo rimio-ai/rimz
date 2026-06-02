@@ -28,3 +28,4 @@ mod sidebar_launch;
 mod trust;
 mod wakeup_pipe;
 mod workspace;
+mod zellij_health;

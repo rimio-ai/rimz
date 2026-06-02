@@ -391,15 +391,15 @@ pub enum BackgroundViewLaunch {
 
 /// Health verdict for a backend session. [`MuxBackend::probe_session_health`]
 /// returns `Healthy` or `Stuck` (read-only); [`MuxBackend::ensure_clean_session`]
-/// adds `Reborn` when it rebirthed a stuck room into a clean one.
+/// adds `Reborn` when it rebirthed a safely-rebuildable room into a clean one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionHealth {
     /// Clean and running — or absent, with nothing to heal.
     Healthy,
-    /// Was stuck; a rebirth brought it back clean and running.
+    /// Was auto-rebuildable; a rebirth brought it back clean and running.
     Reborn,
-    /// Stuck (resurrected/suspended/hung) and even a rebirth could not clear it,
-    /// so a destructive reset is required.
+    /// Stuck and needs an explicit reset: either a rebirth could not clear it, or
+    /// the live room cannot be inspected safely enough to auto-rebirth.
     Stuck,
 }
 
@@ -438,10 +438,10 @@ pub trait MuxBackend: Send + Sync {
     /// window via [`Self::open_background_view`]). Only `rimz start` passes a
     /// `daemon`; other launches pass `None` and birth the working view alone.
     fn open_sidebar(&self, opts: &SidebarPaneOptions, daemon: Option<&DaemonView>) -> Result<()>;
-    /// Read-only health verdict for `name`'s room. Zellij detects a resurrected/
-    /// suspended/hung room (every command pane held at a "Waiting to run" prompt
-    /// after a server death); tmux has no resurrection, so the default is always
-    /// [`SessionHealth::Healthy`]. `rimz doctor` reports this;
+    /// Read-only health verdict for `name`'s room. Zellij detects a resurrected
+    /// or suspended room (every command pane held at a "Waiting to run" prompt
+    /// after a server death) and an uninspectable live room; tmux has no
+    /// resurrection, so the default is always [`SessionHealth::Healthy`]. `rimz doctor` reports this;
     /// [`Self::ensure_clean_session`] acts on it. Never mutates the session.
     fn probe_session_health(&self, name: &str) -> Result<SessionHealth> {
         let _ = name;
@@ -449,11 +449,12 @@ pub trait MuxBackend: Send + Sync {
     }
     /// Guarantee the next [`Self::attach_command`] lands on a clean, running
     /// room. Probe `opts.session_name`; a clean live room is left untouched
-    /// ([`SessionHealth::Healthy`]); a stuck or absent one is (re)birthed from the
-    /// layout ([`SessionHealth::Reborn`]); a room that a rebirth still cannot make
-    /// clean returns [`SessionHealth::Stuck`] so the caller can prompt for, or
-    /// direct the user to, `rimz reset`. This is the authoritative pre-attach gate
-    /// that the best-effort sidebar launch cannot bypass. tmux has no
+    /// ([`SessionHealth::Healthy`]); an absent, exited, or inspected-stale one is
+    /// (re)birthed from the layout ([`SessionHealth::Reborn`]); a live room that
+    /// cannot be inspected, or a room that a rebirth still cannot make clean,
+    /// returns [`SessionHealth::Stuck`] so the caller can prompt for, or direct
+    /// the user to, `rimz reset`. This is the authoritative pre-attach gate that
+    /// the best-effort sidebar launch cannot bypass. tmux has no
     /// resurrection, so the default is a no-op `Healthy`.
     fn ensure_clean_session(
         &self,
