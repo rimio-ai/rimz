@@ -2,68 +2,24 @@
 
 > See [DESIGN.md](../../DESIGN.md) for the commitments this doc operationalizes.
 
-Rimz has two config tiers — one committed with the project, one private per machine. Both are optional. The smallest useful project config is a few lines.
+Rimz runs with no configuration. Everything here is optional tuning.
 
-## Minimal example
+Two per-machine files configure how Rimz drives *your* box: `~/.config/rimz/config.toml` (room, sidebar, remote-control) and `~/.config/rimz/resolvers.toml` (the resolver chain). A project may also commit a `.rimz/config.toml`; today Rimz reads that file only to compute the project's trust hash — the workspace shape it declares is on the roadmap, and the last section explains exactly what is and isn't live.
 
-```toml
-# .rimz/config.toml
-[workspace]
-mux = "auto"               # auto | zellij | tmux
+## What configures Rimz today
 
-[layout]
-sidebar = true
-sidebar_width = 30              # percent of terminal width
+| File | Scope | What it does today |
+| --- | --- | --- |
+| `~/.config/rimz/config.toml` | per-machine | room options, sidebar look, remote-control auto-launch |
+| `~/.config/rimz/resolvers.toml` | per-machine | the resolver allowlist and chain order |
+| `~/.config/rimz/projects/<id>/trust.toml` | per-machine | the project's trust grant — written by `rimz trust grant`, not by hand |
+| `<root>/.rimz/config.toml` | committed | the declared workspace shape; trust-tracked, [not yet applied](#project-config) |
 
-[[layout.initial_panes]]
-name = "shell"
-command = "$SHELL"
-cwd = "$RIMZ_PROJECT_ROOT"
-```
+The per-machine tier is personal and never committed — a clone never inherits it, and none of it enters the trust hash. Settings load best-effort: a missing file is the default, and unknown keys are ignored so a newer file never breaks an older binary.
 
-That's enough for `rimz` in this repo to open the right multiplexer, create or find the project's session, launch the native sidebar pane, and drop you in a shell when the caller is interactive.
+## Per-machine config — `~/.config/rimz/config.toml`
 
-## What to commit, what to keep local
-
-**Commit.** `.rimz/config.toml` — the team should see the same workspace shape on every checkout.
-
-**Don't commit.** Anything under `~/.config/rimz/` — your sound profile, agent paths, multiplexer preference, and resolver allowlist are per-machine and personal.
-
-## Project config — `<project_root>/.rimz/config.toml`
-
-May define:
-
-- workspace display defaults,
-- multiplexer preference (`[workspace] mux`),
-- layout IR,
-- agent launch commands,
-- environment overrides,
-- notification defaults,
-- privacy defaults.
-
-Project config is inert until the workspace is trusted. See [security.md](../guide/security.md).
-
-## Per-machine config — `~/.config/rimz/`
-
-Personal, never committed. Two scopes:
-
-```text
-config.toml                         machine-wide preferences (see below)
-resolvers.toml                      resolver allowlist and chain order
-projects/<sha256(project_root)>/    per-project, per-machine state
-  trust.toml                          executable-surface grant for this project
-```
-
-`config.toml` may define:
-
-- remote-control auto-launch, per agent (`[remote_control] claude` / `codex`),
-- Rimz room multiplexer options (`[zellij]`, `[tmux]`),
-- sidebar row density (`[sidebar] density`),
-- local workspace display name,
-- sound profile,
-- hook install state,
-- local agent binary paths,
-- per-machine mux preference (overrides project `auto`).
+Four sections, each optional: `[remote_control]`, `[sidebar]`, `[zellij]`, `[tmux]`.
 
 ### Remote control auto-launch
 
@@ -73,16 +29,15 @@ claude = true          # off when unset
 codex  = true          # off when unset
 ```
 
-Each toggle is independent. The two hosts launch differently, because their lifecycles differ:
+Each toggle is independent and off by default — Rimz never links an account or starts a remote-control host without opt-in. This tier is per-machine on purpose: remote control links *your* agent accounts and accepts remote spawn commands.
 
-- **Claude** runs `claude remote-control --spawn worktree`: a long-lived foreground host, gated on `claude` being on PATH (best-effort — a missing `claude` is simply skipped). It runs from the project root (the main checkout), so on-demand remote sessions get isolated worktrees off the canonical repo rather than the current worktree. It is a pane in the managed `rimzd` daemon tab (see below).
-- **Codex** runs `remote-control start`, which brings up the Codex app-server daemon with remote control enabled, then returns. That daemon is a **per-user singleton** (keyed by one control socket), so `rimz start` does *not* park it in a per-workspace pane: it spawns the (idempotent) start command detached, with null stdio, once — no pane, no terminal output. `remote-control start` boots and updates the app-server from the *managed standalone install* at `$CODEX_HOME/packages/standalone/current/codex` (CODEX_HOME defaults to `~/.codex`), so a distro `codex` on PATH (e.g. `/usr/bin/codex`) is a different binary and does not satisfy it. **Fail-fast:** when `codex = true` but that install is absent, `rimz start` refuses up front rather than ensuring a daemon that only errors — install it with `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, then re-run (or set `codex = false`). `rimz doctor` reports the same gap and fix ahead of time.
+`claude = true` runs `claude remote-control` in the managed daemon tab when `claude` is on PATH (best-effort — a missing `claude` is skipped). `codex = true` ensures the per-user Codex remote-control daemon once per start. The Codex daemon boots from the managed standalone install at `$CODEX_HOME` (default `~/.codex`), not a distro `codex` on PATH; when `codex = true` and that install is absent, `rimz start` refuses up front with the fix, and `rimz doctor` reports it ahead of time. How each host links its account is in [internals/account.md](../internals/account.md); how enrichment connects is in [internals/transcript.md](../internals/transcript.md).
 
-This tier is per-machine on purpose: remote control links *your* agent accounts and accepts remote spawn commands, so a clone never inherits it and it never enters the project trust hash.
+`rimz start` parks both hosts in one dedicated `rimzd` tab, focus returned to your working pane. Neither is a coding agent, so the sidebar filters both out of the room — Claude's link surfaces as a `⇅ rc` flag on its provider block instead ([interface/sidebar.md](../interface/sidebar.md)).
 
 ### Multiplexer room options
 
-Rimz applies a small set of per-machine multiplexer defaults when it creates or reattaches a room, so the room has the mouse, clipboard, rich-key, and scrollback behaviour agents need without editing your global Zellij/tmux config files.
+Rimz applies a small set of room defaults when it creates or reattaches a session, so the room has the mouse, clipboard, rich-key, and scrollback behaviour agents need without editing your global Zellij or tmux config.
 
 ```toml
 [zellij]
@@ -107,46 +62,39 @@ history_limit = 100000
 allow_passthrough = true
 set_clipboard = "on"                   # "on" | "external" | "off"
 extended_keys = true
-extended_keys_format = "csi-u"          # "csi-u" | "xterm"
+extended_keys_format = "csi-u"         # "csi-u" | "xterm"
 escape_time_ms = 0
 renumber_windows = true
 aggressive_resize = true
-pane_border_status = "off"              # "off" | "top" | "bottom"
-pane_border_lines = "simple"            # "simple" | "single" | "double" | "heavy"
+pane_border_status = "off"             # "off" | "top" | "bottom"
+pane_border_lines = "simple"           # "simple" | "single" | "double" | "heavy"
 ```
 
-Zellij receives these as `zellij attach … options …` on both session birth and attach. `mouse_mode = true` rides Zellij's default enabled state; `mouse_mode = false` emits `--mouse-mode false`. `copy_clipboard = "system"` uses Zellij's OSC52 path unless your Zellij config sets `copy_command`, which deliberately replaces OSC52 with that command.
+Zellij receives these as `zellij attach … options …` on session birth and attach, so they never touch `~/.config/zellij/config.kdl`. tmux applies them across the right scopes — session, window, and the few that are server-global (clipboard and rich-key handling have no per-session equivalent). The backend-by-backend mapping is in [internals/multiplexers.md](../internals/multiplexers.md).
 
-tmux splits the same idea across scopes. `mouse`, `history_limit`, and `renumber_windows` are set on the Rimz session; `allow_passthrough`, `aggressive_resize`, and pane border options are set on the Rimz session's window options; `focus_events`, `set_clipboard`, `extended_keys`, `extended_keys_format`, and `escape_time_ms` are tmux server options because tmux has no per-session equivalent for clipboard and rich-key handling.
+### Sidebar appearance
 
-### The `rimzd` daemon tab
+Per-machine, display-only tuning of how the sidebar paints. None of it affects ledger correctness.
 
-`rimz start` parks its managed panes in one dedicated view — the `rimzd` tab (a Zellij tab / tmux window), born `sidebar | hosts…` and **forced to the first position**, with focus returned to your working pane so an attach never strands you on it. It hosts:
-
-- the **Claude remote-control host** (above), when enabled; and
-- the **Codex app-server broker** — `rimz codex app-server serve`, a *local read-only enrichment* host, **not** the account-linking remote-control feature. It holds one warm `codex app-server` and serves it over a per-session unix socket so Codex enrichment (`rimz codex refresh-context`) skips the cold-spawn handshake. Because it links no account and only reads (rate-limit windows, model name), it is **ungated** — it runs whenever `codex` is on PATH and simply does not appear when `codex` is absent. Enrichment prefers this broker, then the per-user remote-control daemon's control socket (`codex app-server proxy`, overridable by `RIMZ_CODEX_APP_SERVER_SOCK`; empty drops it), then a cold-spawn — so it never depends on either being up.
-
-Neither host is a coding agent, so the sidebar filters both out of the room entirely: Claude's remote-control link surfaces as a `⇅ rc` flag on the Claude block of the [provider dashboard](#sidebar-provider-dashboard) instead, and the broker — local enrichment infrastructure — is simply never shown as an agent.
-
-### Sidebar row density
+#### Card density
 
 ```toml
 [sidebar]
 density = "compact"    # "compact" (default) | "full"
 ```
 
-How much of each agent card the sidebar renders by default (unselected). `compact` shows identity, description, and the context bar; `full` adds the token line and the time/lines-worked line too. Selecting a row always reveals the full card, so density only sets the resting height — a denser default trades on-screen agent count for detail at a glance. (The pre-1.0 `"bars"` level is gone now that the budgets are account-scoped and live in the provider dashboard, not on rows; it deserializes as `"full"`.) Display-only and per-machine: it never affects ledger correctness and a clone does not inherit it.
+`compact` shows each agent's identity, description, and context bar; `full` adds the token line and the time/lines-worked line. Selecting a row always reveals the full card, so density only sets the resting height. (`"bars"` is a legacy alias that now reads as `"full"`.)
 
-### Sidebar attention escalation
+#### Attention escalation
 
 ```toml
 [sidebar]
 attention_redden_secs = 1800   # seconds before an unanswered ?/! reddens (default 1800 = 30 min)
 ```
 
-A `waiting` `?` or `failed` `!` glyph rests bold **yellow** ("a human is needed here") and reddens to bold **red** once the row has gone unanswered past this window — so a fresh ask reads calm-urgent and a long-ignored one visibly heats up. The same threshold reddens the cockpit's `?`/`!` buckets when any of their rows is stale. Lower it for a tighter SLA, raise it for long-running unattended work. Display-only and per-machine; it tunes the colour ramp, never the ledger.
+A `waiting` `?` or `failed` `!` glyph rests bold yellow and reddens once the row has gone unanswered past this window. Lower it for a tighter SLA, raise it for long unattended work.
 
-### Sidebar provider dashboard
+#### Provider dashboard
 
 ```toml
 [sidebar]
@@ -162,54 +110,90 @@ ascii_art = """
 """
 ```
 
-The pinned dashboard at the bottom of the sidebar carries one block per agent kind — active or merely logged in, so an account you are signed into still shows its budgets between turns: a brand emblem, the plan and version, aggregate spend/tokens, and the account-scoped 5-hour / 7-day budgets as draining segmented `▰`/`▱` "mana" bars (an unmetered API-key account shows an `∞` bar with no countdown). `[sidebar.providers.<kind>]` overrides the built-in style per kind — `<kind>` is the agent kind (`claude`, `codex`, `pi`, …). Each field is optional and falls back to the built-in default: `claude` clay (173), `codex` blue (32), `pi` Inflection forest green (28); an unknown kind gets a neutral grey and no emblem. `max_provider_blocks` caps how many blocks render (ordered by spend); raise it if you routinely run more than three providers. Display-only and per-machine. How each block's account, plan, and budgets are sourced and aggregated is [internals/account.md](../internals/account.md).
+The dashboard pinned at the bottom of the sidebar carries one block per agent kind. `[sidebar.providers.<kind>]` overrides the built-in style — `<kind>` is `claude`, `codex`, `pi`, …; each field is optional and falls back to the shipped default, so you can recolour without restating the art. `max_provider_blocks` caps how many blocks render, ordered by spend. How each block's account, plan, and usage budgets are sourced is in [internals/account.md](../internals/account.md).
+
+## Resolver allowlist — `~/.config/rimz/resolvers.toml`
+
+The per-machine chain of resolvers allowed to answer ahead of you. `rimz resolver add` writes this file; you can also hand-edit it.
+
+```toml
+[[resolver]]
+id = "opus-policy"
+order = 10
+budget_seconds = 30
+binary = "/home/me/bin/opus-resolver"   # optional; pins the heartbeat's executable path
+display_name = "Opus policy"            # optional
+
+[[resolver]]
+id = "slack-on-call"
+order = 20
+budget_seconds = 300
+```
+
+`order` sets the chain position (low → high); `budget_seconds` is the time each link holds a request before the chain advances. A resolver engages the bridge only when it is on this list *and* heartbeating freshly. The protocol, the heartbeat, and the chain are in [internals/resolvers.md](../internals/resolvers.md); the trust boundary is in [security.md](../guide/security.md).
+
+## Project trust record — `~/.config/rimz/projects/<id>/trust.toml`
+
+Written by `rimz trust grant`, not by hand. It pins the project's executable-surface hash so an edit to a command-running config field auto-revokes the grant. The four states and the hash contract are in [internals/trust.md](../internals/trust.md); the threat model is in [security.md](../guide/security.md).
 
 ## Merge order
 
 Later layers win:
 
 1. built-in defaults,
-2. project-local config (`.rimz/config.toml`),
+2. project config (`.rimz/config.toml`),
 3. per-machine config (`~/.config/rimz/config.toml`),
 4. CLI flags and `RIMZ_*` environment variables.
 
-The project layer sets the shared defaults every contributor sees. The per-machine layer mutes notifications, swaps sound profiles, overrides agent paths, or disables specific hooks without leaking those choices back into the repo. CLI flags win for one-off use.
+This is the designed model. Today only the per-machine layer and the trust hash are live; the project layer is parsed for the trust hash and otherwise not yet applied (next section).
 
-## Layout IR
+## Project config
 
-`[layout]` is multiplexer-neutral. Backend adapters compile it to Zellij or tmux command sequences at session start. v0 supports the intersection: session, views (Zellij tabs / tmux windows), panes, split direction, pane size, cwd, command, env, pane/view naming. By default the sidebar is a native pane — no plugin install — launched at session start on both backends. Zellij users can opt in to a docked plugin rail instead (`[layout.zellij]` below); the native pane stays the fallback.
+The committed `<root>/.rimz/config.toml`.
+
+> **Declared and trust-tracked today; not yet applied.** Rimz reads this file only to compute the project's trust hash (see [internals/trust.md](../internals/trust.md)). Applying the workspace shape it declares — opening the layout, launching agents, running hooks and env, firing notifications — is on the [roadmap](../contributing/roadmap.md). Every section below carries this caveat.
+
+Commit `.rimz/config.toml` so a team shares one declared workspace shape; per-machine settings stay in `~/.config/rimz/`. The command-running fields below enter the trust hash, so a clone shows `untrusted` until someone runs `rimz trust grant` — that gate works today even though the shape is not yet applied.
 
 ```toml
-[layout]
-sidebar = true
-sidebar_width = 30              # percent of terminal width
-default_view = "main"
-
 [[layout.initial_panes]]
 name = "shell"
 command = "$SHELL"
 cwd = "$RIMZ_PROJECT_ROOT"
-
-# Backend-only extras, ignored when the other backend is selected.
-[layout.zellij]
-sidebar_plugin = false   # opt in to the docked plugin rail instead of a native pane
-# Floating/pinned panes, KDL fragments, plugin panes other than the sidebar.
+env = { EDITOR = "vim" }
 
 [layout.tmux]
-# Popup bindings, status-line snippets.
+status_left = "session"
+status_right = "time"
+popup_command = "fzf-projects"
+
+[layout.zellij]
+plugin_command = "/opt/sidebar.wasm"
+
+[[agents]]
+name = "claude"
+launch_command = "claude"
+env = { CLAUDE_HOME = "/opt/claude" }
+
+[[hooks]]
+event = "PreToolUse"
+command = "notify-send rimz"
+
+[env]
+RUST_LOG = "debug"
+
+[notifications]
+command = "notify-send rimz"
 ```
 
-Backend-only entries that execute shell commands enter the trust hash.
+- `[layout]` — `initial_panes` (each with `name`/`command`/`cwd`/`env`) plus the backend-only `[layout.tmux]` and `[layout.zellij]` fragments.
+- `[[agents]]` — `name` (a known agent), optional `launch_command`, and `env`.
+- `[[hooks]]` — `event` → `command` pairs. This is a *declared, trust-hashed* project hook, distinct from `rimz hooks install`, which wires an agent's own native hooks and works today (see [cli.md](./cli.md) and [internals/hooks.md](../internals/hooks.md)).
+- `[env]` — workspace-wide environment variables.
+- `[notifications]` — a notification helper `command`.
+
+Which of these fields the trust hash covers is in [internals/trust.md](../internals/trust.md).
 
 ## Privacy
 
-```toml
-[privacy]
-retention_days    = 14
-payload_mode      = "redacted"   # metadata | redacted | full
-max_payload_bytes = 8192
-```
-
-- `metadata` — strips tool inputs, prompts, command arguments, and error text.
-- `redacted` — keeps bounded payloads with built-in redaction. Default.
-- `full` — keeps hook payloads as delivered. `rimz doctor` warns.
+Payload-fidelity and retention controls are a planned project surface — Rimz does not yet read a `[privacy]` section or redact hook payloads. The design and the intended `payload_mode` / `retention_days` keys live in [security.md](../guide/security.md); the gate point, once live, is the agent hook path in [internals/hooks.md](../internals/hooks.md).
