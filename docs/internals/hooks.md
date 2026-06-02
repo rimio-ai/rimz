@@ -129,6 +129,14 @@ Codex has no `SessionEnd` or `Notification` hook, so `ends_session` is never tru
 
 **Compaction.** Codex has no dedicated pre-compaction hook; it re-fires `SessionStart` with `source = "compact"` once the context is condensed. That source flags `compacting` (the other sources — `startup`/`resume`/`clear` — do not), so the sidebar shows a brief compacting head. Claude instead fires a true `PreCompact` *before* compaction (see the Claude appendix), so its head leads the work rather than trailing it.
 
+### Session registration and launch quirks
+
+Codex registers its session lazily. A plain CLI launch fires no `SessionStart`; the first prompt fires `SessionStart` and `UserPromptSubmit` together, both carrying the session id. So a freshly launched Codex is an agent instance with no session id until its first turn, which is why the sidebar synthesizes an idle row for it ([agent.md → The instance lifecycle](./agent.md#the-instance-lifecycle)).
+
+`/clear` currently fires **no** `SessionStart` (the wired `source = "clear"` never arrives), so Rimz cannot yet detect a cleared session as a fresh instance — the prior session's row persists until the next bound turn. This is a known upstream gap; Rimz waits for `SessionStart { source: "clear" }` and treats the miss as a documented limitation rather than working around it.
+
+Under `codex remote-control start` the hooks are daemon-routed: they fire from the shared per-user app-server daemon, so `pane_id` is null (the session is unstamped) and `RIMZ_AGENT_PID` is the daemon pid. Binding an unstamped in-pane session is the cwd fallback in [sidebar.md → Presence model](./sidebar.md#presence-model); a session with no local pane is a *remote* agent, not rendered yet (same section).
+
 ### Context enrichment
 
 Codex has no statusline: its `AgentContext` is read out of band from `codex app-server`, and its context gauge from the rollout transcript tail. The read-only client, the detached refresh trigger, the broker → daemon → cold-spawn connection preference, and the one gap (usage rides only a live notification, so the gauge stays transcript-sourced) all live in [transcript.md → Appendix Codex](./transcript.md#appendix--codex).

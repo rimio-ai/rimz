@@ -79,6 +79,8 @@ Every hook receives:
 
 Codex has **no `SessionEnd` or `Notification` hook**. Compaction re-fires `SessionStart` with `source = "compact"` rather than a dedicated hook.
 
+**Observed registration quirks** (upstream, pinned for refresh): `SessionStart` does not fire on a plain CLI launch — it rides the first `UserPromptSubmit` — and does not fire on `/clear` despite the documented `source = "clear"`. Rimz's handling is in the [hooks.md Codex appendix](../hooks.md#appendix--codex); re-verify against the hooks reference URL above on each refresh.
+
 ### Decision and output schema
 
 `PermissionRequest` (the only shape Rimz renders):
@@ -144,6 +146,15 @@ The protocol is organized around three primitives: an **Item** (atomic input/out
 ### Methods Rimz uses
 
 The [`codex::app_server`](../../../crates/rimz/src/agents/codex/app_server.rs) client speaks only **read-only, non-interfering** methods — it never calls `thread/resume`, `turn/start`, or any write, which would rejoin and own the user's live thread.
+
+**`thread/loaded/list`** → the thread ids the app-server currently holds in memory; the daemon-mode liveness signal Rimz reaps ghost sessions against ([sidebar.md → Presence model](../sidebar.md#presence-model)).
+
+```jsonc
+// result — a flat list of loaded thread ids
+{ "threadIds": ["string", …] }
+```
+
+The reaper queries the per-user daemon **specifically** (never a cold-spawn, whose empty set would mass-reap) and trusts only a recognized id-list shape: a response with no id field is treated as unknown, not zero, so a wire-shape drift keeps every session. The set is loaded-in-memory, not attached-pane, so it is a liveness improvement, not a perfect pane signal.
 
 **`initialize`** → handshake; the response `userAgent` carries the Codex version.
 
