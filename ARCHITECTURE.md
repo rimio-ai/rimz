@@ -101,7 +101,7 @@ CLI binary, hook entrypoints, and the runtime/domain library. Start here for any
 - `src/ledger/feed_store.rs` — atomic feed item writes and status CAS.
 - `src/ledger/gc.rs` — runtime garbage collection for stale liveness hints.
 - `src/ledger/snapshot.rs` — reduced workspace snapshot rebuild, latest snapshot write, agent-rollup carryover across event-log rotation, and the pure pane-presence fold-in (the `sidebar` CLI supplies the live pane list; the reducer never calls the mux).
-- `src/ledger/workspace_record.rs` — `workspace.json` maintenance index for migrate/prune.
+- `src/ledger/workspace_record.rs` — `workspace.json` maintenance index for `workspace migrate` and `gc`.
 - `src/ledger/wakeup.rs` — best-effort per-request and sidebar wakeup datagrams.
 - `src/ledger/mod.rs` — `Ledger` handle (`Arc<LedgerInner>`); public methods take the workspace lock and drive `event_log`, `feed_store`, `snapshot` directly. No actor.
 - `src/bridge.rs` — per-request sockets, waiter polling fallback, nonce validation.

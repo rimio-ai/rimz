@@ -38,7 +38,7 @@ Test artifacts, not product. A hook-bridge resolver and a pane-send resolver. Th
 
 ## M4 — Remote durability
 
-Detach/reattach polish, sidebar reload recovery, protocol-version doctor checks, minimum mux version checks, trust-stale auto-revoke, `workspace migrate/prune`, GC and event-log rotation.
+Detach/reattach polish, sidebar reload recovery, protocol-version doctor checks, minimum mux version checks, trust-stale auto-revoke, `workspace migrate`, GC (the global janitor that also prunes dead workspaces) and event-log rotation.
 
 ## M5 — Attention polish
 

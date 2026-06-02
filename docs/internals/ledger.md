@@ -87,7 +87,7 @@ heartbeat/resolver.<resolver_id>.json
 
 Sockets and heartbeats are liveness hints, not durable state. They're split from the ledger directory because Linux's `AF_UNIX` path-length limit (108 bytes) makes deeply nested state paths fragile.
 
-`rimz gc --older-than <duration>` removes stale resolver/sidebar heartbeat files and stale sidebar wakeup sockets named by those heartbeat files. It does not remove `feed.*.sock` files because a long-running `rimz feed ask` may still own one. It also abandons pending feed items whose recorded owner process has exited. As the global garbage collector it additionally prunes provably-dead durable workspaces — a recorded project root that no longer exists, or an abandoned `rimz start` scaffold with no history — the same rule `rimz workspace prune` applies. A workspace whose `workspace.json` is unreadable but that still holds history is kept and reported, never deleted.
+`rimz gc --older-than <duration>` removes stale resolver/sidebar heartbeat files and stale sidebar wakeup sockets named by those heartbeat files. It does not remove `feed.*.sock` files because a long-running `rimz feed ask` may still own one. It also abandons pending feed items whose recorded owner process has exited. As the global garbage collector it additionally prunes provably-dead durable workspaces — a recorded project root that no longer exists, or an abandoned `rimz start` scaffold with no history. A workspace whose `workspace.json` is unreadable but that still holds history is kept and reported, never deleted.
 
 ## Default path
 
