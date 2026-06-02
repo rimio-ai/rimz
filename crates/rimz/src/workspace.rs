@@ -5,6 +5,7 @@
 //! the same workspace; submodules get their own. See `docs/internals` and
 //! `DESIGN.md` for the rules this implements.
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -13,6 +14,7 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{MuxName, WorkspaceId};
+use crate::ledger::workspace_record::{self, WorkspaceRecord};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceErr {
@@ -46,24 +48,27 @@ pub struct KnownWorkspace {
     pub session_name: String,
 }
 
-/// Every workspace with a readable `workspace.json` under the state dir, in
-/// directory order. A directory missing its record is skipped quietly
-/// (half-removed or never finished); a record that exists but won't parse is
-/// logged and skipped. Errors only when the state root itself cannot be read.
+/// Every workspace with a readable, current `workspace.json` under the state dir,
+/// deduplicated by session name with the newest record winning. A directory
+/// missing its record is skipped quietly (half-removed or never finished); a
+/// record that exists but won't parse is logged and skipped. A stale record whose
+/// canonical project root now maps to another workspace id is skipped so
+/// maintenance commands operate on the current workspace record only. Errors only
+/// when the state root itself cannot be read.
 pub fn known_workspaces() -> io::Result<Vec<KnownWorkspace>> {
     known_workspaces_under(&crate::ledger::paths::workspaces_dir())
 }
 
 /// [`known_workspaces`] over an explicit state root, for tests against a tempdir.
 pub fn known_workspaces_under(workspaces_root: &Path) -> io::Result<Vec<KnownWorkspace>> {
-    use crate::ledger::workspace_record::{self, WorkspaceRecordErr};
+    use crate::ledger::workspace_record::WorkspaceRecordErr;
 
     let entries = match std::fs::read_dir(workspaces_root) {
         Ok(entries) => entries,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => return Err(err),
     };
-    let mut out = Vec::new();
+    let mut by_session: BTreeMap<String, KnownWorkspaceCandidate> = BTreeMap::new();
     for entry in entries {
         let path = entry?.path();
         if !path.is_dir() {
@@ -75,12 +80,23 @@ pub fn known_workspaces_under(workspaces_root: &Path) -> io::Result<Vec<KnownWor
         let Ok(workspace_id) = WorkspaceId::parse(name) else {
             continue;
         };
-        match workspace_record::read(&path.join("workspace.json")) {
-            Ok(record) => out.push(KnownWorkspace {
-                workspace_id,
-                project_root: record.project_root,
-                session_name: record.session_name,
-            }),
+        let record_path = path.join("workspace.json");
+        match workspace_record::read(&record_path) {
+            Ok(record) => {
+                let Some(candidate) =
+                    normalize_known_workspace_record(workspace_id, &record_path, record)
+                else {
+                    continue;
+                };
+                by_session
+                    .entry(candidate.workspace.session_name.clone())
+                    .and_modify(|current| {
+                        if candidate.updated_at > current.updated_at {
+                            *current = candidate.clone();
+                        }
+                    })
+                    .or_insert(candidate);
+            }
             // A dir without a record isn't a usable workspace; `workspace prune`
             // reaps it. A record that won't parse is a real anomaly — surface it.
             Err(WorkspaceRecordErr::Io { source, .. })
@@ -90,7 +106,75 @@ pub fn known_workspaces_under(workspaces_root: &Path) -> io::Result<Vec<KnownWor
             }
         }
     }
-    Ok(out)
+    Ok(by_session
+        .into_values()
+        .map(|candidate| candidate.workspace)
+        .collect())
+}
+
+#[derive(Clone)]
+struct KnownWorkspaceCandidate {
+    workspace: KnownWorkspace,
+    updated_at: jiff::Timestamp,
+}
+
+fn normalize_known_workspace_record(
+    workspace_id: WorkspaceId,
+    record_path: &Path,
+    mut record: WorkspaceRecord,
+) -> Option<KnownWorkspaceCandidate> {
+    match record.project_root.canonicalize() {
+        Ok(project_root) => {
+            let canonical_id = WorkspaceId::from_project_root(&project_root);
+            let session_name = session_name_for(&project_root);
+            if canonical_id != workspace_id {
+                tracing::warn!(
+                    workspace = %workspace_id,
+                    canonical_workspace = %canonical_id,
+                    path = %record_path.display(),
+                    "skipping stale workspace record whose canonical root belongs to another workspace",
+                );
+                return None;
+            }
+
+            if record.workspace_id != workspace_id
+                || record.project_root != project_root
+                || record.session_name != session_name
+            {
+                record.workspace_id = workspace_id.clone();
+                record.project_root = project_root;
+                record.session_name = session_name;
+                record.updated_at = jiff::Timestamp::now();
+                if let Err(err) = workspace_record::write_path(record_path, &record) {
+                    tracing::warn!(
+                        path = %record_path.display(),
+                        error = %err,
+                        "repairing workspace record failed; using repaired value in memory",
+                    );
+                }
+            }
+        }
+        Err(_) => {
+            if record.workspace_id != workspace_id {
+                tracing::warn!(
+                    workspace = %workspace_id,
+                    recorded_workspace = %record.workspace_id,
+                    path = %record_path.display(),
+                    "skipping workspace record whose id does not match its directory",
+                );
+                return None;
+            }
+        }
+    }
+
+    Some(KnownWorkspaceCandidate {
+        workspace: KnownWorkspace {
+            workspace_id,
+            project_root: record.project_root,
+            session_name: record.session_name,
+        },
+        updated_at: record.updated_at,
+    })
 }
 
 /// Markers that signal "this directory is a project root" for non-git projects.
@@ -308,6 +392,93 @@ mod tests {
                 "rimz-home-marvin-beta".to_owned(),
             ],
         );
+    }
+
+    #[test]
+    fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
+        use crate::ledger::paths::{StatePaths, workspaces_dir_under};
+        use crate::ledger::workspace_record::{self, WorkspaceRecord};
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let state_root = dir.path().join("state");
+        let project_root = dir.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("mkdir project");
+
+        let canonical_root = project_root.canonicalize().expect("canonical project");
+        let noncanonical_root = project_root.join("..").join("project");
+        let workspace_id = WorkspaceId::from_project_root(&canonical_root);
+        let paths = StatePaths::under(workspace_id.clone(), &state_root).expect("state paths");
+        std::fs::create_dir_all(&paths.root).expect("mkdir workspace");
+        workspace_record::write(
+            &paths,
+            &WorkspaceRecord {
+                workspace_id: workspace_id.clone(),
+                project_root: noncanonical_root,
+                session_name: "rimz-stale".to_owned(),
+                updated_at: jiff::Timestamp::UNIX_EPOCH,
+            },
+        )
+        .expect("write stale record");
+
+        let known = known_workspaces_under(&workspaces_dir_under(&state_root)).expect("enumerate");
+        assert_eq!(known.len(), 1);
+        assert_eq!(known[0].workspace_id, workspace_id);
+        assert_eq!(known[0].project_root, canonical_root);
+        assert_eq!(known[0].session_name, session_name_for(&project_root));
+
+        let repaired = workspace_record::read(&paths.workspace_record).expect("read repaired");
+        assert_eq!(repaired.workspace_id, workspace_id);
+        assert_eq!(repaired.project_root, project_root.canonicalize().unwrap());
+        assert_eq!(repaired.session_name, session_name_for(&project_root));
+    }
+
+    #[test]
+    fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
+        use crate::ledger::paths::{StatePaths, workspaces_dir_under};
+        use crate::ledger::workspace_record::{self, WorkspaceRecord};
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let state_root = dir.path().join("state");
+        let project_root = dir.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("mkdir project");
+
+        let canonical_root = project_root.canonicalize().expect("canonical project");
+        let canonical_id = WorkspaceId::from_project_root(&canonical_root);
+        let canonical_paths =
+            StatePaths::under(canonical_id.clone(), &state_root).expect("canonical paths");
+        std::fs::create_dir_all(&canonical_paths.root).expect("mkdir canonical");
+        workspace_record::write(
+            &canonical_paths,
+            &WorkspaceRecord {
+                workspace_id: canonical_id.clone(),
+                project_root: canonical_root.clone(),
+                session_name: session_name_for(&canonical_root),
+                updated_at: jiff::Timestamp::UNIX_EPOCH,
+            },
+        )
+        .expect("write canonical record");
+
+        let noncanonical_root = project_root.join("..").join("project");
+        let stale_id = WorkspaceId::from_project_root(&noncanonical_root);
+        assert_ne!(stale_id, canonical_id);
+        let stale_paths = StatePaths::under(stale_id.clone(), &state_root).expect("stale paths");
+        std::fs::create_dir_all(&stale_paths.root).expect("mkdir stale");
+        workspace_record::write(
+            &stale_paths,
+            &WorkspaceRecord {
+                workspace_id: stale_id,
+                project_root: noncanonical_root,
+                session_name: session_name_for(&canonical_root),
+                updated_at: jiff::Timestamp::now(),
+            },
+        )
+        .expect("write stale duplicate");
+
+        let known = known_workspaces_under(&workspaces_dir_under(&state_root)).expect("enumerate");
+        assert_eq!(known.len(), 1);
+        assert_eq!(known[0].workspace_id, canonical_id);
+        assert_eq!(known[0].project_root, canonical_root);
+        assert_eq!(known[0].session_name, session_name_for(&project_root));
     }
 
     #[test]

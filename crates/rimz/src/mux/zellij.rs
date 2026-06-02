@@ -666,14 +666,13 @@ impl MuxBackend for ZellijBackend {
 
     fn list_sessions(&self) -> Result<Vec<String>> {
         let output = self.cmd().arg("list-sessions").run()?;
-        // Output lines look like `name [Created Ns ago]`; the bare name
-        // appears as a leading whitespace-separated token. Strip ANSI escapes
-        // defensively in case `list-sessions` colorizes its output.
+        // Output lines look like `name [Created Ns ago]` for live sessions, or
+        // `name [Created Ns ago] (EXITED - attach to resurrect)` for stopped
+        // sessions. `list_sessions` is the live-session set used by `rimz list`
+        // and `rimz reload`, so filter resurrectable corpses out here.
         Ok(String::from_utf8_lossy(&output.stdout)
             .lines()
-            .map(strip_ansi)
-            .map(|line| line.split_whitespace().next().unwrap_or(&line).to_owned())
-            .filter(|line| !line.is_empty())
+            .filter_map(live_session_name_from_line)
             .collect())
     }
 
@@ -1046,6 +1045,16 @@ fn session_state_from_line(line: &str, name: &str) -> Option<SessionState> {
     } else {
         SessionState::Live
     })
+}
+
+fn live_session_name_from_line(line: &str) -> Option<String> {
+    let clean = strip_ansi(line);
+    let name = clean.split_whitespace().next()?;
+    matches!(
+        session_state_from_line(&clean, name),
+        Some(SessionState::Live)
+    )
+    .then(|| name.to_owned())
 }
 
 /// A live, non-plugin sidebar pane is one Zellij still titles with the layout's
@@ -1762,6 +1771,20 @@ mod tests {
         // A different session's line is not a match.
         assert_eq!(
             session_state_from_line("other [Created 6m ago]", "rimz-query-engine"),
+            None,
+        );
+    }
+
+    #[test]
+    fn live_session_name_excludes_exited_rows() {
+        assert_eq!(
+            live_session_name_from_line("rimz-query-engine [Created 6m ago]"),
+            Some("rimz-query-engine".to_owned()),
+        );
+        assert_eq!(
+            live_session_name_from_line(
+                "rimz-query-engine [Created 6m ago] (EXITED - attach to resurrect)",
+            ),
             None,
         );
     }

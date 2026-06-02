@@ -65,20 +65,36 @@ pub fn reload_user_sidebars() -> ReloadOutcome {
         MachineConfig::default()
     });
     let live = LiveSessions::probe();
+    let mut reconciled_sessions: HashSet<(MuxName, String)> = HashSet::new();
 
     for ws in workspaces {
-        let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
-            Ok(runtime) => runtime,
-            Err(err) => {
-                tracing::warn!(workspace = %ws.workspace_id, error = %err, "reload: runtime paths");
-                continue;
-            }
-        };
         match live.mux_of(&ws.session_name) {
             Some(mux) => {
+                if !claim_live_session(&mut reconciled_sessions, mux, &ws.session_name) {
+                    tracing::debug!(
+                        session = %ws.session_name,
+                        workspace = %ws.workspace_id,
+                        "reload: skipping duplicate workspace record for an already-reconciled session",
+                    );
+                    continue;
+                }
+                let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
+                    Ok(runtime) => runtime,
+                    Err(err) => {
+                        tracing::warn!(workspace = %ws.workspace_id, error = %err, "reload: runtime paths");
+                        continue;
+                    }
+                };
                 reconcile_live(mux, &ws, &runtime, &rimz_bin, &machine_config, &mut outcome);
             }
             None => {
+                let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
+                    Ok(runtime) => runtime,
+                    Err(err) => {
+                        tracing::warn!(workspace = %ws.workspace_id, error = %err, "reload: runtime paths");
+                        continue;
+                    }
+                };
                 // No live mux session lists this workspace. Drop its stale
                 // heartbeat/socket files and reap any leftover sidebar/app-server
                 // daemon — but never a mux server: "dead" here is inferred from a
@@ -96,6 +112,14 @@ pub fn reload_user_sidebars() -> ReloadOutcome {
         }
     }
     outcome
+}
+
+fn claim_live_session(
+    seen: &mut HashSet<(MuxName, String)>,
+    mux: MuxName,
+    session_name: &str,
+) -> bool {
+    seen.insert((mux, session_name.to_owned()))
 }
 
 /// Converge one live session: re-exec its live sidebars onto the current binary,
@@ -303,6 +327,25 @@ mod tests {
         assert_eq!(
             pane_from_env_value(MuxName::Tmux, "%5"),
             PaneId::from_parts(MuxName::Tmux, "%5"),
+        );
+    }
+
+    #[test]
+    fn live_session_claim_is_once_per_mux_session() {
+        let mut seen = HashSet::new();
+        assert!(claim_live_session(
+            &mut seen,
+            MuxName::Zellij,
+            "rimz-query-engine"
+        ));
+        assert!(!claim_live_session(
+            &mut seen,
+            MuxName::Zellij,
+            "rimz-query-engine"
+        ));
+        assert!(
+            claim_live_session(&mut seen, MuxName::Tmux, "rimz-query-engine"),
+            "the same name on a different mux is a different live session",
         );
     }
 }

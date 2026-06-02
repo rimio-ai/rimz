@@ -58,7 +58,13 @@ impl WorkspaceRecord {
 
 #[must_use = "durability barrier; check the result"]
 pub fn write(paths: &StatePaths, record: &WorkspaceRecord) -> Result<()> {
-    write_temp_then_rename(&paths.workspace_record, record)?;
+    write_path(&paths.workspace_record, record)?;
+    Ok(())
+}
+
+#[must_use = "durability barrier; check the result"]
+pub fn write_path(path: &Path, record: &WorkspaceRecord) -> Result<()> {
+    write_temp_then_rename(path, record)?;
     Ok(())
 }
 
