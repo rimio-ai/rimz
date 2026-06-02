@@ -116,7 +116,7 @@ enum Subcmd {
     List(list::ListArgs),
     /// Emit generic events into the workspace ledger.
     Event(event::EventArgs),
-    /// Feed primitives: ask, push, list, show, resolve, dismiss.
+    /// Feed primitives: ask, push, list, show, resolve, dismiss, abstain.
     Feed(feed::FeedArgs),
     /// Remove stale runtime liveness hints.
     Gc(gc::GcArgs),
