@@ -64,20 +64,20 @@ enum HooksSubcmd {
     /// install instruction.
     Install {
         /// Agent name (`claude`, `codex`).
-        source: String,
+        agent: String,
     },
     /// Remove the adapter's Rimz-managed hook block.
     Uninstall {
         /// Agent name (`claude`, `codex`).
-        source: String,
+        agent: String,
     },
 }
 
 pub fn run(args: HooksArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         HooksSubcmd::Feed { source, event } => run_feed(source, event, globals),
-        HooksSubcmd::Install { source } => run_install(source),
-        HooksSubcmd::Uninstall { source } => run_uninstall(source),
+        HooksSubcmd::Install { agent } => run_install(agent),
+        HooksSubcmd::Uninstall { agent } => run_uninstall(agent),
     }
 }
 
@@ -337,9 +337,9 @@ fn matches_agent_kind(comm: &str, source: &str) -> bool {
     matches!((source, comm), ("codex", "node"))
 }
 
-fn run_install(source: String) -> Result<()> {
-    let agent = integration_by_name(&source)?;
-    let report = agent.install_hooks()?;
+fn run_install(agent: String) -> Result<()> {
+    let integration = integration_by_name(&agent)?;
+    let report = integration.install_hooks()?;
     // User-facing JSON. Report struct derives Serialize so the shape stays in
     // lockstep with `HookInstallReport`.
     let rendered = serde_json::to_string_pretty(&report)?;
@@ -350,9 +350,9 @@ fn run_install(source: String) -> Result<()> {
     Ok(())
 }
 
-fn run_uninstall(source: String) -> Result<()> {
-    let agent = integration_by_name(&source)?;
-    let report = agent.uninstall_hooks()?;
+fn run_uninstall(agent: String) -> Result<()> {
+    let integration = integration_by_name(&agent)?;
+    let report = integration.uninstall_hooks()?;
     let rendered = serde_json::to_string_pretty(&report)?;
     #[expect(clippy::print_stdout, reason = "user-visible uninstall report")]
     {
