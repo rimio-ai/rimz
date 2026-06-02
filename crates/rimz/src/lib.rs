@@ -25,6 +25,7 @@ pub mod sidebar;
 pub mod trust;
 pub mod workspace;
 
+pub use crate::agents::{SpendTally, SpendWindow};
 pub use crate::bridge::{BridgeErr, BridgeOutcome, ExpectedFrame};
 pub use crate::feed::{
     AbandonReason, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, ResolverStep,

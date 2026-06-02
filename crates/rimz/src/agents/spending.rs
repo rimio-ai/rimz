@@ -26,28 +26,62 @@ use super::transcript::{self, claude, pi};
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
-/// Today / rolling-7-day / calendar-month spending for a set of sessions.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct AgentSpending {
-    pub today_usd: f64,
-    /// Rolling 7-day window: today plus the 6 prior UTC days.
-    pub week_usd: f64,
-    /// Calendar month: the current UTC `YYYY-MM`.
-    pub month_usd: f64,
+/// Spend (USD) and token throughput accumulated over one time window. `tokens`
+/// is `input + output` — the same `◇` total the rest of the sidebar reads, so
+/// the figure stays consistent with the cockpit and per-card token lines.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SpendWindow {
+    pub usd: f64,
+    pub tokens: u64,
 }
 
-impl AgentSpending {
-    pub fn is_zero(&self) -> bool {
-        self.today_usd == 0.0 && self.week_usd == 0.0 && self.month_usd == 0.0
+impl SpendWindow {
+    fn add(&mut self, usd: f64, tokens: u64) {
+        self.usd += usd;
+        self.tokens += tokens;
     }
 }
+
+/// Today / rolling-7-day / calendar-month / all-time spend and token tally for a
+/// set of sessions. `all_time` is the unfiltered sum — the figure that only ever
+/// grows.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SpendTally {
+    pub today: SpendWindow,
+    /// Rolling 7-day window: today plus the 6 prior UTC days.
+    pub week: SpendWindow,
+    /// Calendar month: the current UTC `YYYY-MM`.
+    pub month: SpendWindow,
+    /// Every entry regardless of date — the all-time pile.
+    pub all_time: SpendWindow,
+}
+
+impl SpendTally {
+    /// True when nothing has ever been recorded. `all_time` subsumes every
+    /// window, so a zero all-time means every window is zero.
+    pub fn is_zero(&self) -> bool {
+        self.all_time.usd == 0.0 && self.all_time.tokens == 0
+    }
+}
+
+/// Bumped whenever the cached parse shape changes, so an upgrade re-reads every
+/// file once. A finalized session's stable mtime otherwise pins its entries in
+/// the cache forever — a field added to [`CachedEntry`] (such as `tokens`) would
+/// stay at its `serde` default for that session and never heal. A cache stamped
+/// with an older version is discarded on read, forcing a clean re-parse under the
+/// current shape. `0` is the implicit pre-versioning shape (no `version` field).
+const SPENDING_CACHE_VERSION: u32 = 1;
 
 /// On-disk cache persisted at `{runtime_root}/spending.json`.
 ///
 /// Keyed by canonical file path string.  `dirty` is excluded from
-/// serialization — callers set it and flush when true.
+/// serialization — callers set it and flush when true. `version` gates the
+/// whole cache: [`read_spending_cache`] discards a stale-shape cache and stamps
+/// the current version, so a write always carries it.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SpendingDiskCache {
+    #[serde(default)]
+    pub version: u32,
     #[serde(default)]
     pub files: HashMap<String, FileCacheEntry>,
     #[serde(skip)]
@@ -71,6 +105,12 @@ pub struct FileCacheEntry {
 pub struct CachedEntry {
     pub date: String,
     pub cost_usd: f64,
+    /// Input + output tokens for this entry. `#[serde(default)]` keeps an older
+    /// cache parseable; `SPENDING_CACHE_VERSION` is what actually heals it — a
+    /// pre-token cache is discarded on read so every file re-parses, since a
+    /// finalized session's stable mtime would otherwise pin `tokens` at `0`.
+    #[serde(default)]
+    pub tokens: u64,
     /// `message.id` from Claude entries; `None` for Pi entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
@@ -104,7 +144,7 @@ pub use pi::pi_session_files;
 /// prevents this: if `message.id` M appears as both `isSidechain:false`
 /// (main-chain entry) and `isSidechain:true` (sidechain replay), the sidechain
 /// entry is suppressed.
-pub fn compute_spending(files: &[PathBuf], cache: &mut SpendingDiskCache) -> AgentSpending {
+pub fn compute_spending(files: &[PathBuf], cache: &mut SpendingDiskCache) -> SpendTally {
     let now_secs = unix_secs_now();
     let today = utc_date(now_secs);
     let week_start = utc_date(now_secs.saturating_sub(6 * 86_400));
@@ -163,7 +203,7 @@ pub fn compute_spending(files: &[PathBuf], cache: &mut SpendingDiskCache) -> Age
         }
     }
 
-    let mut totals = AgentSpending::default();
+    let mut totals = SpendTally::default();
     for ((msg_id, _), entry) in &by_exact_key {
         let is_sidechain_replay = entry.is_sidechain
             && msg_has_non_sidechain
@@ -171,45 +211,32 @@ pub fn compute_spending(files: &[PathBuf], cache: &mut SpendingDiskCache) -> Age
                 .copied()
                 .unwrap_or(false);
         if !is_sidechain_replay {
-            accum(
-                &mut totals,
-                &entry.date,
-                entry.cost_usd,
-                &today,
-                &week_start,
-                &month_prefix,
-            );
+            accum(&mut totals, entry, &today, &week_start, &month_prefix);
         }
     }
     for entry in &free_entries {
-        accum(
-            &mut totals,
-            &entry.date,
-            entry.cost_usd,
-            &today,
-            &week_start,
-            &month_prefix,
-        );
+        accum(&mut totals, entry, &today, &week_start, &month_prefix);
     }
     totals
 }
 
 fn accum(
-    totals: &mut AgentSpending,
-    date: &str,
-    cost: f64,
+    totals: &mut SpendTally,
+    entry: &CachedEntry,
     today: &str,
     week_start: &str,
     month_prefix: &str,
 ) {
-    if date == today {
-        totals.today_usd += cost;
+    let (usd, tokens) = (entry.cost_usd, entry.tokens);
+    totals.all_time.add(usd, tokens);
+    if entry.date == today {
+        totals.today.add(usd, tokens);
     }
-    if date >= week_start {
-        totals.week_usd += cost;
+    if entry.date.as_str() >= week_start {
+        totals.week.add(usd, tokens);
     }
-    if date.starts_with(month_prefix) {
-        totals.month_usd += cost;
+    if entry.date.starts_with(month_prefix) {
+        totals.month.add(usd, tokens);
     }
 }
 
@@ -234,11 +261,17 @@ fn parse_jsonl(path: &Path) -> Vec<CachedEntry> {
 
 // ── Cache I/O ─────────────────────────────────────────────────────────────────
 
+/// Load the cache, discarding any cache written under an older parse shape so
+/// every file re-parses once under the current one. The returned cache always
+/// carries the current version, so the next [`write_spending_cache`] stamps it.
 pub fn read_spending_cache(path: &Path) -> SpendingDiskCache {
-    let Ok(bytes) = fs::read(path) else {
-        return SpendingDiskCache::default();
-    };
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    let mut cache = fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<SpendingDiskCache>(&bytes).ok())
+        .filter(|cache| cache.version == SPENDING_CACHE_VERSION)
+        .unwrap_or_default();
+    cache.version = SPENDING_CACHE_VERSION;
+    cache
 }
 
 /// Atomic write: temp file + rename, matching the project's ledger durability
@@ -339,15 +372,80 @@ mod tests {
 
         let mut cache = SpendingDiskCache::default();
         let t1 = compute_spending(std::slice::from_ref(&file), &mut cache);
-        assert!((t1.today_usd - 0.5).abs() < 1e-9);
+        assert!((t1.today.usd - 0.5).abs() < 1e-9);
+        assert_eq!(t1.today.tokens, 15, "input 10 + output 5");
         assert!(cache.dirty);
 
         cache.dirty = false;
         let t2 = compute_spending(&[file], &mut cache);
-        assert_eq!(t2.today_usd, t1.today_usd);
+        assert_eq!(t2.today.usd, t1.today.usd);
+        assert_eq!(t2.today.tokens, t1.today.tokens);
         assert!(
             !cache.dirty,
             "cache should not be marked dirty on a cache hit"
+        );
+    }
+
+    #[test]
+    fn stale_version_cache_is_discarded_so_files_reparse() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("spending.json");
+
+        // A cache from an older parse shape: a file entry whose `tokens` predate
+        // the field, under the implicit pre-versioning `version: 0`.
+        let stale = SpendingDiskCache {
+            version: 0,
+            files: HashMap::from([(
+                "/old/chat.jsonl".to_string(),
+                FileCacheEntry {
+                    mtime_secs: 123,
+                    entries: vec![CachedEntry {
+                        date: "2026-01-01".to_string(),
+                        cost_usd: 9.0,
+                        tokens: 0,
+                        message_id: Some("msg-old".to_string()),
+                        request_id: Some("req-old".to_string()),
+                        is_sidechain: false,
+                    }],
+                },
+            )]),
+            dirty: false,
+        };
+        write_spending_cache(&path, &stale);
+
+        // Read drops the stale-shape cache entirely and stamps the current
+        // version, so the finalized session re-parses instead of serving `0`
+        // tokens from a mtime that will never change again.
+        let healed = read_spending_cache(&path);
+        assert_eq!(healed.version, SPENDING_CACHE_VERSION);
+        assert!(
+            healed.files.is_empty(),
+            "a stale-version cache is discarded, not served"
+        );
+
+        // A current-version cache round-trips with its files intact — only a
+        // version mismatch discards.
+        let mut current = healed;
+        current.files.insert(
+            "/new/chat.jsonl".to_string(),
+            FileCacheEntry {
+                mtime_secs: 456,
+                entries: vec![CachedEntry {
+                    date: "2026-02-02".to_string(),
+                    cost_usd: 1.0,
+                    tokens: 42,
+                    message_id: None,
+                    request_id: None,
+                    is_sidechain: false,
+                }],
+            },
+        );
+        write_spending_cache(&path, &current);
+        let kept = read_spending_cache(&path);
+        assert_eq!(kept.version, SPENDING_CACHE_VERSION);
+        assert_eq!(
+            kept.files["/new/chat.jsonl"].entries[0].tokens, 42,
+            "a same-version cache keeps its entries"
         );
     }
 
@@ -373,16 +471,25 @@ mod tests {
         let totals = compute_spending(&[file], &mut cache);
 
         assert!(
-            (totals.today_usd - 1.0).abs() < 1e-9,
+            (totals.today.usd - 1.0).abs() < 1e-9,
             "today = {}",
-            totals.today_usd
+            totals.today.usd
         );
+        assert_eq!(totals.today.tokens, 15, "one entry today, 15 tok each");
         // week = today + yesterday = 1.5 (old is 8 days ago, outside the 7-day window)
         assert!(
-            (totals.week_usd - 1.5).abs() < 1e-9,
+            (totals.week.usd - 1.5).abs() < 1e-9,
             "week = {}",
-            totals.week_usd
+            totals.week.usd
         );
+        assert_eq!(totals.week.tokens, 30, "two entries in the rolling week");
+        // all-time sums every entry regardless of date — the figure that only grows.
+        assert!(
+            (totals.all_time.usd - 1.75).abs() < 1e-9,
+            "all_time = {}",
+            totals.all_time.usd
+        );
+        assert_eq!(totals.all_time.tokens, 45, "three entries, 15 tok each");
     }
 
     #[test]
@@ -413,7 +520,11 @@ mod tests {
 
         let mut cache = SpendingDiskCache::default();
         let totals = compute_spending(&[file], &mut cache);
-        assert!((totals.today_usd - 0.3).abs() < 1e-9);
+        assert!((totals.today.usd - 0.3).abs() < 1e-9);
+        assert_eq!(
+            totals.today.tokens, 15,
+            "only the kept entry: input 10 + output 5"
+        );
     }
 
     #[test]
@@ -430,10 +541,11 @@ mod tests {
         let mut cache = SpendingDiskCache::default();
         let totals = compute_spending(&[file1, file2], &mut cache);
         assert!(
-            (totals.today_usd - 1.0).abs() < 1e-9,
+            (totals.today.usd - 1.0).abs() < 1e-9,
             "got {}",
-            totals.today_usd
+            totals.today.usd
         );
+        assert_eq!(totals.today.tokens, 15, "the duplicate pair counts once");
     }
 
     #[test]
@@ -463,9 +575,13 @@ mod tests {
         let mut cache = SpendingDiskCache::default();
         let totals = compute_spending(&[main_file, side_file], &mut cache);
         assert!(
-            (totals.today_usd - 0.05).abs() < 1e-9,
-            "today_usd = {} (expected 0.05)",
-            totals.today_usd
+            (totals.today.usd - 0.05).abs() < 1e-9,
+            "today.usd = {} (expected 0.05)",
+            totals.today.usd
+        );
+        assert_eq!(
+            totals.today.tokens, 15,
+            "main-chain tokens kept, the 50k sidechain replay suppressed"
         );
     }
 
@@ -484,9 +600,13 @@ mod tests {
         let mut cache = SpendingDiskCache::default();
         let totals = compute_spending(&[file], &mut cache);
         assert!(
-            (totals.today_usd - 0.20).abs() < 1e-9,
+            (totals.today.usd - 0.20).abs() < 1e-9,
             "got {}",
-            totals.today_usd
+            totals.today.usd
+        );
+        assert_eq!(
+            totals.today.tokens, 50_005,
+            "a lone sidechain keeps its tokens: input 50000 + output 5"
         );
     }
 }

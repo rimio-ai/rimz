@@ -51,6 +51,17 @@ struct ClaudeMessage {
     /// Anthropic message ID (`msg-…`).  The dedup key alongside `requestId`.
     id: Option<String>,
     model: Option<String>,
+    #[serde(default)]
+    usage: ClaudeUsage,
+}
+
+/// The `message.usage` token counts.  `Option` tolerates both an absent field
+/// and an explicit `:null` (which the upstream schema can emit for the cache
+/// fields), so a usage shape never drops an otherwise-valid cost entry.
+#[derive(Default, Deserialize)]
+struct ClaudeUsage {
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
 }
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
@@ -251,9 +262,12 @@ pub fn parse_claude_jsonl(path: &Path) -> Vec<CachedEntry> {
             _ => continue,
         };
         let is_sidechain = entry.is_sidechain == Some(true);
+        let usage = &entry.message.usage;
+        let tokens = usage.input_tokens.unwrap_or(0) + usage.output_tokens.unwrap_or(0);
         let cached = CachedEntry {
             date,
             cost_usd: cost,
+            tokens,
             message_id: entry.message.id.clone(),
             request_id: entry.request_id.clone(),
             is_sidechain,
@@ -331,6 +345,19 @@ mod tests {
         let entries = parse_claude_jsonl(&file);
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn captures_input_plus_output_tokens() {
+        let dir = TempDir::new().unwrap();
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[&claude_line("2026-01-01", 0.5, "msg-1", "req-1")],
+        );
+        let entries = parse_claude_jsonl(&file);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].tokens, 15, "input 10 + output 5");
     }
 
     #[test]

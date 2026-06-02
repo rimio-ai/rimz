@@ -556,11 +556,9 @@ fn enrich_agent_spending(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::R
         write_spending_cache(&cache_path, &cache);
     }
 
-    snapshot.today_cost_usd = if totals.today_usd > 0.0 {
-        Some(totals.today_usd)
-    } else {
-        None
-    };
+    // The fleet tally feeds both the cockpit's today figure and the bottom
+    // value corner; `None` when nothing has ever been recorded.
+    snapshot.value_tally = (!totals.is_zero()).then(|| totals.clone());
 
     for group in &mut snapshot.worktree_groups {
         for row in &mut group.rows {

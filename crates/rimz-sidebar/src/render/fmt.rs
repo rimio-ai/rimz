@@ -103,12 +103,31 @@ pub(super) fn window_label(duration_mins: Option<u32>) -> String {
     }
 }
 
-/// Spend at full cent resolution — `$0.00`, `$3.50`, `$124.05`. Every spend in
-/// the sidebar reads as money at two decimals: the per-row cost, the cockpit
-/// fleet total, and the provider dashboard all share this one shape, so a price
-/// never jitters between a cents and a whole-dollar form.
+/// Spend at full cent resolution with thousands grouped — `$0.00`, `$3.50`,
+/// `$124.05`, `$1,240.57`. Every spend in the sidebar reads as money at two
+/// decimals: the per-row cost, the cockpit fleet total, the provider dashboard,
+/// and the value corner all share this one shape, so a price never jitters
+/// between a cents and a whole-dollar form. Grouping keeps a large accumulating
+/// pile (`$12,480.13`) legible without changing that shape.
 pub(super) fn dollars2(usd: f64) -> String {
-    format!("${usd:.2}")
+    // Work in integer cents so rounding matches `{:.2}` and grouping is exact.
+    let cents = (usd.max(0.0) * 100.0).round() as u64;
+    format!("${}.{:02}", group_thousands(cents / 100), cents % 100)
+}
+
+/// Insert `,` every three digits from the right — `1240` → `1,240`,
+/// `47200000` → `47,200,000`. The shared grouping behind [`dollars2`].
+fn group_thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    let len = digits.len();
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (len - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// Shorten a model's display name for the capability line. First drops the
@@ -183,9 +202,13 @@ fn title_word(word: &str) -> String {
 }
 
 /// A token count as a thin magnitude with no unit suffix — `523`, `76.5k`,
-/// `1.2M` — so callers compose it into a label (`{} tok`) or a split line.
+/// `1.2M`, `1.2B` — so callers compose it into a label (`{} tok`) or a split
+/// line. The `B` tier keeps an all-time token pile compact as it crosses a
+/// billion.
 pub(super) fn tokens_short(count: u64) -> String {
-    if count >= 1_000_000 {
+    if count >= 1_000_000_000 {
+        format!("{:.1}B", count as f64 / 1_000_000_000.0)
+    } else if count >= 1_000_000 {
         format!("{:.1}M", count as f64 / 1_000_000.0)
     } else if count >= 1_000 {
         format!("{:.1}k", count as f64 / 1_000.0)
@@ -331,6 +354,15 @@ mod tests {
     }
 
     #[test]
+    fn dollars2_groups_thousands() {
+        assert_eq!(dollars2(1_240.57), "$1,240.57");
+        assert_eq!(dollars2(12_480.0), "$12,480.00");
+        assert_eq!(dollars2(1_000_000.0), "$1,000,000.00");
+        // Just under a grouping boundary stays ungrouped.
+        assert_eq!(dollars2(999.99), "$999.99");
+    }
+
+    #[test]
     fn duration_worked_coarse_floors_to_minutes() {
         assert_eq!(duration_worked_coarse(13 * 60_000 + 3_000), "13m"); // 13m3s → 13m
         assert_eq!(duration_worked_coarse(60 * 60_000 + 12 * 60_000), "1h12m");
@@ -347,6 +379,8 @@ mod tests {
         assert_eq!(tokens_short(523), "523");
         assert_eq!(tokens_short(76_500), "76.5k");
         assert_eq!(tokens_short(1_200_000), "1.2M");
+        assert_eq!(tokens_short(1_200_000_000), "1.2B");
+        assert_eq!(tokens_short(47_200_000), "47.2M");
     }
 
     #[test]

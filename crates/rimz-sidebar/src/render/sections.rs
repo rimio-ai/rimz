@@ -14,8 +14,10 @@ use rimz::config::SidebarDensity;
 use rimz::feed::{AgentState, AgentStatus, PermissionPosture};
 use rimz::{
     SidebarProviderPanel, SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarSubAgent,
-    SidebarWorktreeGroup, SidebarWorktreeKind,
+    SidebarWorktreeGroup, SidebarWorktreeKind, SpendTally,
 };
+
+use super::TallyAnim;
 
 use super::fmt::{
     activity_short, age_secs, age_short, clip, dollars2, duration_worked, duration_worked_coarse,
@@ -1321,7 +1323,7 @@ fn work_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'stat
 /// totals and the work line so the resting card height is unchanged.
 fn spending_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     let s = row.spending.as_ref()?;
-    if s.is_zero() {
+    if s.today.usd == 0.0 && s.week.usd == 0.0 && s.month.usd == 0.0 {
         return None;
     }
     let spans = vec![
@@ -1329,15 +1331,15 @@ fn spending_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'
         Span::styled("◈", theme.style(Color::Green, Modifier::empty())),
         Span::styled(" today ", theme.dim()),
         Span::styled(
-            dollars2(s.today_usd),
+            dollars2(s.today.usd),
             theme.style(Color::Green, Modifier::BOLD),
         ),
         Span::styled("  ·  ", theme.faint()),
         Span::styled("week ", theme.dim()),
-        Span::styled(dollars2(s.week_usd), theme.dim()),
+        Span::styled(dollars2(s.week.usd), theme.dim()),
         Span::styled("  ·  ", theme.faint()),
         Span::styled("month ", theme.dim()),
-        Span::styled(dollars2(s.month_usd), theme.dim()),
+        Span::styled(dollars2(s.month.usd), theme.dim()),
     ];
     Some(Line::from(trim_spans_to_width(spans, width)))
 }
@@ -1400,6 +1402,90 @@ const PROVIDER_VALUE_WIDTH: usize = 8;
 /// window. A *started* window's reset has ticked well below full, so it clears
 /// the margin easily.
 const NOT_STARTED_GRACE: SignedDuration = SignedDuration::from_secs(120);
+
+/// Lead glyph for the value corner — the filled `◈` that also marks per-card
+/// spend, so a money figure reads the same shape wherever it appears.
+const VALUE_GLYPH: &str = "◈";
+
+/// A brighter sage than the resting money-green, held for a couple of frames as a
+/// figure lands — the quiet "ka-chunk" of the climb. Drops to plain bold under
+/// `NO_COLOR` like every other tone.
+const VALUE_FLASH: Color = Color::Indexed(150);
+
+/// The value corner: the fleet's quiet, climbing pile of spend and tokens,
+/// pinned to the bottom of the dashboard. Two accumulating windows — the
+/// all-time hero that rolls upward (`◈ $4,821.90 · ◇ 47.2M   all-time`) and this
+/// month's dim companion under it (`$1,240.57 · ◇ 33.0M   this month`), USD
+/// first, each scale whispered on the right. Today's pulse lives in the cockpit,
+/// so the corner never repeats it — it escalates `today → this month → all-time`.
+/// No "earned"/"value" label — the climbing number carries the feeling on its
+/// own. Empty (the corner is dropped) until something has been recorded.
+///
+/// Figures read the eased display values from `anim` at `phase`; the all-time
+/// hero brightens briefly the instant it settles.
+pub(super) fn value_corner_lines(
+    theme: &Theme,
+    tally: Option<&SpendTally>,
+    anim: &TallyAnim,
+    phase: u64,
+    width: usize,
+) -> Vec<Line<'static>> {
+    // Nothing recorded yet → no corner. The tally is the authoritative target;
+    // each roll eases toward it and snaps to it when no animation is in flight.
+    let Some(tally) = tally.filter(|t| !t.is_zero()) else {
+        return Vec::new();
+    };
+
+    // Hero — the all-time pile, the figure that only grows. The `$` rides the
+    // money-green, brightening for a beat as a fresh climb lands.
+    let usd_style = if anim.all_time_usd.flashing(phase) {
+        theme.style(VALUE_FLASH, Modifier::BOLD)
+    } else {
+        theme.style(Color::Green, Modifier::BOLD)
+    };
+    let mut hero = vec![
+        Span::styled(VALUE_GLYPH, theme.style(Color::Green, Modifier::empty())),
+        Span::raw(" "),
+        Span::styled(
+            dollars2(anim.all_time_usd.display(tally.all_time.usd, phase)),
+            usd_style,
+        ),
+        Span::styled(" · ", theme.faint()),
+    ];
+    hero.extend(tokens_label(
+        theme,
+        anim.all_time_tokens
+            .display(tally.all_time.tokens as f64, phase)
+            .round() as u64,
+    ));
+    let hero = pin_right(hero, vec![Span::styled("all-time", theme.faint())], width);
+
+    // Companion — this month's pile, dim so the all-time hero leads. Today's
+    // figure lives in the cockpit, so the corner climbs a window the cockpit
+    // doesn't. Indented two cells so its `$` aligns under the hero's, past the
+    // `◈ ` lead.
+    let mut month = vec![
+        Span::raw("  "),
+        Span::styled(
+            dollars2(anim.month_usd.display(tally.month.usd, phase)),
+            theme.dim(),
+        ),
+        Span::styled(" · ", theme.faint()),
+    ];
+    month.extend(tokens_label(
+        theme,
+        anim.month_tokens
+            .display(tally.month.tokens as f64, phase)
+            .round() as u64,
+    ));
+    let month = pin_right(
+        month,
+        vec![Span::styled("this month", theme.faint())],
+        width,
+    );
+
+    vec![hero, month]
+}
 
 /// The pinned per-provider dashboard: one block per provider (`Claude`,
 /// `Codex`, …), each a header line then the brand emblem zipped against the

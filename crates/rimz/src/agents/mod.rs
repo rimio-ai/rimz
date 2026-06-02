@@ -33,7 +33,7 @@ pub use context::{
     AgentTokenUsage, RateLimitWindow,
 };
 pub use observation::AgentLifecycleObservation;
-pub use spending::AgentSpending;
+pub use spending::{SpendTally, SpendWindow};
 
 /// Conservative fallback for adapters that don't override. Claude overrides
 /// to 120s (see `claude::CLAUDE_HOOK_CAP`); Codex overrides to its own cap

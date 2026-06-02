@@ -14,8 +14,11 @@
 
 mod fmt;
 mod labels;
+mod odometer;
 mod sections;
 mod theme;
+
+pub(crate) use odometer::TallyAnim;
 
 use std::io::{self, Write};
 
@@ -32,7 +35,7 @@ use rimz::{SidebarRowKind, SidebarSnapshot};
 use self::fmt::age_short;
 use self::sections::{
     content_width, dashboard_summary_line, first_run_hint_lines, fleet_header_lines, fleet_size,
-    fleet_totals, provider_panel_lines, worktree_group_lines,
+    fleet_totals, provider_panel_lines, value_corner_lines, worktree_group_lines,
 };
 use self::theme::Theme;
 
@@ -44,6 +47,12 @@ pub struct UiState {
     /// animation tick. The renderer derives the running-agent spin frame from
     /// it; freshness gating (per row) keeps a quiet agent frozen.
     pub animation_phase: u64,
+    /// The value corner's count-up state — one eased roll per animated figure.
+    /// Folded forward on each data refresh (`TallyAnim::observe`) and read by the
+    /// renderer at `animation_phase`; the serve loop keeps the fast tick alive
+    /// while a roll is in flight. Crate-internal: an implementation detail of the
+    /// renderer, not part of the public `UiState` surface.
+    pub(crate) tally: TallyAnim,
     /// Hit-test map of the most recently drawn frame: one entry per inner-area
     /// content line, `Some(row)` for a jump-target row line (in
     /// `app::visible_rows()` order) and `None` for chrome. The renderer writes
@@ -182,13 +191,35 @@ pub(crate) fn compose_lines(
     // it breathes in the same one-cell frame as the body.
     let active = alert.is_some_and(Alert::is_active);
     let mut bottom: Vec<Line<'static>> = Vec::new();
-    if !active && !snapshot.providers.is_empty() {
+    let dashboard_present = !active && !snapshot.providers.is_empty();
+    if dashboard_present {
         bottom.push(pad_chrome(hairline_rule(&theme, inner)));
         bottom.extend(
             provider_panel_lines(&theme, &snapshot.providers, inner)
                 .into_iter()
                 .map(pad_chrome),
         );
+    }
+    // The value corner — the quiet, climbing all-time pile — seals the bottom of
+    // the dashboard. It rides under the dashboard's blank-line block separator
+    // when an account block is present, else carries its own hairline so it never
+    // floats unsealed against the body.
+    if !active {
+        let corner = value_corner_lines(
+            &theme,
+            snapshot.value_tally.as_ref(),
+            &ui.tally,
+            ui.animation_phase,
+            inner,
+        );
+        if !corner.is_empty() {
+            if dashboard_present {
+                bottom.push(Line::from(""));
+            } else {
+                bottom.push(pad_chrome(hairline_rule(&theme, inner)));
+            }
+            bottom.extend(corner.into_iter().map(pad_chrome));
+        }
     }
     if !active {
         let footer = footer_lines(snapshot, &theme, inner);
@@ -302,7 +333,12 @@ fn snapshot_lines(
     // `✦ 0` with no spend. Prefer the JSONL-computed today total over the
     // statusline-sum when available, so the cockpit reflects all sessions today.
     let mut totals = fleet_totals(&snapshot.agents, &snapshot.worktree_groups);
-    if let Some(today_usd) = snapshot.today_cost_usd {
+    if let Some(today_usd) = snapshot
+        .value_tally
+        .as_ref()
+        .map(|t| t.today.usd)
+        .filter(|usd| *usd > 0.0)
+    {
         totals.cost = Some(today_usd);
     }
     let size = fleet_size(&snapshot.worktree_groups);
@@ -2250,6 +2286,86 @@ mod tests {
         assert!(rendered.contains('∞'), "infinity at the front:\n{rendered}");
         assert!(rendered.contains('▱'), "the empty ∞ track:\n{rendered}");
         assert_snapshot("provider_dashboard", rendered);
+    }
+
+    /// The value corner: the fleet's quiet, climbing pile pinned at the bottom of
+    /// the dashboard. The all-time hero (`◈ $… · ◇ …  all-time`) leads with USD
+    /// first, this month's dim companion sits under it — today stays in the
+    /// cockpit, never repeated here. No "earned"/"value" label; the climbing
+    /// number carries the feeling. Rendering through a default `UiState`, the
+    /// figures snap to the snapshot's tally (the eased count-up only plays when
+    /// the serve loop folds a fresh tally).
+    #[test]
+    fn render_value_corner_pins_all_time_pile_under_the_dashboard() {
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Auto,
+            Some("/repo/main"),
+            Some("main"),
+            Some("db migrate"),
+        );
+        claude.context = Some(claude_context(fixed_now()));
+        let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+        snapshot.providers = vec![provider_panel(
+            "claude",
+            "Claude",
+            173,
+            true,
+            true,
+            Some((25, 40)),
+        )];
+        snapshot.value_tally = Some(rimz::SpendTally {
+            today: rimz::SpendWindow {
+                usd: 40.23,
+                tokens: 3_300_000,
+            },
+            week: rimz::SpendWindow {
+                usd: 312.40,
+                tokens: 21_000_000,
+            },
+            month: rimz::SpendWindow {
+                usd: 1_240.57,
+                tokens: 33_000_000,
+            },
+            all_time: rimz::SpendWindow {
+                usd: 4_821.90,
+                tokens: 47_200_000,
+            },
+        });
+        let rendered = snapshot_to_screen(&snapshot, 54, 34);
+
+        // The hero pile: the `◈` money mark, the grouped all-time dollars, the
+        // `◇` token burn, and its scale whispered on the right edge.
+        assert!(rendered.contains('◈'), "the value mark:\n{rendered}");
+        assert!(
+            rendered.contains("$4,821.90"),
+            "grouped all-time spend:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("47.2M"),
+            "all-time token burn:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("all-time"),
+            "the hero's scale tag:\n{rendered}"
+        );
+        // This month's companion climbs a window the cockpit doesn't show.
+        assert!(
+            rendered.contains("$1,240.57"),
+            "this month's spend:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("this month"),
+            "the companion's scale tag:\n{rendered}"
+        );
+        // Today stays in the cockpit's `$` — the corner never repeats it.
+        assert!(
+            rendered.contains("$40.23"),
+            "today's spend in the cockpit:\n{rendered}"
+        );
+        assert_snapshot("value_corner", rendered);
     }
 
     /// The borderless repo header (dashboard L1): the workspace name behind `⌘`

@@ -48,6 +48,8 @@ struct PiMessage {
 
 #[derive(Deserialize)]
 struct PiUsage {
+    input: Option<u64>,
+    output: Option<u64>,
     cost: Option<PiCost>,
 }
 
@@ -160,6 +162,11 @@ pub fn parse_pi_jsonl(path: &Path) -> Vec<CachedEntry> {
         if cost <= 0.0 {
             continue;
         }
+        let tokens = msg
+            .usage
+            .as_ref()
+            .map(|u| u.input.unwrap_or(0) + u.output.unwrap_or(0))
+            .unwrap_or(0);
         let Some(ts) = entry.timestamp.as_deref() else {
             continue;
         };
@@ -170,6 +177,7 @@ pub fn parse_pi_jsonl(path: &Path) -> Vec<CachedEntry> {
         out.push(CachedEntry {
             date,
             cost_usd: cost,
+            tokens,
             message_id: None,
             request_id: None,
             is_sidechain: false,
@@ -200,6 +208,7 @@ mod tests {
         let entries = parse_pi_jsonl(&path);
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.42).abs() < 1e-9);
+        assert_eq!(entries[0].tokens, 150, "input 100 + output 50");
         assert_eq!(entries[0].date, "2026-06-02");
         assert!(entries[0].message_id.is_none());
         assert!(!entries[0].is_sidechain);

@@ -178,7 +178,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // subprocess on the render thread, and a busy fetch never freezes the spin
     // or swallows a keypress.
     while !should_exit {
-        let animating = render::has_live_animation(&current);
+        // A live row's spinner or a value-corner count-up both want the fast
+        // frame; either keeps the tick warm, and a settled corner releases it
+        // back to the slow data tick.
+        let phase = wall_clock_phase(anim_start);
+        let animating = render::has_live_animation(&current) || ui.tally.any_rolling(phase);
         let timeout = if animating {
             ANIMATION_FRAME.min(tick)
         } else {
@@ -955,7 +959,7 @@ fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
         worktree_roots: Vec::new(),
         sidebar: rimz::config::SidebarConfig::default(),
         providers: Vec::new(),
-        today_cost_usd: None,
+        value_tally: None,
     }
 }
 
@@ -1373,6 +1377,12 @@ fn apply_fetch_outcome(
         });
     reconcile_selection(ui, current, external_focus);
     ui.animation_phase = wall_clock_phase(anim_start);
+    // Fold the fresh tally into the count-up before drawing: a higher figure
+    // starts an eased roll that the next frames paint, a reset or first value
+    // snaps. A fetch without a tally leaves the rolls untouched.
+    if let Some(tally) = current.value_tally.as_ref() {
+        ui.tally.observe(tally, ui.animation_phase);
+    }
     render::draw_to_terminal_with_ui(terminal, current, health.alert.as_ref(), ui)?;
 
     // A renderer degraded this long is non-functional and, with a now-stale

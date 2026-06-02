@@ -279,6 +279,19 @@ An **unmetered (API-key) account** has no budget to drain, so it shows an `∞` 
 
 Every bar across every block shares one start column and one end column, so the dashboard reads as one aligned grid. A blank line separates blocks. The `⇅ rc` flag pins to a block's top-right when remote control is on for that provider (Claude only — it's host infrastructure, never its own row). Below ~34 columns the emblem is dropped and the bars run full-width. The brand emblem, color, and name are config-driven (`[sidebar.providers.<kind>]`, see [configuration.md](../reference/configuration.md)).
 
+### The value corner
+
+The fleet's running pile of work seals the bottom of the dashboard, above the footer — a quiet corner you learn to glance at, never a cue that competes with the rows. Two accumulating windows, money first: the **all-time** hero that climbs as the agents work, and this month's dim companion beneath it.
+
+```
+ ◈ $4,821.90 · ◇ 47.2M                       all-time
+   $1,240.57 · ◇ 33.0M                     this month
+```
+
+- **The pile (`◈`).** All-time spend in money-green, then the `◇` token burn, summed over every session of the project's worktrees. The figure only grows: when a turn lands it **rolls upward** — an eased count-up on the wall-clock animation frame, with a brief brighten as it settles. It never counts down, and it never rolls on first paint.
+- **This month.** The month-to-date pile, dim so the all-time hero leads. Today's `$` lives in the cockpit, so the corner never repeats it — the three windows escalate `today → this month → all-time`.
+- **Scale tags.** `all-time` / `this month` whisper the window on the right edge — the climbing number carries the rest, with no "earned" or "value" label. Spend is Claude-sourced today (`costUSD`); the token pile counts every provider that logs usage. The corner is dropped until something has been recorded.
+
 ## Bottom chrome
 
 Pinned to the bottom edge, below all three zones. The body is truncated before this chrome is ever clipped, so it can never scroll off.
@@ -329,6 +342,7 @@ The renderer's golden tests in [`crates/rimz-sidebar/src/render/`](../../crates/
 | worktree grouping + external | `worktree_attention_map` |
 | per-worktree cap | `group_cap_with_overflow` |
 | provider dashboard | `provider_dashboard` |
+| value corner | `value_corner` |
 | health alert | `degraded_banner` |
 
 When the renderer changes how something looks, update the `.snap` (the test prints the diff) and this doc together.
