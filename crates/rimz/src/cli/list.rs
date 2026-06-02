@@ -9,7 +9,7 @@
 //! By default the table shows running sessions plus workspaces touched within
 //! the last 24h; `--all` adds the dormant ones. A workspace directory missing
 //! its `workspace.json` is skipped silently — it is not a usable workspace, and
-//! `rimz workspace prune` reaps it. A *corrupt* record is still surfaced.
+//! `rimz gc` reaps it. A *corrupt* record is still surfaced.
 
 use std::time::{Duration, SystemTime};
 

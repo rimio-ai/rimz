@@ -7,7 +7,6 @@ use clap::{Args, Subcommand};
 use super::GlobalFlags;
 use rimz::ids::WorkspaceId;
 use rimz::ledger::event_log::RotationOutcome;
-use rimz::ledger::gc;
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, RuntimePaths, StatePaths};
 
@@ -29,8 +28,6 @@ enum WorkspaceSubcmd {
         old_root: PathBuf,
         new_root: PathBuf,
     },
-    /// Remove known workspace ledgers whose project roots no longer exist.
-    Prune,
     /// Rotate the active event log and prune older archives.
     RotateEvents(RotateEventsArgs),
 }
@@ -57,7 +54,6 @@ pub fn run(args: WorkspaceArgs, globals: &GlobalFlags) -> Result<()> {
             Ok(())
         }
         WorkspaceSubcmd::Migrate { old_root, new_root } => migrate(old_root, new_root),
-        WorkspaceSubcmd::Prune => prune(),
         WorkspaceSubcmd::RotateEvents(args) => rotate_events(args, globals),
     }
 }
@@ -125,39 +121,6 @@ fn migrate(old_root: PathBuf, new_root: PathBuf) -> Result<()> {
         println!("  events        : {}", outcome.events_rewritten);
     }
     Ok(())
-}
-
-fn prune() -> Result<()> {
-    let report = gc::prune_dead_workspaces().context("pruning dead workspaces")?;
-    #[expect(clippy::print_stdout, reason = "user-facing maintenance report")]
-    {
-        println!("pruned {} workspace(s)", report.removed.len());
-        println!("  kept          : {}", report.kept);
-        println!("  skipped       : {}", report.retained_unreadable.len());
-        print_prune_removals(&report);
-        for (workspace_id, err) in &report.retained_unreadable {
-            println!("  skipped       : {workspace_id} ({err})");
-        }
-    }
-    Ok(())
-}
-
-/// Render the per-workspace removal lines shared by `workspace prune` and `gc`.
-#[expect(clippy::print_stdout, reason = "user-facing maintenance report")]
-pub(super) fn print_prune_removals(report: &gc::WorkspacePruneReport) {
-    for removed in &report.removed {
-        match &removed.project_root {
-            Some(root) => println!(
-                "  removed       : {} {}",
-                removed.workspace_id,
-                root.display()
-            ),
-            None => println!(
-                "  removed       : {} (abandoned scaffold)",
-                removed.workspace_id
-            ),
-        }
-    }
 }
 
 fn rotate_events(args: RotateEventsArgs, globals: &GlobalFlags) -> Result<()> {

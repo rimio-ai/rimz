@@ -1,4 +1,4 @@
-//! Integration coverage for `rimz workspace migrate/prune/rotate-events`.
+//! Integration coverage for `rimz workspace migrate/rotate-events`.
 
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
@@ -155,62 +155,4 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
         .assert()
         .success()
         .stdout(contains("event-log rotation skipped"));
-}
-
-#[test]
-fn workspace_prune_removes_ledgers_for_missing_roots() {
-    let env = Env::new();
-    let live_root = env.project_root.join("live-project");
-    let gone_root = env.project_root.join("gone-project");
-    env.record(&live_root);
-    env.record(&gone_root);
-
-    let live_paths = env.state_path_for(&live_root);
-    let gone_paths = env.state_path_for(&gone_root);
-    std::fs::remove_dir_all(&gone_root).expect("remove gone root");
-
-    env.rimz()
-        .args(["workspace", "prune"])
-        .assert()
-        .success()
-        .stdout(contains("pruned 1 workspace(s)"))
-        .stdout(contains("kept          : 1"));
-
-    assert!(live_paths.root.exists(), "live ledger should remain");
-    assert!(!gone_paths.root.exists(), "gone ledger should be pruned");
-}
-
-#[test]
-fn workspace_prune_reaps_scaffold_but_keeps_unreadable_history() {
-    let env = Env::new();
-    let workspaces = env.state_root().join("rimz").join("workspaces");
-    std::fs::create_dir_all(&workspaces).expect("mkdir workspaces");
-
-    // An abandoned `rimz start` scaffold: empty subdirs, no workspace.json.
-    let scaffold =
-        workspaces.join(WorkspaceId::from_project_root(std::path::Path::new("/scaffold")).as_str());
-    for sub in ["feed", "locks", "snapshots"] {
-        std::fs::create_dir_all(scaffold.join(sub)).expect("mkdir scaffold sub");
-    }
-
-    // An unreadable record that still holds history: kept and reported.
-    let history =
-        workspaces.join(WorkspaceId::from_project_root(std::path::Path::new("/history")).as_str());
-    std::fs::create_dir_all(&history).expect("mkdir history");
-    std::fs::write(history.join("workspace.json"), b"{ not json").expect("garbled record");
-    std::fs::write(history.join("events.log.jsonl"), b"{}\n").expect("history");
-
-    env.rimz()
-        .args(["workspace", "prune"])
-        .assert()
-        .success()
-        .stdout(contains("pruned 1 workspace(s)"))
-        .stdout(contains("abandoned scaffold"))
-        .stdout(contains("skipped       : 1"));
-
-    assert!(!scaffold.exists(), "abandoned scaffold should be reaped");
-    assert!(
-        history.exists(),
-        "unreadable record with history should be kept"
-    );
 }

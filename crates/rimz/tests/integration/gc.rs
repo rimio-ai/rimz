@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
 use rimz::schema::heartbeat::ResolverHeartbeat;
-use rimz::{ResolverId, RuntimePaths};
+use rimz::{ResolverId, RuntimePaths, WorkspaceId};
 
 use crate::common::Env;
 
@@ -58,5 +58,40 @@ fn gc_prunes_dead_root_workspace() {
     assert!(
         !gone_paths.root.exists(),
         "gc should reap the workspace whose project root is gone"
+    );
+}
+
+#[test]
+fn gc_reaps_scaffold_but_keeps_unreadable_history() {
+    let env = Env::new();
+    let workspaces = env.state_root().join("rimz").join("workspaces");
+    std::fs::create_dir_all(&workspaces).expect("mkdir workspaces");
+
+    // An abandoned `rimz start` scaffold: empty subdirs, no workspace.json.
+    let scaffold =
+        workspaces.join(WorkspaceId::from_project_root(std::path::Path::new("/scaffold")).as_str());
+    for sub in ["feed", "locks", "snapshots"] {
+        std::fs::create_dir_all(scaffold.join(sub)).expect("mkdir scaffold sub");
+    }
+
+    // An unreadable record that still holds history: kept and reported.
+    let history =
+        workspaces.join(WorkspaceId::from_project_root(std::path::Path::new("/history")).as_str());
+    std::fs::create_dir_all(&history).expect("mkdir history");
+    std::fs::write(history.join("workspace.json"), b"{ not json").expect("garbled record");
+    std::fs::write(history.join("events.log.jsonl"), b"{}\n").expect("history");
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("gc complete"))
+        .stdout(contains("abandoned scaffold"))
+        .stdout(contains("retained      : 1"));
+
+    assert!(!scaffold.exists(), "abandoned scaffold should be reaped");
+    assert!(
+        history.exists(),
+        "unreadable record with history should be kept"
     );
 }

@@ -43,7 +43,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         println!("  dirs removed  : {}", report.dirs_removed);
         println!("  bytes removed : {}", report.bytes_removed);
         println!("  workspaces    : {}", prune.removed.len());
-        super::workspace::print_prune_removals(&prune);
+        print_prune_removals(&prune);
         if !prune.retained_unreadable.is_empty() {
             println!(
                 "  retained      : {} (unreadable record + history)",
@@ -52,6 +52,24 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Render the per-workspace removal lines for the prune step.
+#[expect(clippy::print_stdout, reason = "user-facing maintenance report")]
+fn print_prune_removals(report: &gc::WorkspacePruneReport) {
+    for removed in &report.removed {
+        match &removed.project_root {
+            Some(root) => println!(
+                "  removed       : {} {}",
+                removed.workspace_id,
+                root.display()
+            ),
+            None => println!(
+                "  removed       : {} (abandoned scaffold)",
+                removed.workspace_id
+            ),
+        }
+    }
 }
 
 fn parse_duration(raw: &str) -> std::result::Result<Duration, String> {
