@@ -45,6 +45,17 @@ A new agent earns its context gauge by implementing the transcript half, and its
 
 Per [testing.md](../contributing/testing.md), golden the mapping from a fixture tail and a fixture transport payload, including the fresh-session zero and the unreadable-unknown cases.
 
+## Cost history
+
+The gauge above reads a bounded *tail* for the live row. A second read-path walks the *whole* transcript history to total spend — the sidebar's today / week / month figures. It lives in [`agents/transcript/`](../../crates/rimz/src/agents/transcript/mod.rs): one read-only parser per provider ([`claude`](../../crates/rimz/src/agents/transcript/claude.rs), [`codex`](../../crates/rimz/src/agents/transcript/codex.rs), [`pi`](../../crates/rimz/src/agents/transcript/pi.rs)) that turns a provider's full session JSONL into cost/token records, aggregated by [`spending::compute_spending`](../../crates/rimz/src/agents/spending.rs).
+
+It is **read-only and sidebar-safe** — no ledger writes — so it sits apart from the integration adapters. Two parsing concerns are provider-specific:
+
+- **Dedup.** Claude replays a parent message into each subagent file with an inflated cost; `compute_spending` dedups by `(message.id, requestId)` across files and suppresses the sidechain replay so a turn is counted once. Pi and Codex sessions are single-file and need no cross-file dedup.
+- **Cost source.** Claude and Pi log `costUSD` directly. Codex logs only token counts, so converting its events to dollars additionally needs a per-model pricing table.
+
+Today only the Claude parser is wired into the live path ([`cli/sidebar.rs`](../../crates/rimz/src/cli/sidebar.rs) feeds it Claude project files); the Codex and Pi parsers are complete and tested but staged ahead of their consumer (the pricing table and a broader transcript-history analysis), not dead code. Per [testing.md](../contributing/testing.md), golden each parser from a fixture JSONL, including the dedup and zero/negative-cost cases.
+
 ---
 
 ## Appendix — Claude Code
@@ -57,13 +68,13 @@ Per [testing.md](../contributing/testing.md), golden the mapping from a fixture 
 | context tokens + `usage.output_tokens`                                    | `total_tokens`                            |
 | `message.model`                                                           | `model` (bare id — no capability marker)  |
 
-Claude writes only the bare model id, so the **window divisor is resolved by the caller, not the transcript**: [`context_window_for`](../../crates/rimz/src/agents/claude.rs) reads the `[1m]` marker off the *hook payload's* `model` (1,000,000 tokens) and otherwise assumes the 200,000 standard window, then scales the context tokens to `context_pct`. The marker rides only the payload, never the transcript, so resolving the payload model first is what keeps the 1M gauge correct.
+Claude writes only the bare model id, so the **window divisor is resolved by the caller, not the transcript**: [`context_window_for`](../../crates/rimz/src/agents/claude/mod.rs) reads the `[1m]` marker off the *hook payload's* `model` (1,000,000 tokens) and otherwise assumes the 200,000 standard window, then scales the context tokens to `context_pct`. The marker rides only the payload, never the transcript, so resolving the payload model first is what keeps the 1M gauge correct.
 
-**Rich context.** Claude `exec`s its configured `statusLine` command on every render and pipes a JSON blob to stdin (the full schema is in [adapter/claude-reference.md → Statusline JSON](./adapter/claude-reference.md#statusline-json)). Install points `statusLine` at `rimz statusline feed --source claude`; [`observe_context`](../../crates/rimz/src/agents/statusline.rs) parses that blob into `AgentContext`. When the user already has a `statusLine`, install **wraps** it rather than replacing it: it captures the JSON, passes it unchanged to the original command, and forwards that command's stdout and exit code, so rendering is visually identical. The original is stored verbatim under `_rimz_wrapped` and restored on uninstall. The wrap is a visible security surface — the consent gate summarizes it and the install diff shows it in full — and its child's stdio is fully piped, never inherited. Field-exact shapes are the inline goldens in [`statusline.rs`](../../crates/rimz/src/agents/statusline.rs).
+**Rich context.** Claude `exec`s its configured `statusLine` command on every render and pipes a JSON blob to stdin (the full schema is in [adapter/claude-reference.md → Statusline JSON](./adapter/claude-reference.md#statusline-json)). Install points `statusLine` at `rimz statusline feed --source claude`; [`observe_context`](../../crates/rimz/src/agents/claude/statusline.rs) parses that blob into `AgentContext`. When the user already has a `statusLine`, install **wraps** it rather than replacing it: it captures the JSON, passes it unchanged to the original command, and forwards that command's stdout and exit code, so rendering is visually identical. The original is stored verbatim under `_rimz_wrapped` and restored on uninstall. The wrap is a visible security surface — the consent gate summarizes it and the install diff shows it in full — and its child's stdio is fully piped, never inherited. Field-exact shapes are the inline goldens in [`statusline.rs`](../../crates/rimz/src/agents/claude/statusline.rs).
 
 ## Appendix — Codex
 
-**Transcript.** Codex writes one rollout file per session at `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session_id>.jsonl`. Given the payload's `session_id`, [`find_session_transcript`](../../crates/rimz/src/agents/codex.rs) descends the date tree newest-first, bounded by a day-directory budget so a large archive never stalls the walk; `RIMZ_CODEX_SESSIONS` overrides the root for tests. Two rollout event types feed the gauge:
+**Transcript.** Codex writes one rollout file per session at `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session_id>.jsonl`. Given the payload's `session_id`, [`find_session_transcript`](../../crates/rimz/src/agents/codex/mod.rs) descends the date tree newest-first, bounded by a day-directory budget so a large archive never stalls the walk; `RIMZ_CODEX_SESSIONS` overrides the root for tests. Two rollout event types feed the gauge:
 
 | Rollout event   | Field                                          | Internal                                  |
 | --------------- | ---------------------------------------------- | ----------------------------------------- |
@@ -73,11 +84,11 @@ Claude writes only the bare model id, so the **window divisor is resolved by the
 
 Unlike Claude — which stores raw tokens and derives the window from the payload model — Codex stores a **precomputed `context_pct`**, because the rollout carries the window (`model_context_window`) directly.
 
-**Rich context.** Codex has no statusline, so its `AgentContext` is read out of band from the official `codex app-server` (JSON-RPC 2.0 over stdio) by [`codex_app_server.rs`](../../crates/rimz/src/agents/codex_app_server.rs). The client speaks only **read-only, non-interfering** methods — the handshake, the rate-limit read, and the model list (the methods and their response schemas are in [adapter/codex-reference.md → App-server API](./adapter/codex-reference.md#app-server-api)). It never calls `thread/resume`, `turn/start`, or any write, which would rejoin and own the user's live thread.
+**Rich context.** Codex has no statusline, so its `AgentContext` is read out of band from the official `codex app-server` (JSON-RPC 2.0 over stdio) by [`app_server.rs`](../../crates/rimz/src/agents/codex/app_server.rs). The client speaks only **read-only, non-interfering** methods — the handshake, the rate-limit read, and the model list (the methods and their response schemas are in [adapter/codex-reference.md → App-server API](./adapter/codex-reference.md#app-server-api)). It never calls `thread/resume`, `turn/start`, or any write, which would rejoin and own the user's live thread.
 
 The trigger is never inline: a turn-boundary hook spawns `rimz codex refresh-context` detached with null stdio, so the hook returns before the round-trip and adds no latency. That helper writes the same per-session `AgentContext` sidecar Claude's statusline produces. The producer also keeps the account-scoped balance windows fresh between turns on a bounded cadence — the rate-limit refresh logic (and the `rimz codex refresh-rate-limits` idle path) lives in [account.md → Refresh cadences](./account.md#refresh-cadences). `RIMZ_CODEX_BIN` overrides the binary for tests. Connection preference is warmest-first, all best-effort with a cold-spawn floor so enrichment never depends on any one of them:
 
-1. **The per-session broker** ([`codex_broker.rs`](../../crates/rimz/src/agents/codex_broker.rs), run as `rimz codex app-server serve` in the `rimzd` daemon tab) holds one warm, already-handshaked `codex app-server` and serves it over a unix socket, so each datapoint skips the cold handshake.
+1. **The per-session broker** ([`broker.rs`](../../crates/rimz/src/agents/codex/broker.rs), run as `rimz codex app-server serve` in the `rimzd` daemon tab) holds one warm, already-handshaked `codex app-server` and serves it over a unix socket, so each datapoint skips the cold handshake.
 2. **The per-user remote-control daemon**, re-used via `codex app-server proxy --sock <path>` (overridable by `RIMZ_CODEX_APP_SERVER_SOCK`).
 3. **A fresh cold-spawned `codex app-server`** — the always-present fallback, so headless / no-mux still enriches.
 

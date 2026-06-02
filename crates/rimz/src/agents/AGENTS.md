@@ -2,6 +2,10 @@
 
 Local contract for `crates/rimz/src/agents/` — the integration layer. Extends the root [AGENTS.md](../../../../AGENTS.md); it never restates parent rules. The decision/lifecycle hook model lives in [docs/internals/hooks.md](../../../../docs/internals/hooks.md); the context read-path — transcript-tail parsing and the rich-context transports — is [docs/internals/transcript.md](../../../../docs/internals/transcript.md); the account/balance mapping — auth probes, rate-limit windows, dashboard aggregation — is [docs/internals/account.md](../../../../docs/internals/account.md); the agent-state rollup is [docs/internals/agent.md](../../../../docs/internals/agent.md). The upstream protocol each adapter binds to — native hook events, statusline schema, app-server methods, decision JSON, with source URLs — is mirrored in [docs/internals/adapter/claude-reference.md](../../../../docs/internals/adapter/claude-reference.md) and [docs/internals/adapter/codex-reference.md](../../../../docs/internals/adapter/codex-reference.md).
 
+## Layout
+
+Shared, provider-agnostic code sits at the top level — the [`AgentIntegration`](./mod.rs) trait and registry, [`AgentLifecycleObservation`](./observation.rs) and its shared `observe_lifecycle` scaffolding, [`AgentContext`](./context.rs), the wire enums in [`hook_types.rs`](./hook_types.rs), the [`account`](./account.rs) probe, and [`spending`](./spending.rs) aggregation. Each provider's hook adapter is a sibling directory ([`claude/`](./claude/mod.rs), [`codex/`](./codex/mod.rs)) owning its integration, typed payloads, and rich-context transport. The [`transcript/`](./transcript/mod.rs) tree is the read-only, sidebar-safe full-history cost parsers `spending` consumes — kept apart from the ledger-writing adapters. Adding an agent is a new `<name>/` directory.
+
 ## The boundary
 
 An adapter is the *single* place a native agent protocol is normalized. It owns `classify_hook`, `observe_lifecycle`, `render_decision`, `render_neutral`, and install / uninstall / preview for one agent. Adding an agent is implementing [`AgentIntegration`](./mod.rs) and nothing else.

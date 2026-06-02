@@ -2,7 +2,7 @@
 
 > The mapping onto Rimz's internal types lives beside this doc: [hooks.md](../hooks.md) maps hook events to lifecycle/feed channels, [transcript.md](../transcript.md) maps the rollout transcript and app-server onto `AgentContext`, [account.md](../account.md) maps the auth surface onto account and balance.
 
-This is the single home for the **Codex upstream protocol surface** Rimz binds to — the hook events and their decision schema, the `notify` channel, the app-server JSON-RPC API, the rollout transcript, and the auth file. It is a hand-maintained mirror of OpenAI's published docs and the open-source `codex-rs` types, kept for fast lookup and pinned to the source URLs below. The [`CodexIntegration`](../../../crates/rimz/src/agents/codex.rs) adapter and the [`codex_app_server`](../../../crates/rimz/src/agents/codex_app_server.rs) client are the only code that reads this surface.
+This is the single home for the **Codex upstream protocol surface** Rimz binds to — the hook events and their decision schema, the `notify` channel, the app-server JSON-RPC API, the rollout transcript, and the auth file. It is a hand-maintained mirror of OpenAI's published docs and the open-source `codex-rs` types, kept for fast lookup and pinned to the source URLs below. The [`CodexIntegration`](../../../crates/rimz/src/agents/codex/mod.rs) adapter and the [`codex::app_server`](../../../crates/rimz/src/agents/codex/app_server.rs) client are the only code that reads this surface.
 
 Coverage is **depth on what Rimz wires, breadth as an index**: the events, app-server methods, and rollout fields the code actually parses or emits are documented in full; the rest of the catalog is listed so a contributor wiring a new path knows it exists.
 
@@ -28,7 +28,7 @@ codex app-server generate-json-schema --out DIR  # JSON Schema bundle
 
 ## Hooks
 
-Codex hooks mirror Claude's shape: a command Codex runs at a lifecycle point, fed a JSON payload on **stdin**, returning a decision on **stdout**. They are wired in `~/.codex/config.toml` as `[[hooks.Event]]` tables. Rimz's [`CodexIntegration`](../../../crates/rimz/src/agents/codex.rs) `INSTALLED_EVENTS` constant is the source of truth for the wired set; the native-event → Rimz status mapping is the [hooks.md Codex appendix](../hooks.md#appendix--codex).
+Codex hooks mirror Claude's shape: a command Codex runs at a lifecycle point, fed a JSON payload on **stdin**, returning a decision on **stdout**. They are wired in `~/.codex/config.toml` as `[[hooks.Event]]` tables. Rimz's [`CodexIntegration`](../../../crates/rimz/src/agents/codex/mod.rs) `INSTALLED_EVENTS` constant is the source of truth for the wired set; the native-event → Rimz status mapping is the [hooks.md Codex appendix](../hooks.md#appendix--codex).
 
 ### Config shape
 
@@ -103,7 +103,7 @@ For reference, Codex's other decision shapes (Rimz does not currently emit these
 { "decision": "block", "reason": "string" }
 ```
 
-**Exit codes.** Exit `0` with JSON processes the output; exit `0` with no output continues; exit `2` is a blocking failure (stderr read as the reason/message). The neutral path Rimz takes is empty stdout, exit 0. Exact bytes are the inline goldens in [`codex.rs`](../../../crates/rimz/src/agents/codex.rs).
+**Exit codes.** Exit `0` with JSON processes the output; exit `0` with no output continues; exit `2` is a blocking failure (stderr read as the reason/message). The neutral path Rimz takes is empty stdout, exit 0. Exact bytes are the inline goldens in [`codex/mod.rs`](../../../crates/rimz/src/agents/codex/mod.rs).
 
 ## `notify` channel
 
@@ -143,7 +143,7 @@ The protocol is organized around three primitives: an **Item** (atomic input/out
 
 ### Methods Rimz uses
 
-The [`codex_app_server`](../../../crates/rimz/src/agents/codex_app_server.rs) client speaks only **read-only, non-interfering** methods — it never calls `thread/resume`, `turn/start`, or any write, which would rejoin and own the user's live thread.
+The [`codex::app_server`](../../../crates/rimz/src/agents/codex/app_server.rs) client speaks only **read-only, non-interfering** methods — it never calls `thread/resume`, `turn/start`, or any write, which would rejoin and own the user's live thread.
 
 **`initialize`** → handshake; the response `userAgent` carries the Codex version.
 

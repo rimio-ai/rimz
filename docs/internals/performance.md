@@ -79,7 +79,7 @@ Real wins the pass identified but did not take, because each changes a contract 
 3. **Opt-in async / group-commit event-log fsync.** The per-record `sync_data` is the durability floor; a workspace that tolerates bounded event loss could batch it for throughput. Risk: correctness — this stays opt-in and documented, never the default (principle 4).
 4. **DRY the status and hit-test helpers.** The `AgentStatus` rank/glyph/attention logic and the mouse-hit-test geometry are duplicated across the renderer and `app`. Quality, not throughput — fold into one authority on a focused pass.
 
-*Taken:* the **persistent Codex app-server connection** — a per-session broker ([codex_broker](./transcript.md#appendix--codex)) holds one warm, already-handshaked `codex app-server` and serves it over a unix socket, so each datapoint skips the cold-spawn handshake. Lifecycle and ownership (the flagged risk) live in the broker: it runs as a pane in the `rimzd` daemon tab, respawns a dead child once, and always leaves a cold-spawn fallback so enrichment never depends on it.
+*Taken:* the **persistent Codex app-server connection** — a per-session broker ([codex::broker](./transcript.md#appendix--codex)) holds one warm, already-handshaked `codex app-server` and serves it over a unix socket, so each datapoint skips the cold-spawn handshake. Lifecycle and ownership (the flagged risk) live in the broker: it runs as a pane in the `rimzd` daemon tab, respawns a dead child once, and always leaves a cold-spawn fallback so enrichment never depends on it.
 
 ## Adding a performance change
 

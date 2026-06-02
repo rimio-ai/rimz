@@ -16,9 +16,10 @@ Every agent — Claude, Codex, and every future one — speaks to Rimz through o
 - **`observe_lifecycle`** is the normalizer: it maps a native lifecycle event onto one [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs) — the unified event shape every downstream reducer reads. `None` means "no state transition here", so high-frequency events stay silent.
 - **`render_decision`** / **`render_neutral`** emit the agent-native decision JSON when a resolver answers, and the neutral no-op when no one does.
 - **`hook_cap`** is how long a blocking hook may park on the bridge before falling back to neutral — set from the upstream's published deadline (default [`DEFAULT_HOOK_CAP`](../../crates/rimz/src/agents/mod.rs), 300s).
-- **`posture_from_payload`** samples the permission slider from a hook payload — the reading an `observe_lifecycle` event reports, and the hook for sampling one a lifecycle event omits (how the posture is folded and rendered is [agent.md → Plan mode](./agent.md#plan-mode-as-a-sticky-posture)).
 - **`observe_context`** normalizes a rich out-of-band payload into [`AgentContext`](../../crates/rimz/src/agents/mod.rs); `ends_session` / `moves_on` mark the events that expire a session's pending asks.
 - **`install_hooks`** / **`preview_hook_install`** / **`uninstall_hooks`** / **`hooks_installed`** / **`supports_hook_install`** own the per-user config write and report it.
+
+Permission posture is not a trait method: it is a shared helper (`posture_from_mode` in [`mod.rs`](../../crates/rimz/src/agents/mod.rs)) that each adapter calls inside `observe_lifecycle` to map the payload's permission slider onto the unified posture. A lifecycle event that names no slider reports `None`, so the reducer carries the prior posture forward (how it is folded and rendered is [agent.md → Plan mode](./agent.md#plan-mode-as-a-sticky-posture)).
 
 Two invariants hold the seam shut:
 
@@ -96,7 +97,7 @@ Native event → internal mapping. The appendix says *which native events are wi
 
 **Classification.** `ExitPlanMode` and `AskUserQuestion` ride the broad `PreToolUse` hook and self-classify from `tool_name`, so they need no dedicated matcher (Claude runs every matching matcher group, and the broad entry already covers them). A turn-end `Stop` resolves to `success` or `failed` (`stop_status_from_payload`); a `Stop` whose payload still lists in-flight `background_tasks` (Claude Code v2.1.145+) is the main thread parking, not a turn end, so the row stays `running` and labels itself with that work.
 
-**Decision shapes.** Claude wraps a permission answer in `hookSpecificOutput.decision`; `ExitPlanMode` / `AskUserQuestion` answer on the `PreToolUse` event and **require** `updatedInput` (a missing field is a hard render error). The neutral path is empty stdout. The verbatim shapes are in [adapter/claude-reference.md](./adapter/claude-reference.md#hooks-rimz-wires); exact bytes are the inline goldens in [`claude.rs`](../../crates/rimz/src/agents/claude.rs).
+**Decision shapes.** Claude wraps a permission answer in `hookSpecificOutput.decision`; `ExitPlanMode` / `AskUserQuestion` answer on the `PreToolUse` event and **require** `updatedInput` (a missing field is a hard render error). The neutral path is empty stdout. The verbatim shapes are in [adapter/claude-reference.md](./adapter/claude-reference.md#hooks-rimz-wires); exact bytes are the inline goldens in [`claude/mod.rs`](../../crates/rimz/src/agents/claude/mod.rs).
 
 **Cap & install.** `hook_cap` is 120s (`CLAUDE_HOOK_CAP`; upstream ~125s, with a 5s margin so the bridge times out before Claude kills the hook). Install merges non-destructively into `~/.claude/settings.json` under per-matcher `_rimz_managed` markers; only `PermissionRequest` carries `_rimz_sync = true`, and an existing async marker on it is a hard install error.
 
@@ -120,7 +121,7 @@ Native event → internal mapping; the upstream events, payloads, and decision s
 
 Codex has no `SessionEnd` or `Notification` hook, so `ends_session` is never true — a Codex session leaves the rollup by liveness alone (see [agent.md](./agent.md#liveness-and-presence)).
 
-**Decision shape.** Codex permission hooks emit only `hookSpecificOutput.decision` (`behavior` plus an optional `message`); never `updatedInput`, `updatedPermissions`, or `interrupt`, which belong to other Codex hook types and corrupt the decision. The neutral path is empty stdout. The verbatim shape and the full divergence note are in [adapter/codex-reference.md](./adapter/codex-reference.md#decision-and-output-schema); exact bytes are the inline goldens in [`codex.rs`](../../crates/rimz/src/agents/codex.rs).
+**Decision shape.** Codex permission hooks emit only `hookSpecificOutput.decision` (`behavior` plus an optional `message`); never `updatedInput`, `updatedPermissions`, or `interrupt`, which belong to other Codex hook types and corrupt the decision. The neutral path is empty stdout. The verbatim shape and the full divergence note are in [adapter/codex-reference.md](./adapter/codex-reference.md#decision-and-output-schema); exact bytes are the inline goldens in [`codex/mod.rs`](../../crates/rimz/src/agents/codex/mod.rs).
 
 **Cap & install.** `hook_cap` is 60s (`CODEX_HOOK_CAP`); chain budgets must account for the shorter ceiling. Install writes inline `[[hooks.Event]]` tables in `~/.codex/config.toml` with the same `--event`-free command and substring reclaim as Claude; the legacy `[hooks.rimz]` table is ignored by Codex and removed on uninstall.
 

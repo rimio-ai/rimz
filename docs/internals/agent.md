@@ -64,7 +64,7 @@ The **displayed** status refines the rollup without changing it — `snapshot.ag
 
 ### Plan mode as a sticky posture
 
-`plan` is one position of the permission slider, not a separate flag: thinking is `running` joined to `permission_posture == plan`. Rimz samples posture from lifecycle observations only (`posture_from_payload`); an observation that names no slider carries the prior value forward. It never infers plan mode from prompt text or transcript content.
+`plan` is one position of the permission slider, not a separate flag: thinking is `running` joined to `permission_posture == plan`. Rimz samples posture from lifecycle observations only (`posture_from_mode`); an observation that names no slider carries the prior value forward. It never infers plan mode from prompt text or transcript content.
 
 - **Approving a plan** moves the slider off `plan`; the next observation that reports the new posture drops the thinking state.
 - **Shift-tabbing out of `plan`** mid-turn may raise no observation, so the sidebar can lag until the next one. That bounded latency is intentional — the sidebar is observational, and the simpler model avoids transcript/prompt heuristics.
