@@ -230,9 +230,9 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 snapshot = snapshot.with_agent_activity(&activity);
             }
 
-            // Wiring state gates the live-pane fold (the idle-Codex-pane
-            // synthesis), so set it before folding panes, not after.
-            snapshot.codex_hooks_ready = rimz::sidebar::snapshot::codex_hooks_ready();
+            // Wiring state gates the live-pane fold (the idle-instance synthesis),
+            // so set it before folding panes, not after.
+            snapshot.wired_lazy_kinds = rimz::sidebar::snapshot::wired_lazy_kinds();
             if let Some(panes) = panes {
                 if let Some(own) = exclude.as_ref() {
                     // The producer just sampled this pane list (focus included),

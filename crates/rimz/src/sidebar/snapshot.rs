@@ -393,14 +393,25 @@ pub fn agent_hooks_ready() -> bool {
     })
 }
 
-/// Whether Codex specifically has its Rimz hooks installed. Codex-specific, not
-/// `agent_hooks_ready`'s any-agent check, so a Claude-only install never promotes
-/// an unwired Codex pane to an idle agent (it would otherwise read as a
-/// forever-idle agent Rimz can report no status for). Environment, not ledger.
-pub fn codex_hooks_ready() -> bool {
-    crate::agents::integration_by_name("codex")
-        .map(|agent| agent.supports_hook_install() && agent.hooks_installed())
-        .unwrap_or(false)
+/// The lazy-registering agent kinds whose Rimz hooks are installed — the gate for
+/// the idle-instance synthesis on a wired-but-unbound agent pane. Filtered to lazy
+/// agents (not `agent_hooks_ready`'s any-agent check), so a Claude-only install
+/// never promotes an unwired Codex pane to an idle agent (it would otherwise read
+/// as a forever-idle agent Rimz can report no status for). Environment, not ledger.
+pub fn wired_lazy_kinds() -> Vec<String> {
+    crate::agents::KNOWN_AGENTS
+        .iter()
+        .filter(|name| {
+            crate::agents::integration_by_name(name)
+                .map(|agent| {
+                    agent.registers_session_lazily()
+                        && agent.supports_hook_install()
+                        && agent.hooks_installed()
+                })
+                .unwrap_or(false)
+        })
+        .map(|name| (*name).to_owned())
+        .collect()
 }
 
 /// Render the published snapshot for a consumer renderer, entirely from runtime
@@ -472,9 +483,9 @@ pub fn enrich_consumer(
         let activity = crate::agent_activity::read_all(runtime);
         snapshot = snapshot.with_agent_activity(&activity);
     }
-    // Wiring state gates the live-pane fold (the idle-Codex-pane synthesis), so
-    // set it before folding panes, not after.
-    snapshot.codex_hooks_ready = codex_hooks_ready();
+    // Wiring state gates the live-pane fold (the idle-instance synthesis), so set
+    // it before folding panes, not after.
+    snapshot.wired_lazy_kinds = wired_lazy_kinds();
     if let Some(panes) = panes {
         if let Some(own) = exclude {
             snapshot.own_view = SidebarOwnView::from_panes(own, &panes, observed_at);

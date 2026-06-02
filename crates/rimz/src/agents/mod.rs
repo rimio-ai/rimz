@@ -285,6 +285,19 @@ pub trait AgentIntegration: Send + Sync {
         false
     }
 
+    /// Whether this agent's instances can be present without a stamped session —
+    /// the agent registers its session lazily (no `SessionStart` at launch) and/or
+    /// routes its hooks through a daemon (so the hook stamps no pane). For such an
+    /// agent an instance exists before any session id binds, so the sidebar binds
+    /// a session to its pane by cwd and renders a wired-but-unbound pane as an idle
+    /// instance. Defaults to `false` — an agent that stamps a live pane on every
+    /// session (Claude) is genuinely gone when its pane has no session, never idle-
+    /// synthesized or cwd-rescued. Codex overrides; see
+    /// [docs/internals/agent.md → The instance lifecycle](../../../docs/internals/agent.md).
+    fn registers_session_lazily(&self) -> bool {
+        false
+    }
+
     /// Write or merge the adapter's hook config into the agent's per-user
     /// config file. Defaults to an explicit "not implemented" error until an
     /// adapter owns installation.
@@ -358,6 +371,17 @@ pub fn integration_by_name(name: &str) -> Result<Box<dyn AgentIntegration>> {
         "codex" => Ok(Box::new(CodexIntegration)),
         other => Err(AgentErr::Unknown(other.to_owned())),
     }
+}
+
+/// Whether `kind` registers its session lazily / routes hooks through a daemon, so
+/// its instances can be present without a stamped session
+/// ([`AgentIntegration::registers_session_lazily`]). The sidebar reducer reads this
+/// to bind an unstamped session to its pane by cwd and to synthesize an idle row
+/// for a wired-but-unbound pane. An unknown kind is not lazy.
+pub(crate) fn registers_session_lazily(kind: &str) -> bool {
+    integration_by_name(kind)
+        .map(|agent| agent.registers_session_lazily())
+        .unwrap_or(false)
 }
 
 /// Resolve an agent's per-user config file path. An explicit `override_env`

@@ -162,6 +162,15 @@ impl AgentIntegration for CodexIntegration {
         matches!(event_name, "Stop" | "UserPromptSubmit")
     }
 
+    fn registers_session_lazily(&self) -> bool {
+        // Codex fires no `SessionStart` on a plain CLI launch — it rides the first
+        // `UserPromptSubmit` — and its hooks fire from the app-server with no mux
+        // pane env, so a session is unstamped. Both make a Codex instance present
+        // before any session binds: the sidebar binds it to its pane by cwd and
+        // renders a wired-but-unprompted `codex` pane as an idle agent.
+        true
+    }
+
     fn observe_lifecycle(
         &self,
         event_name: &str,
@@ -814,6 +823,16 @@ mod tests {
             "codex",
             "agent-hook",
         )
+    }
+
+    #[test]
+    fn codex_registers_its_session_lazily() {
+        // Codex's instances can be present before a session binds (lazy
+        // `SessionStart`, daemon-routed unstamped hooks), so it opts into the
+        // sidebar's cwd-bind + idle-instance synthesis. Claude keeps the default
+        // `false` (it stamps a pane on every session).
+        assert!(CodexIntegration.registers_session_lazily());
+        assert!(!crate::agents::ClaudeIntegration.registers_session_lazily());
     }
 
     #[test]

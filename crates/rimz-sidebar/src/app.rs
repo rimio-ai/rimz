@@ -952,7 +952,7 @@ fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
         resolver_working: Vec::new(),
         agents: Vec::new(),
         agent_hooks_ready: false,
-        codex_hooks_ready: false,
+        wired_lazy_kinds: Vec::new(),
         own_view: None,
         only_daemon_view_remains: false,
         project_root: None,

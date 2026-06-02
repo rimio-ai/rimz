@@ -78,16 +78,18 @@ pub struct SidebarSnapshot {
     /// `false`, where the renderer suppresses the hint anyway.
     #[serde(default)]
     pub agent_hooks_ready: bool,
-    /// Whether Codex specifically has its Rimz hooks wired. Gates the
-    /// idle-Codex-pane synthesis in `rows_from_panes`: a launched-but-unprompted
-    /// Codex has no ledger session yet (Codex registers it lazily on the first
-    /// prompt), and only a wired Codex can ever report status, so only a wired
-    /// Codex's bare `codex` pane is promoted from a process row to an idle agent.
-    /// Environment, not ledger — the pure reducer leaves it `false`; the `rimz
-    /// sidebar snapshot` CLI and consumer enrichment fill it before folding live
-    /// panes. The placeholder/persisted snapshot keeps `false` (a process row).
+    /// The lazy-registering agent kinds whose Rimz hooks are wired
+    /// ([`crate::agents::registers_session_lazily`] ∩ installed). Gates the
+    /// idle-instance synthesis in `rows_from_panes`: a launched-but-unbound pane of
+    /// such an agent has no ledger session yet (it registers lazily on the first
+    /// turn), and only a wired agent can ever report status, so only a wired lazy
+    /// agent's bare pane is promoted from a process row to an idle agent. Codex is
+    /// the only such agent today. Environment, not ledger — the pure reducer leaves
+    /// it empty; the `rimz sidebar snapshot` CLI and consumer enrichment fill it
+    /// before folding live panes. The placeholder/persisted snapshot keeps it empty
+    /// (a process row).
     #[serde(default)]
-    pub codex_hooks_ready: bool,
+    pub wired_lazy_kinds: Vec<String>,
     /// The calling sidebar's own-view summary: how many sibling panes share its
     /// tab/window, whether its own pane holds focus, and which sibling is
     /// focused. The renderer's self-close and selection-sync read it instead of
@@ -471,7 +473,7 @@ impl SidebarSnapshot {
             resolver_working,
             agents,
             agent_hooks_ready: false,
-            codex_hooks_ready: false,
+            wired_lazy_kinds: Vec::new(),
             own_view: None,
             only_daemon_view_remains: false,
             project_root: None,
@@ -706,7 +708,7 @@ impl SidebarSnapshot {
             &panes,
             self.project_root.as_deref(),
             &self.worktree_roots,
-            self.codex_hooks_ready,
+            &self.wired_lazy_kinds,
         );
         self
     }
@@ -1164,12 +1166,12 @@ fn build_worktree_groups(
 /// agent, renders as a plain process row. Agents with no live pane (ghosts,
 /// sub-agents, a relaunch the reaper has not yet collapsed) do not render, so a
 /// dead session can never resurrect a row or latch onto a stranger's pane. The
-/// one exception is a pane-less Codex agent whose hooks fire from the
-/// app-server daemon: it binds the live `codex` pane in its own worktree
-/// (`codex_for_pane`), and a wired Codex pane with no session yet renders idle
-/// rather than as a process row. The only truly paneless rows are standalone
-/// script/bridge asks, which no agent session raised. `codex_onboarded` gates
-/// the idle-Codex synthesis (see `codex_for_pane`).
+/// one exception is a pane-less lazy-registering agent (Codex) whose session
+/// arrives unstamped from the app-server daemon: it binds the live agent pane in
+/// its own worktree (`lazy_agent_for_pane`), and a wired such pane with no session
+/// yet renders idle rather than as a process row. The only truly paneless rows are
+/// standalone script/bridge asks, which no agent session raised. `wired_lazy_kinds`
+/// gates the idle-instance synthesis (see `lazy_agent_for_pane`).
 fn build_worktree_groups_with_panes(
     agents: &[AgentState],
     needs_attention: &[FeedItem],
@@ -1177,7 +1179,7 @@ fn build_worktree_groups_with_panes(
     panes: &[PaneRef],
     project_root: Option<&Path>,
     worktree_roots: &[PathBuf],
-    codex_onboarded: bool,
+    wired_lazy_kinds: &[String],
 ) -> Vec<SidebarWorktreeGroup> {
     build_worktree_groups_from_rows(
         rows_from_panes(
@@ -1185,7 +1187,7 @@ fn build_worktree_groups_with_panes(
             needs_attention,
             resolver_working,
             panes,
-            codex_onboarded,
+            wired_lazy_kinds,
         ),
         agents,
         project_root,
@@ -1198,7 +1200,7 @@ fn rows_from_panes(
     needs_attention: &[FeedItem],
     resolver_working: &[FeedItem],
     panes: &[PaneRef],
-    codex_onboarded: bool,
+    wired_lazy_kinds: &[String],
 ) -> Vec<SidebarRow> {
     let mut rows = Vec::new();
     let mut bound_agents: BTreeSet<(String, String)> = BTreeSet::new();
@@ -1213,17 +1215,20 @@ fn rows_from_panes(
                 needs_attention,
                 resolver_working,
             );
-        } else if let Some(bind) = codex_for_pane(pane, agents, &bound_agents, codex_onboarded) {
-            // The Codex exception to stamped-id binding. Codex never stamps a
-            // pane — its hooks fire from the pane-less app-server backend — so it
-            // can't bind through `agent_for_pane`. `codex_for_pane` owns the whole
-            // case: a prompted session binds the live `codex` pane in its worktree
-            // by cwd, and a wired-but-unprompted Codex (no session yet) renders as
-            // an idle agent rather than a bare process row. Remote-control and
+        } else if let Some(bind) =
+            lazy_agent_for_pane(pane, agents, &bound_agents, wired_lazy_kinds)
+        {
+            // The lazy-agent relaxation of stamped-id binding. A lazy-registering
+            // agent (Codex) can be present without a stamped session — it registers
+            // lazily and routes hooks through the pane-less app-server — so it can't
+            // bind through `agent_for_pane`. `lazy_agent_for_pane` owns the whole
+            // case: an unstamped session binds the live agent pane in its worktree
+            // by cwd, and a wired-but-unbound pane (no session yet) renders as an
+            // idle agent rather than a bare process row. Remote-control and
             // app-server broker host panes are filtered out upstream
             // (`with_live_panes`), so they never reach here.
             match bind {
-                CodexPaneRow::Agent(agent) => push_agent_row(
+                LazyAgentRow::Agent(agent) => push_agent_row(
                     &mut rows,
                     &mut bound_agents,
                     agent,
@@ -1231,7 +1236,7 @@ fn rows_from_panes(
                     needs_attention,
                     resolver_working,
                 ),
-                CodexPaneRow::Idle(row) => rows.push(*row),
+                LazyAgentRow::Idle(row) => rows.push(*row),
             }
         } else {
             rows.push(row_from_process(pane));
@@ -1279,9 +1284,9 @@ fn push_agent_row(
 /// can only ever host the agent that ran in it (`agent_binds_only_by_stamped_
 /// pane_id` pins this). When a stale rollup holds more than one claimant for a
 /// pane id (a relaunch the reaper has not yet collapsed), the most-recently-
-/// active wins, keeping the bind deterministic. The one relaxation — a Codex
-/// session whose hooks fire from the pane-less app-server daemon — lives in the
-/// separate, tightly-scoped `codex_for_pane`, never here.
+/// active wins, keeping the bind deterministic. The one relaxation — a lazy-
+/// registering agent whose session arrives unstamped (Codex) — lives in the
+/// separate, tightly-scoped `lazy_agent_for_pane`, never here.
 fn agent_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
@@ -1304,74 +1309,78 @@ fn agent_for_pane<'a>(
         .max_by_key(|agent| agent.last_activity)
 }
 
-/// What a live `codex` pane resolves to. Codex never stamps a pane — its hooks
-/// fire from the pane-less app-server backend — so it can't bind through
-/// `agent_for_pane` (stamped-id only); every Codex-pane special case lives in
-/// `codex_for_pane` instead.
-enum CodexPaneRow<'a> {
-    /// A prompted, daemon-driven session: pane-less, bound to this pane by exact
-    /// worktree cwd (most-recently-active wins; the reaper collapses a stale one).
-    /// Rendered through the shared `push_agent_row`, so it reads identically to a
-    /// stamped agent — its real status, model, and pending ask.
+/// What a live pane running a lazy-registering agent resolves to. Such an agent
+/// ([`crate::agents::registers_session_lazily`]) can be present without a stamped
+/// session — it registers lazily and/or routes hooks through a daemon — so it
+/// can't bind through `agent_for_pane` (stamped-id only); this is where its pane
+/// resolves instead. Codex is the only such agent today.
+enum LazyAgentRow<'a> {
+    /// An unstamped session bound to this pane by exact worktree cwd (most-
+    /// recently-active wins; the reaper collapses a stale one). Rendered through the
+    /// shared `push_agent_row`, so it reads identically to a stamped agent — its
+    /// real status, model, and pending ask.
     Agent(&'a AgentState),
-    /// A wired-but-never-prompted Codex. Codex registers its session lazily on the
-    /// first prompt, so the pane has no rollup entry yet; synthesize an idle row
-    /// so it reads as a proper idle *agent* at rest — `○ codex` with its
-    /// started-session gauge and a cockpit tally — instead of a bare, dim `○ codex`
-    /// process row. The first turn then swaps in the real bound `Agent` row. Boxed
-    /// so the rare synthesized row doesn't bloat the common `Agent` (a thin
-    /// reference) variant.
+    /// A wired instance with no session bound yet — a lazy agent registers its
+    /// session on the first turn, so the pane has no rollup entry. Synthesize an
+    /// idle row so it reads as a proper idle *agent* at rest — `○ <kind>` with its
+    /// started-session gauge and a cockpit tally — instead of a bare, dim process
+    /// row. The first turn then swaps in the real bound `Agent` row. Boxed so the
+    /// rare synthesized row doesn't bloat the common `Agent` (a thin reference).
     Idle(Box<SidebarRow>),
 }
 
-/// The Codex exception to stamped-id binding, and the only place Codex-pane
-/// special-casing lives. Resolve a live `codex` pane to its row:
-/// - the pane's own command must read `codex`, so a shell or a `git` the session
-///   spawned in the worktree never binds;
-/// - a pane-less `codex` agent whose worktree equals the pane's cwd *exactly*
-///   (not containment, so a parent checkout never captures a nested worktree's
-///   pane) binds as the real `Agent` — Codex alone is eligible, since a stamped
-///   agent already bound above and a pane-less *Claude* agent is genuinely gone
-///   (Claude always stamps a live pane);
-/// - failing that, a wired Codex (`codex_onboarded`) with no session yet
-///   synthesizes an `Idle` row; an *unwired* Codex reports no status, so it stays
-///   a process row (agents are invisible until their hooks are wired).
+/// Resolve a live pane running a lazy-registering agent ([`LazyAgentRow`]) to its
+/// row — the relaxation of stamped-id binding, kept tightly scoped here:
+/// - the pane's own command must read a lazy agent kind, so a shell or a `git` the
+///   session spawned in the worktree never binds, and a non-lazy agent (Claude)
+///   returns `None` and falls through to a process row — a pane-less Claude agent
+///   is genuinely gone, since Claude always stamps a live pane;
+/// - a pane-less session of that kind whose worktree equals the pane's cwd
+///   *exactly* (not containment, so a parent checkout never captures a nested
+///   worktree's pane) binds as the real `Agent`;
+/// - failing that, when the kind is wired (`wired_lazy_kinds`) a pane with no
+///   session yet synthesizes an `Idle` row; an *unwired* agent reports no status,
+///   so it stays a process row (agents are invisible until their hooks are wired).
 ///
-/// `None` for a non-codex pane, an empty cwd, or an unwired Codex with no
-/// session. Broker / remote-control / `rimzd` host panes carry `codex` in their
-/// command but are dropped upstream by `with_live_panes`, so they never reach
-/// here.
-fn codex_for_pane<'a>(
+/// `None` for a non-agent pane, a non-lazy agent, an empty cwd, or an unwired lazy
+/// agent with no session. Broker / remote-control / `rimzd` host panes carry an
+/// agent name in their command but are dropped upstream by `with_live_panes`, so
+/// they never reach here.
+fn lazy_agent_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
     bound: &BTreeSet<(String, String)>,
-    codex_onboarded: bool,
-) -> Option<CodexPaneRow<'a>> {
-    if command_agent_kind(pane.command.as_deref()?)? != "codex" {
+    wired_lazy_kinds: &[String],
+) -> Option<LazyAgentRow<'a>> {
+    let kind = command_agent_kind(pane.command.as_deref()?)?;
+    if !crate::agents::registers_session_lazily(kind) {
         return None;
     }
     let cwd = pane.cwd.as_deref().filter(|cwd| !cwd.is_empty())?;
     if let Some(agent) = agents
         .iter()
-        .filter(|agent| agent.pane.is_none() && agent.kind == "codex")
+        .filter(|agent| agent.pane.is_none() && agent.kind == kind)
         .filter(|agent| agent.worktree_path.as_deref() == Some(cwd))
         .filter(|agent| !bound.contains(&(agent.kind.clone(), agent.agent_id.clone())))
         .max_by_key(|agent| agent.last_activity)
     {
-        return Some(CodexPaneRow::Agent(agent));
+        return Some(LazyAgentRow::Agent(agent));
     }
-    codex_onboarded.then(|| CodexPaneRow::Idle(Box::new(idle_codex_row(pane))))
+    wired_lazy_kinds
+        .iter()
+        .any(|wired| wired == kind)
+        .then(|| LazyAgentRow::Idle(Box::new(idle_agent_row(pane, kind))))
 }
 
-/// The resting row for a wired `codex` pane that no session claimed: `○ codex`
+/// The resting row for a wired lazy-agent pane that no session claimed: `○ <kind>`
 /// with no model or context yet (the first turn swaps in the real bound agent
 /// row). Keyed on the pane id — no session id exists, and pane ids and agent ids
 /// are disjoint, so `attach_sub_agents` can never mis-nest a child onto it.
-fn idle_codex_row(pane: &PaneRef) -> SidebarRow {
+fn idle_agent_row(pane: &PaneRef, kind: &str) -> SidebarRow {
     SidebarRow {
         row_kind: SidebarRowKind::Agent,
         id: pane.pane_id.to_string(),
-        name: "codex".to_owned(),
+        name: kind.to_owned(),
         status: Some(AgentStatus::Idle),
         permission_posture: None,
         pane: Some(pane.clone()),
@@ -1382,7 +1391,7 @@ fn idle_codex_row(pane: &PaneRef) -> SidebarRow {
         model: None,
         effort: None,
         // Agent rows draw the started-session gauge at `Some(0)` (see the
-        // `SidebarRow.context_pct` doc) — matching a freshly-bound Codex.
+        // `SidebarRow.context_pct` doc) — matching a freshly-bound session.
         context_pct: Some(0),
         total_tokens: None,
         todo_done: None,
@@ -5076,7 +5085,7 @@ mod tests {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let mut snapshot =
             SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), Vec::new());
-        snapshot.codex_hooks_ready = true;
+        snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
         let snapshot = snapshot.with_live_panes(vec![pane("term1", "codex", "/repo/main")], None);
 
         let rows = &snapshot.worktree_groups[0].rows;
@@ -5095,10 +5104,30 @@ mod tests {
     }
 
     #[test]
+    fn non_lazy_agent_pane_is_never_idle_synthesized() {
+        // The idle-instance synthesis is gated on the agent registering lazily
+        // (`registers_session_lazily`), not merely on being wired. Claude stamps a
+        // pane on every session, so an unbound `claude` pane stays a process row
+        // even when the producer is told claude is a wired lazy kind — the static
+        // trait gate refuses it. This is what keeps the lifecycle agent-agnostic
+        // (a new lazy agent slots in by overriding the trait) without changing how
+        // Claude renders.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), Vec::new());
+        snapshot.wired_lazy_kinds = vec!["claude".to_owned(), "codex".to_owned()];
+        let snapshot = snapshot.with_live_panes(vec![pane("term1", "claude", "/repo/main")], None);
+
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+    }
+
+    #[test]
     fn unwired_codex_pane_stays_a_process_row() {
         // The consent invariant: an unwired Codex can report no status, so its
         // live pane stays a process row (agents are invisible until their hooks
-        // are wired). `codex_hooks_ready` left `false` reproduces an un-onboarded
+        // are wired). `wired_lazy_kinds` left empty reproduces an un-onboarded
         // Codex.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let snapshot =
@@ -5123,7 +5152,7 @@ mod tests {
             Vec::new(),
             vec![paneless_codex("sess-1", "/repo/main", 1_000)],
         );
-        snapshot.codex_hooks_ready = true;
+        snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
         let snapshot = snapshot.with_live_panes(vec![pane("term1", "codex", "/repo/main")], None);
 
         let rows = &snapshot.worktree_groups[0].rows;
@@ -5149,7 +5178,7 @@ mod tests {
             Vec::new(),
             vec![paneless_codex("sess-1", "/repo/main", 1_000)],
         );
-        snapshot.codex_hooks_ready = true;
+        snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
         let snapshot = snapshot.with_live_panes(
             vec![
                 pane("term1", "codex", "/repo/main"),
@@ -5182,7 +5211,7 @@ mod tests {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let mut snapshot =
             SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), Vec::new());
-        snapshot.codex_hooks_ready = true;
+        snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
         let snapshot = snapshot.with_live_panes(vec![pane("term1", "claude", "/repo/main")], None);
 
         let rows = &snapshot.worktree_groups[0].rows;
