@@ -1038,8 +1038,8 @@ fn default_provider_style(kind: &str) -> (String, Vec<String>, u8) {
         ),
         "codex" => (
             "Codex".to_owned(),
-            lines(" ▗▛███▜▖\n ▜▌ ▚ ▐▛\n ▝▙███▟▘"),
-            32,
+            lines(" ▗▛███▜▖\n ▜▌ ▚ ▐▛\n ▝▀▀▀▀▀▘"),
+            38,
         ),
         "pi" => ("Pi".to_owned(), lines(" ▗▛████▜▖\n  ▐▌  ▐▌\n  ▝▘  ▝▘"), 28),
         other => (provider_title_case(other), Vec::new(), 244),

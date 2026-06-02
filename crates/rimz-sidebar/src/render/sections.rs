@@ -576,7 +576,8 @@ fn group_header(
     let diff_text = diff.map(|(added, removed)| format!("+{added} -{removed}"));
     let right_width = diff_text.as_deref().map_or(0, |text| text.chars().count());
     let label_width = cw.saturating_sub(right_width + 1).max(1);
-    let left = clip(&group.label, label_width);
+    let label_with_prefix = format!("⑂ {}", group.label);
+    let left = clip(&label_with_prefix, label_width);
     // The dotted `┄` seal caps only the *selected* worktree's header, so the lane
     // reads as one bracketed block; every other header is just its bold label and
     // right-pinned diff, with plain space filling the gap. Sized to land the line
