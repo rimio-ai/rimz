@@ -106,7 +106,7 @@ fn serve_app_server(workspace_id: &str, session_name: Option<&str>) -> Result<()
     let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
     let socket = runtime.codex_app_server_socket_path();
-    rimz::agents::codex_broker::serve(rimz::agents::codex_broker::BrokerInfo {
+    rimz::agents::codex::broker::serve(rimz::agents::codex::broker::BrokerInfo {
         session: session_name,
         socket_path: &socket,
     })

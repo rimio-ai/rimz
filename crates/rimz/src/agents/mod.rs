@@ -10,17 +10,13 @@
 //! defaults into whatever per-agent config file the upstream agent reads.
 
 pub mod account;
-pub mod adapter;
 pub mod claude;
-pub(crate) mod claude_payloads;
 pub mod codex;
-pub(crate) mod codex_app_server;
-pub mod codex_broker;
-pub(crate) mod codex_payloads;
 pub mod context;
 pub(crate) mod hook_types;
+mod observation;
 pub mod spending;
-pub mod statusline;
+pub mod transcript;
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -29,14 +25,14 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution, RuntimeOwner};
-use crate::ids::PaneId;
+use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution};
 use hook_types::PermissionMode;
 
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
     AgentTokenUsage, RateLimitWindow,
 };
+pub use observation::AgentLifecycleObservation;
 pub use spending::AgentSpending;
 
 /// Conservative fallback for adapters that don't override. Claude overrides
@@ -125,96 +121,6 @@ pub(crate) fn classify_agent_hook(
     }
 }
 
-/// Status + mode transition observed from a lifecycle hook. Returned by
-/// [`AgentIntegration::observe_lifecycle`] so the CLI layer can record an
-/// `agent.lifecycle` event without each adapter touching the ledger.
-#[derive(Clone, Debug, PartialEq)]
-pub struct AgentLifecycleObservation {
-    /// Agent-supplied session/process identifier (e.g. Claude `session_id`,
-    /// Codex root `session_id`, or Codex subagent `agent_id`). The CLI uses
-    /// this as the `agent_id`.
-    pub agent_id: Option<String>,
-    pub status: AgentStatus,
-    /// Process identity observed by the hook runner. The sidebar uses this
-    /// best-effort liveness marker to suppress stale ledger overlays when the
-    /// process disappears.
-    pub agent_pid: Option<u32>,
-    pub agent_process_start: Option<String>,
-    pub runtime_owner: Option<RuntimeOwner>,
-    /// Permission posture pill the event establishes. `None` means "this
-    /// event does not report a posture" — the snapshot reducer carries the
-    /// prior posture forward rather than resetting it, so a `UserPromptSubmit`
-    /// can never demote a `yolo` agent to default (a security surface must
-    /// stay visible).
-    pub permission_posture: Option<PermissionPosture>,
-    /// Optional absolute worktree path observed from the agent payload or
-    /// filled by the CLI from the current Rimz workspace.
-    pub worktree_path: Option<String>,
-    /// Optional worktree branch label observed from the payload, surfaced in
-    /// the sidebar's worktree grouping.
-    pub worktree_branch: Option<String>,
-    /// Display-only task descriptor. It never drives routing or decisions.
-    pub task: Option<String>,
-    /// The user's latest prompt for this session, carried only by the
-    /// prompt-bearing event. The reducer persists it (unlike the activity-bound
-    /// `task`), so the sidebar can label an unnamed session by its prompt once
-    /// the turn ends, until a real session name exists.
-    pub prompt: Option<String>,
-    pub model: Option<String>,
-    pub effort: Option<String>,
-    /// Context-window utilization in percent reported by the agent (0..=100).
-    /// Enrich-only / privacy-gated — the no-transcript-correctness rule.
-    pub context_pct: Option<u8>,
-    /// Cumulative token usage for this agent session.
-    pub total_tokens: Option<u64>,
-    /// Completed / total todos for the agent's current plan or task list.
-    pub todo_done: Option<u32>,
-    pub todo_total: Option<u32>,
-    /// Normalized multiplexer pane id the agent process is running inside,
-    /// read from the per-pane env var the mux exports (`TMUX_PANE` or
-    /// `ZELLIJ_PANE_ID`). Lets the sidebar bind each agent row to its actual
-    /// pane when two agents of the same kind share one worktree.
-    pub pane_id: Option<PaneId>,
-    /// The root session id this observation's agent is a *child* of, set only
-    /// on `SubagentStart`/`SubagentStop` (the payload `session_id`, which both
-    /// adapters report as the parent for a subagent event). `None` for root
-    /// agents. Identity lifetime in the reducer, so a child row links to its
-    /// parent row by `(kind, parent_agent_id)` for the whole child's life.
-    pub parent_agent_id: Option<String>,
-    /// Whether this event marks the agent compacting its context window (Claude
-    /// `PreCompact`, Codex `SessionStart:compact`). The reducer stamps
-    /// [`AgentState::compacting_since`](crate::feed::AgentState::compacting_since)
-    /// from it without changing the agent's lifecycle status — compaction is a
-    /// transient head the sidebar shows, not a state transition.
-    pub compacting: bool,
-}
-
-impl AgentLifecycleObservation {
-    pub(crate) fn new(agent_id: Option<String>, status: AgentStatus) -> Self {
-        Self {
-            agent_id,
-            status,
-            agent_pid: None,
-            agent_process_start: None,
-            runtime_owner: None,
-            permission_posture: None,
-            worktree_path: None,
-            worktree_branch: None,
-            task: None,
-            prompt: None,
-            model: None,
-            effort: None,
-            context_pct: None,
-            total_tokens: None,
-            todo_done: None,
-            todo_total: None,
-            pane_id: None,
-            parent_agent_id: None,
-            compacting: false,
-        }
-    }
-}
-
 /// Sample an agent's permission mode field onto the unified posture enum. The
 /// input is agent-reported mode only; Rimz never infers plan/thinking from
 /// prompt text or transcripts.
@@ -257,7 +163,9 @@ pub(crate) fn posture_from_mode(
 
 fn permission_mode_posture(mode: &PermissionMode) -> Option<PermissionPosture> {
     match mode {
-        PermissionMode::DontAsk | PermissionMode::BypassPermissions => Some(PermissionPosture::Yolo),
+        PermissionMode::DontAsk | PermissionMode::BypassPermissions => {
+            Some(PermissionPosture::Yolo)
+        }
         PermissionMode::Auto | PermissionMode::AcceptEdits => Some(PermissionPosture::Auto),
         PermissionMode::Plan => Some(PermissionPosture::Plan),
         PermissionMode::Default => Some(PermissionPosture::Default),

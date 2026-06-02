@@ -23,7 +23,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::hook_types::{CompactTrigger, HookEventCommon, PermissionMode, SessionSource};
+use crate::agents::hook_types::{CompactTrigger, HookEventCommon, PermissionMode, SessionSource};
 
 // ── Common ─────────────────────────────────────────────────────────────────
 
@@ -212,8 +212,8 @@ pub struct CodexPermissionBehavior {
 mod tests {
     use serde_json::json;
 
-    use super::super::hook_types::{CompactTrigger, PermissionMode, SessionSource};
     use super::*;
+    use crate::agents::hook_types::{CompactTrigger, PermissionMode, SessionSource};
 
     #[test]
     fn session_start_compact_source() {

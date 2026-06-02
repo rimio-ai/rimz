@@ -11,7 +11,7 @@
 //! transport-agnostic, exactly as for Claude.
 //!
 //! Connection preference (warmest first): this session's broker
-//! ([`crate::agents::codex_broker`]) over its unix socket — a held, already
+//! ([`crate::agents::codex::broker`]) over its unix socket — a held, already
 //! handshaked `codex app-server` that amortizes the per-datapoint handshake;
 //! then the per-user daemon `codex remote-control start` brings up (which
 //! [`crate::remote_control`] can auto-launch), re-used via `codex app-server
@@ -24,7 +24,7 @@
 //! context-window usage is exposed only on the live `thread/tokenUsage/updated`
 //! notification (requires a subscribing `thread/resume`), never on a read-only
 //! method. So the context gauge stays sourced from the rollout tail in
-//! [`super::codex`]; this client supplies what the app-server *does* expose
+//! [`crate::agents::codex`]; this client supplies what the app-server *does* expose
 //! read-only: rate-limit windows, model display name + effort, and version.
 //!
 //! Best-effort, never correctness: every failure maps to an omitted field or a
@@ -41,7 +41,7 @@ use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::context::{AgentAccount, AgentContext, AgentRateLimits, RateLimitWindow};
+use crate::agents::context::{AgentAccount, AgentContext, AgentRateLimits, RateLimitWindow};
 
 /// Total wall-clock budget for one refresh (spawn + handshake + reads). The
 /// caller is a detached background helper with no user waiting, so this is
@@ -87,7 +87,7 @@ pub(crate) trait JsonRpcTransport {
 
 /// Resolve the `codex` binary: explicit override, then `PATH`, then the bare
 /// name (which `Command` resolves against `PATH` at spawn). Shared with the
-/// broker ([`crate::agents::codex_broker`]) so both resolve the same binary.
+/// broker ([`crate::agents::codex::broker`]) so both resolve the same binary.
 pub(crate) fn codex_bin() -> PathBuf {
     if let Some(raw) = std::env::var_os(CODEX_BIN_ENV).filter(|v| !v.is_empty()) {
         return PathBuf::from(raw);
@@ -97,7 +97,7 @@ pub(crate) fn codex_bin() -> PathBuf {
 
 /// Spawn a thread draining newline-framed lines from `reader` into a channel, so
 /// a request can wait with its remaining deadline. Shared by both transports and
-/// the broker ([`crate::agents::codex_broker`]).
+/// the broker ([`crate::agents::codex::broker`]).
 pub(crate) fn spawn_frame_reader<R: BufRead + Send + 'static>(reader: R) -> Receiver<String> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -168,7 +168,7 @@ pub(crate) fn recv_response(
 /// frames so each request can wait with its remaining deadline. Backs two
 /// sources: a spawned `codex` child (cold-spawn, or `app-server proxy --sock …`
 /// bridged to the per-user daemon) and a [`UnixStream`] to the per-session broker
-/// ([`crate::agents::codex_broker`]). Only the child case owns a process to reap.
+/// ([`crate::agents::codex::broker`]). Only the child case owns a process to reap.
 pub(crate) struct FramedTransport {
     writer: Box<dyn Write + Send>,
     rx: Receiver<String>,

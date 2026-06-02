@@ -516,7 +516,7 @@ fn enrich_worktree_groups(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::
 /// `None` rather than degrading the snapshot.
 ///
 /// Today this collects Claude project files only (`project_jsonl_files`); the
-/// Pi and Codex parsers in `rimz::agents::adapter` are staged for the upcoming
+/// Pi and Codex parsers in `rimz::agents::transcript` are staged for the upcoming
 /// transcript-history analysis and not yet fed here.
 fn enrich_agent_spending(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::RuntimePaths) {
     use rimz::agents::spending::{

@@ -117,7 +117,7 @@ fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
 /// `LoggedOut` (an authoritative answer); only an unexpected IO error — e.g. a
 /// permission failure on an existing file — is the transient `Unavailable`.
 fn probe_codex() -> AccountProbe {
-    let Some(home) = super::codex_app_server::codex_home() else {
+    let Some(home) = super::codex::app_server::codex_home() else {
         return AccountProbe::LoggedOut;
     };
     match std::fs::read(home.join("auth.json")) {

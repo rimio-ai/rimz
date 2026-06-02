@@ -19,6 +19,10 @@
 //! from the app-server read-only methods via [`refresh_context`], spawned
 //! out-of-band by `rimz codex refresh-context`.
 
+pub(crate) mod app_server;
+pub mod broker;
+pub(crate) mod payloads;
+
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,14 +32,15 @@ use serde_json::Value;
 
 use jiff::Timestamp;
 
-use super::codex_app_server::CodexAppServer;
-use super::codex_payloads::{
+use self::app_server::CodexAppServer;
+use self::payloads::{
     CodexPermissionBehavior, CodexPermissionDecisionOutput, CodexPermissionHookOutput,
     parse_session_start, parse_stop, parse_subagent_start, parse_subagent_stop,
     parse_user_prompt_submit,
 };
 use super::context::AgentContext;
 use super::hook_types::SessionSource;
+use super::observation::{payload_context_pct, payload_total_tokens};
 use super::{
     AgentErr, AgentIntegration, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, Result, agent_config_path, choice_is_allow,
@@ -120,7 +125,11 @@ impl AgentIntegration for CodexIntegration {
                     hook_specific_output: CodexPermissionHookOutput {
                         hook_event_name: "PermissionRequest",
                         decision: CodexPermissionBehavior {
-                            behavior: if choice_is_allow(resolution) { "allow" } else { "deny" },
+                            behavior: if choice_is_allow(resolution) {
+                                "allow"
+                            } else {
+                                "deny"
+                            },
                             // Drift fix #1: upstream spec includes decision.message.
                             // Populated from the resolver's reason when present;
                             // absent (None) when not set so golden tests stay unchanged.
@@ -128,7 +137,8 @@ impl AgentIntegration for CodexIntegration {
                         },
                     },
                 };
-                Ok(serde_json::to_value(output).expect("CodexPermissionDecisionOutput is infallible"))
+                Ok(serde_json::to_value(output)
+                    .expect("CodexPermissionDecisionOutput is infallible"))
             }
             other => Err(AgentErr::Render {
                 agent: "codex",
@@ -157,109 +167,130 @@ impl AgentIntegration for CodexIntegration {
         event_name: &str,
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
-        // SessionStart wires the root agent in but it has not been asked to do
-        // anything yet, so it registers idle; the prompt is what moves it to
-        // running. SubagentStart is different: it fires immediately before the
-        // child model request, so it registers running under the child
-        // `agent_id`. Mode is sampled from lifecycle payloads only; an event
-        // that names no slider returns `None` and the reducer carries the prior
-        // posture forward.
-        // Parse each event that yields an observation through its own struct; the
-        // Codex per-event structs flatten `CodexCommon`, so the posture sample reads
-        // `common.permission_mode` off whichever one matched. Silent events
-        // (PreToolUse, PostToolUse, PermissionRequest) and the not-installed
-        // compaction pair emit nothing here — their structs in `codex_payloads` stay
-        // parse-ready for future wiring rather than being parsed and discarded.
+        // Each event that yields an observation parses through its own typed
+        // struct; silent events (PreToolUse, PostToolUse, PermissionRequest) and
+        // the not-installed compaction pair return `None`. The per-event status
+        // mapping is the Codex column of docs/internals/hooks.md.
         let session_start = (event_name == "SessionStart").then(|| parse_session_start(payload));
-        let user_prompt = (event_name == "UserPromptSubmit").then(|| parse_user_prompt_submit(payload));
+        let user_prompt =
+            (event_name == "UserPromptSubmit").then(|| parse_user_prompt_submit(payload));
         let subagent_start = (event_name == "SubagentStart").then(|| parse_subagent_start(payload));
         let subagent_stop = (event_name == "SubagentStop").then(|| parse_subagent_stop(payload));
         let stop = (event_name == "Stop").then(|| parse_stop(payload));
+        // The permission slider rides every event's flattened common; `None` (no
+        // slider) makes the reducer carry the prior posture forward.
         let (status, posture) = match event_name {
             "SessionStart" => {
                 let p = session_start.as_ref().unwrap();
-                (AgentStatus::Idle, posture_from_mode(p.common.permission_mode.as_ref(), payload, &["approval_policy", "mode"]))
+                (
+                    AgentStatus::Idle,
+                    posture_from_mode(
+                        p.common.permission_mode.as_ref(),
+                        payload,
+                        &["approval_policy", "mode"],
+                    ),
+                )
             }
+            // A subagent fires before the child model request, so it registers
+            // running under the child `agent_id`.
             "SubagentStart" => {
                 let p = subagent_start.as_ref().unwrap();
-                (AgentStatus::Running, posture_from_mode(p.common.permission_mode.as_ref(), payload, &["approval_policy", "mode"]))
+                (
+                    AgentStatus::Running,
+                    posture_from_mode(
+                        p.common.permission_mode.as_ref(),
+                        payload,
+                        &["approval_policy", "mode"],
+                    ),
+                )
             }
             "UserPromptSubmit" => {
                 let p = user_prompt.as_ref().unwrap();
-                (AgentStatus::Running, posture_from_mode(p.common.permission_mode.as_ref(), payload, &["approval_policy", "mode"]))
+                (
+                    AgentStatus::Running,
+                    posture_from_mode(
+                        p.common.permission_mode.as_ref(),
+                        payload,
+                        &["approval_policy", "mode"],
+                    ),
+                )
             }
-            // A child finishing returns its row to idle; the root agent's Stop
-            // completes the turn (success), or fails it on an error signal.
+            // A child finishing returns its row to idle; the root Stop completes
+            // the turn (success), or fails it on an error signal.
             "SubagentStop" => {
                 let p = subagent_stop.as_ref().unwrap();
-                (AgentStatus::Idle, posture_from_mode(p.common.permission_mode.as_ref(), payload, &["approval_policy", "mode"]))
+                (
+                    AgentStatus::Idle,
+                    posture_from_mode(
+                        p.common.permission_mode.as_ref(),
+                        payload,
+                        &["approval_policy", "mode"],
+                    ),
+                )
             }
             "Stop" => {
                 let p = stop.as_ref().unwrap();
-                (stop_status_from_payload(payload), posture_from_mode(p.common.permission_mode.as_ref(), payload, &["approval_policy", "mode"]))
+                (
+                    stop_status_from_payload(payload),
+                    posture_from_mode(
+                        p.common.permission_mode.as_ref(),
+                        payload,
+                        &["approval_policy", "mode"],
+                    ),
+                )
             }
-            // Silent events (PreToolUse, PostToolUse, PermissionRequest) and the
-            // not-installed compaction pair emit no lifecycle observation. Their
-            // structs in codex_payloads stay parse-ready for future wiring.
             _ => return None,
         };
-        // Context budget lives in the rollout JSONL, not the hook payload.
-        // Locate the session's rollout file by id and read its tail so the
-        // gauge populates on the same low-frequency events the reducer already
-        // fires; an explicit payload field (rare) still wins when present.
+        // Both subagent events carry the same (child id, type, parent session);
+        // unify them so the identity reads below are written once. Codex keeps
+        // `agent_id`/`agent_type` beside `common` (not inside it, unlike Claude).
+        let subagent = subagent_start
+            .as_ref()
+            .map(|p| (&p.agent_id, &p.agent_type, &p.common.common.session_id))
+            .or_else(|| {
+                subagent_stop
+                    .as_ref()
+                    .map(|p| (&p.agent_id, &p.agent_type, &p.common.common.session_id))
+            });
+        // Context budget lives in the rollout JSONL, not the payload — locate the
+        // session's file by id and read its tail. The rollout carries a precomputed
+        // percentage (it has the window directly), unlike Claude's raw tokens.
         let usage = optional_payload_string(payload, &["session_id"])
             .and_then(|id| find_session_transcript(&id))
             .map(|path| usage_from_transcript(&path))
             .unwrap_or_default();
-        let context_pct = payload
-            .get("context_pct")
-            .or_else(|| payload.get("context_window_pct"))
-            .and_then(Value::as_u64)
-            .map(|v| v.min(100) as u8)
-            .or(usage.context_pct);
-        let total_tokens = payload
-            .get("total_tokens")
-            .or_else(|| payload.get("token_count"))
-            .and_then(Value::as_u64)
-            .or(usage.total_tokens);
-        // Root events key on `session_id`; subagent events key on `agent_id`.
-        let agent_id = match (subagent_start.as_ref(), subagent_stop.as_ref()) {
-            (Some(p), _) => p.agent_id.clone().or_else(|| p.common.common.session_id.clone()),
-            (_, Some(p)) => p.agent_id.clone().or_else(|| p.common.common.session_id.clone()),
-            _ => optional_payload_string(payload, &["agent_id", "session_id"]),
+        // Root events key on `session_id`; a subagent keys on its own `agent_id`
+        // (its `session_id` is the parent root, captured below).
+        let agent_id = match subagent {
+            Some((id, _, parent)) => id.clone().or_else(|| parent.clone()),
+            None => optional_payload_string(payload, &["agent_id", "session_id"]),
         };
-        let mut observation = AgentLifecycleObservation::new(agent_id, status);
+        let mut observation =
+            AgentLifecycleObservation::new(agent_id, status).with_worktree_from_payload(payload);
         observation.permission_posture = posture;
-        observation.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
-        observation.worktree_branch = optional_payload_string(payload, &["worktree_branch"]);
-        observation.task = task_from_payload(event_name, payload);
-        // The raw prompt rides only its own event; the reducer carries the last
-        // one forward so an unnamed session keeps a label past idle.
-        observation.prompt = user_prompt
-            .as_ref()
-            .and_then(|p| p.prompt.clone())
-            .or_else(|| optional_payload_string(payload, &["prompt"]));
+        // A subagent labels its row with its `agent_type`, kept across stop so a
+        // finished child stays labelled while it lingers in the parent's list.
+        observation.task = match subagent {
+            Some((_, agent_type, _)) => agent_type
+                .clone()
+                .or_else(|| optional_payload_string(payload, &["task", "prompt"])),
+            None => optional_payload_string(payload, &["task", "prompt"]),
+        };
+        observation.prompt = user_prompt.as_ref().and_then(|p| p.prompt.clone());
         observation.model = optional_payload_string(payload, &["model"]).or(usage.model);
         observation.effort = optional_payload_string(
             payload,
             &["model_reasoning_effort", "reasoning_effort", "effort"],
         );
-        observation.context_pct = context_pct;
-        observation.total_tokens = total_tokens;
-        // Codex doesn't expose a stable todo-state hook field; the sidebar's
-        // todo dots stay None and read as "no todo state".
+        observation.context_pct = payload_context_pct(payload, usage.context_pct);
+        observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
+        // Codex exposes no stable todo-state hook field; the dots stay None.
         observation.todo_done = None;
         observation.todo_total = None;
-        // A subagent event's `session_id` is the parent root the child nests under.
-        observation.parent_agent_id = match (subagent_start.as_ref(), subagent_stop.as_ref()) {
-            (Some(p), _) => p.common.common.session_id.clone(),
-            (_, Some(p)) => p.common.common.session_id.clone(),
-            _ => None,
-        };
-        // Codex has no dedicated pre-compaction hook; it re-fires `SessionStart`
-        // with `source = "compact"` once the context has been condensed, so the
-        // sidebar shows a brief "compacting" head then. The reducer keeps the
-        // prior status and only stamps `compacting_since`.
+        observation.parent_agent_id = subagent.and_then(|(_, _, parent)| parent.clone());
+        // Codex has no pre-compaction hook; it re-fires `SessionStart` with
+        // `source = "compact"` once condensed, which flags the transient head the
+        // reducer stamps without changing status.
         observation.compacting = session_start
             .as_ref()
             .is_some_and(|p| p.source == SessionSource::Compact);
@@ -308,21 +339,6 @@ pub fn refresh_context(
 ) -> Option<AgentContext> {
     let mut client = CodexAppServer::connect(broker_socket)?;
     Some(client.observe_context("codex", model_hint, Timestamp::now()))
-}
-
-fn task_from_payload(event_name: &str, payload: &Value) -> Option<String> {
-    match event_name {
-        // The subagent type labels the child row; it rides both start and stop
-        // so a *finished* child keeps its label while it lingers in the parent's
-        // list. Root events read the prompt/task only.
-        "SubagentStart" => parse_subagent_start(payload)
-            .agent_type
-            .or_else(|| optional_payload_string(payload, &["task", "prompt"])),
-        "SubagentStop" => parse_subagent_stop(payload)
-            .agent_type
-            .or_else(|| optional_payload_string(payload, &["task", "prompt"])),
-        _ => optional_payload_string(payload, &["task", "prompt"]),
-    }
 }
 
 /// Context-window usage derived from a Codex rollout tail.

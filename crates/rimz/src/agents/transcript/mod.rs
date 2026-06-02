@@ -1,32 +1,28 @@
-//! Per-provider typed parsers for the agent transcript-history read-path.
+//! Per-provider full-history cost/usage parsing from agent transcripts.
 //!
-//! Each submodule owns the typed deserialization structs, path discovery, and
-//! JSONL parser for one agent provider ([`claude`], [`codex`], [`pi`]).  Shared
-//! filesystem utilities live here.
+//! Read-only and sidebar-safe: each submodule ([`claude`], [`codex`], [`pi`])
+//! owns the typed deserialization, path discovery, and JSONL parser that turns a
+//! provider's full session history into cost/token records. The consumer is
+//! [`super::spending`]. Shared filesystem utilities live here.
+//!
+//! This is the *full-history* read — distinct from the bounded-tail context
+//! gauge each adapter reads in its `observe_lifecycle` ([`super::claude`],
+//! [`super::codex`]): that scans only the trailing window for the live row's
+//! `context_pct`/`total_tokens`; this walks the whole log for spend.
 //!
 //! ## Staged ahead of the consumer — intentional
 //!
-//! This layer is the typed foundation for a forthcoming **deeper analysis of
-//! the agent transcript-history files** (per-model token rollups, cost
-//! attribution, session timelines).  The parsers and type system land *first*,
-//! fully unit-tested, so that analysis logic can build on a stable, reviewed
-//! base — rather than growing the schema and the consumer in one churny change.
-//!
-//! Today exactly one consumer is wired: [`super::spending::compute_spending`]
-//! reads the [`claude`] parser to produce the sidebar's today / week / month
-//! spend.  The [`codex`] and [`pi`] parsers are complete and tested but **not
-//! yet consumed in the live path** — that is deliberate, not dead code:
+//! The parsers and type system land *first*, fully unit-tested, as the typed
+//! foundation for a forthcoming deeper transcript-history analysis (per-model
+//! token rollups, cost attribution, session timelines) — rather than growing the
+//! schema and the consumer in one churny change. Today only
+//! [`super::spending::compute_spending`] reads the [`claude`] parser (the
+//! sidebar's today / week / month spend); the [`codex`] and [`pi`] parsers are
+//! complete and tested but **not yet consumed** — deliberate, not dead code:
 //!
 //! - [`pi`] yields a `costUSD` directly and only awaits the upcoming consumer.
 //! - [`codex`] JSONL carries token counts, not `costUSD`, so turning its events
 //!   into dollars additionally needs a per-model pricing table (also pending).
-//!
-//! ## Not the hook-decision adapter
-//!
-//! Distinct from the [`AgentIntegration`](crate::agents::AgentIntegration)
-//! "adapter" (the hook/decision boundary described in `agents/CLAUDE.md`): that
-//! normalizes the *decision channel*; this normalizes the *transcript/usage
-//! read-path*.  Same provider, different surface.
 
 pub mod claude;
 pub mod codex;

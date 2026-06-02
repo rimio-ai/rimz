@@ -17,21 +17,25 @@
 //! `docs/internals/hooks.md`). The `PreToolUse` blocking sub-events ride the
 //! broad `PreToolUse` hook and self-classify from `tool_name`.
 
+pub(crate) mod payloads;
+mod statusline;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use jiff::Timestamp;
-use serde_json::{Map, Value};
 #[cfg(test)]
 use serde_json::json;
+use serde_json::{Map, Value};
 
-use super::claude_payloads::{
+use self::payloads::{
     ClaudePermissionBehavior, ClaudePermissionDecisionOutput, ClaudePermissionHookOutput,
-    ClaudePreToolUseDecisionOutput, ClaudePreToolUseHookOutput, parse_pre_compact, parse_pre_tool_use,
-    parse_session_start, parse_stop, parse_subagent_start, parse_subagent_stop,
+    ClaudePreToolUseDecisionOutput, ClaudePreToolUseHookOutput, parse_pre_compact,
+    parse_pre_tool_use, parse_session_start, parse_stop, parse_subagent_start, parse_subagent_stop,
     parse_user_prompt_submit,
 };
 use super::hook_types::BackgroundTask;
+use super::observation::{payload_context_pct, payload_total_tokens};
 use super::{
     AgentContext, AgentErr, AgentIntegration, AgentLifecycleObservation, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, Result, StatusLineChange,
@@ -163,13 +167,18 @@ impl AgentIntegration for ClaudeIntegration {
                     hook_specific_output: ClaudePermissionHookOutput {
                         hook_event_name: "PermissionRequest",
                         decision: ClaudePermissionBehavior {
-                            behavior: if choice_is_allow(resolution) { "allow" } else { "deny" },
+                            behavior: if choice_is_allow(resolution) {
+                                "allow"
+                            } else {
+                                "deny"
+                            },
                             updated_input: None,
                             applied_rule: None,
                         },
                     },
                 };
-                Ok(serde_json::to_value(output).expect("ClaudePermissionDecisionOutput is infallible"))
+                Ok(serde_json::to_value(output)
+                    .expect("ClaudePermissionDecisionOutput is infallible"))
             }
             FeedKind::PlanApproval | FeedKind::Question => {
                 let updated_input = resolution
@@ -184,11 +193,16 @@ impl AgentIntegration for ClaudeIntegration {
                 let output = ClaudePreToolUseDecisionOutput {
                     hook_specific_output: ClaudePreToolUseHookOutput {
                         hook_event_name: "PreToolUse",
-                        permission_decision: if choice_is_allow(resolution) { "allow" } else { "deny" },
+                        permission_decision: if choice_is_allow(resolution) {
+                            "allow"
+                        } else {
+                            "deny"
+                        },
                         updated_input,
                     },
                 };
-                Ok(serde_json::to_value(output).expect("ClaudePreToolUseDecisionOutput is infallible"))
+                Ok(serde_json::to_value(output)
+                    .expect("ClaudePreToolUseDecisionOutput is infallible"))
             }
             other => Err(AgentErr::Render {
                 agent: "claude",
@@ -224,27 +238,13 @@ impl AgentIntegration for ClaudeIntegration {
         event_name: &str,
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
-        // SessionStart registers the agent idle (wired in, nothing asked yet);
-        // the prompt is what moves it to running; a clean Stop completes the
-        // turn (success), an errored Stop fails it. Only SessionStart
-        // establishes the permission posture — the prompt and stop carry no
-        // permission field, so they report `None` and the reducer keeps the
-        // established posture. SessionEnd records the exit so the reducer drops
-        // the agent from the rollup (posture carries no meaning on exit);
-        // `ends_session` then expires any asks the dead session left pending.
-        // A Claude `Stop` carries `background_tasks` (Claude Code v2.1.145+):
-        // the main thread has parked and will reawaken when its background work
-        // reports back. While any task is in flight the turn is not over, so we
-        // label the row with the background work and (below) keep it running —
-        // never paint a false `success` on an agent that is still busy.
-        // Parse each event that yields an observation through its own struct;
-        // every per-event struct flattens `ClaudeCommon`, so the posture sample
-        // reads `common.permission_mode` off whichever one matched. Silent events
-        // (PostToolUse, Notification) and the blocking PermissionRequest emit
-        // nothing here — their structs in `claude_payloads` stay parse-ready for
-        // future wiring rather than being parsed and discarded.
+        // Each event that yields an observation parses through its own typed
+        // struct; silent events (PostToolUse, Notification) and the blocking
+        // PermissionRequest return `None`. The per-event status mapping is the
+        // Claude column of docs/internals/hooks.md.
         let session_start = (event_name == "SessionStart").then(|| parse_session_start(payload));
-        let user_prompt = (event_name == "UserPromptSubmit").then(|| parse_user_prompt_submit(payload));
+        let user_prompt =
+            (event_name == "UserPromptSubmit").then(|| parse_user_prompt_submit(payload));
         let subagent_start = (event_name == "SubagentStart").then(|| parse_subagent_start(payload));
         let subagent_stop = (event_name == "SubagentStop").then(|| parse_subagent_stop(payload));
         let stop = (event_name == "Stop").then(|| parse_stop(payload));
@@ -252,29 +252,43 @@ impl AgentIntegration for ClaudeIntegration {
             .as_ref()
             .map(|p| pending_background_tasks(&p.background_tasks))
             .unwrap_or_default();
-        // The agent-reported permission mode rides every event via the flattened
-        // common; `None` (no slider named) makes the reducer carry the prior
-        // posture forward rather than reset it.
+        // The permission slider rides every event's flattened common; `None` (no
+        // slider) makes the reducer carry the prior posture forward, so a prompt
+        // or stop can never demote a yolo agent.
         let (status, posture) = match event_name {
             "SessionStart" => {
                 let p = session_start.as_ref().unwrap();
-                (AgentStatus::Idle, posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]))
+                (
+                    AgentStatus::Idle,
+                    posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
+                )
             }
             "UserPromptSubmit" => {
                 let p = user_prompt.as_ref().unwrap();
-                (AgentStatus::Running, posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]))
+                (
+                    AgentStatus::Running,
+                    posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
+                )
             }
             // A subagent fires before the child model request, so it registers
-            // running under the child `agent_id`; a finished child returns to
-            // idle. Parity with the Codex adapter.
+            // running under the child `agent_id`; a finished child returns to idle.
             "SubagentStart" => {
                 let p = subagent_start.as_ref().unwrap();
-                (AgentStatus::Running, posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]))
+                (
+                    AgentStatus::Running,
+                    posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
+                )
             }
             "SubagentStop" => {
                 let p = subagent_stop.as_ref().unwrap();
-                (AgentStatus::Idle, posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]))
+                (
+                    AgentStatus::Idle,
+                    posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
+                )
             }
+            // A clean Stop completes the turn, but in-flight `background_tasks`
+            // (Claude Code v2.1.145+) keep it running — the main thread has only
+            // parked, so this is never a false success.
             "Stop" => {
                 let p = stop.as_ref().unwrap();
                 (
@@ -282,111 +296,85 @@ impl AgentIntegration for ClaudeIntegration {
                     posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
                 )
             }
-            // Compaction is a transient head, not a transition: the reducer
-            // keeps the agent's prior status and only stamps `compacting_since`.
-            // The status here is a placeholder the reducer overrides.
+            // Compaction is a transient head, not a transition: the reducer keeps
+            // the prior status and only stamps `compacting_since` (the status here
+            // is a placeholder it overrides).
             "PreCompact" => {
                 let p = parse_pre_compact(payload);
-                (AgentStatus::Running, posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]))
+                (
+                    AgentStatus::Running,
+                    posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
+                )
             }
-            // SessionEnd drops the row from the rollup, so its posture carries no
-            // meaning; `ends_session` then expires any asks the dead session left.
+            // SessionEnd drops the row; `ends_session` then expires its pending asks.
             "SessionEnd" => (AgentStatus::Idle, None),
-            // Silent events (PostToolUse, Notification) and the blocking
-            // PermissionRequest emit no lifecycle observation. Their structs in
-            // claude_payloads stay parse-ready for future wiring.
             _ => return None,
         };
-        // Context budget lives in the transcript, not the hook payload. Read its
-        // tail on the low-frequency events Rimz already fires so the gauge
-        // populates without a per-tool hook; an explicit payload field (rare)
-        // still wins when present.
+        // Both subagent events flatten the same `ClaudeCommon`; unify on it so the
+        // child id / type / parent reads are written once.
+        let subagent_common = subagent_start
+            .as_ref()
+            .map(|p| &p.common)
+            .or_else(|| subagent_stop.as_ref().map(|p| &p.common));
+        // Context budget lives in the transcript, not the payload — read its tail
+        // on these low-frequency events. Resolve the model first: only the payload
+        // id carries the `[1m]` marker that widens the window (the transcript id
+        // never does), so it wins over the bare transcript id before the gauge.
         let usage = optional_payload_string(payload, &["session_id"])
             .and_then(|_| optional_payload_string(payload, &["transcript_path"]))
             .map(|path| usage_from_transcript(&path))
             .unwrap_or_default();
-        // Resolve the model before the gauge: the payload id carries the `[1m]`
-        // marker that sets the window, the transcript id never does. SessionStart
-        // carries the authoritative model id; the typed struct's field is used
-        // directly to keep `session_start.common.model` live.
         let model = session_start
             .as_ref()
             .and_then(|p| p.common.model.clone())
             .or_else(|| optional_payload_string(payload, &["model"]))
             .or(usage.model);
-        let context_pct = payload
-            .get("context_pct")
-            .or_else(|| payload.get("context_window_pct"))
-            .and_then(Value::as_u64)
-            .map(|v| v.min(100) as u8)
-            .or_else(|| {
-                let window = context_window_for(model.as_deref()).max(1);
-                usage
-                    .context_tokens
-                    .map(|tokens| (tokens.saturating_mul(100) / window).min(100) as u8)
-            });
-        let total_tokens = payload
-            .get("total_tokens")
-            .or_else(|| payload.get("token_count"))
-            .and_then(Value::as_u64)
-            .or(usage.total_tokens);
+        let window = context_window_for(model.as_deref()).max(1);
+        let context_pct = payload_context_pct(
+            payload,
+            usage
+                .context_tokens
+                .map(|tokens| (tokens.saturating_mul(100) / window).min(100) as u8),
+        );
         let (todo_done, todo_total) = todos_from_payload(payload);
-        // Root events key on `session_id`; subagent events key on the child's
-        // own `agent_id` so the child gets its own row. (`session_id` on a
-        // subagent event is the parent root captured below.)
-        let agent_id = match (subagent_start.as_ref(), subagent_stop.as_ref()) {
-            (Some(p), _) => p.common.agent_id.clone().or_else(|| optional_payload_string(payload, &["session_id"])),
-            (_, Some(p)) => p.common.agent_id.clone().or_else(|| optional_payload_string(payload, &["session_id"])),
-            _ => optional_payload_string(payload, &["session_id"]),
-        };
-        let mut observation = AgentLifecycleObservation::new(agent_id, status);
+        // Root events key on `session_id`; a subagent keys on its own `agent_id`
+        // (its `session_id` is the parent root, captured below).
+        let agent_id = subagent_common
+            .and_then(|c| c.agent_id.clone())
+            .or_else(|| optional_payload_string(payload, &["session_id"]));
+        let mut observation =
+            AgentLifecycleObservation::new(agent_id, status).with_worktree_from_payload(payload);
         observation.permission_posture = posture;
-        observation.worktree_path = optional_payload_string(payload, &["worktree_path", "cwd"]);
-        observation.worktree_branch = optional_payload_string(payload, &["worktree_branch"]);
-        // A subagent labels its row with what it is (`agent_type`) or what it
-        // was asked (`description`). The type rides both start and stop so a
-        // finished child keeps its label while it lingers in the parent's list.
-        observation.task = match (subagent_start.as_ref(), subagent_stop.as_ref()) {
-            (Some(p), _) => p
-                .common
-                .agent_type
-                .clone()
-                .or_else(|| optional_payload_string(payload, &["subagent_type", "description", "task"])),
-            (_, Some(p)) => p
-                .common
-                .agent_type
-                .clone()
-                .or_else(|| optional_payload_string(payload, &["subagent_type", "description", "task"])),
-            _ => background_task_label(&pending_background)
+        // A subagent labels its row with what it is (`agent_type`) or what it was
+        // asked (`description`) — kept across stop so a finished child stays
+        // labelled while it lingers in the parent's list.
+        observation.task = match subagent_common {
+            Some(c) => c.agent_type.clone().or_else(|| {
+                optional_payload_string(payload, &["subagent_type", "description", "task"])
+            }),
+            None => background_task_label(&pending_background)
                 .or_else(|| optional_payload_string(payload, &["task", "prompt"])),
         };
-        // The raw prompt rides only its own event; the reducer carries the last
-        // one forward so an unnamed session keeps a label past idle.
-        observation.prompt = user_prompt
-            .as_ref()
-            .and_then(|p| p.prompt.clone())
-            .or_else(|| optional_payload_string(payload, &["prompt"]));
+        observation.prompt = user_prompt.as_ref().and_then(|p| p.prompt.clone());
         observation.model = model;
-        // `effort` is a `{ "level": … }` object that rides the tool-use-context
-        // events (Stop / SubagentStop among the ones that yield observations); a
-        // flat `thinking_level` string is the legacy fallback.
+        // `effort` is an `{ "level": … }` object on the tool-use-context events
+        // (Stop / SubagentStop here); the flat `thinking_level` string is a legacy
+        // fallback the typed struct does not model.
         observation.effort = stop
             .as_ref()
             .and_then(|p| p.common.effort.as_ref())
-            .or_else(|| subagent_stop.as_ref().and_then(|p| p.common.effort.as_ref()))
+            .or_else(|| {
+                subagent_stop
+                    .as_ref()
+                    .and_then(|p| p.common.effort.as_ref())
+            })
             .and_then(|e| e.level.clone())
             .or_else(|| optional_payload_string(payload, &["thinking_level"]));
         observation.context_pct = context_pct;
-        observation.total_tokens = total_tokens;
+        observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
         observation.todo_done = todo_done;
         observation.todo_total = todo_total;
-        // A subagent event's `session_id` is the parent root the child nests
-        // under; root events carry no parent.
-        observation.parent_agent_id = match (subagent_start.as_ref(), subagent_stop.as_ref()) {
-            (Some(p), _) => p.common.common.session_id.clone(),
-            (_, Some(p)) => p.common.common.session_id.clone(),
-            _ => None,
-        };
+        observation.parent_agent_id = subagent_common.and_then(|c| c.common.session_id.clone());
         observation.compacting = event_name == "PreCompact";
         Some(observation)
     }
@@ -394,8 +382,7 @@ impl AgentIntegration for ClaudeIntegration {
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
         // Claude's transport is the statusline JSON blob. Tolerant parse: any
         // non-object payload yields `None` rather than an error.
-        let parsed: super::statusline::StatuslinePayload =
-            serde_json::from_value(payload.clone()).ok()?;
+        let parsed: statusline::StatuslinePayload = serde_json::from_value(payload.clone()).ok()?;
         Some(parsed.into_context(source, Timestamp::now()))
     }
 

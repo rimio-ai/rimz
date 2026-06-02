@@ -148,8 +148,8 @@ impl RuntimePaths {
     }
 
     /// The per-session Codex app-server broker socket. The broker
-    /// ([`crate::agents::codex_broker`]) binds it; the enrichment client
-    /// ([`crate::agents::codex_app_server`]) connects to it. Both derive it from
+    /// ([`crate::agents::codex::broker`]) binds it; the enrichment client
+    /// ([`crate::agents::codex::app_server`]) connects to it. Both derive it from
     /// the same `workspace_id`, so it needs no env var to agree.
     pub fn codex_app_server_socket_path(&self) -> PathBuf {
         self.sock_dir.join("codex-app-server.sock")

@@ -1,6 +1,6 @@
 //! Per-session Codex app-server broker — a warm, held `codex app-server`.
 //!
-//! Codex enrichment ([`super::codex_app_server`]) otherwise cold-spawns a fresh
+//! Codex enrichment ([`super::app_server`]) otherwise cold-spawns a fresh
 //! `codex app-server` per datapoint and pays the full JSON-RPC handshake each
 //! time. This broker holds one long-lived child, handshakes it once, and serves
 //! it over a per-session unix socket so each refresh skips the handshake. It runs
@@ -37,9 +37,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use super::codex_app_server::{
-    AppServerErr, codex_bin, recv_response, spawn_frame_reader, write_frame,
-};
+use super::app_server::{AppServerErr, codex_bin, recv_response, spawn_frame_reader, write_frame};
 use crate::bridge::SocketGuard;
 
 /// Wall-clock for the startup (and respawn) handshake — generous like the client

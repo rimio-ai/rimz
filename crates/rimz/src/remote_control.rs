@@ -19,7 +19,7 @@
 //!   singleton** (one control socket), so it is *not* a per-workspace pane:
 //!   [`ensure_codex_daemon`] spawns the (idempotent) start command detached with
 //!   null stdio, and Codex enrichment reaches the daemon over the control socket
-//!   (see [`crate::agents::codex_app_server`]).
+//!   (see [`crate::agents::codex::app_server`]).
 //!
 //! `remote-control start` boots and updates its daemon from the standalone's
 //! fixed path, so a `codex` merely on PATH (a different binary) is not enough.
@@ -30,7 +30,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::agents::codex_app_server::codex_home;
+use crate::agents::codex::app_server::codex_home;
 use crate::config::RemoteControlConfig;
 use crate::feed::PaneRef;
 

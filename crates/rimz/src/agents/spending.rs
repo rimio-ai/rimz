@@ -1,6 +1,6 @@
 //! JSONL-based spending aggregation over agent transcript history.
 //!
-//! Per-provider typed parsers live in the sibling [`adapter`](super::adapter)
+//! Per-provider typed parsers live in the sibling [`transcript`](super::transcript)
 //! modules; this module owns the on-disk cache types and the
 //! [`compute_spending`] aggregation loop with cross-file Claude dedup.  Parsing
 //! is provider-dispatched in `parse_jsonl`: a `costUSD`-bearing entry from
@@ -13,7 +13,7 @@
 //! Codex JSONL carries token counts rather than `costUSD` and additionally
 //! awaits a per-model pricing table.  This staging is deliberate — the typed
 //! read-path lands ahead of the upcoming deeper transcript-history analysis;
-//! see [`super::adapter`] for the full rationale.
+//! see [`super::transcript`] for the full rationale.
 
 use std::collections::HashMap;
 use std::fs;
@@ -22,7 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use super::adapter::{self, claude, pi};
+use super::transcript::{self, claude, pi};
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -82,7 +82,7 @@ pub struct CachedEntry {
     pub is_sidechain: bool,
 }
 
-// ── Re-exports from adapter modules ──────────────────────────────────────────
+// ── Re-exports from transcript parser modules ─────────────────────────────────
 
 pub use claude::{claude_config_dirs, encode_project_dir, project_jsonl_files};
 pub use pi::pi_session_files;
@@ -223,10 +223,12 @@ fn file_mtime_secs(path: &Path) -> u64 {
 }
 
 fn parse_jsonl(path: &Path) -> Vec<CachedEntry> {
-    match adapter::detect_provider(path) {
-        adapter::Provider::Pi => pi::parse_pi_jsonl(path),
+    match transcript::detect_provider(path) {
+        transcript::Provider::Pi => pi::parse_pi_jsonl(path),
         // Claude and Unknown (e.g. test temp-dir paths) both use Claude format.
-        adapter::Provider::Claude | adapter::Provider::Unknown => claude::parse_claude_jsonl(path),
+        transcript::Provider::Claude | transcript::Provider::Unknown => {
+            claude::parse_claude_jsonl(path)
+        }
     }
 }
 
