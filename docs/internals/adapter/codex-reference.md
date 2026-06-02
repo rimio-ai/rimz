@@ -77,7 +77,7 @@ Every hook receives:
 | `PreCompact` | before conversation compaction | `turn_id`, `trigger` (`manual`\|`auto`) | |
 | `PostCompact` | after compaction | `turn_id`, `trigger` | |
 
-Codex has **no `SessionEnd` or `Notification` hook** — a Codex session leaves the rollup by liveness alone. Codex also has no dedicated pre-compaction hook in Rimz's wired set: it re-fires `SessionStart` with `source = "compact"` once context is condensed (Rimz flags `compacting` off that source).
+Codex has **no `SessionEnd` or `Notification` hook**. Compaction re-fires `SessionStart` with `source = "compact"` rather than a dedicated hook.
 
 ### Decision and output schema
 
@@ -192,7 +192,7 @@ A non-exhaustive map of the broader surface, for future wiring. Generate the exa
 
 ### Connection ladder
 
-The client prefers the warmest source, all best-effort with a cold floor (mechanics in [transcript.md](../transcript.md#appendix--codex)): the per-session broker socket, then the per-user daemon via `codex app-server proxy --sock <path>` (`RIMZ_CODEX_APP_SERVER_SOCK`), then a fresh cold-spawned `codex app-server`. `RIMZ_CODEX_BIN` overrides the binary.
+Client connection preference (broker → daemon → cold-spawn) and the refresh trigger are in [transcript.md → Appendix Codex](../transcript.md#appendix--codex).
 
 ## Rollout transcript JSONL
 

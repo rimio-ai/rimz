@@ -90,8 +90,8 @@ Every other document is a leaf from here. The `docs/` tree groups by audience: *
 - [agent.md](./docs/internals/agent.md) — agent state model: the rollup, state machine, posture, and liveness.
 - [transcript.md](./docs/internals/transcript.md) — agent context read-path: transcript discovery, tail parsing, the Claude/Codex JSONL→internal mapping, and the statusline / app-server rich-context transports.
 - [account.md](./docs/internals/account.md) — agent accounts and balances: the plan/metered model, the per-provider auth and rate-limit mapping, the out-of-band account probe, and the provider-dashboard aggregation.
-- [adapter/claude.md](./docs/internals/adapter/claude.md) — Claude Code upstream protocol reference: hook events and decision schema, the full statusline JSON schema, and the auth surface, each pinned to its source URL for refresh.
-- [adapter/codex.md](./docs/internals/adapter/codex.md) — Codex upstream protocol reference: hooks, the `notify` channel, the app-server JSON-RPC API, the rollout JSONL, and the auth file, each pinned to its source URL for refresh.
+- [adapter/claude-reference.md](./docs/internals/adapter/claude-reference.md) — Claude Code upstream protocol reference: hook events and decision schema, the full statusline JSON schema, and the auth surface, each pinned to its source URL for refresh.
+- [adapter/codex-reference.md](./docs/internals/adapter/codex-reference.md) — Codex upstream protocol reference: hooks, the `notify` channel, the app-server JSON-RPC API, the rollout JSONL, and the auth file, each pinned to its source URL for refresh.
 - [web.md](./docs/internals/web.md) — Zellij-only browser access and session-route design.
 - [performance.md](./docs/internals/performance.md) — render-thread hot path, the cost map, and the rules a performance change follows.
 

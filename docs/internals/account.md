@@ -6,7 +6,7 @@ A coding agent runs against a **provider account** — a login, on a plan, that 
 This doc owns both: the account/balance model, where each provider's facts come from, how they map onto Rimz's internal types, and how the producer folds them into the provider dashboard.
 
 It is the **single home for account/balance semantics**: what the metered/unmetered/plan facts mean, and how the producer folds them onto the internal types [`AgentAccount`](../../crates/rimz/src/agents/context.rs), [`AgentRateLimits`](../../crates/rimz/src/agents/context.rs), and the [`SidebarProviderPanel`](../../crates/rimz/src/ledger/snapshot.rs) the renderer paints.
-The raw auth surfaces it reads — `claude auth status`, `~/.codex/auth.json`, the app-server `account/rateLimits/read` response — are in the per-provider reference: [adapter/claude.md](./adapter/claude.md#auth-surface) and [adapter/codex.md](./adapter/codex.md#auth-file).
+The raw auth surfaces it reads — `claude auth status`, `~/.codex/auth.json`, the app-server `account/rateLimits/read` response — are in the per-provider reference: [adapter/claude-reference.md](./adapter/claude-reference.md#auth-surface) and [adapter/codex-reference.md](./adapter/codex-reference.md#auth-file).
 
 Account and balance are **enrichment, never correctness** — the no-transcript-correctness rule.
 A missing binary, a logged-out account, an unparseable file: each degrades to an omitted plan label or a blank bar, never a failed snapshot or a wrong decision.
@@ -40,8 +40,8 @@ Each provider maps its native account and balance surfaces onto the two internal
 
 | Provider | Account identity → [`AgentAccount`](../../crates/rimz/src/agents/context.rs) | Balance → [`AgentRateLimits`](../../crates/rimz/src/agents/context.rs) |
 | --- | --- | --- |
-| **Claude** | `claude auth status` JSON: `subscriptionType` → `plan`, `authMethod` → `metered` (an `apiKey` login is unmetered). | The statusline blob's rate-limit windows, parsed by [`observe_context`](../../crates/rimz/src/agents/statusline.rs). |
-| **Codex** | Live: the app-server `account/rateLimits/read` `planType` → `plan`, riding `AgentContext.account` with no extra spawn. Idle: the *shape* of `~/.codex/auth.json` — an `OPENAI_API_KEY` is unmetered (`∞`), a `tokens` block is a metered ChatGPT login (its plan tier filled once a session reports it). | The app-server `account/rateLimits/read` 5h (`primary`) and 7d (`secondary`) windows, each carrying its `windowDurationMins` ([`codex_app_server.rs`](../../crates/rimz/src/agents/codex_app_server.rs)). |
+| **Claude** | [`claude auth status`](./adapter/claude-reference.md#auth-surface) → `plan` + `metered`; `apiKey` login is unmetered. | Statusline [`rate_limits`](./adapter/claude-reference.md#statusline-json) 5h/7d windows, parsed by [`observe_context`](../../crates/rimz/src/agents/statusline.rs). |
+| **Codex** | Live: [`account/rateLimits/read`](./adapter/codex-reference.md#app-server-api) `planType` → `plan`, riding `AgentContext.account`. Idle: [`~/.codex/auth.json`](./adapter/codex-reference.md#auth-file) — API key → unmetered, `tokens` → metered ChatGPT (plan tier filled once a session reports it). | [`account/rateLimits/read`](./adapter/codex-reference.md#app-server-api) `primary`/`secondary` windows, each with `windowDurationMins` ([`codex_app_server.rs`](../../crates/rimz/src/agents/codex_app_server.rs)). |
 
 One asymmetry shapes the producer below: **Claude's balance has no source outside a live statusline**, while **Codex's rides a read-only out-of-band app-server call**, so a logged-in idle Codex account can still refresh its windows but an idle Claude account cannot.
 

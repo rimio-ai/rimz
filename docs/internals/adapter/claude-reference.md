@@ -93,6 +93,8 @@ These are the events the [`ClaudeIntegration`](../../../crates/rimz/src/agents/c
 
 `ExitPlanMode` and `AskUserQuestion` have no dedicated install entry — they self-classify off `tool_name` on the broad `PreToolUse` hook.
 
+**Model field format.** The `model` field on `SessionStart` (and hook payloads generally) may carry an extended-context capability marker: `claude-opus-4-8[1m]` signals a 1,000,000-token context window. Later events in the same session carry the bare id. Rimz strips the marker at reduce time ([agent.md → The rollup](../agent.md#the-rollup)) and uses it to derive the window divisor ([transcript.md → Appendix Claude Code](../transcript.md#appendix--claude-code)).
+
 **Decision shapes Rimz renders.** A `PermissionRequest` answer:
 
 ```json

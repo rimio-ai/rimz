@@ -4,7 +4,7 @@
 
 A coding agent reports to Rimz through hooks. This doc owns the agent boundary end to end: the one trait every agent speaks, the two channels a hook can take, how install wires it, and the per-provider mapping that translates a native protocol onto Rimz's internal types.
 
-It is the **single home for the native-to-internal mapping**: which native events are wired, which channel each takes, and how each folds onto Rimz's internal types ([`AgentIntegration`](../../crates/rimz/src/agents/mod.rs), [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs), the lifecycle/blocking-feed channels). The raw upstream protocol — the full event catalog, the stdin payload schemas, and the verbatim decision JSON — lives in the per-provider reference: [adapter/claude.md](./adapter/claude.md) and [adapter/codex.md](./adapter/codex.md). The seam to the rest of the system is the observation: this doc *produces* it; [agent.md](./agent.md) folds it into the agent rollup; [sidebar.md](./sidebar.md) paints it.
+It is the **single home for the native-to-internal mapping**: which native events are wired, which channel each takes, and how each folds onto Rimz's internal types ([`AgentIntegration`](../../crates/rimz/src/agents/mod.rs), [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs), the lifecycle/blocking-feed channels). The raw upstream protocol — the full event catalog, the stdin payload schemas, and the verbatim decision JSON — lives in the per-provider reference: [adapter/claude-reference.md](./adapter/claude-reference.md) and [adapter/codex-reference.md](./adapter/codex-reference.md). The seam to the rest of the system is the observation: this doc *produces* it; [agent.md](./agent.md) folds it into the agent rollup; [sidebar.md](./sidebar.md) paints it.
 
 Agents are *sources*, not a privileged path. Anything a hook does, a script can do through the same CLI — a hook is just an adapter that translates a native protocol onto `rimz event`/`rimz feed`.
 
@@ -76,7 +76,7 @@ Required tests, per [testing.md](../contributing/testing.md): install/uninstall,
 
 ## Appendix — Claude Code
 
-Native event → internal mapping. The appendix says *which native events are wired* and *how each maps*; the behaviour they drive is the state machine in [agent.md](./agent.md), and the upstream events, payloads, and decision schema are in [adapter/claude.md](./adapter/claude.md).
+Native event → internal mapping. The appendix says *which native events are wired* and *how each maps*; the behaviour they drive is the state machine in [agent.md](./agent.md), and the upstream events, payloads, and decision schema are in [adapter/claude-reference.md](./adapter/claude-reference.md).
 
 | Native event                  | Channel       | `observe_lifecycle` → status                                                                                                |
 | ----------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------- |
@@ -96,7 +96,7 @@ Native event → internal mapping. The appendix says *which native events are wi
 
 **Classification.** `ExitPlanMode` and `AskUserQuestion` ride the broad `PreToolUse` hook and self-classify from `tool_name`, so they need no dedicated matcher (Claude runs every matching matcher group, and the broad entry already covers them). A turn-end `Stop` resolves to `success` or `failed` (`stop_status_from_payload`); a `Stop` whose payload still lists in-flight `background_tasks` (Claude Code v2.1.145+) is the main thread parking, not a turn end, so the row stays `running` and labels itself with that work.
 
-**Decision shapes.** Claude wraps a permission answer in `hookSpecificOutput.decision`; `ExitPlanMode` / `AskUserQuestion` answer on the `PreToolUse` event and **require** `updatedInput` (a missing field is a hard render error). The neutral path is empty stdout. The verbatim shapes are in [adapter/claude.md](./adapter/claude.md#hooks-rimz-wires); exact bytes are the inline goldens in [`claude.rs`](../../crates/rimz/src/agents/claude.rs).
+**Decision shapes.** Claude wraps a permission answer in `hookSpecificOutput.decision`; `ExitPlanMode` / `AskUserQuestion` answer on the `PreToolUse` event and **require** `updatedInput` (a missing field is a hard render error). The neutral path is empty stdout. The verbatim shapes are in [adapter/claude-reference.md](./adapter/claude-reference.md#hooks-rimz-wires); exact bytes are the inline goldens in [`claude.rs`](../../crates/rimz/src/agents/claude.rs).
 
 **Cap & install.** `hook_cap` is 120s (`CLAUDE_HOOK_CAP`; upstream ~125s, with a 5s margin so the bridge times out before Claude kills the hook). Install merges non-destructively into `~/.claude/settings.json` under per-matcher `_rimz_managed` markers; only `PermissionRequest` carries `_rimz_sync = true`, and an existing async marker on it is a hard install error.
 
@@ -106,7 +106,7 @@ Native event → internal mapping. The appendix says *which native events are wi
 
 ## Appendix — Codex
 
-Native event → internal mapping; the upstream events, payloads, and decision schema are in [adapter/codex.md](./adapter/codex.md).
+Native event → internal mapping; the upstream events, payloads, and decision schema are in [adapter/codex-reference.md](./adapter/codex-reference.md).
 
 | Native event                         | Channel       | `observe_lifecycle` → status | Normalized fields                                |
 | ------------------------------------ | ------------- | ---------------------------- | ------------------------------------------------ |
@@ -120,7 +120,7 @@ Native event → internal mapping; the upstream events, payloads, and decision s
 
 Codex has no `SessionEnd` or `Notification` hook, so `ends_session` is never true — a Codex session leaves the rollup by liveness alone (see [agent.md](./agent.md#liveness-and-presence)).
 
-**Decision shape.** Codex permission hooks emit only `hookSpecificOutput.decision` (`behavior` plus an optional `message`); never `updatedInput`, `updatedPermissions`, or `interrupt`, which belong to other Codex hook types and corrupt the decision. The neutral path is empty stdout. The verbatim shape and the full divergence note are in [adapter/codex.md](./adapter/codex.md#decision-and-output-schema); exact bytes are the inline goldens in [`codex.rs`](../../crates/rimz/src/agents/codex.rs).
+**Decision shape.** Codex permission hooks emit only `hookSpecificOutput.decision` (`behavior` plus an optional `message`); never `updatedInput`, `updatedPermissions`, or `interrupt`, which belong to other Codex hook types and corrupt the decision. The neutral path is empty stdout. The verbatim shape and the full divergence note are in [adapter/codex-reference.md](./adapter/codex-reference.md#decision-and-output-schema); exact bytes are the inline goldens in [`codex.rs`](../../crates/rimz/src/agents/codex.rs).
 
 **Cap & install.** `hook_cap` is 60s (`CODEX_HOOK_CAP`); chain budgets must account for the shorter ceiling. Install writes inline `[[hooks.Event]]` tables in `~/.codex/config.toml` with the same `--event`-free command and substring reclaim as Claude; the legacy `[hooks.rimz]` table is ignored by Codex and removed on uninstall.
 
