@@ -5,8 +5,8 @@
 A coding agent runs against a **provider account** — a login, on a plan, that may or may not be metered — and that account has a **balance**: the rate-limit windows the plan draws against.
 This doc owns both: the account/balance model, where each provider's facts come from, how they map onto Rimz's internal types, and how the producer folds them into the provider dashboard.
 
-It is the **single home for account/balance enrichment**.
-Provider auth surfaces (`claude auth status`, `~/.codex/auth.json`, the app-server `account/rateLimits/read` method) and the metered/unmetered/plan semantics appear here and nowhere else — every other doc speaks only the internal types: [`AgentAccount`](../../crates/rimz/src/agents/context.rs) and [`AgentRateLimits`](../../crates/rimz/src/agents/context.rs), and the [`SidebarProviderPanel`](../../crates/rimz/src/ledger/snapshot.rs) the renderer paints.
+It is the **single home for account/balance semantics**: what the metered/unmetered/plan facts mean, and how the producer folds them onto the internal types [`AgentAccount`](../../crates/rimz/src/agents/context.rs), [`AgentRateLimits`](../../crates/rimz/src/agents/context.rs), and the [`SidebarProviderPanel`](../../crates/rimz/src/ledger/snapshot.rs) the renderer paints.
+The raw auth surfaces it reads — `claude auth status`, `~/.codex/auth.json`, the app-server `account/rateLimits/read` response — are in the per-provider reference: [adapter/claude.md](./adapter/claude.md#auth-surface) and [adapter/codex.md](./adapter/codex.md#auth-file).
 
 Account and balance are **enrichment, never correctness** — the no-transcript-correctness rule.
 A missing binary, a logged-out account, an unparseable file: each degrades to an omitted plan label or a blank bar, never a failed snapshot or a wrong decision.
