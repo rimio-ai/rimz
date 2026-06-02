@@ -49,6 +49,7 @@ fn reload_signals_fresh_sidebars_and_skips_stale() {
             MuxName::Tmux,
             SESSION_NAME,
             fresh_sock,
+            None,
         ),
     );
 
@@ -62,6 +63,7 @@ fn reload_signals_fresh_sidebars_and_skips_stale() {
         MuxName::Tmux,
         SESSION_NAME,
         stale_sock,
+        None,
     );
     stale.last_seen = Timestamp::now() - Duration::from_secs(60);
     write_heartbeat(&runtime, "sidebar.stale.json", stale);

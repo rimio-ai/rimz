@@ -160,6 +160,7 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
         MuxName::Tmux,
         "rimz-test-fresh",
         fresh_sock_path,
+        None,
     );
     std::fs::write(
         h.runtime_paths.heartbeat_dir.join("sidebar.fresh.json"),
@@ -181,6 +182,7 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
         MuxName::Tmux,
         "rimz-test-stale",
         stale_sock_path,
+        None,
     );
     stale_hb.last_seen = jiff::Timestamp::now() - Duration::from_secs(60);
     std::fs::write(
@@ -201,6 +203,7 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
         MuxName::Tmux,
         "rimz-test-wrong-protocol",
         wrong_protocol_sock_path,
+        None,
     );
     wrong_protocol_hb.protocol_version = "rimz.plugin.v0".to_owned();
     std::fs::write(
@@ -231,7 +234,7 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
         parsed["workspace_id"],
         serde_json::to_value(&h.workspace_id).expect("ws json"),
     );
-    assert_eq!(parsed["protocol_version"], "rimz.plugin.v2");
+    assert_eq!(parsed["protocol_version"], "rimz.plugin.v3");
 
     let mut buf2 = [0u8; 4096];
     let stale_result = stale_recv.recv_from(&mut buf2);
@@ -273,6 +276,7 @@ fn wake_sidebars_restat_skips_when_mtime_aged_past_ttl() {
         MuxName::Tmux,
         "rimz-test-toctou",
         sock_path,
+        None,
     );
     let hb_path = h.runtime_paths.heartbeat_dir.join("sidebar.toctou.json");
     let file = std::fs::File::create(&hb_path).expect("create hb");

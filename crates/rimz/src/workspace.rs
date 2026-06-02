@@ -35,6 +35,64 @@ pub struct ResolvedWorkspace {
     pub mux_hint: Option<MuxName>,
 }
 
+/// A workspace discovered by scanning the state dir, paired with the mux session
+/// it was last started under. Read straight from `workspace.json`, so it needs
+/// neither a cwd nor a running session — the cwd-independent basis shared by
+/// `rimz list` and the user-wide `rimz reload`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnownWorkspace {
+    pub workspace_id: WorkspaceId,
+    pub project_root: PathBuf,
+    pub session_name: String,
+}
+
+/// Every workspace with a readable `workspace.json` under the state dir, in
+/// directory order. A directory missing its record is skipped quietly
+/// (half-removed or never finished); a record that exists but won't parse is
+/// logged and skipped. Errors only when the state root itself cannot be read.
+pub fn known_workspaces() -> io::Result<Vec<KnownWorkspace>> {
+    known_workspaces_under(&crate::ledger::paths::workspaces_dir())
+}
+
+/// [`known_workspaces`] over an explicit state root, for tests against a tempdir.
+pub fn known_workspaces_under(workspaces_root: &Path) -> io::Result<Vec<KnownWorkspace>> {
+    use crate::ledger::workspace_record::{self, WorkspaceRecordErr};
+
+    let entries = match std::fs::read_dir(workspaces_root) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let mut out = Vec::new();
+    for entry in entries {
+        let path = entry?.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+            continue;
+        };
+        let Ok(workspace_id) = WorkspaceId::parse(name) else {
+            continue;
+        };
+        match workspace_record::read(&path.join("workspace.json")) {
+            Ok(record) => out.push(KnownWorkspace {
+                workspace_id,
+                project_root: record.project_root,
+                session_name: record.session_name,
+            }),
+            // A dir without a record isn't a usable workspace; `workspace prune`
+            // reaps it. A record that won't parse is a real anomaly — surface it.
+            Err(WorkspaceRecordErr::Io { source, .. })
+                if source.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                tracing::warn!(workspace = %workspace_id, error = %err, "skipping workspace with unreadable record");
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Markers that signal "this directory is a project root" for non-git projects.
 const PROJECT_MARKERS: &[&str] = &[
     "Cargo.toml",
@@ -205,6 +263,58 @@ mod tests {
             session_name_for(Path::new("/home/marvin/xxx")),
             "rimz-home-marvin-xxx",
         );
+    }
+
+    #[test]
+    fn known_workspaces_reads_records_and_skips_recordless_dirs() {
+        use crate::ledger::paths::{StatePaths, workspaces_dir_under};
+        use crate::ledger::workspace_record::{self, WorkspaceRecord};
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let state_root = dir.path();
+        let root = workspaces_dir_under(state_root);
+
+        // Two workspaces with records, written through the canonical path.
+        for project in ["/home/marvin/alpha", "/home/marvin/beta"] {
+            let project_root = std::path::PathBuf::from(project);
+            let workspace_id = WorkspaceId::from_project_root(&project_root);
+            let paths = StatePaths::under(workspace_id.clone(), state_root).expect("state paths");
+            std::fs::create_dir_all(&paths.root).expect("mkdir workspace");
+            workspace_record::write(
+                &paths,
+                &WorkspaceRecord {
+                    workspace_id,
+                    project_root: project_root.clone(),
+                    session_name: session_name_for(&project_root),
+                    updated_at: jiff::Timestamp::UNIX_EPOCH,
+                },
+            )
+            .expect("write record");
+        }
+        // A directory whose name isn't a workspace id, and a workspace dir with no
+        // record, are both skipped silently.
+        std::fs::create_dir_all(root.join("not-a-workspace-id")).expect("mkdir junk");
+
+        let mut sessions: Vec<String> = known_workspaces_under(&root)
+            .expect("enumerate")
+            .into_iter()
+            .map(|ws| ws.session_name)
+            .collect();
+        sessions.sort();
+        assert_eq!(
+            sessions,
+            vec![
+                "rimz-home-marvin-alpha".to_owned(),
+                "rimz-home-marvin-beta".to_owned(),
+            ],
+        );
+    }
+
+    #[test]
+    fn known_workspaces_under_missing_root_is_empty() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let missing = dir.path().join("nope");
+        assert!(known_workspaces_under(&missing).expect("ok").is_empty());
     }
 
     #[test]

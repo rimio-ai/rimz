@@ -114,6 +114,7 @@ impl SidebarHarness {
             MuxName::Tmux,
             "session",
             self.runtime.sock_dir.join("sidebar.sock"),
+            None,
         );
         heartbeat.protocol_version = protocol_version.to_owned();
         std::fs::write(
@@ -238,9 +239,10 @@ impl MuxBackend for FakeBackend {
         Ok(())
     }
 
-    fn recover_sidebars(
+    fn reconcile_sidebars(
         &self,
         _opts: &SidebarPaneOptions,
+        _live: &rimz::mux::SidebarLiveness,
     ) -> rimz::mux::Result<rimz::mux::SidebarRecovery> {
         Ok(rimz::mux::SidebarRecovery::default())
     }

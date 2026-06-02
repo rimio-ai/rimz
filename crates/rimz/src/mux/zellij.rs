@@ -20,8 +20,8 @@ use serde_json::Value;
 
 use super::{
     BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, DaemonView, HostPane, MuxBackend,
-    MuxErr, PaneCapture, PaneListOptions, Result, SessionHealth, SessionOptions,
-    SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, ensure_pane_backend,
+    MuxErr, PaneCapture, PaneListOptions, Result, SessionHealth, SessionOptions, SidebarLiveness,
+    SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, ViewSidebars, ensure_pane_backend,
 };
 use crate::config::ZellijConfig;
 use crate::feed::PaneRef;
@@ -421,6 +421,20 @@ impl ZellijBackend {
     fn go_to_tab(&self, session: &str, index: u32) -> Result<()> {
         self.zellij_action(session)
             .args(["go-to-tab".to_owned(), index.to_string()])
+            .run()
+            .map(|_| ())
+    }
+
+    /// Close a single pane by id (`close-pane --pane-id terminal_N`), terminating
+    /// its process. Reconcile uses this to drop a duplicate or unresponsive
+    /// sidebar pane without touching the rest of the tab.
+    fn close_pane(&self, session: &str, pane: &PaneId) -> Result<()> {
+        self.zellij_action(session)
+            .args([
+                "close-pane".to_owned(),
+                "--pane-id".to_owned(),
+                pane.raw().to_owned(),
+            ])
             .run()
             .map(|_| ())
     }
@@ -857,25 +871,26 @@ impl MuxBackend for ZellijBackend {
         super::recovery::purge_zellij_session_cache_in(&crate::ledger::paths::cache_home(), name)
     }
 
-    fn recover_sidebars(&self, opts: &SidebarPaneOptions) -> Result<SidebarRecovery> {
+    fn reconcile_sidebars(
+        &self,
+        opts: &SidebarPaneOptions,
+        live: &SidebarLiveness,
+    ) -> Result<SidebarRecovery> {
         // Zellij docks the sidebar left only at session birth, but a left pane
-        // can still be reached in a live session: split a new pane to the right,
-        // move it left, and resize it to the layout width. This never rebirths
-        // the session, so the user's working panes survive.
+        // can still be reached in a live session: close a stray sidebar by id,
+        // and add one by splitting right, moving it left, and resizing it to the
+        // layout width. This never rebirths the session, so the working panes
+        // survive.
         let panes = self.list_panes_with_session(Some(&opts.session_name))?;
-        let classified: Vec<(String, bool)> = panes
-            .iter()
-            .filter(|pane| pane.is_terminal())
-            .map(|pane| (pane.tab_id.to_string(), is_sidebar_pane(pane)))
-            .collect();
-        let missing = super::views_missing_sidebar(&classified);
-        if missing.is_empty() {
+        let views = views_with_sidebars(&panes);
+        let plan = super::plan_reconcile(&views, live);
+        if plan.close.is_empty() && plan.add.is_empty() {
             return Ok(SidebarRecovery::default());
         }
 
-        // The new pane steals focus, so remember each tab's focused (working)
-        // pane to restore afterwards, and the user's own invoking pane to return
-        // the visible tab to where they ran `rimz reload`.
+        // Adding (and closing) a pane shifts focus, so remember each tab's
+        // focused (working) pane to restore afterwards, and the user's own
+        // invoking pane to return the visible tab to where they ran `rimz reload`.
         let focused_in_tab: std::collections::HashMap<u64, u64> = panes
             .iter()
             .filter(|pane| pane.is_focused && !pane.is_plugin)
@@ -883,7 +898,20 @@ impl MuxBackend for ZellijBackend {
             .collect();
 
         let mut report = SidebarRecovery::default();
-        for tab in &missing {
+        // Close duplicate / unresponsive sidebar panes first, so a view that lost
+        // its only live sidebar reads as missing and gains exactly one fresh one.
+        for pane in &plan.close {
+            match self.close_pane(&opts.session_name, pane) {
+                Ok(()) => report.closed += 1,
+                Err(err) => tracing::warn!(
+                    session = %opts.session_name,
+                    pane = %pane.as_str(),
+                    error = %err,
+                    "sidebar reconcile: closing a stray sidebar pane failed; leaving it",
+                ),
+            }
+        }
+        for tab in &plan.add {
             let Ok(tab_id) = tab.parse::<u64>() else {
                 report.failed += 1;
                 continue;
@@ -900,7 +928,7 @@ impl MuxBackend for ZellijBackend {
                         session = %opts.session_name,
                         tab = tab_id,
                         error = %err,
-                        "sidebar recovery: in-place add failed; leaving the tab without a sidebar",
+                        "sidebar reconcile: in-place add failed; leaving the tab without a sidebar",
                     );
                     report.failed += 1;
                 }
@@ -1024,6 +1052,34 @@ fn session_state_from_line(line: &str, name: &str) -> Option<SessionState> {
 /// [`SIDEBAR_PANE_NAME`] — the same signal `session_is_clean` trusts.
 fn is_sidebar_pane(pane: &RawPane) -> bool {
     !pane.is_plugin && pane.title.as_deref() == Some(SIDEBAR_PANE_NAME)
+}
+
+/// Group a pane list into per-tab [`ViewSidebars`] for the reconcile planner:
+/// each tab's sidebar panes (as normalized [`PaneId`]s) and whether it holds a
+/// working (non-sidebar) terminal pane. First-seen tab order; pane order within
+/// a tab preserved.
+fn views_with_sidebars(panes: &[RawPane]) -> Vec<ViewSidebars> {
+    let mut views: Vec<ViewSidebars> = Vec::new();
+    let mut index: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+    for pane in panes.iter().filter(|pane| pane.is_terminal()) {
+        let slot = *index.entry(pane.tab_id).or_insert_with(|| {
+            views.push(ViewSidebars {
+                view: pane.tab_id.to_string(),
+                sidebar_panes: Vec::new(),
+                has_working: false,
+            });
+            views.len() - 1
+        });
+        if is_sidebar_pane(pane) {
+            views[slot].sidebar_panes.push(PaneId::from_parts(
+                MuxName::Zellij,
+                format!("terminal_{}", pane.id),
+            ));
+        } else {
+            views[slot].has_working = true;
+        }
+    }
+    views
 }
 
 fn has_healthy_sidebar(panes: &[RawPane]) -> bool {
@@ -1526,6 +1582,36 @@ mod tests {
         assert!(parsed[0].is_focused);
         assert!(parsed[1].is_plugin);
         assert!(!parsed[1].is_focused);
+    }
+
+    #[test]
+    fn views_with_sidebars_groups_by_tab_and_normalizes_pane_ids() {
+        // tab 0: a working pane plus two sidebar panes (a duplicate); tab 1: a
+        // sidebar-only tab; the plugin pane never counts as working.
+        let json = r#"[
+          {"id": 1, "is_plugin": false, "tab_id": 0, "title": "zsh"},
+          {"id": 2, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar"},
+          {"id": 3, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar"},
+          {"id": 9, "is_plugin": true,  "tab_id": 0, "title": "zellij:status"},
+          {"id": 4, "is_plugin": false, "tab_id": 1, "title": "rimz-sidebar"}
+        ]"#;
+        let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
+        let views = views_with_sidebars(&panes);
+        assert_eq!(views.len(), 2);
+
+        assert_eq!(views[0].view, "0");
+        assert!(views[0].has_working);
+        assert_eq!(
+            views[0].sidebar_panes,
+            vec![
+                PaneId::from_parts(MuxName::Zellij, "terminal_2"),
+                PaneId::from_parts(MuxName::Zellij, "terminal_3"),
+            ],
+        );
+
+        assert_eq!(views[1].view, "1");
+        assert!(!views[1].has_working);
+        assert_eq!(views[1].sidebar_panes.len(), 1);
     }
 
     #[test]

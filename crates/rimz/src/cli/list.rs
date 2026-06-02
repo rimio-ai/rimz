@@ -11,7 +11,6 @@
 //! its `workspace.json` is skipped silently — it is not a usable workspace, and
 //! `rimz workspace prune` reaps it. A *corrupt* record is still surfaced.
 
-use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
@@ -21,9 +20,8 @@ use serde::Serialize;
 use tracing::warn;
 
 use super::GlobalFlags;
-use rimz::ids::{MuxName, WorkspaceId};
+use rimz::ids::MuxName;
 use rimz::ledger::paths::workspaces_dir;
-use rimz::ledger::workspace_record::{self, WorkspaceRecordErr};
 
 /// Workspaces idle longer than this are hidden from the default view; `--all`
 /// reveals them.
@@ -64,14 +62,16 @@ pub fn run(args: ListArgs, _globals: &GlobalFlags) -> Result<()> {
 }
 
 fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
-    let known = read_known_workspaces()?;
+    let known = rimz::workspace::known_workspaces().context("reading known workspaces")?;
     let zellij_sessions = backend_sessions(MuxName::Zellij);
     let tmux_sessions = backend_sessions(MuxName::Tmux);
     let now = SystemTime::now();
+    let root = workspaces_dir();
 
     let mut rows: Vec<WorkspaceRow> = known
         .into_iter()
         .filter_map(|known| {
+            let last_activity = activity_for(&root.join(known.workspace_id.as_str()));
             let running_on = if zellij_sessions.contains(&known.session_name) {
                 Some(MuxName::Zellij.as_str().to_owned())
             } else if tmux_sessions.contains(&known.session_name) {
@@ -81,7 +81,7 @@ fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
             };
             // Default view: running sessions plus anything touched recently.
             // `--all` keeps dormant workspaces in the listing.
-            if !all && running_on.is_none() && !is_recent(known.last_activity, now) {
+            if !all && running_on.is_none() && !is_recent(last_activity, now) {
                 return None;
             }
             Some(WorkspaceRow {
@@ -89,8 +89,7 @@ fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
                 project_root: known.project_root.display().to_string(),
                 session_name: known.session_name,
                 running_on,
-                last_activity: known
-                    .last_activity
+                last_activity: last_activity
                     .and_then(|at| Timestamp::try_from(at).ok())
                     .map(|ts| ts.to_string()),
             })
@@ -108,61 +107,6 @@ fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
         }
     });
     Ok(rows)
-}
-
-struct KnownWorkspace {
-    workspace_id: WorkspaceId,
-    project_root: PathBuf,
-    session_name: String,
-    last_activity: Option<SystemTime>,
-}
-
-fn read_known_workspaces() -> Result<Vec<KnownWorkspace>> {
-    let root = workspaces_dir();
-    let entries = match std::fs::read_dir(&root) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(err).with_context(|| format!("reading {}", root.display())),
-    };
-    let mut out = Vec::new();
-    for entry in entries {
-        let entry = entry.with_context(|| format!("reading {}", root.display()))?;
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        let Ok(workspace_id) = WorkspaceId::parse(name) else {
-            continue;
-        };
-        let record_path = path.join("workspace.json");
-        let record = match workspace_record::read(&record_path) {
-            Ok(record) => record,
-            // A dir without a record isn't a usable workspace — half-removed or
-            // never finished. Skip it quietly; `rimz workspace prune` reaps it.
-            Err(WorkspaceRecordErr::Io { source, .. })
-                if source.kind() == std::io::ErrorKind::NotFound =>
-            {
-                continue;
-            }
-            // A record that exists but won't parse is a real anomaly worth
-            // surfacing.
-            Err(err) => {
-                warn!(workspace = %workspace_id, error = %err, "skipping workspace with unreadable record");
-                continue;
-            }
-        };
-        let last_activity = activity_for(&path);
-        out.push(KnownWorkspace {
-            workspace_id,
-            project_root: record.project_root,
-            session_name: record.session_name,
-            last_activity,
-        });
-    }
-    Ok(out)
 }
 
 /// Best-effort "last activity" instant — newest mtime across the files that

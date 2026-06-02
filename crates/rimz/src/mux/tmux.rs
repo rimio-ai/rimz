@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, DaemonView, MuxBackend, MuxErr,
-    PaneCapture, PaneListOptions, Result, SessionOptions, SidebarPaneOptions, SidebarRecovery,
-    SplitPaneOptions, ensure_pane_backend,
+    PaneCapture, PaneListOptions, Result, SessionOptions, SidebarLiveness, SidebarPaneOptions,
+    SidebarRecovery, SplitPaneOptions, ViewSidebars, ensure_pane_backend,
 };
 use crate::config::TmuxConfig;
 use crate::feed::PaneRef;
@@ -97,6 +97,21 @@ impl TmuxBackend {
             spec = spec.args(["-S".to_owned(), socket.to_string_lossy().into_owned()]);
         }
         spec
+    }
+
+    /// Close a single pane by id (`kill-pane -t %N`), terminating its process.
+    /// Reconcile uses this to drop a duplicate or unresponsive sidebar pane
+    /// without touching the rest of the window.
+    fn kill_pane(&self, pane: &PaneId) -> Result<()> {
+        ensure_pane_backend(pane, MuxName::Tmux)?;
+        self.cmd()
+            .args([
+                "kill-pane".to_owned(),
+                "-t".to_owned(),
+                pane.raw().to_owned(),
+            ])
+            .run()
+            .map(|_| ())
     }
 
     /// Split a left sidebar into a specific window in place, mirroring the
@@ -239,6 +254,33 @@ fn sidebar_serve_command(opts: &SidebarPaneOptions) -> Vec<String> {
 
 fn is_tmux_sidebar(pane: &PaneRef) -> bool {
     pane.command.as_deref() == Some(SIDEBAR_BIN_NAME)
+}
+
+/// Group a pane list into per-window [`ViewSidebars`] for the reconcile planner:
+/// each window's sidebar panes and whether it holds a working (non-sidebar) pane.
+/// Panes with no window id are skipped. First-seen window order.
+fn tmux_views_with_sidebars(panes: &[PaneRef]) -> Vec<ViewSidebars> {
+    let mut views: Vec<ViewSidebars> = Vec::new();
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for pane in panes {
+        let Some(view) = pane.view_id.as_deref() else {
+            continue;
+        };
+        let slot = *index.entry(view.to_owned()).or_insert_with(|| {
+            views.push(ViewSidebars {
+                view: view.to_owned(),
+                sidebar_panes: Vec::new(),
+                has_working: false,
+            });
+            views.len() - 1
+        });
+        if is_tmux_sidebar(pane) {
+            views[slot].sidebar_panes.push(pane.pane_id.clone());
+        } else {
+            views[slot].has_working = true;
+        }
+    }
+    views
 }
 
 fn tmux_bool(value: bool) -> String {
@@ -506,23 +548,33 @@ impl MuxBackend for TmuxBackend {
             .map(|_| ())
     }
 
-    fn recover_sidebars(&self, opts: &SidebarPaneOptions) -> Result<SidebarRecovery> {
+    fn reconcile_sidebars(
+        &self,
+        opts: &SidebarPaneOptions,
+        live: &SidebarLiveness,
+    ) -> Result<SidebarRecovery> {
         // tmux re-adds a sidebar in place with the same left split the initial
         // window got — `-d` keeps the user's focus, `-l <pct>%` sets the width —
-        // so no move/resize/refocus dance and no session teardown is needed.
+        // and drops a stray sidebar with `kill-pane -t`; no move/resize/refocus
+        // dance and no session teardown is needed.
         let panes = self.list_panes(PaneListOptions {
             session_name: Some(opts.session_name.clone()),
         })?;
-        let classified: Vec<(String, bool)> = panes
-            .iter()
-            .filter_map(|pane| {
-                pane.view_id
-                    .clone()
-                    .map(|view| (view, is_tmux_sidebar(pane)))
-            })
-            .collect();
+        let views = tmux_views_with_sidebars(&panes);
+        let plan = super::plan_reconcile(&views, live);
         let mut report = SidebarRecovery::default();
-        for window in &super::views_missing_sidebar(&classified) {
+        for pane in &plan.close {
+            match self.kill_pane(pane) {
+                Ok(()) => report.closed += 1,
+                Err(err) => tracing::warn!(
+                    session = %opts.session_name,
+                    pane = %pane.as_str(),
+                    error = %err,
+                    "sidebar reconcile: closing a stray sidebar pane failed; leaving it",
+                ),
+            }
+        }
+        for window in &plan.add {
             match self.add_sidebar_to_window(opts, window) {
                 Ok(()) => report.recovered += 1,
                 Err(err) => {
@@ -530,7 +582,7 @@ impl MuxBackend for TmuxBackend {
                         session = %opts.session_name,
                         window = %window,
                         error = %err,
-                        "sidebar recovery: in-place add failed; leaving the window without a sidebar",
+                        "sidebar reconcile: in-place add failed; leaving the window without a sidebar",
                     );
                     report.failed += 1;
                 }
@@ -676,6 +728,52 @@ fn parse_client_pane_ids(stdout: &str) -> Vec<PaneId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tmux_pane(id: &str, view: &str, command: &str) -> PaneRef {
+        PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Tmux, id),
+            session_name: "room".to_owned(),
+            view_id: Some(view.to_owned()),
+            view_kind: None,
+            view_name: None,
+            is_focused: false,
+            client_focused: false,
+            command: Some(command.to_owned()),
+            cwd: None,
+            pane_pid: None,
+            pane_process_start: None,
+        }
+    }
+
+    #[test]
+    fn views_with_sidebars_groups_by_window_and_flags_working() {
+        let panes = vec![
+            tmux_pane("%1", "@0", "sh"),             // working pane
+            tmux_pane("%2", "@0", SIDEBAR_BIN_NAME), // its sidebar
+            tmux_pane("%3", "@0", SIDEBAR_BIN_NAME), // a duplicate sidebar
+            tmux_pane("%4", "@1", SIDEBAR_BIN_NAME), // a sidebar-only window
+        ];
+        let views = tmux_views_with_sidebars(&panes);
+        assert_eq!(views.len(), 2, "two windows, in first-seen order");
+
+        assert_eq!(views[0].view, "@0");
+        assert!(views[0].has_working);
+        assert_eq!(
+            views[0].sidebar_panes,
+            vec![
+                PaneId::from_parts(MuxName::Tmux, "%2"),
+                PaneId::from_parts(MuxName::Tmux, "%3"),
+            ],
+            "both sidebar panes, in order",
+        );
+
+        assert_eq!(views[1].view, "@1");
+        assert!(
+            !views[1].has_working,
+            "a sidebar-only window holds no working pane",
+        );
+        assert_eq!(views[1].sidebar_panes.len(), 1);
+    }
 
     #[test]
     fn version_parser_strips_letter_suffix() {

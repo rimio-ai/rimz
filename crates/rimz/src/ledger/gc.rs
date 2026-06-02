@@ -520,6 +520,7 @@ mod tests {
             MuxName::Tmux,
             "rimz-test",
             stale_socket.clone(),
+            None,
         );
         let stale_sidebar_path = rt.heartbeat_dir.join("sidebar.stale.json");
         write_json(&stale_sidebar_path, &stale_sidebar);

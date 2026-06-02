@@ -19,7 +19,7 @@ use crate::proc::ProcInfo;
 
 /// Grace between SIGTERM and SIGKILL in the process sweep — long enough for a
 /// well-behaved process to exit on its own, short enough not to stall `reset`.
-const SWEEP_GRACE: Duration = Duration::from_millis(300);
+pub(crate) const SWEEP_GRACE: Duration = Duration::from_millis(300);
 
 /// What [`teardown_room`] removed, for the user-facing `rimz reset` report.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -48,7 +48,9 @@ pub fn teardown_room(
     let session_killed = backend.kill_session(session_name).is_ok();
     let cache_removed = backend.purge_resurrection_cache(session_name);
     crate::sidebar::sweep_orphan_runtime(runtime);
-    let processes_swept = sweep_orphan_processes(workspace_id.as_str(), session_name);
+    // The session is already a corpse (killed above), so sweeping its lingering
+    // mux server is cleanup, not destruction.
+    let processes_swept = sweep_orphan_processes(workspace_id.as_str(), session_name, true);
     TeardownReport {
         session_killed,
         cache_removed,
@@ -98,13 +100,22 @@ fn remove_path(path: &Path) -> bool {
 /// Whether `cmdline` belongs to an orphaned room process worth sweeping. The
 /// exact, path-derived `session_name` is globally unique, so requiring it in the
 /// command line is the load-bearing scope: nothing from another room can match.
-/// Within that scope we take either an orphaned multiplexer server or a leaked
-/// rimz sidebar / agent app-server daemon for this workspace.
-fn is_sweep_target(cmdline: &str, session_name: &str, workspace_id: &str) -> bool {
+/// Within that scope we take a leaked rimz sidebar / agent app-server daemon for
+/// this workspace, and — only when `include_mux_server` — an orphaned multiplexer
+/// server. `rimz reset` kills the session first, so its lingering server is a
+/// corpse and sweeping it is safe; `rimz reload` infers "dead" from a best-effort
+/// probe, so it never sweeps a server (a probe that wrongly read a live session
+/// as dead would otherwise destroy it) and reaps only respawnable daemons.
+fn is_sweep_target(
+    cmdline: &str,
+    session_name: &str,
+    workspace_id: &str,
+    include_mux_server: bool,
+) -> bool {
     if !cmdline.contains(session_name) {
         return false;
     }
-    let mux_server = cmdline.contains("--server");
+    let mux_server = include_mux_server && cmdline.contains("--server");
     let workspace_daemon = cmdline.contains(workspace_id)
         && (cmdline.contains("rimz-sidebar")
             || cmdline.contains("sidebar")
@@ -114,27 +125,36 @@ fn is_sweep_target(cmdline: &str, session_name: &str, workspace_id: &str) -> boo
 
 /// Pick the pids to sweep: this user's processes only, matching
 /// [`is_sweep_target`], minus the `protected` set (this process and its
-/// ancestors). Pure over its inputs so the scoping rules are unit-tested without
-/// touching real processes.
+/// ancestors). `include_mux_server` flows through to [`is_sweep_target`]. Pure
+/// over its inputs so the scoping rules are unit-tested without touching real
+/// processes.
 pub(crate) fn select_sweep_targets(
     procs: &[ProcInfo],
     my_uid: u32,
     session_name: &str,
     workspace_id: &str,
     protected: &HashSet<u32>,
+    include_mux_server: bool,
 ) -> Vec<u32> {
     procs
         .iter()
         .filter(|proc| proc.real_uid == my_uid)
         .filter(|proc| !protected.contains(&proc.pid))
-        .filter(|proc| is_sweep_target(&proc.cmdline, session_name, workspace_id))
+        .filter(|proc| {
+            is_sweep_target(
+                &proc.cmdline,
+                session_name,
+                workspace_id,
+                include_mux_server,
+            )
+        })
         .map(|proc| proc.pid)
         .collect()
 }
 
 /// This process plus its ancestor chain — the pids the sweep must never signal,
-/// so `rimz reset` cannot kill the shell or attach that launched it.
-fn protected_pids(procs: &[ProcInfo], self_pid: u32) -> HashSet<u32> {
+/// so `rimz reset`/`rimz reload` cannot kill the shell or attach that launched it.
+pub(crate) fn protected_pids(procs: &[ProcInfo], self_pid: u32) -> HashSet<u32> {
     let parents: HashMap<u32, u32> = procs.iter().map(|proc| (proc.pid, proc.ppid)).collect();
     let mut protected = HashSet::new();
     let mut current = self_pid;
@@ -151,10 +171,19 @@ fn protected_pids(procs: &[ProcInfo], self_pid: u32) -> HashSet<u32> {
     protected
 }
 
+/// Sweep this user's orphaned server / leaked daemons for `(workspace, session)`
+/// (SIGTERM→grace→SIGKILL), excluding the caller and its ancestors. `rimz reset`
+/// runs it after killing the session (`include_mux_server: true`); `rimz reload`
+/// runs it for a workspace whose session a probe read as gone, reaping only
+/// respawnable sidebar/app-server leftovers (`include_mux_server: false`) so a
+/// misread live session is never destroyed. Linux-only.
 #[cfg(target_os = "linux")]
-fn sweep_orphan_processes(workspace_id: &str, session_name: &str) -> Vec<u32> {
-    use nix::sys::signal::{Signal, kill};
-    use nix::unistd::{Pid, Uid};
+pub(crate) fn sweep_orphan_processes(
+    workspace_id: &str,
+    session_name: &str,
+    include_mux_server: bool,
+) -> Vec<u32> {
+    use nix::unistd::Uid;
 
     let procs = crate::proc::list_processes();
     let protected = protected_pids(&procs, std::process::id());
@@ -164,31 +193,53 @@ fn sweep_orphan_processes(workspace_id: &str, session_name: &str) -> Vec<u32> {
         session_name,
         workspace_id,
         &protected,
+        include_mux_server,
     );
+    kill_pids(&targets, SWEEP_GRACE)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn sweep_orphan_processes(
+    _workspace_id: &str,
+    _session_name: &str,
+    _include_mux_server: bool,
+) -> Vec<u32> {
+    Vec::new()
+}
+
+/// SIGTERM each pid, wait `grace`, then SIGKILL any still alive; returns the pids
+/// signalled. The shared graceful-then-forceful kill path for the `rimz reset`
+/// orphan sweep and `rimz reload`'s zombie-sidebar reaping. Linux-only — callers
+/// on other platforms get an empty result and fall back to mux-level pane close.
+#[cfg(target_os = "linux")]
+pub(crate) fn kill_pids(targets: &[u32], grace: Duration) -> Vec<u32> {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+
     if targets.is_empty() {
-        return targets;
+        return Vec::new();
     }
     let signal = |pid: u32, sig: Signal| {
         let _ = kill(Pid::from_raw(pid as i32), sig);
     };
-    for &pid in &targets {
+    for &pid in targets {
         signal(pid, Signal::SIGTERM);
     }
-    std::thread::sleep(SWEEP_GRACE);
+    std::thread::sleep(grace);
     let still_alive: HashSet<u32> = crate::proc::list_processes()
         .iter()
         .map(|proc| proc.pid)
         .collect();
-    for &pid in &targets {
+    for &pid in targets {
         if still_alive.contains(&pid) {
             signal(pid, Signal::SIGKILL);
         }
     }
-    targets
+    targets.to_vec()
 }
 
 #[cfg(not(target_os = "linux"))]
-fn sweep_orphan_processes(_workspace_id: &str, _session_name: &str) -> Vec<u32> {
+pub(crate) fn kill_pids(_targets: &[u32], _grace: Duration) -> Vec<u32> {
     Vec::new()
 }
 
@@ -257,9 +308,16 @@ mod tests {
             proc(23, 1, me, "claude --worktree main"),
         ];
         let protected = HashSet::new();
-        let mut got = select_sweep_targets(&procs, me, SESSION, WS, &protected);
+        let mut got = select_sweep_targets(&procs, me, SESSION, WS, &protected, true);
         got.sort_unstable();
         assert_eq!(got, vec![10, 11, 12]);
+
+        // `rimz reload`'s dead-session sweep excludes the mux server (pid 10), so a
+        // probe that misread a live session as gone can only reap respawnable
+        // daemons, never tear the session down.
+        let mut daemons_only = select_sweep_targets(&procs, me, SESSION, WS, &protected, false);
+        daemons_only.sort_unstable();
+        assert_eq!(daemons_only, vec![11, 12]);
     }
 
     #[test]
@@ -283,7 +341,7 @@ mod tests {
         assert!(protected.contains(&102));
         assert!(protected.contains(&101));
         assert!(protected.contains(&100));
-        let got = select_sweep_targets(&procs, me, SESSION, WS, &protected);
+        let got = select_sweep_targets(&procs, me, SESSION, WS, &protected, true);
         assert_eq!(got, vec![10]);
     }
 

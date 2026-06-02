@@ -14,7 +14,7 @@ pub use selection::auto_detect_backend;
 pub use tmux::TmuxBackend;
 pub use zellij::ZellijBackend;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io;
 use std::io::Read as _;
 use std::path::PathBuf;
@@ -226,6 +226,11 @@ pub struct SessionOptions {
     pub config: crate::config::MultiplexerConfig,
 }
 
+/// Default sidebar width as a percentage of the view, used when launching or
+/// recovering a sidebar pane. The single source of truth for both the CLI launch
+/// paths and the user-wide reload reconcile.
+pub const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
+
 #[derive(Clone, Debug)]
 pub struct SidebarPaneOptions {
     pub session_name: String,
@@ -237,46 +242,82 @@ pub struct SidebarPaneOptions {
     pub config: crate::config::MultiplexerConfig,
 }
 
-/// Tally of one in-place sidebar recovery pass ([`MuxBackend::recover_sidebars`]).
+/// Tally of one in-place sidebar reconcile pass ([`MuxBackend::reconcile_sidebars`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SidebarRecovery {
-    /// Views (Zellij tabs / tmux windows) that had lost their sidebar and got
-    /// one re-added in place this pass.
+    /// Views (Zellij tabs / tmux windows) that gained a sidebar this pass —
+    /// because they had none, or their only sidebar was unresponsive and was
+    /// closed first.
     pub recovered: usize,
+    /// Duplicate or unresponsive sidebar panes closed so each view keeps exactly
+    /// one live sidebar.
+    pub closed: usize,
     /// Views that needed a sidebar but whose in-place add failed — logged and
     /// skipped, never retried.
     pub failed: usize,
 }
 
-/// Group `(view_id, is_sidebar)` pane classifications and return the view ids
-/// that hold at least one working (non-sidebar) pane but no sidebar pane — the
-/// views whose sidebar was lost and should gain one in place. First-seen order,
-/// each view once. Shared by both backends so the "which views lost a sidebar"
-/// rule lives in exactly one place.
-pub(crate) fn views_missing_sidebar(classified: &[(String, bool)]) -> Vec<String> {
-    use std::collections::HashMap;
+/// The live sidebars the runtime knows about when a reconcile runs: the panes a
+/// fresh, current-protocol heartbeat claims, and whether any fresh heartbeat is
+/// *unlocated* (carries no pane id — an old/edge renderer with no per-pane env).
+/// An unlocated live sidebar is a wildcard: reconcile never closes a pane it
+/// might own, degrading that view to add-only.
+#[derive(Clone, Debug, Default)]
+pub struct SidebarLiveness {
+    pub claimed_panes: HashSet<PaneId>,
+    pub has_unlocated: bool,
+}
 
-    let mut order: Vec<String> = Vec::new();
-    // view -> (has_working_pane, has_sidebar_pane)
-    let mut state: HashMap<String, (bool, bool)> = HashMap::new();
-    for (view, is_sidebar) in classified {
-        let entry = state.entry(view.clone()).or_insert_with(|| {
-            order.push(view.clone());
-            (false, false)
-        });
-        if *is_sidebar {
-            entry.1 = true;
-        } else {
-            entry.0 = true;
+/// One view's sidebar panes (in mux order) and whether it holds a working
+/// (non-sidebar) pane — the per-view input the reconcile planner folds.
+pub(crate) struct ViewSidebars {
+    pub view: String,
+    pub sidebar_panes: Vec<PaneId>,
+    pub has_working: bool,
+}
+
+/// What a reconcile must do to converge one session to a single live sidebar per
+/// working view: close these sidebar panes (duplicates + unclaimed/unresponsive),
+/// then add a sidebar to these views (none survived, or none existed).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct ReconcilePlan {
+    pub close: Vec<PaneId>,
+    pub add: Vec<String>,
+}
+
+/// Plan the reconcile for one session: in each working view keep exactly one
+/// *claimed* (live) sidebar pane, mark the rest for closing, and add a sidebar to
+/// any working view left without a live one — so duplicates collapse to one and a
+/// wedged sidebar is replaced. A view with no working pane is left alone (a lone
+/// sidebar self-closes; a daemon view is intentional). When a live sidebar is
+/// unlocated, that view is handled conservatively: never close blind, only add
+/// when it has no sidebar at all. First-seen order; shared by both backends so
+/// the rule lives in one place and is unit-tested without a mux.
+pub(crate) fn plan_reconcile(views: &[ViewSidebars], live: &SidebarLiveness) -> ReconcilePlan {
+    let mut plan = ReconcilePlan::default();
+    for view in views {
+        if !view.has_working {
+            continue;
+        }
+        if live.has_unlocated {
+            if view.sidebar_panes.is_empty() {
+                plan.add.push(view.view.clone());
+            }
+            continue;
+        }
+        let mut kept = false;
+        for pane in &view.sidebar_panes {
+            if !kept && live.claimed_panes.contains(pane) {
+                kept = true;
+            } else {
+                plan.close.push(pane.clone());
+            }
+        }
+        if !kept {
+            plan.add.push(view.view.clone());
         }
     }
-    order
-        .into_iter()
-        .filter(|view| {
-            let (has_work, has_sidebar) = state[view];
-            has_work && !has_sidebar
-        })
-        .collect()
+    plan
 }
 
 #[derive(Clone, Debug, Default)]
@@ -430,12 +471,18 @@ pub trait MuxBackend: Send + Sync {
         let _ = name;
         Vec::new()
     }
-    /// Re-add a sidebar to every view (Zellij tab / tmux window) that holds
-    /// working panes but lost its sidebar, in place and without disturbing
-    /// existing panes. One best-effort pass: a view whose add fails is logged
-    /// and skipped — never retried, never a session rebirth. Unlike
-    /// [`Self::open_sidebar`], this never deletes or recreates the session.
-    fn recover_sidebars(&self, opts: &SidebarPaneOptions) -> Result<SidebarRecovery>;
+    /// Converge every view (Zellij tab / tmux window) that holds working panes to
+    /// exactly one live sidebar: close duplicate or unresponsive sidebar panes
+    /// (those `live` does not claim), then re-add a sidebar to any working view
+    /// left without one — all in place, without disturbing working panes. One
+    /// best-effort pass: a view whose add fails is logged and skipped, never
+    /// retried, never a session rebirth. Unlike [`Self::open_sidebar`], this never
+    /// deletes or recreates the session.
+    fn reconcile_sidebars(
+        &self,
+        opts: &SidebarPaneOptions,
+        live: &SidebarLiveness,
+    ) -> Result<SidebarRecovery>;
     /// Launch the `opts.hosts` in one dedicated, named background view (tmux
     /// window / Zellij tab) of an existing session, born `sidebar | hosts…`,
     /// forced to the first position, and out of the user's focus. Idempotent: a
@@ -473,36 +520,78 @@ pub(crate) fn ensure_pane_backend(pane: &PaneId, expected: MuxName) -> Result<()
 mod tests {
     use super::*;
 
-    #[test]
-    fn views_missing_sidebar_flags_only_worked_views_without_one() {
-        let classified = vec![
-            // tab 12: a working pane, no sidebar -> needs recovery.
-            ("12".to_owned(), false),
-            // tab 15: sidebar + working pane -> healthy.
-            ("15".to_owned(), true),
-            ("15".to_owned(), false),
-            // tab 16: sidebar only (no working pane) -> nothing to serve, skip.
-            ("16".to_owned(), true),
-            // tab 17: two working panes, no sidebar -> needs recovery, listed once.
-            ("17".to_owned(), false),
-            ("17".to_owned(), false),
-        ];
-        assert_eq!(
-            views_missing_sidebar(&classified),
-            vec!["12".to_owned(), "17".to_owned()],
-            "only views with work but no sidebar, in first-seen order, deduped"
-        );
+    fn pane(raw: &str) -> PaneId {
+        PaneId::from_parts(MuxName::Zellij, raw)
+    }
+
+    fn view(id: &str, sidebars: &[&str], has_working: bool) -> ViewSidebars {
+        ViewSidebars {
+            view: id.to_owned(),
+            sidebar_panes: sidebars.iter().map(|raw| pane(raw)).collect(),
+            has_working,
+        }
+    }
+
+    fn live(claimed: &[&str]) -> SidebarLiveness {
+        SidebarLiveness {
+            claimed_panes: claimed.iter().map(|raw| pane(raw)).collect(),
+            has_unlocated: false,
+        }
     }
 
     #[test]
-    fn views_missing_sidebar_is_empty_when_every_view_is_healthy() {
-        let classified = vec![
-            ("a".to_owned(), true),
-            ("a".to_owned(), false),
-            ("b".to_owned(), false),
-            ("b".to_owned(), true),
-        ];
-        assert!(views_missing_sidebar(&classified).is_empty());
+    fn reconcile_adds_to_a_working_view_without_a_sidebar() {
+        let views = vec![view("12", &[], true)];
+        let plan = plan_reconcile(&views, &live(&[]));
+        assert_eq!(plan.close, Vec::<PaneId>::new());
+        assert_eq!(plan.add, vec!["12".to_owned()]);
+    }
+
+    #[test]
+    fn reconcile_leaves_a_healthy_view_untouched() {
+        // One sidebar pane, claimed live, plus a working pane: nothing to do.
+        let views = vec![view("15", &["terminal_15"], true)];
+        let plan = plan_reconcile(&views, &live(&["terminal_15"]));
+        assert_eq!(plan, ReconcilePlan::default());
+    }
+
+    #[test]
+    fn reconcile_closes_duplicates_keeping_one_live() {
+        // Two sidebar panes in one tab; the live one is kept, the other closed.
+        let views = vec![view("15", &["terminal_15", "terminal_99"], true)];
+        let plan = plan_reconcile(&views, &live(&["terminal_15"]));
+        assert_eq!(plan.close, vec![pane("terminal_99")]);
+        assert!(plan.add.is_empty(), "a live sidebar already serves the tab");
+    }
+
+    #[test]
+    fn reconcile_replaces_an_unresponsive_only_sidebar() {
+        // The tab's lone sidebar is not claimed (wedged): close it and add fresh.
+        let views = vec![view("15", &["terminal_15"], true)];
+        let plan = plan_reconcile(&views, &live(&[]));
+        assert_eq!(plan.close, vec![pane("terminal_15")]);
+        assert_eq!(plan.add, vec!["15".to_owned()]);
+    }
+
+    #[test]
+    fn reconcile_skips_a_view_with_no_working_pane() {
+        // A sidebar-only view (no working pane) is left alone — it self-closes.
+        let views = vec![view("16", &["terminal_16"], false)];
+        assert_eq!(plan_reconcile(&views, &live(&[])), ReconcilePlan::default());
+    }
+
+    #[test]
+    fn reconcile_with_an_unlocated_live_sidebar_never_closes_blind() {
+        // A fresh heartbeat with no pane id is a wildcard: don't close any pane it
+        // might own; only add to a view that has none at all.
+        let views = vec![view("15", &["terminal_15"], true), view("12", &[], true)];
+        let unlocated = SidebarLiveness {
+            claimed_panes: HashSet::new(),
+            has_unlocated: true,
+        };
+        let plan = plan_reconcile(&views, &unlocated);
+        assert!(plan.close.is_empty(), "never close blind under a wildcard");
+        assert_eq!(plan.add, vec!["12".to_owned()]);
     }
 
     #[test]

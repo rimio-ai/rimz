@@ -123,7 +123,7 @@ On hook-cap timeout (the per-agent ceiling — see [hooks.md](./hooks.md) for th
 After every ledger write the CLI or hook subprocess:
 
 1. Walks fresh `heartbeat/sidebar.*.json` entries on the current sidebar protocol version (TTL ~5s).
-2. Sends a small wakeup datagram (`{ "kind": "ledger_delta", "request_id": "...", "workspace_id": "...", "protocol_version": "rimz.plugin.v2" }`) to each `sock/sidebar.<instance_id>.sock`.
+2. Sends a small wakeup datagram (`{ "kind": "ledger_delta", "request_id": "...", "workspace_id": "...", "protocol_version": "rimz.plugin.v3" }`) to each `sock/sidebar.<instance_id>.sock`.
 
 The socket datagram is the only wakeup the walk fires, on both backends — one per fresh instance. The `MuxBackend::wake_sidebar` pipe primitive (`zellij --session <name> pipe --name rimz::feed`) is dormant: it has no consumer until the opt-in Zellij plugin rail is built, so the walk spawns no `zellij` subprocess per write. When that rail lands it re-arms the pipe, gated on rail presence (see [multiplexers.md](./multiplexers.md)).
 

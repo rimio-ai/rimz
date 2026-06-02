@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{MuxName, ResolverId, SidebarInstanceId, WorkspaceId};
+use crate::ids::{MuxName, PaneId, ResolverId, SidebarInstanceId, WorkspaceId};
 use crate::schema::{RESOLVER_PROTOCOL_VERSION, SIDEBAR_PROTOCOL_VERSION};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -19,6 +19,13 @@ pub struct SidebarHeartbeat {
     /// `zellij pipe` on the Zellij backend).
     pub session_name: String,
     pub wakeup_socket: PathBuf,
+    /// Normalized pane this renderer paints into (`<mux>:<raw>`). `rimz reload`
+    /// links a live sidebar pane to its instance through this so it can tell a
+    /// healthy sidebar from a duplicate or an unclaimed (wedged) pane. `None`
+    /// when the renderer has no per-pane mux env var — treated as a wildcard
+    /// that reconcile never closes a pane for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<PaneId>,
     pub last_seen: Timestamp,
 }
 
@@ -29,6 +36,7 @@ impl SidebarHeartbeat {
         mux: MuxName,
         session_name: impl Into<String>,
         wakeup_socket: PathBuf,
+        pane_id: Option<PaneId>,
     ) -> Self {
         Self {
             protocol_version: SIDEBAR_PROTOCOL_VERSION.to_owned(),
@@ -37,6 +45,7 @@ impl SidebarHeartbeat {
             mux,
             session_name: session_name.into(),
             wakeup_socket,
+            pane_id,
             last_seen: Timestamp::now(),
         }
     }

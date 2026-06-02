@@ -20,12 +20,12 @@ use std::time::{Duration, SystemTime};
 
 use tracing::debug;
 
-use crate::ids::{MuxName, SidebarInstanceId, WorkspaceId};
+use crate::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use crate::ledger::RuntimePaths;
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
 use crate::ledger::wakeup::SIDEBAR_HEARTBEAT_TTL;
-use crate::mux::{DaemonView, MuxBackend, SidebarPaneOptions};
+use crate::mux::{DaemonView, MuxBackend, SidebarLiveness, SidebarPaneOptions};
 use crate::schema::SIDEBAR_PROTOCOL_VERSION;
 use crate::schema::heartbeat::SidebarHeartbeat;
 
@@ -67,6 +67,7 @@ pub fn write_heartbeat(
     mux: MuxName,
     session_name: &str,
     wakeup_socket: &Path,
+    pane_id: Option<PaneId>,
 ) -> Result<(), HeartbeatWriteErr> {
     let heartbeat = SidebarHeartbeat::new(
         workspace_id,
@@ -74,17 +75,18 @@ pub fn write_heartbeat(
         mux,
         session_name,
         wakeup_socket.to_path_buf(),
+        pane_id,
     );
     let path = runtime.sidebar_heartbeat_path(instance_id);
     atomic::write_temp_then_rename(&path, &heartbeat)
         .map_err(|source| HeartbeatWriteErr { path, source })
 }
 
-/// Instance ids of every fresh, current-protocol sidebar heartbeat in the
-/// workspace runtime dir. The shared liveness filter behind the launch gate and
-/// the runtime election: a stale mtime, unreadable JSON, or mismatched protocol
-/// is skipped.
-fn fresh_sidebar_instances(rt: &RuntimePaths) -> Vec<SidebarInstanceId> {
+/// Every fresh, current-protocol sidebar heartbeat in the workspace runtime dir.
+/// The shared scan behind the launch gate, the runtime election, and the reload
+/// liveness set: a stale mtime, unreadable JSON, or mismatched protocol is
+/// skipped (so an old-build sidebar drops out and reload replaces it).
+fn fresh_sidebar_heartbeats(rt: &RuntimePaths) -> Vec<SidebarHeartbeat> {
     let entries = match fs::read_dir(&rt.heartbeat_dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
@@ -94,7 +96,7 @@ fn fresh_sidebar_instances(rt: &RuntimePaths) -> Vec<SidebarInstanceId> {
         }
     };
 
-    let mut ids = Vec::new();
+    let mut out = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if !SidebarHeartbeat::is_heartbeat_file(&path) {
@@ -111,10 +113,34 @@ fn fresh_sidebar_instances(rt: &RuntimePaths) -> Vec<SidebarInstanceId> {
             }
         };
         if heartbeat.protocol_version == SIDEBAR_PROTOCOL_VERSION {
-            ids.push(heartbeat.instance_id);
+            out.push(heartbeat);
         }
     }
-    ids
+    out
+}
+
+fn fresh_sidebar_instances(rt: &RuntimePaths) -> Vec<SidebarInstanceId> {
+    fresh_sidebar_heartbeats(rt)
+        .into_iter()
+        .map(|heartbeat| heartbeat.instance_id)
+        .collect()
+}
+
+/// The live sidebars for one workspace runtime: every pane a fresh,
+/// current-protocol heartbeat claims, plus whether any fresh heartbeat is
+/// unlocated (no pane id). `rimz reload` folds this into the reconcile planner so
+/// it keeps each view's live sidebar and replaces the wedged or duplicate ones.
+pub fn sidebar_liveness(rt: &RuntimePaths) -> SidebarLiveness {
+    let mut live = SidebarLiveness::default();
+    for heartbeat in fresh_sidebar_heartbeats(rt) {
+        match heartbeat.pane_id {
+            Some(pane) => {
+                live.claimed_panes.insert(pane);
+            }
+            None => live.has_unlocated = true,
+        }
+    }
+    live
 }
 
 pub fn fresh_sidebar_present(rt: &RuntimePaths) -> bool {
@@ -305,6 +331,7 @@ mod tests {
                 MuxName::Tmux,
                 "session",
                 self.runtime.sock_dir.join("sidebar.sock"),
+                None,
             );
             heartbeat.protocol_version = protocol_version.to_owned();
             let path = self.runtime.heartbeat_dir.join(filename);
@@ -316,6 +343,16 @@ mod tests {
         /// Write a fresh, current-protocol heartbeat carrying `id`, at the path
         /// the renderer would use (`sidebar.<id>.json`).
         fn write_sidebar_for(&self, id: &SidebarInstanceId) -> std::path::PathBuf {
+            self.write_sidebar_with_pane(id, None)
+        }
+
+        /// As [`Self::write_sidebar_for`], but stamping the heartbeat's claimed
+        /// pane — exercised by the reload liveness set.
+        fn write_sidebar_with_pane(
+            &self,
+            id: &SidebarInstanceId,
+            pane_id: Option<crate::ids::PaneId>,
+        ) -> std::path::PathBuf {
             self.ensure_runtime();
             let heartbeat = SidebarHeartbeat::new(
                 self.workspace_id.clone(),
@@ -325,6 +362,7 @@ mod tests {
                 self.runtime
                     .sock_dir
                     .join(format!("sidebar.{}.sock", id.short())),
+                pane_id,
             );
             let path = self.runtime.sidebar_heartbeat_path(id);
             std::fs::write(&path, serde_json::to_vec(&heartbeat).expect("json"))
@@ -352,6 +390,43 @@ mod tests {
     fn absent_heartbeat_dir_is_not_fresh() {
         let h = Harness::new();
         assert!(!fresh_sidebar_present(&h.runtime));
+    }
+
+    #[test]
+    fn liveness_collects_claimed_panes_and_flags_unlocated() {
+        use crate::ids::{MuxName, PaneId};
+
+        let h = Harness::new();
+        let located = instance("a1");
+        let unlocated = instance("b2");
+        h.write_sidebar_with_pane(&located, Some(PaneId::from_parts(MuxName::Tmux, "%7")));
+        h.write_sidebar_with_pane(&unlocated, None);
+
+        let live = sidebar_liveness(&h.runtime);
+        assert!(
+            live.claimed_panes
+                .contains(&PaneId::from_parts(MuxName::Tmux, "%7")),
+            "a heartbeat's pane is claimed",
+        );
+        assert_eq!(live.claimed_panes.len(), 1);
+        assert!(
+            live.has_unlocated,
+            "a fresh heartbeat with no pane id flags the wildcard",
+        );
+    }
+
+    #[test]
+    fn liveness_skips_stale_heartbeats() {
+        use crate::ids::{MuxName, PaneId};
+
+        let h = Harness::new();
+        let stale = instance("c3");
+        let path = h.write_sidebar_with_pane(&stale, Some(PaneId::from_parts(MuxName::Tmux, "%9")));
+        make_stale(&path);
+        assert!(
+            sidebar_liveness(&h.runtime).claimed_panes.is_empty(),
+            "a stale sidebar claims no pane",
+        );
     }
 
     #[test]
@@ -408,6 +483,7 @@ mod tests {
             MuxName::Zellij,
             "rimz-test",
             &socket,
+            None,
         )
         .expect("write heartbeat");
 

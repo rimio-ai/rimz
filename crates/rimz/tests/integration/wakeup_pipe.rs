@@ -87,6 +87,7 @@ fn wakeup_walk_sends_datagram_and_spawns_no_zellij_pipe() {
             MuxName::Zellij,
             SESSION_NAME,
             sock_a,
+            None,
         ),
     );
     write_heartbeat(
@@ -98,6 +99,7 @@ fn wakeup_walk_sends_datagram_and_spawns_no_zellij_pipe() {
             MuxName::Zellij,
             SESSION_NAME,
             sock_b,
+            None,
         ),
     );
 
@@ -139,7 +141,7 @@ fn wakeup_walk_sends_datagram_and_spawns_no_zellij_pipe() {
         let parsed: serde_json::Value =
             serde_json::from_slice(&buf[..len]).expect("datagram payload is JSON");
         assert_eq!(parsed["kind"], "ledger_delta");
-        assert_eq!(parsed["protocol_version"], "rimz.plugin.v2");
+        assert_eq!(parsed["protocol_version"], "rimz.plugin.v3");
         assert_eq!(
             parsed["workspace_id"],
             serde_json::to_value(&workspace_id).expect("workspace_id JSON"),

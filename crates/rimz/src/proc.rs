@@ -56,6 +56,30 @@ pub fn comm(_pid: u32) -> Option<String> {
     None
 }
 
+/// The value of environment variable `key` for `pid`, read from
+/// `/proc/<pid>/environ` (NUL-separated `key=value` pairs). A sidebar inherits
+/// its pane's `ZELLIJ_PANE_ID` / `TMUX_PANE`, so `rimz reload` reads it back to
+/// attribute a running renderer to the pane it paints. Non-Linux, or an
+/// unreadable `/proc`, yields `None`, so callers fall back rather than guess.
+#[cfg(target_os = "linux")]
+pub fn env_var(pid: u32, key: &str) -> Option<String> {
+    parse_environ(&std::fs::read(format!("/proc/{pid}/environ")).ok()?, key)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn env_var(_pid: u32, _key: &str) -> Option<String> {
+    None
+}
+
+/// Find `key`'s value in a NUL-separated `key=value` environ blob.
+#[cfg(target_os = "linux")]
+fn parse_environ(raw: &[u8], key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    String::from_utf8_lossy(raw)
+        .split('\0')
+        .find_map(|pair| pair.strip_prefix(prefix.as_str()).map(str::to_owned))
+}
+
 /// Trim the trailing newline `/proc/<pid>/comm` always carries; an empty name is
 /// no name.
 #[cfg(target_os = "linux")]
@@ -111,5 +135,20 @@ mod tests {
     fn parse_comm_rejects_blank() {
         assert_eq!(parse_comm("\n"), None);
         assert_eq!(parse_comm("   "), None);
+    }
+
+    #[test]
+    fn parse_environ_reads_a_present_key() {
+        let blob = b"PATH=/usr/bin\0ZELLIJ_PANE_ID=3\0TERM=xterm\0";
+        assert_eq!(parse_environ(blob, "ZELLIJ_PANE_ID").as_deref(), Some("3"));
+        assert_eq!(parse_environ(blob, "PATH").as_deref(), Some("/usr/bin"));
+    }
+
+    #[test]
+    fn parse_environ_missing_key_is_none() {
+        let blob = b"PATH=/usr/bin\0TERM=xterm\0";
+        assert_eq!(parse_environ(blob, "ZELLIJ_PANE_ID"), None);
+        // A bare key with no `=` never matches the `key=` prefix.
+        assert_eq!(parse_environ(b"ZELLIJ_PANE_ID\0", "ZELLIJ_PANE_ID"), None);
     }
 }

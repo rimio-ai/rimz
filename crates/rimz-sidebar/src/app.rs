@@ -1351,6 +1351,7 @@ fn write_heartbeat(config: &ServeConfig, runtime: &RuntimePaths, socket_path: &P
         config.mux,
         &config.session_name,
         socket_path,
+        own_pane_id(config.mux),
     )
     .map_err(|err| SidebarAppErr::Heartbeat(err.to_string()))
 }
