@@ -1972,7 +1972,7 @@ mod tests {
     fn provider_bars_share_one_front_and_end_column() {
         let theme = Theme::fixed(true);
         let panels = vec![
-            provider_panel("claude", "Claude Code", 173, true, true, Some((25, 40))),
+            provider_panel("claude", "Claude", 173, true, true, Some((25, 40))),
             provider_panel("codex", "Codex", 33, true, false, Some((55, 8))),
             provider_panel("pi", "Pi", 28, false, false, None),
         ];
@@ -2047,7 +2047,7 @@ mod tests {
     fn provider_label_mirrors_its_bar_color() {
         let theme = Theme::fixed(false);
         // 5h: 25% used → 75% left → green. 7d: 70% used → 30% left → yellow.
-        let panel = provider_panel("claude", "Claude Code", 173, true, false, Some((25, 70)));
+        let panel = provider_panel("claude", "Claude", 173, true, false, Some((25, 70)));
         let rows = metered_bar_rows(&theme, &panel);
         assert_eq!(rows.len(), 2, "a metered panel draws a 5h and a 7d row");
         let (five_label, five_glyph, _) = bar_row_facts(&rows[0]);
@@ -2067,7 +2067,7 @@ mod tests {
     fn seven_day_exhaustion_reddens_and_silences_the_five_hour_row() {
         let theme = Theme::fixed(false);
         // 5h is untouched (would be green with a countdown); 7d is fully spent.
-        let panel = provider_panel("claude", "Claude Code", 173, true, false, Some((0, 100)));
+        let panel = provider_panel("claude", "Claude", 173, true, false, Some((0, 100)));
         let rows = metered_bar_rows(&theme, &panel);
         assert_eq!(rows.len(), 2);
         let (five_label, _, five_has_reset) = bar_row_facts(&rows[0]);
@@ -2120,7 +2120,7 @@ mod tests {
     fn not_started_window_drops_its_countdown() {
         let theme = Theme::fixed(false);
         let now = fixed_now();
-        let mut claude = provider_panel("claude", "Claude Code", 173, true, false, None);
+        let mut claude = provider_panel("claude", "Claude", 173, true, false, None);
         // The real not-started shape: ~1% used, reset slid a full 5h ahead (a hair
         // under, here 4h59m30s, the way a live reading reads).
         claude.windows = vec![RateLimitWindow {
@@ -2148,7 +2148,7 @@ mod tests {
     fn started_window_keeps_its_countdown() {
         let theme = Theme::fixed(false);
         let now = fixed_now();
-        let mut claude = provider_panel("claude", "Claude Code", 173, true, false, None);
+        let mut claude = provider_panel("claude", "Claude", 173, true, false, None);
         claude.windows = vec![RateLimitWindow {
             used_percentage: Some(1),
             resets_at: Some(now + Duration::from_secs(4 * 3_600)),
@@ -2171,7 +2171,7 @@ mod tests {
     fn used_window_keeps_countdown_despite_near_full_reset() {
         let theme = Theme::fixed(false);
         let now = fixed_now();
-        let mut claude = provider_panel("claude", "Claude Code", 173, true, false, None);
+        let mut claude = provider_panel("claude", "Claude", 173, true, false, None);
         // 5% used with the reset slid a full 5h out: usage above the floor wins, so
         // this counts as started despite the near-full reset.
         claude.windows = vec![RateLimitWindow {
@@ -2206,7 +2206,7 @@ mod tests {
         claude.context = Some(claude_context(fixed_now()));
         let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
         snapshot.providers = vec![
-            provider_panel("claude", "Claude Code", 173, true, true, Some((25, 40))),
+            provider_panel("claude", "Claude", 173, true, true, Some((25, 40))),
             {
                 let mut codex = provider_panel("codex", "Codex", 33, false, false, None);
                 codex.plan = Some("ChatGPT Pro".to_owned());
@@ -2226,7 +2226,7 @@ mod tests {
         // left with the `⇅ rc` remote-control flag pinned to the top-right corner,
         // then drains its 5h/7d budget bars.
         assert!(
-            rendered.contains("Claude Code v2.1.158 · Claude Max"),
+            rendered.contains("Claude v2.1.158 · Claude Max"),
             "{rendered}"
         );
         assert!(

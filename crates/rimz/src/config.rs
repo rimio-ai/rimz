@@ -338,7 +338,7 @@ fn default_attention_redden_secs() -> u64 {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SidebarProviderStyle {
-    /// Display name for the panel header (`Claude Code`, `Codex`, …).
+    /// Display name for the panel header (`Claude`, `Codex`, …).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub product_name: Option<String>,
     /// Multi-line ASCII emblem painted at the left of the provider block.

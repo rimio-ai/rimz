@@ -1371,7 +1371,7 @@ const PROVIDER_VALUE_WIDTH: usize = 8;
 /// the margin easily.
 const NOT_STARTED_GRACE: SignedDuration = SignedDuration::from_secs(120);
 
-/// The pinned per-provider dashboard: one block per provider (`Claude Code`,
+/// The pinned per-provider dashboard: one block per provider (`Claude`,
 /// `Codex`, …), each a header line then the brand emblem zipped against the
 /// aggregate stats and the account-scoped budget bars. A metered account drains
 /// one "mana" bar per budget window toward its reset; an unmetered (API-key)
@@ -1396,7 +1396,7 @@ pub(super) fn provider_panel_lines(
     lines
 }
 
-/// `Claude Code v2.1.158 · Claude Max          ⇅ rc`: the product name in the
+/// `Claude v2.1.158 · Claude Max          ⇅ rc`: the product name in the
 /// brand color and the version + plan dim on the left, with the violet `⇅ rc`
 /// flag pinned to the top-right corner of the block when remote control is on for
 /// the provider. Fields drop out when unknown.

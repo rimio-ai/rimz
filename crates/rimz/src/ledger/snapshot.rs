@@ -153,7 +153,7 @@ pub struct SidebarSnapshot {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarProviderPanel {
     pub kind: String,
-    /// Header display name (`Claude Code`, `Codex`, …).
+    /// Header display name (`Claude`, `Codex`, …).
     pub product_name: String,
     /// Multi-line ASCII emblem, painted brand-colored at the block's left.
     pub art: Vec<String>,
@@ -949,7 +949,7 @@ fn default_provider_style(kind: &str) -> (String, Vec<String>, u8) {
     let lines = |art: &str| art.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
     match kind {
         "claude" => (
-            "Claude Code".to_owned(),
+            "Claude".to_owned(),
             lines(" ▐▛███▜▌\n▝▜█████▛▘\n  ▘▘ ▝▝"),
             173,
         ),
