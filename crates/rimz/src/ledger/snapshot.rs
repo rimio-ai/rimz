@@ -568,6 +568,46 @@ impl SidebarSnapshot {
         }
     }
 
+    /// Reap daemon-mode Codex sessions the per-user app-server daemon no longer
+    /// holds in memory. A daemon-backed session records the shared daemon's pid,
+    /// not its own CLI's, so process liveness — which keeps it while the daemon
+    /// lives ([`drop_dead_agents_with`]) — can never reap it. Without this a closed
+    /// remote-control conversation lingers as a ghost and binds its stale status,
+    /// model, tokens, and pending ask onto a live `codex` pane by cwd
+    /// ([`lazy_agent_for_pane`]).
+    ///
+    /// Tri-state, and fail-safe by construction (the loaded-thread set is a
+    /// liveness improvement, not a perfect pane signal, so it never mass-reaps):
+    /// - `loaded` is `None` — the daemon was unreachable or its `thread/loaded/list`
+    ///   could not be trusted — keep every session;
+    /// - `daemon_pids` is empty — no daemon is running, so every session is
+    ///   standalone — keep every session;
+    /// - a session is daemon-mode ([`is_daemon_mode_codex`]) and its id is absent
+    ///   from `loaded` — reap it;
+    /// - anything else — keep it.
+    ///
+    /// The producer runs this before the live-pane fold, so a reaped session can
+    /// neither render a row nor attach stale stats to a live pane.
+    pub fn drop_dead_daemon_sessions(
+        &mut self,
+        daemon_pids: &BTreeSet<u32>,
+        loaded: Option<&BTreeSet<String>>,
+    ) {
+        let Some(loaded) = loaded else { return };
+        if daemon_pids.is_empty() {
+            return;
+        }
+        let previous_len = self.agents.len();
+        self.agents.retain(|agent| {
+            let reapable =
+                is_daemon_mode_codex(agent, daemon_pids) && !loaded.contains(&agent.agent_id);
+            !reapable
+        });
+        if self.agents.len() != previous_len {
+            self.rebuild_groups();
+        }
+    }
+
     /// Reap ghost sessions from the agent rollup. This filters the *derived*
     /// rollup only; the append-only event log is untouched, so it complements
     /// the workspace-level `rimz gc`. Two rules, both safe for the
@@ -1097,6 +1137,30 @@ fn agent_is_pidless(agent: &AgentState) -> bool {
     agent.runtime_owner.is_none() && agent.agent_pid.is_none()
 }
 
+/// Whether `agent` is a daemon-mode Codex session: a root (non-subagent) `codex`
+/// session with no stamped pane whose recorded hook owner is the shared app-server
+/// daemon ([`crate::remote_control::codex_daemon_pids`]). Subagents are excluded —
+/// their ids are not root threads, so they never appear in `thread/loaded/list` —
+/// and so are standalone sessions, whose owner pid is their own in-pane CLI rather
+/// than a daemon.
+fn is_daemon_mode_codex(agent: &AgentState, daemon_pids: &BTreeSet<u32>) -> bool {
+    if agent.kind != "codex" || agent.pane.is_some() || agent.parent_agent_id.is_some() {
+        return false;
+    }
+    agent_owner_pid(agent).is_some_and(|pid| daemon_pids.contains(&pid))
+}
+
+/// The pid the hook recorded as this session's owner: the runtime owner when one
+/// was captured, else the legacy `agent_pid`. In daemon mode this is the shared
+/// app-server daemon; in standalone mode it is the session's own process.
+fn agent_owner_pid(agent: &AgentState) -> Option<u32> {
+    agent
+        .runtime_owner
+        .as_ref()
+        .map(|owner| owner.pid)
+        .or(agent.agent_pid)
+}
+
 fn session_age_secs(now: Timestamp, agent: &AgentState) -> i64 {
     now.duration_since(agent.last_activity).as_secs()
 }
@@ -1361,6 +1425,7 @@ fn lazy_agent_for_pane<'a>(
         .iter()
         .filter(|agent| agent.pane.is_none() && agent.kind == kind)
         .filter(|agent| agent.worktree_path.as_deref() == Some(cwd))
+        .filter(|agent| pane_start_allows_bind(agent, pane))
         .filter(|agent| !bound.contains(&(agent.kind.clone(), agent.agent_id.clone())))
         .max_by_key(|agent| agent.last_activity)
     {
@@ -1370,6 +1435,19 @@ fn lazy_agent_for_pane<'a>(
         .iter()
         .any(|wired| wired == kind)
         .then(|| LazyAgentRow::Idle(Box::new(idle_agent_row(pane, kind))))
+}
+
+/// Defensive guard for the cwd fallback: when the backend reports the pane's
+/// process start, a session whose `last_activity` predates that start belongs to
+/// an older instance that once ran in this worktree, not the process now in the
+/// pane — so it must not bind. A daemon-mode Codex session records the shared
+/// app-server daemon's pid, so process liveness alone cannot tell a stale session
+/// from the live one; this keeps that residue off a freshly-started pane in the
+/// same cwd. Backends that report no pane start (some Zellij snapshots) skip the
+/// check and fall back to most-recently-active ([codex-daemon-fix] → Pane Binding).
+fn pane_start_allows_bind(agent: &AgentState, pane: &PaneRef) -> bool {
+    pane.pane_process_start
+        .is_none_or(|start| agent.last_activity >= start)
 }
 
 /// The resting row for a wired lazy-agent pane that no session claimed: `○ <kind>`
@@ -5073,6 +5151,144 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
         assert_eq!(rows[0].id, "sess-new");
+    }
+
+    #[test]
+    fn paneless_codex_predating_pane_start_does_not_bind() {
+        // The defensive guard on the cwd fallback: when the backend reports the
+        // pane's process start, a pane-less Codex session whose last activity
+        // predates it belongs to an older instance that once ran in this worktree,
+        // not the process now in the pane. A daemon-mode session records the shared
+        // daemon pid, so process liveness can't tell the stale one from the live
+        // one — so the bind is refused and the fresh pane stays a process row until
+        // its own session reports.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let pane_start = Timestamp::now();
+        let mut stale = paneless_codex("sess-old", "/repo/main", 1_000);
+        stale.last_activity = pane_start - std::time::Duration::from_secs(60);
+        let fresh_pane = PaneRef {
+            pane_process_start: Some(pane_start),
+            ..pane("term1", "codex", "/repo/main")
+        };
+        let snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![stale])
+                .with_live_panes(vec![fresh_pane], None);
+
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].row_kind,
+            SidebarRowKind::Process,
+            "a session predating the pane start must not bind it",
+        );
+    }
+
+    #[test]
+    fn paneless_codex_active_after_pane_start_binds() {
+        // The guard never over-blocks: a session whose last activity is at or after
+        // the pane's process start is the live occupant and binds normally.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let pane_start = Timestamp::now();
+        let mut live = paneless_codex("sess-1", "/repo/main", 1_000);
+        live.last_activity = pane_start + std::time::Duration::from_secs(5);
+        let started_pane = PaneRef {
+            pane_process_start: Some(pane_start),
+            ..pane("term1", "codex", "/repo/main")
+        };
+        let snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![live])
+                .with_live_panes(vec![started_pane], None);
+
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
+        assert_eq!(rows[0].id, "sess-1");
+        assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "term1");
+    }
+
+    fn daemon_codex(id: &str, worktree: &str, owner_pid: u32) -> AgentState {
+        let mut codex = paneless_codex(id, worktree, 1_000);
+        codex.runtime_owner = Some(RuntimeOwner::new(
+            RuntimeOwnerKind::Agent,
+            id,
+            owner_pid,
+            None,
+        ));
+        codex.agent_pid = Some(owner_pid);
+        codex
+    }
+
+    fn daemon_snapshot(agents: Vec<AgentState>) -> SidebarSnapshot {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), agents)
+    }
+
+    fn rollup_ids(snapshot: &SidebarSnapshot) -> Vec<String> {
+        let mut ids: Vec<String> = snapshot.agents.iter().map(|a| a.agent_id.clone()).collect();
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn daemon_session_absent_from_loaded_is_reaped() {
+        // The shared daemon pid is alive, so process liveness keeps the ghost; the
+        // app-server no longer holds the thread, so the loaded-set filter reaps it
+        // while keeping the session it still holds.
+        let daemon_pids = BTreeSet::from([7]);
+        let loaded = BTreeSet::from(["t-live".to_owned()]);
+        let mut snapshot = daemon_snapshot(vec![
+            daemon_codex("t-live", "/repo/a", 7),
+            daemon_codex("t-gone", "/repo/b", 7),
+        ]);
+        snapshot.drop_dead_daemon_sessions(&daemon_pids, Some(&loaded));
+        assert_eq!(rollup_ids(&snapshot), vec!["t-live"]);
+    }
+
+    #[test]
+    fn unknown_loaded_set_keeps_every_session() {
+        // `None` means the daemon was unreachable or its list untrusted — never
+        // mass-reap.
+        let daemon_pids = BTreeSet::from([7]);
+        let mut snapshot = daemon_snapshot(vec![daemon_codex("t-gone", "/repo/b", 7)]);
+        snapshot.drop_dead_daemon_sessions(&daemon_pids, None);
+        assert_eq!(rollup_ids(&snapshot), vec!["t-gone"]);
+    }
+
+    #[test]
+    fn empty_daemon_pids_keeps_every_session() {
+        // No daemon is running, so every session is standalone — process liveness
+        // governs them, not the loaded-thread set.
+        let loaded = BTreeSet::new();
+        let mut snapshot = daemon_snapshot(vec![daemon_codex("t-gone", "/repo/b", 7)]);
+        snapshot.drop_dead_daemon_sessions(&BTreeSet::new(), Some(&loaded));
+        assert_eq!(rollup_ids(&snapshot), vec!["t-gone"]);
+    }
+
+    #[test]
+    fn standalone_codex_is_not_reaped_by_the_loaded_set() {
+        // A session whose owner pid is its own in-pane CLI (not a daemon pid) is not
+        // daemon-mode, so its absence from the daemon's loaded set means nothing.
+        let daemon_pids = BTreeSet::from([7]);
+        let loaded = BTreeSet::new();
+        let mut snapshot = daemon_snapshot(vec![daemon_codex("t-standalone", "/repo/b", 99)]);
+        snapshot.drop_dead_daemon_sessions(&daemon_pids, Some(&loaded));
+        assert_eq!(rollup_ids(&snapshot), vec!["t-standalone"]);
+    }
+
+    #[test]
+    fn daemon_filter_spares_subagents_and_other_kinds() {
+        // A codex subagent id is never a root thread, and a non-codex agent is never
+        // daemon-mode — neither is reaped even sharing the daemon pid and absent from
+        // the loaded set.
+        let daemon_pids = BTreeSet::from([7]);
+        let loaded = BTreeSet::new();
+        let mut sub = daemon_codex("sub-1", "/repo/a", 7);
+        sub.parent_agent_id = Some("root-1".to_owned());
+        let mut claude = daemon_codex("claude-1", "/repo/c", 7);
+        claude.kind = "claude".to_owned();
+        let mut snapshot = daemon_snapshot(vec![sub, claude]);
+        snapshot.drop_dead_daemon_sessions(&daemon_pids, Some(&loaded));
+        assert_eq!(rollup_ids(&snapshot), vec!["claude-1", "sub-1"]);
     }
 
     #[test]

@@ -4,9 +4,11 @@
 //! Claude's statusline `AgentContext`) is read from the official Codex
 //! app-server (`codex app-server`, JSON-RPC 2.0 over stdio). This client speaks
 //! only **read-only, non-interfering** methods — `initialize`/`initialized`,
-//! `account/rateLimits/read`, and `model/list` — and never `thread/resume` or
-//! `turn/start` (which would rejoin/own the user's live Codex thread). It is the
-//! out-of-band producer behind `rimz codex refresh-context`; storage
+//! `account/rateLimits/read`, `model/list`, and `thread/loaded/list` — and never
+//! `thread/resume` or `turn/start` (which would rejoin/own the user's live Codex
+//! thread). It is the out-of-band producer behind `rimz codex refresh-context`
+//! and the daemon-mode liveness probe behind the sidebar's ghost-session reap;
+//! storage
 //! ([`crate::ledger::agent_context`]) and the snapshot fold-in are
 //! transport-agnostic, exactly as for Claude.
 //!
@@ -368,6 +370,28 @@ impl CodexAppServer<FramedTransport> {
         }
         None
     }
+
+    /// Connect to the **per-user daemon specifically** and handshake — the only
+    /// app-server whose `thread/loaded/list` is authoritative for daemon-mode
+    /// sessions. No broker, and deliberately no cold-spawn fallback: a fresh
+    /// `app-server` holds no threads, so reporting its empty loaded set would mass-
+    /// reap every daemon-mode session. `None` when no daemon control socket exists
+    /// or it does not handshake — the liveness caller reads that as "unknown, keep
+    /// all", never as "zero loaded". Used only by the sidebar producer's ghost reap.
+    pub(crate) fn connect_daemon() -> Option<Self> {
+        let socket = daemon_socket().filter(|path| path.exists())?;
+        let bin = codex_bin();
+        let args = vec![
+            "app-server".to_owned(),
+            "proxy".to_owned(),
+            "--sock".to_owned(),
+            socket.to_string_lossy().into_owned(),
+        ];
+        let transport = FramedTransport::spawn(&bin, &args, PROXY_PROBE_DEADLINE).ok()?;
+        let mut client = Self::new(transport);
+        client.handshake().ok()?;
+        Some(client)
+    }
 }
 
 /// The attempts [`CodexAppServer::connect`] tries, in preference order, after
@@ -532,6 +556,58 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
             observed_at,
         )
     }
+
+    /// The thread ids the connected app-server currently holds in memory
+    /// (`thread/loaded/list`). Read-only and non-interfering — it lists ids, never
+    /// resumes or owns a thread. This is the daemon-mode liveness signal: a daemon-
+    /// backed Codex session absent from this set is reapable even while the shared
+    /// daemon pid lives. A response with no recognized id field is an error, not an
+    /// empty set, so a wire-shape drift degrades to keep-all rather than mass-reap.
+    /// Assumes [`Self::handshake`] already ran.
+    pub(crate) fn loaded_threads(&mut self) -> Result<Vec<String>, AppServerErr> {
+        let result = self.transport.request("thread/loaded/list", Value::Null)?;
+        parse_loaded_threads(&result)
+    }
+}
+
+/// Extract the loaded thread ids from a `thread/loaded/list` result, trusting only
+/// recognized shapes. The documented response is a flat list of ids; accept it
+/// under any of the likely keys (or as a bare array), and tolerate id-bearing
+/// objects. A response carrying none of these is **untrusted** — return an error
+/// so the daemon-liveness caller keeps every session rather than reaping against a
+/// shape it could not read (the fix plan's "do not mass-reap when the response
+/// cannot be trusted").
+fn parse_loaded_threads(result: &Value) -> Result<Vec<String>, AppServerErr> {
+    const ID_LIST_KEYS: [&str; 4] = ["threadIds", "threads", "loadedThreadIds", "ids"];
+    for key in ID_LIST_KEYS {
+        if let Some(array) = result.get(key).and_then(Value::as_array) {
+            return Ok(array.iter().filter_map(extract_thread_id).collect());
+        }
+    }
+    if let Some(array) = result.as_array() {
+        return Ok(array.iter().filter_map(extract_thread_id).collect());
+    }
+    Err(AppServerErr::Protocol(
+        "thread/loaded/list: no recognized thread-id field".to_owned(),
+    ))
+}
+
+/// One loaded-thread entry: a bare string id, or an object carrying it under a
+/// known key. `None` for an empty or shapeless entry.
+fn extract_thread_id(value: &Value) -> Option<String> {
+    if let Some(id) = value.as_str() {
+        return (!id.is_empty()).then(|| id.to_owned());
+    }
+    for key in ["id", "threadId", "thread_id"] {
+        if let Some(id) = value
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        {
+            return Some(id.to_owned());
+        }
+    }
+    None
 }
 
 /// Project the gathered read-only parts onto the transport-agnostic record.
@@ -889,6 +965,70 @@ mod tests {
         );
         assert_eq!(codex_version_from_user_agent("nogap").as_deref(), None);
         assert_eq!(codex_version_from_user_agent("trailing/").as_deref(), None);
+    }
+
+    #[test]
+    fn loaded_threads_reads_the_id_list_after_handshake() {
+        let transport = CannedTransport::new()
+            .with("thread/loaded/list", json!({ "threadIds": ["t-1", "t-2"] }));
+        let mut client = CodexAppServer::new(transport);
+        client.handshake().unwrap();
+        assert_eq!(client.loaded_threads().unwrap(), ["t-1", "t-2"]);
+        // The list read rides after the handshake, like every other method.
+        assert_eq!(client.transport.calls[0], "initialize");
+        assert_eq!(client.transport.calls[1], "notify:initialized");
+        assert!(
+            client
+                .transport
+                .calls
+                .iter()
+                .any(|c| c == "thread/loaded/list")
+        );
+    }
+
+    #[test]
+    fn parse_loaded_threads_accepts_known_shapes() {
+        // Primary: a flat id list under `threadIds`.
+        assert_eq!(
+            parse_loaded_threads(&json!({ "threadIds": ["a", "b"] })).unwrap(),
+            ["a", "b"]
+        );
+        // Tolerated key alias.
+        assert_eq!(
+            parse_loaded_threads(&json!({ "threads": ["a"] })).unwrap(),
+            ["a"]
+        );
+        // Id-bearing objects, with an empty id dropped.
+        assert_eq!(
+            parse_loaded_threads(&json!({ "threadIds": [{ "id": "a" }, { "threadId": "b" }, ""] }))
+                .unwrap(),
+            ["a", "b"]
+        );
+        // A bare array is accepted too.
+        assert_eq!(
+            parse_loaded_threads(&json!(["a", "b"])).unwrap(),
+            ["a", "b"]
+        );
+    }
+
+    #[test]
+    fn parse_loaded_threads_trusts_an_empty_known_list() {
+        // A recognized but empty list is genuinely "zero loaded" — trusted, so the
+        // caller may reap absent sessions against it.
+        assert!(
+            parse_loaded_threads(&json!({ "threadIds": [] }))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn parse_loaded_threads_errors_on_unrecognized_shape() {
+        // No recognized id field → untrusted → error, so the caller keeps every
+        // session rather than reaping against a shape it could not read.
+        assert!(parse_loaded_threads(&json!({ "foo": 1 })).is_err());
+        assert!(parse_loaded_threads(&json!({})).is_err());
+        assert!(parse_loaded_threads(&Value::Null).is_err());
     }
 
     /// Assert a `Spawn` attempt's argv + budget; panics on a `Broker` attempt.

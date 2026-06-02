@@ -350,6 +350,19 @@ pub fn refresh_context(
     Some(client.observe_context("codex", model_hint, Timestamp::now()))
 }
 
+/// The thread ids the per-user Codex app-server daemon currently holds in memory,
+/// for the sidebar's daemon-mode ghost reap
+/// ([`crate::ledger::snapshot::SidebarSnapshot::drop_dead_daemon_sessions`]).
+/// Connects to the daemon **specifically** — never a cold-spawn, whose empty set
+/// would mass-reap — and reads `thread/loaded/list`. `None` when there is no daemon
+/// to ask or its list cannot be trusted, which the caller reads as "unknown, keep
+/// all". Spawned out-of-band by the sidebar producer; read-only, best-effort.
+pub fn loaded_daemon_threads() -> Option<std::collections::BTreeSet<String>> {
+    let mut client = CodexAppServer::connect_daemon()?;
+    let ids = client.loaded_threads().ok()?;
+    Some(ids.into_iter().collect())
+}
+
 /// Context-window usage derived from a Codex rollout tail.
 #[derive(Default)]
 struct TranscriptUsage {

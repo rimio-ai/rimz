@@ -233,6 +233,23 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             // Wiring state gates the live-pane fold (the idle-instance synthesis),
             // so set it before folding panes, not after.
             snapshot.wired_lazy_kinds = rimz::sidebar::snapshot::wired_lazy_kinds();
+            // Reap daemon-mode Codex ghosts the app-server no longer holds: a
+            // remote-control conversation records the shared daemon's pid, which
+            // outlives it, so process liveness can never reap it. Gated on a
+            // pane-less root `codex` session actually being present, so the common
+            // room pays no proc scan or daemon probe. Best-effort and fail-safe —
+            // no daemon process or an untrusted loaded list keeps every session —
+            // and run before the pane fold so a ghost can neither render nor bind
+            // its stale stats to a live pane.
+            if snapshot.agents.iter().any(|agent| {
+                agent.kind == "codex" && agent.pane.is_none() && agent.parent_agent_id.is_none()
+            }) {
+                let daemon_pids = rimz::remote_control::codex_daemon_pids();
+                if !daemon_pids.is_empty() {
+                    let loaded = rimz::agents::codex::loaded_daemon_threads();
+                    snapshot.drop_dead_daemon_sessions(&daemon_pids, loaded.as_ref());
+                }
+            }
             if let Some(panes) = panes {
                 if let Some(own) = exclude.as_ref() {
                     // The producer just sampled this pane list (focus included),

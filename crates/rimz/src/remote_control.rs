@@ -210,6 +210,36 @@ pub fn pane_is_host(pane: &PaneRef) -> bool {
     }) || pane.view_name.as_deref() == Some(VIEW_NAME)
 }
 
+/// PIDs of the per-user Codex app-server daemon — the process a remote-control
+/// Codex session records as its hook owner (`$PPID`). A daemon-mode session's
+/// recorded pid is the shared daemon, which outlives any one conversation, so
+/// matching a session's owner pid against this set is how the sidebar tells a
+/// daemon-backed session (reapable only by the app-server's loaded-thread set)
+/// from a standalone one whose pid is its own in-pane CLI (reapable by process
+/// liveness). Best-effort: an unreadable `/proc` yields an empty set, which the
+/// caller reads as "no daemon-mode sessions to reap".
+///
+/// Extra matches are inert. The set classifies a session only by an owner-pid
+/// match, and no session records Rimz's own `rimz codex app-server …` broker or
+/// proxy as its hook owner — so a stray codex-server pid that no session points at
+/// simply never matches.
+pub fn codex_daemon_pids() -> std::collections::BTreeSet<u32> {
+    crate::proc::list_processes()
+        .into_iter()
+        .filter(|process| is_codex_daemon_cmdline(&process.cmdline))
+        .map(|process| process.pid)
+        .collect()
+}
+
+/// Whether a command line runs the Codex daemon: the `codex` binary on its
+/// `app-server` or `remote-control` surface. Mirrors [`pane_is_host`]'s markers,
+/// narrowed to the `codex` binary so an unrelated process that merely mentions a
+/// marker is not mistaken for the daemon.
+fn is_codex_daemon_cmdline(cmdline: &str) -> bool {
+    let on_daemon_surface = cmdline.contains(APP_SERVER_MARKER) || cmdline.contains(COMMAND_MARKER);
+    on_daemon_surface && cmdline.contains("codex")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,5 +364,24 @@ mod tests {
         assert!(!pane_is_host(&pane(Some("claude"), Some("2"))));
         assert!(!pane_is_host(&pane(Some("codex"), Some("3"))));
         assert!(!pane_is_host(&pane(Some("zsh"), None)));
+    }
+
+    #[test]
+    fn codex_daemon_cmdline_matches_the_app_server_surface() {
+        // The per-user daemon runs the codex binary on its daemon surface.
+        assert!(is_codex_daemon_cmdline(
+            "/home/u/.codex/packages/standalone/current/codex app-server"
+        ));
+        assert!(is_codex_daemon_cmdline("codex remote-control start"));
+    }
+
+    #[test]
+    fn codex_daemon_cmdline_rejects_a_plain_session_or_other_server() {
+        // A plain in-pane codex TUI is a standalone session, not the daemon —
+        // process liveness reaps it, so it must not join the daemon set.
+        assert!(!is_codex_daemon_cmdline("codex"));
+        assert!(!is_codex_daemon_cmdline("codex --model gpt-5.5"));
+        // A non-codex server that merely spells a marker is not the codex daemon.
+        assert!(!is_codex_daemon_cmdline("some-other app-server"));
     }
 }
