@@ -299,8 +299,12 @@ fn snapshot_lines(
     let mut header = repo_header_lines(theme, snapshot, inner);
     // Dashboard L2: the fleet head-count (`✦`/`✧`, left) and the bold spend
     // (right), directly under the name. Always present — an empty room reads
-    // `✦ 0` with no spend.
-    let totals = fleet_totals(&snapshot.agents, &snapshot.worktree_groups);
+    // `✦ 0` with no spend. Prefer the JSONL-computed today total over the
+    // statusline-sum when available, so the cockpit reflects all sessions today.
+    let mut totals = fleet_totals(&snapshot.agents, &snapshot.worktree_groups);
+    if let Some(today_usd) = snapshot.today_cost_usd {
+        totals.cost = Some(today_usd);
+    }
     let size = fleet_size(&snapshot.worktree_groups);
     header.push(dashboard_summary_line(theme, size, &totals, inner));
     header.push(hairline_rule(theme, inner));

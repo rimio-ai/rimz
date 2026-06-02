@@ -704,6 +704,9 @@ fn row_lines(
                 if let Some(line) = token_totals_line(theme, row, cw) {
                     inner.push(line);
                 }
+                if let Some(line) = spending_line(theme, row, cw) {
+                    inner.push(line);
+                }
                 if let Some(line) = work_line(theme, row, cw) {
                     inner.push(line);
                 }
@@ -1310,6 +1313,33 @@ fn work_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'stat
     // calm.
     let age = Span::styled(activity_short(row.last_activity), theme.dim());
     printed.then(|| pin_right(spans, vec![age], width))
+}
+
+/// JSONL-computed spending for the row's repo: today (bold green), week, and
+/// month (both dim). Only rendered in the selected/full tier when `row.spending`
+/// is present and at least one value is non-zero. Placed between the token
+/// totals and the work line so the resting card height is unchanged.
+fn spending_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
+    let s = row.spending.as_ref()?;
+    if s.is_zero() {
+        return None;
+    }
+    let spans = vec![
+        Span::raw("  "),
+        Span::styled("◈", theme.style(Color::Green, Modifier::empty())),
+        Span::styled(" today ", theme.dim()),
+        Span::styled(
+            dollars2(s.today_usd),
+            theme.style(Color::Green, Modifier::BOLD),
+        ),
+        Span::styled("  ·  ", theme.faint()),
+        Span::styled("week ", theme.dim()),
+        Span::styled(dollars2(s.week_usd), theme.dim()),
+        Span::styled("  ·  ", theme.faint()),
+        Span::styled("month ", theme.dim()),
+        Span::styled(dollars2(s.month_usd), theme.dim()),
+    ];
+    Some(Line::from(trim_spans_to_width(spans, width)))
 }
 
 /// The lone last-activity age, pinned bottom-right — the only stat a just-started

@@ -13,7 +13,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agent_activity::AgentActivity;
-use crate::agents::{AgentAccount, AgentContext, RateLimitWindow};
+use crate::agents::{AgentAccount, AgentContext, AgentSpending, RateLimitWindow};
 use crate::feed::{
     AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, PaneRef, PermissionPosture,
     ResolverStepState, RuntimeOwner, RuntimeOwnerKind, Surface,
@@ -142,6 +142,15 @@ pub struct SidebarSnapshot {
     /// snapshot leaves it empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<SidebarProviderPanel>,
+    /// JSONL-computed total today spend across all visible agents and their repo
+    /// worktrees. Built on the producer by the `rimz sidebar snapshot` spending
+    /// enrichment (`cli::sidebar::enrich_agent_spending`, via
+    /// [`crate::agents::spending::compute_spending`]); `None` until the cache is
+    /// seeded (the first producer tick after startup). The cockpit uses this
+    /// instead of the statusline-sum fleet total so the `$X.XX` figure reflects
+    /// all sessions today, not only the current session's lifetime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub today_cost_usd: Option<f64>,
 }
 
 /// One provider's aggregate dashboard block, pinned to the bottom of the
@@ -340,6 +349,13 @@ pub struct SidebarRow {
     /// so it stays out of the cockpit tally. Always `false` for process rows.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compacting: bool,
+    /// JSONL-computed today / week / month spending for all sessions of this
+    /// agent's repo (all worktrees of the same git repository). Built on the
+    /// producer by the `rimz sidebar snapshot` spending enrichment (see
+    /// [`crate::agents::spending::compute_spending`]); `None` until the cache is
+    /// seeded, and always `None` for process rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spending: Option<AgentSpending>,
 }
 
 /// A compact summary of a child agent, nested under its parent's row. Subagents
@@ -443,6 +459,7 @@ impl SidebarSnapshot {
             worktree_roots: Vec::new(),
             sidebar: crate::config::SidebarConfig::default(),
             providers: Vec::new(),
+            today_cost_usd: None,
         }
     }
 
@@ -1356,6 +1373,7 @@ fn idle_codex_row(pane: &PaneRef) -> SidebarRow {
         process_active: false,
         command_detail: None,
         compacting: false,
+        spending: None,
     }
 }
 
@@ -1730,6 +1748,7 @@ fn row_from_agent(agent: &AgentState) -> SidebarRow {
         process_active: false,
         command_detail: None,
         compacting: is_compacting(agent, Timestamp::now()),
+        spending: None,
     }
 }
 
@@ -1795,6 +1814,7 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
         process_active: active,
         command_detail,
         compacting: false,
+        spending: None,
     }
 }
 
@@ -1960,6 +1980,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         process_active: false,
         command_detail: None,
         compacting: false,
+        spending: None,
     })
 }
 

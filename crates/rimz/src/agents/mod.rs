@@ -10,11 +10,13 @@
 //! defaults into whatever per-agent config file the upstream agent reads.
 
 pub mod account;
+pub mod adapter;
 pub mod claude;
 pub mod codex;
 pub(crate) mod codex_app_server;
 pub mod codex_broker;
 pub mod context;
+pub mod spending;
 pub mod statusline;
 
 use std::io::{Read, Seek, SeekFrom};
@@ -31,6 +33,7 @@ pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
     AgentTokenUsage, RateLimitWindow,
 };
+pub use spending::AgentSpending;
 
 /// Conservative fallback for adapters that don't override. Claude overrides
 /// to 120s (see `claude::CLAUDE_HOOK_CAP`); Codex overrides to its own cap

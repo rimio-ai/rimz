@@ -15,8 +15,9 @@ use rimz::ledger::workspace_record;
 use rimz::mux::PaneListOptions;
 use rimz::sidebar::snapshot::{
     DiffStats, DiffStatsCache, DiffStatsCacheEntry, SNAPSHOT_CACHE_TTL, SnapshotCache,
-    WorktreeRootsCache, enrich_consumer, needed_worktree_paths, project_diff_stats,
-    read_diff_stats_cache, read_published_snapshot, read_snapshot_cache, unix_now_ms,
+    WorktreeRootsCache, cached_worktree_roots, enrich_consumer, needed_worktree_paths,
+    project_diff_stats, read_diff_stats_cache, read_published_snapshot, read_snapshot_cache,
+    unix_now_ms,
 };
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, RuntimePaths, StatePaths};
@@ -253,6 +254,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             // display preference is enrichment, never a precondition.
             snapshot = rimz::sidebar::snapshot::fold_machine_config_producing(snapshot, runtime);
             enrich_worktree_groups(&mut snapshot, runtime);
+            enrich_agent_spending(&mut snapshot, runtime);
             emit(&snapshot)
         }
         SidebarSubcmd::Serve {
@@ -505,6 +507,68 @@ fn enrich_worktree_groups(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::
     let needed = needed_worktree_paths(snapshot);
     let cache = refresh_diff_stats(&cache_path, runtime, &needed, now_ms);
     project_diff_stats(snapshot, &cache);
+}
+
+/// Compute and attach JSONL-based spending totals to every agent row and to the
+/// cockpit's today figure. Reads the per-workspace `spending.json` cache,
+/// refreshes only files whose mtime changed, then writes back if anything was
+/// updated. Best-effort: a read or write failure leaves `spending` fields as
+/// `None` rather than degrading the snapshot.
+///
+/// Today this collects Claude project files only (`project_jsonl_files`); the
+/// Pi and Codex parsers in `rimz::agents::adapter` are staged for the upcoming
+/// transcript-history analysis and not yet fed here.
+fn enrich_agent_spending(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::RuntimePaths) {
+    use rimz::agents::spending::{
+        compute_spending, project_jsonl_files, read_spending_cache, write_spending_cache,
+    };
+
+    let cache_path = runtime.root.join("spending.json");
+    let worktree_roots = cached_worktree_roots(runtime);
+    let mut cache = read_spending_cache(&cache_path);
+
+    // Collect all distinct worktree paths visible in the snapshot.
+    let mut all_paths: Vec<PathBuf> = worktree_roots;
+    for group in &snapshot.worktree_groups {
+        for row in &group.rows {
+            if let Some(p) = &row.worktree_path {
+                let pb = PathBuf::from(p);
+                if !all_paths.contains(&pb) {
+                    all_paths.push(pb);
+                }
+            }
+        }
+    }
+
+    if all_paths.is_empty() {
+        return;
+    }
+
+    let path_refs: Vec<&std::path::Path> = all_paths.iter().map(PathBuf::as_path).collect();
+    let files = project_jsonl_files(&path_refs);
+    if files.is_empty() {
+        return;
+    }
+
+    let totals = compute_spending(&files, &mut cache);
+
+    if cache.dirty {
+        write_spending_cache(&cache_path, &cache);
+    }
+
+    snapshot.today_cost_usd = if totals.today_usd > 0.0 {
+        Some(totals.today_usd)
+    } else {
+        None
+    };
+
+    for group in &mut snapshot.worktree_groups {
+        for row in &mut group.rows {
+            if row.row_kind == rimz::SidebarRowKind::Agent {
+                row.spending = Some(totals.clone());
+            }
+        }
+    }
 }
 
 /// Refresh the diff stats for `needed` worktree paths and return the cache map
