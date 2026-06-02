@@ -2,11 +2,29 @@
 
 > See [DESIGN.md](../../DESIGN.md) for the commitments this doc operationalizes.
 
-The CLI is the public API for humans, scripts, sidebars, hooks, and resolvers. One surface, every participant. Command behaviour is stable and additive — never silently re-shaped.
+The CLI is the one public API every participant speaks — humans, scripts, sidebars, hooks, and resolvers. Command behaviour is stable and additive.
 
-Commands are grouped below by intent. Each cluster opens with the most common flow so you can read by what you want to do, not by alphabetical order.
+Commands group by intent below. Each cluster opens with its common flow, so you read by what you want to do. Internal commands that hooks and the sidebar invoke for you come last.
 
-## Start a workspace
+## Your first session
+
+One repo maps to one room: a multiplexer session with a sidebar, backed by one ledger. Every command writes to or reads from that room.
+
+```sh
+cd ~/code/query-engine
+rimz                                                # open or reattach the room
+
+rimz event emit --kind build.started --title web   # any script can post
+rimz feed ask --title "Promote staging → prod?" \
+              --options yes,no --timeout 1h         # blocks until answered
+
+ssh dev-box rimz attach query-engine               # reattach from anywhere
+rimz pane split && claude                           # run an agent in a new pane
+```
+
+That is the whole loop. For the five-minute tour and the why, see [the product guide](../guide/product.md); for the model that shapes the surface, see [DESIGN.md](../../DESIGN.md).
+
+## Start and attach a workspace
 
 ```sh
 rimz [--attach|--no-attach|--print] [PATH]
@@ -14,14 +32,13 @@ rimz start [--attach|--no-attach|--print] [PATH]
 rimz attach [--attach|--no-attach|--print] [SESSION]
 rimz list [--all] [--json]        # running + recently-active workspaces; --all adds dormant ones
 rimz doctor [--audit]             # diagnose backend, hooks, trust, resolvers
-rimz trust [status|grant|revoke]  # manage the project's executable-surface trust
 ```
 
-`rimz` resolves the project root, records `workspace.json`, creates or finds the multiplexer session, opens one native sidebar pane when no fresh sidebar heartbeat exists, and then enters the mux session on an interactive TTY. In non-interactive contexts it prints the attach command instead. `--attach` forces entering the mux; `--no-attach` and `--print` force printing. First-run UX is non-invasive: nothing is written to your shell or the agent's config until you run `rimz hooks install <agent>`.
+`rimz` (or `rimz start`) resolves the project root, finds or creates the multiplexer session, launches the native sidebar pane, and enters the session. On an interactive TTY it attaches; otherwise it prints the attach command. `--attach` forces attaching; `--no-attach` and `--print` force printing — the rule is [interactive attach is opportunistic](../../DESIGN.md#commitments). Nothing is written to your shell or an agent's config until you run `rimz hooks install`.
 
-`rimz attach` without a session name resolves the cwd workspace and follows the same create/sidebar/attach flow. `rimz attach <session>` keeps exact session-name semantics: it prefers a mux already hosting that session, and when a matching `workspace.json` record exists it uses that record's workspace ID and cwd to ensure the session and relaunch the sidebar. Without a record, it warns and continues with the attach command only.
+`rimz attach <session>` reattaches by exact session name; `rimz attach` with no name uses the cwd's workspace. `rimz list` joins each known workspace against the live Zellij and tmux sessions so you see which mux currently hosts it, running first.
 
-`rimz list` walks the workspace state directory and joins each known workspace against `zellij list-sessions` and `tmux list-sessions` so you can tell at a glance which mux is currently hosting a session. By default it shows running sessions plus workspaces touched within the last 24h; `--all` adds the dormant ones. Sort order puts running sessions first, then by most recent activity. A workspace directory missing its `workspace.json` is skipped silently — it is not a usable workspace and `rimz workspace prune` reaps it; a record that exists but fails to parse is still surfaced.
+`rimz doctor` reports the backend, installed hooks, trust state, and enrolled resolvers, and names the fix for anything misconfigured. Run it first when something looks wrong.
 
 ## Publish events and ask questions
 
@@ -29,15 +46,15 @@ rimz trust [status|grant|revoke]  # manage the project's executable-surface trus
 rimz event emit --kind <kind> [--title <s>] [--body <s>] [--json <payload>]
 rimz feed push --kind <kind> --title <s> [--body <s>]
 rimz feed ask  --title <s> --options <a,b,c> [--timeout <duration>] [--no-block]
-rimz feed list [--json] [--audit]
+rimz feed list [--json] [--audit]        # alias: ls
 rimz feed show <request-id> [--json]
 ```
 
-`event emit` is a fire-and-forget signal that lands in the ledger. `feed push` posts a richer audit item without blocking. `feed ask` blocks the script until somebody answers or the timeout fires; while that waiting process is alive, the question lands in runtime views and the sidebar with declared options as answer buttons.
+`event emit` posts a fire-and-forget signal to the event log. `feed push` posts a non-blocking item to the feed. `feed ask` posts a question and blocks until someone answers or the timeout fires; while it waits, the question shows in the sidebar with its options as answer buttons.
 
-Default `feed list` is a runtime view: it expels records whose recorded owner process is gone, reused, or missing. `feed list --audit` shows durable feed history exactly as written. `feed show <request-id>` is always an exact audit lookup.
+`feed list` is a runtime view that drops items whose owner process is gone; `--audit` shows the durable history as written. `feed show` is always an exact audit lookup.
 
-Common flow — a deploy gate:
+A deploy gate, the canonical script flow:
 
 ```sh
 rimz feed ask \
@@ -48,13 +65,13 @@ rimz feed ask \
 
 ## Answer and triage
 
-`feed resolve` is the only verb that actually delivers a decision. The other three are non-answers with different meanings.
+`feed resolve` is the only verb that delivers a decision. The other two are non-answers with distinct meanings.
 
 | Verb | Valid surfaces | Meaning |
 | --- | --- | --- |
 | `feed resolve` | `bridge`, `script` | Deliver a decision through Rimz to a waiting hook or script. |
-| `feed dismiss` | `native_ui` | Local acknowledgement only. Does *not* answer the agent — focus the agent's pane and answer there. |
-| `feed abstain` | `bridge`, `script` | Explicit chain handoff. The active resolver declines; the chain advances. |
+| `feed dismiss` | `native_ui` | Local acknowledgement only. The agent is unanswered — focus its pane and answer there. |
+| `feed abstain` | `bridge`, `script` | The active resolver declines; the chain advances to the next link. |
 
 ```sh
 rimz feed resolve <request-id> --decision '{"choice":"yes"}' \
@@ -63,12 +80,7 @@ rimz feed dismiss  <request-id> [--reason <text>]
 rimz feed abstain  <request-id> --resolver-id <id> [--reason <text>]
 ```
 
-Resolution methods recorded in the ledger:
-
-- `hook_bridge` — resolver returned a decision JSON; the waiting hook printed it.
-- `pane_send` — resolver typed the answer into the pane after capturing it.
-- `cli` — a human ran `rimz feed resolve` from a shell.
-- `sidebar` — a human clicked through the sidebar UI.
+Each resolution records its `--method` in the ledger: `hook_bridge` (a resolver returned decision JSON the hook printed), `pane_send` (a resolver typed the answer into the pane), `cli` (a human ran `feed resolve`), or `sidebar` (a human clicked through the UI). The three surfaces are defined in [the three operating paths](../../DESIGN.md#the-three-operating-paths).
 
 ## Drive panes
 
@@ -78,9 +90,10 @@ rimz pane focus <pane-id> [--session-name <name>] [--pane-process-start <ts>]
 rimz pane list [--json] [--session-name <name>]
 rimz pane capture <pane-id> [--lines N] [--json] [--ansi]
 rimz pane send <pane-id> -- <keys-or-text>
+rimz pane detach [--session-name <name>]
 ```
 
-`capture` and `send` are the universal answer surface: resolvers use them to answer prompts on tools with no hook protocol. Captured pane text is untrusted data — never feed it back to an LLM as if it were a user instruction. Detail in [resolvers.md](../internals/resolvers.md).
+`capture` and `send` are the universal answer surface: resolvers use them to answer prompts on tools that expose no hook protocol. Captured pane text is untrusted data — a resolver matches it against its own bounded patterns, never replaying it as an instruction. Detail in [resolvers.md](../internals/resolvers.md). `detach` drops the attached client and leaves the session running; client semantics differ per backend ([multiplexers.md](../internals/multiplexers.md)).
 
 ## Enrol resolvers
 
@@ -88,42 +101,55 @@ rimz pane send <pane-id> -- <keys-or-text>
 rimz resolver add <id> [--order <n>] [--budget <duration>] \
                        [--binary <path>] [--display-name <name>]
 rimz resolver remove   <id>
-rimz resolver list     [--json]
+rimz resolver list     [--json]            # alias: ls
 rimz resolver reorder  <id> [--before <other-id> | --after <other-id>]
 ```
 
-Resolvers form an ordered chain that ends with you. Each entry has its own `--budget` so a fast LLM resolver, a Slack-to-human bot, and a PagerDuty escalator can chain naturally. Full protocol in [resolvers.md](../internals/resolvers.md); trust model in [security.md](../guide/security.md).
+Resolvers form an ordered chain that ends with you. Each entry carries its own `--budget`, so a fast LLM policy, a Slack-to-human bot, and a PagerDuty escalator chain naturally. Full protocol in [resolvers.md](../internals/resolvers.md); trust model in [security.md](../guide/security.md).
 
-## Operate and maintain
+## Maintain the room
 
 ```sh
-rimz hooks install <agent>
+rimz reset [--yes] [--no-start] [PATH]   # destroy a wedged room and rebuild it clean
+rimz reload                              # converge every running sidebar to a healthy set
+rimz gc [--older-than <duration>]        # sweep stale liveness hints and dead-owner items
+rimz workspace migrate <old-root> <new-root>
+rimz workspace rotate-events [--max-bytes <size>] [--archive-older-than <duration>]
+```
+
+`reset` tears a stuck room down — the session, its resurrection cache, and orphaned processes — then rebuilds and reattaches it; `--no-start` stops after teardown, `--yes` skips the confirmation. `reload` runs from anywhere and reconciles sidebars across all of your workspaces: it re-execs each to a freshly-installed build and re-adds any view that lost its sidebar, never rebirthing a session ([internals/sidebar.md](../internals/sidebar.md)). `gc` is the global janitor: it removes stale resolver/sidebar heartbeats and sockets, abandons pending items whose owner process has exited, and reaps provably-dead workspace ledgers.
+
+`workspace migrate` rewires the ledger after a repo moves on disk, rewriting every feed item, event, and snapshot to the new workspace ID. `workspace rotate-events` archives the active event log past `--max-bytes` (default `64MiB`), preserving the agent rollup, and prunes archives older than `--archive-older-than`. The durability rules behind both live in [internals/ledger.md](../internals/ledger.md).
+
+## Manage trust
+
+```sh
+rimz trust [status|grant|revoke] [--json]
+```
+
+`status` re-hashes the project's executable surface and reports one of `trusted`, `stale`, `untrusted`, or `no_config`; `grant` pins the current hash; `revoke` drops it. The states, the hash, and stale auto-revoke are in [internals/trust.md](../internals/trust.md); the threat model is in [security.md](../guide/security.md).
+
+## Install agent hooks
+
+```sh
+rimz hooks install <agent>      # claude | codex
 rimz hooks uninstall <agent>
-
-rimz workspace migrate <old-root> <new-root>   # repo moved; rewire the ledger
-rimz workspace prune                           # reap provably-dead ledgers (gone root or empty scaffold)
-rimz workspace rotate-events                   # archive events.log.jsonl past a size cap
-                  [--max-bytes <size>]
-                  [--archive-older-than <duration>]
-rimz trust [status|grant|revoke] [--json]      # executable-surface trust
-rimz gc          [--older-than <duration>]
-rimz reload                                    # reconcile every running sidebar (all sessions)
 ```
 
-`workspace migrate` moves the state directory from the workspace ID derived from `<old-root>` to the ID derived from `<new-root>`, then rewrites feed items, event envelopes, snapshots, and `workspace.json` to the new ID. `workspace prune` reaps provably-dead ledgers: a `workspace.json` record whose project root no longer exists, or an abandoned `rimz start` scaffold with no record and no durable history. A directory whose record is unreadable but still holds history is reported and kept, never deleted. `workspace rotate-events` archives the active event log into `events.log.archive/` when it exceeds `--max-bytes` (default `64MiB`), folds the agent rollup into `agents.carryover.json` so it survives the rename, and removes archives older than `--archive-older-than` when provided. `trust status` re-hashes the project's executable surface on every call and reports `trusted`, `stale`, `untrusted`, or `no_config`; `trust grant` pins the current hash and `trust revoke` drops the record. Full contract in [trust.md](../internals/trust.md). `gc` is the global garbage collector: it removes stale runtime liveness hints — stale resolver/sidebar heartbeats and stale sidebar wakeup sockets — abandons pending feed items whose recorded owner process has exited, and prunes provably-dead workspaces under the same rule as `workspace prune`. `reload` is **user-wide and cwd-independent** — it runs from anywhere, including outside a session, and converges *every* running sidebar across all of this user's workspaces to a healthy set: exactly one current-binary, responsive sidebar per working view. For each workspace with a live mux session it (1) tells every live sidebar to re-exec its own binary in place when its on-disk binary differs from the one it is running, so a freshly-installed build (`make install`) takes effect without a session rebirth; a sidebar already on that build refetches in place instead of re-execing, so an unchanged `make install` causes no pane churn; (2) reconciles panes — closes duplicate or unresponsive sidebar panes (any a fresh heartbeat does not claim) and re-adds a sidebar to any Rimz tab/window that still has working panes but lost its own, in place, never rebirthing the session: tmux re-splits a left sidebar, Zellij splits one to the right, moves it left, and sizes it; and (3) reaps orphaned sidebar processes whose pane is gone. A workspace whose session has stopped has its stale runtime files and leftover daemons swept instead. Every pass is best-effort and run-once; a view that fails to gain a sidebar is reported and left alone. Pressing `r` in a sidebar reloads that one pane: it re-execs the renderer in place when the on-disk binary differs from the running one (the same in-place reload, scoped to the one pane), and otherwise forces an immediate producing refetch so `r` always pulls live data and un-sticks a tab whose producer has stalled.
+`install` wires Rimz into an agent's own per-user config — the event set plus a statusline — additively and reversibly. This is the real hook mechanism; it is distinct from the project config's `[[hooks]]` table (see [configuration.md](./configuration.md)). What gets wired and how payload content is gated live in [internals/hooks.md](../internals/hooks.md).
 
-`hooks install` wires the full event set for every agent integration, including the high-frequency per-tool hooks that keep the sidebar's enrichment current. Their payload content is gated by `[privacy] payload_mode`. See [hooks.md](../internals/hooks.md#hook-install--the-visible-security-step).
+## Commands Rimz calls for you
 
-## Internal
-
-These commands are called by hooks, the sidebar, or other Rimz processes. You generally don't run them by hand.
+Hooks, the sidebar, the statusline, and other Rimz processes invoke these. You rarely run them by hand.
 
 ```sh
-rimz ping
-rimz sidebar snapshot --workspace-id <id> [--exclude-pane-id <own>] [--json]
-rimz sidebar serve [--workspace-id <id>] [--mux <zellij|tmux>] \
-                   [--session-name <name>] [--tick-seconds N]
-rimz hooks feed --source <agent> [--event <event>]
+rimz ping                                          # liveness check; prints `ok`
+rimz sidebar snapshot --workspace-id <id> [--json] # the shared view-model JSON
+rimz sidebar serve ...                             # the terminal sidebar renderer
+rimz statusline feed --source <agent>              # captures statusline context
+rimz hooks feed --source <agent> [--event <e>]     # routes a hook payload (--event is a debug override)
+rimz codex ...                                     # Codex enrichment helpers
+rimz workspace resolve [PATH]                      # print the resolved workspace as JSON
 ```
 
-The installed hook command passes only `--source`; the event is read from the payload on stdin (see [hooks.md](../internals/hooks.md#hook-install--the-visible-security-step)). `--event` is a manual override for debugging.
+The installed hook command passes only `--source`; the event is read from the payload on stdin. The Codex helpers and the daemon broker they back are documented in [internals/hooks.md](../internals/hooks.md) and [internals/transcript.md](../internals/transcript.md).
