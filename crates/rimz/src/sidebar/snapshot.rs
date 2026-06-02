@@ -13,7 +13,7 @@
 //! producer's write side (single-flight election, the git forks) stays in
 //! `cli::sidebar`, which constructs these same cache types.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -517,16 +517,16 @@ pub fn fold_machine_config_producing(
         accounts,
     );
     // The producer owns the account-scoped window cache: it writes live readings
-    // back so the 5h/7d budgets survive a session ending or going idle.
+    // back so the budgets survive a session ending or going idle.
     apply_rate_limit_cache(&mut snapshot, runtime, true);
-    // Codex's 5h/7d windows live behind the app-server. The producer refreshes
+    // Codex's budget windows live behind the app-server. The producer refreshes
     // active session sidecars and the idle account cache on a coarse cadence so a
     // long-running task does not wait for the next turn boundary to repaint.
     refresh_codex_rate_limits(&snapshot, runtime);
     snapshot
 }
 
-/// Kick detached, best-effort Codex 5h/7d refreshes. A live/root Codex session
+/// Kick detached, best-effort Codex budget refreshes. A live/root Codex session
 /// refreshes its `AgentContext` sidecar because provider aggregation prefers live
 /// session readings over the shared cache. A logged-in metered Codex account with
 /// no root session refreshes the account cache instead, so idle dashboards stay
@@ -831,19 +831,13 @@ fn write_accounts_cache(path: &Path, cache: &AccountsCache) {
     }
 }
 
-/// The 5-hour and weekly budget windows' lengths. When a window has reset while
-/// the dashboard was idle, its synthesized full window's countdown reads one
-/// length out from now — until a live provider reading replaces it.
-const FIVE_HOUR_WINDOW: SignedDuration = SignedDuration::from_hours(5);
-const SEVEN_DAY_WINDOW: SignedDuration = SignedDuration::from_hours(24 * 7);
-
 /// Minimum gap between out-of-band Codex rate-limit refreshes for one target
 /// (active session sidecar or idle account cache). The producer checks every
-/// sidebar data tick, but 5h/7d windows move on the scale of minutes.
+/// sidebar data tick, but budget windows move on the scale of minutes.
 const CODEX_RATE_LIMIT_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// The producer's published per-provider rate-limit windows, account-scoped so
-/// the 5h/7d budgets outlive a session ending or going idle: the first frame
+/// the budgets outlive a session ending or going idle: the first frame
 /// after inactivity paints the last-known bars rather than an empty dashboard.
 /// Single-flighted like the other runtime caches — the producer writes, every
 /// tab reads — and reaped with the workspace runtime dir by `ledger::gc`.
@@ -877,7 +871,7 @@ fn write_rate_limits_cache(path: &Path, cache: &RateLimitsCache) {
 }
 
 /// Seed one provider kind's account-scoped windows into the cache out-of-band, so
-/// a logged-in-but-idle provider's 5h/7d bars paint from the first frame instead
+/// a logged-in-but-idle provider's budget bars paint from the first frame instead
 /// of staying blank until a live session reports. Read-modify-write over the
 /// existing cache; other kinds are preserved untouched.
 ///
@@ -898,29 +892,28 @@ pub fn merge_account_rate_limits(runtime: &RuntimePaths, kind: &str, windows: Ag
 /// Project one idle provider's cached window for display when no live session
 /// reported it this frame. Before its reset instant the last-known (most-drained)
 /// reading stands unchanged; once `now` reaches that instant the window has
-/// refilled, so synthesize a full window (0% used) with its reset rolled one
-/// window length forward, so the countdown still reads sensibly until a live
-/// reading overwrites it. An undated cached window can't be aged, so it shows
-/// as-is. `None` in (no cached reading) yields `None` out (no bar).
-fn project_idle_window(
-    cached: Option<RateLimitWindow>,
-    now: Timestamp,
-    window_len: SignedDuration,
-) -> Option<RateLimitWindow> {
-    let window = cached?;
-    match window.resets_at {
-        Some(resets_at) if resets_at <= now => Some(RateLimitWindow {
+/// refilled, so synthesize a full window (0% used) with its reset rolled its own
+/// `duration_mins` forward, so the countdown still reads sensibly until a live
+/// reading overwrites it. A window with no reset, or no known duration to roll by,
+/// shows as-is.
+fn project_idle_window(cached: RateLimitWindow, now: Timestamp) -> RateLimitWindow {
+    match (cached.resets_at, cached.duration_mins) {
+        (Some(resets_at), Some(mins)) if resets_at <= now => RateLimitWindow {
             used_percentage: Some(0),
-            resets_at: now.checked_add(window_len).ok(),
-        }),
-        _ => Some(window),
+            resets_at: now
+                .checked_add(SignedDuration::from_secs(i64::from(mins) * 60))
+                .ok(),
+            duration_mins: Some(mins),
+        },
+        _ => cached,
     }
 }
 
 /// Fold the persisted account-scoped windows onto the resolved provider panels:
-/// a kind with no live reading this frame paints its last-known 5h/7d bars
-/// (projected through [`project_idle_window`]'s reset-to-max rule) instead of an
-/// empty dashboard. On the producer (`persist`) the live readings are written
+/// a kind with no live reading this frame paints its last-known bars (projected
+/// through [`project_idle_window`]'s reset-to-max rule) instead of an empty
+/// dashboard. Reconciled per window duration, so each budget is carried forward
+/// independently. On the producer (`persist`) the live readings are written
 /// back — and only the live ground truth, never the synthesized full window —
 /// so budgets survive a session ending or going idle. The written cache tracks
 /// login: it is rebuilt from the panels alone, so a logged-out kind (no panel)
@@ -944,36 +937,49 @@ fn apply_rate_limit_cache(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths
     };
 
     for panel in &mut snapshot.providers {
-        let prev = cached.windows.get(&panel.kind);
-        let prev_five = prev.and_then(|windows| windows.five_hour.clone());
-        let prev_seven = prev.and_then(|windows| windows.seven_day.clone());
-
-        // The live readings this frame — `None` once every session has gone idle.
-        let live_five = panel.five_hour.take();
-        let live_seven = panel.seven_day.take();
+        // Index this kind's live (this-frame) and cached (last-known) readings by
+        // window duration, so each duration is reconciled independently.
+        let live: BTreeMap<Option<u32>, RateLimitWindow> = std::mem::take(&mut panel.windows)
+            .into_iter()
+            .map(|window| (window.duration_mins, window))
+            .collect();
+        let prev: BTreeMap<Option<u32>, RateLimitWindow> = cached
+            .windows
+            .get(&panel.kind)
+            .into_iter()
+            .flat_map(|limits| limits.windows.iter())
+            .map(|window| (window.duration_mins, window.clone()))
+            .collect();
+        let durations: BTreeSet<Option<u32>> = live.keys().chain(prev.keys()).copied().collect();
 
         // Persist ground truth only: a live reading supersedes the cached one;
         // absent one, the prior reading is retained unchanged. The synthesized
         // full window below is never written — it is recomputed each frame.
         if persist {
-            let truth_five = live_five.clone().or_else(|| prev_five.clone());
-            let truth_seven = live_seven.clone().or_else(|| prev_seven.clone());
-            if truth_five.is_some() || truth_seven.is_some() {
-                next.windows.insert(
-                    panel.kind.clone(),
-                    AgentRateLimits {
-                        five_hour: truth_five,
-                        seven_day: truth_seven,
-                    },
-                );
+            let truth: Vec<RateLimitWindow> = durations
+                .iter()
+                .filter_map(|duration| live.get(duration).or_else(|| prev.get(duration)).cloned())
+                .collect();
+            if !truth.is_empty() {
+                next.windows
+                    .insert(panel.kind.clone(), AgentRateLimits { windows: truth });
             }
         }
 
         // Display: a live reading wins; otherwise the cached reading, projected.
-        panel.five_hour =
-            live_five.or_else(|| project_idle_window(prev_five, now, FIVE_HOUR_WINDOW));
-        panel.seven_day =
-            live_seven.or_else(|| project_idle_window(prev_seven, now, SEVEN_DAY_WINDOW));
+        // Sorted short→long for a stable paint order.
+        let mut display: Vec<RateLimitWindow> = durations
+            .iter()
+            .filter_map(|duration| {
+                live.get(duration).cloned().or_else(|| {
+                    prev.get(duration)
+                        .cloned()
+                        .map(|window| project_idle_window(window, now))
+                })
+            })
+            .collect();
+        display.sort_by_key(|window| window.duration_mins.unwrap_or(u32::MAX));
+        panel.windows = display;
     }
 
     if persist {
@@ -1324,11 +1330,17 @@ mod tests {
         assert_eq!(entry.branch.as_deref(), Some("feature-migration"));
     }
 
-    fn provider_panel(
-        kind: &str,
-        five_hour: Option<RateLimitWindow>,
-        seven_day: Option<RateLimitWindow>,
-    ) -> crate::SidebarProviderPanel {
+    /// A 5-hour budget window for tests — a known `duration_mins` so the
+    /// projection and per-duration reconciliation have something to key on.
+    fn rl_window(used: u8, resets_at: Option<Timestamp>) -> RateLimitWindow {
+        RateLimitWindow {
+            used_percentage: Some(used),
+            resets_at,
+            duration_mins: Some(300),
+        }
+    }
+
+    fn provider_panel(kind: &str, windows: Vec<RateLimitWindow>) -> crate::SidebarProviderPanel {
         crate::SidebarProviderPanel {
             kind: kind.to_owned(),
             product_name: kind.to_owned(),
@@ -1344,8 +1356,7 @@ mod tests {
             cached_tokens: None,
             lines_added: None,
             lines_removed: None,
-            five_hour,
-            seven_day,
+            windows,
         }
     }
 
@@ -1394,50 +1405,41 @@ mod tests {
     fn idle_window_before_reset_shows_last_known() {
         let now = Timestamp::from_second(2_000_000_000).unwrap();
         let future = Timestamp::from_second(2_000_010_000).unwrap();
-        let cached = RateLimitWindow {
-            used_percentage: Some(80),
-            resets_at: Some(future),
-        };
-        let projected =
-            project_idle_window(Some(cached.clone()), now, FIVE_HOUR_WINDOW).expect("a window");
+        let cached = rl_window(80, Some(future));
+        let projected = project_idle_window(cached.clone(), now);
         assert_eq!(projected, cached, "before reset the cached reading stands");
     }
 
     /// Once `now` reaches the reset instant with no fresh reading, the window has
-    /// refilled: it projects to full (0% used) with its reset rolled one window
-    /// length forward, so the countdown still reads sensibly.
+    /// refilled: it projects to full (0% used) with its reset rolled its own
+    /// duration forward, so the countdown still reads sensibly.
     #[test]
     fn idle_window_past_reset_refills_to_full_and_rolls_forward() {
         let now = Timestamp::from_second(2_000_000_000).unwrap();
         let passed = Timestamp::from_second(1_999_990_000).unwrap();
-        let cached = RateLimitWindow {
-            used_percentage: Some(95),
-            resets_at: Some(passed),
-        };
-        let projected =
-            project_idle_window(Some(cached), now, FIVE_HOUR_WINDOW).expect("a full window");
+        let projected = project_idle_window(rl_window(95, Some(passed)), now);
         assert_eq!(projected.used_percentage, Some(0), "a reset window is full");
         assert_eq!(
             projected.resets_at,
-            now.checked_add(FIVE_HOUR_WINDOW).ok(),
-            "the reset rolls one window length forward from now"
+            now.checked_add(SignedDuration::from_secs(300 * 60)).ok(),
+            "the reset rolls one window length (300 min) forward from now"
         );
     }
 
-    /// A cached window with no reset instant can't be aged out, so it projects
-    /// as-is; and an absent cached window yields no bar.
+    /// A cached window that can't be aged — no reset instant, or a passed reset
+    /// with no known duration to roll by — projects as-is.
     #[test]
-    fn idle_window_undated_shows_as_is_and_absent_is_none() {
+    fn idle_window_unageable_shows_as_is() {
         let now = Timestamp::from_second(2_000_000_000).unwrap();
-        let undated = RateLimitWindow {
-            used_percentage: Some(40),
-            resets_at: None,
+        let passed = Timestamp::from_second(1_999_990_000).unwrap();
+        let undated = rl_window(40, None);
+        assert_eq!(project_idle_window(undated.clone(), now), undated);
+        let no_duration = RateLimitWindow {
+            used_percentage: Some(90),
+            resets_at: Some(passed),
+            duration_mins: None,
         };
-        assert_eq!(
-            project_idle_window(Some(undated.clone()), now, FIVE_HOUR_WINDOW),
-            Some(undated)
-        );
-        assert_eq!(project_idle_window(None, now, FIVE_HOUR_WINDOW), None);
+        assert_eq!(project_idle_window(no_duration.clone(), now), no_duration);
     }
 
     /// The producer persists a live reading as ground truth; once the session is
@@ -1454,14 +1456,7 @@ mod tests {
         // A live frame reports 60% used on the 5h window; the producer writes it.
         let mut producing = snapshot_with_panels(
             workspace.clone(),
-            vec![provider_panel(
-                "claude",
-                Some(RateLimitWindow {
-                    used_percentage: Some(60),
-                    resets_at: Some(future),
-                }),
-                None,
-            )],
+            vec![provider_panel("claude", vec![rl_window(60, Some(future))])],
         );
         apply_rate_limit_cache(&mut producing, &runtime, true);
         let cache = read_rate_limits_cache(&runtime.root.join("rate_limits.json"));
@@ -1469,7 +1464,7 @@ mod tests {
             cache
                 .windows
                 .get("claude")
-                .and_then(|windows| windows.five_hour.as_ref())
+                .and_then(|limits| limits.windows.first())
                 .and_then(|window| window.used_percentage),
             Some(60),
             "the live reading is persisted as ground truth"
@@ -1477,12 +1472,12 @@ mod tests {
 
         // The session goes idle (no live window). A reader projects the cached
         // reading back onto the panel — the dashboard is not empty.
-        let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", None, None)]);
+        let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
         apply_rate_limit_cache(&mut idle, &runtime, false);
         assert_eq!(
             idle.providers[0]
-                .five_hour
-                .as_ref()
+                .windows
+                .first()
                 .and_then(|window| window.used_percentage),
             Some(60),
             "an idle frame still shows the last-known budget"
@@ -1509,11 +1504,7 @@ mod tests {
                 windows: BTreeMap::from([(
                     "claude".to_owned(),
                     AgentRateLimits {
-                        five_hour: Some(RateLimitWindow {
-                            used_percentage: Some(90),
-                            resets_at: Some(passed),
-                        }),
-                        seven_day: None,
+                        windows: vec![rl_window(90, Some(passed))],
                     },
                 )]),
             },
@@ -1521,9 +1512,9 @@ mod tests {
 
         // An idle producer frame with no live window: the display projects to
         // full, while the persisted ground truth stays the real 90% reading.
-        let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", None, None)]);
+        let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
         apply_rate_limit_cache(&mut idle, &runtime, true);
-        let shown = idle.providers[0].five_hour.as_ref().expect("a full window");
+        let shown = idle.providers[0].windows.first().expect("a full window");
         assert_eq!(shown.used_percentage, Some(0), "a reset window shows full");
         assert!(shown.resets_at.is_some(), "with a rolled-forward countdown");
 
@@ -1532,7 +1523,7 @@ mod tests {
             persisted
                 .windows
                 .get("claude")
-                .and_then(|windows| windows.five_hour.as_ref())
+                .and_then(|limits| limits.windows.first())
                 .and_then(|window| window.used_percentage),
             Some(90),
             "the cache retains ground truth, not the synthesized full window"
@@ -1551,19 +1542,14 @@ mod tests {
         runtime.ensure_dirs().unwrap();
         let future = Timestamp::from_second(4_000_000_000).unwrap();
         let path = runtime.root.join("rate_limits.json");
-        let window = |used| {
-            Some(RateLimitWindow {
-                used_percentage: Some(used),
-                resets_at: Some(future),
-            })
-        };
+        let windows = |used| vec![rl_window(used, Some(future))];
 
         // Seed windows for both providers through a live frame.
         let mut seeded = snapshot_with_panels(
             workspace.clone(),
             vec![
-                provider_panel("claude", window(40), None),
-                provider_panel("codex", window(30), None),
+                provider_panel("claude", windows(40)),
+                provider_panel("codex", windows(30)),
             ],
         );
         apply_rate_limit_cache(&mut seeded, &runtime, true);
@@ -1575,7 +1561,7 @@ mod tests {
         // rebuilds the cache from the surviving panels, so codex drops out while
         // claude's windows are kept.
         let mut codex_gone =
-            snapshot_with_panels(workspace, vec![provider_panel("claude", window(40), None)]);
+            snapshot_with_panels(workspace, vec![provider_panel("claude", windows(40))]);
         apply_rate_limit_cache(&mut codex_gone, &runtime, true);
         let after = read_rate_limits_cache(&path);
         assert!(
@@ -1607,11 +1593,7 @@ mod tests {
                 windows: BTreeMap::from([(
                     "claude".to_owned(),
                     AgentRateLimits {
-                        five_hour: Some(RateLimitWindow {
-                            used_percentage: Some(20),
-                            resets_at: None,
-                        }),
-                        seven_day: None,
+                        windows: vec![rl_window(20, None)],
                     },
                 )]),
             },
@@ -1621,11 +1603,7 @@ mod tests {
             &runtime,
             "codex",
             AgentRateLimits {
-                five_hour: Some(RateLimitWindow {
-                    used_percentage: Some(55),
-                    resets_at: None,
-                }),
-                seven_day: None,
+                windows: vec![rl_window(55, None)],
             },
         );
 
@@ -1634,7 +1612,7 @@ mod tests {
             cache
                 .windows
                 .get("codex")
-                .and_then(|w| w.five_hour.as_ref())
+                .and_then(|limits| limits.windows.first())
                 .and_then(|w| w.used_percentage),
             Some(55),
             "the idle provider's windows are seeded"
@@ -1651,14 +1629,7 @@ mod tests {
         let workspace = WorkspaceId::from_project_root(dir.path());
         let mut snapshot = snapshot_with_panels(
             workspace,
-            vec![provider_panel(
-                "codex",
-                Some(RateLimitWindow {
-                    used_percentage: Some(42),
-                    resets_at: None,
-                }),
-                None,
-            )],
+            vec![provider_panel("codex", vec![rl_window(42, None)])],
         );
         snapshot
             .agents
@@ -1680,14 +1651,7 @@ mod tests {
         let workspace = WorkspaceId::from_project_root(dir.path());
         let snapshot = snapshot_with_panels(
             workspace,
-            vec![provider_panel(
-                "codex",
-                Some(RateLimitWindow {
-                    used_percentage: Some(25),
-                    resets_at: None,
-                }),
-                None,
-            )],
+            vec![provider_panel("codex", vec![rl_window(25, None)])],
         );
 
         assert_eq!(
@@ -1702,7 +1666,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
         let mut snapshot =
-            snapshot_with_panels(workspace, vec![provider_panel("codex", None, None)]);
+            snapshot_with_panels(workspace, vec![provider_panel("codex", Vec::new())]);
         snapshot
             .agents
             .push(root_agent("codex", "sess-active", None));
@@ -1721,16 +1685,16 @@ mod tests {
     fn unmetered_or_non_codex_providers_do_not_refresh() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
-        let mut unmetered_codex = provider_panel("codex", None, None);
+        let mut unmetered_codex = provider_panel("codex", Vec::new());
         unmetered_codex.metered = false;
         let snapshot = snapshot_with_panels(
             workspace,
-            vec![unmetered_codex, provider_panel("claude", None, None)],
+            vec![unmetered_codex, provider_panel("claude", Vec::new())],
         );
 
         assert!(
             codex_rate_limit_refreshes(&snapshot).is_empty(),
-            "only metered Codex has an out-of-band 5h/7d read"
+            "only metered Codex has an out-of-band budget read"
         );
     }
 

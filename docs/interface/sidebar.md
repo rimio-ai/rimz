@@ -247,15 +247,25 @@ You don't read where to go; you go. Selecting a row focuses that pane — no mux
 
 ## Zone 3 — the provider dashboard
 
-The 5-hour and 7-day budgets are account-scoped — every session of a provider shares one account's budget — so they leave the rows for a pinned panel at the bottom. One block per provider, including any account that is logged in but idle this run, so your accounts and budgets show even between turns. Codex budgets are pulled out-of-band from the app-server: active sessions refresh during long turns, and a logged-in idle account refreshes from the shared cache path.
+The budgets are account-scoped — every session of a provider shares one account's budget — so they leave the rows for a pinned panel at the bottom. One block per provider, including any account that is logged in but idle this run, so your accounts and budgets show even between turns. Each provider shows one bar per window it reports — both Claude and Codex a 5-hour and a 7-day — so the dashboard tracks whatever windows a provider exposes. Codex budgets are pulled out-of-band from the app-server: active sessions refresh during long turns, and a logged-in idle account refreshes from the shared cache path.
 
-A **metered account** drains two "mana" bars toward their resets. The bar fills with what's *left*, ramping green → amber → red as it empties — and a fully-spent window (0% left) flips its whole empty track red, so an exhausted budget never reads as an untouched one. The `5h`/`7d` label wears its own bar's color, so the row reads as one unit. A spent weekly cap gates the short window: once `7d` is exhausted the `5h` row is painted exhausted too — red, no countdown — regardless of its own reading, since that budget is unusable until the week resets.
+A **metered account** drains one "mana" bar per budget window toward its reset. The bar fills with what's *left*, ramping green → amber → red as it empties — and a fully-spent window (0% left) flips its whole empty track red, so an exhausted budget never reads as an untouched one. Each window's label (`5h`/`7d`) wears its own bar's color, so the row reads as one unit. A spent longer window gates the shorter ones: once the `7d` is exhausted the `5h` row is painted exhausted too — red, no countdown — regardless of its own reading, since that budget is unusable until the longer window resets.
+
+These are **sliding windows** that begin counting only on your first token, so until then the provider keeps sliding the reset a full window-length ahead. A window whose reset still sits ~a full window out has **not started** (it still reads ~1% used, not 0 — so it's the reset distance that gives it away). Any usage above that ~1% floor means it has already started, countdown and all; only a 0–1% window with a near-full reset qualifies. A not-started window shows a near-full bar with **no countdown**, reading "ready — send a message to start it" rather than a misleading ticking placeholder; the countdown appears once your first token fixes the reset and it begins ticking down.
 
 ```
  Claude Code v2.1.158 · Claude Max               ⇅ rc    header — product · version · plan, rc flag right
   ▐▛███▜▌  $3.50 · ◇ 486.0k                               emblem + account spend · tokens
- ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ ↻ 2h06m    5-hour window left, until reset
-   ▘▘ ▝▝   7d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h    7-day window, same start/end column
+ ▝▜█████▛▘ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱ ↻ 2h06m    5-hour window left, until reset
+   ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h    7-day window, same start/end column
+```
+
+The dashboard isn't pinned to a fixed set of windows. If a provider reports a single window — as Codex briefly did during a server-side bug that widened its window to ~30 days — it paints one bar, labeled by its length, instead of misrendering:
+
+```
+ Codex v0.136.0 · ChatGPT Pro                            header — product · version · plan
+  ▐▛███▜▌  $1.20 · ◇ 88.0k                                emblem + account spend · tokens
+ ▝▜█████▛▘ 30d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱ ↻ 28d04h    a single window, labeled by length
 ```
 
 An **unmetered (API-key) account** has no budget to drain, so it shows an `∞` bar — the icon in the front slot, an empty track, no countdown:

@@ -274,7 +274,7 @@ pub enum SidebarDensity {
     #[default]
     Compact,
     /// The whole card on every row — the context bar plus the token and work
-    /// stats. Richest, and tallest, so the fewest agents fit. The 5h/7d budget
+    /// stats. Richest, and tallest, so the fewest agents fit. The budget
     /// windows are account-scoped and live in the provider panel, never a row,
     /// so `bars` is a legacy alias that now folds into `full`.
     #[serde(alias = "bars")]
@@ -554,7 +554,7 @@ mod tests {
             .expect("load");
         assert_eq!(full.sidebar.density, SidebarDensity::Full);
         // `bars` is the legacy name for the densest card; it now folds into
-        // `full` because the 5h/7d budget bars moved to the provider panel.
+        // `full` because the budget bars moved to the provider panel.
         let bars = MachineConfig::load_from(&write(&dir, "[sidebar]\ndensity = \"bars\"\n"))
             .expect("load");
         assert_eq!(bars.sidebar.density, SidebarDensity::Full);

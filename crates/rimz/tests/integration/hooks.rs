@@ -883,7 +883,7 @@ fn statusline_context_folds_into_the_snapshot_agent() {
         .find(|a| a["agent_id"] == "sess-fold")
         .expect("session agent present");
     assert_eq!(
-        agent["context"]["rate_limits"]["five_hour"]["used_percentage"], 24,
+        agent["context"]["rate_limits"]["windows"][0]["used_percentage"], 24,
         "statusline context folds onto the agent row (23.5 rounds to 24)"
     );
 }
@@ -960,8 +960,11 @@ fn codex_turn_boundary_refreshes_context_sidecar_from_app_server() {
     assert_eq!(record.kind, "codex");
     assert_eq!(record.context.source, "codex");
     let limits = record.context.rate_limits.expect("rate limits present");
-    assert_eq!(limits.five_hour.unwrap().used_percentage, Some(42));
-    assert_eq!(limits.seven_day.unwrap().used_percentage, Some(7));
+    // Wire order preserved: primary (300 min) then secondary (10080 min).
+    assert_eq!(limits.windows[0].duration_mins, Some(300));
+    assert_eq!(limits.windows[0].used_percentage, Some(42));
+    assert_eq!(limits.windows[1].duration_mins, Some(10080));
+    assert_eq!(limits.windows[1].used_percentage, Some(7));
     assert_eq!(
         record.context.model_display_name.as_deref(),
         Some("GPT-5.5 Codex")
@@ -1024,12 +1027,12 @@ fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
     let cache: Value = serde_json::from_slice(&std::fs::read(cache_path).expect("rate cache"))
         .expect("rate cache json");
     assert_eq!(
-        cache["windows"]["codex"]["five_hour"]["used_percentage"], 42,
-        "5h window comes from the app-server primary window"
+        cache["windows"]["codex"]["windows"][0]["used_percentage"], 42,
+        "the short window comes from the app-server primary window"
     );
     assert_eq!(
-        cache["windows"]["codex"]["seven_day"]["used_percentage"], 7,
-        "7d window comes from the app-server secondary window"
+        cache["windows"]["codex"]["windows"][1]["used_percentage"], 7,
+        "the long window comes from the app-server secondary window"
     );
 }
 

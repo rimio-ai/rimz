@@ -47,7 +47,7 @@ enum CodexSubcmd {
         #[arg(long)]
         model: Option<String>,
     },
-    /// Refresh the account's 5h/7d rate-limit windows into the shared cache,
+    /// Refresh the account's rate-limit windows into the shared cache,
     /// account-scoped (no session). The sidebar producer spawns this detached for
     /// a logged-in but idle provider so its budgets paint without a live session;
     /// humans do not run it.
@@ -138,7 +138,7 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
 
 /// Fetch the account's rate-limit windows from the app-server (account-scoped, no
 /// session/thread) and merge them into the shared `rate_limits.json` cache, so a
-/// logged-in but idle provider's 5h/7d bars paint from the next frame. Best-effort
+/// logged-in but idle provider's budget bars paint from the next frame. Best-effort
 /// like `refresh_context`: an unreachable app-server, a logged-out or API-key
 /// account (no windows), or a write hiccup all succeed silently with nothing
 /// merged.

@@ -6,7 +6,7 @@
 //! agent, not a stack of one-off widgets. See the
 //! [grammar in docs/internals/sidebar.md](../../../docs/internals/sidebar.md).
 
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use rimz::agents::{AgentContext, RateLimitWindow};
@@ -19,7 +19,7 @@ use rimz::{
 
 use super::fmt::{
     activity_short, age_secs, age_short, clip, dollars2, duration_worked, duration_worked_coarse,
-    model_label, pct_label, reset_days_hours, reset_hours_minutes, time_remaining, tokens_short,
+    model_label, pct_label, reset_countdown, time_remaining, tokens_short, window_label,
 };
 use super::labels::{
     TOKENS_CACHED, TOKENS_IN, TOKENS_OUT, agent_glyph, agent_style, attention_glyph_style,
@@ -36,8 +36,8 @@ use super::theme::Theme;
 const WORKED_GLYPH: &str = "◷";
 
 /// The context-meter label — a framed square reading as "the window", replacing
-/// the `ctx` word now that it is the row's one bar (the account-scoped 5h/7d
-/// budgets moved to the provider dashboard).
+/// the `ctx` word now that it is the row's one bar (the account-scoped budget
+/// bars moved to the provider dashboard).
 const CONTEXT_GLYPH: &str = "▣";
 
 /// Lead glyph for the fleet's committed-work total (`◆ 3`): a filled diamond,
@@ -666,8 +666,8 @@ fn row_lines(
     // The resting (unselected) card is line 1 (identity), line 2 (description),
     // and the ctx bar — plus whatever `density` keeps resident. Selection only
     // *appends* the deeper lines (the token and work stats); it never reshapes a
-    // line already on screen, so the card never reflows on expand. The 5h/7d
-    // budgets are account-scoped, so they live in the pinned provider dashboard,
+    // line already on screen, so the card never reflows on expand. The budgets
+    // are account-scoped, so they live in the pinned provider dashboard,
     // never on a row.
     let mut inner = vec![identity_line(
         theme,
@@ -1356,17 +1356,26 @@ const PROVIDER_ART_WIDTH: usize = 9;
 /// the emblem is dropped so the bar keeps a legible length.
 const PROVIDER_ART_MIN_WIDTH: usize = 34;
 
-/// The provider bar's label slot (`5h` / `7d` / `∞`) and reset-value column,
-/// shared by every provider bar so they align front and back. The value holds
-/// `↻ ` plus a two-unit reset countdown (`↻ 3d12h`).
-const PROVIDER_LABEL_WIDTH: usize = 2;
-const PROVIDER_VALUE_WIDTH: usize = 7;
+/// The provider bar's label slot (`5h` / `7d` / `30d` / `∞`) and reset-value
+/// column, shared by every provider bar so they align front and back. The label
+/// fits three cells (`30d`); the value holds `↻ ` plus a two-unit reset countdown
+/// (up to `↻ 30d10h`).
+const PROVIDER_LABEL_WIDTH: usize = 3;
+const PROVIDER_VALUE_WIDTH: usize = 8;
+
+/// How close to a full window-length a reset must read to count as "not started".
+/// A not-started window keeps its reset slid to `now + duration`, but a live
+/// reading lands a hair under (minute-flooring + read latency) and a cached one
+/// drifts down until the next refresh — so allow this margin below the full
+/// window. A *started* window's reset has ticked well below full, so it clears
+/// the margin easily.
+const NOT_STARTED_GRACE: SignedDuration = SignedDuration::from_secs(120);
 
 /// The pinned per-provider dashboard: one block per provider (`Claude Code`,
 /// `Codex`, …), each a header line then the brand emblem zipped against the
 /// aggregate stats and the account-scoped budget bars. A metered account drains
-/// 5h/7d "mana" bars toward their resets; an unmetered (API-key) account shows
-/// the `∞` "infinite power" bar in the label slot with no countdown. The bars
+/// one "mana" bar per budget window toward its reset; an unmetered (API-key)
+/// account shows the `∞` "infinite power" bar in the label slot with no countdown. The bars
 /// share one start and one end column across every block, so the whole
 /// dashboard reads as one aligned grid. Bottom chrome — never a jump target.
 pub(super) fn provider_panel_lines(
@@ -1473,10 +1482,10 @@ fn provider_stats_spans(theme: &Theme, panel: &SidebarProviderPanel) -> Vec<Span
     spans
 }
 
-/// The provider's budget bars within `region`: a metered account drains its
-/// 5h/7d "mana" bars; an unmetered account shows the single `∞` bar. The 5-hour
-/// reset reads `{h}h{mm}m` and the weekly `{d}d{hh}h` — both fixed two-unit, so
-/// the two countdowns column-align. Each row aligns front and back within
+/// The provider's budget bars within `region`: a metered account drains one
+/// "mana" bar per reported window (`5h`, `7d`, `30d`, …, ordered short→long);
+/// an unmetered account shows the single `∞` bar. Each reset reads a two-unit
+/// countdown scaled to its magnitude. Each row aligns front and back within
 /// `region`, so they line up across providers too.
 fn provider_bar_rows(
     theme: &Theme,
@@ -1486,64 +1495,81 @@ fn provider_bar_rows(
     if !panel.metered {
         return vec![infinite_bar_row(theme, panel.color, region)];
     }
-    // A spent weekly cap gates the 5-hour window: once 7d is exhausted the 5h
-    // budget is unusable regardless of its own reading, so paint the 5h row as
-    // exhausted (red, no countdown) rather than a misleading fresh bar.
-    let seven_exhausted = panel
-        .seven_day
-        .as_ref()
-        .and_then(|window| window.used_percentage)
-        .is_some_and(|used| used >= 100);
-    let mut rows = Vec::new();
-    if let Some(spans) = metered_bar_row(
-        theme,
-        "5h",
-        panel.five_hour.as_ref(),
-        reset_hours_minutes,
-        region,
-        seven_exhausted,
-    ) {
-        rows.push(spans);
-    }
-    if let Some(spans) = metered_bar_row(
-        theme,
-        "7d",
-        panel.seven_day.as_ref(),
-        reset_days_hours,
-        region,
-        false,
-    ) {
-        rows.push(spans);
-    }
-    rows
+    panel
+        .windows
+        .iter()
+        .filter_map(|window| {
+            metered_bar_row(theme, window, region, longer_window_spent(panel, window))
+        })
+        .collect()
 }
 
-/// One metered budget bar row: a `5h`/`7d` label, the draining mana bar (filled
-/// = remaining), and the `↻ <reset>` countdown right-aligned in the value
-/// column. The label mirrors its bar's severity color. `force_exhausted` paints
-/// the row as fully spent — red, no countdown — regardless of the window's own
-/// reading (the 7d→5h cascade). `None` when the window reported no usage
-/// percentage and is not force-exhausted.
+/// Whether a window with a strictly longer duration is spent — a higher-level cap
+/// being exhausted gates this shorter window (its budget is unusable until the
+/// longer one resets), so the renderer paints the shorter row exhausted too (e.g.
+/// a spent 7-day cap gating the 5-hour bar).
+fn longer_window_spent(panel: &SidebarProviderPanel, window: &RateLimitWindow) -> bool {
+    let mins = window.duration_mins.unwrap_or(0);
+    panel.windows.iter().any(|other| {
+        other.duration_mins.unwrap_or(0) > mins
+            && other.used_percentage.is_some_and(|used| used >= 100)
+    })
+}
+
+/// Whether a window has not started its clock. These budgets are sliding windows:
+/// the provider keeps `resets_at` slid a full window-length ahead until the first
+/// token, so a reset still within [`NOT_STARTED_GRACE`] of the full window means
+/// the clock hasn't begun — the displayed countdown would be a placeholder.
+///
+/// The not-started floor is ~1% used (a fresh 5h window reads `usedPercent: 1`,
+/// never 0), so detection keys on the reset distance, not a 0% reading. Any usage
+/// **above** that floor means the window has clearly started — its reset is then a
+/// real countdown — so >1% short-circuits to "started" regardless of the reset
+/// (this also covers a spent window at 100%). An absent reset or duration can't be
+/// judged, so it isn't flagged.
+fn window_not_started(window: &RateLimitWindow) -> bool {
+    if window.used_percentage > Some(1) {
+        return false;
+    }
+    let (Some(reset), Some(mins)) = (window.resets_at, window.duration_mins) else {
+        return false;
+    };
+    let full = SignedDuration::from_secs(i64::from(mins) * 60);
+    reset.duration_since(Timestamp::now()) >= full - NOT_STARTED_GRACE
+}
+
+/// One metered budget bar row: the window's label (`5h`/`7d`/`30d`), the draining
+/// mana bar (filled = remaining), and the `↻ <reset>` countdown right-aligned in
+/// the value column. The label mirrors its bar's severity color. `force_exhausted`
+/// paints the row as fully spent — red, no countdown — regardless of the window's
+/// own reading (a longer spent window gates it). `None` when the window reported
+/// no usage percentage and is not force-exhausted.
+///
+/// A window that has **not started** drops its countdown — a near-full bar with no
+/// `↻` reads "send a message to start it" rather than a misleading ticking reset.
+/// These are sliding windows that begin counting only on the first token, so until
+/// then the provider keeps `resets_at` slid a full window-length ahead. Detect that
+/// by the reset distance ([`window_not_started`]), not a 0% reading — a fresh 5h
+/// window still reports ~1% used, never 0.
 fn metered_bar_row(
     theme: &Theme,
-    label: &str,
-    window: Option<&RateLimitWindow>,
-    reset_fmt: fn(Timestamp) -> String,
+    window: &RateLimitWindow,
     region: usize,
     force_exhausted: bool,
 ) -> Option<Vec<Span<'static>>> {
-    let window = window?;
     let remaining = if force_exhausted {
         0
     } else {
         100u8.saturating_sub(window.used_percentage?)
     };
-    let value = if force_exhausted {
+    let label = window_label(window.duration_mins);
+    let not_started = !force_exhausted && window_not_started(window);
+    let value = if force_exhausted || not_started {
         String::new()
     } else {
         window
             .resets_at
-            .map(|at| format!("↻ {}", reset_fmt(at)))
+            .map(|at| format!("↻ {}", reset_countdown(at)))
             .unwrap_or_default()
     };
     let bar_width = provider_bar_width(region);

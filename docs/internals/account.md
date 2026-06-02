@@ -16,7 +16,7 @@ A missing binary, a logged-out account, an unparseable file: each degrades to an
 Two facts, both **account-scoped** — every session of one provider kind shares them, so the dashboard reads them per kind and never paints them per row:
 
 - **Account identity** — [`AgentAccount`](../../crates/rimz/src/agents/context.rs): the raw `plan` tier the provider reports (`max`, `team`, `pro`) and a `metered` flag.
-- **Balance** — [`AgentRateLimits`](../../crates/rimz/src/agents/context.rs): a `five_hour` and a `seven_day` `RateLimitWindow`, each a `used_percentage` plus a typed `resets_at` instant a renderer formats as a countdown.
+- **Balance** — [`AgentRateLimits`](../../crates/rimz/src/agents/context.rs): an ordered list of [`RateLimitWindow`](../../crates/rimz/src/agents/context.rs)s (short→long), each a `used_percentage`, a typed `resets_at` instant a renderer formats as a countdown, and a `duration_mins` that names the window. Both Claude and Codex report a 5-hour and a 7-day window. The duration drives the bar label (`5h`/`7d`) and the reset-to-max roll-forward, so no window kind is hard-coded — a provider's windows are whatever it reports, and a server-side change in their count or length renders gracefully (a transient Codex bug once widened its window to ~30 days; it painted a labeled `30d` bar rather than misrendering).
 
 Both ride [`AgentContext`](../../crates/rimz/src/agents/context.rs), the session-scoped rich-context record (see [agent.md → Rich context](./agent.md#rich-context-agentcontext)); the producer lifts them to the account scope at aggregation time.
 
@@ -41,7 +41,7 @@ Each provider maps its native account and balance surfaces onto the two internal
 | Provider | Account identity → [`AgentAccount`](../../crates/rimz/src/agents/context.rs) | Balance → [`AgentRateLimits`](../../crates/rimz/src/agents/context.rs) |
 | --- | --- | --- |
 | **Claude** | `claude auth status` JSON: `subscriptionType` → `plan`, `authMethod` → `metered` (an `apiKey` login is unmetered). | The statusline blob's rate-limit windows, parsed by [`observe_context`](../../crates/rimz/src/agents/statusline.rs). |
-| **Codex** | Live: the app-server `account/rateLimits/read` `planType` → `plan`, riding `AgentContext.account` with no extra spawn. Idle: the *shape* of `~/.codex/auth.json` — an `OPENAI_API_KEY` is unmetered (`∞`), a `tokens` block is a metered ChatGPT login (its plan tier filled once a session reports it). | The app-server `account/rateLimits/read` 5h/7d windows ([`codex_app_server.rs`](../../crates/rimz/src/agents/codex_app_server.rs)). |
+| **Codex** | Live: the app-server `account/rateLimits/read` `planType` → `plan`, riding `AgentContext.account` with no extra spawn. Idle: the *shape* of `~/.codex/auth.json` — an `OPENAI_API_KEY` is unmetered (`∞`), a `tokens` block is a metered ChatGPT login (its plan tier filled once a session reports it). | The app-server `account/rateLimits/read` 5h (`primary`) and 7d (`secondary`) windows, each carrying its `windowDurationMins` ([`codex_app_server.rs`](../../crates/rimz/src/agents/codex_app_server.rs)). |
 
 One asymmetry shapes the producer below: **Claude's balance has no source outside a live statusline**, while **Codex's rides a read-only out-of-band app-server call**, so a logged-in idle Codex account can still refresh its windows but an idle Claude account cannot.
 
@@ -67,19 +67,23 @@ Per panel:
 - **Aggregate stats** — spend, tokens, and lines summed across the kind's sessions (zero for an idle, session-less kind); `plan` and `version` taken from the freshest `context.observed_at`.
 - **Account** — `metered` and the `plan` label come from the kind's account (a live session's, or the probed idle one); a `plan` tier formats into a brand label (`max` → `Claude Max`, `pro` → `ChatGPT Pro`), and a missing account infers `metered` from whether windows were reported.
 - **Brand style** — emblem art, color, and product name resolve from `[sidebar.providers.<kind>]` over the built-in defaults (claude clay, codex blue, pi forest green); an unknown kind gets neutral grey and no emblem. See [configuration.md](../reference/configuration.md#sidebar-provider-dashboard).
-- **Balance windows** — each `5h`/`7d` window chosen by `stable_window` (below).
+- **Balance windows** — the per-duration set chosen by `stable_windows` (below).
 
 Blocks sort by spend and cap at `[sidebar] max_provider_blocks` (default 3). The account cache and the probe are single-flighted on the elder like the diff stats — the producer publishes `accounts.json`; consumers read it and never fork.
 
 ### Stable window selection
 
 Balance is account-scoped, but the *freshest* session is not the truest reading: parallel sessions report the same window at slightly different instants, so "freshest wins" flickers between ticks.
-[`stable_window`](../../crates/rimz/src/ledger/snapshot.rs) instead picks each window deterministically across every session of the kind: it drops any reading whose reset has already passed (stale), then keeps the **most-drained survivor** (highest `used_percentage`, so the bar never over-promises remaining budget).
-Same inputs, same bar, regardless of which session reported last.
+[`stable_windows`](../../crates/rimz/src/ledger/snapshot.rs) instead groups every session's readings by `duration_mins` and picks each duration deterministically: it drops any reading whose reset has already passed (stale), then keeps the **most-drained survivor** (highest `used_percentage`, so the bar never over-promises remaining budget), and returns the set short→long.
+Same inputs, same bars, regardless of which session reported last.
 
 ### Spent-window verdict → the rate-limited head
 
-A window is **spent** at `used_percentage == 100` with its reset still ahead ([`RateLimitWindow::is_spent`](../../crates/rimz/src/agents/context.rs)). When either window of a kind is spent, the sidebar parks every *resting* (`idle`/`success`) agent of that kind to the derived `rate_limited` status — account-scoped, so a session that just launched into a spent account is parked too. This is display, not correctness: the rollup keeps each agent's true lifecycle status, and the projection and its glyph live in [agent.md → The state machine](./agent.md#the-state-machine) and [the interface legend](../interface/sidebar.md#reading-the-glyphs).
+A window is **spent** at `used_percentage == 100` with its reset still ahead ([`RateLimitWindow::is_spent`](../../crates/rimz/src/agents/context.rs)). When any window of a kind is spent, the sidebar parks every *resting* (`idle`/`success`) agent of that kind to the derived `rate_limited` status — account-scoped, so a session that just launched into a spent account is parked too. This is display, not correctness: the rollup keeps each agent's true lifecycle status, and the projection and its glyph live in [agent.md → The state machine](./agent.md#the-state-machine) and [the interface legend](../interface/sidebar.md#reading-the-glyphs).
+
+### Not-started windows
+
+These budgets are **sliding** windows: the clock starts on your first token, so until then the provider keeps `resets_at` slid a full window-length ahead. A window whose reset still sits ~a full window out has **not started** — and it is detected by that reset distance, not a `used_percentage` of 0, because a fresh window still reports ~1% used (the live Codex 5h reads `usedPercent: 1` with the reset a full 5h out). That ~1% is the floor: any usage **above** it means the window has clearly started, so only a window at or below the floor (0–1% used) is a not-started candidate — past that, the reset is a real countdown regardless of its distance. The dashboard omits the countdown for such a window (a near-full bar, no `↻`), so it reads "ready to start" rather than a misleading ticking placeholder. Display only — it touches no parking or correctness — and applies to every provider; the on-screen treatment is [the interface reference](../interface/sidebar.md#zone-3--the-provider-dashboard).
 
 ### Persistence across idle sessions
 
@@ -97,11 +101,11 @@ Claude's windows have no source outside a live statusline, so Claude never quali
 
 ## Adding a provider
 
-A new agent earns an account block and balance bars by filling the two internal types from its own surfaces; everything downstream — aggregation, `stable_window`, caching, the dashboard — is provider-agnostic and comes free.
+A new agent earns an account block and balance bars by filling the two internal types from its own surfaces; everything downstream — aggregation, `stable_windows`, caching, the dashboard — is provider-agnostic and comes free.
 The work mirrors [transcript.md → Adding a provider](./transcript.md#adding-a-provider) and [hooks.md → Adding an agent](./hooks.md#adding-an-agent):
 
 1. **Fill `AgentAccount`** (plan + metered) on the session's `AgentContext` from its rich-context transport, and/or add an out-of-band arm to [`account::probe`](../../crates/rimz/src/agents/account.rs) for the logged-in-but-idle case.
-2. **Fill `AgentRateLimits`** (the 5h/7d windows with reset instants) on `AgentContext` from the transport.
+2. **Fill `AgentRateLimits`** (the windows, each with a `used_percentage`, reset instant, and `duration_mins`) on `AgentContext` from the transport.
 3. **Optionally** register `[sidebar.providers.<kind>]` defaults (emblem, color, name).
 4. **Stay best-effort** throughout: a missing fact is an omitted label or a blank bar, never an error.
 
@@ -109,7 +113,7 @@ Per [testing.md](../contributing/testing.md), golden the account mapping from a 
 
 ## What lives elsewhere
 
-- **The on-screen look** — the mana bars, the `∞` bar, the aligned grid, the `⇅ rc` flag, the exhausted-window and weekly-cap rendering — is [the interface reference](../interface/sidebar.md#zone-3--the-provider-dashboard).
+- **The on-screen look** — the mana bars, the `∞` bar, the aligned grid, the `⇅ rc` flag, the exhausted-window and longer-window-gating rendering — is [the interface reference](../interface/sidebar.md#zone-3--the-provider-dashboard).
 - **The renderer's projection** of `providers` and where the dashboard sits in the sidebar is [sidebar.md → Provider dashboard](./sidebar.md#provider-dashboard).
 - **The transport plumbing** that carries the rich context — the statusline pipe and its wrap/restore, the Codex app-server connection ladder and broker — is [transcript.md](./transcript.md).
 - **Storage** of `AgentContext` on the rollup and the sidecar fold-in is [agent.md → Rich context](./agent.md#rich-context-agentcontext).

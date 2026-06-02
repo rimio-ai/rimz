@@ -135,14 +135,16 @@ pub struct AgentCurrentUsage {
     pub cache_read_input_tokens: Option<u64>,
 }
 
-/// Rate-limit windows the agent surfaces, each with a reset instant a renderer
-/// can format as a countdown.
+/// The rate-limit windows the agent surfaces, ordered short→long by duration.
+/// Each window carries its own length, so a renderer derives its label (`5h`,
+/// `7d`, …) and its reset-to-max roll-forward from the window itself — no
+/// provider-shaped buckets. Both Claude and Codex report a 5-hour and a 7-day
+/// window; carrying the duration means a provider reporting a different count or
+/// length (a window kind changing, or a transient server bug) just works.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentRateLimits {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub five_hour: Option<RateLimitWindow>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seven_day: Option<RateLimitWindow>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub windows: Vec<RateLimitWindow>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -153,6 +155,12 @@ pub struct RateLimitWindow {
     /// a countdown rather than re-parsing a raw value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets_at: Option<Timestamp>,
+    /// The window's length in minutes — its identity across sessions (the
+    /// stable-window pick groups readings by it), the source of its bar label,
+    /// and the roll-forward length once it refills while idle. Providers stamp
+    /// it: Claude from the window kind it names, Codex from `windowDurationMins`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_mins: Option<u32>,
 }
 
 impl RateLimitWindow {
@@ -168,18 +176,11 @@ impl RateLimitWindow {
 }
 
 impl AgentRateLimits {
-    /// Whether either the 5-hour or the 7-day window is
-    /// [`spent`](RateLimitWindow::is_spent) — the account-level "nothing to do
-    /// but wait" verdict the sidebar projects onto every resting agent of the
-    /// kind.
+    /// Whether any reported window is [`spent`](RateLimitWindow::is_spent) — the
+    /// account-level "nothing to do but wait" verdict the sidebar projects onto
+    /// every resting agent of the kind.
     pub fn any_spent(&self) -> bool {
-        self.five_hour
-            .as_ref()
-            .is_some_and(RateLimitWindow::is_spent)
-            || self
-                .seven_day
-                .as_ref()
-                .is_some_and(RateLimitWindow::is_spent)
+        self.windows.iter().any(RateLimitWindow::is_spent)
     }
 }
 
@@ -202,6 +203,7 @@ mod tests {
         RateLimitWindow {
             used_percentage: used,
             resets_at: None,
+            duration_mins: Some(300),
         }
     }
 
@@ -215,27 +217,24 @@ mod tests {
     }
 
     #[test]
-    fn any_spent_reads_either_window() {
-        let spent = || Some(window(Some(100)));
-        let fresh = || Some(window(Some(10)));
+    fn any_spent_reads_any_window() {
+        let spent = window(Some(100));
+        let fresh = window(Some(10));
         assert!(
             AgentRateLimits {
-                five_hour: spent(),
-                seven_day: fresh()
+                windows: vec![spent.clone(), fresh.clone()]
             }
             .any_spent()
         );
         assert!(
             AgentRateLimits {
-                five_hour: fresh(),
-                seven_day: spent()
+                windows: vec![fresh.clone(), spent]
             }
             .any_spent()
         );
         assert!(
             !AgentRateLimits {
-                five_hour: fresh(),
-                seven_day: fresh()
+                windows: vec![fresh.clone(), fresh]
             }
             .any_spent()
         );

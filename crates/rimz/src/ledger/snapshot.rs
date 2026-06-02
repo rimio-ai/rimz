@@ -135,7 +135,7 @@ pub struct SidebarSnapshot {
     #[serde(default)]
     pub sidebar: crate::config::SidebarConfig,
     /// Per-provider dashboard blocks pinned to the bottom of the sidebar — the
-    /// account-scoped 5h/7d budgets, aggregate spend/tokens, and brand emblem.
+    /// account-scoped budgets, aggregate spend/tokens, and brand emblem.
     /// One block folds every session of a kind. Built by
     /// [`Self::with_provider_aggregates`] on the producer (it needs config and an
     /// account probe the pure reducer can't read), so the placeholder/persisted
@@ -147,7 +147,7 @@ pub struct SidebarSnapshot {
 /// One provider's aggregate dashboard block, pinned to the bottom of the
 /// sidebar. Account-scoped: every session of one agent kind folds into one
 /// block — summed spend and tokens, plus the freshest session's plan, version,
-/// and rate-limit windows — so the 5h/7d budgets render once per account, never
+/// and rate-limit windows — so the budgets render once per account, never
 /// per row. Resolved on the producer into a ready-to-paint shape: the renderer
 /// reads art, color, and plan straight off it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -165,7 +165,7 @@ pub struct SidebarProviderPanel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
     /// Whether the account is metered by rate-limit windows. `false` paints the
-    /// "infinite power" bar in place of draining 5h/7d budgets.
+    /// "infinite power" bar in place of draining budget bars.
     pub metered: bool,
     /// Whether remote control is enabled for this provider (the `⇅ rc` flag).
     pub remote_control: bool,
@@ -183,10 +183,11 @@ pub struct SidebarProviderPanel {
     pub lines_added: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lines_removed: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub five_hour: Option<RateLimitWindow>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seven_day: Option<RateLimitWindow>,
+    /// The account-scoped budget windows, ordered short→long by duration. A
+    /// metered account drains one mana bar per window; the persisted cache folds
+    /// in so an idle account still paints its last-known bars.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub windows: Vec<RateLimitWindow>,
 }
 
 /// One sidebar's view of the panes sharing its tab/window. `None` on the
@@ -790,39 +791,23 @@ impl SidebarSnapshot {
                 .filter_map(|agent| agent.context.as_ref())
                 .max_by_key(|context| context.observed_at);
             let version = freshest.and_then(|context| context.agent_version.clone());
-            // The 5h/7d windows are account-scoped too, but the *freshest* session
-            // is not the truest reading: parallel sessions report the same window
-            // at slightly different instants, so "freshest wins" flips between
-            // ticks and the bar flickers. Instead, pick each window stably across
-            // every session — drop readings whose reset already passed (stale),
-            // then keep the most-drained survivor (most conservative). Same inputs
-            // always yield the same bar, regardless of which session reported last.
+            // The budget windows are account-scoped too, but the *freshest*
+            // session is not the truest reading: parallel sessions report the same
+            // window at slightly different instants, so "freshest wins" flips
+            // between ticks and the bar flickers. Instead, pick each window stably
+            // across every session, grouped by duration — drop readings whose reset
+            // already passed (stale), then keep the most-drained survivor (most
+            // conservative). Same inputs always yield the same bars, regardless of
+            // which session reported last.
             let now = Timestamp::now();
-            let five_hour = stable_window(
-                sessions.iter().filter_map(|agent| {
-                    agent
-                        .context
-                        .as_ref()?
-                        .rate_limits
-                        .as_ref()?
-                        .five_hour
-                        .clone()
-                }),
+            let windows = stable_windows(
+                sessions
+                    .iter()
+                    .filter_map(|agent| agent.context.as_ref()?.rate_limits.as_ref())
+                    .flat_map(|limits| limits.windows.iter().cloned()),
                 now,
             );
-            let seven_day = stable_window(
-                sessions.iter().filter_map(|agent| {
-                    agent
-                        .context
-                        .as_ref()?
-                        .rate_limits
-                        .as_ref()?
-                        .seven_day
-                        .clone()
-                }),
-                now,
-            );
-            let has_windows = five_hour.is_some() || seven_day.is_some();
+            let has_windows = !windows.is_empty();
             let cached_tokens = freshest
                 .and_then(|context| context.tokens.as_ref())
                 .and_then(|tokens| tokens.current_usage.as_ref())
@@ -873,8 +858,7 @@ impl SidebarSnapshot {
                 cached_tokens,
                 lines_added,
                 lines_removed,
-                five_hour,
-                seven_day,
+                windows,
             });
         }
 
@@ -893,9 +877,32 @@ impl SidebarSnapshot {
     }
 }
 
-/// The account-stable reading of one rate-limit window across every session of a
-/// provider. Parallel sessions report the same shared budget at different
-/// instants, so a "freshest wins" pick flickers; this is deterministic instead.
+/// The account-stable *set* of budget windows across every session of a
+/// provider, grouped by [`duration_mins`](RateLimitWindow::duration_mins).
+/// Readings of the same duration run through [`stable_window`] independently, so
+/// two sessions reporting one budget at different instants converge to a single
+/// bar per duration. Output sorted short→long for a stable paint order; windows
+/// of unknown duration sort last.
+fn stable_windows(
+    windows: impl Iterator<Item = RateLimitWindow>,
+    now: Timestamp,
+) -> Vec<RateLimitWindow> {
+    let mut groups: BTreeMap<Option<u32>, Vec<RateLimitWindow>> = BTreeMap::new();
+    for window in windows {
+        groups.entry(window.duration_mins).or_default().push(window);
+    }
+    let mut stable: Vec<RateLimitWindow> = groups
+        .into_values()
+        .filter_map(|group| stable_window(group.into_iter(), now))
+        .collect();
+    stable.sort_by_key(|window| window.duration_mins.unwrap_or(u32::MAX));
+    stable
+}
+
+/// The account-stable reading of one rate-limit window (one duration) across
+/// every session of a provider. Parallel sessions report the same shared budget
+/// at different instants, so a "freshest wins" pick flickers; this is
+/// deterministic instead.
 ///
 /// Drop any reading whose `resets_at` has already passed — that window reset, so
 /// its `used_percentage` is stale — then, among the survivors, keep the most
@@ -1641,8 +1648,8 @@ fn project_display_status(rows: &mut [SidebarRow], agents: &[AgentState], now: T
 }
 
 /// The set of provider kinds whose account rate-limit budget is spent: a live
-/// session of the kind reports a 5-hour or 7-day window used to the cap whose
-/// reset has not yet passed. Account-scoped — every session of a kind shares the
+/// session of the kind reports any window used to the cap whose reset has not yet
+/// passed. Account-scoped — every session of a kind shares the
 /// budget — so the verdict flips *every* resting agent of the kind, including one
 /// that launched straight into a spent account. Reads the same window source as
 /// the provider dashboard (`agent.context.rate_limits`), so the cockpit tally and
@@ -1660,8 +1667,10 @@ fn rate_limited_kinds(agents: &[AgentState], now: Timestamp) -> BTreeSet<String>
         else {
             continue;
         };
-        if window_spent_unreset(limits.five_hour.as_ref(), now)
-            || window_spent_unreset(limits.seven_day.as_ref(), now)
+        if limits
+            .windows
+            .iter()
+            .any(|window| window_spent_unreset(window, now))
         {
             limited.insert(agent.kind.clone());
         }
@@ -1671,9 +1680,8 @@ fn rate_limited_kinds(agents: &[AgentState], now: Timestamp) -> BTreeSet<String>
 
 /// Whether a window is spent and has not yet reset — the budget is gone *now*. A
 /// spent window whose `resets_at` has already passed is stale, not limiting.
-fn window_spent_unreset(window: Option<&RateLimitWindow>, now: Timestamp) -> bool {
-    window
-        .is_some_and(|window| window.is_spent() && window.resets_at.is_none_or(|reset| reset > now))
+fn window_spent_unreset(window: &RateLimitWindow, now: Timestamp) -> bool {
+    window.is_spent() && window.resets_at.is_none_or(|reset| reset > now)
 }
 
 /// A child `AgentState` projected to the compact summary the parent's expanded
@@ -4398,10 +4406,7 @@ mod tests {
         );
     }
 
-    fn ctx_with_limits(
-        five_hour: Option<RateLimitWindow>,
-        seven_day: Option<RateLimitWindow>,
-    ) -> AgentContext {
+    fn ctx_with_limits(windows: Vec<RateLimitWindow>) -> AgentContext {
         AgentContext {
             source: "claude".to_owned(),
             session_name: None,
@@ -4415,10 +4420,7 @@ mod tests {
             exceeds_200k_tokens: None,
             cost: None,
             tokens: None,
-            rate_limits: Some(crate::agents::AgentRateLimits {
-                five_hour,
-                seven_day,
-            }),
+            rate_limits: Some(crate::agents::AgentRateLimits { windows }),
             pr: None,
             account: None,
             observed_at: Timestamp::now(),
@@ -4441,7 +4443,7 @@ mod tests {
             1_000,
         );
         reporter.worktree_path = Some("/repo/main".to_owned());
-        reporter.context = Some(ctx_with_limits(Some(window(100, 3_600)), None));
+        reporter.context = Some(ctx_with_limits(vec![window(100, 3_600)]));
         let mut fresh = agent(
             "claude",
             "sess-fresh",
@@ -4509,7 +4511,7 @@ mod tests {
             1_000,
         );
         idle.worktree_path = Some("/repo/main".to_owned());
-        idle.context = Some(ctx_with_limits(Some(window(100, -60)), None));
+        idle.context = Some(ctx_with_limits(vec![window(100, -60)]));
 
         let snapshot = SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![idle]);
         assert_eq!(
@@ -5995,6 +5997,7 @@ mod tests {
         RateLimitWindow {
             used_percentage: Some(used),
             resets_at: Some(resets_at),
+            duration_mins: Some(300),
         }
     }
 
@@ -6035,9 +6038,36 @@ mod tests {
         let undated = RateLimitWindow {
             used_percentage: Some(33),
             resets_at: None,
+            duration_mins: Some(300),
         };
         let pick = stable_window([window(90, -10), undated].into_iter(), now)
             .expect("the undated reading backstops the stale one");
         assert_eq!(pick.used_percentage, Some(33));
+    }
+
+    #[test]
+    fn stable_windows_picks_one_per_duration_sorted_short_to_long() {
+        let now = Timestamp::now();
+        let mk = |used: u8, mins: u32| RateLimitWindow {
+            used_percentage: Some(used),
+            resets_at: Some(now + std::time::Duration::from_secs(3_600)),
+            duration_mins: Some(mins),
+        };
+        // Two sessions, each reporting a 5h and a 30d window at different drains.
+        let readings = [mk(10, 43_800), mk(20, 300), mk(40, 43_800), mk(5, 300)];
+        let stable = stable_windows(readings.into_iter(), now);
+        assert_eq!(stable.len(), 2, "one bar per duration");
+        assert_eq!(
+            stable[0].duration_mins,
+            Some(300),
+            "short window sorts first"
+        );
+        assert_eq!(stable[0].used_percentage, Some(20), "most-drained 5h kept");
+        assert_eq!(
+            stable[1].duration_mins,
+            Some(43_800),
+            "long window sorts last"
+        );
+        assert_eq!(stable[1].used_percentage, Some(40), "most-drained 30d kept");
     }
 }

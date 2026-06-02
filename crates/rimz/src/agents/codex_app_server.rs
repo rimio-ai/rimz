@@ -473,7 +473,7 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
             .request("account/rateLimits/read", Value::Null)?;
         let parsed: RateLimitsResponse = serde_json::from_value(result)
             .map_err(|err| AppServerErr::Protocol(err.to_string()))?;
-        let windows = bucket_windows(parsed.rate_limits.primary, parsed.rate_limits.secondary);
+        let windows = collect_windows(parsed.rate_limits.primary, parsed.rate_limits.secondary);
         let plan = parsed.rate_limits.plan_type.filter(|plan| !plan.is_empty());
         let account = (plan.is_some() || windows.is_some()).then_some(AgentAccount {
             metered: Some(true),
@@ -568,36 +568,31 @@ fn into_context(
     }
 }
 
-/// Route Codex's positional rate-limit windows onto Claude's named buckets so
-/// the two agents share one shape. Codex reports `primary` (≈300 min = 5h) and
-/// `secondary` (≈10080 min = 7d); route by `windowDurationMins` (a day or less
-/// → the short window, longer → the weekly one), falling back to position when
-/// the duration is absent.
-fn bucket_windows(
+/// Map Codex's positional rate-limit windows onto the provider-agnostic shape.
+/// Each window carries its own `windowDurationMins`, so they need no bucketing —
+/// the dashboard labels and ages each by its length. Codex reports a 5-hour
+/// (`primary`) and a 7-day (`secondary`) window; carrying the raw duration means a
+/// server-side change in count or length (e.g. a transient single ~30-day window)
+/// maps without special-casing. The wire order is preserved here and sorted
+/// short→long downstream by the producer.
+fn collect_windows(
     primary: Option<RawWindow>,
     secondary: Option<RawWindow>,
 ) -> Option<AgentRateLimits> {
-    const DAY_MINS: i64 = 24 * 60;
-    let mut five_hour = None;
-    let mut seven_day = None;
-    for window in [primary, secondary].into_iter().flatten() {
-        let mapped = RateLimitWindow {
+    let windows: Vec<RateLimitWindow> = [primary, secondary]
+        .into_iter()
+        .flatten()
+        .map(|window| RateLimitWindow {
             used_percentage: window.used_percent.map(clamp_pct),
             resets_at: window
                 .resets_at
                 .and_then(|secs| Timestamp::from_second(secs).ok()),
-        };
-        match window.window_duration_mins {
-            Some(mins) if mins > DAY_MINS => seven_day = Some(mapped),
-            Some(_) => five_hour = Some(mapped),
-            None if five_hour.is_none() => five_hour = Some(mapped),
-            None => seven_day = Some(mapped),
-        }
-    }
-    (five_hour.is_some() || seven_day.is_some()).then_some(AgentRateLimits {
-        five_hour,
-        seven_day,
-    })
+            duration_mins: window
+                .window_duration_mins
+                .and_then(|mins| u32::try_from(mins).ok()),
+        })
+        .collect();
+    (!windows.is_empty()).then_some(AgentRateLimits { windows })
 }
 
 fn clamp_pct(value: i64) -> u8 {
@@ -731,19 +726,53 @@ mod tests {
     }
 
     #[test]
-    fn maps_rate_limit_windows_to_five_hour_and_seven_day() {
+    fn maps_each_window_with_its_duration() {
         let transport =
             CannedTransport::new().with("account/rateLimits/read", rate_limits_result());
         let mut client = CodexAppServer::new(transport);
         client.handshake().unwrap();
         let ctx = client.observe_context("codex", None, ts());
         let limits = ctx.rate_limits.expect("rate limits present");
-        let five = limits.five_hour.expect("five-hour window");
-        let seven = limits.seven_day.expect("seven-day window");
+        assert_eq!(limits.windows.len(), 2);
+        // Wire order is preserved: primary (300 min) then secondary (10080 min).
+        let five = &limits.windows[0];
+        let seven = &limits.windows[1];
+        assert_eq!(five.duration_mins, Some(300));
         assert_eq!(five.used_percentage, Some(12));
-        assert_eq!(seven.used_percentage, Some(88));
         assert_eq!(five.resets_at, Timestamp::from_second(1_780_092_691).ok());
+        assert_eq!(seven.duration_mins, Some(10080));
+        assert_eq!(seven.used_percentage, Some(88));
         assert_eq!(seven.resets_at, Timestamp::from_second(1_780_186_207).ok());
+    }
+
+    #[test]
+    fn single_window_maps_to_one_window() {
+        // A single window — `primary` with `secondary: null` — maps to one window
+        // carrying its own duration, beside fields the tolerant wire model ignores.
+        // (This is the shape a transient Codex server bug produced, widening the
+        // window to ~30 days; the mapper carries whatever the wire reports.)
+        let result = json!({
+            "rateLimits": {
+                "limitId": "codex",
+                "limitName": null,
+                "primary": { "usedPercent": 0, "windowDurationMins": 43800, "resetsAt": 1_783_005_867_i64 },
+                "secondary": null,
+                "credits": { "hasCredits": false, "unlimited": false, "balance": null },
+                "planType": "team",
+                "rateLimitReachedType": null
+            }
+        });
+        let transport = CannedTransport::new().with("account/rateLimits/read", result);
+        let mut client = CodexAppServer::new(transport);
+        client.handshake().unwrap();
+        let ctx = client.observe_context("codex", None, ts());
+        let limits = ctx.rate_limits.expect("rate limits present");
+        assert_eq!(limits.windows.len(), 1, "one window, no secondary");
+        let window = &limits.windows[0];
+        assert_eq!(window.duration_mins, Some(43800));
+        assert_eq!(window.used_percentage, Some(0));
+        assert_eq!(window.resets_at, Timestamp::from_second(1_783_005_867).ok());
+        assert_eq!(ctx.account.unwrap().plan.as_deref(), Some("team"));
     }
 
     #[test]
@@ -774,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn windows_without_duration_fall_back_to_position() {
+    fn windows_without_duration_keep_order_and_carry_no_duration() {
         let result = json!({
             "rateLimits": {
                 "primary": { "usedPercent": 5 },
@@ -788,8 +817,11 @@ mod tests {
             .observe_context("codex", None, ts())
             .rate_limits
             .expect("rate limits");
-        assert_eq!(limits.five_hour.and_then(|w| w.used_percentage), Some(5));
-        assert_eq!(limits.seven_day.and_then(|w| w.used_percentage), Some(50));
+        assert_eq!(limits.windows.len(), 2);
+        assert_eq!(limits.windows[0].used_percentage, Some(5));
+        assert_eq!(limits.windows[0].duration_mins, None);
+        assert_eq!(limits.windows[1].used_percentage, Some(50));
+        assert_eq!(limits.windows[1].duration_mins, None);
     }
 
     #[test]
@@ -805,8 +837,8 @@ mod tests {
             .observe_context("codex", None, ts())
             .rate_limits
             .unwrap();
-        assert_eq!(limits.five_hour.unwrap().used_percentage, Some(100));
-        assert_eq!(limits.seven_day.unwrap().used_percentage, Some(0));
+        assert_eq!(limits.windows[0].used_percentage, Some(100));
+        assert_eq!(limits.windows[1].used_percentage, Some(0));
     }
 
     #[test]

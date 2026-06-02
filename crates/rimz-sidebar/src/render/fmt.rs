@@ -70,30 +70,37 @@ pub(super) fn clip(value: &str, max_chars: usize) -> String {
         + "..."
 }
 
-/// The 5-hour budget window's reset countdown as a fixed `{h}h{mm:02}m`
-/// (`4h20m`, `0h45m`, `5h00m`): always two units, so it column-aligns with the
-/// 7-day [`reset_days_hours`] beside it. The window caps at 5h, so hours stay a
-/// single digit. A passed reset reads `0h00m` (the stable-window selection drops
-/// expired readings upstream, so a rendered window is live).
-pub(super) fn reset_hours_minutes(deadline: Timestamp) -> String {
-    reset_hm(deadline.duration_since(Timestamp::now()).as_secs())
+/// A budget window's reset countdown, two units scaled to how much time is left:
+/// `{d}d{hh:02}h` at a day or more (`30d10h`, `6d23h`, `1d02h`), `{h}h{mm:02}m`
+/// under a day (`5h00m`, `0h45m`). Both forms hold to five cells under a 99-day
+/// reset, so countdowns in one panel column-align. A passed reset reads `0h00m`
+/// (the stable-window selection drops expired readings upstream, so a rendered
+/// window is live).
+pub(super) fn reset_countdown(deadline: Timestamp) -> String {
+    reset_secs(deadline.duration_since(Timestamp::now()).as_secs())
 }
 
-fn reset_hm(seconds: i64) -> String {
+fn reset_secs(seconds: i64) -> String {
     let seconds = seconds.max(0);
-    format!("{}h{:02}m", seconds / 3_600, seconds % 3_600 / 60)
+    if seconds >= 86_400 {
+        format!("{}d{:02}h", seconds / 86_400, seconds % 86_400 / 3_600)
+    } else {
+        format!("{}h{:02}m", seconds / 3_600, seconds % 3_600 / 60)
+    }
 }
 
-/// The 7-day budget window's reset countdown as a fixed `{d}d{hh:02}h` (`2d23h`,
-/// `0d05h`, `6d23h`): always two units, so it column-aligns with the 5-hour
-/// [`reset_hours_minutes`]. The window caps at 7d, so days stay a single digit.
-pub(super) fn reset_days_hours(deadline: Timestamp) -> String {
-    reset_dh(deadline.duration_since(Timestamp::now()).as_secs())
-}
-
-fn reset_dh(seconds: i64) -> String {
-    let seconds = seconds.max(0);
-    format!("{}d{:02}h", seconds / 86_400, seconds % 86_400 / 3_600)
+/// A budget window's bar label from its length in minutes: hours under a day
+/// (`5h`), days at a day or more (`7d`, `30d`), each rounded to its nearest unit.
+/// `None` (an unknown length) yields an empty label.
+pub(super) fn window_label(duration_mins: Option<u32>) -> String {
+    let Some(mins) = duration_mins else {
+        return String::new();
+    };
+    if mins < 24 * 60 {
+        format!("{}h", (mins + 30) / 60)
+    } else {
+        format!("{}d", (mins + 720) / 1_440)
+    }
 }
 
 /// Spend at full cent resolution — `$0.00`, `$3.50`, `$124.05`. Every spend in
@@ -270,21 +277,30 @@ mod tests {
     }
 
     #[test]
-    fn reset_labels_are_fixed_two_unit_and_aligned() {
-        // 5h window: always `{h}h{mm:02}m` — single-digit hours, padded minutes.
-        assert_eq!(reset_hm(4 * 3_600 + 20 * 60), "4h20m");
-        assert_eq!(reset_hm(45 * 60), "0h45m");
-        assert_eq!(reset_hm(5 * 3_600), "5h00m");
-        // 7d window: always `{d}d{hh:02}h` — single-digit days, padded hours.
-        assert_eq!(reset_dh(2 * 86_400 + 23 * 3_600), "2d23h");
-        assert_eq!(reset_dh(5 * 3_600), "0d05h");
-        assert_eq!(reset_dh(6 * 86_400 + 23 * 3_600), "6d23h");
-        // Both stay five cells so the two countdowns column-align.
-        assert_eq!(reset_hm(45 * 60).chars().count(), 5);
-        assert_eq!(reset_dh(5 * 3_600).chars().count(), 5);
+    fn reset_countdown_scales_units_to_time_left() {
+        // Under a day: `{h}h{mm:02}m` — single-digit hours, padded minutes.
+        assert_eq!(reset_secs(4 * 3_600 + 20 * 60), "4h20m");
+        assert_eq!(reset_secs(45 * 60), "0h45m");
+        // A day or more: `{d}d{hh:02}h` — padded hours.
+        assert_eq!(reset_secs(86_400), "1d00h");
+        assert_eq!(reset_secs(6 * 86_400 + 23 * 3_600), "6d23h");
+        // A ~30-day window's reset stays compact: `30d10h`.
+        assert_eq!(reset_secs(30 * 86_400 + 10 * 3_600), "30d10h");
+        // Five cells under 10 days, so same-magnitude countdowns column-align.
+        assert_eq!(reset_secs(45 * 60).chars().count(), 5);
+        assert_eq!(reset_secs(5 * 86_400).chars().count(), 5);
         // A passed reset is the zero floor, never negative.
-        assert_eq!(reset_hm(-10), "0h00m");
-        assert_eq!(reset_dh(-10), "0d00h");
+        assert_eq!(reset_secs(-10), "0h00m");
+    }
+
+    #[test]
+    fn window_label_reads_in_hours_or_days() {
+        assert_eq!(window_label(Some(5 * 60)), "5h");
+        assert_eq!(window_label(Some(7 * 24 * 60)), "7d");
+        // Codex's ~30-day window (43800 min = 30d 10h) rounds to `30d`.
+        assert_eq!(window_label(Some(43_800)), "30d");
+        // An unknown length carries no label.
+        assert_eq!(window_label(None), "");
     }
 
     #[test]

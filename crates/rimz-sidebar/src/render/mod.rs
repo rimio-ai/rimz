@@ -799,14 +799,18 @@ mod tests {
                 }),
             }),
             rate_limits: Some(AgentRateLimits {
-                five_hour: Some(RateLimitWindow {
-                    used_percentage: Some(30),
-                    resets_at: Some(now + Duration::from_secs(3 * 3_600 + 12 * 60)),
-                }),
-                seven_day: Some(RateLimitWindow {
-                    used_percentage: Some(60),
-                    resets_at: Some(now + Duration::from_secs(3 * 86_400 + 4 * 3_600)),
-                }),
+                windows: vec![
+                    RateLimitWindow {
+                        used_percentage: Some(30),
+                        resets_at: Some(now + Duration::from_secs(3 * 3_600 + 12 * 60)),
+                        duration_mins: Some(5 * 60),
+                    },
+                    RateLimitWindow {
+                        used_percentage: Some(60),
+                        resets_at: Some(now + Duration::from_secs(3 * 86_400 + 4 * 3_600)),
+                        duration_mins: Some(7 * 24 * 60),
+                    },
+                ],
             }),
             pr: None,
             account: None,
@@ -814,11 +818,11 @@ mod tests {
         }
     }
 
-    /// The Codex app-server enrichment: rate-limit windows, the official model
-    /// display name, effort, and version — but no token usage or cost (the
-    /// app-server exposes neither read-only, so those stay `None` and the gauge
-    /// falls back to the rollout scalars). The mirror of `claude_context` for the
-    /// other transport.
+    /// The Codex app-server enrichment: a 5-hour and a 7-day rate-limit window,
+    /// the official model display name, effort, and version — but no token usage or
+    /// cost (the app-server exposes neither read-only, so those stay `None` and
+    /// the gauge falls back to the rollout scalars). The mirror of `claude_context`
+    /// for the other transport.
     fn codex_context(now: Timestamp) -> AgentContext {
         AgentContext {
             source: "codex".to_owned(),
@@ -834,14 +838,18 @@ mod tests {
             cost: None,
             tokens: None,
             rate_limits: Some(AgentRateLimits {
-                five_hour: Some(RateLimitWindow {
-                    used_percentage: Some(42),
-                    resets_at: Some(now + Duration::from_secs(3 * 3_600 + 12 * 60)),
-                }),
-                seven_day: Some(RateLimitWindow {
-                    used_percentage: Some(7),
-                    resets_at: Some(now + Duration::from_secs(3 * 86_400 + 4 * 3_600)),
-                }),
+                windows: vec![
+                    RateLimitWindow {
+                        used_percentage: Some(42),
+                        resets_at: Some(now + Duration::from_secs(3 * 3_600 + 12 * 60)),
+                        duration_mins: Some(5 * 60),
+                    },
+                    RateLimitWindow {
+                        used_percentage: Some(7),
+                        resets_at: Some(now + Duration::from_secs(3 * 86_400 + 4 * 3_600)),
+                        duration_mins: Some(7 * 24 * 60),
+                    },
+                ],
             }),
             pr: None,
             account: None,
@@ -1456,11 +1464,11 @@ mod tests {
         );
         claude.context = Some(AgentContext {
             rate_limits: Some(AgentRateLimits {
-                five_hour: Some(RateLimitWindow {
+                windows: vec![RateLimitWindow {
                     used_percentage: Some(100),
                     resets_at: Some(now + Duration::from_secs(2 * 3_600)),
-                }),
-                seven_day: None,
+                    duration_mins: Some(5 * 60),
+                }],
             }),
             ..claude_context(now)
         });
@@ -1917,9 +1925,10 @@ mod tests {
         windows: Option<(u8, u8)>,
     ) -> rimz::SidebarProviderPanel {
         let now = fixed_now();
-        let window = |used: u8| RateLimitWindow {
+        let window = |used: u8, mins: u32, resets_in: Duration| RateLimitWindow {
             used_percentage: Some(used),
-            resets_at: Some(now + Duration::from_secs(3 * 3_600 + 12 * 60)),
+            resets_at: Some(now + resets_in),
+            duration_mins: Some(mins),
         };
         rimz::SidebarProviderPanel {
             kind: kind.to_owned(),
@@ -1940,8 +1949,18 @@ mod tests {
             cached_tokens: Some(1_600),
             lines_added: Some(230),
             lines_removed: Some(23),
-            five_hour: windows.map(|(five, _)| window(five)),
-            seven_day: windows.map(|(_, seven)| window(seven)),
+            windows: windows
+                .map(|(five, seven)| {
+                    vec![
+                        window(five, 5 * 60, Duration::from_secs(3 * 3_600 + 12 * 60)),
+                        window(
+                            seven,
+                            7 * 24 * 60,
+                            Duration::from_secs(3 * 86_400 + 4 * 3_600),
+                        ),
+                    ]
+                })
+                .unwrap_or_default(),
         }
     }
 
@@ -2061,6 +2080,111 @@ mod tests {
         assert_eq!(
             five_label, seven_label,
             "the cascaded 5h label reddens to match the exhausted 7d"
+        );
+    }
+
+    /// A provider that reports a single window draws exactly one bar, labeled by
+    /// the window's own length — the model isn't pinned to a fixed set. (A
+    /// transient Codex server bug once widened its window to ~30 days; this is what
+    /// rendered, instead of mislabeling it `7d`.)
+    #[test]
+    fn single_window_panel_draws_one_bar_labeled_by_length() {
+        let theme = Theme::fixed(false);
+        let now = fixed_now();
+        let mut codex = provider_panel("codex", "Codex", 33, true, false, None);
+        codex.windows = vec![RateLimitWindow {
+            used_percentage: Some(7),
+            resets_at: Some(now + Duration::from_secs(28 * 86_400 + 4 * 3_600)),
+            duration_mins: Some(43_800),
+        }];
+        let rows = metered_bar_rows(&theme, &codex);
+        assert_eq!(rows.len(), 1, "one window → one bar");
+        let label = rows[0]
+            .spans
+            .first()
+            .expect("a label span")
+            .content
+            .trim()
+            .to_owned();
+        assert_eq!(label, "30d", "the ~30-day window is labeled 30d");
+        let (_, _, has_reset) = bar_row_facts(&rows[0]);
+        assert!(has_reset, "the bar carries its reset countdown");
+    }
+
+    /// A not-started window drops its countdown — these budgets begin counting
+    /// only on the first token, so until then the provider keeps `resets_at` slid a
+    /// full window-length ahead. It's detected by the reset distance, not a 0%
+    /// reading: the real Codex shape is `usedPercent: 1` with the reset still ~a
+    /// full 5h out (`4h59m`). Its bar shows near-full with no countdown.
+    #[test]
+    fn not_started_window_drops_its_countdown() {
+        let theme = Theme::fixed(false);
+        let now = fixed_now();
+        let mut claude = provider_panel("claude", "Claude Code", 173, true, false, None);
+        // The real not-started shape: ~1% used, reset slid a full 5h ahead (a hair
+        // under, here 4h59m30s, the way a live reading reads).
+        claude.windows = vec![RateLimitWindow {
+            used_percentage: Some(1),
+            resets_at: Some(now + Duration::from_secs(5 * 3_600 - 30)),
+            duration_mins: Some(5 * 60),
+        }];
+        let rows = metered_bar_rows(&theme, &claude);
+        assert_eq!(rows.len(), 1);
+        let (_, _, has_reset) = bar_row_facts(&rows[0]);
+        assert!(
+            !has_reset,
+            "a not-started window (reset ~ full 5h) shows no countdown"
+        );
+        assert!(
+            rows[0].spans.iter().any(|span| span.content.contains('▰')),
+            "the not-started window shows a near-full bar, not an empty/exhausted track"
+        );
+    }
+
+    /// A started window — its reset has ticked well below the full window — keeps
+    /// its countdown, even at the same low 1% usage as a not-started one. Usage
+    /// alone can't tell them apart; the reset distance does.
+    #[test]
+    fn started_window_keeps_its_countdown() {
+        let theme = Theme::fixed(false);
+        let now = fixed_now();
+        let mut claude = provider_panel("claude", "Claude Code", 173, true, false, None);
+        claude.windows = vec![RateLimitWindow {
+            used_percentage: Some(1),
+            resets_at: Some(now + Duration::from_secs(4 * 3_600)),
+            duration_mins: Some(5 * 60),
+        }];
+        let rows = metered_bar_rows(&theme, &claude);
+        assert_eq!(rows.len(), 1);
+        let (_, _, has_reset) = bar_row_facts(&rows[0]);
+        assert!(
+            has_reset,
+            "a started window (reset well below full) shows its countdown"
+        );
+    }
+
+    /// Usage above the ~1% not-started floor means the window has started — keep its
+    /// countdown even when the reset still reads a near-full window. The reset-distance
+    /// grace only applies to a window at or below the floor (0–1% used); any real
+    /// usage short-circuits to "started".
+    #[test]
+    fn used_window_keeps_countdown_despite_near_full_reset() {
+        let theme = Theme::fixed(false);
+        let now = fixed_now();
+        let mut claude = provider_panel("claude", "Claude Code", 173, true, false, None);
+        // 5% used with the reset slid a full 5h out: usage above the floor wins, so
+        // this counts as started despite the near-full reset.
+        claude.windows = vec![RateLimitWindow {
+            used_percentage: Some(5),
+            resets_at: Some(now + Duration::from_secs(5 * 3_600 - 30)),
+            duration_mins: Some(5 * 60),
+        }];
+        let rows = metered_bar_rows(&theme, &claude);
+        assert_eq!(rows.len(), 1);
+        let (_, _, has_reset) = bar_row_facts(&rows[0]);
+        assert!(
+            has_reset,
+            "usage above ~1% shows the countdown even with a near-full reset"
         );
     }
 
