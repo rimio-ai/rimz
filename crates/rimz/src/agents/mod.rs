@@ -15,6 +15,7 @@ pub mod codex;
 pub mod context;
 pub(crate) mod hook_types;
 mod observation;
+pub mod pricing;
 pub mod spending;
 pub mod transcript;
 
@@ -33,7 +34,8 @@ pub use context::{
     AgentTokenUsage, RateLimitWindow,
 };
 pub use observation::AgentLifecycleObservation;
-pub use spending::{SpendTally, SpendWindow};
+pub use pricing::{PriceBook, Pricing};
+pub use spending::{ProviderKind, SpendTally, SpendWindow, Spending};
 
 /// Conservative fallback for adapters that don't override. Claude overrides
 /// to 120s (see `claude::CLAUDE_HOOK_CAP`); Codex overrides to its own cap

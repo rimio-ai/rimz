@@ -7,6 +7,13 @@ allow = [
     "MIT",
     "Unicode-3.0",
     "Zlib",
+    # The rustls TLS stack reached via `ureq` (pricing refresh): permissive,
+    # OSI-approved licenses on `ring`, `rustls-webpki`, `untrusted` (ISC),
+    # `subtle` (BSD-3-Clause), and the Mozilla CA root bundle `webpki-roots`
+    # (CDLA-Permissive-2.0, a permissive data license).
+    "ISC",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.93
 
@@ -20,6 +27,11 @@ deny = [
 skip = [
     { crate = "wit-bindgen@0.51.0", reason = "dev-only WASI split through getrandom/tempfile; revisit when uuid/proptest converge" },
     { crate = "wit-bindgen@0.57.1", reason = "dev-only WASI split through getrandom/tempfile; revisit when uuid/proptest converge" },
+    # The `ring` crypto backend reached via `ureq`/`rustls` pins older support
+    # crates than the rest of the tree; isolated to the TLS stack, drop when ring
+    # catches up.
+    { crate = "getrandom@0.2.17", reason = "ring pins getrandom 0.2; workspace otherwise on 0.3/0.4" },
+    { crate = "windows-sys@0.52.0", reason = "ring pins windows-sys 0.52; workspace otherwise on 0.61" },
 ]
 
 [advisories]

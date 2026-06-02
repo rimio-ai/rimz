@@ -509,12 +509,14 @@ pub fn enrich_consumer(
 pub fn fold_machine_config_producing(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
+    provider_spending: &BTreeMap<String, crate::agents::SpendTally>,
 ) -> SidebarSnapshot {
     let accounts = produce_accounts(&snapshot, runtime);
     let mut snapshot = fold_machine_config_with(
         snapshot,
         crate::config::MachineConfig::load().unwrap_or_default(),
         accounts,
+        provider_spending,
     );
     // The producer owns the account-scoped window cache: it writes live readings
     // back so the budgets survive a session ending or going idle.
@@ -746,10 +748,14 @@ pub fn fold_machine_config_cached(
     runtime: &RuntimePaths,
 ) -> SidebarSnapshot {
     let accounts = read_accounts_cache(&runtime.root.join("accounts.json")).accounts;
+    // Consumers don't walk transcript history (that is the producer's file I/O);
+    // per-provider spend rides the producer's published snapshot, so the
+    // consumer's freshly-built panels carry none.
     let mut snapshot = fold_machine_config_with(
         snapshot,
         crate::config::MachineConfig::load().unwrap_or_default(),
         accounts,
+        &BTreeMap::new(),
     );
     // A consumer reads the producer's published windows to fill idle gaps, but
     // never writes — the single-flight contract keeps the cache the producer's.
@@ -763,6 +769,7 @@ fn fold_machine_config_with(
     mut snapshot: SidebarSnapshot,
     config: crate::config::MachineConfig,
     accounts: BTreeMap<String, crate::agents::AgentAccount>,
+    provider_spending: &BTreeMap<String, crate::agents::SpendTally>,
 ) -> SidebarSnapshot {
     let crate::config::MachineConfig {
         remote_control,
@@ -776,7 +783,7 @@ fn fold_machine_config_with(
     remote_control_flags.insert("claude".to_owned(), remote_control.claude);
     remote_control_flags.insert("codex".to_owned(), remote_control.codex);
 
-    snapshot.with_provider_aggregates(&accounts, &remote_control_flags)
+    snapshot.with_provider_aggregates(&accounts, &remote_control_flags, provider_spending)
 }
 
 /// Probe out-of-band login/account facts for every known provider plus any
@@ -1350,6 +1357,7 @@ mod tests {
             plan: None,
             metered: true,
             remote_control: false,
+            spending: None,
             total_cost_usd: None,
             total_input_tokens: None,
             total_output_tokens: None,

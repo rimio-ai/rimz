@@ -1983,6 +1983,7 @@ mod tests {
             plan: Some("Claude Max".to_owned()),
             metered,
             remote_control,
+            spending: None,
             total_cost_usd: Some(3.5),
             total_input_tokens: Some(470_000),
             total_output_tokens: Some(16_000),
@@ -2179,6 +2180,51 @@ mod tests {
             rows[0].spans.iter().any(|span| span.content.contains('▰')),
             "the not-started window shows a near-full bar, not an empty/exhausted track"
         );
+    }
+
+    /// The stats-line money figure (the span carrying `$`) of one rendered panel.
+    fn stats_money(theme: &Theme, panel: &rimz::SidebarProviderPanel) -> String {
+        provider_panel_lines(theme, std::slice::from_ref(panel), 40)
+            .into_iter()
+            .flat_map(|line| line.spans)
+            .map(|span| span.content.into_owned())
+            .find(|content| content.contains('$'))
+            .expect("a money span on the stats line")
+    }
+
+    /// A token-only provider (Codex) reports no live lifetime cost, so its panel
+    /// shows today's transcript-history spend instead of `$0.00`.
+    #[test]
+    fn codex_panel_shows_history_spend_when_no_live_cost() {
+        let theme = Theme::fixed(false);
+        let mut codex = provider_panel("codex", "Codex", 33, false, false, None);
+        codex.total_cost_usd = None;
+        codex.spending = Some(rimz::SpendTally {
+            today: rimz::SpendWindow {
+                usd: 4.20,
+                tokens: 0,
+            },
+            ..Default::default()
+        });
+        let money = stats_money(&theme, &codex);
+        assert!(money.contains("4.20"), "stats money was {money:?}");
+    }
+
+    /// When both are present, the panel prefers the historical today spend over
+    /// the live lifetime cost (the helper sets `total_cost_usd = 3.5`).
+    #[test]
+    fn provider_panel_prefers_history_spend_over_live_cost() {
+        let theme = Theme::fixed(false);
+        let mut claude = provider_panel("claude", "Claude", 173, false, false, None);
+        claude.spending = Some(rimz::SpendTally {
+            today: rimz::SpendWindow {
+                usd: 7.0,
+                tokens: 0,
+            },
+            ..Default::default()
+        });
+        let money = stats_money(&theme, &claude);
+        assert!(money.contains("7.00"), "stats money was {money:?}");
     }
 
     /// A started window — its reset has ticked well below the full window — keeps

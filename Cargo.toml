@@ -40,6 +40,12 @@ jiff = { version = "0.2", features = ["serde"] }
 # CLI
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 
+# HTTP — pricing refresh: the runtime LiteLLM/models.dev fetch and the
+# build-time embed both GET a static JSON document. `ureq` is a small,
+# synchronous, rustls-backed client — the right shape for a one-shot
+# background fetch and a build script, with no async-runtime drag.
+ureq = "3"
+
 # Filesystem and locking
 fs4 = { version = "1", features = ["sync"] }
 tempfile = "3"

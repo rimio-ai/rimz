@@ -1,11 +1,9 @@
 //! Codex agent JSONL transcript parser.
 //!
-//! Staged ahead of its consumer — see [`super`] for the layer-wide rationale.
-//! These typed events and the path discovery are complete and unit-tested but
-//! not yet fed into [spending](super::super::spending): the Codex JSONL records
-//! **token usage events** and carries **no** `costUSD` field, so turning events
-//! into dollars also needs a per-model pricing table (pending with the upcoming
-//! transcript-history analysis).
+//! Codex JSONL records **token usage events** and carries **no** `costUSD`
+//! field, so [spending](super::super::spending) multiplies each
+//! [`CodexTokenEvent`] through the [`pricing`](super::super::pricing) table to a
+//! USD cost. This module stays pure and network-free — it only parses tokens.
 //!
 //! Codex session files live at `~/.codex/sessions/` (or `CODEX_HOME` env).
 //!

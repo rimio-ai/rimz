@@ -191,7 +191,7 @@ Current snapshot — entries move when a better-designed alternative wins on des
 | Tier | Crates |
 | --- | --- |
 | **Runtime — core** | `clap`, `serde`, `serde_json`, `tokio`, `tracing`, `tracing-subscriber`, `thiserror`, `uuid`, `jiff` |
-| **Runtime — utility** | `tempfile`, `fs4`, `which`, `sha2`, `hex`, `nix` (Unix sockets, sigaction) on `cfg(unix)` |
+| **Runtime — utility** | `tempfile`, `fs4`, `which`, `sha2`, `hex`, `nix` (Unix sockets, sigaction) on `cfg(unix)`, `ureq` (rustls; the runtime pricing-refresh HTTP client, also used by `xtask pricing-refresh`) |
 | **Binary boundary only** | `anyhow` — permitted in `crates/rimz/src/main.rs`, the private `cli/` module tree, `crates/rimz-sidebar/src/main.rs`, and `xtask/` |
 | **Sidebar runtime** | `ratatui` (via its `crossterm_0_29` feature); direct `crossterm` only when sidebar I/O actually requires it |
 | **Tests** | `insta`, `proptest`, `assert_cmd`, `predicates`, `vt100`, `tempfile`, `portable-pty` |

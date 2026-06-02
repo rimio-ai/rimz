@@ -246,15 +246,23 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 snapshot = snapshot.with_live_panes(panes, exclude.as_ref());
             }
             snapshot.agent_hooks_ready = rimz::sidebar::snapshot::agent_hooks_ready();
+            // Walk transcript history for the fleet + per-provider spend before
+            // the config fold, so the dashboard panels are built, ranked, and
+            // capped with each provider's spend already known.
+            let spending = compute_fleet_spending(&snapshot, runtime);
             // Fold the per-machine config onto the snapshot: row density plus the
             // per-provider dashboard (account-scoped budgets, spend, emblem). The
             // producer owns the out-of-band account probe (a subprocess) and
             // publishes it to `accounts.json` for consumer tabs to read back.
             // Best-effort — a config read failure falls back to defaults, so
             // display preference is enrichment, never a precondition.
-            snapshot = rimz::sidebar::snapshot::fold_machine_config_producing(snapshot, runtime);
+            snapshot = rimz::sidebar::snapshot::fold_machine_config_producing(
+                snapshot,
+                runtime,
+                &spending.by_provider,
+            );
             enrich_worktree_groups(&mut snapshot, runtime);
-            enrich_agent_spending(&mut snapshot, runtime);
+            apply_spending(&mut snapshot, &spending);
             emit(&snapshot)
         }
         SidebarSubcmd::Serve {
@@ -509,26 +517,28 @@ fn enrich_worktree_groups(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::
     project_diff_stats(snapshot, &cache);
 }
 
-/// Compute and attach JSONL-based spending totals to every agent row and to the
-/// cockpit's today figure. Reads the per-workspace `spending.json` cache,
-/// refreshes only files whose mtime changed, then writes back if anything was
-/// updated. Best-effort: a read or write failure leaves `spending` fields as
-/// `None` rather than degrading the snapshot.
+/// Walk every provider's transcript history into a fleet-wide and per-provider
+/// [`Spending`](rimz::agents::spending::Spending). Reads the per-workspace
+/// `spending.json` cache, refreshes only files whose mtime changed, then writes
+/// back if anything was updated, and loads the price book (a TTL-gated remote
+/// refresh) so Codex's token counts become dollars. Best-effort: a read/write or
+/// fetch failure degrades gracefully to the cached or embedded data.
 ///
-/// Today this collects Claude project files only (`project_jsonl_files`); the
-/// Pi and Codex parsers in `rimz::agents::transcript` are staged for the upcoming
-/// transcript-history analysis and not yet fed here.
-fn enrich_agent_spending(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::RuntimePaths) {
+/// Claude files are scoped to the visible worktrees (`project_jsonl_files`);
+/// Codex and Pi sessions are not project-scoped, so all of them count toward the
+/// fleet total.
+fn compute_fleet_spending(
+    snapshot: &rimz::SidebarSnapshot,
+    runtime: &rimz::RuntimePaths,
+) -> rimz::agents::spending::Spending {
+    use rimz::agents::pricing;
     use rimz::agents::spending::{
-        compute_spending, project_jsonl_files, read_spending_cache, write_spending_cache,
+        ProviderKind, Spending, codex_session_files, compute_spending, pi_session_files,
+        project_jsonl_files, read_spending_cache, write_spending_cache,
     };
 
-    let cache_path = runtime.root.join("spending.json");
-    let worktree_roots = cached_worktree_roots(runtime);
-    let mut cache = read_spending_cache(&cache_path);
-
-    // Collect all distinct worktree paths visible in the snapshot.
-    let mut all_paths: Vec<PathBuf> = worktree_roots;
+    // Collect all distinct worktree paths visible in the snapshot (Claude scope).
+    let mut all_paths: Vec<PathBuf> = cached_worktree_roots(runtime);
     for group in &snapshot.worktree_groups {
         for row in &group.rows {
             if let Some(p) = &row.worktree_path {
@@ -539,31 +549,55 @@ fn enrich_agent_spending(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::R
             }
         }
     }
-
-    if all_paths.is_empty() {
-        return;
-    }
-
     let path_refs: Vec<&std::path::Path> = all_paths.iter().map(PathBuf::as_path).collect();
-    let files = project_jsonl_files(&path_refs);
+
+    // Tag each file with its provider at discovery — the source knows the kind,
+    // so pricing/bucketing never has to guess it from the path.
+    let mut files: Vec<(ProviderKind, PathBuf)> = Vec::new();
+    files.extend(
+        project_jsonl_files(&path_refs)
+            .into_iter()
+            .map(|file| (ProviderKind::Claude, file)),
+    );
+    files.extend(
+        codex_session_files()
+            .into_iter()
+            .map(|file| (ProviderKind::Codex, file)),
+    );
+    files.extend(
+        pi_session_files()
+            .into_iter()
+            .map(|file| (ProviderKind::Pi, file)),
+    );
     if files.is_empty() {
-        return;
+        return Spending::default();
     }
 
-    let totals = compute_spending(&files, &mut cache);
-
+    let cache_path = runtime.root.join("spending.json");
+    let mut cache = read_spending_cache(&cache_path);
+    let prices = pricing::load_for_spending(&runtime.root.join("pricing-cache.json"));
+    let spending = compute_spending(&files, &mut cache, &prices);
     if cache.dirty {
         write_spending_cache(&cache_path, &cache);
     }
+    spending
+}
 
-    // The fleet tally feeds both the cockpit's today figure and the bottom
-    // value corner; `None` when nothing has ever been recorded.
-    snapshot.value_tally = (!totals.is_zero()).then(|| totals.clone());
-
+/// Attach computed spend to the snapshot: the fleet `value_tally` (read by both
+/// the cockpit's today figure and the bottom value corner) and every agent row's
+/// spend. The per-provider breakdown is folded into the dashboard panels
+/// separately (see `with_provider_aggregates`).
+fn apply_spending(
+    snapshot: &mut rimz::SidebarSnapshot,
+    spending: &rimz::agents::spending::Spending,
+) {
+    // The fleet tally feeds both the cockpit's today figure and the bottom value
+    // corner; `None` when nothing has ever been recorded.
+    snapshot.value_tally = (!spending.total.is_zero()).then(|| spending.total.clone());
     for group in &mut snapshot.worktree_groups {
         for row in &mut group.rows {
             if row.row_kind == rimz::SidebarRowKind::Agent {
-                row.spending = Some(totals.clone());
+                row.spending = Some(spending.total.clone());
             }
         }
     }

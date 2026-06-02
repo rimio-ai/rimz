@@ -179,6 +179,14 @@ pub struct SidebarProviderPanel {
     pub metered: bool,
     /// Whether remote control is enabled for this provider (the `⇅ rc` flag).
     pub remote_control: bool,
+    /// JSONL-computed today / week / month / all-time spend and tokens for this
+    /// provider, summed across all of its sessions' transcript history. `None`
+    /// until the producer's spending enrichment runs. Distinct from
+    /// `total_cost_usd` (which sums only the live sessions' lifetime cost): this
+    /// is the historical spend, and the only cost source for token-only providers
+    /// like Codex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spending: Option<SpendTally>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -198,6 +206,15 @@ pub struct SidebarProviderPanel {
     /// in so an idle account still paints its last-known bars.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub windows: Vec<RateLimitWindow>,
+}
+
+impl SidebarProviderPanel {
+    /// The figure the dashboard ranks panels by: the larger of today's
+    /// historical spend and the live sessions' lifetime cost.
+    fn rank_cost(&self) -> f64 {
+        let today = self.spending.as_ref().map_or(0.0, |s| s.today.usd);
+        today.max(self.total_cost_usd.unwrap_or(0.0))
+    }
 }
 
 /// One sidebar's view of the panes sharing its tab/window. `None` on the
@@ -740,6 +757,7 @@ impl SidebarSnapshot {
         mut self,
         probed_accounts: &BTreeMap<String, AgentAccount>,
         remote_control: &BTreeMap<String, bool>,
+        provider_spending: &BTreeMap<String, SpendTally>,
     ) -> Self {
         let mut kinds: Vec<String> = Vec::new();
         for agent in &self.agents {
@@ -860,6 +878,7 @@ impl SidebarSnapshot {
                 .unwrap_or(default_art);
             let color = style.and_then(|style| style.color).unwrap_or(default_color);
             let remote_control = remote_control.get(&kind).copied().unwrap_or(false);
+            let spending = provider_spending.get(&kind).cloned();
 
             panels.push(SidebarProviderPanel {
                 kind,
@@ -870,6 +889,7 @@ impl SidebarSnapshot {
                 plan,
                 metered,
                 remote_control,
+                spending,
                 total_cost_usd,
                 total_input_tokens,
                 total_output_tokens,
@@ -881,11 +901,13 @@ impl SidebarSnapshot {
         }
 
         // Most spend first, then kind for a stable order; cap the panel height.
+        // Rank by the larger of the historical today spend and the live lifetime
+        // cost so a token-only provider (Codex) is not buried under a live-cost
+        // provider, nor vice-versa.
         panels.sort_by(|left, right| {
             right
-                .total_cost_usd
-                .unwrap_or(0.0)
-                .partial_cmp(&left.total_cost_usd.unwrap_or(0.0))
+                .rank_cost()
+                .partial_cmp(&left.rank_cost())
                 .unwrap_or(Ordering::Equal)
                 .then_with(|| left.kind.cmp(&right.kind))
         });
@@ -2748,6 +2770,7 @@ pub(crate) fn project_root_for(paths: &StatePaths) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::SpendWindow;
     use crate::feed::FeedKind;
     use crate::ids::{MuxName, PaneId, WorkspaceId};
     use std::path::{Path, PathBuf};
@@ -2977,6 +3000,52 @@ mod tests {
         assert_eq!(snap.agents[0].permission_posture, PermissionPosture::Plan);
         assert_eq!(snap.agents[0].last_activity, at);
         assert_eq!(snap.agents[0].last_seen, original_seen);
+    }
+
+    #[test]
+    fn provider_panel_spending_is_attached_and_ranks_panels() {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let claude = agent(
+            "claude",
+            "c1",
+            AgentStatus::Idle,
+            PermissionPosture::Default,
+            10,
+        );
+        let codex = agent(
+            "codex",
+            "x1",
+            AgentStatus::Idle,
+            PermissionPosture::Default,
+            20,
+        );
+        let snapshot =
+            SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![claude, codex]);
+
+        let today_tally = |usd: f64| SpendTally {
+            today: SpendWindow { usd, tokens: 0 },
+            ..Default::default()
+        };
+        let mut by_provider: BTreeMap<String, SpendTally> = BTreeMap::new();
+        by_provider.insert("claude".to_owned(), today_tally(1.0));
+        by_provider.insert("codex".to_owned(), today_tally(5.0));
+
+        let snapshot =
+            snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &by_provider);
+
+        // Codex's today spend (5.0) outranks Claude's (1.0), so it sorts first —
+        // even though Codex has no live `total_cost_usd`.
+        assert_eq!(snapshot.providers[0].kind, "codex");
+        assert_eq!(
+            snapshot.providers[0].spending.as_ref().unwrap().today.usd,
+            5.0
+        );
+        let claude_panel = snapshot
+            .providers
+            .iter()
+            .find(|panel| panel.kind == "claude")
+            .expect("claude panel present");
+        assert_eq!(claude_panel.spending.as_ref().unwrap().today.usd, 1.0);
     }
 
     #[test]

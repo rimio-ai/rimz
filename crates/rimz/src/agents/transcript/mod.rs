@@ -10,19 +10,14 @@
 //! [`super::codex`]): that scans only the trailing window for the live row's
 //! `context_pct`/`total_tokens`; this walks the whole log for spend.
 //!
-//! ## Staged ahead of the consumer — intentional
+//! ## Cost vs. tokens
 //!
-//! The parsers and type system land *first*, fully unit-tested, as the typed
-//! foundation for a forthcoming deeper transcript-history analysis (per-model
-//! token rollups, cost attribution, session timelines) — rather than growing the
-//! schema and the consumer in one churny change. Today only
-//! [`super::spending::compute_spending`] reads the [`claude`] parser (the
-//! sidebar's today / week / month spend); the [`codex`] and [`pi`] parsers are
-//! complete and tested but **not yet consumed** — deliberate, not dead code:
-//!
-//! - [`pi`] yields a `costUSD` directly and only awaits the upcoming consumer.
-//! - [`codex`] JSONL carries token counts, not `costUSD`, so turning its events
-//!   into dollars additionally needs a per-model pricing table (also pending).
+//! [`super::spending::compute_spending`] consumes all three parsers. [`claude`]
+//! and [`pi`] log `costUSD` directly, so their entries carry a cost as parsed.
+//! [`codex`] logs only token counts: `spending` multiplies each
+//! [`codex::CodexTokenEvent`] through the [`pricing`](super::pricing) table to a
+//! USD cost. The parsers here stay pure and network-free — pricing lives in the
+//! consumer, so the read-only transcript tree never reaches the network.
 
 pub mod claude;
 pub mod codex;
@@ -30,25 +25,6 @@ pub mod pi;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-
-/// Inferred provider from a JSONL file path.
-pub(super) enum Provider {
-    Claude,
-    Pi,
-    /// No recognizable path hint; treated as Claude format (covers test paths).
-    Unknown,
-}
-
-pub(super) fn detect_provider(path: &Path) -> Provider {
-    let s = path.to_string_lossy();
-    if s.contains("/.claude/") || s.contains("/.config/claude/") {
-        Provider::Claude
-    } else if s.contains("/.pi/") {
-        Provider::Pi
-    } else {
-        Provider::Unknown
-    }
-}
 
 pub(super) fn home_dir() -> PathBuf {
     std::env::var("HOME")

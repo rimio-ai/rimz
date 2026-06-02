@@ -1584,12 +1584,22 @@ fn provider_body_lines(
 
 /// The provider's aggregate stats line: bold money-green spend (two decimals) and
 /// the `◇` token total — always rendered, reading `$0.00 · ◇ 0` for an idle
-/// account so the line above the budget bars is never blank. The summed `+/-`
+/// account so the line above the budget bars is never blank. The money figure is
+/// today's transcript-history spend (the accurate cross-session total, and the
+/// only cost source for token-only providers like Codex), falling back to the
+/// live sessions' lifetime cost when no history spend is known. The summed `+/-`
 /// churn is intentionally absent — a noisy per-account aggregate; per-worktree
 /// churn lives on the group headers and per-agent churn on the work line.
 fn provider_stats_spans(theme: &Theme, panel: &SidebarProviderPanel) -> Vec<Span<'static>> {
+    let money = panel
+        .spending
+        .as_ref()
+        .map(|spending| spending.today.usd)
+        .filter(|usd| *usd > 0.0)
+        .or(panel.total_cost_usd)
+        .unwrap_or(0.0);
     let mut spans: Vec<Span<'static>> = vec![Span::styled(
-        dollars2(panel.total_cost_usd.unwrap_or(0.0)),
+        dollars2(money),
         theme.style(Color::Green, Modifier::BOLD),
     )];
     let tokens = panel.total_input_tokens.unwrap_or(0) + panel.total_output_tokens.unwrap_or(0);

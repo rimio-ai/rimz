@@ -52,9 +52,9 @@ The gauge above reads a bounded *tail* for the live row. A second read-path walk
 It is **read-only and sidebar-safe** — no ledger writes — so it sits apart from the integration adapters. Two parsing concerns are provider-specific:
 
 - **Dedup.** Claude replays a parent message into each subagent file with an inflated cost; `compute_spending` dedups by `(message.id, requestId)` across files and suppresses the sidechain replay so a turn is counted once. Pi and Codex sessions are single-file and need no cross-file dedup.
-- **Cost source.** Claude and Pi log `costUSD` directly. Codex logs only token counts, so converting its events to dollars additionally needs a per-model pricing table.
+- **Cost source.** Claude and Pi log `costUSD` directly. Codex logs only token counts, so `compute_spending` multiplies its events through the per-model [pricing table](./pricing.md) to dollars.
 
-Today only the Claude parser is wired into the live path ([`cli/sidebar.rs`](../../crates/rimz/src/cli/sidebar.rs) feeds it Claude project files); the Codex and Pi parsers are complete and tested but staged ahead of their consumer (the pricing table and a broader transcript-history analysis), not dead code. Per [testing.md](../contributing/testing.md), golden each parser from a fixture JSONL, including the dedup and zero/negative-cost cases.
+The producer ([`cli/sidebar.rs`](../../crates/rimz/src/cli/sidebar.rs)) feeds all three: Claude project files scoped to the visible worktrees, and Codex / Pi sessions fleet-wide (their logs are not project-scoped). `compute_spending` returns one fleet total plus a **per-provider breakdown** — the cockpit shows the total, each dashboard panel its own provider's spend (see [account.md](./account.md#per-provider-spend)). Per [testing.md](../contributing/testing.md), golden each parser from a fixture JSONL, including the dedup and zero/negative-cost cases.
 
 ---
 

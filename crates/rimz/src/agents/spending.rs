@@ -2,27 +2,28 @@
 //!
 //! Per-provider typed parsers live in the sibling [`transcript`](super::transcript)
 //! modules; this module owns the on-disk cache types and the
-//! [`compute_spending`] aggregation loop with cross-file Claude dedup.  Parsing
-//! is provider-dispatched in `parse_jsonl`: a `costUSD`-bearing entry from
-//! Claude or Pi becomes a [`CachedEntry`] and is bucketed into today / week /
-//! month.
+//! [`compute_spending`] aggregation loop with cross-file Claude dedup. Parsing
+//! is provider-dispatched in `parse_for`, keyed by the [`ProviderKind`] the
+//! caller tags each file with at discovery:
 //!
-//! The live consumer ([`crate::SidebarSnapshot`] spending enrichment) currently
-//! feeds only Claude project files, so Claude is the sole provider reflected in
-//! the sidebar today.  The Pi parser is wired into `parse_jsonl` and ready;
-//! Codex JSONL carries token counts rather than `costUSD` and additionally
-//! awaits a per-model pricing table.  This staging is deliberate — the typed
-//! read-path lands ahead of the upcoming deeper transcript-history analysis;
-//! see [`super::transcript`] for the full rationale.
+//! - **Claude** and **Pi** log `costUSD` directly — each entry becomes a
+//!   [`CachedEntry`] verbatim, with `input + output` tokens alongside.
+//! - **Codex** logs only token counts, so its events are multiplied through a
+//!   [`PriceBook`](super::pricing) to a USD cost before bucketing.
+//!
+//! [`compute_spending`] returns a [`Spending`]: one fleet-wide today / week /
+//! month / all-time [`SpendTally`] plus a per-provider breakdown, so the value
+//! corner and cockpit read the fleet pile and each dashboard panel reads its own.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use super::transcript::{self, claude, pi};
+use super::pricing::PriceBook;
+use super::transcript::{claude, codex, pi};
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -64,6 +65,38 @@ impl SpendTally {
     }
 }
 
+/// The result of a spending pass: the fleet-wide total plus a per-provider
+/// breakdown keyed by agent kind (`"claude"`, `"codex"`, `"pi"`). The value
+/// corner and cockpit read [`Spending::total`]; each provider dashboard panel
+/// reads its own entry from [`Spending::by_provider`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Spending {
+    pub total: SpendTally,
+    pub by_provider: BTreeMap<String, SpendTally>,
+}
+
+/// Which provider a discovered transcript file belongs to. The caller knows this
+/// from the discovery source (`project_jsonl_files`, `codex_session_files`,
+/// `pi_session_files`), so it is passed in rather than guessed from the path —
+/// a non-default `CODEX_HOME` / `CLAUDE_CONFIG_DIR` would defeat a path guess.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProviderKind {
+    Claude,
+    Codex,
+    Pi,
+}
+
+impl ProviderKind {
+    /// The agent `kind` string used as the per-provider bucket key.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProviderKind::Claude => "claude",
+            ProviderKind::Codex => "codex",
+            ProviderKind::Pi => "pi",
+        }
+    }
+}
+
 /// Bumped whenever the cached parse shape changes, so an upgrade re-reads every
 /// file once. A finalized session's stable mtime otherwise pins its entries in
 /// the cache forever — a field added to [`CachedEntry`] (such as `tokens`) would
@@ -99,8 +132,8 @@ pub struct FileCacheEntry {
 /// A single cost entry with dedup keys for cross-file deduplication.
 ///
 /// `message_id` and `request_id` are present for Claude entries and absent for
-/// Pi entries.  `is_sidechain` drives the sidechain-replay suppression logic
-/// in `compute_spending`.
+/// Codex and Pi entries.  `is_sidechain` drives the sidechain-replay suppression
+/// logic in `compute_spending`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CachedEntry {
     pub date: String,
@@ -111,10 +144,10 @@ pub struct CachedEntry {
     /// finalized session's stable mtime would otherwise pin `tokens` at `0`.
     #[serde(default)]
     pub tokens: u64,
-    /// `message.id` from Claude entries; `None` for Pi entries.
+    /// `message.id` from Claude entries; `None` for Codex and Pi entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
-    /// `requestId` from Claude entries; `None` for Pi entries.
+    /// `requestId` from Claude entries; `None` for Codex and Pi entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
     /// `isSidechain` flag from Claude entries.
@@ -125,11 +158,14 @@ pub struct CachedEntry {
 // ── Re-exports from transcript parser modules ─────────────────────────────────
 
 pub use claude::{claude_config_dirs, encode_project_dir, project_jsonl_files};
+pub use codex::codex_session_files;
 pub use pi::pi_session_files;
 
 // ── Spending computation ──────────────────────────────────────────────────────
 
-/// Compute today / week / month spending totals for the given JSONL files.
+/// Compute the fleet and per-provider today / week / month / all-time spend and
+/// token tally for the given JSONL files, pricing token-only providers (Codex)
+/// through `prices`.
 ///
 /// Only re-reads a file when its mtime has changed; sets `cache.dirty = true`
 /// when any entry was updated.  Finished sessions have stable mtimes and are
@@ -143,20 +179,25 @@ pub use pi::pi_session_files;
 /// summed naively.  Dedup by `(message.id, requestId)` across all files
 /// prevents this: if `message.id` M appears as both `isSidechain:false`
 /// (main-chain entry) and `isSidechain:true` (sidechain replay), the sidechain
-/// entry is suppressed.
-pub fn compute_spending(files: &[PathBuf], cache: &mut SpendingDiskCache) -> SpendTally {
+/// entry is suppressed.  Only Claude entries carry message IDs; Codex and Pi
+/// entries are ID-free and bucket directly under their file's tagged provider.
+pub fn compute_spending(
+    files: &[(ProviderKind, PathBuf)],
+    cache: &mut SpendingDiskCache,
+    prices: &PriceBook,
+) -> Spending {
     let now_secs = unix_secs_now();
     let today = utc_date(now_secs);
     let week_start = utc_date(now_secs.saturating_sub(6 * 86_400));
     let month_prefix = today[..7].to_string(); // "YYYY-MM"
 
     // First pass: refresh stale cache entries.
-    for file in files {
+    for (kind, file) in files {
         let mtime = file_mtime_secs(file);
         let key = file.to_string_lossy().into_owned();
         let stale = cache.files.get(&key).is_none_or(|e| e.mtime_secs != mtime);
         if stale {
-            let parsed = parse_jsonl(file);
+            let parsed = parse_for(*kind, file, prices);
             cache.files.insert(
                 key,
                 FileCacheEntry {
@@ -170,14 +211,16 @@ pub fn compute_spending(files: &[PathBuf], cache: &mut SpendingDiskCache) -> Spe
 
     // Second pass: aggregate with cross-file Claude deduplication.
     //
-    // For entries with message IDs: exact_key = (message_id, request_id).
-    // msg_has_non_sidechain tracks whether each message_id has a main-chain
-    // entry anywhere across all files, so sidechain replays can be suppressed.
+    // Claude entries carry message IDs and dedup on exact_key = (message_id,
+    // request_id); msg_has_non_sidechain tracks whether each message_id has a
+    // main-chain entry anywhere across all files, so sidechain replays can be
+    // suppressed.  ID-free entries (Codex, Pi) carry their file's provider so
+    // they bucket under the right kind.
     let mut by_exact_key: HashMap<(String, Option<String>), CachedEntry> = HashMap::new();
     let mut msg_has_non_sidechain: HashMap<String, bool> = HashMap::new();
-    let mut free_entries: Vec<CachedEntry> = Vec::new();
+    let mut free_entries: Vec<(&'static str, CachedEntry)> = Vec::new();
 
-    for file in files {
+    for (kind, file) in files {
         let key = file.to_string_lossy().into_owned();
         let Some(cached_file) = cache.files.get(&key) else {
             continue;
@@ -198,12 +241,30 @@ pub fn compute_spending(files: &[PathBuf], cache: &mut SpendingDiskCache) -> Spe
                     })
                     .or_insert_with(|| e.clone());
             } else {
-                free_entries.push(e.clone());
+                free_entries.push((kind.as_str(), e.clone()));
             }
         }
     }
 
-    let mut totals = SpendTally::default();
+    let mut spending = Spending::default();
+    let mut add = |provider: &str, entry: &CachedEntry| {
+        accum(
+            &mut spending.total,
+            entry,
+            &today,
+            &week_start,
+            &month_prefix,
+        );
+        accum(
+            spending.by_provider.entry(provider.to_owned()).or_default(),
+            entry,
+            &today,
+            &week_start,
+            &month_prefix,
+        );
+    };
+
+    // Message-ID entries are Claude's.
     for ((msg_id, _), entry) in &by_exact_key {
         let is_sidechain_replay = entry.is_sidechain
             && msg_has_non_sidechain
@@ -211,32 +272,32 @@ pub fn compute_spending(files: &[PathBuf], cache: &mut SpendingDiskCache) -> Spe
                 .copied()
                 .unwrap_or(false);
         if !is_sidechain_replay {
-            accum(&mut totals, entry, &today, &week_start, &month_prefix);
+            add("claude", entry);
         }
     }
-    for entry in &free_entries {
-        accum(&mut totals, entry, &today, &week_start, &month_prefix);
+    for (provider, entry) in &free_entries {
+        add(provider, entry);
     }
-    totals
+    spending
 }
 
 fn accum(
-    totals: &mut SpendTally,
+    tally: &mut SpendTally,
     entry: &CachedEntry,
     today: &str,
     week_start: &str,
     month_prefix: &str,
 ) {
     let (usd, tokens) = (entry.cost_usd, entry.tokens);
-    totals.all_time.add(usd, tokens);
+    tally.all_time.add(usd, tokens);
     if entry.date == today {
-        totals.today.add(usd, tokens);
+        tally.today.add(usd, tokens);
     }
     if entry.date.as_str() >= week_start {
-        totals.week.add(usd, tokens);
+        tally.week.add(usd, tokens);
     }
     if entry.date.starts_with(month_prefix) {
-        totals.month.add(usd, tokens);
+        tally.month.add(usd, tokens);
     }
 }
 
@@ -249,14 +310,55 @@ fn file_mtime_secs(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
-fn parse_jsonl(path: &Path) -> Vec<CachedEntry> {
-    match transcript::detect_provider(path) {
-        transcript::Provider::Pi => pi::parse_pi_jsonl(path),
-        // Claude and Unknown (e.g. test temp-dir paths) both use Claude format.
-        transcript::Provider::Claude | transcript::Provider::Unknown => {
-            claude::parse_claude_jsonl(path)
-        }
+fn parse_for(kind: ProviderKind, path: &Path, prices: &PriceBook) -> Vec<CachedEntry> {
+    match kind {
+        ProviderKind::Codex => codex_entries(path, prices),
+        ProviderKind::Pi => pi::parse_pi_jsonl(path),
+        ProviderKind::Claude => claude::parse_claude_jsonl(path),
     }
+}
+
+/// Turn a Codex session's token events into priced [`CachedEntry`] values.
+///
+/// Codex logs token counts, not dollars, so each event is multiplied through
+/// the price book: uncached input at the input rate, the cached slice at the
+/// cache-read rate, and output (which already includes reasoning tokens) at the
+/// output rate. The recorded `tokens` is `input + output` — the same `◇` total
+/// the rest of the sidebar reads. Events whose model has no known price, or that
+/// price to zero, are dropped. Codex entries carry no message/request IDs, so
+/// they bypass the Claude dedup and bucket directly under the `codex` provider.
+fn codex_entries(path: &Path, prices: &PriceBook) -> Vec<CachedEntry> {
+    let sessions_dir = path.parent().unwrap_or(path);
+    let events = codex::parse_codex_session(sessions_dir, path);
+    let mut out = Vec::with_capacity(events.len());
+    for event in events {
+        let Some(model) = event.model.as_deref() else {
+            continue;
+        };
+        let Some(price) = prices.price(model) else {
+            continue;
+        };
+        let uncached_input = event.input_tokens.saturating_sub(event.cached_input_tokens);
+        let cost = uncached_input as f64 * price.input
+            + event.cached_input_tokens as f64 * price.cache_read
+            + event.output_tokens as f64 * price.output;
+        if cost <= 0.0 {
+            continue;
+        }
+        let date = match event.timestamp.get(..10) {
+            Some(d) if d.as_bytes().get(4) == Some(&b'-') => d.to_owned(),
+            _ => continue,
+        };
+        out.push(CachedEntry {
+            date,
+            cost_usd: cost,
+            tokens: event.input_tokens + event.output_tokens,
+            message_id: None,
+            request_id: None,
+            is_sidechain: false,
+        });
+    }
+    out
 }
 
 // ── Cache I/O ─────────────────────────────────────────────────────────────────
@@ -326,6 +428,16 @@ mod tests {
     use std::io::Write as _;
     use tempfile::TempDir;
 
+    /// Claude tests don't need pricing — tag the files Claude, sum with an empty
+    /// book, and take the fleet total, matching the pre-per-provider assertions.
+    fn compute_total(files: &[PathBuf], cache: &mut SpendingDiskCache) -> SpendTally {
+        let tagged: Vec<(ProviderKind, PathBuf)> = files
+            .iter()
+            .map(|file| (ProviderKind::Claude, file.clone()))
+            .collect();
+        compute_spending(&tagged, cache, &PriceBook::default()).total
+    }
+
     // Full Claude-format line including "usage":{ to pass the fast pre-filter.
     fn claude_line(date: &str, cost: f64, msg_id: &str, req_id: &str) -> String {
         format!(
@@ -371,13 +483,13 @@ mod tests {
         );
 
         let mut cache = SpendingDiskCache::default();
-        let t1 = compute_spending(std::slice::from_ref(&file), &mut cache);
+        let t1 = compute_total(std::slice::from_ref(&file), &mut cache);
         assert!((t1.today.usd - 0.5).abs() < 1e-9);
         assert_eq!(t1.today.tokens, 15, "input 10 + output 5");
         assert!(cache.dirty);
 
         cache.dirty = false;
-        let t2 = compute_spending(&[file], &mut cache);
+        let t2 = compute_total(&[file], &mut cache);
         assert_eq!(t2.today.usd, t1.today.usd);
         assert_eq!(t2.today.tokens, t1.today.tokens);
         assert!(
@@ -468,7 +580,7 @@ mod tests {
         );
 
         let mut cache = SpendingDiskCache::default();
-        let totals = compute_spending(&[file], &mut cache);
+        let totals = compute_total(&[file], &mut cache);
 
         assert!(
             (totals.today.usd - 1.0).abs() < 1e-9,
@@ -495,7 +607,7 @@ mod tests {
     #[test]
     fn empty_file_list_returns_zero() {
         let mut cache = SpendingDiskCache::default();
-        assert!(compute_spending(&[], &mut cache).is_zero());
+        assert!(compute_total(&[], &mut cache).is_zero());
     }
 
     #[test]
@@ -519,7 +631,7 @@ mod tests {
         );
 
         let mut cache = SpendingDiskCache::default();
-        let totals = compute_spending(&[file], &mut cache);
+        let totals = compute_total(&[file], &mut cache);
         assert!((totals.today.usd - 0.3).abs() < 1e-9);
         assert_eq!(
             totals.today.tokens, 15,
@@ -539,7 +651,7 @@ mod tests {
         let file2 = write_jsonl(dir.path(), "session2.jsonl", &[&line]);
 
         let mut cache = SpendingDiskCache::default();
-        let totals = compute_spending(&[file1, file2], &mut cache);
+        let totals = compute_total(&[file1, file2], &mut cache);
         assert!(
             (totals.today.usd - 1.0).abs() < 1e-9,
             "got {}",
@@ -573,7 +685,7 @@ mod tests {
         );
 
         let mut cache = SpendingDiskCache::default();
-        let totals = compute_spending(&[main_file, side_file], &mut cache);
+        let totals = compute_total(&[main_file, side_file], &mut cache);
         assert!(
             (totals.today.usd - 0.05).abs() < 1e-9,
             "today.usd = {} (expected 0.05)",
@@ -598,7 +710,7 @@ mod tests {
         );
 
         let mut cache = SpendingDiskCache::default();
-        let totals = compute_spending(&[file], &mut cache);
+        let totals = compute_total(&[file], &mut cache);
         assert!(
             (totals.today.usd - 0.20).abs() < 1e-9,
             "got {}",
@@ -608,5 +720,110 @@ mod tests {
             totals.today.tokens, 50_005,
             "a lone sidechain keeps its tokens: input 50000 + output 5"
         );
+    }
+
+    /// A price book with a single non-builtin model so the asserted cost is
+    /// independent of the hardcoded builtin values.
+    fn gpt4o_book() -> PriceBook {
+        PriceBook::from_litellm_json(
+            r#"{"gpt-4o": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6,
+                           "cache_read_input_token_cost": 1e-7}}"#,
+        )
+    }
+
+    /// Write a Codex session file. The path is irrelevant — the provider is
+    /// tagged explicitly at the `compute_spending` call.
+    fn write_codex(dir: &Path, lines: &[&str]) -> PathBuf {
+        let sessions = dir.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        write_jsonl(&sessions, "sess.jsonl", lines)
+    }
+
+    fn codex_token_line(date: &str, input: u64, cached: u64, output: u64) -> String {
+        format!(
+            r#"{{"type":"event_msg","timestamp":"{date}T10:00:00.000Z","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":{input},"cached_input_tokens":{cached},"output_tokens":{output}}}}}}}}}"#
+        )
+    }
+
+    #[test]
+    fn codex_tokens_priced_through_book() {
+        let dir = TempDir::new().unwrap();
+        let today = utc_date(unix_secs_now());
+        let file = write_codex(
+            dir.path(),
+            &[
+                r#"{"type":"turn_context","payload":{"model":"gpt-4o"}}"#,
+                &codex_token_line(&today, 1000, 400, 500),
+            ],
+        );
+
+        let mut cache = SpendingDiskCache::default();
+        let spending = compute_spending(&[(ProviderKind::Codex, file)], &mut cache, &gpt4o_book());
+
+        // uncached 600 * 1e-6 + cached 400 * 1e-7 + output 500 * 2e-6
+        //   = 0.0006 + 0.00004 + 0.001 = 0.00164
+        let codex = &spending.by_provider["codex"];
+        assert!(
+            (codex.today.usd - 0.00164).abs() < 1e-9,
+            "got {}",
+            codex.today.usd
+        );
+        assert_eq!(codex.today.tokens, 1500, "input 1000 + output 500");
+        assert!((spending.total.today.usd - 0.00164).abs() < 1e-9);
+    }
+
+    #[test]
+    fn unpriced_codex_model_contributes_nothing() {
+        let dir = TempDir::new().unwrap();
+        let today = utc_date(unix_secs_now());
+        let file = write_codex(
+            dir.path(),
+            &[
+                r#"{"type":"turn_context","payload":{"model":"some-unknown-model-xyz"}}"#,
+                &codex_token_line(&today, 1000, 0, 500),
+            ],
+        );
+
+        let mut cache = SpendingDiskCache::default();
+        // Empty json → only builtins; the unknown model has no price.
+        let spending = compute_spending(
+            &[(ProviderKind::Codex, file)],
+            &mut cache,
+            &PriceBook::from_litellm_json("{}"),
+        );
+        assert!(spending.total.is_zero());
+    }
+
+    #[test]
+    fn per_provider_breakdown_splits_claude_and_codex() {
+        let dir = TempDir::new().unwrap();
+        let today = utc_date(unix_secs_now());
+
+        let claude_file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[&claude_line(&today, 0.5, "msg-1", "req-1")],
+        );
+        let codex_file = write_codex(
+            dir.path(),
+            &[
+                r#"{"type":"turn_context","payload":{"model":"gpt-4o"}}"#,
+                &codex_token_line(&today, 1000, 0, 0),
+            ],
+        );
+
+        let mut cache = SpendingDiskCache::default();
+        let spending = compute_spending(
+            &[
+                (ProviderKind::Claude, claude_file),
+                (ProviderKind::Codex, codex_file),
+            ],
+            &mut cache,
+            &gpt4o_book(),
+        );
+
+        assert!((spending.by_provider["claude"].today.usd - 0.5).abs() < 1e-9);
+        assert!((spending.by_provider["codex"].today.usd - 0.001).abs() < 1e-9);
+        assert!((spending.total.today.usd - 0.501).abs() < 1e-9);
     }
 }

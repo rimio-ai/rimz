@@ -1,6 +1,7 @@
 #![deny(clippy::print_stdout)]
 #![deny(clippy::print_stderr)]
 
+use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
@@ -10,6 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use serde_json::{Map, Value};
 
 fn main() -> Result<()> {
     let mut args = env::args().skip(1);
@@ -28,6 +30,7 @@ fn main() -> Result<()> {
         "coverage" => coverage(&root),
         "semver" => semver(&root),
         "invariants" => invariants(&root),
+        "pricing-refresh" => pricing_refresh(&root),
         "ci" => ci(&root),
         other => bail!("unknown xtask `{other}`"),
     }
@@ -248,6 +251,92 @@ fn coverage(root: &Path) -> Result<()> {
             "--locked",
         ],
     )
+}
+
+// ── Pricing snapshot refresh ────────────────────────────────────────────────
+
+const LITELLM_URL: &str =
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+const VENDORED_SNAPSHOT: &str = "crates/rimz/pricing/litellm-pricing.json";
+const KEPT_FIELDS: [&str; 4] = [
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "cache_read_input_token_cost",
+    "cache_creation_input_token_cost",
+];
+
+/// Regenerate the checked-in LiteLLM pricing snapshot that `crates/rimz/build.rs`
+/// embeds as the tier-1 table (and falls back to for offline builds). Fetches
+/// upstream, compacts to the kept prefixes/fields, and writes a sorted,
+/// pretty-printed JSON so the diff is reviewable. `RIMZ_PRICING_JSON_PATH`
+/// overrides the network fetch with a local raw document.
+///
+/// The compaction mirrors `crates/rimz/build.rs::compact`; keep the two in step.
+fn pricing_refresh(root: &Path) -> Result<()> {
+    let raw = if let Some(path) = env::var_os("RIMZ_PRICING_JSON_PATH") {
+        fs::read_to_string(&path).context("reading RIMZ_PRICING_JSON_PATH")?
+    } else {
+        fetch_litellm().context("fetching LiteLLM pricing JSON")?
+    };
+    let snapshot = compact_pretty(&raw).context("compacting pricing JSON")?;
+    let dest = root.join(VENDORED_SNAPSHOT);
+    fs::write(&dest, snapshot).with_context(|| format!("writing {}", dest.display()))?;
+    Ok(())
+}
+
+fn fetch_litellm() -> Result<String> {
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(30)))
+        .build()
+        .new_agent();
+    let mut response = agent.get(LITELLM_URL).call().context("HTTP GET")?;
+    if response.status().as_u16() != 200 {
+        bail!("LiteLLM fetch returned HTTP {}", response.status().as_u16());
+    }
+    response
+        .body_mut()
+        .with_config()
+        .limit(64 * 1024 * 1024)
+        .read_to_string()
+        .context("reading response body")
+}
+
+fn compact_pretty(json: &str) -> Result<String> {
+    let Value::Object(raw) = serde_json::from_str::<Value>(json).context("parsing JSON")? else {
+        bail!("pricing JSON is not an object");
+    };
+    let mut out: BTreeMap<String, Value> = BTreeMap::new();
+    for (model, pricing) in raw {
+        if !is_kept_model(&model) {
+            continue;
+        }
+        let Value::Object(fields) = pricing else {
+            continue;
+        };
+        let mut kept = Map::new();
+        for field in KEPT_FIELDS {
+            if let Some(value) = fields.get(field)
+                && !value.is_null()
+            {
+                kept.insert(field.to_owned(), value.clone());
+            }
+        }
+        if kept.contains_key("input_cost_per_token") && kept.contains_key("output_cost_per_token") {
+            out.insert(model, Value::Object(kept));
+        }
+    }
+    let mut pretty = serde_json::to_string_pretty(&out).context("serializing snapshot")?;
+    pretty.push('\n');
+    Ok(pretty)
+}
+
+fn is_kept_model(model: &str) -> bool {
+    model.starts_with("gpt-")
+        || model.starts_with("o1")
+        || model.starts_with("o3")
+        || model.starts_with("o4")
+        || model.starts_with("codex")
+        || model.starts_with("claude-")
 }
 
 fn run<I, S>(root: &Path, program: &str, args: I) -> Result<()>
