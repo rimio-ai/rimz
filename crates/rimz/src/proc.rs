@@ -1,6 +1,8 @@
 //! Minimal `/proc` reader. The `rimz reset` orphan sweep walks every process
 //! ([`list_processes`]); the sidebar resolves a pane's owning shell from its root
-//! pid ([`comm`]). Linux-only; other platforms return an empty list / `None`, so
+//! pid ([`comm`]), dates an in-pane agent instance from its start
+//! ([`process_start`]), and matches a process to a pane by working directory
+//! ([`cwd`]). Linux-only; other platforms return an empty list / `None`, so
 //! callers fall back rather than guessing without `/proc`.
 
 /// One process as the reset sweep needs to see it: its pid, its parent, the real
@@ -121,6 +123,79 @@ fn read_proc(pid: u32) -> Option<ProcInfo> {
     })
 }
 
+/// Wall-clock start time of `pid`, anchoring `/proc/<pid>/stat` field 22
+/// (`starttime`, in clock ticks since boot) to the boot epoch (`btime` in
+/// `/proc/stat`). A start time dates the in-pane instance: the sidebar compares
+/// it against a session's last activity so a freshly-launched agent process never
+/// inherits the stale session that last ran in the same worktree (the
+/// `pane_start_allows_bind` guard). `None` on a non-Linux target or an unreadable
+/// `/proc` — another user's process — so callers fall back rather than guess.
+#[cfg(target_os = "linux")]
+pub fn process_start(pid: u32) -> Option<jiff::Timestamp> {
+    let ticks = parse_starttime_ticks(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)?;
+    let btime = parse_btime(&std::fs::read_to_string("/proc/stat").ok()?)?;
+    let seconds = btime.checked_add((ticks / clk_tck()) as i64)?;
+    jiff::Timestamp::from_second(seconds).ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn process_start(_pid: u32) -> Option<jiff::Timestamp> {
+    None
+}
+
+/// The working directory of `pid` from the `/proc/<pid>/cwd` symlink. The sidebar
+/// matches this against a pane's reported cwd to find the in-pane agent process
+/// that backs the pane. `None` on a non-Linux target or an unreadable link.
+#[cfg(target_os = "linux")]
+pub fn cwd(pid: u32) -> Option<std::path::PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn cwd(_pid: u32) -> Option<std::path::PathBuf> {
+    None
+}
+
+/// Field 22 (`starttime`) of a `/proc/<pid>/stat` line. The second field (`comm`)
+/// is parenthesized and may itself contain spaces and parens, so anchor on the
+/// *last* `)` and count whitespace-separated fields after it: `starttime` is the
+/// 20th field past `comm` (index 19), since `comm` is field 2 and `starttime` is
+/// field 22.
+#[cfg(target_os = "linux")]
+fn parse_starttime_ticks(stat: &str) -> Option<u64> {
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()
+}
+
+/// System boot time as a Unix epoch (seconds) from the `btime <secs>` line of
+/// `/proc/stat`.
+#[cfg(target_os = "linux")]
+fn parse_btime(stat: &str) -> Option<i64> {
+    stat.lines()
+        .find_map(|line| line.strip_prefix("btime "))?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// Clock ticks per second for `/proc` `starttime` (`SC_CLK_TCK`). Linux reports
+/// `starttime` in USER_HZ; `sysconf` returns it, and an unavailable or nonsensical
+/// answer falls back to 100 — the USER_HZ every mainstream Linux target fixes it
+/// at, independent of the kernel's `CONFIG_HZ`.
+#[cfg(target_os = "linux")]
+fn clk_tck() -> u64 {
+    nix::unistd::sysconf(nix::unistd::SysconfVar::CLK_TCK)
+        .ok()
+        .flatten()
+        .and_then(|ticks| u64::try_from(ticks).ok())
+        .filter(|&ticks| ticks > 0)
+        .unwrap_or(100)
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
@@ -150,5 +225,34 @@ mod tests {
         assert_eq!(parse_environ(blob, "ZELLIJ_PANE_ID"), None);
         // A bare key with no `=` never matches the `key=` prefix.
         assert_eq!(parse_environ(b"ZELLIJ_PANE_ID\0", "ZELLIJ_PANE_ID"), None);
+    }
+
+    #[test]
+    fn parse_starttime_ticks_reads_field_22() {
+        // pid (comm) state ppid … starttime(field 22) …
+        let stat = "1234 (codex) S 1 1234 1234 0 -1 0 0 0 0 0 1 2 3 4 20 0 5 0 646245020 …";
+        assert_eq!(parse_starttime_ticks(stat), Some(646_245_020));
+    }
+
+    #[test]
+    fn parse_starttime_ticks_handles_comm_with_spaces_and_parens() {
+        // `comm` can carry spaces and nested parens; anchoring on the last `)`
+        // keeps field 22 correct.
+        let stat = "1234 (codex (1) :)) S 1 1234 1234 0 -1 0 0 0 0 0 1 2 3 4 20 0 5 0 777 0";
+        assert_eq!(parse_starttime_ticks(stat), Some(777));
+    }
+
+    #[test]
+    fn parse_starttime_ticks_rejects_malformed() {
+        assert_eq!(parse_starttime_ticks("no parens here"), None);
+        // Too few fields after `comm` to reach field 22.
+        assert_eq!(parse_starttime_ticks("1 (sh) S 1 2 3"), None);
+    }
+
+    #[test]
+    fn parse_btime_reads_the_btime_line() {
+        let stat = "cpu  1 2 3\nintr 99\nbtime 1773993132\nprocesses 42\n";
+        assert_eq!(parse_btime(stat), Some(1_773_993_132));
+        assert_eq!(parse_btime("cpu 1 2 3\nprocesses 42\n"), None);
     }
 }

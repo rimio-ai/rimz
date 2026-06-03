@@ -244,13 +244,36 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     snapshot.drop_dead_daemon_sessions(&daemon_pids, loaded.as_ref());
                 }
             }
-            if let Some(panes) = panes {
+            if let Some(mut panes) = panes {
                 if let Some(own) = exclude.as_ref() {
                     snapshot.own_view = rimz::SidebarOwnView::from_panes(own, &panes);
                 }
                 // Computed from the full session pane list (pre-exclusion), before
                 // `with_live_panes` consumes `panes`.
                 snapshot.only_daemon_view_remains = rimz::SidebarSnapshot::only_daemon_view(&panes);
+                // Backends that report no per-pane process start (Zellij) leave the
+                // cwd-fallback guard (`pane_start_allows_bind`) blind, so a stale
+                // daemon-mode Codex session would latch onto a freshly-started pane
+                // in the same cwd. Derive the in-pane agent CLI's start from `/proc`
+                // and stamp it so the guard fires: a process newer than a session
+                // can't inherit it. Cheap — `in_pane_agent_start` scans `/proc` only
+                // for a Codex pane that lacks a native start (so tmux pays nothing).
+                for pane in &mut panes {
+                    if pane.pane_process_start.is_some() {
+                        continue;
+                    }
+                    let Some(cwd) = pane.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
+                        continue;
+                    };
+                    if let Some(kind) = pane
+                        .command
+                        .as_deref()
+                        .and_then(rimz::ledger::snapshot::command_agent_kind)
+                    {
+                        pane.pane_process_start =
+                            rimz::remote_control::in_pane_agent_start(kind, cwd);
+                    }
+                }
                 snapshot = snapshot.with_live_panes(panes, exclude.as_ref());
             }
             snapshot.agent_hooks_ready = rimz::sidebar::snapshot::agent_hooks_ready();

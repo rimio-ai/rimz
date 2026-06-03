@@ -136,7 +136,7 @@ Codex registers its session lazily. A plain CLI launch fires no `SessionStart`; 
 
 `/clear` currently fires **no** `SessionStart` (the wired `source = "clear"` never arrives), so Rimz cannot yet detect a cleared session as a fresh instance — the prior session's row persists until the next bound turn. This is a known upstream gap; Rimz waits for `SessionStart { source: "clear" }` and treats the miss as a documented limitation rather than working around it.
 
-Under `codex remote-control start` the hooks are daemon-routed: they fire from the shared per-user app-server daemon, so `pane_id` is null (the session is unstamped) and `RIMZ_AGENT_PID` is the daemon pid. Binding an unstamped in-pane session is the cwd fallback in [sidebar.md → Presence model](./sidebar.md#presence-model); a session with no local pane is a *remote* agent, not rendered yet (same section).
+Under `codex remote-control start` the hooks are daemon-routed: they fire from the shared per-user app-server daemon, so `pane_id` is null (the session is unstamped) and `RIMZ_AGENT_PID` is the daemon pid. Binding an unstamped in-pane session is the cwd fallback in [sidebar.md → Presence model](./sidebar.md#presence-model); the fallback reconciles against the in-pane `codex` CLI's `/proc` start, so a relaunched `codex` in a reused cwd starts fresh rather than adopting the prior session's stats. A session with no local pane is a *remote* agent, not rendered yet (same section).
 
 ### Context enrichment
 

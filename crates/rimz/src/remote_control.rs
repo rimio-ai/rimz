@@ -240,6 +240,37 @@ fn is_codex_daemon_cmdline(cmdline: &str) -> bool {
     on_daemon_surface && cmdline.contains("codex")
 }
 
+/// Start time of the in-pane agent CLI process backing a live pane, found by
+/// working directory — the signal a backend that reports no per-pane process
+/// start (Zellij) needs so the cwd fallback can refuse a stale session. Codex is
+/// the only lazy-registering agent today, so this resolves the bare `codex` TUI
+/// ([`is_codex_cli_cmdline`]) whose `/proc` cwd equals `pane_cwd` and returns the
+/// *earliest* such start: with that floor the sidebar's `pane_start_allows_bind`
+/// guard only rejects a session predating every candidate, so a cwd hosting more
+/// than one `codex` never hides a live one. `None` for a non-Codex kind, no
+/// match, or an unreadable `/proc` (another user's process).
+pub fn in_pane_agent_start(kind: &str, pane_cwd: &str) -> Option<jiff::Timestamp> {
+    if kind != "codex" {
+        return None;
+    }
+    let pane_cwd = Path::new(pane_cwd);
+    crate::proc::list_processes()
+        .into_iter()
+        .filter(|process| is_codex_cli_cmdline(&process.cmdline))
+        .filter(|process| crate::proc::cwd(process.pid).as_deref() == Some(pane_cwd))
+        .filter_map(|process| crate::proc::process_start(process.pid))
+        .min()
+}
+
+/// Whether a command line runs the in-pane Codex CLI — the bare `codex` TUI a
+/// user launches in a pane — rather than the daemon, the remote-control host, or
+/// Rimz's own `rimz codex app-server serve` broker. The inverse of
+/// [`is_codex_daemon_cmdline`] within the `codex` binary: those all spell
+/// `app-server` or `remote-control`, so excluding them leaves the plain CLI.
+fn is_codex_cli_cmdline(cmdline: &str) -> bool {
+    cmdline.contains("codex") && !is_codex_daemon_cmdline(cmdline)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,5 +414,22 @@ mod tests {
         assert!(!is_codex_daemon_cmdline("codex --model gpt-5.5"));
         // A non-codex server that merely spells a marker is not the codex daemon.
         assert!(!is_codex_daemon_cmdline("some-other app-server"));
+    }
+
+    #[test]
+    fn codex_cli_cmdline_matches_bare_cli_not_daemon() {
+        // The in-pane TUI a user launches, including the npm `node` wrapper.
+        assert!(is_codex_cli_cmdline("codex"));
+        assert!(is_codex_cli_cmdline("codex --model gpt-5.5"));
+        assert!(is_codex_cli_cmdline("node /usr/bin/codex"));
+        // The daemon, the remote-control host, and Rimz's broker all spell a
+        // daemon surface, so none reads as the in-pane CLI.
+        assert!(!is_codex_cli_cmdline("codex app-server"));
+        assert!(!is_codex_cli_cmdline("codex remote-control start"));
+        assert!(!is_codex_cli_cmdline(
+            "rimz codex app-server serve --workspace-id w"
+        ));
+        // A non-codex process is never the codex CLI.
+        assert!(!is_codex_cli_cmdline("zsh"));
     }
 }

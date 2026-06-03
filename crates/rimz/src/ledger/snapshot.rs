@@ -1380,14 +1380,16 @@ fn lazy_agent_for_pane<'a>(
         .then(|| LazyAgentRow::Idle(Box::new(idle_agent_row(pane, kind))))
 }
 
-/// Defensive guard for the cwd fallback: when the backend reports the pane's
-/// process start, a session whose `last_activity` predates that start belongs to
-/// an older instance that once ran in this worktree, not the process now in the
-/// pane — so it must not bind. A daemon-mode Codex session records the shared
-/// app-server daemon's pid, so process liveness alone cannot tell a stale session
-/// from the live one; this keeps that residue off a freshly-started pane in the
-/// same cwd. Backends that report no pane start (some Zellij snapshots) skip the
-/// check and fall back to most-recently-active ([codex-daemon-fix] → Pane Binding).
+/// Defensive guard for the cwd fallback: when the pane's process start is known,
+/// a session whose `last_activity` predates that start belongs to an older
+/// instance that once ran in this worktree, not the process now in the pane — so
+/// it must not bind. A daemon-mode Codex session records the shared app-server
+/// daemon's pid, so process liveness alone cannot tell a stale session from the
+/// live one; this keeps that residue off a freshly-started pane in the same cwd.
+/// The producer supplies the start from `/proc` for backends that report none
+/// natively (Zellij; see [`crate::remote_control::in_pane_agent_start`]), so the
+/// guard fires on both backends. Only a pane whose cwd has no readable in-pane
+/// agent process — another user's — still falls back to most-recently-active.
 fn pane_start_allows_bind(agent: &AgentState, pane: &PaneRef) -> bool {
     pane.pane_process_start
         .is_none_or(|start| agent.last_activity >= start)
@@ -2037,7 +2039,7 @@ const LAUNCHERS: &[&str] = &["node", "nodejs", "npx"];
 /// any `sudo`, and through a `node`/`npx` launcher to its script) — never an
 /// install target, so `sudo npm install -g @openai/codex` is an npm process while
 /// `codex`, `sudo codex`, and `node /usr/bin/codex` are codex.
-fn command_agent_kind(command: &str) -> Option<&'static str> {
+pub fn command_agent_kind(command: &str) -> Option<&'static str> {
     let program = program_label(command);
     crate::agents::KNOWN_AGENTS
         .iter()
@@ -5326,6 +5328,48 @@ mod tests {
         assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
         assert_eq!(rows[0].id, "sess-1");
         assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "term1");
+    }
+
+    #[test]
+    fn fresh_codex_pane_with_proc_start_shows_idle_not_ghost() {
+        // The ghost-stats regression. A completed daemon-mode Codex session lingers
+        // in the rollup — its owner is the shared, still-alive app-server daemon, so
+        // process liveness can never reap it, and the daemon still holds the thread
+        // loaded so the loaded-set reap keeps it too. A fresh `codex` then starts in
+        // the same worktree. On Zellij the backend reports no pane process start, so
+        // the producer stamps the in-pane CLI's `/proc` start; fed that, the guard
+        // refuses the stale session and the wired pane renders the synthesized idle
+        // row (`○ codex`) — not yesterday's `success` stats — until its own first
+        // turn binds a new session.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let pane_start = Timestamp::now();
+        let mut ghost = paneless_codex("sess-old", "/repo/main", 1_000);
+        ghost.status = AgentStatus::Success;
+        ghost.total_tokens = Some(126_621);
+        ghost.model = Some("gpt-5.5".to_owned());
+        ghost.last_activity = pane_start - std::time::Duration::from_secs(12 * 60 * 60);
+        let mut snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![ghost]);
+        snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+        let fresh_pane = PaneRef {
+            pane_process_start: Some(pane_start),
+            ..pane("term1", "codex", "/repo/main")
+        };
+        let snapshot = snapshot.with_live_panes(vec![fresh_pane], None);
+
+        let rows = &snapshot.worktree_groups[0].rows;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
+        assert_eq!(rows[0].status, Some(AgentStatus::Idle));
+        // The synthesized idle row keys on the pane id, never the stale session, and
+        // carries none of its stats.
+        assert_eq!(rows[0].id, "tmux:term1");
+        assert_ne!(rows[0].id, "sess-old");
+        assert_eq!(
+            rows[0].total_tokens, None,
+            "no ghost tokens on a fresh pane"
+        );
+        assert_eq!(rows[0].model, None, "no ghost model on a fresh pane");
     }
 
     fn daemon_codex(id: &str, worktree: &str, owner_pid: u32) -> AgentState {
