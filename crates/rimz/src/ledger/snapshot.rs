@@ -1144,12 +1144,14 @@ fn is_agent_native_item(item: &FeedItem) -> bool {
 /// True when an agent-hook ask names a session (`agent_id`/`session_id`) that is
 /// no longer the live occupant of its pane. The rollup is the liveness source of
 /// truth — gated by `SessionEnd` and process-liveness — so an ask is stale when
-/// either its session has left the rollup entirely, or a strictly-newer session
-/// of the same kind has taken over the worktree. The latter reaps the zombie
-/// case: a pidless `SessionStart`-only session never ends and never gets reaped
-/// by process liveness, so without supersession its old permission prompt pins
-/// itself onto the freshly launched session sharing the pane. Asks with no
-/// session id can't be proven stale and are kept.
+/// either its session has left the rollup entirely, or a strictly-newer root
+/// session of the same kind has taken over the worktree. The latter reaps the
+/// zombie case: a pidless `SessionStart`-only session never ends and never gets
+/// reaped by process liveness, so without supersession its old permission prompt
+/// pins itself onto the freshly launched session sharing the pane. Subagents
+/// never supersede their parent: they share the parent's pane and worktree but do
+/// not own the human decision surface. Asks with no session id can't be proven
+/// stale and are kept.
 fn agent_hook_session_stale(item: &FeedItem, agents: &[AgentState]) -> bool {
     if item.source_kind != "agent-hook" {
         return false;
@@ -1163,8 +1165,12 @@ fn agent_hook_session_stale(item: &FeedItem, agents: &[AgentState]) -> bool {
     else {
         return true;
     };
+    if session.parent_agent_id.is_some() {
+        return false;
+    }
     agents.iter().any(|other| {
-        other.kind == session.kind
+        other.parent_agent_id.is_none()
+            && other.kind == session.kind
             && other.agent_id != session.agent_id
             && other.worktree_path == session.worktree_path
             && other.last_activity > session.last_activity
@@ -4595,6 +4601,60 @@ mod tests {
         assert_eq!(row.name, "claude");
         assert_eq!(row.status, Some(AgentStatus::Waiting));
         assert_eq!(row.pane.as_ref().unwrap().pane_id.raw(), "%1");
+    }
+
+    #[test]
+    fn newer_subagent_does_not_expire_parent_attention() {
+        // A child shares the parent's pane and worktree, so it can be newer than
+        // the parent without superseding the parent's human decision surface.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut item = FeedItem::new(
+            workspace.clone(),
+            Surface::NativeUi,
+            FeedKind::Permission,
+            "claude needs attention",
+            "claude",
+            "agent-hook",
+        );
+        item.worktree_path = Some("/repo/main".to_owned());
+        item.payload = serde_json::json!({ "session_id": "parent-claude" });
+
+        let mut parent = agent(
+            "claude",
+            "parent-claude",
+            AgentStatus::Running,
+            PermissionPosture::Plan,
+            1_000,
+        );
+        parent.worktree_path = Some("/repo/main".to_owned());
+        parent.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+        let mut child = agent(
+            "claude",
+            "child-claude",
+            AgentStatus::Idle,
+            PermissionPosture::Plan,
+            2_000,
+        );
+        child.parent_agent_id = Some("parent-claude".to_owned());
+        child.worktree_path = Some("/repo/main".to_owned());
+        child.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+
+        let snapshot = SidebarSnapshot::build_with_carryover(
+            workspace,
+            vec![item.clone()],
+            Vec::new(),
+            vec![parent, child],
+        )
+        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+
+        assert_eq!(
+            snapshot.needs_attention[0].request_id, item.request_id,
+            "the child must not make the parent's ask stale"
+        );
+        let row = &snapshot.worktree_groups[0].rows[0];
+        assert_eq!(row.id, "parent-claude");
+        assert_eq!(row.status, Some(AgentStatus::Waiting));
+        assert_eq!(row.request_id, Some(item.request_id));
     }
 
     #[test]
