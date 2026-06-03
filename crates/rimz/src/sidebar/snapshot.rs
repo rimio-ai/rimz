@@ -439,26 +439,7 @@ pub fn read_published_snapshot(
     let cache_path = runtime.root.join("snapshot.json");
     let cache = read_snapshot_cache(&cache_path, session)?;
     let base = consumer_rollup(state)?;
-    // The cache's production time is when the producer sampled focus; carry it as
-    // the observation time so a consumer's read time never masquerades as a fresh
-    // external focus and rolls back a recent local selection.
-    let observed_at = ms_to_timestamp(cache.produced_at_ms);
-    Some(enrich_consumer(
-        base,
-        Some(cache.panes),
-        runtime,
-        exclude,
-        observed_at,
-    ))
-}
-
-/// Convert epoch milliseconds (the snapshot cache stamp) to a `Timestamp`,
-/// falling back to now on the impossible out-of-range case.
-fn ms_to_timestamp(ms: u64) -> Timestamp {
-    i64::try_from(ms)
-        .ok()
-        .and_then(|ms| Timestamp::from_millisecond(ms).ok())
-        .unwrap_or_else(Timestamp::now)
+    Some(enrich_consumer(base, Some(cache.panes), runtime, exclude))
 }
 
 /// Fold the read-only enrichments onto a consumer's base snapshot: the cached
@@ -473,7 +454,6 @@ pub fn enrich_consumer(
     panes: Option<Vec<PaneRef>>,
     runtime: &RuntimePaths,
     exclude: Option<&PaneId>,
-    observed_at: Timestamp,
 ) -> SidebarSnapshot {
     if snapshot.project_root.is_some() {
         snapshot = snapshot.with_worktree_roots(cached_worktree_roots(runtime));
@@ -488,7 +468,7 @@ pub fn enrich_consumer(
     snapshot.wired_lazy_kinds = wired_lazy_kinds();
     if let Some(panes) = panes {
         if let Some(own) = exclude {
-            snapshot.own_view = SidebarOwnView::from_panes(own, &panes, observed_at);
+            snapshot.own_view = SidebarOwnView::from_panes(own, &panes);
         }
         // Recompute from the published pane list (pre-exclusion) rather than
         // trusting the producer's base bit, for producer/consumer symmetry.

@@ -152,15 +152,9 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     exclude.as_ref(),
                 ) {
                     Some(snapshot) => snapshot,
-                    // Cold start: no published panes yet, so own-view (and its
-                    // focus stamp) is not computed — the timestamp is unused.
-                    None => enrich_consumer(
-                        ledger.snapshot()?,
-                        None,
-                        runtime,
-                        exclude.as_ref(),
-                        jiff::Timestamp::now(),
-                    ),
+                    // Cold start: no published panes yet, so own-view is not
+                    // computed — the bare rollup stands until the next tick.
+                    None => enrich_consumer(ledger.snapshot()?, None, runtime, exclude.as_ref()),
                 };
                 return emit(&snapshot);
             }
@@ -252,10 +246,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             }
             if let Some(panes) = panes {
                 if let Some(own) = exclude.as_ref() {
-                    // The producer just sampled this pane list (focus included),
-                    // so its production time is the focus observation time.
-                    snapshot.own_view =
-                        rimz::SidebarOwnView::from_panes(own, &panes, jiff::Timestamp::now());
+                    snapshot.own_view = rimz::SidebarOwnView::from_panes(own, &panes);
                 }
                 // Computed from the full session pane list (pre-exclusion), before
                 // `with_live_panes` consumes `panes`.

@@ -22,7 +22,7 @@ use rimz::mux::PaneListOptions;
 use rimz::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use tracing::{debug, info, warn};
 
-use crate::render::{self, Alert, UiState};
+use crate::render::{self, Alert, OverrideKind, SelectionOverride, UiState};
 
 mod input;
 use input::{
@@ -929,6 +929,14 @@ fn next_health(previous: &Health, failure: Option<String>) -> Health {
 /// something to move.
 const ANIMATION_FRAME: Duration = Duration::from_millis(100);
 
+/// How long an optimistic jump override pins the jumped pane before reverting to
+/// the focus mirror. It outlasts one pane-cache window (750ms) so a confirm that
+/// is merely one window late never flicker-reverts, yet stays under two backstop
+/// ticks (~2s) so a jump that never lands self-heals to the real focus quickly.
+/// The override also clears *early* the instant the mirror confirms the jump, so
+/// this is only the failure-mode ceiling, never the steady-state latency.
+const SELECTION_SETTLE: Duration = Duration::from_millis(1500);
+
 /// The animation frame index for `now`, derived from elapsed wall-clock since
 /// the serve loop's monotonic base. Every redraw path sets the phase from this,
 /// so the spin advances on real time and survives re-fetches and ledger deltas
@@ -1217,9 +1225,8 @@ fn run_self_close_probe(config: &ServeConfig) -> SelfCloseProbeOutcome {
         session_name: Some(config.session_name.clone()),
     }) {
         Ok(panes) => SelfCloseProbeOutcome {
-            // This probe reads only `sibling_count`; the focus timestamp is
-            // irrelevant here, so stamp it now.
-            sibling_count: rimz::SidebarOwnView::from_panes(&own, &panes, Timestamp::now())
+            // This probe reads only `sibling_count`.
+            sibling_count: rimz::SidebarOwnView::from_panes(&own, &panes)
                 .map(|view| view.sibling_count),
             error: None,
         },
@@ -1364,18 +1371,17 @@ fn apply_fetch_outcome(
     *current = state.snapshot;
     // Reconcile the highlight before drawing: re-anchor the identity-keyed
     // selection to its row (so a status-churn reorder never slides it onto a
-    // neighbour) and apply the edge-triggered external-focus mirror. Running it
-    // before the draw means an external focus move paints this frame, not next.
-    let external_focus = current
+    // neighbour) and apply the level-triggered focus mirror. Running it before the
+    // draw means an external focus move paints this frame, not next. The report is
+    // filtered to a non-sidebar agent row — a sidebar-self, undiscoverable, or
+    // non-row focus is inert and the mirror holds.
+    let focused_agent = current
         .own_view
         .as_ref()
         .filter(|view| !view.own_is_focused)
-        .and_then(|view| {
-            view.focused_pane_id
-                .clone()
-                .map(|pane| (pane, view.focused_observed_at))
-        });
-    reconcile_selection(ui, current, external_focus);
+        .and_then(|view| view.focused_pane_id.clone())
+        .filter(|pane| row_index_of_pane(current, pane).is_some());
+    reconcile_selection(ui, current, focused_agent, Instant::now());
     ui.animation_phase = wall_clock_phase(anim_start);
     // Fold the fresh tally into the count-up before drawing: a higher figure
     // starts an eased roll that the next frames paint, a reset or first value
@@ -1644,6 +1650,7 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
         KeyAction::Up => {
             if ui.selected_index > 0 {
                 select_row(ui, snapshot, ui.selected_index - 1);
+                set_browse_override(ui);
                 return InputOutcome::redraw();
             }
             InputOutcome::default()
@@ -1652,20 +1659,23 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
             let len = visible_row_count(snapshot);
             if ui.selected_index + 1 < len {
                 select_row(ui, snapshot, ui.selected_index + 1);
+                set_browse_override(ui);
                 return InputOutcome::redraw();
             }
             InputOutcome::default()
         }
         KeyAction::Enter => {
-            // Local selection + jump on the current row: re-stamp so the
-            // highlight holds on it through the briefly-stale post-jump focus,
-            // identical to a click.
+            // Jump on the current row: pin it as an optimistic override so the
+            // highlight holds through the briefly-stale post-jump focus, identical
+            // to a click.
             select_row(ui, snapshot, ui.selected_index);
+            set_jump_override(ui);
             InputOutcome::focus(ui.selected_index)
         }
         KeyAction::Space => {
             if let Some(index) = next_attention_index(snapshot, ui.selected_index) {
                 select_row(ui, snapshot, index);
+                set_jump_override(ui);
                 return InputOutcome::focus(index);
             }
             InputOutcome::default()
@@ -1679,6 +1689,7 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
             let index = usize::from(digit.saturating_sub(1));
             if index < visible_row_count(snapshot) {
                 select_row(ui, snapshot, index);
+                set_jump_override(ui);
                 return InputOutcome::focus(index);
             }
             InputOutcome::default()
@@ -1694,26 +1705,51 @@ fn handle_mouse_click(
 ) -> InputOutcome {
     if let Some(index) = row_index_at_screen_position(ui, row) {
         select_row(ui, snapshot, index);
+        set_jump_override(ui);
         return InputOutcome::focus(index);
     }
     InputOutcome::default()
 }
 
 /// Point the highlight at a visible row by index — the identity-keyed selection
-/// (`selected_pane`) plus its derived render index. Every local selection action
-/// (click, `↵`, digit, `␣`, arrow navigation) routes through here, so each one
-/// stamps `local_selection` with the chosen pane and the current instant: the
-/// newest local pick contests the last valid external focus by timestamp in
-/// `reconcile_selection`, and the highlight is always anchored to a pane, never
-/// a bare position.
+/// (`selected_pane`) plus its derived render index. A pure positioner: the
+/// browse-vs-jump semantics live in the override the caller then sets
+/// (`set_browse_override` / `set_jump_override`), so the highlight is always
+/// anchored to a pane, never a bare position.
 fn select_row(ui: &mut UiState, snapshot: &SidebarSnapshot, index: usize) {
     ui.selected_index = index;
     ui.selected_pane = visible_rows(snapshot)
         .nth(index)
         .and_then(|row| row.pane.as_ref())
         .map(|pane| pane.pane_id.clone());
+}
+
+/// Pin the just-selected pane as an arrow-browse override: the highlight holds
+/// without moving focus until the user acts again or the client focus moves off
+/// the baseline mirror value captured here.
+fn set_browse_override(ui: &mut UiState) {
     if let Some(pane) = ui.selected_pane.clone() {
-        ui.local_selection = Some((pane, Timestamp::now()));
+        ui.selection_override = Some(SelectionOverride {
+            pane,
+            kind: OverrideKind::Browse {
+                baseline: ui.focus_mirror.clone(),
+            },
+        });
+    }
+}
+
+/// Pin the just-selected pane as an optimistic jump override: the highlight holds
+/// the jumped pane until the focus mirror confirms it, a genuine external move
+/// supersedes it, or the settle deadline reverts to the mirror.
+fn set_jump_override(ui: &mut UiState) {
+    if let Some(pane) = ui.selected_pane.clone() {
+        ui.selection_override = Some(SelectionOverride {
+            pane,
+            kind: OverrideKind::Jump {
+                settle_deadline: Instant::now() + SELECTION_SETTLE,
+                from: ui.focus_mirror.clone(),
+            },
+        });
     }
 }
 
@@ -1726,84 +1762,106 @@ fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
     }
 }
 
-/// Reconcile the highlight after folding a new snapshot by contesting two
-/// timestamped values — the last local selection and the last *valid* external
-/// focus — and letting the newer one win. Keyed on pane identity, never
-/// position.
+/// Reconcile the highlight after folding a new snapshot. The live client focus is
+/// authoritative — the highlight follows it by default and always reconverges on
+/// it — while a bounded local override briefly overrides it. Keyed on pane
+/// identity, never position.
 ///
-/// `external` is the snapshot's focus report `(pane, observed_at)`, already
-/// filtered to a non-sidebar focus (`!own_is_focused` with a `Some` pane). It is
-/// folded into `external_focus` only when it is a **genuine new external move**:
+/// `focused_agent` is the snapshot's focus report, pre-filtered at the call site
+/// to a non-sidebar **agent row**: `Some(pane)` iff `!own_is_focused` and the
+/// focused pane is a row in this snapshot; `None` otherwise (sidebar-self,
+/// undiscoverable, or a non-row helper pane). `now` is a monotonic instant used
+/// only for the jump settle deadline.
 ///
-/// 1. **Row guard.** The pane must be an agent row in this snapshot. A focus on
-///    a non-row helper pane (`claude rc`, `codex app-server`) — or no report at
-///    all (sidebar-self / undiscoverable focus) — is inert and leaves
-///    `external_focus` untouched, so a fresh local selection still wins during
-///    the click-through focus window.
-/// 2. **Identity guard.** The pane must differ from the one `external_focus` was
-///    last trusted on (the pane we jumped *from*); an equal report is
-///    steady-state or a lagging re-report, not a move. A `None`/cold-start
-///    `external_focus` adopts the first valid report.
-/// 3. **Monotonic guard.** Its `observed_at` must be newer than the stored
-///    sample, rejecting a reordered older one.
-///
-/// The winner is the value with the newer `Timestamp`; the lone present value
-/// wins if only one exists; with neither, the current `selected_pane` holds.
-/// Finally a `local_selection`/`external_focus` whose pane has left the snapshot
-/// is dropped, and `anchor_selection` re-derives `selected_index` by identity.
+/// 1. **Level-triggered mirror.** A `Some` report advances `focus_mirror`; a
+///    `None` *holds* its previous value, so a momentary "no agent focus" gap never
+///    blanks or moves the highlight.
+/// 2. **Override resolution.** A `Browse` pick holds the pinned pane until the
+///    client focus moves off the baseline it began from. A `Jump` pick optimistically
+///    holds the jumped pane until the mirror confirms focus reached it, a genuine
+///    external move supersedes it (a pane that is neither the jumped pane nor the
+///    pre-jump `from`), or the settle deadline passes — then it follows the mirror.
+/// 3. **Reanchor.** A `focus_mirror` whose pane has left the room is dropped, and
+///    `anchor_selection` re-derives `selected_index` by identity.
 fn reconcile_selection(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
-    external: Option<(PaneId, Timestamp)>,
+    focused_agent: Option<PaneId>,
+    now: Instant,
 ) {
-    if let Some((pane, observed_at)) = external
-        && row_index_of_pane(snapshot, &pane).is_some()
-    {
-        let genuine_move = match &ui.external_focus {
-            Some((prev_pane, prev_at)) => pane != *prev_pane && observed_at > *prev_at,
-            None => true,
-        };
-        if genuine_move {
-            ui.external_focus = Some((pane, observed_at));
-        }
+    // 1. Level-triggered mirror: a genuine agent-row focus advances it; an inert
+    //    report holds the last value.
+    if let Some(pane) = focused_agent {
+        ui.focus_mirror = Some(pane);
     }
 
-    if let Some(pane) = newer_selection(ui.local_selection.as_ref(), ui.external_focus.as_ref()) {
+    // 2. Resolve the active override; `follow_mirror` means it has yielded.
+    let follow_mirror = match ui.selection_override.take() {
+        None => true,
+        Some(ovr) => match &ovr.kind {
+            OverrideKind::Browse { baseline } => {
+                if ui.focus_mirror == *baseline {
+                    // Still browsing: hold the pinned pane (a None report did not
+                    // advance the mirror, so the baseline still matches).
+                    ui.selected_pane = Some(ovr.pane.clone());
+                    ui.selection_override = Some(ovr);
+                    false
+                } else {
+                    // A genuine external move off the baseline ends the browse.
+                    true
+                }
+            }
+            OverrideKind::Jump {
+                settle_deadline,
+                from,
+            } => {
+                if ui.focus_mirror.as_ref() == Some(&ovr.pane) {
+                    // Confirmed: the mirror reached the jumped pane.
+                    true
+                } else if from.is_some() && ui.focus_mirror.is_some() && ui.focus_mirror != *from {
+                    // Superseded by a genuine external move to a third pane. Gated
+                    // on a known `from`: with no pre-jump baseline we cannot tell a
+                    // genuine move from a lagging first sample of the pre-jump
+                    // focus, so we hold until confirm or the deadline instead of
+                    // risking a bounce.
+                    true
+                } else if now >= *settle_deadline {
+                    // Failed jump: the deadline passed without confirmation — revert
+                    // to the real focus rather than shadowing it forever.
+                    true
+                } else {
+                    // Optimistic window still open: pin the jumped pane even though
+                    // the mirror still shows the pre-jump focus (no bounce-back).
+                    ui.selected_pane = Some(ovr.pane.clone());
+                    ui.selection_override = Some(ovr);
+                    false
+                }
+            }
+        },
+    };
+    if follow_mirror && let Some(pane) = ui.focus_mirror.clone() {
         ui.selected_pane = Some(pane);
     }
 
-    drop_absent_selection(&mut ui.local_selection, snapshot);
-    drop_absent_selection(&mut ui.external_focus, snapshot);
-    anchor_selection(ui, snapshot);
-}
-
-/// The pane of the timestamped value that was set most recently; the lone
-/// present value if only one exists; `None` when neither is set.
-fn newer_selection(
-    local: Option<&(PaneId, Timestamp)>,
-    external: Option<&(PaneId, Timestamp)>,
-) -> Option<PaneId> {
-    match (local, external) {
-        (Some((lp, lt)), Some((ep, et))) => Some(if et > lt { ep.clone() } else { lp.clone() }),
-        (Some((lp, _)), None) => Some(lp.clone()),
-        (None, Some((ep, _))) => Some(ep.clone()),
-        (None, None) => None,
-    }
-}
-
-/// Clear a timestamped selection whose pane has left the snapshot, so the other
-/// value can win the next contest instead of being shadowed by a dangling pick.
-fn drop_absent_selection(slot: &mut Option<(PaneId, Timestamp)>, snapshot: &SidebarSnapshot) {
-    if let Some((pane, _)) = slot
-        && row_index_of_pane(snapshot, pane).is_none()
+    // 3. Drop a mirror or override pane that left the room — so a pick whose pane
+    //    closed stops shadowing the mirror and the highlight reconverges — then
+    //    re-anchor by identity.
+    if let Some(pane) = ui.focus_mirror.clone()
+        && row_index_of_pane(snapshot, &pane).is_none()
     {
-        *slot = None;
+        ui.focus_mirror = None;
     }
+    if let Some(ovr) = &ui.selection_override
+        && row_index_of_pane(snapshot, &ovr.pane).is_none()
+    {
+        ui.selection_override = None;
+    }
+    anchor_selection(ui, snapshot);
 }
 
 /// Re-derive `selected_index` from the identity-keyed `selected_pane`. When the
 /// selected pane has left the room its row is gone, so drop the dangling
-/// identity and clamp the index — the next external focus edge re-seats it.
+/// identity and clamp the index — the next mirror report or pick re-seats it.
 fn anchor_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
     if let Some(pane) = ui.selected_pane.clone() {
         if let Some(index) = row_index_of_pane(snapshot, &pane) {
@@ -2635,15 +2693,31 @@ mod tests {
         );
     }
 
-    /// A timestamp `secs` seconds past a fixed epoch, for ordering selections.
-    fn ts(secs: i64) -> Timestamp {
-        Timestamp::from_second(2_000_000_000 + secs).unwrap()
+    /// A jump override pinning `pane`, jumped from `from`, expiring at `deadline`.
+    fn jump(pane: &PaneId, from: Option<&PaneId>, deadline: Instant) -> SelectionOverride {
+        SelectionOverride {
+            pane: pane.clone(),
+            kind: OverrideKind::Jump {
+                settle_deadline: deadline,
+                from: from.cloned(),
+            },
+        }
+    }
+
+    /// A browse override pinning `pane`, begun from the `baseline` mirror value.
+    fn browse(pane: &PaneId, baseline: Option<&PaneId>) -> SelectionOverride {
+        SelectionOverride {
+            pane: pane.clone(),
+            kind: OverrideKind::Browse {
+                baseline: baseline.cloned(),
+            },
+        }
     }
 
     #[test]
-    fn cold_start_adopts_the_first_valid_external_focus() {
-        // No local selection and no prior external focus: the first valid report
-        // seeds both `external_focus` and the highlight.
+    fn cold_start_follows_the_first_focus_report() {
+        // No mirror and no override: the first valid focus report seeds both the
+        // mirror and the highlight.
         let ws = workspace();
         let focused = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let snapshot = snapshot_with_panes(
@@ -2655,52 +2729,18 @@ mod tests {
         );
         let mut ui = UiState::default();
 
-        reconcile_selection(&mut ui, &snapshot, Some((focused.clone(), ts(0))));
+        reconcile_selection(&mut ui, &snapshot, Some(focused.clone()), Instant::now());
 
         assert_eq!(ui.selected_index, 1);
         assert_eq!(ui.selected_pane, Some(focused.clone()));
-        assert_eq!(ui.external_focus, Some((focused, ts(0))));
+        assert_eq!(ui.focus_mirror, Some(focused));
     }
 
     #[test]
-    fn external_focus_newer_than_the_click_is_adopted() {
-        // A genuine external focus move stamped after the local click wins by
-        // timestamp and moves the highlight.
+    fn cold_start_with_no_focus_clamps_to_first_row() {
+        // No mirror, no override, an inert report: the highlight has nothing to
+        // follow, so it clamps to the first row.
         let ws = workspace();
-        let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let moved = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", false),
-                pane("terminal_2", "tab_0", true),
-            ],
-        );
-        let mut ui = UiState {
-            selected_index: 0,
-            selected_pane: Some(clicked.clone()),
-            local_selection: Some((clicked, ts(1))),
-            ..Default::default()
-        };
-
-        reconcile_selection(&mut ui, &snapshot, Some((moved.clone(), ts(2))));
-
-        assert_eq!(ui.selected_index, 1);
-        assert_eq!(ui.selected_pane, Some(moved.clone()));
-        assert_eq!(ui.external_focus, Some((moved, ts(2))));
-    }
-
-    #[test]
-    fn click_newer_than_a_lagging_from_pane_report_holds() {
-        // The rollback case, stale-*after* the jump. A click pinned terminal_2 at
-        // ts(2); terminal_1 is the pane it jumped from, last trusted at ts(0). A
-        // lagging re-report of that from-pane lands *after* the click (ts(3)) —
-        // newer, but the same pane, so the identity guard reads it as steady
-        // state, not a move. `external_focus` does not refresh and the click
-        // holds.
-        let ws = workspace();
-        let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let from_pane = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
@@ -2708,64 +2748,57 @@ mod tests {
                 pane("terminal_2", "tab_0", false),
             ],
         );
-        let mut ui = UiState {
-            selected_index: 1,
-            selected_pane: Some(clicked.clone()),
-            local_selection: Some((clicked.clone(), ts(2))),
-            external_focus: Some((from_pane.clone(), ts(0))),
-            ..Default::default()
-        };
+        let mut ui = UiState::default();
 
-        reconcile_selection(&mut ui, &snapshot, Some((from_pane.clone(), ts(3))));
+        reconcile_selection(&mut ui, &snapshot, None, Instant::now());
 
-        assert_eq!(ui.selected_index, 1, "held on the clicked pane");
-        assert_eq!(ui.selected_pane, Some(clicked));
-        assert_eq!(
-            ui.external_focus,
-            Some((from_pane, ts(0))),
-            "a lagging re-report of the from-pane never refreshes external_focus"
-        );
+        assert_eq!(ui.selected_pane, None);
+        assert_eq!(ui.selected_index, 0);
     }
 
     #[test]
-    fn cross_tab_click_holds_against_a_repeated_stale_focus() {
-        // A click on a pane in another tab pins terminal_3 at ts(2). The producer
-        // keeps reporting the from-tab's focus (terminal_1) at ts(1); the first
-        // adopts into external_focus, every repeat is steady-state (identity
-        // guard), and the newer local pick wins every fold — no rollback.
+    fn tab_switch_is_followed() {
+        // No override: the highlight follows the live focus mirror. A genuine
+        // external move (a Zellij tab click) to terminal_3 moves it.
         let ws = workspace();
-        let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_3");
-        let own_tab_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let was = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let now_focused = PaneId::from_parts(MuxName::Zellij, "terminal_3");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
-                pane("terminal_1", "tab_0", true),
+                pane("terminal_1", "tab_0", false),
                 pane("terminal_2", "tab_0", false),
                 pane("terminal_3", "tab_1", false),
             ],
         );
         let mut ui = UiState {
-            selected_index: 2,
-            selected_pane: Some(clicked.clone()),
-            local_selection: Some((clicked.clone(), ts(2))),
+            selected_index: 0,
+            selected_pane: Some(was.clone()),
+            focus_mirror: Some(was),
             ..Default::default()
         };
 
-        for _ in 0..3 {
-            reconcile_selection(&mut ui, &snapshot, Some((own_tab_focus.clone(), ts(1))));
-        }
+        reconcile_selection(
+            &mut ui,
+            &snapshot,
+            Some(now_focused.clone()),
+            Instant::now(),
+        );
 
-        assert_eq!(ui.selected_index, 2, "held on the cross-tab clicked pane");
-        assert_eq!(ui.selected_pane, Some(clicked));
+        assert_eq!(ui.selected_index, 2);
+        assert_eq!(ui.selected_pane, Some(now_focused.clone()));
+        assert_eq!(ui.focus_mirror, Some(now_focused));
     }
 
     #[test]
-    fn sidebar_self_or_unknown_focus_is_inert() {
-        // Focus on the sidebar itself (or an undiscoverable focus) arrives as
-        // `None`. It leaves `external_focus` untouched, so the local click holds.
+    fn lagging_pre_jump_report_does_not_bounce() {
+        // Root cause A. A jump pins terminal_2 (from terminal_1) with the deadline
+        // in the future; the producer is still reporting the pre-jump focus
+        // (terminal_1, == `from`). The override holds the jumped pane — no bounce —
+        // because a lagging re-report of `from` neither confirms nor supersedes.
         let ws = workspace();
-        let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let baseline = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let from = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
@@ -2773,62 +2806,64 @@ mod tests {
                 pane("terminal_2", "tab_0", false),
             ],
         );
+        let now = Instant::now();
         let mut ui = UiState {
             selected_index: 1,
-            selected_pane: Some(clicked.clone()),
-            local_selection: Some((clicked.clone(), ts(2))),
-            external_focus: Some((baseline.clone(), ts(0))),
+            selected_pane: Some(jumped.clone()),
+            focus_mirror: Some(from.clone()),
+            selection_override: Some(jump(&jumped, Some(&from), now + Duration::from_millis(500))),
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, None);
+        reconcile_selection(&mut ui, &snapshot, Some(from), now);
 
-        assert_eq!(ui.selected_index, 1);
-        assert_eq!(ui.selected_pane, Some(clicked));
+        assert_eq!(ui.selected_pane, Some(jumped), "held the jumped pane");
+        assert!(
+            ui.selection_override.is_some(),
+            "the optimistic override is still in flight"
+        );
+    }
+
+    #[test]
+    fn jump_resolves_when_mirror_confirms() {
+        // The mirror reaches the jumped pane before the deadline: the override
+        // clears early and the highlight follows the (now-equal) mirror.
+        let ws = workspace();
+        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let from = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let now = Instant::now();
+        let mut ui = UiState {
+            selected_index: 1,
+            selected_pane: Some(jumped.clone()),
+            focus_mirror: Some(from.clone()),
+            selection_override: Some(jump(&jumped, Some(&from), now + Duration::from_millis(500))),
+            ..Default::default()
+        };
+
+        reconcile_selection(&mut ui, &snapshot, Some(jumped.clone()), now);
+
+        assert_eq!(ui.selected_pane, Some(jumped.clone()));
+        assert_eq!(ui.focus_mirror, Some(jumped));
         assert_eq!(
-            ui.external_focus,
-            Some((baseline, ts(0))),
-            "an inert report must not touch external_focus"
+            ui.selection_override, None,
+            "confirmed jump clears the override"
         );
     }
 
     #[test]
-    fn focus_on_a_non_row_helper_pane_is_inert() {
-        // Zellij can focus a non-agent helper pane (`claude rc`, `codex
-        // app-server`) that the sidebar never renders as a row. Such a focus is
-        // not a jump target: it leaves external_focus untouched, so a fresh local
-        // click holds even though the helper focus is newer.
+    fn genuine_external_move_supersedes_an_override() {
+        // While a jump to terminal_2 (from terminal_1) is in flight, the client
+        // focuses a third pane (terminal_3) by keybind. That is neither the jumped
+        // pane nor `from`, so it supersedes the override at once.
         let ws = workspace();
-        let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let helper = PaneId::from_parts(MuxName::Zellij, "terminal_99");
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", false),
-                pane("terminal_2", "tab_0", false),
-            ],
-        );
-        let mut ui = UiState {
-            selected_index: 1,
-            selected_pane: Some(clicked.clone()),
-            local_selection: Some((clicked.clone(), ts(1))),
-            ..Default::default()
-        };
-
-        reconcile_selection(&mut ui, &snapshot, Some((helper, ts(2))));
-
-        assert_eq!(ui.selected_index, 1);
-        assert_eq!(ui.selected_pane, Some(clicked));
-        assert_eq!(ui.external_focus, None, "a non-row focus never adopts");
-    }
-
-    #[test]
-    fn external_move_to_a_third_pane_newer_than_the_click_adopts() {
-        // From an established external_focus (terminal_1), a genuine move to a
-        // different row (terminal_3) stamped after the click is adopted — the
-        // identity guard passes (different pane) and the timestamp wins.
-        let ws = workspace();
-        let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let from = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let third = PaneId::from_parts(MuxName::Zellij, "terminal_3");
         let snapshot = snapshot_with_panes(
@@ -2839,29 +2874,105 @@ mod tests {
                 pane("terminal_3", "tab_0", false),
             ],
         );
+        let now = Instant::now();
         let mut ui = UiState {
             selected_index: 1,
-            selected_pane: Some(clicked.clone()),
-            local_selection: Some((clicked, ts(1))),
-            external_focus: Some((from, ts(0))),
+            selected_pane: Some(jumped.clone()),
+            focus_mirror: Some(from.clone()),
+            selection_override: Some(jump(&jumped, Some(&from), now + Duration::from_millis(500))),
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, Some((third.clone(), ts(2))));
+        reconcile_selection(&mut ui, &snapshot, Some(third.clone()), now);
 
         assert_eq!(ui.selected_index, 2);
         assert_eq!(ui.selected_pane, Some(third.clone()));
-        assert_eq!(ui.external_focus, Some((third, ts(2))));
+        assert_eq!(ui.focus_mirror, Some(third));
+        assert_eq!(
+            ui.selection_override, None,
+            "a genuine move clears the override"
+        );
     }
 
     #[test]
-    fn monotonic_guard_ignores_a_reordered_older_sample() {
-        // external_focus was last trusted on terminal_2 at ts(2). A focus sample
-        // for a different pane (terminal_1) arrives reordered with an *older*
-        // stamp (ts(1)); the monotonic guard rejects it, so the highlight holds.
+    fn failed_jump_reconverges_after_settle() {
+        // Root cause B. A jump pins terminal_2 but never lands — the mirror stays
+        // stuck on terminal_1. Once the deadline passes the override is abandoned
+        // and the highlight reconverges on the true focus.
         let ws = workspace();
-        let held = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let older = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let real = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let started = Instant::now();
+        let mut ui = UiState {
+            selected_index: 1,
+            selected_pane: Some(jumped),
+            focus_mirror: Some(real.clone()),
+            selection_override: Some(jump(
+                &PaneId::from_parts(MuxName::Zellij, "terminal_2"),
+                Some(&real),
+                started + Duration::from_millis(500),
+            )),
+            ..Default::default()
+        };
+
+        // A fold past the deadline, mirror still stuck on the real focus.
+        reconcile_selection(
+            &mut ui,
+            &snapshot,
+            Some(real.clone()),
+            started + Duration::from_secs(1),
+        );
+
+        assert_eq!(ui.selected_index, 0);
+        assert_eq!(
+            ui.selected_pane,
+            Some(real),
+            "reconverged on the true focus"
+        );
+        assert_eq!(ui.selection_override, None, "the failed jump was abandoned");
+    }
+
+    #[test]
+    fn inert_report_holds_the_mirror() {
+        // A `None` report — the sidebar itself focused, an undiscoverable focus, or
+        // a non-row helper pane filtered out at the call site — holds the mirror's
+        // last value and does not blank or move the highlight.
+        let ws = workspace();
+        let held = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 0,
+            selected_pane: Some(held.clone()),
+            focus_mirror: Some(held.clone()),
+            ..Default::default()
+        };
+
+        reconcile_selection(&mut ui, &snapshot, None, Instant::now());
+
+        assert_eq!(ui.selected_pane, Some(held.clone()));
+        assert_eq!(ui.focus_mirror, Some(held));
+    }
+
+    #[test]
+    fn browse_holds_across_inert_reports() {
+        // An arrow-browse pins terminal_2 without moving focus. Inert (`None`)
+        // reports do not advance the mirror off the baseline, so the browse holds.
+        let ws = workspace();
+        let browsed = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let baseline = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
@@ -2871,20 +2982,83 @@ mod tests {
         );
         let mut ui = UiState {
             selected_index: 1,
-            selected_pane: Some(held.clone()),
-            external_focus: Some((held.clone(), ts(2))),
+            selected_pane: Some(browsed.clone()),
+            focus_mirror: Some(baseline.clone()),
+            selection_override: Some(browse(&browsed, Some(&baseline))),
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, Some((older, ts(1))));
+        for _ in 0..2 {
+            reconcile_selection(&mut ui, &snapshot, None, Instant::now());
+            assert_eq!(ui.selected_pane, Some(browsed.clone()), "browse holds");
+            assert!(ui.selection_override.is_some());
+        }
+    }
 
-        assert_eq!(ui.selected_index, 1);
-        assert_eq!(ui.selected_pane, Some(held.clone()));
-        assert_eq!(
-            ui.external_focus,
-            Some((held, ts(2))),
-            "a reordered older sample never refreshes external_focus"
+    #[test]
+    fn browse_holds_then_yields_to_a_genuine_external_move() {
+        // The browse pins terminal_2 (baseline terminal_1); when the client focus
+        // genuinely moves off the baseline (to terminal_3), the browse ends and the
+        // highlight follows the mirror.
+        let ws = workspace();
+        let browsed = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let baseline = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let moved = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+                pane("terminal_3", "tab_0", false),
+            ],
         );
+        let mut ui = UiState {
+            selected_index: 1,
+            selected_pane: Some(browsed.clone()),
+            focus_mirror: Some(baseline.clone()),
+            selection_override: Some(browse(&browsed, Some(&baseline))),
+            ..Default::default()
+        };
+
+        // Inert report first: browse still holds.
+        reconcile_selection(&mut ui, &snapshot, None, Instant::now());
+        assert_eq!(ui.selected_pane, Some(browsed));
+
+        // Then a genuine external move ends the browse.
+        reconcile_selection(&mut ui, &snapshot, Some(moved.clone()), Instant::now());
+        assert_eq!(ui.selected_pane, Some(moved.clone()));
+        assert_eq!(ui.focus_mirror, Some(moved));
+        assert_eq!(ui.selection_override, None, "the browse yielded");
+    }
+
+    #[test]
+    fn rapid_successive_jumps_take_the_latest() {
+        // A second jump overwrites the override with the newest pane; the latest
+        // pinned pane wins, with no stacking.
+        let ws = workspace();
+        let latest = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+        let from = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+                pane("terminal_3", "tab_0", false),
+            ],
+        );
+        let now = Instant::now();
+        let mut ui = UiState {
+            selected_index: 2,
+            selected_pane: Some(latest.clone()),
+            focus_mirror: Some(from.clone()),
+            selection_override: Some(jump(&latest, Some(&from), now + Duration::from_millis(500))),
+            ..Default::default()
+        };
+
+        reconcile_selection(&mut ui, &snapshot, Some(from), now);
+
+        assert_eq!(ui.selected_index, 2);
+        assert_eq!(ui.selected_pane, Some(latest), "the latest jump holds");
     }
 
     #[test]
@@ -2892,8 +3066,7 @@ mod tests {
         // terminal_2 moved from row 1 to row 0 between folds with no focus edge;
         // the highlight follows its pane, not the old index.
         let ws = workspace();
-        let clicked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let focus = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
@@ -2903,22 +3076,21 @@ mod tests {
         );
         let mut ui = UiState {
             selected_index: 1,
-            selected_pane: Some(clicked.clone()),
-            local_selection: Some((clicked.clone(), ts(2))),
-            external_focus: Some((focus.clone(), ts(0))),
+            selected_pane: Some(focus.clone()),
+            focus_mirror: Some(focus.clone()),
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, Some((focus, ts(0))));
+        reconcile_selection(&mut ui, &snapshot, Some(focus.clone()), Instant::now());
 
         assert_eq!(ui.selected_index, 0, "re-anchored to the pane's new row");
-        assert_eq!(ui.selected_pane, Some(clicked));
+        assert_eq!(ui.selected_pane, Some(focus));
     }
 
     #[test]
     fn selection_drops_when_its_pane_leaves_the_room() {
-        // The locally-selected pane is gone from the snapshot: drop the dangling
-        // identity and clamp, so the next selection can re-seat it.
+        // The mirror's pane is gone from the snapshot: drop the dangling identity
+        // and clamp, so the next report can re-seat it.
         let ws = workspace();
         let gone = PaneId::from_parts(MuxName::Zellij, "terminal_9");
         let snapshot = snapshot_with_panes(
@@ -2931,15 +3103,46 @@ mod tests {
         let mut ui = UiState {
             selected_index: 1,
             selected_pane: Some(gone.clone()),
-            local_selection: Some((gone, ts(2))),
+            focus_mirror: Some(gone),
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, None);
+        reconcile_selection(&mut ui, &snapshot, None, Instant::now());
 
         assert_eq!(ui.selected_pane, None, "dangling identity dropped");
-        assert_eq!(ui.local_selection, None, "absent local selection cleared");
+        assert_eq!(ui.focus_mirror, None, "absent mirror cleared");
         assert!(ui.selected_index < 2, "clamped to a valid row");
+    }
+
+    #[test]
+    fn override_drops_when_its_pane_leaves_the_room() {
+        // A browse pins terminal_9, which then closes. The override must not keep
+        // shadowing the mirror — it is dropped, so the highlight reconverges on the
+        // real focus on the next fold.
+        let ws = workspace();
+        let gone = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+        let real = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 1,
+            selected_pane: Some(gone.clone()),
+            focus_mirror: Some(real.clone()),
+            selection_override: Some(browse(&gone, Some(&real))),
+            ..Default::default()
+        };
+
+        reconcile_selection(&mut ui, &snapshot, None, Instant::now());
+        assert_eq!(ui.selection_override, None, "the dead override is dropped");
+
+        // The next fold reconverges on the live focus mirror.
+        reconcile_selection(&mut ui, &snapshot, None, Instant::now());
+        assert_eq!(ui.selected_pane, Some(real));
     }
 
     /// Lay out `snapshot` at a generous size through the real render path,
@@ -3081,6 +3284,16 @@ mod tests {
 
         assert_eq!(outcome, InputOutcome::focus(1));
         assert_eq!(ui.selected_index, 1);
+        assert!(
+            matches!(
+                ui.selection_override,
+                Some(SelectionOverride {
+                    kind: OverrideKind::Jump { .. },
+                    ..
+                })
+            ),
+            "a click pins an optimistic jump override"
+        );
     }
 
     #[test]
@@ -3105,6 +3318,16 @@ mod tests {
 
         assert_eq!(outcome, InputOutcome::redraw());
         assert_eq!(ui.selected_index, 1);
+        assert!(
+            matches!(
+                ui.selection_override,
+                Some(SelectionOverride {
+                    kind: OverrideKind::Browse { .. },
+                    ..
+                })
+            ),
+            "arrow browse pins a browse override, not a jump"
+        );
     }
 
     #[test]
@@ -3144,6 +3367,16 @@ mod tests {
 
         assert_eq!(outcome, InputOutcome::focus(1));
         assert_eq!(ui.selected_index, 1);
+        assert!(
+            matches!(
+                ui.selection_override,
+                Some(SelectionOverride {
+                    kind: OverrideKind::Jump { .. },
+                    ..
+                })
+            ),
+            "Enter pins an optimistic jump override"
+        );
     }
 
     // ---- last-known-good commit gate -------------------------------------

@@ -21,6 +21,7 @@ mod theme;
 pub(crate) use odometer::TallyAnim;
 
 use std::io::{self, Write};
+use std::time::Instant;
 
 use jiff::Timestamp;
 use ratatui::backend::{Backend, CrosstermBackend};
@@ -60,24 +61,49 @@ pub struct UiState {
     /// before the first draw.
     pub line_map: Vec<Option<usize>>,
     /// The pane the highlight is pinned to — selection keyed by identity, not
-    /// position. Re-derived each fold from the timestamped contest between
-    /// `local_selection` and `external_focus` (see `app::reconcile_selection`).
-    /// Keying on the pane means a status-churn reorder re-anchors the highlight
-    /// to the same pane instead of sliding it onto a neighbour.
+    /// position. Re-derived each fold by `app::reconcile_selection` from the
+    /// `focus_mirror` and any active `selection_override`. Keying on the pane
+    /// means a status-churn reorder re-anchors the highlight to the same pane
+    /// instead of sliding it onto a neighbour.
     pub selected_pane: Option<PaneId>,
-    /// The pane and instant of the last *local* selection action — a click, `↵`,
-    /// a digit, `␣`, or arrow navigation. The newer of this and `external_focus`
-    /// wins the highlight, so a fresh local pick holds through the briefly-stale
-    /// focus window a click-through jump opens.
-    pub local_selection: Option<(PaneId, Timestamp)>,
-    /// The pane and observation instant of the last *valid* external focus — a
-    /// non-sidebar agent row the producer sampled the client focused on. A
-    /// sidebar-self focus, an undiscoverable focus, or a focus on a non-row
-    /// helper pane (`claude rc`, `codex app-server`) is invalid and leaves this
-    /// untouched, so it can never roll a fresh local selection back. Adopted
-    /// only on a genuine new move (a different pane than the one last trusted)
-    /// with a newer timestamp than the stored sample.
-    pub external_focus: Option<(PaneId, Timestamp)>,
+    /// The last agent row the mux client was observed focused on — the
+    /// level-triggered baseline and the *default* highlight. It advances on every
+    /// valid focus report and HOLDS its value across a `None` / sidebar-self /
+    /// undiscoverable / non-row report, so a momentary "no agent focus" gap never
+    /// blanks or moves the highlight. With no active override the highlight simply
+    /// follows this, so the sidebar always reconverges on the real focus.
+    pub(crate) focus_mirror: Option<PaneId>,
+    /// The active local override of the focus mirror, or `None` to follow the
+    /// mirror. Set by every local selection action and cleared by
+    /// `app::reconcile_selection` once it resolves (see [`OverrideKind`]).
+    pub(crate) selection_override: Option<SelectionOverride>,
+}
+
+/// A local selection that overrides the [`UiState::focus_mirror`] for a bounded
+/// window. `pane` is the identity it pins; `kind` decides when it yields.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SelectionOverride {
+    pub(crate) pane: PaneId,
+    pub(crate) kind: OverrideKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum OverrideKind {
+    /// Arrow-key browse: pins `pane` WITHOUT moving focus. Holds until the user
+    /// acts again or the client focus moves off `baseline` — the mirror value
+    /// captured when browsing began. A `None`/inert report does not advance the
+    /// mirror, so it is not "moving off baseline" and the browse holds.
+    Browse { baseline: Option<PaneId> },
+    /// Click / `↵` / digit / `␣`: optimistically pins the jumped `pane`. Resolves
+    /// (clears, reverting to the mirror) when the mirror confirms focus reached
+    /// `pane`, when a genuine external move lands on a pane that is neither `pane`
+    /// nor `from`, or when `now >= settle_deadline` (a jump that never landed).
+    /// `from` is the pre-jump focus, so a lagging re-report of it holds the
+    /// optimistic pick instead of bouncing the highlight back.
+    Jump {
+        settle_deadline: Instant,
+        from: Option<PaneId>,
+    },
 }
 
 /// A sticky health alert pinned to the bottom of the sidebar.
