@@ -8,7 +8,7 @@ This crate is a **pure projection** over the `SidebarSnapshot` view-model. It ow
 
 - **The view-model owns every decision.** Grouping, ranking, and pane→row binding are resolved once in the producer ([`ledger/snapshot.rs`](../rimz/src/ledger/snapshot.rs) in the `rimz` crate). Never re-derive them here — a renderer maps view-model fields to glyphs and nothing more. The view-model types (`SidebarSnapshot`, `SidebarRow`, …) live in `rimz`; this crate consumes them.
 - **Read-only on the ledger.** Reach state only through `rimz sidebar snapshot` or the in-process consumer read (`rimz::sidebar::snapshot`); never import a ledger-writer module (CI grep). The only write is this renderer's own liveness heartbeat, via `rimz::sidebar::write_heartbeat`.
-- **Panes are opaque.** Pane presence arrives in the snapshot; never call `pane capture` / `pane send`. The lone mux call is the metadata-only sibling count for self-close, which never updates the rendered snapshot.
+- **Panes are opaque.** Pane presence arrives in the snapshot; never call `pane capture` / `pane send`. The lone mux call is the resize-time metadata-only sibling count for self-close, which never updates the rendered snapshot.
 - **The semantic→glyph mapping is the one cross-renderer discipline.** It lives in [`render/labels.rs`](./src/render/labels.rs) and must track the canonical table in [docs/interface/sidebar.md](../../docs/interface/sidebar.md#reading-the-glyphs) so the native pane, the Zellij rail, and the CLI read the same.
 
 ## The loop

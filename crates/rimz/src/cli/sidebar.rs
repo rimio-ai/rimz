@@ -221,7 +221,13 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     snapshot.with_agent_context(rimz::ledger::agent_context::read_all(runtime));
                 snapshot = snapshot
                     .with_subagent_context(rimz::ledger::subagent_context::read_all(runtime));
-                let activity = rimz::agent_activity::read_all(runtime);
+                let activity = rimz::agent_activity::read_for_keys(
+                    runtime,
+                    snapshot
+                        .agents
+                        .iter()
+                        .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
+                );
                 snapshot = snapshot.with_agent_activity(&activity);
             }
 

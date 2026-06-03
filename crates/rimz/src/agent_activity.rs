@@ -16,6 +16,7 @@
 //! is nothing to fold it onto. `rimz gc` reaps the files ended sessions leave
 //! behind, like the other runtime liveness files.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -63,6 +64,28 @@ pub fn touch(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> Result<(), a
     atomic::write_temp_then_rename(&activity_path(runtime, kind, agent_id), &record)
 }
 
+fn read_one(path: PathBuf) -> Option<AgentActivity> {
+    let bytes = fs::read(path).ok()?;
+    serde_json::from_slice::<AgentActivity>(&bytes).ok()
+}
+
+/// Read activity touches for the live agent identities the caller already has.
+/// This is the sidebar hot path: runtime activity files are disposable and may
+/// outlive their sessions until `rimz gc`, so a keyed read avoids parsing a
+/// directory full of stale sidecars on every renderer tick.
+pub fn read_for_keys<'a>(
+    runtime: &RuntimePaths,
+    keys: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Vec<AgentActivity> {
+    let mut seen = BTreeSet::new();
+    keys.into_iter()
+        .filter_map(|(kind, agent_id)| {
+            let path = activity_path(runtime, kind, agent_id);
+            seen.insert(path.clone()).then(|| read_one(path)).flatten()
+        })
+        .collect()
+}
+
 /// Read every recorded activity touch. A missing dir, an unreadable file, or
 /// malformed JSON is skipped — a liveness hint never blocks a snapshot.
 pub fn read_all(runtime: &RuntimePaths) -> Vec<AgentActivity> {
@@ -83,10 +106,7 @@ pub fn read_all(runtime: &RuntimePaths) -> Vec<AgentActivity> {
             // possibly staler, touch for the same identity.
             entry.path().extension().is_some_and(|ext| ext == "json")
         })
-        .filter_map(|entry| {
-            let bytes = fs::read(entry.path()).ok()?;
-            serde_json::from_slice::<AgentActivity>(&bytes).ok()
-        })
+        .filter_map(|entry| read_one(entry.path()))
         .collect()
 }
 
@@ -140,6 +160,19 @@ mod tests {
         // A different identity gets its own file.
         touch(&runtime, "codex", "sess-1").expect("touch codex");
         assert_eq!(read_all(&runtime).len(), 2);
+    }
+
+    #[test]
+    fn read_for_keys_reads_only_requested_identities() {
+        let (_dir, runtime) = runtime();
+        touch(&runtime, "claude", "sess-live").expect("touch live");
+        touch(&runtime, "claude", "sess-stale").expect("touch stale");
+        touch(&runtime, "codex", "sess-stale").expect("touch other stale");
+
+        let all = read_for_keys(&runtime, [("claude", "sess-live")]);
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].kind, "claude");
+        assert_eq!(all[0].agent_id, "sess-live");
     }
 
     #[test]

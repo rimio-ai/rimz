@@ -103,11 +103,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // across re-fetches and ledger deltas, so no redraw path can stall it.
     let anim_start = Instant::now();
 
-    // The snapshot subprocess (workspace resolve + `list-panes` + git) and the
-    // heartbeat write run on a background worker, so animation and input never
-    // block on them. The worker posts `SNAPSHOT_WAKEUP` when a result is ready;
-    // `in_flight`/`pending_refetch` coalesce requests so a ledger-delta storm or
-    // a slow fetch can never queue more than one extra run.
+    // The snapshot subprocess (workspace resolve + `list-panes` + git) runs on
+    // a background worker, so animation and input never block on it. The worker
+    // posts `SNAPSHOT_WAKEUP` when a result is ready; `in_flight`/
+    // `pending_refetch` coalesce requests so a ledger-delta storm or a slow
+    // fetch can never queue more than one extra run.
     let (request_tx, request_rx) = std::sync::mpsc::channel::<FetchRequest>();
     let (result_tx, result_rx) = std::sync::mpsc::channel::<FetchOutcome>();
     // `JoinHandle` drops without blocking: the thread runs to completion on its
@@ -176,7 +176,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // keypress.
     let mut dirty = true;
     let mut next_frame = Instant::now();
-    let mut last_close_probe = Instant::now();
+    let mut last_self_close_check = Instant::now();
     // The sidebar's own pane width as of the last resize the loop processed. A
     // resize that grows it is the precondition for the self-close full-width
     // flash, so a grow holds its repaint (`paint_held`) until the sibling-count
@@ -198,9 +198,9 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 .saturating_duration_since(Instant::now())
                 .max(FRAME_MIN_TIMEOUT)
         } else {
-            // Cap by the watchdog so the probe fires on time even when the data
-            // tick is much longer (e.g. the test's 20s tick vs the 3s watchdog).
-            let watchdog_due = SELF_CLOSE_PROBE_WATCHDOG.saturating_sub(last_close_probe.elapsed());
+            // Cap by the watchdog so the self-close backstop fires on time even
+            // when the data tick is much longer.
+            let watchdog_due = SELF_CLOSE_WATCHDOG.saturating_sub(last_self_close_check.elapsed());
             tick.min(watchdog_due).max(FRAME_MIN_TIMEOUT)
         };
         socket.set_read_timeout(Some(timeout))?;
@@ -216,6 +216,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 }
                 let mut rejected = false;
                 if let Some(outcome) = latest {
+                    let snapshot_ok = outcome.snapshot.is_ok();
                     fetched_at = Instant::now();
                     let applied = apply_fetch_outcome(
                         &config,
@@ -231,6 +232,9 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     )?;
                     should_exit = applied.should_exit;
                     rejected = applied.rejected;
+                    if snapshot_ok {
+                        last_self_close_check = Instant::now();
+                    }
                     // The fold mutated the model; the frame phase paints it.
                     dirty = true;
                     if !should_exit {
@@ -349,7 +353,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     &mut pending_self_close_probe,
                     Duration::ZERO,
                 );
-                last_close_probe = Instant::now();
+                last_self_close_check = Instant::now();
                 // A resize is the mux telling us topology changed: a split
                 // opened/closed, or the sidebar got space back. Pull a fresh
                 // pane list immediately and require a cache produced after this
@@ -453,16 +457,20 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         }
 
         // Self-close watchdog: if no resize event fired (e.g. background sessions
-        // where the mux omits SIGWINCH after a pane closes), poll the pane list
-        // on a slow backstop so the sidebar still closes promptly. The resize path
-        // remains the fast lane; this is only a fallback for when it stays silent.
-        if last_close_probe.elapsed() >= SELF_CLOSE_PROBE_WATCHDOG {
-            last_close_probe = Instant::now();
-            request_self_close_probe(
-                &self_close_probe_tx,
-                &mut self_close_probe_in_flight,
-                &mut pending_self_close_probe,
-                Duration::ZERO,
+        // where the mux omits SIGWINCH after a pane closes), ask the normal
+        // snapshot path to refresh so the snapshot's own-view count can close a
+        // lone sidebar. This preserves the one-producer bound: consumers read
+        // the shared pane cache in process instead of each forking `list-panes`.
+        // The resize path remains the fast lane and still runs the metadata-only
+        // probe for the full-width-flash guard.
+        if last_self_close_check.elapsed() >= SELF_CLOSE_WATCHDOG {
+            last_self_close_check = Instant::now();
+            request_fetch(
+                &request_tx,
+                &mut in_flight,
+                &mut pending_refetch,
+                FetchRequest::default(),
+                false,
             );
         }
 
@@ -472,14 +480,20 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         // timer wake with no recompose. While idle, keep the grid armed so the
         // next event paints within one `ANIMATION_FRAME`.
         let now = Instant::now();
+        if dirty {
+            let dirty_deadline = now + ANIMATION_FRAME;
+            if next_frame > dirty_deadline {
+                next_frame = dirty_deadline;
+            }
+        }
         // `!should_exit`: once the tab has emptied, never paint again — this is
         // what stops the last frame from flashing at the grown/full width on the
         // way out. `!paint_held`: a grow resize defers its paint until the
         // sibling-count verdict releases the hold (see the resize handler).
         if !should_exit && !paint_held && active && now >= next_frame {
             ui.animation_phase = wall_clock_phase(anim_start);
-            let animating =
-                render::has_live_animation(&current) || ui.tally.any_rolling(ui.animation_phase);
+            let animating = render::animation_cadence(&current) != render::AnimationCadence::None
+                || ui.tally.any_rolling(ui.animation_phase);
             if dirty || animating {
                 render::draw_to_terminal_with_ui(
                     &mut terminal,
@@ -489,7 +503,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 )?;
                 dirty = false;
             }
-            next_frame = next_frame_after(next_frame, now, ANIMATION_FRAME);
+            next_frame = next_frame_after(next_frame, now, frame_interval(&current, &ui));
         } else if !active {
             next_frame = now + ANIMATION_FRAME;
         }
@@ -747,17 +761,16 @@ impl SelfCloseState {
 }
 
 const EMPTY_STARTUP_OBSERVATIONS_BEFORE_CLOSE: u8 = 2;
-/// Watchdog interval for the self-close probe: when no resize event arrives
+/// Watchdog interval for the self-close backstop: when no resize event arrives
 /// (e.g. background Zellij sessions that omit SIGWINCH after a pane closes),
-/// this backstop polls the live pane list to detect an empty tab. Sized at 2s
-/// so that even a slow probe (up to `PROBE_COMMAND_TIMEOUT`) finishes inside
-/// the 7s integration-test window with margin to spare.
-const SELF_CLOSE_PROBE_WATCHDOG: Duration = Duration::from_secs(2);
+/// this asks the normal snapshot path for a fresh own-view count. Sized at 2s
+/// so cleanup stays prompt even when a caller configured a much slower data tick.
+const SELF_CLOSE_WATCHDOG: Duration = Duration::from_secs(2);
 /// Maximum time the self-close probe spends waiting for the mux backend's
 /// `list-panes` subprocess. Shorter than the default 30s backend timeout so
-/// a hung Zellij does not pin the sidebar open indefinitely. Combined with
-/// `SELF_CLOSE_PROBE_WATCHDOG` (2s), worst-case close time is ≤ 2+4 = 6s —
-/// safely inside the 7s integration-test window.
+/// a hung Zellij does not pin the sidebar open indefinitely. Resize probes are
+/// the fast path for the full-width-flash guard; the periodic backstop uses the
+/// shared snapshot fetch instead.
 const PROBE_COMMAND_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// Decide whether the daemon-view sidebar should detach the client because the
@@ -1054,6 +1067,11 @@ fn next_health(previous: &Health, failure: Option<String>) -> Health {
 /// something to move.
 const ANIMATION_FRAME: Duration = Duration::from_millis(100);
 
+/// Slow cosmetic animation tick for attention breathing and empty-idle loading
+/// dots. These visual states already hold the same rendered frame for several
+/// base phases, so redrawing them at 10fps wastes CPU in an idle or blocked room.
+const SLOW_ANIMATION_FRAME: Duration = Duration::from_millis(300);
+
 /// Floor for the frame-boundary recv timeout. When the loop is at or past the
 /// next frame boundary, the time-to-boundary is zero; a 1ms floor lets an
 /// already-queued datagram drain on this turn without a zero-timeout busy spin.
@@ -1073,6 +1091,17 @@ const SELECTION_SETTLE: Duration = Duration::from_millis(1500);
 /// without a per-tick counter that a break-and-refetch could reset.
 fn wall_clock_phase(start: Instant) -> u64 {
     (start.elapsed().as_millis() / ANIMATION_FRAME.as_millis()) as u64
+}
+
+fn frame_interval(snapshot: &SidebarSnapshot, ui: &UiState) -> Duration {
+    if ui.tally.any_rolling(ui.animation_phase) {
+        return ANIMATION_FRAME;
+    }
+    match render::animation_cadence(snapshot) {
+        render::AnimationCadence::Fast => ANIMATION_FRAME,
+        render::AnimationCadence::Slow => SLOW_ANIMATION_FRAME,
+        render::AnimationCadence::None => ANIMATION_FRAME,
+    }
 }
 
 fn tick_for(seconds: u64) -> Duration {
@@ -2668,6 +2697,59 @@ mod tests {
             next_frame_after(base, now, ANIMATION_FRAME),
             now + ANIMATION_FRAME
         );
+    }
+
+    #[test]
+    fn frame_interval_slows_cosmetic_animation_only() {
+        let ws = workspace();
+        let mut slow = snapshot(&ws);
+        slow.worktree_groups = vec![rimz::SidebarWorktreeGroup {
+            key: "/repo/main".to_owned(),
+            label: "main".to_owned(),
+            kind: rimz::SidebarWorktreeKind::Worktree,
+            status_counts: Vec::new(),
+            rows: vec![rimz::SidebarRow {
+                row_kind: rimz::SidebarRowKind::Agent,
+                id: "claude-1".to_owned(),
+                name: "claude".to_owned(),
+                status: Some(rimz::feed::AgentStatus::Waiting),
+                permission_posture: None,
+                pane: None,
+                request_id: None,
+                surface: None,
+                task: Some("allow cargo fmt".to_owned()),
+                prompt: None,
+                model: None,
+                effort: None,
+                context_pct: None,
+                total_tokens: None,
+                todo_done: None,
+                todo_total: None,
+                context: None,
+                worktree_path: Some("/repo/main".to_owned()),
+                worktree_branch: Some("main".to_owned()),
+                last_activity: Timestamp::now(),
+                resolver: None,
+                options: Vec::new(),
+                sub_agents: Vec::new(),
+                process_active: false,
+                command_detail: None,
+                compacting: false,
+                parked_on_background: false,
+            }],
+            hidden_count: 0,
+            diff_added: None,
+            diff_removed: None,
+            commits_ahead: None,
+        }];
+
+        assert_eq!(
+            frame_interval(&slow, &UiState::default()),
+            SLOW_ANIMATION_FRAME
+        );
+
+        slow.worktree_groups[0].rows[0].status = Some(rimz::feed::AgentStatus::Running);
+        assert_eq!(frame_interval(&slow, &UiState::default()), ANIMATION_FRAME);
     }
 
     #[test]

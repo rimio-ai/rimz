@@ -461,7 +461,13 @@ pub fn enrich_consumer(
     }
     if !snapshot.agents.is_empty() {
         snapshot = snapshot.with_agent_context(crate::ledger::agent_context::read_all(runtime));
-        let activity = crate::agent_activity::read_all(runtime);
+        let activity = crate::agent_activity::read_for_keys(
+            runtime,
+            snapshot
+                .agents
+                .iter()
+                .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
+        );
         snapshot = snapshot.with_agent_activity(&activity);
     }
     // Wiring state gates the live-pane fold (the idle-instance synthesis), so set

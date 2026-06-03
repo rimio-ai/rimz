@@ -139,33 +139,65 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Al
     draw_with_ui(frame, snapshot, alert, &mut UiState::default());
 }
 
+/// The fastest animation class currently visible in the snapshot. Fast motion
+/// changes every frame (working/thinking spinners, resolver work, active process
+/// rows). Slow motion is cosmetic attention/loading movement whose visible
+/// state is held for several base frames, so the serve loop can redraw it less
+/// often without making the sidebar feel stale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnimationCadence {
+    None,
+    Slow,
+    Fast,
+}
+
 /// Whether any visible row is in an animated state — a running agent (working
 /// or plan-mode thinking), a resolver mid-flight, an active process spinning on
 /// real work (a build, a test, a `sudo` install), an attention row whose `?`/`!`
 /// glyph breathes, or an idle agent showing the loading-dots cue. The serve
-/// loop uses this to switch to the fast animation tick only while there is live
-/// motion to paint; a fully settled sidebar (only quiet idle/done rows) keeps
+/// loop uses this as the broad "does anything move?" gate; [`animation_cadence`]
+/// decides whether the movement needs the fast frame grid or the slower
+/// cosmetic cadence. A fully settled sidebar (only quiet idle/done rows) keeps
 /// idling on the slow data tick. A stalled agent is projected to `failed`
 /// upstream, so it reads as a breathing `!` here. The cockpit's today-spend
 /// count-up rides a separate gate (`UiState::tally`), so a finished-turn climb
 /// keeps the tick alive even when every row is otherwise static.
 pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {
+    animation_cadence(snapshot) != AnimationCadence::None
+}
+
+pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
     use rimz::feed::AgentStatus;
-    snapshot
+    let mut slow = false;
+    for row in snapshot
         .worktree_groups
         .iter()
         .flat_map(|group| &group.rows)
-        .any(|row| match row.row_kind {
+    {
+        match row.row_kind {
             SidebarRowKind::Agent => {
-                row.resolver.is_some()
-                    || row.status == Some(AgentStatus::Running)
-                    // `?`/`!` breathe to pull the eye back to an unanswered row.
-                    || matches!(row.status, Some(AgentStatus::Waiting | AgentStatus::Failed))
-                    // The idle "waiting for a prompt" loading-dots cue.
+                if row.resolver.is_some() || row.status == Some(AgentStatus::Running) {
+                    return AnimationCadence::Fast;
+                }
+                // `?`/`!` breathe to pull the eye back to an unanswered row, and
+                // the idle "waiting for a prompt" loading-dots cue cycles in
+                // place. Both are deliberately slow and do not need a 10fps
+                // full-frame redraw.
+                if matches!(row.status, Some(AgentStatus::Waiting | AgentStatus::Failed))
                     || sections::shows_loading_dots(row)
+                {
+                    slow = true;
+                }
             }
-            SidebarRowKind::Process => row.process_active,
-        })
+            SidebarRowKind::Process if row.process_active => return AnimationCadence::Fast,
+            SidebarRowKind::Process => {}
+        }
+    }
+    if slow {
+        AnimationCadence::Slow
+    } else {
+        AnimationCadence::None
+    }
 }
 
 pub fn draw_with_ui(
@@ -1399,6 +1431,51 @@ mod tests {
         let idle = snapshot_with(Vec::new(), Vec::new())
             .with_live_panes(vec![pane("%1", "zsh", "/repo/main")], None);
         assert!(!has_live_animation(&idle));
+    }
+
+    #[test]
+    fn animation_cadence_separates_fast_work_from_slow_cosmetic_motion() {
+        let running = snapshot_with(
+            Vec::new(),
+            vec![agent(
+                "claude-1",
+                "claude",
+                AgentStatus::Running,
+                PermissionPosture::Default,
+                Some("/repo/main"),
+                Some("main"),
+                Some("db migrate"),
+            )],
+        );
+        assert_eq!(animation_cadence(&running), AnimationCadence::Fast);
+
+        let waiting = snapshot_with(
+            Vec::new(),
+            vec![agent(
+                "claude-1",
+                "claude",
+                AgentStatus::Waiting,
+                PermissionPosture::Default,
+                Some("/repo/main"),
+                Some("main"),
+                Some("allow cargo fmt"),
+            )],
+        );
+        assert_eq!(animation_cadence(&waiting), AnimationCadence::Slow);
+
+        let calm = snapshot_with(
+            Vec::new(),
+            vec![agent(
+                "claude-1",
+                "claude",
+                AgentStatus::Success,
+                PermissionPosture::Default,
+                Some("/repo/main"),
+                Some("main"),
+                Some("done"),
+            )],
+        );
+        assert_eq!(animation_cadence(&calm), AnimationCadence::None);
     }
 
     #[test]
