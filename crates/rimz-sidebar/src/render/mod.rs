@@ -36,7 +36,7 @@ use rimz::{SidebarRowKind, SidebarSnapshot};
 use self::fmt::age_short;
 use self::sections::{
     content_width, dashboard_summary_line, first_run_hint_lines, fleet_header_lines, fleet_size,
-    fleet_totals, provider_panel_lines, value_corner_lines, worktree_group_lines,
+    provider_panel_lines, value_corner_lines, worktree_group_lines,
 };
 use self::theme::Theme;
 
@@ -355,20 +355,17 @@ fn snapshot_lines(
     // header from the cockpit. Inert chrome, so every line maps to `None`.
     let mut header = repo_header_lines(theme, snapshot, inner);
     // Dashboard L2: the fleet head-count (`✦`/`✧`, left) and the bold spend
-    // (right), directly under the name. Always present — an empty room reads
-    // `✦ 0` with no spend. Prefer the JSONL-computed today total over the
-    // statusline-sum when available, so the cockpit reflects all sessions today.
-    let mut totals = fleet_totals(&snapshot.agents, &snapshot.worktree_groups);
-    if let Some(today_usd) = snapshot
+    // (right), directly under the name. Always present — an empty room, or a day
+    // with no spend yet, reads `✦ 0` with no spend. The spend is today's total
+    // across every provider, read from the JSONL `value_tally`, so the cockpit
+    // reflects all of today's sessions rather than only the live statusline sum.
+    let today_usd = snapshot
         .value_tally
         .as_ref()
         .map(|t| t.today.usd)
-        .filter(|usd| *usd > 0.0)
-    {
-        totals.cost = Some(today_usd);
-    }
+        .filter(|usd| *usd > 0.0);
     let size = fleet_size(&snapshot.worktree_groups);
-    header.push(dashboard_summary_line(theme, size, &totals, inner));
+    header.push(dashboard_summary_line(theme, size, today_usd, inner));
     header.push(hairline_rule(theme, inner));
     extend_inert(&mut lines, &mut map, header);
 
@@ -2009,13 +2006,13 @@ mod tests {
             plan: Some("Claude Max".to_owned()),
             metered,
             remote_control,
-            spending: None,
-            total_cost_usd: Some(3.5),
-            total_input_tokens: Some(470_000),
-            total_output_tokens: Some(16_000),
-            cached_tokens: Some(1_600),
-            lines_added: Some(230),
-            lines_removed: Some(23),
+            spending: Some(rimz::SpendTally {
+                today: rimz::SpendWindow {
+                    usd: 3.5,
+                    tokens: 486_000,
+                },
+                ..Default::default()
+            }),
             windows: windows
                 .map(|(five, seven)| {
                     vec![
@@ -2208,49 +2205,32 @@ mod tests {
         );
     }
 
-    /// The stats-line money figure (the span carrying `$`) of one rendered panel.
-    fn stats_money(theme: &Theme, panel: &rimz::SidebarProviderPanel) -> String {
+    /// The full provider stats line (all spans joined) of one rendered panel.
+    fn stats_line(theme: &Theme, panel: &rimz::SidebarProviderPanel) -> String {
         provider_panel_lines(theme, std::slice::from_ref(panel), 40)
             .into_iter()
             .flat_map(|line| line.spans)
             .map(|span| span.content.into_owned())
-            .find(|content| content.contains('$'))
-            .expect("a money span on the stats line")
+            .collect()
     }
 
-    /// A token-only provider (Codex) reports no live lifetime cost, so its panel
-    /// shows today's transcript-history spend instead of `$0.00`.
+    /// The provider stats line reads today's transcript-history spend *and* token
+    /// burn from the JSONL `spending`, never the live active-session sum — the one
+    /// figure that also holds for a token-only provider (Codex) with no live cost.
     #[test]
-    fn codex_panel_shows_history_spend_when_no_live_cost() {
+    fn provider_stats_read_todays_jsonl_spend_and_tokens() {
         let theme = Theme::fixed(false);
         let mut codex = provider_panel("codex", "Codex", 33, false, false, None);
-        codex.total_cost_usd = None;
         codex.spending = Some(rimz::SpendTally {
             today: rimz::SpendWindow {
                 usd: 4.20,
-                tokens: 0,
+                tokens: 486_000,
             },
             ..Default::default()
         });
-        let money = stats_money(&theme, &codex);
-        assert!(money.contains("4.20"), "stats money was {money:?}");
-    }
-
-    /// When both are present, the panel prefers the historical today spend over
-    /// the live lifetime cost (the helper sets `total_cost_usd = 3.5`).
-    #[test]
-    fn provider_panel_prefers_history_spend_over_live_cost() {
-        let theme = Theme::fixed(false);
-        let mut claude = provider_panel("claude", "Claude", 173, false, false, None);
-        claude.spending = Some(rimz::SpendTally {
-            today: rimz::SpendWindow {
-                usd: 7.0,
-                tokens: 0,
-            },
-            ..Default::default()
-        });
-        let money = stats_money(&theme, &claude);
-        assert!(money.contains("7.00"), "stats money was {money:?}");
+        let stats = stats_line(&theme, &codex);
+        assert!(stats.contains("$4.20"), "today's JSONL spend: {stats:?}");
+        assert!(stats.contains("486.0k"), "today's JSONL tokens: {stats:?}");
     }
 
     /// A started window — its reset has ticked well below the full window — keeps
@@ -2323,12 +2303,13 @@ mod tests {
                 let mut codex = provider_panel("codex", "Codex", 33, false, false, None);
                 codex.plan = Some("ChatGPT Pro".to_owned());
                 codex.version = Some("0.135.0".to_owned());
-                codex.total_cost_usd = Some(1.2);
-                codex.total_input_tokens = Some(80_000);
-                codex.total_output_tokens = Some(8_000);
-                codex.cached_tokens = None;
-                codex.lines_added = None;
-                codex.lines_removed = None;
+                codex.spending = Some(rimz::SpendTally {
+                    today: rimz::SpendWindow {
+                        usd: 1.2,
+                        tokens: 88_000,
+                    },
+                    ..Default::default()
+                });
                 codex
             },
         ];
@@ -2361,12 +2342,13 @@ mod tests {
     }
 
     /// The value corner: the fleet's quiet, climbing pile pinned at the bottom of
-    /// the dashboard. The all-time hero (`◈ $… · ◇ …  all-time`) leads with USD
-    /// first, this month's dim companion sits under it — today stays in the
-    /// cockpit, never repeated here. No "earned"/"value" label; the climbing
-    /// number carries the feeling. Rendering through a default `UiState`, the
-    /// figures snap to the snapshot's tally (the eased count-up only plays when
-    /// the serve loop folds a fresh tally).
+    /// the dashboard as a two-row ledger. This month's dim companion (`month:`)
+    /// leads, the all-time pile (`total:`) sits under it — each row reading
+    /// `label:  <tokens> tok · $<spend>` flush to the right edge, the labels
+    /// stacked and the `$` figures on one column. Today stays in the cockpit,
+    /// never repeated here. Rendering through a default `UiState`, the figures
+    /// snap to the snapshot's tally (the eased count-up only plays when the serve
+    /// loop folds a fresh tally).
     #[test]
     fn render_value_corner_pins_all_time_pile_under_the_dashboard() {
         let mut claude = agent(
@@ -2408,29 +2390,28 @@ mod tests {
         });
         let rendered = snapshot_to_screen(&snapshot, 54, 34);
 
-        // The hero pile: the `◈` money mark, the grouped all-time dollars, the
-        // `◇` token burn, and its scale whispered on the right edge.
-        assert!(rendered.contains('◈'), "the value mark:\n{rendered}");
+        // The `total:` row: the grouped all-time dollars and its `◇`-free token
+        // burn, labeled on the left and pinned flush right.
+        assert!(
+            rendered.contains("total:"),
+            "the all-time row's label:\n{rendered}"
+        );
         assert!(
             rendered.contains("$4,821.90"),
             "grouped all-time spend:\n{rendered}"
         );
         assert!(
-            rendered.contains("47.2M"),
+            rendered.contains("47.2M tok"),
             "all-time token burn:\n{rendered}"
         );
+        // The `month:` row climbs a window the cockpit doesn't show.
         assert!(
-            rendered.contains("all-time"),
-            "the hero's scale tag:\n{rendered}"
+            rendered.contains("month:"),
+            "this month's row label:\n{rendered}"
         );
-        // This month's companion climbs a window the cockpit doesn't show.
         assert!(
             rendered.contains("$1,240.57"),
             "this month's spend:\n{rendered}"
-        );
-        assert!(
-            rendered.contains("this month"),
-            "the companion's scale tag:\n{rendered}"
         );
         // Today stays in the cockpit's `$` — the corner never repeats it.
         assert!(

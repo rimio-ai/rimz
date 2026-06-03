@@ -3,7 +3,7 @@ source: crates/rimz-sidebar/src/render/mod.rs
 expression: screen
 ---
  ⌘ query-engine
- ✦ 1                                            $1.27
+ ✦ 1
  ────────────────────────────────────────────────────
  ? 0   ! 0   ○ 0                      ✽ 0   ⢿ 1   ✓ 0
  ◷ <t> · ◇ 76.5k

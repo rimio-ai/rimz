@@ -14,7 +14,7 @@ A real room: one Claude agent working in `main`, its card selected, with the per
 
 ```
  ⌘ query-engine                                          ← workspace identity
- ✦ 1                                            $1.27    ← head-count · fleet spend
+ ✦ 1                                            $1.27    ← head-count · today's fleet spend
  ────────────────────────────────────────────────────
  ? 0   ! 0   ○ 0                      ✽ 0   ⢿ 1   ✓ 0    ← make-up: who needs you | who's busy
  ◷ 12m · ◇ 76.5k                                         ← fleet totals: time · tokens
@@ -281,16 +281,18 @@ Every bar across every block shares one start column and one end column, so the 
 
 ### The value corner
 
-The fleet's running pile of work seals the bottom of the dashboard, above the footer — a quiet corner you learn to glance at, never a cue that competes with the rows. Two accumulating windows, money first: the **all-time** hero that climbs as the agents work, and this month's dim companion beneath it.
+The fleet's running pile of work seals the bottom of the dashboard, above the footer — a quiet two-row ledger you learn to glance at, never a cue that competes with the rows. This month's dim companion leads; the all-time **total** that climbs as the agents work sits beneath it.
 
 ```
- ◈ $4,821.90 · ◇ 47.2M                       all-time
-   $1,240.57 · ◇ 33.0M                     this month
+                         month: 33.0M tok · $1,240.57
+                         total: 47.2M tok · $4,821.90
 ```
 
-- **The pile (`◈`).** All-time spend in money-green, then the `◇` token burn, summed over every session of the project's worktrees. The figure only grows: when a turn lands it **rolls upward** — an eased count-up on the wall-clock animation frame, with a brief brighten as it settles. It never counts down, and it never rolls on first paint.
-- **This month.** The month-to-date pile, dim so the all-time hero leads. Today's `$` lives in the cockpit, so the corner never repeats it — the three windows escalate `today → this month → all-time`.
-- **Scale tags.** `all-time` / `this month` whisper the window on the right edge — the climbing number carries the rest, with no "earned" or "value" label. Spend is Claude-sourced today (`costUSD`); the token pile counts every provider that logs usage. The corner is dropped until something has been recorded.
+- **The rows.** Each reads `label:  <tokens> tok · $<spend>`, pinned flush to the right edge — the token burn, then the spend in money-green. The two rows share one token column and one spend column, so the `month:` / `total:` labels stack and every `$` lands on the same right edge.
+- **`total`.** The all-time pile, the figure that only grows. When a turn lands it **rolls upward** — an eased count-up on the wall-clock animation frame, with a brief brighten as it settles. It never counts down, and it never rolls on first paint.
+- **`month`.** The month-to-date pile, dim so the total leads. Today's `$` lives in the cockpit, so the corner never repeats it — the windows escalate `today → month → total`.
+
+Both figures are computed from the transcript JSONL — Codex's dollars priced from its token counts, every provider that logs usage counted. The corner is dropped until something has been recorded.
 
 ## Bottom chrome
 

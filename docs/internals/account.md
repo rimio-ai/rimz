@@ -64,16 +64,16 @@ It is **producer-only**: it needs per-machine config and the out-of-band probe t
 
 Per panel:
 
-- **Aggregate stats** — spend, tokens, and lines summed across the kind's sessions (zero for an idle, session-less kind); `plan` and `version` taken from the freshest `context.observed_at`.
+- **Aggregate stats** — the per-provider `spending` (today / week / month / all-time, summed across the kind's transcript history by `compute_spending`; zero for a session-less kind); `plan` and `version` taken from the freshest `context.observed_at`.
 - **Account** — `metered` and the `plan` label come from the kind's account (a live session's, or the probed idle one); a `plan` tier formats into a brand label (`max` → `Claude Max`, `pro` → `ChatGPT Pro`), and a missing account infers `metered` from whether windows were reported.
 - **Brand style** — emblem art, color, and product name resolve from `[sidebar.providers.<kind>]` over the built-in defaults (claude clay, codex blue, pi forest green); an unknown kind gets neutral grey and no emblem. See [configuration.md](../reference/configuration.md#provider-dashboard).
 - **Balance windows** — the per-duration set chosen by `stable_windows` (below).
 
-Blocks sort by spend and cap at `[sidebar] max_provider_blocks` (default 3) — ranked by the larger of a panel's today spend and its live cost, so a token-only provider is not buried. The account cache and the probe are single-flighted on the elder like the diff stats — the producer publishes `accounts.json`; consumers read it and never fork.
+Blocks sort by spend and cap at `[sidebar] max_provider_blocks` (default 3) — ranked by a panel's today JSONL spend, so the provider you're actively spending on leads and a token-only provider ranks on the same transcript-derived footing. The account cache and the probe are single-flighted on the elder like the diff stats — the producer publishes `accounts.json`; consumers read it and never fork.
 
 ### Per-provider spend
 
-The aggregate stats' `total_cost_usd` sums only **live** sessions' lifetime cost from their rich context — and a token-only provider like Codex reports none. So each panel also carries `spending`, the **today / week / month** figure from the transcript-history read-path ([transcript.md → Cost history](./transcript.md#cost-history)): `compute_spending` returns a per-provider breakdown, and the producer attaches each kind's entry to its panel before sorting. The renderer shows that today spend as the panel's money figure, falling back to the live cost when no history spend is known — so Codex's dollars (priced from tokens via [pricing.md](./pricing.md)) finally show. The spend is producer-only, like the rest of aggregation; it threads in as a plain map so the reducer stays I/O-free.
+A panel's `$` and `◇` are both today's transcript-history spend and token burn, read from `spending` — the per-provider [`SpendTally`](../../crates/rimz/src/agents/spending.rs) `compute_spending` returns ([transcript.md → Cost history](./transcript.md#cost-history)). The producer attaches each kind's entry to its panel before sorting; the renderer reads `spending.today` for both figures, so a token-only provider like Codex (priced from tokens via [pricing.md](./pricing.md)) shows its dollars the same as a `costUSD`-logging one — there is no live-session aggregate to fall back to. The spend is producer-only, like the rest of aggregation; it threads in as a plain map so the reducer stays I/O-free.
 
 ### Stable window selection
 

@@ -183,27 +183,12 @@ pub struct SidebarProviderPanel {
     /// Whether remote control is enabled for this provider (the `⇅ rc` flag).
     pub remote_control: bool,
     /// JSONL-computed today / week / month / all-time spend and tokens for this
-    /// provider, summed across all of its sessions' transcript history. `None`
-    /// until the producer's spending enrichment runs. Distinct from
-    /// `total_cost_usd` (which sums only the live sessions' lifetime cost): this
-    /// is the historical spend, and the only cost source for token-only providers
-    /// like Codex.
+    /// provider, summed across all of its sessions' transcript history — the one
+    /// source for the panel's `$` and `◇` figures, and the only cost source for
+    /// token-only providers like Codex. `None` until the producer's spending
+    /// enrichment runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spending: Option<SpendTally>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_cost_usd: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_output_tokens: Option<u64>,
-    /// Cached input tokens on the freshest session's latest message (no
-    /// cumulative cached figure exists); `None` when unknown.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cached_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lines_added: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lines_removed: Option<u64>,
     /// The account-scoped budget windows, ordered short→long by duration. A
     /// metered account drains one mana bar per window; the persisted cache folds
     /// in so an idle account still paints its last-known bars.
@@ -212,11 +197,10 @@ pub struct SidebarProviderPanel {
 }
 
 impl SidebarProviderPanel {
-    /// The figure the dashboard ranks panels by: the larger of today's
-    /// historical spend and the live sessions' lifetime cost.
+    /// The figure the dashboard ranks panels by: today's JSONL spend, so the
+    /// provider you are spending on right now floats to the top.
     fn rank_cost(&self) -> f64 {
-        let today = self.spending.as_ref().map_or(0.0, |s| s.today.usd);
-        today.max(self.total_cost_usd.unwrap_or(0.0))
+        self.spending.as_ref().map_or(0.0, |s| s.today.usd)
     }
 }
 
@@ -365,13 +349,6 @@ pub struct SidebarRow {
     /// so it stays out of the cockpit tally. Always `false` for process rows.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compacting: bool,
-    /// JSONL-computed today / week / month / all-time spend and token tally for
-    /// all sessions of this agent's repo (all worktrees of the same git
-    /// repository). Built on the producer by the `rimz sidebar snapshot` spending
-    /// enrichment (see [`crate::agents::spending::compute_spending`]); `None`
-    /// until the cache is seeded, and always `None` for process rows.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spending: Option<SpendTally>,
 }
 
 /// A compact summary of a child agent, nested under its parent's row. Subagents
@@ -828,36 +805,6 @@ impl SidebarSnapshot {
                 continue;
             }
 
-            let mut total_cost_usd: Option<f64> = None;
-            let mut total_input_tokens: Option<u64> = None;
-            let mut total_output_tokens: Option<u64> = None;
-            let mut lines_added: Option<u64> = None;
-            let mut lines_removed: Option<u64> = None;
-            for agent in &sessions {
-                let Some(context) = agent.context.as_ref() else {
-                    continue;
-                };
-                if let Some(cost) = context.cost.as_ref() {
-                    if let Some(usd) = cost.total_cost_usd {
-                        *total_cost_usd.get_or_insert(0.0) += usd;
-                    }
-                    if let Some(added) = cost.total_lines_added {
-                        *lines_added.get_or_insert(0) += added;
-                    }
-                    if let Some(removed) = cost.total_lines_removed {
-                        *lines_removed.get_or_insert(0) += removed;
-                    }
-                }
-                if let Some(tokens) = context.tokens.as_ref() {
-                    if let Some(input) = tokens.total_input_tokens {
-                        *total_input_tokens.get_or_insert(0) += input;
-                    }
-                    if let Some(output) = tokens.total_output_tokens {
-                        *total_output_tokens.get_or_insert(0) += output;
-                    }
-                }
-            }
-
             // The freshest context wins the account-scoped facts (plan, version)
             // — every session shares one account.
             let freshest = sessions
@@ -882,14 +829,6 @@ impl SidebarSnapshot {
                 now,
             );
             let has_windows = !windows.is_empty();
-            let cached_tokens = freshest
-                .and_then(|context| context.tokens.as_ref())
-                .and_then(|tokens| tokens.current_usage.as_ref())
-                .map(|usage| {
-                    usage.cache_creation_input_tokens.unwrap_or(0)
-                        + usage.cache_read_input_tokens.unwrap_or(0)
-                })
-                .filter(|cached| *cached > 0);
 
             let account = freshest
                 .and_then(|context| context.account.clone())
@@ -928,20 +867,14 @@ impl SidebarSnapshot {
                 metered,
                 remote_control,
                 spending,
-                total_cost_usd,
-                total_input_tokens,
-                total_output_tokens,
-                cached_tokens,
-                lines_added,
-                lines_removed,
                 windows,
             });
         }
 
         // Most spend first, then kind for a stable order; cap the panel height.
-        // Rank by the larger of the historical today spend and the live lifetime
-        // cost so a token-only provider (Codex) is not buried under a live-cost
-        // provider, nor vice-versa.
+        // Rank by today's JSONL spend so the provider you are actively spending
+        // on floats up, and a token-only provider (Codex) ranks on the same
+        // transcript-derived footing as a live-cost one.
         panels.sort_by(|left, right| {
             right
                 .rank_cost()
@@ -1478,7 +1411,6 @@ fn idle_agent_row(pane: &PaneRef, kind: &str) -> SidebarRow {
         process_active: false,
         command_detail: None,
         compacting: false,
-        spending: None,
     }
 }
 
@@ -1853,7 +1785,6 @@ fn row_from_agent(agent: &AgentState) -> SidebarRow {
         process_active: false,
         command_detail: None,
         compacting: is_compacting(agent, Timestamp::now()),
-        spending: None,
     }
 }
 
@@ -1919,7 +1850,6 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
         process_active: active,
         command_detail,
         compacting: false,
-        spending: None,
     }
 }
 
@@ -2085,7 +2015,6 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         process_active: false,
         command_detail: None,
         compacting: false,
-        spending: None,
     })
 }
 

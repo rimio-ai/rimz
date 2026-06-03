@@ -297,12 +297,12 @@ fn push_count(
     spans.push(Span::styled(format!("{glyph} {count}"), style));
 }
 
-/// The fleet's summed resource totals, computed once and read by both the repo
-/// dashboard's L2 (the `cost`, pinned right of the head-count) and the cockpit's
-/// bottom line (time, tokens, and committed work). Each `Option` stays `None`
-/// until some agent reports that metric, so a consumer renders only what is real.
+/// The fleet's summed live resource totals for the cockpit's bottom line: time
+/// worked, the token burn, and committed work. Spend is not here — the dashboard
+/// reads today's figure straight from the JSONL `value_tally`, never the live
+/// session sum. Each `Option` stays `None` until some agent reports that metric,
+/// so a consumer renders only what is real.
 pub(super) struct FleetTotals {
-    pub cost: Option<f64>,
     pub tokens: Option<u64>,
     pub duration_ms: Option<u64>,
     pub commits: u64,
@@ -315,7 +315,6 @@ pub(super) fn fleet_totals(agents: &[AgentState], groups: &[SidebarWorktreeGroup
         .map(u64::from)
         .sum();
     let mut totals = FleetTotals {
-        cost: None,
         tokens: None,
         duration_ms: None,
         commits,
@@ -324,13 +323,13 @@ pub(super) fn fleet_totals(agents: &[AgentState], groups: &[SidebarWorktreeGroup
         if let Some(n) = agent_total_tokens(agent) {
             *totals.tokens.get_or_insert(0) += n;
         }
-        if let Some(record) = agent.context.as_ref().and_then(|ctx| ctx.cost.as_ref()) {
-            if let Some(usd) = record.total_cost_usd {
-                *totals.cost.get_or_insert(0.0) += usd;
-            }
-            if let Some(ms) = record.total_duration_ms {
-                *totals.duration_ms.get_or_insert(0) += ms;
-            }
+        if let Some(ms) = agent
+            .context
+            .as_ref()
+            .and_then(|ctx| ctx.cost.as_ref())
+            .and_then(|record| record.total_duration_ms)
+        {
+            *totals.duration_ms.get_or_insert(0) += ms;
         }
     }
     totals
@@ -340,12 +339,14 @@ pub(super) fn fleet_totals(agents: &[AgentState], groups: &[SidebarWorktreeGroup
 /// agents (a filled star, teal to echo the metric icons) and, when any spawned
 /// children this turn, `✧ {subs}` subagents (a hollow star, faint and
 /// subordinate) — with the bold money-green spend (two decimals) pinned right.
-/// Always present beneath the identity line; an empty room reads `✦ 0` with no
-/// spend. Committed work moved down to the cockpit totals line.
+/// The spend is `today_usd`: today's total across every provider, read from the
+/// JSONL `value_tally`, never the live session sum. Always present beneath the
+/// identity line; an empty room — or a day with no spend yet — reads `✦ 0` with
+/// no spend. Committed work moved down to the cockpit totals line.
 pub(super) fn dashboard_summary_line(
     theme: &Theme,
     size: (usize, usize),
-    totals: &FleetTotals,
+    today_usd: Option<f64>,
     width: usize,
 ) -> Line<'static> {
     let (main, subs) = size;
@@ -355,9 +356,9 @@ pub(super) fn dashboard_summary_line(
         left.push(Span::styled(FLEET_SUB_GLYPH, theme.faint()));
         left.push(Span::styled(format!(" {subs}"), theme.dim()));
     }
-    let right = match totals.cost {
-        Some(cost) => vec![Span::styled(
-            dollars2(cost),
+    let right = match today_usd {
+        Some(usd) => vec![Span::styled(
+            dollars2(usd),
             theme.style(Color::Green, Modifier::BOLD),
         )],
         None => Vec::new(),
@@ -705,9 +706,6 @@ fn row_lines(
                 inner.push(activity_age_line(theme, row, cw));
             } else {
                 if let Some(line) = token_totals_line(theme, row, cw) {
-                    inner.push(line);
-                }
-                if let Some(line) = spending_line(theme, row, cw) {
                     inner.push(line);
                 }
                 if let Some(line) = work_line(theme, row, cw) {
@@ -1318,33 +1316,6 @@ fn work_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'stat
     printed.then(|| pin_right(spans, vec![age], width))
 }
 
-/// JSONL-computed spending for the row's repo: today (bold green), week, and
-/// month (both dim). Only rendered in the selected/full tier when `row.spending`
-/// is present and at least one value is non-zero. Placed between the token
-/// totals and the work line so the resting card height is unchanged.
-fn spending_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
-    let s = row.spending.as_ref()?;
-    if s.today.usd == 0.0 && s.week.usd == 0.0 && s.month.usd == 0.0 {
-        return None;
-    }
-    let spans = vec![
-        Span::raw("  "),
-        Span::styled("◈", theme.style(Color::Green, Modifier::empty())),
-        Span::styled(" today ", theme.dim()),
-        Span::styled(
-            dollars2(s.today.usd),
-            theme.style(Color::Green, Modifier::BOLD),
-        ),
-        Span::styled("  ·  ", theme.faint()),
-        Span::styled("week ", theme.dim()),
-        Span::styled(dollars2(s.week.usd), theme.dim()),
-        Span::styled("  ·  ", theme.faint()),
-        Span::styled("month ", theme.dim()),
-        Span::styled(dollars2(s.month.usd), theme.dim()),
-    ];
-    Some(Line::from(trim_spans_to_width(spans, width)))
-}
-
 /// The lone last-activity age, pinned bottom-right — the only stat a just-started
 /// idle agent shows once the zeroed token and work lines are suppressed.
 fn activity_age_line(theme: &Theme, row: &SidebarRow, width: usize) -> Line<'static> {
@@ -1404,26 +1375,22 @@ const PROVIDER_VALUE_WIDTH: usize = 8;
 /// the margin easily.
 const NOT_STARTED_GRACE: SignedDuration = SignedDuration::from_secs(120);
 
-/// Lead glyph for the value corner — the filled `◈` that also marks per-card
-/// spend, so a money figure reads the same shape wherever it appears.
-const VALUE_GLYPH: &str = "◈";
-
 /// A brighter sage than the resting money-green, held for a couple of frames as a
 /// figure lands — the quiet "ka-chunk" of the climb. Drops to plain bold under
 /// `NO_COLOR` like every other tone.
 const VALUE_FLASH: Color = Color::Indexed(150);
 
 /// The value corner: the fleet's quiet, climbing pile of spend and tokens,
-/// pinned to the bottom of the dashboard. Two accumulating windows — the
-/// all-time hero that rolls upward (`◈ $4,821.90 · ◇ 47.2M   all-time`) and this
-/// month's dim companion under it (`$1,240.57 · ◇ 33.0M   this month`), USD
-/// first, each scale whispered on the right. Today's pulse lives in the cockpit,
-/// so the corner never repeats it — it escalates `today → this month → all-time`.
-/// No "earned"/"value" label — the climbing number carries the feeling on its
-/// own. Empty (the corner is dropped) until something has been recorded.
+/// pinned to the bottom of the dashboard as a small two-row ledger. This month's
+/// dim companion leads, the all-time pile that only grows sits under it as the
+/// `total`, each row reading `label:  <tokens> tok · $<spend>` flush to the right
+/// edge. Today's pulse lives in the cockpit, so the corner never repeats it — it
+/// escalates `today → month → total`. The two rows share their token and spend
+/// column widths, so the labels stack and the `$` figures land on one right edge.
+/// Empty (the corner is dropped) until something has been recorded.
 ///
 /// Figures read the eased display values from `anim` at `phase`; the all-time
-/// hero brightens briefly the instant it settles.
+/// total brightens briefly the instant it settles.
 pub(super) fn value_corner_lines(
     theme: &Theme,
     tally: Option<&SpendTally>,
@@ -1437,55 +1404,80 @@ pub(super) fn value_corner_lines(
         return Vec::new();
     };
 
-    // Hero — the all-time pile, the figure that only grows. The `$` rides the
-    // money-green, brightening for a beat as a fresh climb lands.
+    // Both rows share one token column and one spend column, sized to the wider
+    // (all-time) settled figure so the labels stack and the `$` lands on one
+    // right edge. Widths come from the settled targets, not the eased display, so
+    // the columns hold steady at rest — a climbing roll may jitter a cell the way
+    // every animated figure does.
+    let tok_w = tokens_short(tally.all_time.tokens)
+        .chars()
+        .count()
+        .max(tokens_short(tally.month.tokens).chars().count());
+    let usd_w = dollars2(tally.all_time.usd)
+        .chars()
+        .count()
+        .max(dollars2(tally.month.usd).chars().count());
+
+    // This month's companion, dim, on top — the window the cockpit's today figure
+    // doesn't show.
+    let month = value_corner_row(
+        theme,
+        "month",
+        anim.month_tokens
+            .display(tally.month.tokens as f64, phase)
+            .round() as u64,
+        anim.month_usd.display(tally.month.usd, phase),
+        theme.dim(),
+        (tok_w, usd_w),
+        width,
+    );
+
+    // The all-time total below — the figure that only grows. Its `$` rides the
+    // money-green and brightens for a beat as a fresh climb lands.
     let usd_style = if anim.all_time_usd.flashing(phase) {
         theme.style(VALUE_FLASH, Modifier::BOLD)
     } else {
         theme.style(Color::Green, Modifier::BOLD)
     };
-    let mut hero = vec![
-        Span::styled(VALUE_GLYPH, theme.style(Color::Green, Modifier::empty())),
-        Span::raw(" "),
-        Span::styled(
-            dollars2(anim.all_time_usd.display(tally.all_time.usd, phase)),
-            usd_style,
-        ),
-        Span::styled(" · ", theme.faint()),
-    ];
-    hero.extend(tokens_label(
+    let total = value_corner_row(
         theme,
+        "total",
         anim.all_time_tokens
             .display(tally.all_time.tokens as f64, phase)
             .round() as u64,
-    ));
-    let hero = pin_right(hero, vec![Span::styled("all-time", theme.faint())], width);
-
-    // Companion — this month's pile, dim so the all-time hero leads. Today's
-    // figure lives in the cockpit, so the corner climbs a window the cockpit
-    // doesn't. Indented two cells so its `$` aligns under the hero's, past the
-    // `◈ ` lead.
-    let mut month = vec![
-        Span::raw("  "),
-        Span::styled(
-            dollars2(anim.month_usd.display(tally.month.usd, phase)),
-            theme.dim(),
-        ),
-        Span::styled(" · ", theme.faint()),
-    ];
-    month.extend(tokens_label(
-        theme,
-        anim.month_tokens
-            .display(tally.month.tokens as f64, phase)
-            .round() as u64,
-    ));
-    let month = pin_right(
-        month,
-        vec![Span::styled("this month", theme.faint())],
+        anim.all_time_usd.display(tally.all_time.usd, phase),
+        usd_style,
+        (tok_w, usd_w),
         width,
     );
 
-    vec![hero, month]
+    vec![month, total]
+}
+
+/// One value-corner row, pinned flush to the right edge: a faint `{label}:` text
+/// column, the token burn right-aligned in `tok_w` cells with a faint ` tok`,
+/// then the spend right-aligned in `usd_w` cells in `usd_style`. The caller hands
+/// both rows the same `(tok_w, usd_w)`, so right-pinning stacks the label column
+/// and lands every `$` on one column — the rows read as an aligned little ledger.
+fn value_corner_row(
+    theme: &Theme,
+    label: &str,
+    tokens: u64,
+    usd: f64,
+    usd_style: Style,
+    (tok_w, usd_w): (usize, usize),
+    width: usize,
+) -> Line<'static> {
+    let tokens = tokens_short(tokens);
+    let usd = dollars2(usd);
+    let cluster = vec![
+        Span::styled(format!("{label}: "), theme.faint()),
+        Span::styled(format!("{tokens:>tok_w$}"), theme.dim()),
+        Span::styled(" tok", theme.faint()),
+        Span::styled(" · ", theme.faint()),
+        Span::styled(format!("{usd:>usd_w$}"), usd_style),
+    ];
+    pin_right(Vec::new(), cluster, width)
 }
 
 /// The pinned per-provider dashboard: one block per provider (`Claude`,
@@ -1583,29 +1575,26 @@ fn provider_body_lines(
     lines
 }
 
-/// The provider's aggregate stats line: bold money-green spend (two decimals) and
-/// the `◇` token total — always rendered, reading `$0.00 · ◇ 0` for an idle
-/// account so the line above the budget bars is never blank. The money figure is
-/// today's transcript-history spend (the accurate cross-session total, and the
-/// only cost source for token-only providers like Codex), falling back to the
-/// live sessions' lifetime cost when no history spend is known. The summed `+/-`
+/// The provider's aggregate stats line: bold money-green spend (two decimals)
+/// and the `◇` token total — always rendered, reading `$0.00 · ◇ 0` for an idle
+/// account so the line above the budget bars is never blank. Both figures are
+/// today's transcript-history spend and token burn for this provider, summed
+/// across every session from the JSONL — the accurate cross-session total, and
+/// the only cost source for token-only providers like Codex. The summed `+/-`
 /// churn is intentionally absent — a noisy per-account aggregate; per-worktree
 /// churn lives on the group headers and per-agent churn on the work line.
 fn provider_stats_spans(theme: &Theme, panel: &SidebarProviderPanel) -> Vec<Span<'static>> {
-    let money = panel
+    let today = panel
         .spending
         .as_ref()
-        .map(|spending| spending.today.usd)
-        .filter(|usd| *usd > 0.0)
-        .or(panel.total_cost_usd)
-        .unwrap_or(0.0);
+        .map(|spending| spending.today)
+        .unwrap_or_default();
     let mut spans: Vec<Span<'static>> = vec![Span::styled(
-        dollars2(money),
+        dollars2(today.usd),
         theme.style(Color::Green, Modifier::BOLD),
     )];
-    let tokens = panel.total_input_tokens.unwrap_or(0) + panel.total_output_tokens.unwrap_or(0);
     push_dot(&mut spans, theme);
-    spans.extend(tokens_label(theme, tokens));
+    spans.extend(tokens_label(theme, today.tokens));
     spans
 }
 

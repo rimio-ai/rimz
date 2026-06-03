@@ -591,24 +591,15 @@ fn compute_fleet_spending(
     spending
 }
 
-/// Attach computed spend to the snapshot: the fleet `value_tally` (read by both
-/// the cockpit's today figure and the bottom value corner) and every agent row's
-/// spend. The per-provider breakdown is folded into the dashboard panels
-/// separately (see `with_provider_aggregates`).
+/// Attach the fleet `value_tally` to the snapshot — the JSONL today / month /
+/// all-time pile read by both the cockpit's today figure and the bottom value
+/// corner; `None` when nothing has ever been recorded. The per-provider breakdown
+/// is folded into the dashboard panels separately (see `with_provider_aggregates`).
 fn apply_spending(
     snapshot: &mut rimz::SidebarSnapshot,
     spending: &rimz::agents::spending::Spending,
 ) {
-    // The fleet tally feeds both the cockpit's today figure and the bottom value
-    // corner; `None` when nothing has ever been recorded.
     snapshot.value_tally = (!spending.total.is_zero()).then(|| spending.total.clone());
-    for group in &mut snapshot.worktree_groups {
-        for row in &mut group.rows {
-            if row.row_kind == rimz::SidebarRowKind::Agent {
-                row.spending = Some(spending.total.clone());
-            }
-        }
-    }
 }
 
 /// Refresh the diff stats for `needed` worktree paths and return the cache map

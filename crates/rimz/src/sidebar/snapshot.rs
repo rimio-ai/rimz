@@ -1349,12 +1349,6 @@ mod tests {
             metered: true,
             remote_control: false,
             spending: None,
-            total_cost_usd: None,
-            total_input_tokens: None,
-            total_output_tokens: None,
-            cached_tokens: None,
-            lines_added: None,
-            lines_removed: None,
             windows,
         }
     }
