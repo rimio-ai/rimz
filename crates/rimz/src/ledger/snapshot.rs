@@ -1825,11 +1825,13 @@ fn window_spent_unreset(window: &RateLimitWindow, now: Timestamp) -> bool {
 }
 
 /// A child `AgentState` projected to the compact summary the parent's expanded
-/// card paints. The subagent's type rode in as its `task` (set on both
-/// `SubagentStart` and `SubagentStop`), so it stays labeled after it finishes.
-/// A typeless child is named by a short id placeholder — never the provider
-/// `kind`, which would render as a phantom `claude`/`codex` row indistinguishable
-/// from a real subagent — and the anomaly is logged.
+/// card paints. The subagent's type rode in as its `task` on `SubagentStart`,
+/// carried forward as identity by the reducer, so it stays labeled after it
+/// finishes even when its `SubagentStop` omits the type. A child that never
+/// reported a type — first seen at a bare `SubagentStop` — is named by a short
+/// id placeholder, never the provider `kind` (which would render as a phantom
+/// `claude`/`codex` row indistinguishable from a real subagent), and the
+/// anomaly is logged.
 fn sub_agent_from_state(child: &AgentState) -> SidebarSubAgent {
     let name = child
         .task
@@ -2708,9 +2710,18 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
                 })
             })
             .or_else(|| prior.and_then(|p| p.runtime_owner.clone()));
-        // Task is activity-bound, not identity: a fresh event replaces it
-        // (idle clears it back to "—"); only capability fields persist.
-        let task = param_string("task");
+        // A root's `task` is activity: a fresh event replaces it and idle clears
+        // it back to "—" (the persisted `prompt` then labels the unnamed
+        // session). A subagent's `task` is its *type* ("Explore", "review") —
+        // identity, not activity — so carry it forward like the parent link
+        // above: a task-less `SubagentStop` (or any later child event) then
+        // leaves a finished child labeled instead of degrading it to
+        // `subagent <hash>`.
+        let task = if parent_agent_id.is_some() {
+            param_string("task").or_else(|| prior.and_then(|p| p.task.clone()))
+        } else {
+            param_string("task")
+        };
         // The latest prompt, unlike `task`, persists: only the prompt-bearing
         // event sets it, so carry the prior one forward to label an unnamed
         // session past idle until it earns a real name.
@@ -3885,6 +3896,51 @@ mod tests {
             .expect("child row");
         assert_eq!(child.parent_agent_id.as_deref(), Some("sess-root"));
         assert_eq!(child.status, AgentStatus::Idle);
+    }
+
+    #[test]
+    fn subagent_keeps_its_type_when_stop_omits_it() {
+        // The regression: a subagent's type is identity, not activity, so a
+        // task-less `SubagentStop` must not wipe the label the `SubagentStart`
+        // established. Before the carry-forward, the finished child degraded to
+        // a `subagent <id>` placeholder.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let lifecycle = |params: serde_json::Value| {
+            EventEnvelope::new(
+                workspace.clone(),
+                "session",
+                "claude",
+                "agent-hook",
+                "agent.lifecycle",
+                params,
+            )
+        };
+        let start = lifecycle(serde_json::json!({
+            "event_name": "SubagentStart",
+            "agent_id": "child-1",
+            "status": "running",
+            "parent_agent_id": "sess-root",
+            "task": "Explore",
+        }));
+        // SubagentStop carries no `task` — the exact shape that wiped the label.
+        let stop = lifecycle(serde_json::json!({
+            "event_name": "SubagentStop",
+            "agent_id": "child-1",
+            "status": "idle",
+        }));
+        let agents = reduce_agent_states(&[start, stop]);
+        let child = agents
+            .iter()
+            .find(|a| a.agent_id == "child-1")
+            .expect("child row");
+        assert_eq!(child.status, AgentStatus::Idle);
+        assert_eq!(
+            child.task.as_deref(),
+            Some("Explore"),
+            "a task-less SubagentStop must not wipe the carried-forward type",
+        );
+        // The projected sidebar row reads the type, never the hash placeholder.
+        assert_eq!(sub_agent_from_state(child).name, "Explore");
     }
 
     #[test]
