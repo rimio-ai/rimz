@@ -2054,6 +2054,7 @@ mod tests {
                     process_active: false,
                     command_detail: None,
                     compacting: false,
+                    parked_on_background: false,
                 })
                 .collect(),
             hidden_count: 0,
@@ -2093,6 +2094,7 @@ mod tests {
             process_active: false,
             command_detail: None,
             compacting: false,
+            parked_on_background: false,
         };
         snapshot.worktree_groups = vec![rimz::SidebarWorktreeGroup {
             key: "/repo/main".to_owned(),
@@ -2145,6 +2147,7 @@ mod tests {
             process_active: false,
             command_detail: None,
             compacting: false,
+            parked_on_background: false,
         };
         let process = rimz::SidebarRow {
             row_kind: rimz::SidebarRowKind::Process,
@@ -2173,6 +2176,7 @@ mod tests {
             process_active: false,
             command_detail: None,
             compacting: false,
+            parked_on_background: false,
         };
         snapshot.worktree_groups = vec![rimz::SidebarWorktreeGroup {
             key: "/repo/main".to_owned(),

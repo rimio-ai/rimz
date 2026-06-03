@@ -934,7 +934,13 @@ fn agent_identity_line(
 /// (`●●●○○ 3/5`) pins to a right column, aligning under the cost/age above so
 /// the dots read as a tidy gutter instead of floating after the text.
 fn description_line(theme: &Theme, row: &SidebarRow, tier: Tier, width: usize) -> Line<'static> {
-    let left = vec![Span::raw("  "), Span::raw(descriptor(row).to_owned())];
+    let mut left = vec![Span::raw("  "), Span::raw(descriptor(row).to_owned())];
+    // The agent parked its turn on still-in-flight background work: keep the
+    // real activity above and add a distinct, faint secondary marker rather than
+    // overwriting the description with a synthetic "N background tasks" count.
+    if row.parked_on_background {
+        left.push(Span::styled("  ⋯ bg", theme.faint()));
+    }
     if tier == Tier::L2 && row.todo_total.unwrap_or(0) > 0 {
         let (done, total) = (row.todo_done.unwrap_or(0), row.todo_total.unwrap_or(0));
         return pin_right(left, todo_spans(theme, done, total), width);
@@ -966,12 +972,34 @@ fn pin_right(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) 
 /// than the task. The activity-bound `task` clears on idle, so the persisted
 /// prompt keeps an unnamed session labelled past its turn until it earns a name.
 fn descriptor(row: &SidebarRow) -> &str {
+    // The producer sanitizes prompt/task before they reach the row; this is a
+    // last-ditch backstop so a harness control turn (`<task-notification>…`)
+    // can never paint the description even if a future producer regressed.
+    let usable = |value: &str| !value.is_empty() && !looks_like_control_text(value);
     ctx(row)
         .and_then(|context| context.session_name.as_deref())
-        .filter(|name| !name.is_empty())
-        .or(row.task.as_deref().filter(|task| !task.is_empty()))
-        .or(row.prompt.as_deref().filter(|prompt| !prompt.is_empty()))
+        .filter(|name| usable(name))
+        .or(row.task.as_deref().filter(|task| usable(task)))
+        .or(row.prompt.as_deref().filter(|prompt| usable(prompt)))
         .unwrap_or("—")
+}
+
+/// Whether a description candidate is a harness-injected control turn rather
+/// than human-authored text — it leads with one of the synthetic-turn tags. A
+/// renderer backstop only; the real guard is `sanitize_user_prompt` in the
+/// producer.
+fn looks_like_control_text(value: &str) -> bool {
+    const CONTROL_TAG_PREFIXES: &[&str] = &[
+        "<task-notification>",
+        "<system-reminder>",
+        "<command-message>",
+        "<command-name>",
+        "<local-command-stdout>",
+    ];
+    let trimmed = value.trim_start();
+    CONTROL_TAG_PREFIXES
+        .iter()
+        .any(|tag| trimmed.starts_with(tag))
 }
 
 /// The session's statusline enrichment, when it published any.
