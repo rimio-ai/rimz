@@ -159,8 +159,11 @@ pub(super) fn wait_for_wakeup(socket: &UnixDatagram) -> io::Result<Wakeup> {
     let mut buf = [0_u8; 4096];
     match socket.recv(&mut buf) {
         Ok(n) => Ok(decode_wakeup(&buf[..n])),
-        // Timeout (the tick), or a signal (the resize watcher's SIGWINCH handler
-        // interrupts this blocking recv): all are just "redraw now", never fatal.
+        // Timeout (a frame boundary or the idle backstop interval), or a signal
+        // (the resize watcher's SIGWINCH handler interrupts this blocking recv):
+        // all decode to `Wakeup::Tick`, a bare wake the serve loop's frame phase
+        // turns into the spin advance, the paint decision, and the backstop poll.
+        // Never fatal.
         Err(err)
             if matches!(
                 err.kind(),

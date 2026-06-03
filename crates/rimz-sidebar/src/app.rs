@@ -159,7 +159,6 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         &mut self_close,
         &mut session_exit,
         &mut ui,
-        &mut terminal,
         anim_start,
     )?
     .should_exit;
@@ -172,19 +171,29 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         );
     }
 
-    // One event loop. It blocks only in `recv`; the spinner advances on the
-    // animation tick, input is applied in place, and a finished background fetch
-    // arrives as `Wakeup::Snapshot` to be folded in — so no path forks a
-    // subprocess on the render thread, and a busy fetch never freezes the spin
-    // or swallows a keypress.
+    // One fixed-timestep event loop. Events fold into the in-process model and
+    // mark the frame dirty; the loop paints at most once per `ANIMATION_FRAME`
+    // boundary, coalescing every change that landed mid-frame into a single
+    // paint. Data and animation ride this frame grid; input paints synchronously
+    // for instant feedback (see `apply_input`). The grid runs at `ANIMATION_FRAME`
+    // while there is something to show (`active`) and relaxes to the `tick`
+    // backstop when idle, snapping back the instant an event or animation
+    // arrives. The loop blocks only in `recv`, so no path forks a subprocess on
+    // the render thread and a busy fetch never freezes the spin or swallows a
+    // keypress.
+    let mut dirty = true;
+    let mut next_frame = Instant::now();
     while !should_exit {
-        // A live row's spinner or a value-corner count-up both want the fast
-        // frame; either keeps the tick warm, and a settled corner releases it
-        // back to the slow data tick.
+        // A live row's spinner or a value-corner count-up keeps the frame grid
+        // warm; a pending fold (`dirty`) does too. With neither, drop to the
+        // slow data backstop until the next wakeup re-arms the grid.
         let phase = wall_clock_phase(anim_start);
         let animating = render::has_live_animation(&current) || ui.tally.any_rolling(phase);
-        let timeout = if animating {
-            ANIMATION_FRAME.min(tick)
+        let active = animating || dirty;
+        let timeout = if active {
+            next_frame
+                .saturating_duration_since(Instant::now())
+                .max(FRAME_MIN_TIMEOUT)
         } else {
             tick
         };
@@ -212,11 +221,12 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                         &mut self_close,
                         &mut session_exit,
                         &mut ui,
-                        &mut terminal,
                         anim_start,
                     )?;
                     should_exit = applied.should_exit;
                     rejected = applied.rejected;
+                    // The fold mutated the model; the frame phase paints it.
+                    dirty = true;
                 }
                 if !should_exit && let Some(request) = pending_refetch.take() {
                     request_fetch(
@@ -259,40 +269,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     );
                 }
             }
-            // The poll timeout drives two decoupled layers. Render: while a row
-            // animates (a running agent, a resolver, or an active process),
-            // advance the spin frame on the cached snapshot — pure in-process
-            // redraw, never gated on fetch state, so the spin stays smooth at
-            // `ANIMATION_FRAME` regardless of fetch latency. Data: a latency-tolerant backstop refetch, fired only when
-            // nothing has refreshed data for a full `tick`. Ledger deltas (which
-            // include the statusline `$`/token push) are the primary data
-            // channel; this backstop only catches pane/git drift that fires no
-            // delta. `request_fetch` is a no-op while a fetch is in flight, so the
-            // backstop can neither double-fire nor stall.
-            Wakeup::Tick => {
-                // Advance the spin whenever there is motion to show — a pure
-                // in-process redraw on the cached snapshot, decoupled from fetch
-                // state so it stays smooth at `ANIMATION_FRAME` regardless of
-                // fetch latency.
-                if animating {
-                    ui.animation_phase = wall_clock_phase(anim_start);
-                    render::draw_to_terminal_with_ui(
-                        &mut terminal,
-                        &current,
-                        health.alert.as_ref(),
-                        &mut ui,
-                    )?;
-                }
-                if fetched_at.elapsed() >= tick {
-                    request_fetch(
-                        &request_tx,
-                        &mut in_flight,
-                        &mut pending_refetch,
-                        FetchRequest::default(),
-                        false,
-                    );
-                }
-            }
+            // A recv timeout: the active grid reached a frame boundary, or the
+            // idle backstop interval elapsed. It carries no state of its own —
+            // the frame phase below advances the spin and paints, and the
+            // backstop poll runs there too.
+            Wakeup::Tick => {}
             // A ledger delta means new committed data: refetch, forcing one more
             // run if a fetch is already in flight so the delta is never lost.
             // Pane-sensitive lifecycle deltas bypass the pane cache so a
@@ -312,13 +293,18 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 );
             }
             Wakeup::Resize => {
-                apply_input(
+                // Input paints synchronously, so a resize repaints at once; the
+                // grid no longer owes this frame a paint.
+                if apply_input(
                     Wakeup::Resize,
                     &mut ui,
                     &mut health,
                     &mut terminal,
                     &current,
-                )?;
+                    anim_start,
+                )? {
+                    dirty = false;
+                }
                 request_self_close_probe(
                     &self_close_probe_tx,
                     &mut self_close_probe_in_flight,
@@ -384,8 +370,58 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 }
             },
             wakeup => {
-                apply_input(wakeup, &mut ui, &mut health, &mut terminal, &current)?;
+                // Key/mouse input paints synchronously for instant feedback; a
+                // paint settles any frame the loop owed.
+                if apply_input(
+                    wakeup,
+                    &mut ui,
+                    &mut health,
+                    &mut terminal,
+                    &current,
+                    anim_start,
+                )? {
+                    dirty = false;
+                }
             }
+        }
+
+        // Data backstop: catch pane/git drift no ledger delta announced. Self-
+        // gated to the `tick` interval and a no-op while a fetch is in flight, so
+        // it neither double-fires nor rides the frame grid (the removed
+        // ACTIVE_REFRESH anti-pattern). Runs once per loop turn regardless of why
+        // we woke.
+        if fetched_at.elapsed() >= tick {
+            request_fetch(
+                &request_tx,
+                &mut in_flight,
+                &mut pending_refetch,
+                FetchRequest::default(),
+                false,
+            );
+        }
+
+        // Frame phase: at the boundary, advance the spin and paint once, folding
+        // every change that landed this frame into a single draw. Paint when the
+        // model changed (`dirty`) or a row is animating; an idle frame is a bare
+        // timer wake with no recompose. While idle, keep the grid armed so the
+        // next event paints within one `ANIMATION_FRAME`.
+        let now = Instant::now();
+        if active && now >= next_frame {
+            ui.animation_phase = wall_clock_phase(anim_start);
+            let animating =
+                render::has_live_animation(&current) || ui.tally.any_rolling(ui.animation_phase);
+            if dirty || animating {
+                render::draw_to_terminal_with_ui(
+                    &mut terminal,
+                    &current,
+                    health.alert.as_ref(),
+                    &mut ui,
+                )?;
+                dirty = false;
+            }
+            next_frame = next_frame_after(next_frame, now, ANIMATION_FRAME);
+        } else if !active {
+            next_frame = now + ANIMATION_FRAME;
         }
     }
     if let Some(target) = reexec_to {
@@ -929,6 +965,11 @@ fn next_health(previous: &Health, failure: Option<String>) -> Health {
 /// something to move.
 const ANIMATION_FRAME: Duration = Duration::from_millis(100);
 
+/// Floor for the frame-boundary recv timeout. When the loop is at or past the
+/// next frame boundary, the time-to-boundary is zero; a 1ms floor lets an
+/// already-queued datagram drain on this turn without a zero-timeout busy spin.
+const FRAME_MIN_TIMEOUT: Duration = Duration::from_millis(1);
+
 /// How long an optimistic jump override pins the jumped pane before reverting to
 /// the focus mirror. It outlasts one pane-cache window (750ms) so a confirm that
 /// is merely one window late never flicker-reverts, yet stays under two backstop
@@ -947,6 +988,22 @@ fn wall_clock_phase(start: Instant) -> u64 {
 
 fn tick_for(seconds: u64) -> Duration {
     Duration::from_secs(seconds.max(1))
+}
+
+/// The next frame boundary after painting the frame scheduled for `scheduled`
+/// at wall-clock `now`. The grid normally advances by exactly one `frame`, so
+/// paints hold a fixed cadence regardless of how long a paint took. When the
+/// loop has fallen a full frame or more behind — a slow paint or a scheduler
+/// hiccup — it snaps onto the boundary one `frame` ahead of `now` rather than
+/// replaying every missed boundary, so a backlog can never spiral into a burst
+/// of catch-up paints.
+fn next_frame_after(scheduled: Instant, now: Instant, frame: Duration) -> Instant {
+    let advanced = scheduled + frame;
+    if advanced <= now {
+        now + frame
+    } else {
+        advanced
+    }
 }
 
 fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
@@ -1341,7 +1398,6 @@ fn apply_fetch_outcome(
     self_close: &mut SelfCloseState,
     session_exit: &mut SessionExitState,
     ui: &mut UiState,
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     anim_start: Instant,
 ) -> Result<ApplyOutcome> {
     // The gate compares the incoming snapshot against the last frame we actually
@@ -1369,12 +1425,12 @@ fn apply_fetch_outcome(
     *last_snapshot = state.last_snapshot;
     *health = state.health;
     *current = state.snapshot;
-    // Reconcile the highlight before drawing: re-anchor the identity-keyed
-    // selection to its row (so a status-churn reorder never slides it onto a
-    // neighbour) and apply the level-triggered focus mirror. Running it before the
-    // draw means an external focus move paints this frame, not next. The report is
-    // filtered to a non-sidebar agent row — a sidebar-self, undiscoverable, or
-    // non-row focus is inert and the mirror holds.
+    // Reconcile the highlight as part of the fold, before the next frame paints:
+    // re-anchor the identity-keyed selection to its row (so a status-churn
+    // reorder never slides it onto a neighbour) and apply the level-triggered
+    // focus mirror. Folding it here means an external focus move is on the very
+    // next frame. The report is filtered to a non-sidebar agent row — a
+    // sidebar-self, undiscoverable, or non-row focus is inert and the mirror holds.
     let focused_agent = current
         .own_view
         .as_ref()
@@ -1383,13 +1439,13 @@ fn apply_fetch_outcome(
         .filter(|pane| row_index_of_pane(current, pane).is_some());
     reconcile_selection(ui, current, focused_agent, Instant::now());
     ui.animation_phase = wall_clock_phase(anim_start);
-    // Fold the fresh tally into the count-up before drawing: a higher figure
-    // starts an eased roll that the next frames paint, a reset or first value
-    // snaps. A fetch without a tally leaves the rolls untouched.
+    // Fold the fresh tally into the count-up: a higher figure starts an eased
+    // roll that the next frames paint, a reset or first value snaps. A fetch
+    // without a tally leaves the rolls untouched. The serve loop paints the
+    // folded state on its next frame boundary; this path never draws.
     if let Some(tally) = current.value_tally.as_ref() {
         ui.tally.observe(tally, ui.animation_phase);
     }
-    render::draw_to_terminal_with_ui(terminal, current, health.alert.as_ref(), ui)?;
 
     // A renderer degraded this long is non-functional and, with a now-stale
     // heartbeat, unreachable by `rimz reload` — so it gives up rather than
@@ -1411,8 +1467,8 @@ fn apply_fetch_outcome(
     // Own-view (sibling count) rides in on the snapshot — the CLI computes it
     // from the same pane list it already enumerated. Resize events have their
     // own metadata-only fast probe; this snapshot path stays the durable
-    // backstop. The focus-driven selection reconcile already ran before the
-    // draw above.
+    // backstop. The focus-driven selection reconcile already ran in the fold
+    // above.
     if self_close_decision(
         self_close,
         current.own_view.as_ref().map(|view| view.sibling_count),
@@ -1571,19 +1627,25 @@ fn spawn_event_waker(wake_path: PathBuf) {
 /// Apply an input wakeup (key/mouse/resize) to the local UI in place. Input
 /// never changes ledger data, so it redraws the *current* snapshot and may jump
 /// focus, but it never re-runs the snapshot burst — that per-keystroke refetch
-/// was the input lag.
+/// was the input lag. Input paints synchronously so a keypress or click feels
+/// instant rather than waiting for the next frame; the returned `bool` reports
+/// whether it painted, so the serve loop can clear its frame-pending flag.
 fn apply_input(
     wakeup: Wakeup,
     ui: &mut UiState,
     health: &mut Health,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     snapshot: &SidebarSnapshot,
-) -> Result<()> {
+    anim_start: Instant,
+) -> Result<bool> {
     let outcome = handle_wakeup(wakeup, ui, snapshot);
     if outcome.dismiss {
         health.alert = None;
     }
     if outcome.redraw {
+        // Carry the live spin phase into the instant paint so a keypress mid-spin
+        // never rewinds the animation to a stale frame.
+        ui.animation_phase = wall_clock_phase(anim_start);
         render::draw_to_terminal_with_ui(terminal, snapshot, health.alert.as_ref(), ui)?;
     }
     if let Some(index) = outcome.focus_index {
@@ -1593,7 +1655,7 @@ fn apply_input(
         // optimistic-focus guard is needed.
         focus_selected_row(snapshot, index);
     }
-    Ok(())
+    Ok(outcome.redraw)
 }
 
 fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -> InputOutcome {
@@ -2493,6 +2555,30 @@ mod tests {
     #[test]
     fn tick_for_clamps_zero_to_one() {
         assert_eq!(tick_for(0), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn frame_grid_advances_one_frame_when_on_time() {
+        let base = Instant::now();
+        // Painted at the scheduled boundary: the next boundary is exactly one
+        // frame later, holding the fixed cadence.
+        assert_eq!(
+            next_frame_after(base, base, ANIMATION_FRAME),
+            base + ANIMATION_FRAME
+        );
+    }
+
+    #[test]
+    fn frame_grid_snaps_forward_when_behind() {
+        let base = Instant::now();
+        // Scheduled several frames in the past relative to `now`: rather than
+        // replaying every missed boundary, the grid snaps to one frame ahead of
+        // `now`, so a slow paint never spirals into a burst of catch-up frames.
+        let now = base + ANIMATION_FRAME * 5;
+        assert_eq!(
+            next_frame_after(base, now, ANIMATION_FRAME),
+            now + ANIMATION_FRAME
+        );
     }
 
     #[test]
