@@ -14,6 +14,7 @@ pub mod claude;
 pub mod codex;
 pub mod context;
 pub(crate) mod hook_types;
+pub mod lifecycle;
 mod observation;
 pub mod pricing;
 pub mod spending;
@@ -25,14 +26,16 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::Value;
+use tracing::error;
 
-use crate::feed::{AgentStatus, FeedItem, FeedKind, PermissionPosture, Resolution};
+use crate::feed::{FeedItem, FeedKind, PermissionPosture, Resolution};
 use hook_types::PermissionMode;
 
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
     AgentTokenUsage, RateLimitWindow,
 };
+pub use lifecycle::{LifecycleSignal, LifecycleState, Transition, TransitionKind, step};
 pub use observation::AgentLifecycleObservation;
 pub use pricing::{PriceBook, Pricing};
 pub use spending::{ProviderKind, SpendTally, SpendWindow, Spending};
@@ -245,8 +248,11 @@ pub trait AgentIntegration: Send + Sync {
     }
 
     /// Observe a lifecycle event payload and translate it into the
-    /// status/mode transition the ledger should record. Returns `None` when
-    /// the event is not a lifecycle event the adapter recognises.
+    /// [`LifecycleSignal`](lifecycle::LifecycleSignal) (plus posture sample and
+    /// enrichment) the ledger should record. The adapter names the intent; the
+    /// shared [`step`](lifecycle::step) table derives the status. Returns `None`
+    /// when the event carries no transition the adapter recognises (a read-only
+    /// tool, a quarantined subagent with no distinct child id).
     fn observe_lifecycle(
         &self,
         _event_name: &str,
@@ -453,12 +459,13 @@ pub(crate) fn choice_is_allow(resolution: &Resolution) -> bool {
         .unwrap_or(false)
 }
 
-/// Status a `Stop`-style turn-end event records. A `Stop` only fires after a
-/// turn ran, so a clean end is `success`; an explicit error signal in the
-/// payload demotes to `failed`. `idle` stays owned by `SessionStart` (wired in,
-/// nothing asked) — it is never a `Stop` outcome.
-pub(crate) fn stop_status_from_payload(payload: &Value) -> AgentStatus {
-    let errored = payload
+/// Whether a `Stop`-style turn-end payload carries an explicit error signal. A
+/// `Stop` only fires after a turn ran, so a clean end is a success and an error
+/// signal demotes it to a failure — but that status decision now lives in the
+/// lifecycle [`step`](lifecycle::step) table, so this helper reports only the
+/// raw `errored` bit the adapter folds into [`LifecycleSignal::TurnEnded`].
+pub(crate) fn stop_payload_errored(payload: &Value) -> bool {
+    payload
         .get("is_error")
         .and_then(Value::as_bool)
         .unwrap_or(false)
@@ -470,10 +477,186 @@ pub(crate) fn stop_status_from_payload(payload: &Value) -> AgentStatus {
         || matches!(
             payload.get("subtype").and_then(Value::as_str),
             Some("error" | "error_during_execution" | "error_max_turns")
+        )
+}
+
+/// Tags the Claude/Codex harness injects as synthetic "user" turns — a
+/// completed background task, a system reminder, a slash-command echo. Their
+/// text is not user-authored, so it must never become an agent's description
+/// line (the `<task-notification>…` leak). Presence of any of these rejects the
+/// whole string.
+const CONTROL_TAG_PREFIXES: &[&str] = &[
+    "<task-notification>",
+    "<system-reminder>",
+    "<command-message>",
+    "<command-name>",
+    "<local-command-stdout>",
+];
+
+/// Sanitize a raw prompt/task string before it can label a sidebar row. Trims;
+/// returns `None` for an empty string, or for any text carrying a harness
+/// control tag (a synthetic, non-user-authored turn). KISS: a single substring
+/// scan, no partial parsing — a control tag anywhere means the whole string is
+/// rejected, so a raw `<task-notification>…` can never reach the description.
+pub(crate) fn sanitize_user_prompt(raw: Option<&str>) -> Option<String> {
+    let trimmed = raw.map(str::trim).filter(|value| !value.is_empty())?;
+    if CONTROL_TAG_PREFIXES.iter().any(|tag| trimmed.contains(tag)) {
+        return None;
+    }
+    Some(trimmed.to_owned())
+}
+
+/// Whether a tool-use payload names a tool that mutates the workspace — writes
+/// files or runs commands. Drives [`LifecycleSignal::ToolUsed`]'s `mutates`
+/// bit: a mutating tool is proof of real work, so its `PostToolUse` is the only
+/// tool event worth recording on the lifecycle channel (read-only tools stay
+/// silent), and it is what reconciles a stale `plan` posture. The tool name
+/// rides `tool_name` in both providers' payloads.
+pub(crate) fn tool_mutates(payload: &Value) -> bool {
+    payload
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .is_some_and(|name| {
+            matches!(
+                name,
+                // Claude
+                "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "Bash"
+                // Codex
+                | "shell" | "apply_patch" | "exec_command" | "local_shell"
+            )
+        })
+}
+
+/// The outcome of resolving a subagent event's identity.
+pub(crate) enum SubagentIdentity {
+    /// A usable child id distinct from its parent — the only case that yields a
+    /// child entity.
+    Resolved {
+        agent_id: String,
+        parent_agent_id: String,
+    },
+    /// Unusable identity (missing child or parent id, or child == parent). The
+    /// caller emits no observation, so a malformed subagent event can never
+    /// fold onto — and corrupt — its parent's row.
+    Quarantined,
+}
+
+/// Resolve a subagent event's identity, requiring a non-empty child id, a
+/// non-empty parent id, and `child != parent`. This is the one place the rule
+/// lives, shared by both adapters; it replaces the unsafe per-adapter
+/// `child_id.or_else(|| parent_id)` fallback that silently keyed a child onto
+/// its parent. A quarantined identity is logged once with the raw payload so
+/// the anomaly is traceable.
+pub(crate) fn resolve_subagent_identity(
+    kind: &str,
+    event_name: &str,
+    child_id: Option<&str>,
+    parent_id: Option<&str>,
+    payload: &Value,
+) -> SubagentIdentity {
+    let child = child_id.map(str::trim).filter(|value| !value.is_empty());
+    let parent = parent_id.map(str::trim).filter(|value| !value.is_empty());
+    match (child, parent) {
+        (Some(child), Some(parent)) if child != parent => SubagentIdentity::Resolved {
+            agent_id: child.to_owned(),
+            parent_agent_id: parent.to_owned(),
+        },
+        _ => {
+            error!(
+                target: "rimz::agent::lifecycle",
+                kind,
+                event = event_name,
+                child_id = child.unwrap_or(""),
+                parent_id = parent.unwrap_or(""),
+                payload = %payload,
+                "subagent identity unusable — quarantined (need a distinct child and parent id)",
+            );
+            SubagentIdentity::Quarantined
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn sanitize_rejects_each_control_tag() {
+        for tag in CONTROL_TAG_PREFIXES {
+            let injected = format!("{tag}<task-id>afdc639e18e7ebdb9</...");
+            assert_eq!(sanitize_user_prompt(Some(&injected)), None, "tag {tag}");
+        }
+    }
+
+    #[test]
+    fn sanitize_rejects_embedded_control_tag() {
+        assert_eq!(
+            sanitize_user_prompt(Some("please fix <system-reminder>noise</system-reminder>")),
+            None,
         );
-    if errored {
-        AgentStatus::Failed
-    } else {
-        AgentStatus::Success
+    }
+
+    #[test]
+    fn sanitize_passes_a_real_prompt_trimmed() {
+        assert_eq!(
+            sanitize_user_prompt(Some("  add a dark mode toggle  ")),
+            Some("add a dark mode toggle".to_owned()),
+        );
+    }
+
+    #[test]
+    fn sanitize_rejects_empty_and_whitespace() {
+        assert_eq!(sanitize_user_prompt(None), None);
+        assert_eq!(sanitize_user_prompt(Some("   ")), None);
+    }
+
+    #[test]
+    fn tool_mutates_reads_the_tool_name() {
+        assert!(tool_mutates(&json!({ "tool_name": "Edit" })));
+        assert!(tool_mutates(&json!({ "tool_name": "Bash" })));
+        assert!(tool_mutates(&json!({ "tool_name": "apply_patch" })));
+        assert!(!tool_mutates(&json!({ "tool_name": "Read" })));
+        assert!(!tool_mutates(&json!({ "tool_name": "Grep" })));
+        assert!(!tool_mutates(&json!({})));
+    }
+
+    #[test]
+    fn subagent_identity_resolves_distinct_child_and_parent() {
+        match resolve_subagent_identity(
+            "claude",
+            "SubagentStart",
+            Some("child"),
+            Some("root"),
+            &json!({}),
+        ) {
+            SubagentIdentity::Resolved {
+                agent_id,
+                parent_agent_id,
+            } => {
+                assert_eq!(agent_id, "child");
+                assert_eq!(parent_agent_id, "root");
+            }
+            SubagentIdentity::Quarantined => panic!("expected resolved"),
+        }
+    }
+
+    #[test]
+    fn subagent_identity_quarantines_missing_or_equal_ids() {
+        let cases = [
+            (None, Some("root")),
+            (Some("child"), None),
+            (Some("same"), Some("same")),
+            (Some("  "), Some("root")),
+        ];
+        for (child, parent) in cases {
+            assert!(
+                matches!(
+                    resolve_subagent_identity("claude", "SubagentStart", child, parent, &json!({})),
+                    SubagentIdentity::Quarantined
+                ),
+                "child={child:?} parent={parent:?}",
+            );
+        }
     }
 }

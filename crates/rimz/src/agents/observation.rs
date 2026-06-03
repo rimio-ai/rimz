@@ -9,22 +9,29 @@
 
 use serde_json::Value;
 
-use crate::feed::{AgentStatus, PermissionPosture, RuntimeOwner};
+use crate::feed::{PermissionPosture, RuntimeOwner};
 use crate::ids::PaneId;
 
+use super::lifecycle::LifecycleSignal;
 use super::optional_payload_string;
 
-/// Status + mode transition observed from a lifecycle hook. Returned by
+/// One lifecycle observation: the agent-agnostic [`LifecycleSignal`] a native
+/// event carries plus the posture sample and enrichment it reports. Returned by
 /// [`AgentIntegration::observe_lifecycle`](super::AgentIntegration::observe_lifecycle)
 /// so the CLI layer can record an `agent.lifecycle` event without each adapter
-/// touching the ledger.
+/// touching the ledger. The status is *derived* from the signal through
+/// [`step`](super::lifecycle::step), never decided by the adapter.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentLifecycleObservation {
     /// Agent-supplied session/process identifier (e.g. Claude `session_id`,
     /// Codex root `session_id`, or Codex subagent `agent_id`). The CLI uses
     /// this as the `agent_id`.
     pub agent_id: Option<String>,
-    pub status: AgentStatus,
+    /// The agent-agnostic lifecycle intent this event carries. The reducer and
+    /// the ingestion path fold it onto the rollup through the one
+    /// [`step`](super::lifecycle::step) table; the adapter no longer decides a
+    /// final [`AgentStatus`](crate::feed::AgentStatus).
+    pub signal: LifecycleSignal,
     /// Process identity observed by the hook runner. The sidebar uses this
     /// best-effort liveness marker to suppress stale ledger overlays when the
     /// process disappears.
@@ -71,19 +78,13 @@ pub struct AgentLifecycleObservation {
     /// agents. Identity lifetime in the reducer, so a child row links to its
     /// parent row by `(kind, parent_agent_id)` for the whole child's life.
     pub parent_agent_id: Option<String>,
-    /// Whether this event marks the agent compacting its context window (Claude
-    /// `PreCompact`, Codex `SessionStart:compact`). The reducer stamps
-    /// [`AgentState::compacting_since`](crate::feed::AgentState::compacting_since)
-    /// from it without changing the agent's lifecycle status — compaction is a
-    /// transient head the sidebar shows, not a state transition.
-    pub compacting: bool,
 }
 
 impl AgentLifecycleObservation {
-    pub(crate) fn new(agent_id: Option<String>, status: AgentStatus) -> Self {
+    pub(crate) fn new(agent_id: Option<String>, signal: LifecycleSignal) -> Self {
         Self {
             agent_id,
-            status,
+            signal,
             agent_pid: None,
             agent_process_start: None,
             runtime_owner: None,
@@ -100,7 +101,6 @@ impl AgentLifecycleObservation {
             todo_total: None,
             pane_id: None,
             parent_agent_id: None,
-            compacting: false,
         }
     }
 
