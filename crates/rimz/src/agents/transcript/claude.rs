@@ -3,7 +3,6 @@
 //! JSONL shape (one entry per API response logged by Claude Code):
 //! ```json
 //! { "timestamp": "2026-01-01T10:00:00.000Z",
-//!   "costUSD": 0.042,
 //!   "requestId": "req-abc",
 //!   "isSidechain": false,
 //!   "message": { "id": "msg-xyz",
@@ -12,6 +11,13 @@
 //!                           "cache_creation_input_tokens": 0,
 //!                           "cache_read_input_tokens": 800 } } }
 //! ```
+//!
+//! **Cost source.** Current Claude transcripts log no `costUSD` field, so spend
+//! is reconstructed from the `message.usage` token counts priced through the
+//! per-model [`PriceBook`](crate::agents::pricing::PriceBook) — the same path
+//! Codex takes.
+//! When an older transcript still carries a positive `costUSD`, that authoritative
+//! figure is used verbatim and the table is not consulted.
 //!
 //! Fast pre-filter: skip lines without `"usage":{` and lines where certain
 //! fields carry `:null` (rejected by the upstream TypeScript/Zod schema).
@@ -24,6 +30,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::agents::pricing::PriceBook;
 use crate::agents::spending::CachedEntry;
 
 use super::{bytes_contains, collect_jsonl, expand_tilde, home_dir};
@@ -213,7 +220,7 @@ fn consume_digits(bytes: &[u8], i: &mut usize) -> bool {
 ///
 /// Cross-file suppression (same message_id across a session file and its
 /// subagent file) is handled in `spending::compute_spending`.
-pub fn parse_claude_jsonl(path: &Path) -> Vec<CachedEntry> {
+pub fn parse_claude_jsonl(path: &Path, prices: &PriceBook) -> Vec<CachedEntry> {
     let Ok(content) = std::fs::read(path) else {
         return Vec::new();
     };
@@ -238,21 +245,38 @@ pub fn parse_claude_jsonl(path: &Path) -> Vec<CachedEntry> {
         if !is_valid_claude_entry(&entry) {
             continue;
         }
-        let (Some(ts), Some(cost)) = (entry.timestamp.as_deref(), entry.cost_usd) else {
+        let Some(ts) = entry.timestamp.as_deref() else {
             continue;
+        };
+        let Some(ts_secs) = crate::agents::spending::iso_to_unix_secs(ts) else {
+            continue;
+        };
+        let usage = &entry.message.usage;
+        let input = usage.input_tokens.unwrap_or(0);
+        let output = usage.output_tokens.unwrap_or(0);
+        let cache_creation = usage.cache_creation_input_tokens.unwrap_or(0);
+        let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
+        let tokens = input + output + cache_creation + cache_read;
+        // Cost source: a positive logged `costUSD` is authoritative (older
+        // transcripts carried it); otherwise reconstruct spend from the token
+        // usage through the model table, since current transcripts omit it. An
+        // entry that still resolves to zero — no positive cost and no priced
+        // model — is dropped rather than counted as a free turn.
+        let cost = match entry.cost_usd {
+            Some(cost) if cost > 0.0 => cost,
+            _ => price_usage(
+                prices,
+                entry.message.model.as_deref(),
+                input,
+                output,
+                cache_creation,
+                cache_read,
+            ),
         };
         if cost <= 0.0 {
             continue;
         }
-        let Some(ts_secs) = crate::agents::spending::iso_to_unix_secs(ts) else {
-            continue;
-        };
         let is_sidechain = entry.is_sidechain == Some(true);
-        let usage = &entry.message.usage;
-        let tokens = usage.input_tokens.unwrap_or(0)
-            + usage.output_tokens.unwrap_or(0)
-            + usage.cache_creation_input_tokens.unwrap_or(0)
-            + usage.cache_read_input_tokens.unwrap_or(0);
         let cached = CachedEntry {
             ts_secs,
             cost_usd: cost,
@@ -282,6 +306,30 @@ pub fn parse_claude_jsonl(path: &Path) -> Vec<CachedEntry> {
     out
 }
 
+/// Price a Claude usage record through the model table, in dollars.
+///
+/// Each token class bills at its own rate — uncached input, output,
+/// cache-creation (prompt-cache write), and cache-read (prompt-cache hit) — the
+/// same decomposition Codex spend uses. Returns `0.0` when the model is absent or
+/// unpriced (including the `<synthetic>` non-API turns), so the caller drops the
+/// entry instead of recording a zero-cost line.
+fn price_usage(
+    prices: &PriceBook,
+    model: Option<&str>,
+    input: u64,
+    output: u64,
+    cache_creation: u64,
+    cache_read: u64,
+) -> f64 {
+    let Some(price) = model.and_then(|model| prices.price(model)) else {
+        return 0.0;
+    };
+    input as f64 * price.input
+        + output as f64 * price.output
+        + cache_creation as f64 * price.cache_create
+        + cache_read as f64 * price.cache_read
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -289,6 +337,12 @@ mod tests {
     use super::*;
     use std::io::Write as _;
     use tempfile::TempDir;
+
+    /// An empty price book: the `costUSD`-bearing fixtures below never consult it,
+    /// so spend is driven entirely by their logged cost.
+    fn no_prices() -> PriceBook {
+        PriceBook::from_litellm_json("{}")
+    }
 
     fn write_jsonl(dir: &Path, filename: &str, lines: &[&str]) -> PathBuf {
         let path = dir.join(filename);
@@ -322,7 +376,7 @@ mod tests {
                 &claude_line("2026-01-01", 0.5, "msg-1", "req-1"),
             ],
         );
-        let entries = parse_claude_jsonl(&file);
+        let entries = parse_claude_jsonl(&file, &no_prices());
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.5).abs() < 1e-9);
     }
@@ -335,7 +389,7 @@ mod tests {
             "chat.jsonl",
             &[&claude_line("2026-01-01", 0.5, "msg-1", "req-1")],
         );
-        let entries = parse_claude_jsonl(&file);
+        let entries = parse_claude_jsonl(&file, &no_prices());
         assert_eq!(entries.len(), 1);
         assert_eq!(
             entries[0].tokens, 25,
@@ -353,7 +407,7 @@ mod tests {
                 r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.5,"requestId":"req-1","message":{"id":"msg-1","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":800}}}"#,
             ],
         );
-        let entries = parse_claude_jsonl(&file);
+        let entries = parse_claude_jsonl(&file, &no_prices());
         assert_eq!(entries.len(), 1);
         assert_eq!(
             entries[0].tokens, 1150,
@@ -362,11 +416,57 @@ mod tests {
     }
 
     #[test]
+    fn prices_from_tokens_when_cost_usd_absent() {
+        // Current Claude transcripts carry no `costUSD`; cost is reconstructed
+        // from the token usage through the model table.
+        let dir = TempDir::new().unwrap();
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"claude-test","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":800}}}"#,
+            ],
+        );
+        let prices = PriceBook::from_litellm_json(
+            r#"{"claude-test": {"input_cost_per_token": 3e-6, "output_cost_per_token": 15e-6,
+                                "cache_read_input_token_cost": 3e-7,
+                                "cache_creation_input_token_cost": 3.75e-6}}"#,
+        );
+        let entries = parse_claude_jsonl(&file, &prices);
+        assert_eq!(entries.len(), 1);
+        // 100*3e-6 + 50*15e-6 + 200*3.75e-6 + 800*3e-7
+        //   = 3e-4 + 7.5e-4 + 7.5e-4 + 2.4e-4 = 2.04e-3
+        assert!(
+            (entries[0].cost_usd - 2.04e-3).abs() < 1e-12,
+            "got {}",
+            entries[0].cost_usd
+        );
+        assert_eq!(entries[0].tokens, 1150);
+    }
+
+    #[test]
+    fn unpriced_or_modelless_costless_entry_is_dropped() {
+        // No `costUSD` and a model the table cannot price (here: no model at all,
+        // standing in for `<synthetic>` turns) contributes nothing rather than a
+        // zero-cost line.
+        let dir = TempDir::new().unwrap();
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"<synthetic>","usage":{"input_tokens":100,"output_tokens":50}}}"#,
+            ],
+        );
+        let entries = parse_claude_jsonl(&file, &no_prices());
+        assert!(entries.is_empty(), "an unpriced turn is dropped, not zeroed");
+    }
+
+    #[test]
     fn per_file_dedup_drops_exact_duplicate() {
         let dir = TempDir::new().unwrap();
         let line = claude_line("2026-01-01", 1.0, "msg-a", "req-a");
         let file = write_jsonl(dir.path(), "chat.jsonl", &[&line, &line]);
-        let entries = parse_claude_jsonl(&file);
+        let entries = parse_claude_jsonl(&file, &no_prices());
         assert_eq!(entries.len(), 1, "same (msg, req) within file must dedup");
     }
 
@@ -385,7 +485,7 @@ mod tests {
                 &claude_line("2026-01-01", 0.05, "msg-x", "req-main"),
             ],
         );
-        let entries = parse_claude_jsonl(&file);
+        let entries = parse_claude_jsonl(&file, &no_prices());
         // Two distinct exact-keys: the suppression happens in compute_spending.
         assert_eq!(entries.len(), 2);
         let sc = entries.iter().find(|e| e.is_sidechain).unwrap();
@@ -406,7 +506,7 @@ mod tests {
                 &claude_line("2026-01-01", 0.3, "msg-1", "req-1"),
             ],
         );
-        let entries = parse_claude_jsonl(&file);
+        let entries = parse_claude_jsonl(&file, &no_prices());
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.3).abs() < 1e-9);
     }
@@ -422,7 +522,7 @@ mod tests {
                 &claude_line("2026-01-01", 0.5, "msg-1", "req-1"),
             ],
         );
-        let entries = parse_claude_jsonl(&file);
+        let entries = parse_claude_jsonl(&file, &no_prices());
         assert_eq!(entries.len(), 1, "costUSD:null line must be skipped");
     }
 
@@ -437,7 +537,7 @@ mod tests {
                 &claude_line("2026-01-01", 0.5, "msg-2", "req-2"),
             ],
         );
-        let entries = parse_claude_jsonl(&file);
+        let entries = parse_claude_jsonl(&file, &no_prices());
         assert_eq!(entries.len(), 1, "model:null line must be skipped");
     }
 
@@ -452,7 +552,7 @@ mod tests {
                 &claude_line("2026-01-01", 0.5, "msg-2", "req-2"),
             ],
         );
-        let entries = parse_claude_jsonl(&file);
+        let entries = parse_claude_jsonl(&file, &no_prices());
         assert_eq!(entries.len(), 1, "empty requestId must be rejected");
     }
 
@@ -467,7 +567,7 @@ mod tests {
                 r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.2,"version":"1.2.3","message":{"id":"msg-2","usage":{"input_tokens":1}}}"#,
             ],
         );
-        let entries = parse_claude_jsonl(&file);
+        let entries = parse_claude_jsonl(&file, &no_prices());
         assert_eq!(entries.len(), 1, "non-semver version rejected; semver kept");
         assert!((entries[0].cost_usd - 0.2).abs() < 1e-9);
     }

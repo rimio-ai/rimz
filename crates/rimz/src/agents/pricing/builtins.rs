@@ -3,7 +3,9 @@
 //! Applied **last**, after the embedded snapshot and any remote refresh, so the
 //! team's values always win — a stale or missing remote entry never mis-prices
 //! a model we ship support for. The set is deliberately the OpenAI / Codex
-//! family, since Claude and Pi report `costUSD` directly and never need a table.
+//! family: Claude's token-priced spend resolves through the embedded LiteLLM
+//! snapshot (which carries the Claude models), and Pi reports `costUSD`
+//! directly, so neither needs a hardcoded builtin.
 //!
 //! `gpt-5` is mandatory: it is the Codex parser's fallback model
 //! (`transcript::codex`), so a Codex event with no resolvable model still prices.

@@ -6,10 +6,13 @@
 //! is provider-dispatched in `parse_for`, keyed by the [`ProviderKind`] the
 //! caller tags each file with at discovery:
 //!
-//! - **Claude** and **Pi** log `costUSD` directly — each entry becomes a
-//!   [`CachedEntry`] verbatim, with `input + output` tokens alongside.
-//! - **Codex** logs only token counts, so its events are multiplied through a
-//!   [`PriceBook`](super::pricing) to a USD cost before bucketing.
+//! - **Claude** and **Codex** log token counts that are multiplied through a
+//!   [`PriceBook`](super::pricing) to a USD cost before bucketing — current Claude
+//!   transcripts carry no `costUSD`, so each turn is priced from its
+//!   `message.usage`. A Claude turn that still logs a positive `costUSD` (older
+//!   transcripts) uses that figure verbatim.
+//! - **Pi** logs `costUSD` directly — each entry becomes a [`CachedEntry`]
+//!   verbatim, with `input + output` tokens alongside.
 //!
 //! [`compute_spending`] returns a [`Spending`]: one fleet-wide trailing
 //! 24h / 7d / 30d / 365d [`SpendTally`] plus a per-provider breakdown, so the
@@ -104,14 +107,17 @@ impl ProviderKind {
     }
 }
 
-/// Bumped whenever the cached parse shape changes, so an upgrade re-reads every
-/// file once. A finalized session's stable mtime otherwise pins its entries in
-/// the cache forever — a field added to or reshaped in [`CachedEntry`] (such as
-/// `tokens`, or the `date` → `ts_secs` switch in v3) would otherwise stay at its
-/// `serde` default for that session and never heal. A cache stamped with an older
-/// version is discarded on read, forcing a clean re-parse under the current
-/// shape. `0` is the implicit pre-versioning shape (no `version` field).
-const SPENDING_CACHE_VERSION: u32 = 3;
+/// Bumped whenever the cached parse shape *or values* change, so an upgrade
+/// re-reads every file once. A finalized session's stable mtime otherwise pins
+/// its entries in the cache forever — a field added to or reshaped in
+/// [`CachedEntry`] (such as `tokens`, or the `date` → `ts_secs` switch in v3), or
+/// a change in how a kept cost is computed (v4: Claude turns priced from token
+/// usage now that transcripts omit `costUSD`, so sessions cached as zero entries
+/// must re-parse), would otherwise stay frozen for that session and never heal. A
+/// cache stamped with an older version is discarded on read, forcing a clean
+/// re-parse under the current shape. `0` is the implicit pre-versioning shape (no
+/// `version` field).
+const SPENDING_CACHE_VERSION: u32 = 4;
 
 /// On-disk cache persisted at `{runtime_root}/spending.json`.
 ///
@@ -315,7 +321,7 @@ fn parse_for(kind: ProviderKind, path: &Path, prices: &PriceBook) -> Vec<CachedE
     match kind {
         ProviderKind::Codex => codex_entries(path, prices),
         ProviderKind::Pi => pi::parse_pi_jsonl(path),
-        ProviderKind::Claude => claude::parse_claude_jsonl(path),
+        ProviderKind::Claude => claude::parse_claude_jsonl(path, prices),
     }
 }
 

@@ -1,8 +1,10 @@
 //! Per-model token pricing — the table that turns token counts into dollars.
 //!
-//! Agents that report `costUSD` directly (Claude, Pi) never need this; it exists
-//! for token-only providers — Codex today — whose spend
-//! ([`super::spending`]) can only be totalled by multiplying tokens by a price.
+//! Token-only providers — Claude and Codex — need this: their spend
+//! ([`super::spending`]) can only be totalled by multiplying each turn's tokens
+//! by a price, since current Claude transcripts and every Codex rollout log token
+//! counts rather than a `costUSD`. Pi reports `costUSD` directly and never
+//! consults the table.
 //!
 //! Three layers feed one [`PriceBook`], the later ones winning:
 //!

@@ -2,7 +2,7 @@
 
 > See [transcript.md → Cost history](./transcript.md#cost-history) for the read-path that consumes this table, and [account.md](./account.md) for how the resulting per-provider spend reaches the dashboard panels.
 
-Rimz totals an agent's spend from its transcript history. Claude and Pi log `costUSD` directly; Codex logs only token counts, so converting Codex events to dollars needs a per-model price table. This doc owns that table: where prices come from, how a model resolves to a price, and how the table stays fresh.
+Rimz totals an agent's spend from its transcript history. Claude and Codex log token counts, so converting their turns to dollars needs a per-model price table; Pi logs `costUSD` directly (as did older Claude transcripts, which still use that figure when present). This doc owns that table: where prices come from, how a model resolves to a price, and how the table stays fresh.
 
 Pricing is **enrichment, never correctness** — the no-transcript-correctness rule. A failed fetch, a missing snapshot, an unknown model: each degrades to stale-but-usable prices or an omitted entry, never a hard failure.
 
@@ -30,6 +30,6 @@ The book is assembled from three sources, the later ones winning, so a stale or 
 
 `PriceBook::price` resolves a model id to a price by exact match, then a boundary-aware fuzzy scan: the longest stored key that is a word-boundary prefix of the (normalized: trimmed, lowercased, `.`/`@`→`-`) lookup wins. So `claude-sonnet-4-20250514-via-bedrock` resolves to its base model. A purely numeric, non-date version bump is rejected — a new `gpt-5`-family version is never silently priced as the old one; it falls through to its own entry or to no price.
 
-## Computing Codex cost
+## Computing token-priced cost
 
-`spending::compute_spending` multiplies each [`CodexTokenEvent`](../../crates/rimz/src/agents/transcript/codex.rs): uncached input at the input rate, the cached slice at the cache-read rate, and output (which already includes reasoning tokens) at the output rate. An event whose model has no known price contributes nothing rather than guessing.
+`spending::compute_spending` prices the token-only providers per turn. **Codex** multiplies each [`CodexTokenEvent`](../../crates/rimz/src/agents/transcript/codex.rs): uncached input at the input rate, the cached slice at the cache-read rate, and output (which already includes reasoning tokens) at the output rate. **Claude** prices each `message.usage` the same way and adds the cache-creation slice at the cache-creation (prompt-cache write) rate, since its transcripts now omit `costUSD`; an older Claude turn that still logs a positive `costUSD` keeps that figure instead. A turn whose model has no known price contributes nothing rather than guessing.
