@@ -204,10 +204,13 @@ fn preflight_decision(
 /// the full command line (so the `remote-control` / `app-server` subcommand is
 /// visible), while tmux reports only the foreground binary basename but names the
 /// window — which is the view name we launched it under, catching either host.
+pub fn command_is_host(command: &str) -> bool {
+    command.contains(COMMAND_MARKER) || command.contains(APP_SERVER_MARKER)
+}
+
 pub fn pane_is_host(pane: &PaneRef) -> bool {
-    pane.command.as_deref().is_some_and(|command| {
-        command.contains(COMMAND_MARKER) || command.contains(APP_SERVER_MARKER)
-    }) || pane.view_name.as_deref() == Some(VIEW_NAME)
+    pane.command.as_deref().is_some_and(command_is_host)
+        || pane.view_name.as_deref() == Some(VIEW_NAME)
 }
 
 /// PIDs of the per-user Codex app-server daemon — the process a remote-control

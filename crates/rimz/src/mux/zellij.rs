@@ -1097,8 +1097,8 @@ fn is_sidebar_pane(pane: &RawPane) -> bool {
 
 /// Group a pane list into per-tab [`ViewSidebars`] for the reconcile planner:
 /// each tab's sidebar panes (as normalized [`PaneId`]s) and whether it holds a
-/// working (non-sidebar) terminal pane. First-seen tab order; pane order within
-/// a tab preserved.
+/// user-working terminal pane. Managed daemon hosts in `rimzd` are not work.
+/// First-seen tab order; pane order within a tab preserved.
 fn views_with_sidebars(panes: &[RawPane]) -> Vec<ViewSidebars> {
     let mut views: Vec<ViewSidebars> = Vec::new();
     let mut index: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
@@ -1116,11 +1116,18 @@ fn views_with_sidebars(panes: &[RawPane]) -> Vec<ViewSidebars> {
                 MuxName::Zellij,
                 format!("terminal_{}", pane.id),
             ));
-        } else {
+        } else if !is_daemon_host_pane(pane) {
             views[slot].has_working = true;
         }
     }
     views
+}
+
+fn is_daemon_host_pane(pane: &RawPane) -> bool {
+    pane.pane_command
+        .as_deref()
+        .or(pane.command.as_deref())
+        .is_some_and(crate::remote_control::command_is_host)
 }
 
 fn classify_session_panes(panes: &[RawPane]) -> SessionCleanliness {
@@ -1663,6 +1670,26 @@ mod tests {
         assert_eq!(views[1].view, "1");
         assert!(!views[1].has_working);
         assert_eq!(views[1].sidebar_panes.len(), 1);
+    }
+
+    #[test]
+    fn views_with_sidebars_ignores_daemon_hosts_as_working_panes() {
+        let json = r#"[
+          {
+            "id": 2,
+            "is_plugin": false,
+            "tab_id": 0,
+            "title": "/home/marvin/.cargo/bin/rimz codex app-server serve --workspace-id ws_1 --session-name rimz-home",
+            "pane_command": "/home/marvin/.cargo/bin/rimz codex app-server serve --workspace-id ws_1 --session-name rimz-home"
+          }
+        ]"#;
+        let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
+        let views = views_with_sidebars(&panes);
+
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].view, "0");
+        assert!(!views[0].has_working);
+        assert!(views[0].sidebar_panes.is_empty());
     }
 
     #[test]

@@ -128,7 +128,7 @@ fn normalize_known_workspace_record(
             let canonical_id = WorkspaceId::from_project_root(&project_root);
             let session_name = session_name_for(&project_root);
             if canonical_id != workspace_id {
-                tracing::warn!(
+                tracing::debug!(
                     workspace = %workspace_id,
                     canonical_workspace = %canonical_id,
                     path = %record_path.display(),

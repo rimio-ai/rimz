@@ -268,8 +268,8 @@ pub struct SidebarLiveness {
     pub has_unlocated: bool,
 }
 
-/// One view's sidebar panes (in mux order) and whether it holds a working
-/// (non-sidebar) pane — the per-view input the reconcile planner folds.
+/// One view's sidebar panes (in mux order) and whether it holds a user-working
+/// pane — neither a sidebar nor a managed daemon host.
 pub(crate) struct ViewSidebars {
     pub view: String,
     pub sidebar_panes: Vec<PaneId>,
@@ -285,14 +285,14 @@ pub(crate) struct ReconcilePlan {
     pub add: Vec<String>,
 }
 
-/// Plan the reconcile for one session: in each working view keep exactly one
+/// Plan the reconcile for one session: in each user-working view keep exactly one
 /// *claimed* (live) sidebar pane, mark the rest for closing, and add a sidebar to
-/// any working view left without a live one — so duplicates collapse to one and a
-/// wedged sidebar is replaced. A view with no working pane is left alone (a lone
-/// sidebar self-closes; a daemon view is intentional). When a live sidebar is
-/// unlocated, that view is handled conservatively: never close blind, only add
-/// when it has no sidebar at all. First-seen order; shared by both backends so
-/// the rule lives in one place and is unit-tested without a mux.
+/// any user-working view left without a live one — so duplicates collapse to one
+/// and a wedged sidebar is replaced. A view with no user-working pane is left
+/// alone: a lone sidebar self-closes, and a daemon view is intentional. When a
+/// live sidebar is unlocated, that view is handled conservatively: never close
+/// blind, only add when it has no sidebar at all. First-seen order; shared by
+/// both backends so the rule lives in one place and is unit-tested without a mux.
 pub(crate) fn plan_reconcile(views: &[ViewSidebars], live: &SidebarLiveness) -> ReconcilePlan {
     let mut plan = ReconcilePlan::default();
     for view in views {

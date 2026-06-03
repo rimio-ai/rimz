@@ -257,8 +257,9 @@ fn is_tmux_sidebar(pane: &PaneRef) -> bool {
 }
 
 /// Group a pane list into per-window [`ViewSidebars`] for the reconcile planner:
-/// each window's sidebar panes and whether it holds a working (non-sidebar) pane.
-/// Panes with no window id are skipped. First-seen window order.
+/// each window's sidebar panes and whether it holds a user-working pane. Managed
+/// daemon hosts in `rimzd` are not work. Panes with no window id are skipped.
+/// First-seen window order.
 fn tmux_views_with_sidebars(panes: &[PaneRef]) -> Vec<ViewSidebars> {
     let mut views: Vec<ViewSidebars> = Vec::new();
     let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -276,7 +277,7 @@ fn tmux_views_with_sidebars(panes: &[PaneRef]) -> Vec<ViewSidebars> {
         });
         if is_tmux_sidebar(pane) {
             views[slot].sidebar_panes.push(pane.pane_id.clone());
-        } else {
+        } else if !crate::remote_control::pane_is_host(pane) {
             views[slot].has_working = true;
         }
     }
@@ -773,6 +774,19 @@ mod tests {
             "a sidebar-only window holds no working pane",
         );
         assert_eq!(views[1].sidebar_panes.len(), 1);
+    }
+
+    #[test]
+    fn views_with_sidebars_ignores_daemon_hosts_as_working_panes() {
+        let mut host = tmux_pane("%1", "@0", "rimz");
+        host.view_name = Some(crate::remote_control::VIEW_NAME.to_owned());
+        let panes = vec![host];
+        let views = tmux_views_with_sidebars(&panes);
+
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].view, "@0");
+        assert!(!views[0].has_working);
+        assert!(views[0].sidebar_panes.is_empty());
     }
 
     #[test]
