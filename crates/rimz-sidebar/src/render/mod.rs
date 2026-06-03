@@ -2576,4 +2576,31 @@ mod tests {
             "the selected worktree shows the lane spine:\n{screen}"
         );
     }
+
+    /// A compacting agent in plan posture counts as **working** (`⢿`), not
+    /// thinking (`✽`). Compaction is active context work regardless of posture.
+    #[test]
+    fn compacting_agent_in_plan_mode_counts_as_working() {
+        let mut compacting = agent(
+            "c",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Plan,
+            Some("/repo/main"),
+            Some("main"),
+            Some("t"),
+        );
+        compacting.compacting_since = Some(fixed_now());
+        let snapshot = snapshot_with(Vec::new(), vec![compacting]);
+        let screen = snapshot_to_screen(&snapshot, 40, 12);
+        let buckets = screen.lines().nth(4).unwrap();
+        assert!(
+            buckets.contains("⢿ 1"),
+            "compacting counts as working: {buckets}"
+        );
+        assert!(
+            buckets.contains("✽ 0"),
+            "compacting does not count as thinking: {buckets}"
+        );
+    }
 }

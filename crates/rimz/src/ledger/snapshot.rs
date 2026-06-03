@@ -347,8 +347,10 @@ pub struct SidebarRow {
     pub command_detail: Option<String>,
     /// The agent is condensing its context window right now (Claude `PreCompact`,
     /// Codex `SessionStart:compact`). A short-lived transient the renderer paints
-    /// as a pulsing head over the base status; never a status bucket of its own,
-    /// so it stays out of the cockpit tally. Always `false` for process rows.
+    /// as a pulsing head over the base status; never a status bucket of its own.
+    /// Counted as **working** (`⢿`) in the cockpit tally regardless of plan
+    /// posture — compaction is active context work, not planning. Always `false`
+    /// for process rows.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compacting: bool,
     /// The agent parked its last turn on still-in-flight background work

@@ -63,8 +63,8 @@ Two short-lived heads ride over the base status on the leading cell, so they nev
 
 | head | meaning |
 |------|---------|
-| `▇` compacting | condensing its context window — pulses `▁▃▄▅▆▇▆▅▄▃` in violet, then returns to its resting head |
-| `´` waiting on subagents | the main agent delegated to its children; the work is in the rows below — a low clay wave (`_` bobbing up to `´` and back) |
+| `▇` compacting | condensing its context window — pulses `▁▃▄▅▆▇▆▅▄▃` in violet, then returns to its resting head; counted as **working** (`⢿`) in the cockpit make-up regardless of plan posture |
+| `´` waiting on subagents | the main agent delegated to its children; the work is in the rows below — a low clay wave (`_` bobbing up to `´` and back); counted as **thinking** (`✽`) or **working** (`⢿`) based on the parent's posture |
 
 The two actionable attention glyphs (`?` / `!`) **slowly blink** — shown for most of a ~2s cycle, winking out for a beat — to pull the eye back to an unanswered row, and they **redden from yellow to red** once a row sits unanswered past the neglect window (`[sidebar] attention_redden_secs`), so a fresh ask reads calm-urgent and a long-ignored one heats up. A working agent that goes silent past the stall window escalates to a blinking `!` instead of spinning on. The `⏸` rate-limited head is attention-class but parked: it holds still in a held amber and never reddens or blinks, since waiting for the reset is the only move. A parent waiting on subagents is exempt from the stall escalation — its quiet wave is the children's work, not a wedge. An idle agent with no prompt yet shows a gentle `.`→`..`→`...` loading cue on line 2 in place of the em dash.
 

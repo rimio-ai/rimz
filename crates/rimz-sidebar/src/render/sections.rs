@@ -131,6 +131,7 @@ pub(super) fn fleet_header_lines(
         .filter(|row| {
             row.status == Some(AgentStatus::Running)
                 && row.permission_posture == Some(PermissionPosture::Plan)
+                && !row.compacting
         })
         .count();
     let working = running.saturating_sub(thinking);
