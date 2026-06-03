@@ -97,6 +97,12 @@ pub struct RuntimePaths {
     /// statusline enrichment). Written by the feed process, read by the
     /// snapshot CLI — never the sidebar.
     pub agent_context_dir: PathBuf,
+    /// Holds one latest-wins subagent-context sidecar per child (Claude's
+    /// `subagentStatusLine` enrichment: description, token count, start time).
+    /// Written by the feed process, read by the snapshot CLI — never the sidebar.
+    /// Kept apart from `agent_context/` so each reader deserializes only its own
+    /// record shape.
+    pub subagent_context_dir: PathBuf,
     /// Per-agent activity heartbeats (see [`crate::agent_activity`]). Latency
     /// hints the snapshot folds into each agent's `last_activity`.
     pub agent_activity_dir: PathBuf,
@@ -114,6 +120,7 @@ impl RuntimePaths {
         let sock_dir = root.join("sock");
         let heartbeat_dir = root.join("heartbeat");
         let agent_context_dir = root.join("agent_context");
+        let subagent_context_dir = root.join("subagent_context");
         let agent_activity_dir = root.join("agent-activity");
         Ok(Self {
             workspace_id,
@@ -121,6 +128,7 @@ impl RuntimePaths {
             sock_dir,
             heartbeat_dir,
             agent_context_dir,
+            subagent_context_dir,
             agent_activity_dir,
         })
     }
@@ -136,6 +144,19 @@ impl RuntimePaths {
         let digest = hex::encode(hasher.finalize());
         self.agent_context_dir
             .join(format!("ctx.{}.json", &digest[..32]))
+    }
+
+    /// Sidecar file for one subagent's `subagentStatusLine` enrichment, keyed by
+    /// `(kind, agent_id)` and digested to a safe, fixed-width name like
+    /// [`Self::agent_context_path`].
+    pub fn subagent_context_path(&self, kind: &str, agent_id: &str) -> PathBuf {
+        let mut hasher = Sha256::new();
+        hasher.update(kind.as_bytes());
+        hasher.update([0]);
+        hasher.update(agent_id.as_bytes());
+        let digest = hex::encode(hasher.finalize());
+        self.subagent_context_dir
+            .join(format!("sub.{}.json", &digest[..32]))
     }
 
     /// Path of a sidebar instance's heartbeat file. The freshness scan in
@@ -159,6 +180,7 @@ impl RuntimePaths {
         mkdir_p(&self.sock_dir)?;
         mkdir_p(&self.heartbeat_dir)?;
         mkdir_p(&self.agent_context_dir)?;
+        mkdir_p(&self.subagent_context_dir)?;
         mkdir_p(&self.agent_activity_dir)?;
         #[cfg(unix)]
         {

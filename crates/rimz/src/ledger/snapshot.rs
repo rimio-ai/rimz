@@ -27,6 +27,7 @@ use crate::ledger::event_log::{self, EventLogErr};
 use crate::ledger::feed_store::{self, FeedStoreErr};
 use crate::ledger::paths::StatePaths;
 use crate::ledger::runtime::{RuntimeProjection, RuntimeScope};
+use crate::ledger::subagent_context::SubagentContextRecord;
 use crate::ledger::workspace_record;
 use crate::schema::event::EventEnvelope;
 
@@ -362,9 +363,12 @@ pub struct SidebarRow {
     pub parked_on_background: bool,
 }
 
-/// A compact summary of a child agent, nested under its parent's row. Subagents
-/// are paneless and carry no out-of-band enrichment, so this holds only what the
-/// expanded list paints: identity, live status, and what it's working on.
+/// A compact summary of a child agent, nested under its parent's row. The
+/// expanded list paints its identity and live status, and — when Claude's
+/// `subagentStatusLine` has reported them — what the parent asked it to do, what
+/// it has spent, and how long it has run. The enrichment fields stay `None` for a
+/// Codex child or before the first render, and the card degrades to the bare
+/// type line.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarSubAgent {
     pub id: String,
@@ -374,6 +378,18 @@ pub struct SidebarSubAgent {
     pub status: AgentStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
+    /// What the parent asked this child to do (`subagentStatusLine` description),
+    /// painted after the type on the first row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Cumulative tokens the child has spent (`subagentStatusLine` `tokenCount`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    /// Wall-clock seconds the child has worked: `now − started_at` while running,
+    /// frozen at `last_activity − started_at` once it finishes. `None` when no
+    /// start time was reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_secs: Option<i64>,
     pub last_activity: Timestamp,
 }
 
@@ -523,6 +539,41 @@ impl SidebarSnapshot {
         for agent in &mut self.agents {
             if let Some(context) = by_key.remove(&(agent.kind.clone(), agent.agent_id.clone())) {
                 agent.context = Some(context);
+                changed = true;
+            }
+        }
+        if changed {
+            self.rebuild_groups();
+        }
+        self
+    }
+
+    /// Attach each child's `subagentStatusLine` enrichment (description, token
+    /// count, start time) to its `AgentState` by `(kind, agent_id)`, then rebuild
+    /// so the projection picks it up. It must land on the `AgentState`, not the
+    /// already-projected `SidebarSubAgent`: the rebuild re-runs `attach_sub_agents`
+    /// → `sub_agent_from_state`, which would discard anything written on the
+    /// projection. `token_count` claims the otherwise-unused `total_tokens` slot
+    /// (a paneless child reads no transcript). Display-only, like
+    /// [`with_agent_context`](Self::with_agent_context) — it never touches
+    /// `last_activity`, so ranking is untouched. A record whose child is absent
+    /// from the rollup is dropped; the key it is filed under is authority.
+    pub fn with_subagent_context(mut self, records: Vec<SubagentContextRecord>) -> Self {
+        if records.is_empty() {
+            return self;
+        }
+        let mut by_key: BTreeMap<(String, String), _> = records
+            .into_iter()
+            .map(|record| ((record.kind, record.agent_id), record.context))
+            .collect();
+        let mut changed = false;
+        for agent in &mut self.agents {
+            if let Some(context) = by_key.remove(&(agent.kind.clone(), agent.agent_id.clone())) {
+                agent.subagent_description = context.description;
+                agent.subagent_started_at = context.started_at;
+                if context.token_count.is_some() {
+                    agent.total_tokens = context.token_count;
+                }
                 changed = true;
             }
         }
@@ -1712,7 +1763,7 @@ fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState], now: Timest
         if let Some(parent) = rows.iter_mut().find(|row| {
             row.row_kind == SidebarRowKind::Agent && row.name == child.kind && row.id == parent_id
         }) {
-            parent.sub_agents.push(sub_agent_from_state(child));
+            parent.sub_agents.push(sub_agent_from_state(child, now));
         } else {
             warn!(
                 target: "rimz::agent::lifecycle",
@@ -1831,8 +1882,10 @@ fn window_spent_unreset(window: &RateLimitWindow, now: Timestamp) -> bool {
 /// reported a type — first seen at a bare `SubagentStop` — is named by a short
 /// id placeholder, never the provider `kind` (which would render as a phantom
 /// `claude`/`codex` row indistinguishable from a real subagent), and the
-/// anomaly is logged.
-fn sub_agent_from_state(child: &AgentState) -> SidebarSubAgent {
+/// anomaly is logged. Elapsed work is frozen at projection: a running child
+/// counts to `now`, a finished one to its `last_activity` (which stops
+/// advancing), so the figure settles when it ends.
+fn sub_agent_from_state(child: &AgentState, now: Timestamp) -> SidebarSubAgent {
     let name = child
         .task
         .clone()
@@ -1846,11 +1899,22 @@ fn sub_agent_from_state(child: &AgentState) -> SidebarSubAgent {
             );
             degraded_subagent_label(&child.agent_id)
         });
+    let elapsed_secs = child.subagent_started_at.map(|started| {
+        let until = if child.status == AgentStatus::Running {
+            now
+        } else {
+            child.last_activity
+        };
+        until.duration_since(started).as_secs().max(0)
+    });
     SidebarSubAgent {
         id: child.agent_id.clone(),
         name,
         status: child.status,
         task: child.task.clone(),
+        description: child.subagent_description.clone(),
+        total_tokens: child.total_tokens,
+        elapsed_secs,
         last_activity: child.last_activity,
     }
 }
@@ -2775,8 +2839,11 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             todo_done,
             todo_total,
             // Never reduced from events — the snapshot CLI folds the latest
-            // statusline context in via `with_agent_context`.
+            // statusline context in via `with_agent_context`, and the per-child
+            // `subagentStatusLine` enrichment in via `with_subagent_context`.
             context: None,
+            subagent_description: None,
+            subagent_started_at: None,
             turn_started_at,
             compacting_since,
             parked_on_background,
@@ -2958,6 +3025,8 @@ mod tests {
             todo_done: None,
             todo_total: None,
             context: None,
+            subagent_description: None,
+            subagent_started_at: None,
             turn_started_at: None,
             compacting_since: None,
             parked_on_background: false,
@@ -4093,6 +4162,91 @@ mod tests {
         let mut rows: Vec<SidebarRow> = Vec::new();
         attach_sub_agents(&mut rows, &[child], Timestamp::now());
         assert!(rows.is_empty(), "a child with no parent row never renders");
+    }
+
+    #[test]
+    fn with_subagent_context_folds_onto_child_by_key() {
+        use crate::agents::context::SubagentContext;
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let parent = agent(
+            "claude",
+            "sess-root",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            100,
+        );
+        let child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
+        let started = Timestamp::from_second(1_700_000_000).unwrap();
+        let snapshot =
+            SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![parent, child]);
+
+        let record = SubagentContextRecord {
+            kind: "claude".to_owned(),
+            agent_id: "child-1".to_owned(),
+            context: SubagentContext {
+                description: Some("locate the render seam".to_owned()),
+                token_count: Some(12_400),
+                started_at: Some(started),
+                observed_at: Timestamp::now(),
+            },
+        };
+        let folded = snapshot.with_subagent_context(vec![record]);
+        let child = folded
+            .agents
+            .iter()
+            .find(|a| a.agent_id == "child-1")
+            .expect("child in rollup");
+        assert_eq!(
+            child.subagent_description.as_deref(),
+            Some("locate the render seam")
+        );
+        assert_eq!(child.total_tokens, Some(12_400));
+        assert_eq!(child.subagent_started_at, Some(started));
+
+        // A record whose child is absent from the rollup is dropped — the key it
+        // is filed under is authority.
+        let absent = SubagentContextRecord {
+            kind: "claude".to_owned(),
+            agent_id: "ghost".to_owned(),
+            context: SubagentContext {
+                description: Some("nowhere".to_owned()),
+                token_count: None,
+                started_at: None,
+                observed_at: Timestamp::now(),
+            },
+        };
+        let folded = folded.with_subagent_context(vec![absent]);
+        assert!(folded.agents.iter().all(|a| a.agent_id != "ghost"));
+    }
+
+    #[test]
+    fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
+        let now = Timestamp::from_second(1_700_000_100).unwrap();
+        let started = Timestamp::from_second(1_700_000_000).unwrap();
+
+        // Running: elapsed counts to `now` (100s), enrichment projects through.
+        let mut running = child_state("sess-root", "child-1", AgentStatus::Running, 5);
+        running.subagent_description = Some("locate the render seam".to_owned());
+        running.subagent_started_at = Some(started);
+        running.total_tokens = Some(12_400);
+        let sub = sub_agent_from_state(&running, now);
+        assert_eq!(sub.description.as_deref(), Some("locate the render seam"));
+        assert_eq!(sub.total_tokens, Some(12_400));
+        assert_eq!(sub.elapsed_secs, Some(100));
+
+        // Finished: elapsed freezes at `last_activity` (40s after start), never `now`.
+        let mut finished = child_state("sess-root", "child-2", AgentStatus::Success, 0);
+        finished.last_activity = Timestamp::from_second(1_700_000_040).unwrap();
+        finished.subagent_started_at = Some(started);
+        let sub = sub_agent_from_state(&finished, now);
+        assert_eq!(sub.elapsed_secs, Some(40));
+
+        // A child with no enrichment (Codex, or pre-first-render) degrades cleanly.
+        let bare = child_state("sess-root", "child-3", AgentStatus::Running, 5);
+        let sub = sub_agent_from_state(&bare, now);
+        assert_eq!(sub.description, None);
+        assert_eq!(sub.total_tokens, None);
+        assert_eq!(sub.elapsed_secs, None);
     }
 
     #[test]

@@ -659,6 +659,19 @@ pub struct AgentState {
     /// Same enrich-only discipline as `context_pct`: display, never routing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<crate::agents::context::AgentContext>,
+    /// What the parent asked this *subagent* to do, harvested from Claude's
+    /// `subagentStatusLine`. Folded in at snapshot time by
+    /// `SidebarSnapshot::with_subagent_context`, never reduced from the event
+    /// log; always `None` for a root agent. The expanded card prefers it over the
+    /// activity-bound `task` on a child's first row. Same enrich-only discipline
+    /// as `context`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_description: Option<String>,
+    /// When this *subagent* began (its `subagentStatusLine` `startTime`), folded
+    /// in alongside `subagent_description`. The card derives elapsed work from it;
+    /// `None` for a root agent or before the first render.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_started_at: Option<Timestamp>,
     /// When this agent's current turn began — the timestamp of its latest
     /// `UserPromptSubmit` (carried forward; `None` until the first prompt).
     /// Unlike `last_seen` it does *not* advance on `Stop`, so it marks the

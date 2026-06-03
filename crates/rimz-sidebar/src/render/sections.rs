@@ -19,8 +19,8 @@ use rimz::{
 use super::TallyAnim;
 
 use super::fmt::{
-    activity_short, age_secs, age_short, clip, dollars2, model_label, pct_label, reset_countdown,
-    time_remaining, tokens_int, tokens_short, window_label,
+    activity_short, age_secs, age_short, clip, compact_seconds, dollars2, model_label, pct_label,
+    reset_countdown, time_remaining, tokens_int, tokens_short, window_label,
 };
 use super::labels::{
     TOKENS_CACHED, TOKENS_IN, TOKENS_OUT, TOKENS_TOTAL, agent_glyph, agent_style,
@@ -655,10 +655,14 @@ fn row_lines(
         .collect()
 }
 
-/// The expanded card's subagent list: a dim `⧉ subagents (N)` header, then one
-/// indented line per child — its status glyph, its type, and the task when that
-/// adds anything. Children are subordinate to the parent card, so every line is
-/// dim and indented past the parent's own stat lines.
+/// The expanded card's subagent list: a dim `⧉ subagents (N)` header, then up to
+/// two indented lines per child. Line 1 is the status glyph, the type, and the
+/// description of what the parent asked it to do; line 2 (deeper indent) is its
+/// token spend `◇` and elapsed work `◷`, pinned right under the parent's own
+/// stats. Children are subordinate to the parent card, so every line is dim and
+/// indented past the parent's stat lines. The enrichment (description, tokens,
+/// elapsed) rides in from Claude's `subagentStatusLine`; a Codex child or one
+/// before its first render degrades to the bare type line, with line 2 dropped.
 fn sub_agent_lines(
     theme: &Theme,
     sub_agents: &[SidebarSubAgent],
@@ -678,12 +682,34 @@ fn sub_agent_lines(
             Span::raw(" "),
             Span::styled(sub.name.clone(), theme.dim()),
         ];
-        // Show the task only when it differs from the name (the name already is
-        // the type for most children) so the line doesn't read `Explore — Explore`.
-        if let Some(task) = sub.task.as_deref().filter(|task| *task != sub.name) {
-            spans.push(Span::styled(format!(" — {task}"), theme.dim()));
+        // Prefer the `subagentStatusLine` description; fall back to the task
+        // descriptor, shown only when it differs from the name (the name already
+        // is the type for most children) so the line never reads `Explore —
+        // Explore`.
+        let detail = sub
+            .description
+            .as_deref()
+            .or(sub.task.as_deref().filter(|task| *task != sub.name));
+        if let Some(detail) = detail {
+            spans.push(Span::styled(format!(" — {detail}"), theme.dim()));
         }
         lines.push(Line::from(trim_spans_to_width(spans, width)));
+
+        // Line 2: token spend (left) and elapsed work (right-pinned), drawn only
+        // when `subagentStatusLine` reported a positive figure. A deeper indent
+        // sets it below the type line; the `◷` lands under the parent's age.
+        let tokens = sub.total_tokens.filter(|total| *total > 0);
+        let elapsed = sub.elapsed_secs.filter(|secs| *secs > 0);
+        if tokens.is_some() || elapsed.is_some() {
+            let mut left = vec![Span::raw("      ")];
+            if let Some(total) = tokens {
+                left.extend(tokens_total_spans(theme, total, tokens_short));
+            }
+            let right = elapsed
+                .map(|secs| metric_spans(theme, WORKED_GLYPH, Color::Cyan, &compact_seconds(secs)))
+                .unwrap_or_default();
+            lines.push(pin_right(left, right, width));
+        }
     }
     lines
 }

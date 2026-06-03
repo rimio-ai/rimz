@@ -33,7 +33,7 @@ use hook_types::PermissionMode;
 
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
-    AgentTokenUsage, RateLimitWindow,
+    AgentTokenUsage, RateLimitWindow, SubagentContext, SubagentObservation,
 };
 pub use lifecycle::{LifecycleSignal, LifecycleState, Transition, TransitionKind, step};
 pub use observation::AgentLifecycleObservation;
@@ -207,6 +207,11 @@ pub struct HookInstallPreview {
     /// statusline (Codex).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_line_change: Option<StatusLineChange>,
+    /// How the install changes the agent's `subagentStatusLine` (the per-child
+    /// render command), same consent-surface discipline as `status_line_change`.
+    /// `None` for agents that manage no subagent statusline (Codex).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_status_line_change: Option<StatusLineChange>,
 }
 
 /// What `rimz hooks install` does to the agent's statusline command, surfaced
@@ -271,6 +276,17 @@ pub trait AgentIntegration: Send + Sync {
     /// Display-only enrichment — it never reaches the event log or a decision.
     fn observe_context(&self, _source: &str, _payload: &Value) -> Option<AgentContext> {
         None
+    }
+
+    /// Harvest per-subagent enrichment from an out-of-band render payload —
+    /// Claude's `subagentStatusLine` tasks today. One payload renders many child
+    /// rows, so this returns one [`SubagentObservation`] per attributable task
+    /// (every task carrying an `agent_id`). Empty when the adapter has no such
+    /// transport (Codex) or the payload is unusable. Display-only enrichment,
+    /// like [`observe_context`](Self::observe_context) — it never reaches the
+    /// event log or a decision.
+    fn observe_subagent_context(&self, _payload: &Value) -> Vec<SubagentObservation> {
+        Vec::new()
     }
 
     /// Whether this event ends an agent session. When true the CLI expires the
@@ -351,6 +367,15 @@ pub trait AgentIntegration: Send + Sync {
     /// its pass-through target. Best-effort: a read/parse failure reads as
     /// `None`.
     fn wrapped_status_line_command(&self) -> Option<String> {
+        None
+    }
+
+    /// The user's original `subagentStatusLine` command this agent currently
+    /// wraps, if any — the pass-through target for `rimz statusline feed
+    /// --subagent`. `None` when the agent manages no subagent statusline (Codex)
+    /// or no wrap is configured. Best-effort: a read/parse failure reads as
+    /// `None`.
+    fn wrapped_subagent_status_line_command(&self) -> Option<String> {
         None
     }
 

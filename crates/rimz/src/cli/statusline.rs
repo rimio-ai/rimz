@@ -41,21 +41,27 @@ pub struct StatuslineArgs {
 enum StatuslineSubcmd {
     /// Capture the statusline JSON on stdin, persist the agent-context sidecar,
     /// then pass the JSON through to the wrapped command and forward its output.
+    /// With `--subagent` the same datasource serves Claude's `subagentStatusLine`:
+    /// the payload's `tasks` array is harvested into one per-child sidecar.
     #[command(hide = true)]
     Feed {
         /// Agent the statusline belongs to (`claude`).
         #[arg(long)]
         source: String,
+        /// Treat the payload as a `subagentStatusLine` render (a `tasks` array)
+        /// rather than the session `statusLine` blob.
+        #[arg(long)]
+        subagent: bool,
     },
 }
 
 pub fn run(args: StatuslineArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
-        StatuslineSubcmd::Feed { source } => run_feed(source, globals),
+        StatuslineSubcmd::Feed { source, subagent } => run_feed(source, subagent, globals),
     }
 }
 
-fn run_feed(source: String, globals: &GlobalFlags) -> Result<()> {
+fn run_feed(source: String, subagent: bool, globals: &GlobalFlags) -> Result<()> {
     // Read all of stdin once — the rich statusline JSON. Keep the bytes for a
     // verbatim pass-through; a parse failure must never blank the statusline.
     let mut buf = Vec::new();
@@ -64,18 +70,29 @@ fn run_feed(source: String, globals: &GlobalFlags) -> Result<()> {
         .context("reading statusline stdin")?;
 
     // Resolve the pass-through target before any fallible payload work, so a
-    // parse error can't strand the user's statusline.
-    let wrapped = integration_by_name(&source)
-        .ok()
-        .and_then(|agent| agent.wrapped_status_line_command());
+    // parse error can't strand the user's statusline. The two render commands
+    // wrap independently, so each mode reads its own wrapped target.
+    let wrapped = integration_by_name(&source).ok().and_then(|agent| {
+        if subagent {
+            agent.wrapped_subagent_status_line_command()
+        } else {
+            agent.wrapped_status_line_command()
+        }
+    });
 
     // Best-effort context capture. Never fatal, never blocks on the ledger.
-    if let Err(err) = persist_context(&source, &buf, globals) {
-        warn!(source = %source, error = %err, "statusline: context capture failed");
+    let persisted = if subagent {
+        persist_subagent_context(&source, &buf, globals)
+    } else {
+        persist_context(&source, &buf, globals)
+    };
+    if let Err(err) = persisted {
+        warn!(source = %source, subagent, error = %err, "statusline: context capture failed");
     }
 
     // Pass-through. Always emit something so the statusline never blanks. With
-    // no wrapped command we print nothing, so Claude renders its built-in line.
+    // no wrapped command we print nothing, so Claude renders its built-in line
+    // (or, for `--subagent`, its own child rows).
     match wrapped {
         Some(command) => forward_to_wrapped(&command, &buf),
         None => Ok(()),
@@ -104,6 +121,41 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
     // Push the update so the `$`/token figure repaints within a wakeup rather
     // than waiting for the sidebar's next poll tick. Best-effort, like every
     // other wakeup: a send failure never fails the statusline render.
+    let _ = rimz::ledger::wakeup::wake_sidebars_for_context(&runtime, &workspace_id);
+    Ok(())
+}
+
+/// Parse a `subagentStatusLine` payload, harvest its `tasks`, and write one
+/// per-child sidecar keyed by `(kind, task id)` — the same id the child's
+/// `SubagentStart` lifecycle row is keyed under, so the snapshot fold attaches
+/// it. Like [`persist_context`] this resolves only `RuntimePaths` (no ledger
+/// open/lock) to stay fast and lock-free on the per-render path. Nothing to
+/// persist (a non-Claude source, or a payload with no attributable task) is
+/// success, not an error.
+fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<()> {
+    let payload: Value =
+        serde_json::from_slice(stdin).context("parsing subagent statusline payload")?;
+    let agent = integration_by_name(source)?;
+    let observations = agent.observe_subagent_context(&payload);
+    if observations.is_empty() {
+        return Ok(());
+    }
+    let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
+    let workspace_id = workspace.workspace_id.clone();
+    let runtime =
+        RuntimePaths::for_workspace(workspace.workspace_id).context("preparing runtime paths")?;
+    runtime.ensure_dirs().context("preparing runtime dirs")?;
+    for observation in &observations {
+        rimz::ledger::subagent_context::write(
+            &runtime,
+            agent.name(),
+            &observation.agent_id,
+            &observation.context,
+        )
+        .context("writing subagent-context sidecar")?;
+    }
+    // Repaint the parent's expanded card within a wakeup rather than on the next
+    // poll tick. Best-effort, like every other wakeup.
     let _ = rimz::ledger::wakeup::wake_sidebars_for_context(&runtime, &workspace_id);
     Ok(())
 }

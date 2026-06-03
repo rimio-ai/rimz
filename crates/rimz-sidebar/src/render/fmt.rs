@@ -252,6 +252,26 @@ pub(super) fn pct_label(precise: Option<f64>, whole: u8) -> String {
     }
 }
 
+/// A span as its two highest non-zero units — `3d12h`, `3h12m`, `2m30s`, `45s`.
+/// Skipping zero units keeps it short, so a span with no minutes reads `3h3s`
+/// rather than padding a `0m`; a non-positive span is empty (the caller only
+/// paints a positive elapsed). Formats the subagent elapsed-work readout.
+pub(super) fn compact_seconds(seconds: i64) -> String {
+    if seconds <= 0 {
+        return String::new();
+    }
+    [
+        (seconds / 86_400, 'd'),
+        (seconds % 86_400 / 3_600, 'h'),
+        (seconds % 3_600 / 60, 'm'),
+        (seconds % 60, 's'),
+    ]
+    .into_iter()
+    .filter(|(value, _)| *value > 0)
+    .take(2)
+    .map(|(value, unit)| format!("{value}{unit}"))
+    .collect()
+}
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -273,6 +293,19 @@ mod tests {
         assert_eq!(reset_secs(5 * 86_400).chars().count(), 5);
         // A passed reset is the zero floor, never negative.
         assert_eq!(reset_secs(-10), "0h00m");
+    }
+
+    #[test]
+    fn compact_seconds_takes_two_highest_nonzero_units() {
+        assert_eq!(compact_seconds(3 * 86_400 + 12 * 3_600), "3d12h");
+        assert_eq!(compact_seconds(3 * 3_600 + 12 * 60), "3h12m");
+        assert_eq!(compact_seconds(2 * 60 + 30), "2m30s");
+        assert_eq!(compact_seconds(45), "45s");
+        // Zero units are skipped, not padded.
+        assert_eq!(compact_seconds(3 * 3_600 + 3), "3h3s");
+        // A non-positive span is empty; the caller only paints a positive one.
+        assert_eq!(compact_seconds(0), "");
+        assert_eq!(compact_seconds(-5), "");
     }
 
     #[test]

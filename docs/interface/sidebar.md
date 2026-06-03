@@ -172,7 +172,17 @@ The `▣`/`▢`, `◇`, and `◷` glyphs share one lead column, so the card read
                                   ▌    ⢿ Explore
 ```
 
-The expanded card also lists any **subagents** the agent spawned this turn — a dim `⧉ subagents (N)` header then one indented `glyph type` line each (`⢿ Explore`, `○ review`). Subagents have no pane of their own, so they never get a row; they nest here only.
+The expanded card also lists any **subagents** the agent spawned this turn — a dim `⧉ subagents (N)` header then, per child, the status glyph and type with what the parent asked it to do, and a deeper-indented second line carrying its token spend `◇` and elapsed work `◷` pinned right under the parent's stats:
+
+```
+▌  ⧉ subagents (2)
+▌    ⢿ Explore — locate the render seam
+▌        ◇ 12.4k                              ◷ 1m30s
+▌    ✓ review — audit the trust hash
+▌        ◇ 3.1k                                  ◷ 45s
+```
+
+The description, tokens, and elapsed ride in from Claude's `subagentStatusLine` (Claude-only; harvested at install time). A Codex child, or a Claude child before its first render, shows just the `glyph type` line. Subagents have no pane of their own, so they never get a row; they nest here only.
 
 ### Attention rows
 

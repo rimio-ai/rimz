@@ -811,6 +811,8 @@ mod tests {
             todo_done: None,
             todo_total: None,
             context: None,
+            subagent_description: None,
+            subagent_started_at: None,
             turn_started_at: None,
             compacting_since: None,
             parked_on_background: false,
@@ -1064,6 +1066,74 @@ mod tests {
             "window size left the token line:\n{rendered}"
         );
         assert_snapshot("enriched_selected_agent_card", rendered);
+    }
+
+    #[test]
+    fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
+        // A selected parent expands its `⧉ subagents` list. Each child reads two
+        // lines: the type and its `subagentStatusLine` description, then the token
+        // spend `◇` left with the elapsed work `◷` pinned right. The child is
+        // finished, so its elapsed is frozen at `last_activity − started` (exactly
+        // 60s here, independent of wall-clock) — a deterministic `1m`.
+        let mut parent = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            Some("/repo/main"),
+            Some("main"),
+            Some("db migrate"),
+        );
+        parent.context = Some(claude_context(fixed_now()));
+
+        let mut child = agent(
+            "child-1",
+            "claude",
+            AgentStatus::Success,
+            PermissionPosture::Default,
+            None,
+            None,
+            Some("Explore"),
+        );
+        child.parent_agent_id = Some("claude-1".to_owned());
+        child.subagent_description = Some("locate the render seam".to_owned());
+        child.subagent_started_at = Some(fixed_now() - Duration::from_secs(90));
+        child.last_activity = fixed_now() - Duration::from_secs(30);
+        child.last_seen = fixed_now() - Duration::from_secs(30);
+        child.total_tokens = Some(12_400);
+
+        let snapshot = snapshot_with(Vec::new(), vec![parent, child]);
+        let rendered = snapshot_to_screen_with_alert_and_ui(
+            &snapshot,
+            None,
+            &UiState {
+                selected_index: 0,
+                ..Default::default()
+            },
+            54,
+            18,
+        );
+
+        assert!(
+            rendered.contains("⧉ subagents (1)"),
+            "the expanded card lists its child:\n{rendered}"
+        );
+        // Line 1: type + the description of what the parent asked it to do.
+        assert!(
+            rendered.contains("Explore — locate the render seam"),
+            "line 1 carries the description:\n{rendered}"
+        );
+        // Line 2: token spend left, elapsed work right-pinned. 12_400 → `12.4k`,
+        // 60s frozen → `1m`.
+        assert!(
+            rendered.contains("◇ 12.4k"),
+            "line 2 carries the token spend:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("◷ 1m"),
+            "line 2 carries the frozen elapsed:\n{rendered}"
+        );
+        assert_snapshot("subagent_two_line_entry", rendered);
     }
 
     #[test]

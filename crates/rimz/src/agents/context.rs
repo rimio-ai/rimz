@@ -64,6 +64,46 @@ pub struct AgentContext {
     pub observed_at: Timestamp,
 }
 
+/// Per-subagent enrichment a paneless child cannot publish for itself. Claude's
+/// `subagentStatusLine` is `exec`d to render the agent panel's child rows and is
+/// handed each task's `description`, `tokenCount`, and `startTime`; Rimz harvests
+/// those into one of these per child so the expanded card paints what the child
+/// is doing, what it has spent, and how long it has run. Identity-free like
+/// [`AgentContext`] — the child it belongs to is the `(kind, agent_id)` key it is
+/// filed under, never a field here. `subagentStatusLine` is Claude-only, so a
+/// Codex child simply has no record and the card degrades to its bare type line.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SubagentContext {
+    /// What the parent asked this child to do (the Task tool's `description`).
+    /// Painted after the child's type on the first row; absent before the first
+    /// render.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Cumulative tokens the child has spent. Folds onto the child's
+    /// `AgentState.total_tokens`, which is otherwise always `None` for a paneless
+    /// subagent that never reads a transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_count: Option<u64>,
+    /// When the child began, from `startTime`. The card derives elapsed work as
+    /// `(running ? now : last_activity) − started_at`. Absent when the upstream
+    /// value is missing or unparseable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<Timestamp>,
+    /// When the producer observed this record. The snapshot reaper drops a
+    /// sidecar past the ghost-session TTL even if a stop was missed.
+    pub observed_at: Timestamp,
+}
+
+/// One child's enrichment paired with the `agent_id` it belongs to — the
+/// adapter's output for a single `subagentStatusLine` task, before the ledger
+/// stamps the `kind` it is filed under. A payload renders many rows, so one
+/// observation maps to one sidecar write keyed by `(kind, agent_id)`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SubagentObservation {
+    pub agent_id: String,
+    pub context: SubagentContext,
+}
+
 /// The provider account/plan a session authenticates against. Account-scoped —
 /// every session of one provider shares it — so the sidebar's provider
 /// dashboard reads it from the freshest session, never paints it per row.

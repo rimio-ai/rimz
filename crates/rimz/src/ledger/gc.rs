@@ -100,19 +100,23 @@ fn collect_workspace_runtime(
     let sock_dir = workspace_root.join("sock");
     let activity_dir = workspace_root.join("agent-activity");
     let context_dir = workspace_root.join("agent_context");
+    let subagent_context_dir = workspace_root.join("subagent_context");
     collect_heartbeats(&heartbeat_dir, &sock_dir, older_than, report)?;
     collect_stale_sidecars(&activity_dir, older_than, report)?;
     collect_stale_sidecars(&context_dir, older_than, report)?;
+    collect_stale_sidecars(&subagent_context_dir, older_than, report)?;
     remove_dir_if_empty(&heartbeat_dir, report)?;
     remove_dir_if_empty(&sock_dir, report)?;
     remove_dir_if_empty(&activity_dir, report)?;
     remove_dir_if_empty(&context_dir, report)?;
+    remove_dir_if_empty(&subagent_context_dir, report)?;
     remove_dir_if_empty(workspace_root, report)?;
     Ok(())
 }
 
-/// Reap stale per-session sidecar files — the activity heartbeats and the
-/// statusline context sidecars. These are latency hints, not ledger truth, so a
+/// Reap stale per-session sidecar files — the activity heartbeats, the
+/// statusline context sidecars, and the per-subagent context sidecars. These are
+/// latency hints, not ledger truth, so a
 /// file an ended session left behind is aged out like the other runtime liveness
 /// files; reaping them also lets the workspace root be removed once the workspace
 /// goes quiet. Any orphaned atomic-write `.tmp` sibling ages out the same way.
@@ -479,15 +483,17 @@ mod tests {
         .unwrap();
         let stale_context = rt.agent_context_dir.join("cafef00dcafef00d.json");
         fs::write(&stale_context, b"{}").unwrap();
+        let stale_subagent = rt.subagent_context_dir.join("sub.cafebabecafebabe.json");
+        fs::write(&stale_subagent, b"{}").unwrap();
         let old = SystemTime::now() - Duration::from_secs(7200);
-        for path in [&stale_activity, &stale_context] {
+        for path in [&stale_activity, &stale_context, &stale_subagent] {
             fs::File::open(path).unwrap().set_modified(old).unwrap();
         }
 
         let report =
             collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600)).unwrap();
 
-        assert_eq!(report.sidecar_files_removed, 2);
+        assert_eq!(report.sidecar_files_removed, 3);
         assert!(
             !rt.agent_activity_dir.exists(),
             "the emptied activity dir is removed"
@@ -495,6 +501,10 @@ mod tests {
         assert!(
             !rt.agent_context_dir.exists(),
             "the emptied context dir is removed"
+        );
+        assert!(
+            !rt.subagent_context_dir.exists(),
+            "the emptied subagent-context dir is removed"
         );
         assert!(
             !rt.agent_activity_dir.parent().unwrap().exists(),

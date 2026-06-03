@@ -151,6 +151,8 @@ mod tests {
             todo_done: None,
             todo_total: None,
             context: None,
+            subagent_description: None,
+            subagent_started_at: None,
             turn_started_at: None,
             compacting_since: None,
             parked_on_background: false,

@@ -280,9 +280,24 @@ impl Env {
             .expect("wait statusline feed")
     }
 
+    /// `rimz statusline feed --source <source> --subagent`, mirroring how
+    /// Claude's installed `subagentStatusLine` command invokes it.
+    pub fn run_subagent_statusline_feed(&self, source: &str, payload: &str) -> Output {
+        let mut cmd = self.statusline_feed_command(source);
+        cmd.arg("--subagent");
+        self.spawn_payload(cmd, payload)
+            .wait_with_output()
+            .expect("wait subagent statusline feed")
+    }
+
     /// Read every persisted agent-context sidecar for the harness workspace.
     pub fn agent_contexts(&self) -> Vec<rimz::ledger::agent_context::AgentContextRecord> {
         rimz::ledger::agent_context::read_all(&self.runtime_paths())
+    }
+
+    /// Read every persisted subagent-context sidecar for the harness workspace.
+    pub fn subagent_contexts(&self) -> Vec<rimz::ledger::subagent_context::SubagentContextRecord> {
+        rimz::ledger::subagent_context::read_all(&self.runtime_paths())
     }
 
     // --- feed commands ---

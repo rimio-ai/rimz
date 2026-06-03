@@ -29,6 +29,7 @@ pub mod paths;
 pub mod runtime;
 pub mod single_flight;
 pub mod snapshot;
+pub mod subagent_context;
 pub mod wakeup;
 pub mod workspace_record;
 

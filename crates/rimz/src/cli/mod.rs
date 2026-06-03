@@ -308,6 +308,29 @@ fn approve_hook_install(previews: &[HookInstallPreview]) -> Result<Vec<&'static 
     }
 }
 
+/// One consent line for a statusline-style wrap (`statusLine` or
+/// `subagentStatusLine`), keeping the change a visible security surface. An
+/// unchanged re-install or an agent that manages no such command prints nothing.
+fn write_status_line_consent(
+    w: &mut impl std::io::Write,
+    key: &str,
+    purpose: &str,
+    change: &Option<StatusLineChange>,
+) -> Result<()> {
+    match change {
+        Some(StatusLineChange::Added) => writeln!(
+            w,
+            "      also sets your {key} to {purpose} (removed on uninstall)",
+        )?,
+        Some(StatusLineChange::Wrapping { original }) => writeln!(
+            w,
+            "      also wraps your {key} command ({original}) — restored on uninstall",
+        )?,
+        Some(StatusLineChange::Unchanged) | None => {}
+    }
+    Ok(())
+}
+
 fn print_hook_consent_gate(previews: &[HookInstallPreview], interactive: bool) -> Result<()> {
     let mut stderr = std::io::stderr().lock();
     writeln!(
@@ -331,17 +354,18 @@ fn print_hook_consent_gate(previews: &[HookInstallPreview], interactive: bool) -
             preview.planned_events.len(),
             preview.config_path.display(),
         )?;
-        match &preview.status_line_change {
-            Some(StatusLineChange::Added) => writeln!(
-                stderr,
-                "      also sets your statusLine to report context to Rimz (removed on uninstall)",
-            )?,
-            Some(StatusLineChange::Wrapping { original }) => writeln!(
-                stderr,
-                "      also wraps your statusLine command ({original}) — restored on uninstall",
-            )?,
-            Some(StatusLineChange::Unchanged) | None => {}
-        }
+        write_status_line_consent(
+            &mut stderr,
+            "statusLine",
+            "report context to Rimz",
+            &preview.status_line_change,
+        )?;
+        write_status_line_consent(
+            &mut stderr,
+            "subagentStatusLine",
+            "report subagent activity to Rimz",
+            &preview.subagent_status_line_change,
+        )?;
     }
     writeln!(
         stderr,

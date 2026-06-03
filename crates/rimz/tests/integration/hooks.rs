@@ -715,12 +715,16 @@ fn claude_session_start_with_bypass_permissions_observes_yolo_posture() {
 fn claude_install_uninstall_cli_round_trips_into_settings_json() {
     let env = Env::new();
     let claude_settings = env.project_root.join(".claude").join("settings.json");
-    // Seed a pre-existing user statusLine so the round-trip also proves the
-    // wrap-then-restore contract, not just hooks.
+    // Seed pre-existing user statusLine and subagentStatusLine commands so the
+    // round-trip also proves the wrap-then-restore contract for both render
+    // commands, not just hooks.
     std::fs::create_dir_all(claude_settings.parent().unwrap()).unwrap();
     std::fs::write(
         &claude_settings,
-        r#"{ "statusLine": { "type": "command", "command": "npx -y ccstatusline@latest" } }"#,
+        r#"{
+            "statusLine": { "type": "command", "command": "npx -y ccstatusline@latest" },
+            "subagentStatusLine": { "type": "command", "command": "my-subagent-line" }
+        }"#,
     )
     .unwrap();
 
@@ -763,6 +767,15 @@ fn claude_install_uninstall_cli_round_trips_into_settings_json() {
         on_disk["statusLine"]["_rimz_wrapped"]["command"],
         "npx -y ccstatusline@latest"
     );
+    // The subagentStatusLine is wrapped the same way, independently.
+    assert_eq!(
+        on_disk["subagentStatusLine"]["command"],
+        "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source claude --subagent"
+    );
+    assert_eq!(
+        on_disk["subagentStatusLine"]["_rimz_wrapped"]["command"],
+        "my-subagent-line"
+    );
 
     let uninstall = env
         .rimz()
@@ -790,6 +803,16 @@ fn claude_install_uninstall_cli_round_trips_into_settings_json() {
         "npx -y ccstatusline@latest"
     );
     assert!(restored["statusLine"].get("_rimz_managed").is_none());
+    // The user's original subagentStatusLine is restored exactly too.
+    assert_eq!(
+        restored["subagentStatusLine"]["command"],
+        "my-subagent-line"
+    );
+    assert!(
+        restored["subagentStatusLine"]
+            .get("_rimz_managed")
+            .is_none()
+    );
 }
 
 /// The statusline feed passes the JSON through to the wrapped command verbatim
@@ -852,6 +875,60 @@ fn statusline_feed_with_no_wrap_emits_nothing_but_captures_context() {
         record.context.tokens.as_ref().unwrap().used_percentage,
         Some(42)
     );
+}
+
+/// The `--subagent` feed harvests every task in a `subagentStatusLine` payload
+/// into one per-child sidecar, keyed by the task id, and emits nothing when no
+/// wrap is configured (Claude renders its own child rows).
+#[test]
+fn subagent_statusline_feed_writes_one_sidecar_per_task() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+
+    let payload = r#"{
+        "columns": 80,
+        "tasks": [
+            {
+                "id": "child-1",
+                "type": "Explore",
+                "status": "running",
+                "description": "locate the render seam",
+                "startTime": 1700000000,
+                "tokenCount": 12400
+            },
+            {
+                "id": "child-2",
+                "type": "review",
+                "description": "audit the trust hash",
+                "startTime": 1700000055,
+                "tokenCount": 3100
+            }
+        ]
+    }"#;
+    let out = env.run_subagent_statusline_feed("claude", payload);
+    assert!(
+        out.status.success(),
+        "feed stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stdout.is_empty(),
+        "no wrap means empty stdout, got: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    let mut records = env.subagent_contexts();
+    records.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
+    assert_eq!(records.len(), 2, "one sidecar per task");
+    assert_eq!(records[0].agent_id, "child-1");
+    assert_eq!(
+        records[0].context.description.as_deref(),
+        Some("locate the render seam")
+    );
+    assert_eq!(records[0].context.token_count, Some(12_400));
+    assert!(records[0].context.started_at.is_some());
+    assert_eq!(records[1].agent_id, "child-2");
+    assert_eq!(records[1].context.token_count, Some(3_100));
 }
 
 /// The captured context surfaces on the session's agent row in the snapshot
