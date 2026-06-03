@@ -113,6 +113,43 @@ impl TmuxServer {
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
     }
 
+    /// Run a raw tmux command against this server's socket, asserting success.
+    fn tmux(&self, args: &[&str]) {
+        let output = Command::new("tmux")
+            .arg("-S")
+            .arg(self.socket.to_str().expect("utf8 socket"))
+            .args(args)
+            .output()
+            .expect("spawn tmux");
+        assert!(
+            output.status.success(),
+            "tmux {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    /// Block briefly until some pane in `session` reports `command` as its current
+    /// command — an `exec`'d pane needs a tick before `pane_current_command`
+    /// settles off the launching shell.
+    fn wait_for_pane_command(&self, session: &str, command: &str) {
+        for _ in 0..40 {
+            let listed = self
+                .backend
+                .list_panes(PaneListOptions {
+                    session_name: Some(session.to_owned()),
+                })
+                .expect("list_panes");
+            if listed
+                .iter()
+                .any(|pane| pane.command.as_deref() == Some(command))
+            {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        panic!("no pane in `{session}` ran `{command}` within the deadline");
+    }
+
     fn window_names(&self, session: &str) -> Vec<String> {
         let output = Command::new("tmux")
             .args([
@@ -497,6 +534,63 @@ fn reconcile_sidebars_adds_one_to_a_sidebarless_window() {
     );
 }
 
+/// `reconcile_sidebars` collapses an orphan sidebar-only window — a wedged
+/// renderer whose working siblings all closed but which never self-closed — by
+/// closing its sidebar pane, so the window disappears. A working window with no
+/// sidebar still gains one in the same pass; the two behaviours coexist without a
+/// rebirth.
+#[test]
+fn reconcile_sidebars_collapses_an_orphan_sidebar_only_window() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    server.ensure_with_shell("multi"); // window 0: a working `sh` pane
+    server.tmux(&["rename-window", "-t", "multi:0", "room"]);
+    let (_stub_dir, stub) = sidebar_process_stub();
+    // window 1: a lone `rimz-sidebar` pane, no working sibling — the orphan.
+    server.tmux(&[
+        "new-window",
+        "-t",
+        "multi",
+        "-n",
+        "ghost",
+        &format!("exec {} 600", stub.display()),
+    ]);
+    server.wait_for_pane_command("multi", "rimz-sidebar");
+    assert_eq!(
+        server.window_names("multi"),
+        vec!["room".to_owned(), "ghost".to_owned()],
+        "two windows before reconcile",
+    );
+
+    let (_rimz_dir, rimz_bin) = sidebar_command_stub();
+    let report = server
+        .backend
+        .reconcile_sidebars(
+            &SidebarPaneOptions {
+                session_name: "multi".to_owned(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-orphan")),
+                cwd: std::env::current_dir().expect("cwd"),
+                width_percent: 30,
+                rimz_bin,
+                replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
+            },
+            // No live sidebars known: the orphan's pane is unclaimed, so it closes.
+            &rimz::mux::SidebarLiveness::default(),
+        )
+        .expect("reconcile_sidebars");
+
+    assert_eq!(report.closed, 1, "the orphan's lone sidebar pane is closed");
+    assert_eq!(report.recovered, 1, "the working window gains a sidebar");
+    assert_eq!(report.failed, 0);
+    assert_eq!(
+        server.window_names("multi"),
+        vec!["room".to_owned()],
+        "the orphan window collapsed; the working window survives",
+    );
+}
+
 fn sidebar_command_stub() -> (TempDir, PathBuf) {
     let dir = TempDir::new().expect("stub dir");
     let path = dir.path().join("rimz-stub");
@@ -508,6 +602,17 @@ fn sidebar_command_stub() -> (TempDir, PathBuf) {
         perms.set_mode(0o755);
         std::fs::set_permissions(&path, perms).expect("chmod");
     }
+    (dir, path)
+}
+
+/// A real binary named `rimz-sidebar` (the backend's `SIDEBAR_BIN_NAME`), so a
+/// pane running it reports `pane_current_command == "rimz-sidebar"` and reconcile
+/// classifies it as a sidebar. A `#!/bin/sh` stub would report `sh`, so copy a
+/// genuine executable (`sleep`) under the wanted name instead.
+fn sidebar_process_stub() -> (TempDir, PathBuf) {
+    let dir = TempDir::new().expect("stub dir");
+    let path = dir.path().join("rimz-sidebar");
+    std::fs::copy("/bin/sleep", &path).expect("copy sleep to rimz-sidebar");
     (dir, path)
 }
 

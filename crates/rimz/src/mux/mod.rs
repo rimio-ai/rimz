@@ -268,12 +268,15 @@ pub struct SidebarLiveness {
     pub has_unlocated: bool,
 }
 
-/// One view's sidebar panes (in mux order) and whether it holds a user-working
-/// pane — neither a sidebar nor a managed daemon host.
+/// One view's sidebar panes (in mux order) and how it is otherwise occupied: a
+/// user-working pane (neither a sidebar nor a managed daemon host), and/or a
+/// managed daemon host. A view with neither is sidebar-only — an orphan to
+/// collapse; one with a daemon host is the intentional `rimzd` view.
 pub(crate) struct ViewSidebars {
     pub view: String,
     pub sidebar_panes: Vec<PaneId>,
     pub has_working: bool,
+    pub has_daemon_host: bool,
 }
 
 /// What a reconcile must do to converge one session to a single live sidebar per
@@ -285,36 +288,49 @@ pub(crate) struct ReconcilePlan {
     pub add: Vec<String>,
 }
 
-/// Plan the reconcile for one session: in each user-working view keep exactly one
-/// *claimed* (live) sidebar pane, mark the rest for closing, and add a sidebar to
-/// any user-working view left without a live one — so duplicates collapse to one
-/// and a wedged sidebar is replaced. A view with no user-working pane is left
-/// alone: a lone sidebar self-closes, and a daemon view is intentional. When a
-/// live sidebar is unlocated, that view is handled conservatively: never close
-/// blind, only add when it has no sidebar at all. First-seen order; shared by
-/// both backends so the rule lives in one place and is unit-tested without a mux.
+/// Plan the reconcile for one session, view by view:
+/// - **Working view** — keep exactly one *claimed* (live) sidebar pane, close the
+///   rest, and add one if none survived, so duplicates collapse to one and a
+///   wedged sidebar is replaced.
+/// - **Orphan sidebar-only view** — no working pane and no daemon host, so its
+///   working siblings all closed but the sidebar never self-closed (a wedged
+///   renderer that stopped ticking). Close every sidebar pane and let the view
+///   collapse; reload cannot rely on self-close for a renderer that is no longer
+///   ticking.
+/// - **Daemon view** — a sidebar beside managed daemon hosts (`rimzd`) is
+///   intentional; leave it alone.
+///
+/// When a live sidebar is unlocated (a fresh heartbeat carrying no pane id), every
+/// view is handled conservatively: never close blind — a working view only adds
+/// when it has no sidebar at all, and an orphan view is left for self-close.
+/// First-seen order; shared by both backends so the rule lives in one place and
+/// is unit-tested without a mux.
 pub(crate) fn plan_reconcile(views: &[ViewSidebars], live: &SidebarLiveness) -> ReconcilePlan {
     let mut plan = ReconcilePlan::default();
     for view in views {
-        if !view.has_working {
-            continue;
-        }
-        if live.has_unlocated {
-            if view.sidebar_panes.is_empty() {
+        if view.has_working {
+            if live.has_unlocated {
+                if view.sidebar_panes.is_empty() {
+                    plan.add.push(view.view.clone());
+                }
+                continue;
+            }
+            let mut kept = false;
+            for pane in &view.sidebar_panes {
+                if !kept && live.claimed_panes.contains(pane) {
+                    kept = true;
+                } else {
+                    plan.close.push(pane.clone());
+                }
+            }
+            if !kept {
                 plan.add.push(view.view.clone());
             }
-            continue;
-        }
-        let mut kept = false;
-        for pane in &view.sidebar_panes {
-            if !kept && live.claimed_panes.contains(pane) {
-                kept = true;
-            } else {
-                plan.close.push(pane.clone());
-            }
-        }
-        if !kept {
-            plan.add.push(view.view.clone());
+        } else if !view.has_daemon_host && !live.has_unlocated {
+            // Orphan sidebar-only view: close every sidebar pane so the view
+            // collapses. Under an unlocated wildcard one of these might be a live
+            // renderer we cannot place, so leave it for self-close instead.
+            plan.close.extend(view.sidebar_panes.iter().cloned());
         }
     }
     plan
@@ -472,13 +488,15 @@ pub trait MuxBackend: Send + Sync {
         let _ = name;
         Vec::new()
     }
-    /// Converge every view (Zellij tab / tmux window) that holds working panes to
-    /// exactly one live sidebar: close duplicate or unresponsive sidebar panes
-    /// (those `live` does not claim), then re-add a sidebar to any working view
-    /// left without one — all in place, without disturbing working panes. One
-    /// best-effort pass: a view whose add fails is logged and skipped, never
-    /// retried, never a session rebirth. Unlike [`Self::open_sidebar`], this never
-    /// deletes or recreates the session.
+    /// Converge every view (Zellij tab / tmux window) to one healthy sidebar per
+    /// working view: in a working view close duplicate or unresponsive sidebar
+    /// panes (those `live` does not claim) and re-add one if none survived; in an
+    /// orphan sidebar-only view (no working pane, no daemon host) close every
+    /// sidebar pane so a wedged renderer that never self-closed collapses with its
+    /// view; leave the daemon view alone. All in place, without disturbing working
+    /// panes. One best-effort pass: a view whose add fails is logged and skipped,
+    /// never retried, never a session rebirth. Unlike [`Self::open_sidebar`], this
+    /// never deletes or recreates the session.
     fn reconcile_sidebars(
         &self,
         opts: &SidebarPaneOptions,
@@ -530,6 +548,7 @@ mod tests {
             view: id.to_owned(),
             sidebar_panes: sidebars.iter().map(|raw| pane(raw)).collect(),
             has_working,
+            has_daemon_host: false,
         }
     }
 
@@ -575,10 +594,45 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_skips_a_view_with_no_working_pane() {
-        // A sidebar-only view (no working pane) is left alone — it self-closes.
+    fn reconcile_collapses_an_orphan_sidebar_only_view() {
+        // A sidebar-only view (working siblings all closed, no daemon host) is an
+        // orphan a wedged renderer never self-closed: close every sidebar pane so
+        // the view collapses, and add nothing — there is no working pane to serve.
+        let views = vec![view("16", &["terminal_16", "terminal_17"], false)];
+        let plan = plan_reconcile(&views, &live(&["terminal_16"]));
+        assert_eq!(plan.close, vec![pane("terminal_16"), pane("terminal_17")]);
+        assert!(
+            plan.add.is_empty(),
+            "no working pane means no sidebar to add"
+        );
+    }
+
+    #[test]
+    fn reconcile_leaves_the_daemon_view_alone() {
+        // The daemon view (`rimzd`) has a sidebar beside managed hosts but no
+        // working pane — intentional, never collapsed.
+        let daemon = ViewSidebars {
+            view: "0".to_owned(),
+            sidebar_panes: vec![pane("terminal_2")],
+            has_working: false,
+            has_daemon_host: true,
+        };
+        assert_eq!(
+            plan_reconcile(&[daemon], &live(&["terminal_2"])),
+            ReconcilePlan::default(),
+        );
+    }
+
+    #[test]
+    fn reconcile_leaves_an_orphan_view_alone_under_an_unlocated_wildcard() {
+        // An unlocated live sidebar might own the orphan's pane, so don't close
+        // blind — leave it for self-close.
         let views = vec![view("16", &["terminal_16"], false)];
-        assert_eq!(plan_reconcile(&views, &live(&[])), ReconcilePlan::default());
+        let unlocated = SidebarLiveness {
+            claimed_panes: HashSet::new(),
+            has_unlocated: true,
+        };
+        assert_eq!(plan_reconcile(&views, &unlocated), ReconcilePlan::default());
     }
 
     #[test]

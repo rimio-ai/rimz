@@ -1108,6 +1108,7 @@ fn views_with_sidebars(panes: &[RawPane]) -> Vec<ViewSidebars> {
                 view: pane.tab_id.to_string(),
                 sidebar_panes: Vec::new(),
                 has_working: false,
+                has_daemon_host: false,
             });
             views.len() - 1
         });
@@ -1116,7 +1117,9 @@ fn views_with_sidebars(panes: &[RawPane]) -> Vec<ViewSidebars> {
                 MuxName::Zellij,
                 format!("terminal_{}", pane.id),
             ));
-        } else if !is_daemon_host_pane(pane) {
+        } else if is_daemon_host_pane(pane) {
+            views[slot].has_daemon_host = true;
+        } else {
             views[slot].has_working = true;
         }
     }
@@ -1659,6 +1662,7 @@ mod tests {
 
         assert_eq!(views[0].view, "0");
         assert!(views[0].has_working);
+        assert!(!views[0].has_daemon_host);
         assert_eq!(
             views[0].sidebar_panes,
             vec![
@@ -1667,8 +1671,10 @@ mod tests {
             ],
         );
 
+        // tab 1 is a sidebar-only orphan: no working pane and no daemon host.
         assert_eq!(views[1].view, "1");
         assert!(!views[1].has_working);
+        assert!(!views[1].has_daemon_host);
         assert_eq!(views[1].sidebar_panes.len(), 1);
     }
 
@@ -1689,6 +1695,10 @@ mod tests {
         assert_eq!(views.len(), 1);
         assert_eq!(views[0].view, "0");
         assert!(!views[0].has_working);
+        assert!(
+            views[0].has_daemon_host,
+            "a daemon host marks the view so reload never collapses it as an orphan",
+        );
         assert!(views[0].sidebar_panes.is_empty());
     }
 

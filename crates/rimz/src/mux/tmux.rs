@@ -272,12 +272,15 @@ fn tmux_views_with_sidebars(panes: &[PaneRef]) -> Vec<ViewSidebars> {
                 view: view.to_owned(),
                 sidebar_panes: Vec::new(),
                 has_working: false,
+                has_daemon_host: false,
             });
             views.len() - 1
         });
         if is_tmux_sidebar(pane) {
             views[slot].sidebar_panes.push(pane.pane_id.clone());
-        } else if !crate::remote_control::pane_is_host(pane) {
+        } else if crate::remote_control::pane_is_host(pane) {
+            views[slot].has_daemon_host = true;
+        } else {
             views[slot].has_working = true;
         }
     }
@@ -768,11 +771,13 @@ mod tests {
             "both sidebar panes, in order",
         );
 
+        // window @1 is a sidebar-only orphan: no working pane and no daemon host.
         assert_eq!(views[1].view, "@1");
         assert!(
             !views[1].has_working,
             "a sidebar-only window holds no working pane",
         );
+        assert!(!views[1].has_daemon_host);
         assert_eq!(views[1].sidebar_panes.len(), 1);
     }
 
@@ -786,6 +791,10 @@ mod tests {
         assert_eq!(views.len(), 1);
         assert_eq!(views[0].view, "@0");
         assert!(!views[0].has_working);
+        assert!(
+            views[0].has_daemon_host,
+            "a daemon host marks the view so reload never collapses it as an orphan",
+        );
         assert!(views[0].sidebar_panes.is_empty());
     }
 
