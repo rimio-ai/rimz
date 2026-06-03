@@ -2332,8 +2332,8 @@ mod tests {
     /// A not-started window drops its countdown — these budgets begin counting
     /// only on the first token, so until then the provider keeps `resets_at` slid a
     /// full window-length ahead. It's detected by the reset distance, not a 0%
-    /// reading: the real Codex shape is `usedPercent: 1` with the reset still ~a
-    /// full 5h out (`4h59m`). Its bar shows near-full with no countdown.
+    /// reading: the real Claude shape is `usedPercent: 1` with the reset still ~a
+    /// full 5h out (`4h59m`). Its bar shows full with no countdown.
     #[test]
     fn not_started_window_drops_its_countdown() {
         let theme = Theme::fixed(false);
@@ -2355,7 +2355,28 @@ mod tests {
         );
         assert!(
             rows[0].spans.iter().any(|span| span.content.contains('▰')),
-            "the not-started window shows a near-full bar, not an empty/exhausted track"
+            "the not-started window shows a full bar, not an empty/exhausted track"
+        );
+    }
+
+    /// Codex reports `usedPercent: 99` with no `resetsAt` before the first token —
+    /// the bar should be full (not 1% remaining) and the countdown absent.
+    #[test]
+    fn codex_not_started_shows_full_bar() {
+        let theme = Theme::fixed(false);
+        let mut codex = provider_panel("codex", "Codex", 33, true, false, None);
+        codex.windows = vec![RateLimitWindow {
+            used_percentage: Some(99),
+            resets_at: None,
+            duration_mins: Some(5 * 60),
+        }];
+        let rows = metered_bar_rows(&theme, &codex);
+        assert_eq!(rows.len(), 1);
+        let (_, _, has_reset) = bar_row_facts(&rows[0]);
+        assert!(!has_reset, "Codex not-started: no reset countdown");
+        assert!(
+            !rows[0].spans.iter().any(|span| span.content.contains('▱')),
+            "Codex not-started: bar is full, no empty track cells"
         );
     }
 

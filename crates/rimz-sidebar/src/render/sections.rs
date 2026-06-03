@@ -1657,25 +1657,35 @@ fn window_not_started(window: &RateLimitWindow) -> bool {
 /// own reading (a longer spent window gates it). `None` when the window reported
 /// no usage percentage and is not force-exhausted.
 ///
-/// A window that has **not started** drops its countdown — a near-full bar with no
+/// A window that has **not started** drops its countdown — a full bar with no
 /// `↻` reads "send a message to start it" rather than a misleading ticking reset.
 /// These are sliding windows that begin counting only on the first token, so until
 /// then the provider keeps `resets_at` slid a full window-length ahead. Detect that
 /// by the reset distance ([`window_not_started`]), not a 0% reading — a fresh 5h
-/// window still reports ~1% used, never 0.
+/// window still reports ~1% used, never 0. Codex reports a placeholder usedPercent
+/// (~99) with no `resets_at` before the first token; that variant is caught by the
+/// absent-reset + known-duration check in the `remaining` computation below.
 fn metered_bar_row(
     theme: &Theme,
     window: &RateLimitWindow,
     region: usize,
     force_exhausted: bool,
 ) -> Option<Vec<Span<'static>>> {
+    let not_started = !force_exhausted && window_not_started(window);
     let remaining = if force_exhausted {
         0
     } else {
-        100u8.saturating_sub(window.used_percentage?)
+        let raw = 100u8.saturating_sub(window.used_percentage?);
+        // Codex reports a placeholder usedPercent (≈99) with no resetsAt before the
+        // first token and a known duration — normalise to full so the bar matches
+        // the empty countdown.
+        if not_started || (window.resets_at.is_none() && window.duration_mins.is_some() && raw > 0) {
+            100
+        } else {
+            raw
+        }
     };
     let label = window_label(window.duration_mins);
-    let not_started = !force_exhausted && window_not_started(window);
     let value = if force_exhausted || not_started {
         String::new()
     } else {
