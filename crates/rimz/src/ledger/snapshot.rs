@@ -379,7 +379,8 @@ pub struct SidebarRow {
 pub struct SidebarSubAgent {
     pub id: String,
     /// The subagent's type (`Explore`, `review`, …), from the `SubagentStart`
-    /// task descriptor; falls back to the agent kind when none was reported.
+    /// task descriptor; falls back to a short degraded id when none was
+    /// reported.
     pub name: String,
     pub status: AgentStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1903,13 +1904,13 @@ fn window_spent_unreset(window: &RateLimitWindow, now: Timestamp) -> bool {
 /// A child `AgentState` projected to the compact summary the parent's expanded
 /// card paints. The subagent's type rode in as its `task` on `SubagentStart`,
 /// carried forward as identity by the reducer, so it stays labeled after it
-/// finishes even when its `SubagentStop` omits the type. A child that never
-/// reported a type — first seen at a bare `SubagentStop` — is named by a short
-/// id placeholder, never the provider `kind` (which would render as a phantom
-/// `claude`/`codex` row indistinguishable from a real subagent), and the
-/// anomaly is logged. Elapsed work is frozen at projection: a running child
-/// counts to `now`, a finished one to its `last_activity` (which stops
-/// advancing), so the figure settles when it ends.
+/// finishes even when its `SubagentStop` omits the type. A child that somehow
+/// reaches projection without a type is named by a short id placeholder, never
+/// the provider `kind` (which would render as a phantom `claude`/`codex` row
+/// indistinguishable from a real subagent), and the anomaly is logged. Elapsed
+/// work is frozen at projection: a running child counts to `now`, a finished
+/// one to its `last_activity` (which stops advancing), so the figure settles
+/// when it ends.
 fn sub_agent_from_state(child: &AgentState, now: Timestamp) -> SidebarSubAgent {
     let name = child
         .task
@@ -2678,6 +2679,17 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| format!("{kind}:anonymous"));
         let event_name = event.params.get("event_name").and_then(|v| v.as_str());
+        let param_non_empty_string = |key: &str| {
+            event
+                .params
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned)
+        };
+        let event_parent_agent_id = param_non_empty_string("parent_agent_id");
+        let event_task = param_non_empty_string("task");
         if event_name == Some("SessionEnd")
             || event.params.get("status").and_then(|v| v.as_str()) == Some("offline")
         {
@@ -2685,6 +2697,26 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             continue;
         }
         let prior = map.get(&(kind.clone(), agent_id.clone()));
+        if event_name == Some("SubagentStop")
+            && prior.is_none()
+            && event_parent_agent_id.is_some()
+            && event_task.is_none()
+        {
+            warn!(
+                target: "rimz::agent::lifecycle",
+                event_id = %event.event_id,
+                workspace = %event.workspace_id,
+                session = %event.session_name,
+                kind = %kind,
+                source_kind = %event.source_kind,
+                timestamp = %event.timestamp,
+                event_name = event_name.unwrap_or(""),
+                parent = event_parent_agent_id.as_deref().unwrap_or(""),
+                child = %agent_id,
+                "typeless SubagentStop for unknown child — ignored",
+            );
+            continue;
+        }
         // The agent-agnostic lifecycle intent this event carries (a current
         // `signal`, or one reconstructed from a legacy `status`/`compacting`
         // pair). The status and the thinking/compacting heads are all derived
@@ -2735,12 +2767,14 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             .or_else(|| prior.and_then(|p| p.todo_total));
         let establishes_identity = matches!(event_name, Some("SessionStart" | "SubagentStart"));
         // The parent link is pure identity: only ever set, never cleared. Adopt
-        // it from any event that carries it, then carry it forward. `SubagentStop`
-        // can be the first child event Claude reports; without its parent link,
-        // that Stop-only child would masquerade as a root session on its parent's
-        // pane. Root agents never carry one.
-        let parent_agent_id = param_string("parent_agent_id")
-            .or_else(|| prior.and_then(|p| p.parent_agent_id.clone()));
+        // it from any event that carries it, then carry it forward. A typed
+        // `SubagentStop` can be the first useful child event Claude reports;
+        // without its parent link, that Stop-only child would masquerade as a
+        // root session on its parent's pane. A typeless stop-only event is
+        // ignored above, since it is not enough identity to create a child row.
+        // Root agents never carry one.
+        let parent_agent_id =
+            event_parent_agent_id.or_else(|| prior.and_then(|p| p.parent_agent_id.clone()));
         // The current turn's start instant — advanced only by `UserPromptSubmit`,
         // never by `Stop`. It is the "next prompt" boundary the subagent-list
         // retention reads; carried forward across all other events.
@@ -2789,13 +2823,13 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
         // it back to "—" (the persisted `prompt` then labels the unnamed
         // session). A subagent's `task` is its *type* ("Explore", "review") —
         // identity, not activity — so carry it forward like the parent link
-        // above: a task-less `SubagentStop` (or any later child event) then
-        // leaves a finished child labeled instead of degrading it to
+        // above: a task-less or blank-task `SubagentStop` (or any later child
+        // event) then leaves a finished child labeled instead of degrading it to
         // `subagent <hash>`.
         let task = if parent_agent_id.is_some() {
-            param_string("task").or_else(|| prior.and_then(|p| p.task.clone()))
+            event_task.or_else(|| prior.and_then(|p| p.task.clone()))
         } else {
-            param_string("task")
+            param_non_empty_string("task")
         };
         // The latest prompt, unlike `task`, persists: only the prompt-bearing
         // event sets it, so carry the prior one forward to label an unnamed
@@ -3932,11 +3966,13 @@ mod tests {
             "parent_agent_id": "sess-root",
             "task": "Explore",
         }));
-        // SubagentStop carries no `task` — the exact shape that wiped the label.
+        // SubagentStop carries a blank `task` — the exact shape that wiped the
+        // label in live Claude events.
         let stop = lifecycle(serde_json::json!({
             "event_name": "SubagentStop",
             "agent_id": "child-1",
             "status": "idle",
+            "task": "",
         }));
         let agents = reduce_agent_states(&[start, stop]);
         let child = agents
@@ -3956,10 +3992,10 @@ mod tests {
 
     #[test]
     fn subagent_stop_without_start_keeps_parent_link_and_spares_the_parent() {
-        // Claude can report a child only at `SubagentStop`. That Stop still
-        // carries `parent_agent_id`; adopting it keeps the finished child nested
-        // instead of letting it supersede the parent as a newer root on the same
-        // pane.
+        // Claude can report a typed child only at `SubagentStop`. That Stop
+        // still carries `parent_agent_id`; adopting it keeps the finished child
+        // nested instead of letting it supersede the parent as a newer root on
+        // the same pane.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let lifecycle = |params: serde_json::Value| {
             EventEnvelope::new(
@@ -3994,6 +4030,7 @@ mod tests {
             "agent_id": "child-1",
             "status": "idle",
             "parent_agent_id": "sess-root",
+            "task": "Explore",
             "pane_id": pane,
             "worktree_path": "/repo/wt",
             "worktree_branch": "feature",
@@ -4013,6 +4050,66 @@ mod tests {
             snapshot.agents.iter().any(|a| a.agent_id == "sess-root"),
             "a Stop-only child must not reap its live parent",
         );
+    }
+
+    #[test]
+    fn typeless_subagent_stop_without_start_is_ignored() {
+        // Claude can also emit extra SubagentStop hooks for task ids that never
+        // had a SubagentStart and carry an empty task label. Those are not useful
+        // child identity; reducing them used to mint `subagent <hash>` entries in
+        // the parent's expanded card.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let lifecycle = |params: serde_json::Value| {
+            EventEnvelope::new(
+                workspace.clone(),
+                "session",
+                "claude",
+                "agent-hook",
+                "agent.lifecycle",
+                params,
+            )
+        };
+        let root_start = lifecycle(serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "sess-root",
+            "status": "idle",
+        }));
+        let root_prompt = lifecycle(serde_json::json!({
+            "event_name": "UserPromptSubmit",
+            "agent_id": "sess-root",
+            "status": "running",
+        }));
+        let child_start = lifecycle(serde_json::json!({
+            "event_name": "SubagentStart",
+            "agent_id": "child-real",
+            "status": "running",
+            "parent_agent_id": "sess-root",
+            "task": "Explore",
+        }));
+        let stray_stop = lifecycle(serde_json::json!({
+            "event_name": "SubagentStop",
+            "agent_id": "a833a787ad884cee2",
+            "status": "idle",
+            "parent_agent_id": "sess-root",
+            "task": "",
+            "total_tokens": 36_410,
+        }));
+
+        let agents = reduce_agent_states(&[root_start, root_prompt, child_start, stray_stop]);
+        assert!(
+            agents.iter().all(|a| a.agent_id != "a833a787ad884cee2"),
+            "an unknown blank-label stop must not become a child row",
+        );
+        let mut rows = vec![row_from_agent(
+            agents
+                .iter()
+                .find(|a| a.agent_id == "sess-root")
+                .expect("root row"),
+        )];
+        attach_sub_agents(&mut rows, &agents, Timestamp::now());
+        assert_eq!(rows[0].sub_agents.len(), 1);
+        assert_eq!(rows[0].sub_agents[0].id, "child-real");
+        assert_eq!(rows[0].sub_agents[0].name, "Explore");
     }
 
     #[test]
