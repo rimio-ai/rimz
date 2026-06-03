@@ -38,7 +38,8 @@ use self::payloads::{
     parse_post_tool_use, parse_session_start, parse_stop, parse_subagent_start,
     parse_subagent_stop, parse_user_prompt_submit,
 };
-use super::context::AgentContext;
+use super::context::{AgentCost, AgentContext};
+use super::pricing::PriceBook;
 use super::hook_types::SessionSource;
 use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
@@ -358,18 +359,54 @@ impl AgentIntegration for CodexIntegration {
 
 /// Read Codex's read-only realtime details from the app-server and project them
 /// onto an [`AgentContext`] for the session sidecar. Spawned out-of-band by
-/// `rimz codex refresh-context` (never inline in a hook). `model_hint` is the
-/// session's model id from the lifecycle observation, used to resolve the
-/// model's display name + effort. `broker_socket` is this session's broker
-/// socket (the preferred, warm transport); `None`/absent falls back to the
-/// per-user daemon then a cold-spawn. Returns `None` when the app-server is
-/// unreachable (codex missing, not runnable, handshake failed) — best-effort.
+/// `rimz codex refresh-context` (never inline in a hook). `session_id` is used
+/// to locate the rollout JSONL for a cumulative cost estimate; `None` skips the
+/// cost step (account-only refreshes). `model_hint` is the session's model id
+/// from the lifecycle observation, used to resolve the model's display name +
+/// effort. `broker_socket` is this session's broker socket (the preferred, warm
+/// transport); `None`/absent falls back to the per-user daemon then a cold-spawn.
+/// Returns `None` when the app-server is unreachable — best-effort.
 pub fn refresh_context(
+    session_id: Option<&str>,
     model_hint: Option<&str>,
     broker_socket: Option<&Path>,
 ) -> Option<AgentContext> {
     let mut client = CodexAppServer::connect(broker_socket)?;
-    Some(client.observe_context("codex", model_hint, Timestamp::now()))
+    let mut context = client.observe_context("codex", model_hint, Timestamp::now());
+
+    // Compute accumulated session cost from the rollout JSONL when a session_id
+    // is provided.  Best-effort: a missing file, an unknown model, or a zero
+    // cost all result in `cost` staying `None`, matching current behaviour.
+    if let Some(sid) = session_id {
+        if let Some(path) = find_session_transcript(sid) {
+            let usage = usage_from_transcript(&path);
+            if let (Some(total_input), Some(total_output)) =
+                (usage.cumulative_input_tokens, usage.cumulative_output_tokens)
+            {
+                let model_id = context
+                    .model_id
+                    .as_deref()
+                    .or(model_hint)
+                    .or(usage.model.as_deref())
+                    .unwrap_or("");
+                let price_book = PriceBook::embedded();
+                if let Some(price) = price_book.price(model_id) {
+                    let uncached = total_input.saturating_sub(usage.cumulative_cached_tokens);
+                    let cost = uncached as f64 * price.input
+                        + usage.cumulative_cached_tokens as f64 * price.cache_read
+                        + total_output as f64 * price.output;
+                    if cost > 0.0 {
+                        context.cost = Some(AgentCost {
+                            total_cost_usd: Some(cost),
+                            ..AgentCost::default()
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Some(context)
 }
 
 /// The thread ids the per-user Codex app-server daemon currently holds in memory,
@@ -391,6 +428,13 @@ struct TranscriptUsage {
     context_pct: Option<u8>,
     total_tokens: Option<u64>,
     model: Option<String>,
+    /// Cumulative session input tokens from the most-recent `total_token_usage`
+    /// block — the billable input total, used to estimate the session cost.
+    cumulative_input_tokens: Option<u64>,
+    /// Cumulative cached input tokens from `total_token_usage`.
+    cumulative_cached_tokens: u64,
+    /// Cumulative output tokens from `total_token_usage`.
+    cumulative_output_tokens: Option<u64>,
 }
 
 impl TranscriptUsage {
@@ -404,6 +448,9 @@ impl TranscriptUsage {
             context_pct: Some(0),
             total_tokens: Some(0),
             model: None,
+            cumulative_input_tokens: None,
+            cumulative_cached_tokens: 0,
+            cumulative_output_tokens: None,
         }
     }
 }
@@ -473,19 +520,22 @@ fn sorted_subdirs_desc(path: &Path) -> Vec<PathBuf> {
 
 /// Derive context-window usage from the tail of a Codex rollout JSONL. Codex
 /// emits an `event_msg`/`token_count` payload after every assistant turn with
-/// the current `model_context_window` and `last_token_usage`. This reads a
-/// bounded tail and takes the most recent record. Best-effort: any IO or
-/// parse failure yields empty fields (enrichment, never correctness).
+/// the current `model_context_window`, `last_token_usage` (gauge), and
+/// `total_token_usage` (cumulative billing totals). This reads a bounded tail
+/// and takes the most recent record. Best-effort: any IO or parse failure
+/// yields empty fields (enrichment, never correctness).
 fn usage_from_transcript(path: &Path) -> TranscriptUsage {
     let Some(text) = read_transcript_tail(path) else {
         return TranscriptUsage::default();
     };
-    // Walk the tail newest-first, tracking the latest `token_count` (gauge
-    // values) and the latest `turn_context.payload.model` (display name) seen.
-    // Bail once both are filled. A truncated leading line from the tail seek
-    // simply fails to parse and is skipped.
+    // Walk the tail newest-first. Capture the latest `token_count` entry for
+    // the gauge fields (context_pct, total_tokens) and the cumulative billing
+    // totals (cumulative_input_tokens, etc.), plus the model from
+    // `turn_context`. Bail once all targets are filled.
     let mut latest_model: Option<String> = None;
     let mut latest_usage: Option<(u64, Option<u64>, u64)> = None;
+    // (cumulative_input, cumulative_cached, cumulative_output)
+    let mut latest_cumulative: Option<(u64, u64, u64)> = None;
     for line in text.lines().rev() {
         let line = line.trim();
         if line.is_empty() {
@@ -504,31 +554,57 @@ fn usage_from_transcript(path: &Path) -> TranscriptUsage {
         {
             latest_model = Some(model.to_owned());
         }
-        if latest_usage.is_none()
+        if (latest_usage.is_none() || latest_cumulative.is_none())
             && let Some(payload) = value.get("payload")
             && payload.get("type").and_then(Value::as_str) == Some("token_count")
         {
             let info = payload.get("info");
-            let window = info
-                .and_then(|info| info.get("model_context_window"))
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let last = info.and_then(|info| info.get("last_token_usage"));
-            let input = last
-                .and_then(|last| last.get("input_tokens"))
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let total = last
-                .and_then(|last| last.get("total_tokens"))
-                .and_then(Value::as_u64);
-            if window > 0 || input > 0 || total.is_some() {
-                latest_usage = Some((input, total, window));
+            if latest_usage.is_none() {
+                let window = info
+                    .and_then(|info| info.get("model_context_window"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let last = info.and_then(|info| info.get("last_token_usage"));
+                let input = last
+                    .and_then(|last| last.get("input_tokens"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let total = last
+                    .and_then(|last| last.get("total_tokens"))
+                    .and_then(Value::as_u64);
+                if window > 0 || input > 0 || total.is_some() {
+                    latest_usage = Some((input, total, window));
+                }
+            }
+            if latest_cumulative.is_none() {
+                let total_usage = info.and_then(|info| info.get("total_token_usage"));
+                let cum_input = total_usage
+                    .and_then(|u| u.get("input_tokens"))
+                    .and_then(Value::as_u64);
+                let cum_output = total_usage
+                    .and_then(|u| u.get("output_tokens"))
+                    .and_then(Value::as_u64);
+                let cum_cached = total_usage
+                    .and_then(|u| {
+                        u.get("cached_input_tokens")
+                            .or_else(|| u.get("cache_read_input_tokens"))
+                    })
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                if let (Some(i), Some(o)) = (cum_input, cum_output) {
+                    latest_cumulative = Some((i, cum_cached, o));
+                }
             }
         }
-        if latest_model.is_some() && latest_usage.is_some() {
+        if latest_model.is_some() && latest_usage.is_some() && latest_cumulative.is_some() {
             break;
         }
     }
+    let (cumulative_input_tokens, cumulative_cached_tokens, cumulative_output_tokens) =
+        match latest_cumulative {
+            Some((i, c, o)) => (Some(i), c, Some(o)),
+            None => (None, 0, None),
+        };
     match latest_usage {
         Some((input, total, window)) => {
             let context_pct = input
@@ -539,12 +615,18 @@ fn usage_from_transcript(path: &Path) -> TranscriptUsage {
                 context_pct,
                 total_tokens: total,
                 model: latest_model,
+                cumulative_input_tokens,
+                cumulative_cached_tokens,
+                cumulative_output_tokens,
             }
         }
         None => TranscriptUsage {
             // Opened cleanly but no `token_count` yet — fresh session, may
             // still have a `turn_context` model captured above.
             model: latest_model,
+            cumulative_input_tokens,
+            cumulative_cached_tokens,
+            cumulative_output_tokens,
             ..TranscriptUsage::fresh()
         },
     }
@@ -1500,6 +1582,49 @@ command = "echo user"
         let usage = usage_from_transcript(Path::new("/nonexistent/path/rollout.jsonl"));
         assert_eq!(usage.context_pct, None);
         assert_eq!(usage.total_tokens, None);
+    }
+
+    #[test]
+    fn transcript_tail_populates_cumulative_totals() {
+        // total_token_usage carries the cumulative session billing totals;
+        // usage_from_transcript must surface them so refresh_context can
+        // price the session cost.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-session.jsonl");
+        std::fs::write(
+            &path,
+            "{\"type\":\"turn_context\",\"payload\":{\"model\":\"codex-mini\"}}\n\
+             {\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+             \"last_token_usage\":{\"input_tokens\":500,\"total_tokens\":600},\
+             \"total_token_usage\":{\"input_tokens\":1000,\"output_tokens\":200,\
+             \"cached_input_tokens\":400},\
+             \"model_context_window\":100000}}}\n",
+        )
+        .unwrap();
+        let usage = usage_from_transcript(&path);
+        assert_eq!(usage.cumulative_input_tokens, Some(1000));
+        assert_eq!(usage.cumulative_output_tokens, Some(200));
+        assert_eq!(usage.cumulative_cached_tokens, 400);
+        assert_eq!(usage.model.as_deref(), Some("codex-mini"));
+    }
+
+    #[test]
+    fn transcript_tail_without_total_token_usage_leaves_cumulative_none() {
+        // Older rollout files that only have last_token_usage must not produce
+        // a spurious cost estimate.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-session.jsonl");
+        std::fs::write(
+            &path,
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+             \"last_token_usage\":{\"input_tokens\":500,\"total_tokens\":600},\
+             \"model_context_window\":100000}}}\n",
+        )
+        .unwrap();
+        let usage = usage_from_transcript(&path);
+        assert_eq!(usage.cumulative_input_tokens, None);
+        assert_eq!(usage.cumulative_output_tokens, None);
+        assert_eq!(usage.cumulative_cached_tokens, 0);
     }
 
     #[test]

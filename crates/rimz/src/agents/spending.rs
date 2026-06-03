@@ -69,7 +69,7 @@ impl SpendTally {
 /// breakdown keyed by agent kind (`"claude"`, `"codex"`, `"pi"`). The value
 /// corner and cockpit read [`Spending::total`]; each provider dashboard panel
 /// reads its own entry from [`Spending::by_provider`].
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Spending {
     pub total: SpendTally,
     pub by_provider: BTreeMap<String, SpendTally>,
@@ -103,7 +103,7 @@ impl ProviderKind {
 /// stay at its `serde` default for that session and never heal. A cache stamped
 /// with an older version is discarded on read, forcing a clean re-parse under the
 /// current shape. `0` is the implicit pre-versioning shape (no `version` field).
-const SPENDING_CACHE_VERSION: u32 = 1;
+const SPENDING_CACHE_VERSION: u32 = 2;
 
 /// On-disk cache persisted at `{runtime_root}/spending.json`.
 ///
@@ -386,6 +386,31 @@ pub fn write_spending_cache(path: &Path, cache: &SpendingDiskCache) {
     if fs::write(&tmp, &bytes).is_ok() {
         let _ = fs::rename(&tmp, path);
     }
+}
+
+// ── Provider-spending cache ───────────────────────────────────────────────────
+
+/// Atomic write of the aggregated `Spending` to a small JSON cache so consumer
+/// sidebar tabs can read the fleet and per-provider totals without re-walking
+/// the JSONL transcript history. Follows the same temp-then-rename durability
+/// contract as [`write_spending_cache`].
+pub fn write_provider_spending_cache(path: &Path, spending: &Spending) {
+    let Ok(bytes) = serde_json::to_vec(spending) else {
+        return;
+    };
+    let tmp = path.with_extension("json.tmp");
+    if fs::write(&tmp, &bytes).is_ok() {
+        let _ = fs::rename(&tmp, path);
+    }
+}
+
+/// Read the provider-spending cache written by [`write_provider_spending_cache`].
+/// Returns [`Spending::default`] on any error so callers always get a usable value.
+pub fn read_provider_spending_cache(path: &Path) -> Spending {
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Spending>(&bytes).ok())
+        .unwrap_or_default()
 }
 
 // ── Date utilities ────────────────────────────────────────────────────────────

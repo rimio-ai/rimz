@@ -281,6 +281,12 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             // the config fold, so the dashboard panels are built, ranked, and
             // capped with each provider's spend already known.
             let spending = compute_fleet_spending(&snapshot, runtime);
+            // Publish the aggregated totals so consumer tabs can read them
+            // without re-walking the JSONL history themselves.
+            rimz::agents::spending::write_provider_spending_cache(
+                &runtime.root.join("provider-spending.json"),
+                &spending,
+            );
             // Fold the per-machine config onto the snapshot: row density plus the
             // per-provider dashboard (account-scoped budgets, spend, emblem). The
             // producer owns the out-of-band account probe (a subprocess) and

@@ -62,6 +62,8 @@ struct ClaudeMessage {
 struct ClaudeUsage {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+    cache_creation_input_tokens: Option<u64>,
+    cache_read_input_tokens: Option<u64>,
 }
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
@@ -263,7 +265,10 @@ pub fn parse_claude_jsonl(path: &Path) -> Vec<CachedEntry> {
         };
         let is_sidechain = entry.is_sidechain == Some(true);
         let usage = &entry.message.usage;
-        let tokens = usage.input_tokens.unwrap_or(0) + usage.output_tokens.unwrap_or(0);
+        let tokens = usage.input_tokens.unwrap_or(0)
+            + usage.output_tokens.unwrap_or(0)
+            + usage.cache_creation_input_tokens.unwrap_or(0)
+            + usage.cache_read_input_tokens.unwrap_or(0);
         let cached = CachedEntry {
             date,
             cost_usd: cost,
@@ -312,7 +317,7 @@ mod tests {
 
     fn claude_line(date: &str, cost: f64, msg_id: &str, req_id: &str) -> String {
         format!(
-            r#"{{"timestamp":"{date}T10:00:00.000Z","costUSD":{cost},"requestId":"{req_id}","message":{{"id":"{msg_id}","usage":{{"input_tokens":10,"output_tokens":5}}}}}}"#
+            r#"{{"timestamp":"{date}T10:00:00.000Z","costUSD":{cost},"requestId":"{req_id}","message":{{"id":"{msg_id}","usage":{{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":3,"cache_read_input_tokens":7}}}}}}"#
         )
     }
 
@@ -357,7 +362,22 @@ mod tests {
         );
         let entries = parse_claude_jsonl(&file);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].tokens, 15, "input 10 + output 5");
+        assert_eq!(entries[0].tokens, 25, "input 10 + output 5 + cache_creation 3 + cache_read 7");
+    }
+
+    #[test]
+    fn captures_cache_tokens() {
+        let dir = TempDir::new().unwrap();
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.5,"requestId":"req-1","message":{"id":"msg-1","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":800}}}"#,
+            ],
+        );
+        let entries = parse_claude_jsonl(&file);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].tokens, 1150, "input 100 + output 50 + cache_creation 200 + cache_read 800");
     }
 
     #[test]

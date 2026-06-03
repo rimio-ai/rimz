@@ -21,6 +21,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::agents::spending::{read_provider_spending_cache, Spending};
 use crate::agents::{AgentRateLimits, RateLimitWindow};
 use crate::feed::PaneRef;
 use crate::ids::PaneId;
@@ -480,9 +481,13 @@ pub fn enrich_consumer(
     // dashboard are environment, not ledger, so the producer's published rollup
     // carries neither. Fold them here so a consumer tab honours the user's
     // preference and paints the same provider panel — a cheap config read plus
-    // the producer's published account cache, never a per-tick fork or a ledger
-    // lock. The account probe is a subprocess and stays on the producer.
-    snapshot = fold_machine_config_cached(snapshot, runtime);
+    // the producer's published account and spending caches, never a per-tick
+    // fork or a ledger lock. The account probe and JSONL walk stay on the producer.
+    let spending;
+    (snapshot, spending) = fold_machine_config_cached(snapshot, runtime);
+    if !spending.total.is_zero() {
+        snapshot.value_tally = Some(spending.total);
+    }
 
     let cache = read_diff_stats_cache(&runtime.root.join("diff-stats.json"));
     project_diff_stats(&mut snapshot, &cache);
@@ -737,21 +742,22 @@ fn produce_accounts(
 pub fn fold_machine_config_cached(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
-) -> SidebarSnapshot {
+) -> (SidebarSnapshot, Spending) {
     let accounts = read_accounts_cache(&runtime.root.join("accounts.json")).accounts;
-    // Consumers don't walk transcript history (that is the producer's file I/O);
-    // per-provider spend rides the producer's published snapshot, so the
-    // consumer's freshly-built panels carry none.
+    // Consumers read the producer's published spending cache rather than
+    // re-walking the JSONL transcript history themselves.
+    let spending =
+        read_provider_spending_cache(&runtime.root.join("provider-spending.json"));
     let mut snapshot = fold_machine_config_with(
         snapshot,
         crate::config::MachineConfig::load().unwrap_or_default(),
         accounts,
-        &BTreeMap::new(),
+        &spending.by_provider,
     );
     // A consumer reads the producer's published windows to fill idle gaps, but
     // never writes — the single-flight contract keeps the cache the producer's.
     apply_rate_limit_cache(&mut snapshot, runtime, false);
-    snapshot
+    (snapshot, spending)
 }
 
 /// Apply the resolved config and already-resolved accounts onto the snapshot:
