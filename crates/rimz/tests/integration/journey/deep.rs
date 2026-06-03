@@ -149,6 +149,134 @@ fn tmux_room_shows_agent_after_hook() {
     );
 }
 
+/// tmux: prove the sidebar self-closes when its last sibling dies *without*
+/// flashing to the freed full width on the way out.
+///
+/// Closing the working pane first grows the sidebar to the whole window (a
+/// SIGWINCH), and the renderer holds that grow-repaint until the sibling-count
+/// verdict lands — a "close" verdict exits without ever painting the grown
+/// frame. This drives the real path end to end: split a sidebar beside a live
+/// command, let it latch `seen_sibling`, kill the command, then sample the
+/// sidebar pane until it vanishes.
+///
+/// Best-effort on the flash itself: the flash (if the guard regressed) is a
+/// single sub-frame paint, so a poll may miss it — but a correct renderer never
+/// paints wide, so this never false-fails, and a sampled wide frame is a real
+/// regression. The authoritative guards are the `resize_grew` unit test and the
+/// frame-phase `!should_exit`/`!paint_held` gate; this closes the loop in a real
+/// mux. The path is backend-agnostic (the decision is the same on Zellij), so
+/// one backend smoke is representative.
+#[test]
+fn tmux_sidebar_self_closes_without_full_width_flash() {
+    if which::which("tmux").is_err() {
+        eprintln!("tmux not on PATH; skipping deep tmux self-close smoke");
+        return;
+    }
+    let Some(sidebar) = rimz_sidebar_bin() else {
+        eprintln!("rimz-sidebar not built; skipping deep tmux self-close smoke");
+        return;
+    };
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+
+    let server_dir = TempDir::new().expect("tmux socket dir");
+    let socket = server_dir.path().join("tmux.sock");
+    let runtime = tempfile::Builder::new()
+        .prefix("rz")
+        .rand_bytes(6)
+        .tempdir()
+        .expect("short runtime dir");
+    let _server = TmuxServerGuard {
+        socket: socket.clone(),
+    };
+    let fake_codex = fake_codex_bin(server_dir.path());
+
+    tmux(
+        &socket,
+        &[
+            "new-session",
+            "-d",
+            "-s",
+            "room",
+            "-x",
+            "120",
+            "-y",
+            "40",
+            "-c",
+            &env.project_root.display().to_string(),
+            &format!("{} 60", fake_codex.display()),
+        ],
+    );
+    let codex_pane = tmux_capture(&socket, &["list-panes", "-t", "room", "-F", "#{pane_id}"]);
+    let serve = sidebar_serve_line(&env, &sidebar, runtime.path(), "tmux", "room");
+    tmux(&socket, &["split-window", "-h", "-t", "room", &serve]);
+
+    // Drive a real agent so the sidebar renders a complete frame; reaching that
+    // frame means a snapshot enumerated the live panes, so the self-close latch
+    // has seen its sibling (the codex pane). Now an empty tab means teardown.
+    env.install_agent_hooks("codex");
+    let out = env.run_installed_hook_in_pane(
+        "codex",
+        &session_start_at(
+            "sess-1",
+            "GPT-5.5",
+            "high",
+            env.project_root.display().to_string(),
+            Some("main"),
+        )
+        .to_string(),
+        &[("TMUX_PANE", &codex_pane)],
+    );
+    assert!(
+        out.status.success(),
+        "codex hook failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let latched = capture_until(
+        &socket,
+        "room",
+        |s| s.contains("codex") && s.contains("main"),
+        CAPTURE_BUDGET,
+    );
+    assert!(
+        latched.contains("codex"),
+        "the sidebar must render its sibling before we test self-close:\n{latched}"
+    );
+
+    // The active pane is the sidebar split. Record its id and pre-close width;
+    // a held grow keeps painted content within that width, a flash spills toward
+    // the full 120 columns.
+    let (sidebar_pane, split_width) = tmux_active_pane(&socket, "room");
+    let flash_ceiling = split_width + 5;
+
+    tmux(&socket, &["kill-pane", "-t", &codex_pane]);
+
+    // Sample fast until the sidebar pane is gone (it self-closed) or the budget
+    // elapses. Every frame we do see must stay within the split width.
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    let mut closed = false;
+    while Instant::now() < deadline {
+        if !tmux_pane_alive(&socket, "room", &sidebar_pane) {
+            closed = true;
+            break;
+        }
+        let frame = capture_until(&socket, &sidebar_pane, |_| true, Duration::from_millis(0));
+        let widest = max_line_width(&frame);
+        assert!(
+            widest <= flash_ceiling,
+            "sidebar painted {widest} cols wide before self-close (split was \
+             {split_width}); it flashed toward the freed full width:\n{frame}"
+        );
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    assert!(
+        closed,
+        "the sidebar never self-closed after its last sibling died"
+    );
+}
+
 /// Zellij: same arc through a real Zellij session. Self-skips without `zellij`.
 #[test]
 fn zellij_room_shows_agent_after_hook() {
@@ -343,6 +471,58 @@ fn capture_until(
         }
         std::thread::sleep(Duration::from_millis(150));
     }
+}
+
+/// The active pane's id and width for `session` — after a `split-window`, that
+/// is the freshly created sidebar split.
+fn tmux_active_pane(socket: &Path, session: &str) -> (String, usize) {
+    let raw = tmux_capture(
+        socket,
+        &[
+            "list-panes",
+            "-t",
+            session,
+            "-F",
+            "#{pane_active} #{pane_id} #{pane_width}",
+        ],
+    );
+    for line in raw.lines() {
+        let mut cols = line.split_whitespace();
+        if cols.next() == Some("1") {
+            let id = cols.next().expect("pane id").to_owned();
+            let width = cols
+                .next()
+                .and_then(|w| w.parse().ok())
+                .expect("pane width");
+            return (id, width);
+        }
+    }
+    panic!("no active pane in {session}:\n{raw}");
+}
+
+/// Whether `pane` still exists in `session`. A self-closed sidebar pane (and its
+/// now-empty session) drops off the list, which is how the close is observed.
+fn tmux_pane_alive(socket: &Path, session: &str, pane: &str) -> bool {
+    let out = Command::new("tmux")
+        .arg("-S")
+        .arg(socket)
+        .args(["list-panes", "-t", session, "-F", "#{pane_id}"])
+        .output()
+        .expect("spawn tmux list-panes");
+    out.status.success()
+        && String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .any(|id| id == pane)
+}
+
+/// The rightmost painted column across a captured frame (trailing blanks
+/// trimmed), a proxy for how wide the renderer painted.
+fn max_line_width(frame: &str) -> usize {
+    frame
+        .lines()
+        .map(|line| line.trim_end().chars().count())
+        .max()
+        .unwrap_or(0)
 }
 
 struct TmuxServerGuard {

@@ -177,6 +177,12 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     let mut dirty = true;
     let mut next_frame = Instant::now();
     let mut last_close_probe = Instant::now();
+    // The sidebar's own pane width as of the last resize the loop processed. A
+    // resize that grows it is the precondition for the self-close full-width
+    // flash, so a grow holds its repaint (`paint_held`) until the sibling-count
+    // verdict lands — close exits without painting, stay paints at the new size.
+    let mut prev_width: Option<u16> = terminal.size().map(|s| s.width).ok();
+    let mut paint_held = false;
     // Heartbeat writes live on the main thread (fast in-process atomic writes)
     // so the exit path can remove the file without racing a background writer.
     let mut last_heartbeat: Option<Instant> = None;
@@ -227,6 +233,12 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     rejected = applied.rejected;
                     // The fold mutated the model; the frame phase paints it.
                     dirty = true;
+                    if !should_exit {
+                        // The snapshot carried a stay verdict (sibling count > 0,
+                        // or unknowable): release any held grow-repaint so the
+                        // frame phase paints it at the new size.
+                        paint_held = false;
+                    }
                 }
                 if !should_exit && let Some(request) = pending_refetch.take() {
                     request_fetch(
@@ -260,13 +272,17 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                         break;
                     }
                 }
-                if !should_exit && let Some(delay) = pending_self_close_probe.take() {
-                    request_self_close_probe(
-                        &self_close_probe_tx,
-                        &mut self_close_probe_in_flight,
-                        &mut pending_self_close_probe,
-                        delay,
-                    );
+                if !should_exit {
+                    // Stay/unknown verdict: a held grow-repaint is now safe to show.
+                    paint_held = false;
+                    if let Some(delay) = pending_self_close_probe.take() {
+                        request_self_close_probe(
+                            &self_close_probe_tx,
+                            &mut self_close_probe_in_flight,
+                            &mut pending_self_close_probe,
+                            delay,
+                        );
+                    }
                 }
             }
             // A recv timeout: the active grid reached a frame boundary, or the
@@ -293,17 +309,39 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 );
             }
             Wakeup::Resize => {
-                // Input paints synchronously, so a resize repaints at once; the
-                // grid no longer owes this frame a paint.
-                if apply_input(
-                    Wakeup::Resize,
-                    &mut ui,
-                    &mut health,
-                    &mut terminal,
-                    &current,
-                    anim_start,
-                )? {
-                    dirty = false;
+                // A grow is the mux handing the sidebar a freed sibling's space —
+                // the precondition for the self-close full-width flash. Hold the
+                // paint until the sibling-count verdict the probe and fetch below
+                // request: a "close" verdict exits without ever painting the grown
+                // frame (the frame phase guards on `should_exit`); a "stay" verdict
+                // releases the hold and paints at the new size. A shrink, a
+                // same-width resize, or an unreadable size cannot flash, so each
+                // keeps the instant repaint for snappy attach/redraw feedback.
+                let grew = match terminal.size().map(|s| s.width).ok() {
+                    Some(width) => {
+                        let grew = resize_grew(prev_width, width);
+                        prev_width = Some(width);
+                        grew
+                    }
+                    None => false,
+                };
+                if grew {
+                    dirty = true;
+                    paint_held = true;
+                } else {
+                    if apply_input(
+                        Wakeup::Resize,
+                        &mut ui,
+                        &mut health,
+                        &mut terminal,
+                        &current,
+                        anim_start,
+                    )? {
+                        dirty = false;
+                    }
+                    // A safe-width paint just landed; drop any stale hold a prior
+                    // grow left pending so it cannot suppress this frame.
+                    paint_held = false;
                 }
                 request_self_close_probe(
                     &self_close_probe_tx,
@@ -434,7 +472,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         // timer wake with no recompose. While idle, keep the grid armed so the
         // next event paints within one `ANIMATION_FRAME`.
         let now = Instant::now();
-        if active && now >= next_frame {
+        // `!should_exit`: once the tab has emptied, never paint again — this is
+        // what stops the last frame from flashing at the grown/full width on the
+        // way out. `!paint_held`: a grow resize defers its paint until the
+        // sibling-count verdict releases the hold (see the resize handler).
+        if !should_exit && !paint_held && active && now >= next_frame {
             ui.animation_phase = wall_clock_phase(anim_start);
             let animating =
                 render::has_live_animation(&current) || ui.tally.any_rolling(ui.animation_phase);
@@ -670,6 +712,14 @@ fn degraded_too_long(health: &Health, now: Timestamp) -> bool {
 /// that case we never close.
 fn self_close_decision(state: &mut SelfCloseState, sibling_count: Option<usize>) -> bool {
     state.should_close(sibling_count)
+}
+
+/// A resize that grows the pane width is the necessary precondition for the
+/// self-close full-width flash: the mux handed the sidebar a freed sibling's
+/// space. An unknown previous width (the first resize) counts as a grow so the
+/// cautious held path is taken.
+fn resize_grew(prev: Option<u16>, new: u16) -> bool {
+    prev.is_none_or(|p| new > p)
 }
 
 #[derive(Debug, Default)]
@@ -2763,6 +2813,20 @@ mod tests {
         assert!(
             state.seen_sibling,
             "an unknown count must not clear the latch"
+        );
+    }
+
+    #[test]
+    fn resize_grew_treats_strictly_larger_width_as_grow() {
+        // A grow is the flash precondition (the mux handed us a sibling's space),
+        // so it takes the held path; a shrink or same width keeps the instant
+        // repaint, and the first resize (no prior width) is held cautiously.
+        assert!(resize_grew(Some(30), 120), "wider pane is a grow");
+        assert!(!resize_grew(Some(120), 30), "narrower pane is not a grow");
+        assert!(!resize_grew(Some(80), 80), "same width is not a grow");
+        assert!(
+            resize_grew(None, 1),
+            "an unknown previous width counts as a grow"
         );
     }
 

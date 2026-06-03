@@ -3,8 +3,15 @@
 //! A Zellij session created in the background has no client, so its sidebar
 //! pane's PTY starts at a placeholder size; the renderer's first frame lands in
 //! that tiny area. When the user attaches, Zellij resizes the pane (SIGWINCH).
-//! The serve loop must redraw at the new size *immediately* — not on its next
-//! tick — or the sidebar reads as a multi-second blank pane on attach.
+//! The serve loop must redraw at the new size promptly — not on its next tick —
+//! or the sidebar reads as a multi-second blank pane on attach.
+//!
+//! A grow resize (attach is one: 1x1 -> usable) now defers its paint until the
+//! self-close verdict the resize fires resolves, so the sidebar never paints at
+//! the grown width on its way out (the self-close full-width flash). That stays
+//! well inside this test's budget: the probe fires with `Duration::ZERO`, and
+//! with no `ZELLIJ_PANE_ID` set it returns instantly with a "stay" verdict that
+//! releases the held paint.
 //!
 //! This drives the real `rimz-sidebar serve` binary through a PTY: render into
 //! a 1x1 pane, resize to a usable size, and assert the full frame appears well
