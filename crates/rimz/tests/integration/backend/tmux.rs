@@ -399,6 +399,7 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
         .backend
         .list_panes(rimz::mux::PaneListOptions {
             session_name: Some("rimz-resume".to_owned()),
+            ..Default::default()
         })
         .expect("list panes")
         .into_iter()
