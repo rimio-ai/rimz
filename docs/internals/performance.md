@@ -43,7 +43,7 @@ Where the milliseconds are, and what bounds each. Treat the figures as orders of
 | jump (focus the bound pane) | one mux-client fork (`focus_pane`), tens–hundreds ms | off the render thread (detached); in-process focus of the snapshot-bound pane, no `rimz pane focus` child, no per-click `list-panes` re-validation; fire-and-forget |
 | durable file write | temp + 2 fsyncs (file, parent dir) | reserved for the event log and durable state |
 | disposable cache write | temp + atomic rename, 0 fsync | `write_temp_then_rename_cache` |
-| frame redraw | sub-millisecond, in-process | fixed `ANIMATION_FRAME` grid (100ms) while active, relaxes to the backstop tick when idle; paint gated on dirty-or-animating (idle frame = bare timer wake, no recompose); pure redraw from cache, never forks a fetch |
+| frame redraw | sub-millisecond, in-process | fixed `ANIMATION_FRAME` grid (100ms) while active, relaxes to the backstop tick when idle; paint gated on dirty-or-animating (idle frame = bare timer wake, no recompose); pure redraw from cache, never forks a fetch. `has_live_animation` keeps it warm for working/thinking spinners, the cockpit spend count-up, the slow `?`/`!` blink, and the idle loading-dots — so a waiting/idle room ticks too, but every tick stays an in-process cache redraw (no fork, no mux action) |
 
 ## Key optimizations in place
 

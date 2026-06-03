@@ -8,10 +8,11 @@ Rimz gives every project one room — a Zellij or tmux session with a sidebar �
 
 ```
  ⌘ query-engine            ~/code/query-engine
- ✦ 6   ✧ 2                              $4.20
+
+ ¤ 6   ◎ 12   ◇ 76k ↘ 12k ↗ 64k ◍ 12k ◌ 68k
+                                        $4.20
  ──────────────────────────────────────────────
  ? 2   ! 1   ○ 1            ✽ 1   ⢿ 1   ✓ 0
- ◷ 41m · ◇ 486.0k · ◆ 4
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌? claude · Opus · xhigh

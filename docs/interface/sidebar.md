@@ -14,28 +14,28 @@ A real room: one Claude agent working in `main`, its card selected, with the per
 
 ```
  ⌘ query-engine                                          ← workspace identity
- ✦ 1                                            $1.27    ← head-count · today's fleet spend
+                                                         ← blank line below the name
+ ¤ 1   ◎ 12   ◇ 76k ↘ 64k ↗ 12k ◍ 20k ◌ 68k             ← live agents · sessions today · today's tokens
+                                                 $4.20    ← today's fleet spend (counts up)
  ────────────────────────────────────────────────────
  ? 0   ! 0   ○ 0                      ✽ 0   ⢿ 1   ✓ 0    ← make-up: who needs you | who's busy
- ◷ 12m · ◇ 76.5k                                         ← fleet totals: time · tokens
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← the worktree you're in (lane spine ▏)
 ▌⣾ claude · Opus 4.8 (1M) · high · auto         $1.27    ← line 1: identity · capability · $cost
 ▌  ledger refactor                                       ← line 2: what it's on
 ▌  ▣ ━━━━━━━━━━━━━━━━────────────────────────── 38.2%    ← context meter: how full the window is
-▌  ◇ 76.5k ↘ 64.2k ↗ 12.3k ◌ 68.0k                       ← tokens (selected/full only)
-▌  ◷ 12m worked · +214 -31                         1m    ← time worked · diff · last activity
+▌  ◇ 76k ↘ 64k ↗ 12k ◍ 20k ◌ 48k                ◷ 1m    ← per-card tokens · last-activity age
+▌  ◷ 12m worked · +214 -31                               ← time worked · diff (selected/full)
 
  ────────────────────────────────────────────────────
- Claude Code v2.1.158 · Claude Max               ⇅ rc    ← provider · plan · remote-control flag
-  ▐▛███▜▌  $3.50 · ◇ 486.0k                               ← brand emblem · account spend · tokens
+ Claude v2.1.158 · Claude Max                    ⇅ rc    ← provider · plan · remote-control flag
+                                                         ← blank line below the name
+  ▐▛███▜▌  ◇ 486k ↘ 422k ↗ 64k ◍ 12k ◌ 68k      $3.50    ← brand emblem · today's tokens · spend
  ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ ↻ 2h06m    ← 5-hour budget left, until reset
    ▘▘ ▝▝   7d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h    ← 7-day budget left, until reset
 
- Codex v0.135.0 · ChatGPT Pro
-  ▐▛███▜▌  $1.20 · ◇ 88.0k
- ▝▜█████▛▘ ∞  ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱             ← API-key account: no meter to spend
-   ▘▘ ▝▝  
+ W: ◎  92  ◇ 16.5k ↘ 2.3k ↗ 14.2k ◌ 168k       $140.57  ← week ledger: sessions · tokens · spend
+ M: ◎ 212  ◇ 76.5k ↘ 12.3k ↗ 64.2k ◌ 668k      $240.57  ← month ledger
                       ? for help                         ← footer (pinned to the bottom edge)
 ```
 
@@ -66,7 +66,7 @@ Two short-lived heads ride over the base status on the leading cell, so they nev
 | `▇` compacting | condensing its context window — pulses `▁▃▄▅▆▇▆▅▄▃` in violet, then returns to its resting head |
 | `´` waiting on subagents | the main agent delegated to its children; the work is in the rows below — a low clay wave (`_` bobbing up to `´` and back) |
 
-Only live states move. The two actionable attention glyphs (`?` / `!`) hold still and **redden from yellow to red** once a row sits unanswered past the neglect window (`[sidebar] attention_redden_secs`) — a fresh ask reads calm-urgent, a long-ignored one heats up. A working agent that goes silent past the stall window escalates to a static `!` instead of spinning on. The `⏸` rate-limited head is attention-class but parked: it holds still in a held amber and never reddens, since waiting for the reset is the only move. A parent waiting on subagents is exempt from the stall escalation — its quiet wave is the children's work, not a wedge.
+The two actionable attention glyphs (`?` / `!`) **slowly blink** — shown for most of a ~2s cycle, winking out for a beat — to pull the eye back to an unanswered row, and they **redden from yellow to red** once a row sits unanswered past the neglect window (`[sidebar] attention_redden_secs`), so a fresh ask reads calm-urgent and a long-ignored one heats up. A working agent that goes silent past the stall window escalates to a blinking `!` instead of spinning on. The `⏸` rate-limited head is attention-class but parked: it holds still in a held amber and never reddens or blinks, since waiting for the reset is the only move. A parent waiting on subagents is exempt from the stall escalation — its quiet wave is the children's work, not a wedge. An idle agent with no prompt yet shows a gentle `.`→`..`→`...` loading cue on line 2 in place of the em dash.
 
 **Posture — the permission pill, sized by blast radius.**
 
@@ -81,9 +81,9 @@ Only live states move. The two actionable attention glyphs (`?` / `!`) hold stil
 
 | token | reads as |
 |-------|----------|
-| `▣ ━━━━──── 38.2%` | context meter — how full the window is (blue → amber → red), bar fills as used |
-| `◇` `↘` `↗` `◌`   | tokens: total · input · output · cached |
-| `◷ 12m worked`    | time the agent has worked |
+| `▣ ━━━━──── 38.2%` | context meter — how full the window is (blue → amber → red), bar fills as used; an empty 0% window reads the hollow `▢` |
+| `◇` `↘` `↗` `◍` `◌` | tokens: total · input · output · cache-write · cache-read |
+| `◷ 12m worked` / `◷ 1m` | time the agent has worked / its last-activity age |
 | `+127 -43`        | lines added / removed |
 | `●●●○○ 3/5`       | todo progress |
 | `$1.27`           | spend — money-green, always two decimals |
@@ -95,7 +95,9 @@ Only live states move. The two actionable attention glyphs (`?` / `!`) hold stil
 | mark | meaning |
 |------|---------|
 | `⌘ name`        | the workspace |
-| `✦ N` / `✧ M`   | main agents you launched / subagents they spawned |
+| `¤ N`           | the live agents in the room right now |
+| `◎ N`           | sessions (threads) that have run today (cockpit) / in the window (ledger) |
+| `⧉ N`           | the subagents an agent spawned this turn (expanded card) |
 | `▏`             | the selection lane — the worktree you're in |
 | `▌`             | the selected card |
 | `┄ external ┄`  | out-of-project panes (scripts, CI, stray shells) |
@@ -108,22 +110,24 @@ The top block. Fixed height, so the rows below it never jump as agents change st
 
 ```
  ⌘ query-engine                            ~/code/query-engine
- ✦ 5   ✧ 2                                            $4.20
+
+ ¤ 5   ◎ 12   ◇ 76k ↘ 12k ↗ 64k ◍ 12k ◌ 68k
+                                                     $4.20
  ──────────────────────────────────────────────────────────
  ? 2   ! 1   ○ 1                        ✽ 1   ⢿ 1   ✓ 0
- ◷ 41m · ◇ 486.0k · ◆ 4
 ```
 
-- **Identity.** The workspace name behind `⌘`, with the project path dim on the right edge (home-abbreviated to `~/…`; it left-truncates with a leading `…` before it ever crowds the name).
-- **Head-count and spend.** `✦` is the agents you launched; `✧` (only when present) is the subagents they spawned this turn. The fleet's total spend pins right. An empty room reads `✦ 0` with no spend.
-- **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (yellow, reddening when any of their rows goes stale), a `⏸` rate-limited count right after them (held amber, parked), then a free `○` idle agent grouped at its right edge — calm, but a free agent wants work. The **right cluster** is the busy tail: `✽` thinking before `⢿` working (you read a plan before it acts), then `✓` done. The fixed buckets always show, so a zero reads a faint `? 0` and the line is scannable by position; the `⏸` bucket is the one exception — a rare, non-actionable state, it appears only when an agent is actually parked, so it never costs width on a narrow rail.
-- **Fleet totals.** Time worked behind a teal `◷`, the `◇` token total, and `◆` commits ahead of trunk. A field that no agent reported is dropped.
+- **Identity.** The workspace name behind `⌘`, with the project path dim on the right edge (home-abbreviated to `~/…`; it left-truncates with a leading `…` before it ever crowds the name). A blank line sets it apart from the summary below.
+- **Summary — who's here and what today burned.** `¤` is the live agents in the room right now; `◎` is the sessions (threads) that have run today. Then today's accumulated token breakdown — `◇` total · `↘` input · `↗` output · `◍` cache-write · `◌` cache-read — in the coarse integer form. The counts read from the live fleet and the JSONL `value_tally`'s today window; the breakdown drops when today recorded no tokens. An empty room reads `¤ 0  ◎ 0`.
+- **Today's spend.** The fleet's total spend for today, on its own line pinned to the right edge, **counting up** in a smooth eased climb as a turn lands (with a brief brighten as it settles) — the cockpit's one animated number.
+- **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (yellow, reddening when any of their rows goes stale, and slowly blinking), a `⏸` rate-limited count right after them (held amber, parked), then a free `○` idle agent grouped at its right edge — calm, but a free agent wants work. The **right cluster** is the busy tail: `✽` thinking before `⢿` working (you read a plan before it acts), then `✓` done. The fixed buckets always show, so a zero reads a faint `? 0` and the line is scannable by position; the `⏸` bucket is the one exception — a rare, non-actionable state, it appears only when an agent is actually parked, so it never costs width on a narrow rail.
 
-An **empty room** has no make-up line at all — just identity and the `✦ 0` head-count:
+An **empty room** has no make-up line at all — just identity and the `¤ 0  ◎ 0` summary:
 
 ```
  ⌘ query-engine
- ✦ 0
+
+ ¤ 0   ◎ 0
  ──────────────────────────────────────────────────────────
 
  no agents yet
@@ -139,36 +143,37 @@ The body: one card per pane, grouped under the worktree it lives in. A worktree 
 
 ### The card
 
-An agent is a small stacked card. The resting card is three lines; selecting it (or running `full` density) appends the deeper stats. Selection never reshapes a line already on screen — it only *appends* and lights the spine — so the card never reflows as it expands.
+An agent is a small stacked card. The resting card is four lines; selecting it (or running `full` density) appends the work line and any subagents. Selection never reshapes a line already on screen — it only *appends* and lights the spine — so the card never reflows as it expands.
 
 ```
 ▌⣾ claude · Opus 4.8 (1M) · high · auto         $1.27    line 1 — glyph · name · model · effort · posture, $cost right
 ▌  ledger refactor                          ●●●○○ 3/5    line 2 — what it's on; todo pins right when wide
 ▌  ▣ ━━━━━━━━━━━━━━━━────────────────────────── 38.2%    context meter — the resting card's one bar
-▌  ◇ 76.5k ↘ 64.2k ↗ 12.3k ◌ 68.0k                       selected/full — token breakdown
-▌  ◷ 12m worked · +214 -31                         1m    selected/full — time worked · diff · last-activity age
+▌  ◇ 76k ↘ 64k ↗ 12k ◍ 20k ◌ 48k               ◷ 1m    token breakdown · last-activity age (◷)
+▌  ◷ 12m worked · +214 -31                               selected/full — time worked · the agent's own diff
 ```
 
 - **Line 1 — identity.** The animated leading cell, then the agent kind (dim — the glyph and its color carry identity), then capability: model, effort, and the posture pill. Capability degrades by width — a wide card carries model · effort · posture, a medium one drops effort, a narrow one keeps just the name. The session `$cost` pins right.
-- **Line 2 — what it's on.** The session name you gave it (`--name` / `/rename`), else the agent's task, else its latest prompt (which lingers once the turn ends and the task clears, so an unnamed session stays labelled until it earns a name), else an em dash. On a wide card, todo dots pin right.
-- **The context meter (`▣`).** The resting card's one bar. The bar fills as the window is *used*; its value is always the percent used. While the window is calm it splits into colored segments showing *where* the tokens went (cache writes / cache reads / fresh input); once it warns it goes a solid amber/red. The `▣` glyph reads *how full* the window is on its own ramp — blue while cold, warming as it fills.
-- **Selected / full lines.** The token breakdown (`◇` total · `↘` input · `↗` output · `◌` cached) and the work line (`◷` time worked · the agent's own diff · a coarse last-activity age pinned right). These are the only place an age appears — the resting card stays calm.
+- **Line 2 — what it's on.** The session name you gave it (`--name` / `/rename`), else the agent's task, else its latest prompt (which lingers once the turn ends and the task clears, so an unnamed session stays labelled until it earns a name). An idle agent with nothing to show yet animates a `.`→`..`→`...` loading cue here instead of an em dash. On a wide card, todo dots pin right.
+- **The context meter (`▣`/`▢`).** The resting card's one bar — `▢` hollow at an empty 0% window, `▣` once anything fills it. The bar fills as the window is *used*; its value is always the percent used. While the window is calm it splits into colored segments showing *where* the tokens went (cache writes / cache reads / fresh input); once it warns it goes a solid amber/red. The `▣` glyph reads *how full* the window is on its own ramp — blue while cold, warming as it fills.
+- **The token line.** Part of the resting card: the integer breakdown `◇` total · `↘` input · `↗` output · `◍` cache-write · `◌` cache-read, with a coarse `◷` last-activity age pinned right (the line shows the bare `◇` total alone for an agent whose context carries no read-only split, like Codex).
+- **Selected / full — the work line.** `◷` time worked and the agent's own diff. The last-activity age rides the token line above, so it is not repeated here.
 
-The `▣`, `◇`, and `◷` glyphs share one lead column, so the card reads as an aligned grid.
+The `▣`/`▢`, `◇`, and `◷` glyphs share one lead column, so the card reads as an aligned grid.
 
-**Density and selection.** `[sidebar] density` sets the resting height: `compact` (default) shows the three top lines, `full` adds the token and work lines. Selecting any row always reveals the full five-line card, so the deepest data is one keystroke away:
+**Density and selection.** `[sidebar] density` sets the resting height: `compact` (default) shows the four top lines (incl. the token line), `full` adds the work line. Selecting any row always reveals the full five-line card plus any subagents, so the deepest data is one keystroke away:
 
 ```
-   resting (compact)          selected — only appends, never reshapes
-   ─────────────────          ────────────────────────────────────────
-    ⣾ claude · Opus · auto    ▌⣾ claude · Opus · auto            $1.27
-      ledger refactor         ▌  ledger refactor
-      ▣ ━━━━━━━──── 38.2%     ▌  ▣ ━━━━━━━──── 38.2%
-                              ▌  ◇ 76.5k ↘ 64.2k ↗ 12.3k ◌ 68.0k   ← appended
-                              ▌  ◷ 12m worked · +214 -31       1m   ← appended
+   resting (compact)              selected — only appends, never reshapes
+   ─────────────────              ────────────────────────────────────────
+    ⣾ claude · Opus · auto        ▌⣾ claude · Opus · auto            $1.27
+      ledger refactor             ▌  ledger refactor
+      ▣ ━━━━━━━──── 38.2%         ▌  ▣ ━━━━━━━──── 38.2%
+      ◇ 76k ↘ 64k ↗ 12k ◌ 48k    ▌  ◇ 76k ↘ 64k ↗ 12k ◍ 20k ◌ 48k   ◷ 1m
+                                  ▌  ◷ 12m worked · +214 -31          ← appended
 ```
 
-The expanded card also lists any **subagents** the agent spawned this turn — a dim `subagents (N)` header then one indented `glyph type` line each (`⢿ Explore`, `○ review`). Subagents have no pane of their own, so they never get a row; they nest here only.
+The expanded card also lists any **subagents** the agent spawned this turn — a dim `⧉ subagents (N)` header then one indented `glyph type` line each (`⢿ Explore`, `○ review`). Subagents have no pane of their own, so they never get a row; they nest here only.
 
 ### Attention rows
 
@@ -178,7 +183,7 @@ A waiting or failed agent is the whole point. Its glyph leads, bold, and the car
 ▏feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌! claude · Opus · yolo
 ▌  db migrate
-▌  ▣ ──────────────────────    0%
+▌  ▢ ──────────────────────    0%
 ```
 
 A `?` waiting row reads the same with a `?` glyph. The row carries *who* needs you and *what task*, and selecting it lands you in the agent's pane, where the full prompt and its safe defaults live — that is the row's job, to route you there. A script's `feed ask` is the one item answerable from the sidebar itself: it chose Rimz as its surface, so its declared options render as buttons on the row.
@@ -209,10 +214,10 @@ Worktrees stack as bounded blocks. The one **holding your selection** reads as a
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← selected worktree: lane spine + dotted seal
 ▌? claude
 ▌  permission
-▌  ▣ ──────────────────────────    0%
+▌  ▢ ──────────────────────────    0%
 ▏⣾ codex · GPT-5.5
 ▏  add tests
-▏  ▣ ──────────────────────────    0%
+▏  ▢ ──────────────────────────    0%
 
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1   ← out-of-project panes, attention-only tally
  ? deploy.sh
@@ -229,10 +234,10 @@ The `external` block is the catch-all for panes outside the project — untether
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌⣾ codex
 ▌  task-0
-▌  ▣ ────────────────────────    0%
+▌  ▢ ────────────────────────    0%
 ▏⣾ codex
 ▏  task-1
-▏  ▣ ────────────────────────    0%
+▏  ▢ ────────────────────────    0%
 ▏  +3 more
 ```
 
@@ -254,8 +259,9 @@ A **metered account** drains one "mana" bar per budget window toward its reset. 
 These are **sliding windows** that begin counting only on your first token, so until then the provider keeps sliding the reset a full window-length ahead. A window whose reset still sits ~a full window out has **not started** (it still reads ~1% used, not 0 — so it's the reset distance that gives it away). Any usage above that ~1% floor means it has already started, countdown and all; only a 0–1% window with a near-full reset qualifies. A not-started window shows a near-full bar with **no countdown**, reading "ready — send a message to start it" rather than a misleading ticking placeholder; the countdown appears once your first token fixes the reset and it begins ticking down.
 
 ```
- Claude Code v2.1.158 · Claude Max               ⇅ rc    header — product · version · plan, rc flag right
-  ▐▛███▜▌  $3.50 · ◇ 486.0k                               emblem + account spend · tokens
+ Claude v2.1.158 · Claude Max                    ⇅ rc    header — product · version · plan, rc flag right
+                                                         blank line below the name
+  ▐▛███▜▌  ◇ 486k ↘ 422k ↗ 64k ◍ 12k ◌ 68k      $3.50    emblem + today's token breakdown · spend (right)
  ▝▜█████▛▘ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱ ↻ 2h06m    5-hour window left, until reset
    ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h    7-day window, same start/end column
 ```
@@ -264,7 +270,8 @@ The dashboard isn't pinned to a fixed set of windows. If a provider reports a si
 
 ```
  Codex v0.136.0 · ChatGPT Pro                            header — product · version · plan
-  ▐▛███▜▌  $1.20 · ◇ 88.0k                                emblem + account spend · tokens
+
+  ▐▛███▜▌  ◇ 88k ↘ 76k ↗ 12k ◍ 0 ◌ 8k           $1.20    emblem + today's token breakdown · spend
  ▝▜█████▛▘ 30d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱ ↻ 28d04h    a single window, labeled by length
 ```
 
@@ -272,27 +279,27 @@ An **unmetered (API-key) account** has no budget to drain, so it shows an `∞` 
 
 ```
  Codex v0.135.0 · ChatGPT Pro
-  ▐▛███▜▌  $1.20 · ◇ 88.0k
+
+  ▐▛███▜▌  ◇ 88k ↘ 76k ↗ 12k ◍ 0 ◌ 8k           $1.20
  ▝▜█████▛▘ ∞  ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱
    ▘▘ ▝▝  
 ```
 
 Every bar across every block shares one start column and one end column, so the dashboard reads as one aligned grid. A blank line separates blocks. The `⇅ rc` flag pins to a block's top-right when remote control is on for that provider (Claude only — it's host infrastructure, never its own row). Below ~34 columns the emblem is dropped and the bars run full-width. The brand emblem, color, and name are config-driven (`[sidebar.providers.<kind>]`, see [configuration.md](../reference/configuration.md)).
 
-### The value corner
+### The fleet ledger
 
-The fleet's running pile of work seals the bottom of the dashboard, above the footer — a quiet two-row ledger you learn to glance at, never a cue that competes with the rows. The trailing month's dim companion leads; the trailing-year **year** pile that climbs as the agents work sits beneath it.
+The fleet's running totals seal the bottom of the dashboard, above the footer — a quiet two-row ledger you learn to glance at, never a cue that competes with the rows. A trailing-week (`W:`) row and a trailing-month (`M:`) row, fleet-wide across every provider.
 
 ```
-                         month: 33.0M tok · $1,240.57
-                          year: 47.2M tok · $4,821.90
+ W: ◎  92  ◇ 16.5k ↘ 2.3k ↗ 14.2k ◌ 168k       $140.57
+ M: ◎ 212  ◇ 76.5k ↘ 12.3k ↗ 64.2k ◌ 668k      $240.57
 ```
 
-- **The rows.** Each reads `label:  <tokens> tok · $<spend>`, pinned flush to the right edge — the token burn, then the spend in money-green. The two rows share one token column and one spend column, so the `month:` / `year:` labels stack and every `$` lands on the same right edge.
-- **`year`.** The trailing-365-day pile. When a turn lands it **rolls upward** — an eased count-up on the wall-clock animation frame, with a brief brighten as it settles. It never rolls on first paint.
-- **`month`.** The trailing-30-day pile, dim so the year leads. Today's `$` (the trailing 24 hours) lives in the cockpit, so the corner never repeats it — the windows escalate `today → month → year`.
+- **The rows.** Each reads `◎ sessions  ◇ total ↘ input ↗ output ◌ cache-read  $spend`: the thread count, the precise one-decimal token figures (the exact record beside the cockpit's coarse live read), and the spend pinned to the right edge in money-green. The `◇` total carries the same soft-violet as the cards. Every numeric field is right-aligned into one shared grid, so the `W:` / `M:` labels stack and each column lines up. The `◍` cache-write field is omitted here — the ledger keeps to the headline figures.
+- **No animation.** The ledger figures are static — only today's headline (the cockpit's `$`) counts up. The windows escalate `today → week → month`.
 
-Both figures are computed from the transcript JSONL — Codex's dollars priced from its token counts, every provider that logs usage counted, all of them fleet-wide. The corner is dropped until something has been recorded.
+Every figure is computed from the transcript JSONL — Codex's dollars priced from its token counts, every provider that logs usage counted, all of them fleet-wide. The ledger is dropped until something has been recorded.
 
 ## Bottom chrome
 
@@ -344,7 +351,7 @@ The renderer's golden tests in [`crates/rimz-sidebar/src/render/`](../../crates/
 | worktree grouping + external | `worktree_attention_map` |
 | per-worktree cap | `group_cap_with_overflow` |
 | provider dashboard | `provider_dashboard` |
-| value corner | `value_corner` |
+| fleet ledger (week/month) | `fleet_ledger` |
 | health alert | `degraded_banner` |
 
 When the renderer changes how something looks, update the `.snap` (the test prints the diff) and this doc together.
