@@ -139,13 +139,12 @@ pub struct AgentCost {
 }
 
 /// Context-window token accounting. `used_percentage` is the authoritative
-/// gauge value the statusline reports directly (0..=100).
+/// gauge value the statusline reports directly (0..=100). The statusline's
+/// `total_input_tokens` / `total_output_tokens` are not captured: since Claude
+/// Code v2.1.132 they read "tokens in the current context window", which
+/// `current_usage` already carries component by component.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentTokenUsage {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_output_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window_size: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

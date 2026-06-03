@@ -15,7 +15,7 @@ A real room: one Claude agent working in `main`, its card selected, with the per
 ```
  ⌘ query-engine                                          ← workspace identity
                                                          ← blank line below the name
- ¤ 1                   ◇ 76k ↘ 64k ↗ 12k ◍ 20k ◌ 68k    ← live agents · today's tokens (right)
+ ¤ 1                   ◇ 76k ↘ 12k ↗ 64k ◍ 20k ◌ 68k    ← live agents · today's tokens (right)
  ◎ 12                                            $4.20    ← sessions today · today's fleet spend
  ────────────────────────────────────────────────────
  ? 0   ! 0   ○ 0   ⏸ 0                ✽ 0   ⢿ 1   ✓ 0    ← make-up: who needs you | who's busy
@@ -24,12 +24,12 @@ A real room: one Claude agent working in `main`, its card selected, with the per
 ▌⣾ claude · Opus 4.8 (1M) · high · auto         $1.27    ← line 1: identity · capability · $cost
 ▌  ledger refactor                                       ← line 2: what it's on
 ▌  ▣ ━━━━━━━━━━━━━━━━────────────────────────── 38.2%    ← context meter: how full the window is
-▌  ◇ 76k ↘ 64k ↗ 12k ◍ 20k ◌ 48k                ◷ 1m    ← per-card tokens · last-activity age (≥1m)
+▌  ◇ 4k ↘ 1k ↗ 2k ◍ 6k ◌ 68k                    ◷ 1m    ← per-card tokens · last-activity age (≥1m)
 
  ────────────────────────────────────────────────────
  Claude v2.1.158 · Claude Max                    ⇅ rc    ← provider · plan · remote-control flag
                                                          ← blank line below the name
-  ▐▛███▜▌  ◇ 486k ↘ 422k ↗ 64k ◍ 12k ◌ 68k      $3.50    ← brand emblem · today's tokens · spend
+  ▐▛███▜▌  ◇ 486k ↘ 64k ↗ 422k ◍ 12k ◌ 68k      $3.50    ← brand emblem · today's tokens · spend
  ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ ↻ 2h06m    ← 5-hour budget left, until reset
    ▘▘ ▝▝   7d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h    ← 7-day budget left, until reset
 
@@ -149,13 +149,13 @@ An agent is a small stacked card. The resting card is four lines; selecting it a
 ▌⣾ claude · Opus 4.8 (1M) · high · auto         $1.27    line 1 — glyph · name · model · effort · posture, $cost right
 ▌  ledger refactor                          ●●●○○ 3/5    line 2 — what it's on; todo pins right when wide
 ▌  ▣ ━━━━━━━━━━━━━━━━────────────────────────── 38.2%    context meter — the resting card's one bar
-▌  ◇ 76k ↘ 64k ↗ 12k ◍ 20k ◌ 48k               ◷ 1m    token breakdown · last-activity age (◷, ≥1m)
+▌  ◇ 4k ↘ 1k ↗ 2k ◍ 6k ◌ 68k                   ◷ 1m    token breakdown · last-activity age (◷, ≥1m)
 ```
 
 - **Line 1 — identity.** The animated leading cell, then the agent kind (dim — the glyph and its color carry identity), then capability: model, effort, and the posture pill. Capability degrades by width — a wide card carries model · effort · posture, a medium one drops effort, a narrow one keeps just the name. The session `$cost` pins right.
 - **Line 2 — what it's on.** The session name you gave it (`--name` / `/rename`), else the agent's task, else its latest prompt (which lingers once the turn ends and the task clears, so an unnamed session stays labelled until it earns a name). An idle agent with nothing to show yet animates a `.`→`..`→`...` loading cue here instead of an em dash. On a wide card, todo dots pin right.
 - **The context meter (`▣`/`▢`).** The resting card's one bar — `▢` hollow at an empty 0% window, `▣` once anything fills it. The bar fills as the window is *used*; its value is always the percent used. While the window is calm it splits into colored segments showing *where* the tokens went (cache writes / cache reads / fresh input); once it warns it goes a solid amber/red. The `▣` glyph reads *how full* the window is on its own ramp — blue while cold, warming as it fills.
-- **The token line.** Part of the resting card: the integer breakdown `◇` total · `↘` input · `↗` output · `◍` cache-write · `◌` cache-read, with a coarse `◷` last-activity age pinned right once it crosses a full minute — a just-active agent shows the breakdown alone, left-aligned, rather than a misleading `1m` (the line shows the bare `◇` total alone for an agent whose context carries no read-only split, like Codex).
+- **The token line.** Part of the resting card: the latest API call's integer breakdown `◇` total · `↘` input · `↗` output · `◍` cache-write · `◌` cache-read — the same disjoint split the cockpit and fleet ledger accumulate, so a column means one thing everywhere: `↘` is fresh uncached input, cache rides apart, and `◇` is `input + output`. How full the window is stays the context meter's job. A coarse `◷` last-activity age pins right once it crosses a full minute — a just-active agent shows the breakdown alone, left-aligned, rather than a misleading `1m` (the line shows the bare `◇` total alone for an agent whose context carries no per-call split, like Codex).
 
 The `▣`/`▢`, `◇`, and `◷` glyphs share one lead column, so the card reads as an aligned grid.
 
@@ -167,7 +167,7 @@ The `▣`/`▢`, `◇`, and `◷` glyphs share one lead column, so the card read
     ⣾ claude · Opus · auto        ▌⣾ claude · Opus · auto            $1.27
       ledger refactor             ▌  ledger refactor
       ▣ ━━━━━━━──── 38.2%         ▌  ▣ ━━━━━━━──── 38.2%
-      ◇ 76k ↘ 64k ↗ 12k ◌ 48k    ▌  ◇ 76k ↘ 64k ↗ 12k ◍ 20k ◌ 48k   ◷ 1m
+      ◇ 4k ↘ 1k ↗ 2k ◌ 68k       ▌  ◇ 4k ↘ 1k ↗ 2k ◍ 6k ◌ 68k       ◷ 1m
                                   ▌  ⧉ subagents (1)                  ← appended
                                   ▌    ⢿ Explore
 ```

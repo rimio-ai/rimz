@@ -58,8 +58,6 @@ struct CostField {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ContextWindowField {
-    total_input_tokens: Option<u64>,
-    total_output_tokens: Option<u64>,
     context_window_size: Option<u64>,
     used_percentage: Option<f64>,
     remaining_percentage: Option<f64>,
@@ -188,8 +186,6 @@ impl StatuslinePayload {
             total_lines_removed: self.cost.total_lines_removed,
         });
         let tokens = non_empty(AgentTokenUsage {
-            total_input_tokens: self.context_window.total_input_tokens,
-            total_output_tokens: self.context_window.total_output_tokens,
             context_window_size: self.context_window.context_window_size,
             used_percentage: clamp_pct(self.context_window.used_percentage),
             remaining_percentage: clamp_pct(self.context_window.remaining_percentage),
@@ -305,13 +301,15 @@ mod tests {
         assert_eq!(cost.total_cost_usd, Some(0.01234));
         assert_eq!(cost.total_lines_added, Some(156));
 
+        // `total_input_tokens` / `total_output_tokens` ride the wire above but
+        // are not captured — `current_usage` carries the same window split.
         let tokens = ctx.tokens.unwrap();
-        assert_eq!(tokens.total_input_tokens, Some(15500));
         assert_eq!(tokens.context_window_size, Some(200000));
         assert_eq!(tokens.used_percentage, Some(8));
         assert_eq!(tokens.remaining_percentage, Some(92));
         let usage = tokens.current_usage.unwrap();
         assert_eq!(usage.input_tokens, Some(8500));
+        assert_eq!(usage.output_tokens, Some(1200));
         assert_eq!(usage.cache_creation_input_tokens, Some(5000));
         assert_eq!(usage.cache_read_input_tokens, Some(2000));
 

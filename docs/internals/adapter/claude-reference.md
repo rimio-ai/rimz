@@ -251,7 +251,7 @@ Claude `exec`s the configured `statusLine` command on every render and pipes thi
 | `cost.total_duration_ms` | wall-clock time since session start |
 | `cost.total_api_duration_ms` | time spent waiting on API responses |
 | `cost.total_lines_added`, `cost.total_lines_removed` | lines changed |
-| `context_window.total_input_tokens`, `total_output_tokens` | tokens in the current context window (current, not cumulative, since v2.1.132) |
+| `context_window.total_input_tokens`, `total_output_tokens` | tokens in the current context window (current, not cumulative, since v2.1.132); Rimz skips them — `current_usage` carries the same window, split by component |
 | `context_window.context_window_size` | max window in tokens (200000 default; 1000000 for extended-context models) |
 | `context_window.used_percentage`, `remaining_percentage` | pre-calculated context fill (from input-side tokens only) |
 | `context_window.current_usage.{input_tokens,output_tokens,cache_creation_input_tokens,cache_read_input_tokens}` | per-component token counts from the last API call |

@@ -892,16 +892,17 @@ mod tests {
                 total_lines_removed: Some(31),
             }),
             tokens: Some(AgentTokenUsage {
-                total_input_tokens: Some(64_200),
-                total_output_tokens: Some(12_300),
                 context_window_size: Some(200_000),
                 used_percentage: Some(38),
                 remaining_percentage: Some(62),
+                // A realistic per-call split: cache reads carry the context,
+                // fresh input stays small. The input side sums to 76,500 so
+                // the precise meter still reads 38.2% of the 200k window.
                 current_usage: Some(AgentCurrentUsage {
-                    input_tokens: Some(8_500),
-                    output_tokens: Some(1_200),
-                    cache_creation_input_tokens: Some(20_000),
-                    cache_read_input_tokens: Some(48_000),
+                    input_tokens: Some(1_700),
+                    output_tokens: Some(2_300),
+                    cache_creation_input_tokens: Some(6_600),
+                    cache_read_input_tokens: Some(68_200),
                 }),
             }),
             rate_limits: Some(AgentRateLimits {
@@ -1085,14 +1086,16 @@ mod tests {
         // the provider dashboard now.
         assert!(!rendered.contains("5h↻"));
         assert!(!rendered.contains("7d↻"));
-        // The card carries the token line at rest. Tokens read the integer split
-        // ◇ total ↘ input ↗ output ◍ cache-write ◌ cache-read; the window size no
-        // longer rides this line.
-        assert!(rendered.contains("◇ 76k"));
-        assert!(rendered.contains("↘ 64k"));
-        assert!(rendered.contains("↗ 12k"));
-        assert!(rendered.contains("◍ 20k"), "cache-write split:\n{rendered}");
-        assert!(rendered.contains("◌ 48k"), "cache-read split:\n{rendered}");
+        // The card carries the token line at rest: the latest API call's
+        // disjoint split ◇ total ↘ input ↗ output ◍ cache-write ◌ cache-read,
+        // where ↘ is fresh uncached input and ◇ is input + output — the same
+        // column meanings the cockpit and fleet ledger accumulate. The window
+        // size no longer rides this line.
+        assert!(rendered.contains("◇ 4k"));
+        assert!(rendered.contains("↘ 1k"));
+        assert!(rendered.contains("↗ 2k"));
+        assert!(rendered.contains("◍ 6k"), "cache-write split:\n{rendered}");
+        assert!(rendered.contains("◌ 68k"), "cache-read split:\n{rendered}");
         assert!(
             !rendered.contains("ctx"),
             "window size left the token line:\n{rendered}"

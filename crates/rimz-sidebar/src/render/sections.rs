@@ -1252,32 +1252,31 @@ fn gauge_segments(row: &SidebarRow) -> Option<[(u64, Color); 3]> {
 }
 
 /// The card's token line — the `◇ ↘ ↗ ◍ ◌` breakdown (integer magnitudes) with
-/// the `◷` last-activity age pinned right: the cumulative total (violet `◇`),
-/// input read in (`↘`), output generated (`↗`), then the latest message's cache
-/// writes (`◍`) and cache reads (`◌`). The breakdown glyphs stay dim so only the
-/// `◇` total carries a tone. Falls back to the bare `◇` rollup total for an agent
-/// whose context carries no read-only token split (Codex's app-server exposes
-/// none), so the line shows *something* for every agent. The `◷` age rides the
-/// right edge only once it crosses a full minute — a just-active agent shows the
-/// breakdown alone, left-aligned, rather than a misleading `1m`.
+/// the `◷` last-activity age pinned right: the latest API call's fresh input
+/// (`↘`), output generated (`↗`), cache writes (`◍`), and cache reads (`◌`),
+/// with the violet `◇` total carrying `input + output`. The five slots are the
+/// same disjoint split, glyph for glyph, as the cockpit summary and the fleet
+/// ledger — cache rides apart, never folded into `↘` or the total — and
+/// context-window occupancy is the `▣` meter's job, not this line's. The
+/// breakdown glyphs stay dim so only the `◇` total carries a tone. Falls back
+/// to the bare `◇` rollup total for an agent whose context carries no per-call
+/// token split (Codex's app-server exposes none, and Claude reports none before
+/// the first API call and right after `/compact`), so the line shows
+/// *something* for every agent. The `◷` age rides the right edge only once it
+/// crosses a full minute — a just-active agent shows the breakdown alone,
+/// left-aligned, rather than a misleading `1m`.
 fn token_totals_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     let age = activity_short(row.last_activity)
         .map(|label| vec![Span::styled(format!("{WORKED_GLYPH} {label}"), theme.dim())])
         .unwrap_or_default();
-    if let Some(tokens) = ctx(row).and_then(|context| context.tokens.as_ref())
-        && (tokens.total_input_tokens.is_some() || tokens.total_output_tokens.is_some())
+    if let Some(usage) = ctx(row)
+        .and_then(|context| context.tokens.as_ref())
+        .and_then(|tokens| tokens.current_usage.as_ref())
     {
-        let input = tokens.total_input_tokens.unwrap_or(0);
-        let output = tokens.total_output_tokens.unwrap_or(0);
-        // The cache split is per-message: `◍` the latest message's cache writes,
-        // `◌` its cache reads. There is no cumulative cached figure.
-        let usage = tokens.current_usage.as_ref();
-        let cache_write = usage
-            .and_then(|usage| usage.cache_creation_input_tokens)
-            .unwrap_or(0);
-        let cache_read = usage
-            .and_then(|usage| usage.cache_read_input_tokens)
-            .unwrap_or(0);
+        let input = usage.input_tokens.unwrap_or(0);
+        let output = usage.output_tokens.unwrap_or(0);
+        let cache_write = usage.cache_creation_input_tokens.unwrap_or(0);
+        let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
         let mut left = vec![Span::raw("  ")];
         left.extend(token_breakdown_spans(
             theme,
