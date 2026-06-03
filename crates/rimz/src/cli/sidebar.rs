@@ -15,9 +15,8 @@ use rimz::ledger::workspace_record;
 use rimz::mux::PaneListOptions;
 use rimz::sidebar::snapshot::{
     DiffStats, DiffStatsCache, DiffStatsCacheEntry, SNAPSHOT_CACHE_TTL, SnapshotCache,
-    WorktreeRootsCache, cached_worktree_roots, enrich_consumer, needed_worktree_paths,
-    project_diff_stats, read_diff_stats_cache, read_published_snapshot, read_snapshot_cache,
-    unix_now_ms,
+    WorktreeRootsCache, enrich_consumer, needed_worktree_paths, project_diff_stats,
+    read_diff_stats_cache, read_published_snapshot, read_snapshot_cache, unix_now_ms,
 };
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, RuntimePaths, StatePaths};
@@ -280,7 +279,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             // Walk transcript history for the fleet + per-provider spend before
             // the config fold, so the dashboard panels are built, ranked, and
             // capped with each provider's spend already known.
-            let spending = compute_fleet_spending(&snapshot, runtime);
+            let spending = compute_fleet_spending(runtime);
             // Publish the aggregated totals so consumer tabs can read them
             // without re-walking the JSONL history themselves.
             rimz::agents::spending::write_provider_spending_cache(
@@ -561,38 +560,22 @@ fn enrich_worktree_groups(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::
 /// refresh) so Codex's token counts become dollars. Best-effort: a read/write or
 /// fetch failure degrades gracefully to the cached or embedded data.
 ///
-/// Claude files are scoped to the visible worktrees (`project_jsonl_files`);
-/// Codex and Pi sessions are not project-scoped, so all of them count toward the
-/// fleet total.
-fn compute_fleet_spending(
-    snapshot: &rimz::SidebarSnapshot,
-    runtime: &rimz::RuntimePaths,
-) -> rimz::agents::spending::Spending {
+/// All three providers are discovered fleet-wide (`all_jsonl_files`,
+/// `codex_session_files`, `pi_session_files`) so each counts on the same footing,
+/// and the dashboard panel and value corner read one provider's spend the same
+/// way regardless of which project it ran in.
+fn compute_fleet_spending(runtime: &rimz::RuntimePaths) -> rimz::agents::spending::Spending {
     use rimz::agents::pricing;
     use rimz::agents::spending::{
-        ProviderKind, Spending, codex_session_files, compute_spending, pi_session_files,
-        project_jsonl_files, read_spending_cache, write_spending_cache,
+        ProviderKind, Spending, all_jsonl_files, codex_session_files, compute_spending,
+        pi_session_files, read_spending_cache, write_spending_cache,
     };
-
-    // Collect all distinct worktree paths visible in the snapshot (Claude scope).
-    let mut all_paths: Vec<PathBuf> = cached_worktree_roots(runtime);
-    for group in &snapshot.worktree_groups {
-        for row in &group.rows {
-            if let Some(p) = &row.worktree_path {
-                let pb = PathBuf::from(p);
-                if !all_paths.contains(&pb) {
-                    all_paths.push(pb);
-                }
-            }
-        }
-    }
-    let path_refs: Vec<&std::path::Path> = all_paths.iter().map(PathBuf::as_path).collect();
 
     // Tag each file with its provider at discovery — the source knows the kind,
     // so pricing/bucketing never has to guess it from the path.
     let mut files: Vec<(ProviderKind, PathBuf)> = Vec::new();
     files.extend(
-        project_jsonl_files(&path_refs)
+        all_jsonl_files()
             .into_iter()
             .map(|file| (ProviderKind::Claude, file)),
     );

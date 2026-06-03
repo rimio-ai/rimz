@@ -281,18 +281,18 @@ Every bar across every block shares one start column and one end column, so the 
 
 ### The value corner
 
-The fleet's running pile of work seals the bottom of the dashboard, above the footer — a quiet two-row ledger you learn to glance at, never a cue that competes with the rows. This month's dim companion leads; the all-time **total** that climbs as the agents work sits beneath it.
+The fleet's running pile of work seals the bottom of the dashboard, above the footer — a quiet two-row ledger you learn to glance at, never a cue that competes with the rows. The trailing month's dim companion leads; the trailing-year **year** pile that climbs as the agents work sits beneath it.
 
 ```
                          month: 33.0M tok · $1,240.57
-                         total: 47.2M tok · $4,821.90
+                          year: 47.2M tok · $4,821.90
 ```
 
-- **The rows.** Each reads `label:  <tokens> tok · $<spend>`, pinned flush to the right edge — the token burn, then the spend in money-green. The two rows share one token column and one spend column, so the `month:` / `total:` labels stack and every `$` lands on the same right edge.
-- **`total`.** The all-time pile, the figure that only grows. When a turn lands it **rolls upward** — an eased count-up on the wall-clock animation frame, with a brief brighten as it settles. It never counts down, and it never rolls on first paint.
-- **`month`.** The month-to-date pile, dim so the total leads. Today's `$` lives in the cockpit, so the corner never repeats it — the windows escalate `today → month → total`.
+- **The rows.** Each reads `label:  <tokens> tok · $<spend>`, pinned flush to the right edge — the token burn, then the spend in money-green. The two rows share one token column and one spend column, so the `month:` / `year:` labels stack and every `$` lands on the same right edge.
+- **`year`.** The trailing-365-day pile. When a turn lands it **rolls upward** — an eased count-up on the wall-clock animation frame, with a brief brighten as it settles. It never rolls on first paint.
+- **`month`.** The trailing-30-day pile, dim so the year leads. Today's `$` (the trailing 24 hours) lives in the cockpit, so the corner never repeats it — the windows escalate `today → month → year`.
 
-Both figures are computed from the transcript JSONL — Codex's dollars priced from its token counts, every provider that logs usage counted. The corner is dropped until something has been recorded.
+Both figures are computed from the transcript JSONL — Codex's dollars priced from its token counts, every provider that logs usage counted, all of them fleet-wide. The corner is dropped until something has been recorded.
 
 ## Bottom chrome
 

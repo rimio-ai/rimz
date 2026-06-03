@@ -126,7 +126,8 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
     // Prefer this session's warm broker socket; `refresh_context` falls back to
     // the per-user daemon then a cold-spawn when it isn't up.
     let broker_socket = runtime.codex_app_server_socket_path();
-    let Some(context) = codex::refresh_context(Some(session_id), model, Some(&broker_socket)) else {
+    let Some(context) = codex::refresh_context(Some(session_id), model, Some(&broker_socket))
+    else {
         // App-server unreachable / nothing to record. Best-effort: succeed.
         return Ok(());
     };

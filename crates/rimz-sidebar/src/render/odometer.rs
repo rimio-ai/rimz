@@ -106,13 +106,13 @@ impl Roll {
     }
 }
 
-/// The value corner's animated figures: the all-time pile (the hero that
-/// climbs) and this month's companion, each split into spend and tokens. Today's
-/// figure is the cockpit's, never repeated here.
+/// The value corner's animated figures: the trailing-year pile (the hero that
+/// climbs) and the trailing-month companion, each split into spend and tokens.
+/// Today's figure is the cockpit's, never repeated here.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct TallyAnim {
-    pub(crate) all_time_usd: Roll,
-    pub(crate) all_time_tokens: Roll,
+    pub(crate) year_usd: Roll,
+    pub(crate) year_tokens: Roll,
     pub(crate) month_usd: Roll,
     pub(crate) month_tokens: Roll,
 }
@@ -122,9 +122,8 @@ impl TallyAnim {
     /// refresh that carries a tally; a refresh without one leaves the rolls
     /// untouched, so a transient missing snapshot never snaps the pile to zero.
     pub(crate) fn observe(&mut self, tally: &SpendTally, phase: u64) {
-        self.all_time_usd.observe(tally.all_time.usd, phase);
-        self.all_time_tokens
-            .observe(tally.all_time.tokens as f64, phase);
+        self.year_usd.observe(tally.year.usd, phase);
+        self.year_tokens.observe(tally.year.tokens as f64, phase);
         self.month_usd.observe(tally.month.usd, phase);
         self.month_tokens.observe(tally.month.tokens as f64, phase);
     }
@@ -133,8 +132,8 @@ impl TallyAnim {
     /// animation gate so a finished-turn climb plays even when no agent is
     /// running, then lets the loop fall back to the slow data tick once settled.
     pub(crate) fn any_rolling(&self, phase: u64) -> bool {
-        self.all_time_usd.rolling(phase)
-            || self.all_time_tokens.rolling(phase)
+        self.year_usd.rolling(phase)
+            || self.year_tokens.rolling(phase)
             || self.month_usd.rolling(phase)
             || self.month_tokens.rolling(phase)
     }

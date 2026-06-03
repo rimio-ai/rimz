@@ -1409,11 +1409,11 @@ const NOT_STARTED_GRACE: SignedDuration = SignedDuration::from_secs(120);
 const VALUE_FLASH: Color = Color::Indexed(150);
 
 /// The value corner: the fleet's quiet, climbing pile of spend and tokens,
-/// pinned to the bottom of the dashboard as a small two-row ledger. This month's
-/// dim companion leads, the all-time pile that only grows sits under it as the
-/// `total`, each row reading `label:  <tokens> tok · $<spend>` flush to the right
+/// pinned to the bottom of the dashboard as a small two-row ledger. The trailing
+/// month's dim companion leads, the trailing-year pile sits under it as the
+/// `year`, each row reading `label:  <tokens> tok · $<spend>` flush to the right
 /// edge. Today's pulse lives in the cockpit, so the corner never repeats it — it
-/// escalates `today → month → total`. The two rows share their token and spend
+/// escalates `today → month → year`. The two rows share their token and spend
 /// column widths, so the labels stack and the `$` figures land on one right edge.
 /// Empty (the corner is dropped) until something has been recorded.
 ///
@@ -1433,15 +1433,15 @@ pub(super) fn value_corner_lines(
     };
 
     // Both rows share one token column and one spend column, sized to the wider
-    // (all-time) settled figure so the labels stack and the `$` lands on one
+    // (trailing-year) settled figure so the labels stack and the `$` lands on one
     // right edge. Widths come from the settled targets, not the eased display, so
     // the columns hold steady at rest — a climbing roll may jitter a cell the way
     // every animated figure does.
-    let tok_w = tokens_short(tally.all_time.tokens)
+    let tok_w = tokens_short(tally.year.tokens)
         .chars()
         .count()
         .max(tokens_short(tally.month.tokens).chars().count());
-    let usd_w = dollars2(tally.all_time.usd)
+    let usd_w = dollars2(tally.year.usd)
         .chars()
         .count()
         .max(dollars2(tally.month.usd).chars().count());
@@ -1460,26 +1460,26 @@ pub(super) fn value_corner_lines(
         width,
     );
 
-    // The all-time total below — the figure that only grows. Its `$` rides the
+    // The trailing-year pile below — the climbing hero. Its `$` rides the
     // money-green and brightens for a beat as a fresh climb lands.
-    let usd_style = if anim.all_time_usd.flashing(phase) {
+    let usd_style = if anim.year_usd.flashing(phase) {
         theme.style(VALUE_FLASH, Modifier::BOLD)
     } else {
         theme.style(Color::Green, Modifier::BOLD)
     };
-    let total = value_corner_row(
+    let year = value_corner_row(
         theme,
-        "total",
-        anim.all_time_tokens
-            .display(tally.all_time.tokens as f64, phase)
+        "year",
+        anim.year_tokens
+            .display(tally.year.tokens as f64, phase)
             .round() as u64,
-        anim.all_time_usd.display(tally.all_time.usd, phase),
+        anim.year_usd.display(tally.year.usd, phase),
         usd_style,
         (tok_w, usd_w),
         width,
     );
 
-    vec![month, total]
+    vec![month, year]
 }
 
 /// One value-corner row, pinned flush to the right edge: a faint `{label}:` text

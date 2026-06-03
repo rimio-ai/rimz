@@ -21,7 +21,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::agents::spending::{read_provider_spending_cache, Spending};
+use crate::agents::spending::{Spending, read_provider_spending_cache};
 use crate::agents::{AgentRateLimits, RateLimitWindow};
 use crate::feed::PaneRef;
 use crate::ids::PaneId;
@@ -746,8 +746,7 @@ pub fn fold_machine_config_cached(
     let accounts = read_accounts_cache(&runtime.root.join("accounts.json")).accounts;
     // Consumers read the producer's published spending cache rather than
     // re-walking the JSONL transcript history themselves.
-    let spending =
-        read_provider_spending_cache(&runtime.root.join("provider-spending.json"));
+    let spending = read_provider_spending_cache(&runtime.root.join("provider-spending.json"));
     let mut snapshot = fold_machine_config_with(
         snapshot,
         crate::config::MachineConfig::load().unwrap_or_default(),

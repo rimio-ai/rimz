@@ -64,7 +64,7 @@ It is **producer-only**: it needs per-machine config and the out-of-band probe t
 
 Per panel:
 
-- **Aggregate stats** — the per-provider `spending` (today / week / month / all-time, summed across the kind's transcript history by `compute_spending`; zero for a session-less kind); `plan` and `version` taken from the freshest `context.observed_at`.
+- **Aggregate stats** — the per-provider `spending` (trailing 24h / 7d / 30d / 365d, summed fleet-wide across the kind's transcript history by `compute_spending`); `plan` and `version` taken from the freshest `context.observed_at`. A kind with no live session still earns a panel when it has recorded spend or a probed login.
 - **Account** — `metered` and the `plan` label come from the kind's account (a live session's, or the probed idle one); a `plan` tier formats into a brand label (`max` → `Claude Max`, `pro` → `ChatGPT Pro`), and a missing account infers `metered` from whether windows were reported.
 - **Brand style** — emblem art, color, and product name resolve from `[sidebar.providers.<kind>]` over the built-in defaults (claude clay, codex blue, pi forest green); an unknown kind gets neutral grey and no emblem. See [configuration.md](../reference/configuration.md#provider-dashboard).
 - **Balance windows** — the per-duration set chosen by `stable_windows` (below).

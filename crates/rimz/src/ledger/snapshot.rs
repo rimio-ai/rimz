@@ -765,14 +765,16 @@ impl SidebarSnapshot {
     }
 
     /// Fold the agent rollup into per-provider dashboard blocks — one per agent
-    /// kind, plus one for any logged-in provider with no active session this run
-    /// (an account-only block, so the dashboard shows your accounts and budgets
-    /// between turns). Sums each kind's spend, tokens, and edited lines; takes the
-    /// plan, version, and rate-limit windows from the freshest session (account
-    /// state is shared, so the latest reading is truest). `probed_accounts`
-    /// carries out-of-band login facts the context cannot (Claude's `auth status`,
-    /// Codex's `auth.json`), preferred only when the freshest context has none —
-    /// and the kind whose only signal is such a login still earns a block;
+    /// kind, plus one for any provider with no active session this run that is
+    /// either logged in or has recorded spend (an account-only block, so the
+    /// dashboard shows your accounts, budgets, and fleet history between turns).
+    /// Sums each kind's spend, tokens, and edited lines; takes the plan, version,
+    /// and rate-limit windows from the freshest session (account state is shared,
+    /// so the latest reading is truest). `probed_accounts` carries out-of-band
+    /// login facts the context cannot (Claude's `auth status`, Codex's
+    /// `auth.json`), preferred only when the freshest context has none — and a kind
+    /// whose only signal is such a login, or whose only signal is recorded spend in
+    /// `provider_spending`, still earns a block;
     /// `remote_control` carries the per-kind `⇅ rc` flag. Styling (emblem, color,
     /// name) resolves from `self.sidebar.providers` over the built-in defaults, so
     /// the renderer gets a ready-to-paint block. Capped to `max_provider_blocks`,
@@ -800,6 +802,13 @@ impl SidebarSnapshot {
                 kinds.push(kind.clone());
             }
         }
+        // A provider with recorded spend earns a block too, so its fleet history
+        // shows even with no live session and no probed login this run.
+        for (kind, tally) in provider_spending {
+            if !tally.is_zero() && !kinds.iter().any(|known| known == kind) {
+                kinds.push(kind.clone());
+            }
+        }
 
         let mut panels: Vec<SidebarProviderPanel> = Vec::new();
         for kind in kinds {
@@ -808,9 +817,13 @@ impl SidebarSnapshot {
                 .iter()
                 .filter(|agent| agent.parent_agent_id.is_none() && agent.kind == kind)
                 .collect();
-            // No sessions and no logged-in account means nothing to show; an idle
-            // but logged-in provider falls through to a minimal account-only block.
-            if sessions.is_empty() && !probed_accounts.contains_key(&kind) {
+            // Nothing to show without a session, a logged-in account, or recorded
+            // spend; an idle provider with any of the three falls through to a
+            // minimal block.
+            let has_spend = provider_spending
+                .get(&kind)
+                .is_some_and(|tally| !tally.is_zero());
+            if sessions.is_empty() && !probed_accounts.contains_key(&kind) && !has_spend {
                 continue;
             }
 
@@ -3159,6 +3172,41 @@ mod tests {
             .find(|panel| panel.kind == "claude")
             .expect("claude panel present");
         assert_eq!(claude_panel.spending.as_ref().unwrap().today.usd, 1.0);
+    }
+
+    #[test]
+    fn provider_with_recorded_spend_earns_a_panel_without_a_session() {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        // No live agents and no probed accounts — only recorded fleet spend for
+        // Claude. Its history alone must still surface a panel, so the dashboard
+        // never reads zero for a provider you spent on earlier.
+        let snapshot = SidebarSnapshot::build_with_agents(workspace, Vec::new(), Vec::new());
+
+        let mut by_provider: BTreeMap<String, SpendTally> = BTreeMap::new();
+        by_provider.insert(
+            "claude".to_owned(),
+            SpendTally {
+                today: SpendWindow {
+                    usd: 2.0,
+                    tokens: 100,
+                },
+                year: SpendWindow {
+                    usd: 9.0,
+                    tokens: 900,
+                },
+                ..Default::default()
+            },
+        );
+
+        let snapshot =
+            snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &by_provider);
+
+        let claude = snapshot
+            .providers
+            .iter()
+            .find(|panel| panel.kind == "claude")
+            .expect("claude panel from recorded spend alone");
+        assert_eq!(claude.spending.as_ref().unwrap().year.usd, 9.0);
     }
 
     #[test]

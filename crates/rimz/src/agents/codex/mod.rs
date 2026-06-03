@@ -38,11 +38,11 @@ use self::payloads::{
     parse_post_tool_use, parse_session_start, parse_stop, parse_subagent_start,
     parse_subagent_stop, parse_user_prompt_submit,
 };
-use super::context::{AgentCost, AgentContext};
-use super::pricing::PriceBook;
+use super::context::{AgentContext, AgentCost};
 use super::hook_types::SessionSource;
 use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
+use super::pricing::PriceBook;
 use super::{
     AgentErr, AgentIntegration, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, Result, SubagentIdentity, agent_config_path,
@@ -380,9 +380,10 @@ pub fn refresh_context(
     if let Some(sid) = session_id {
         if let Some(path) = find_session_transcript(sid) {
             let usage = usage_from_transcript(&path);
-            if let (Some(total_input), Some(total_output)) =
-                (usage.cumulative_input_tokens, usage.cumulative_output_tokens)
-            {
+            if let (Some(total_input), Some(total_output)) = (
+                usage.cumulative_input_tokens,
+                usage.cumulative_output_tokens,
+            ) {
                 let model_id = context
                     .model_id
                     .as_deref()

@@ -11,9 +11,10 @@
 //! - **Codex** logs only token counts, so its events are multiplied through a
 //!   [`PriceBook`](super::pricing) to a USD cost before bucketing.
 //!
-//! [`compute_spending`] returns a [`Spending`]: one fleet-wide today / week /
-//! month / all-time [`SpendTally`] plus a per-provider breakdown, so the value
-//! corner and cockpit read the fleet pile and each dashboard panel reads its own.
+//! [`compute_spending`] returns a [`Spending`]: one fleet-wide trailing
+//! 24h / 7d / 30d / 365d [`SpendTally`] plus a per-provider breakdown, so the
+//! value corner and cockpit read the fleet pile and each dashboard panel reads
+//! its own.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -43,25 +44,31 @@ impl SpendWindow {
     }
 }
 
-/// Today / rolling-7-day / calendar-month / all-time spend and token tally for a
-/// set of sessions. `all_time` is the unfiltered sum — the figure that only ever
-/// grows.
+/// Rolling spend and token tally over four trailing windows: the last 24 hours,
+/// 7 days, 30 days, and 365 days. The windows nest — `year` (365 days) is the
+/// widest and subsumes the rest — so a recent entry lands in all four. Spend
+/// older than a year falls out of every window.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SpendTally {
+    /// Trailing 24 hours.
     pub today: SpendWindow,
-    /// Rolling 7-day window: today plus the 6 prior UTC days.
+    /// Trailing 7 days.
     pub week: SpendWindow,
-    /// Calendar month: the current UTC `YYYY-MM`.
+    /// Trailing 30 days.
     pub month: SpendWindow,
-    /// Every entry regardless of date — the all-time pile.
-    pub all_time: SpendWindow,
+    /// Trailing 365 days — the widest window, so it subsumes the other three.
+    /// `#[serde(default)]` keeps an older `provider-spending.json` (which carried
+    /// an `all_time` field and no `year`) readable: the stale field is ignored and
+    /// `year` defaults to zero until the producer rewrites the cache next tick.
+    #[serde(default)]
+    pub year: SpendWindow,
 }
 
 impl SpendTally {
-    /// True when nothing has ever been recorded. `all_time` subsumes every
-    /// window, so a zero all-time means every window is zero.
+    /// True when nothing has been recorded in the trailing year. `year` is the
+    /// widest window, so a zero year means every window is zero.
     pub fn is_zero(&self) -> bool {
-        self.all_time.usd == 0.0 && self.all_time.tokens == 0
+        self.year.usd == 0.0 && self.year.tokens == 0
     }
 }
 
@@ -76,7 +83,7 @@ pub struct Spending {
 }
 
 /// Which provider a discovered transcript file belongs to. The caller knows this
-/// from the discovery source (`project_jsonl_files`, `codex_session_files`,
+/// from the discovery source (`all_jsonl_files`, `codex_session_files`,
 /// `pi_session_files`), so it is passed in rather than guessed from the path —
 /// a non-default `CODEX_HOME` / `CLAUDE_CONFIG_DIR` would defeat a path guess.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,11 +106,12 @@ impl ProviderKind {
 
 /// Bumped whenever the cached parse shape changes, so an upgrade re-reads every
 /// file once. A finalized session's stable mtime otherwise pins its entries in
-/// the cache forever — a field added to [`CachedEntry`] (such as `tokens`) would
-/// stay at its `serde` default for that session and never heal. A cache stamped
-/// with an older version is discarded on read, forcing a clean re-parse under the
-/// current shape. `0` is the implicit pre-versioning shape (no `version` field).
-const SPENDING_CACHE_VERSION: u32 = 2;
+/// the cache forever — a field added to or reshaped in [`CachedEntry`] (such as
+/// `tokens`, or the `date` → `ts_secs` switch in v3) would otherwise stay at its
+/// `serde` default for that session and never heal. A cache stamped with an older
+/// version is discarded on read, forcing a clean re-parse under the current
+/// shape. `0` is the implicit pre-versioning shape (no `version` field).
+const SPENDING_CACHE_VERSION: u32 = 3;
 
 /// On-disk cache persisted at `{runtime_root}/spending.json`.
 ///
@@ -136,7 +144,10 @@ pub struct FileCacheEntry {
 /// logic in `compute_spending`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CachedEntry {
-    pub date: String,
+    /// Unix timestamp (seconds) the entry was recorded, parsed from the JSONL
+    /// `timestamp` via [`iso_to_unix_secs`]. Drives the trailing-window bucketing
+    /// in [`accum`].
+    pub ts_secs: u64,
     pub cost_usd: f64,
     /// Input + output tokens for this entry. `#[serde(default)]` keeps an older
     /// cache parseable; `SPENDING_CACHE_VERSION` is what actually heals it — a
@@ -157,13 +168,13 @@ pub struct CachedEntry {
 
 // ── Re-exports from transcript parser modules ─────────────────────────────────
 
-pub use claude::{claude_config_dirs, encode_project_dir, project_jsonl_files};
+pub use claude::all_jsonl_files;
 pub use codex::codex_session_files;
 pub use pi::pi_session_files;
 
 // ── Spending computation ──────────────────────────────────────────────────────
 
-/// Compute the fleet and per-provider today / week / month / all-time spend and
+/// Compute the fleet and per-provider trailing 24h / 7d / 30d / 365d spend and
 /// token tally for the given JSONL files, pricing token-only providers (Codex)
 /// through `prices`.
 ///
@@ -187,9 +198,6 @@ pub fn compute_spending(
     prices: &PriceBook,
 ) -> Spending {
     let now_secs = unix_secs_now();
-    let today = utc_date(now_secs);
-    let week_start = utc_date(now_secs.saturating_sub(6 * 86_400));
-    let month_prefix = today[..7].to_string(); // "YYYY-MM"
 
     // First pass: refresh stale cache entries.
     for (kind, file) in files {
@@ -248,19 +256,11 @@ pub fn compute_spending(
 
     let mut spending = Spending::default();
     let mut add = |provider: &str, entry: &CachedEntry| {
-        accum(
-            &mut spending.total,
-            entry,
-            &today,
-            &week_start,
-            &month_prefix,
-        );
+        accum(&mut spending.total, entry, now_secs);
         accum(
             spending.by_provider.entry(provider.to_owned()).or_default(),
             entry,
-            &today,
-            &week_start,
-            &month_prefix,
+            now_secs,
         );
     };
 
@@ -281,23 +281,24 @@ pub fn compute_spending(
     spending
 }
 
-fn accum(
-    tally: &mut SpendTally,
-    entry: &CachedEntry,
-    today: &str,
-    week_start: &str,
-    month_prefix: &str,
-) {
+fn accum(tally: &mut SpendTally, entry: &CachedEntry, now_secs: u64) {
     let (usd, tokens) = (entry.cost_usd, entry.tokens);
-    tally.all_time.add(usd, tokens);
-    if entry.date == today {
-        tally.today.add(usd, tokens);
+    // Trailing-window bucketing: an entry counts toward each window whose span it
+    // still falls within. The windows nest (24h ⊂ 7d ⊂ 30d ⊂ 365d), so a recent
+    // entry lands in all four; one older than a year lands in none.
+    let age = now_secs.saturating_sub(entry.ts_secs);
+    if age >= 365 * 86_400 {
+        return;
     }
-    if entry.date.as_str() >= week_start {
+    tally.year.add(usd, tokens);
+    if age < 30 * 86_400 {
+        tally.month.add(usd, tokens);
+    }
+    if age < 7 * 86_400 {
         tally.week.add(usd, tokens);
     }
-    if entry.date.starts_with(month_prefix) {
-        tally.month.add(usd, tokens);
+    if age < 86_400 {
+        tally.today.add(usd, tokens);
     }
 }
 
@@ -345,12 +346,11 @@ fn codex_entries(path: &Path, prices: &PriceBook) -> Vec<CachedEntry> {
         if cost <= 0.0 {
             continue;
         }
-        let date = match event.timestamp.get(..10) {
-            Some(d) if d.as_bytes().get(4) == Some(&b'-') => d.to_owned(),
-            _ => continue,
+        let Some(ts_secs) = iso_to_unix_secs(&event.timestamp) else {
+            continue;
         };
         out.push(CachedEntry {
-            date,
+            ts_secs,
             cost_usd: cost,
             tokens: event.input_tokens + event.output_tokens,
             message_id: None,
@@ -427,6 +427,38 @@ pub fn utc_date(secs: u64) -> String {
     civil_date_from_epoch_days((secs / 86_400) as i64)
 }
 
+/// Parse an ISO-8601 UTC timestamp (`YYYY-MM-DDTHH:MM:SS…`, e.g. a JSONL
+/// `timestamp`) to Unix seconds. Reads fixed offsets; the time-of-day is optional
+/// (a bare `YYYY-MM-DD` parses to midnight). Returns `None` when the date prefix
+/// is malformed — the same guard the parsers applied to the old date slice.
+pub(crate) fn iso_to_unix_secs(ts: &str) -> Option<u64> {
+    let bytes = ts.as_bytes();
+    if bytes.get(4) != Some(&b'-') || bytes.get(7) != Some(&b'-') {
+        return None;
+    }
+    let year: i64 = ts.get(0..4)?.parse().ok()?;
+    let month: i64 = ts.get(5..7)?.parse().ok()?;
+    let day: i64 = ts.get(8..10)?.parse().ok()?;
+    let hour: i64 = ts.get(11..13).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let min: i64 = ts.get(14..16).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let sec: i64 = ts.get(17..19).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let secs = days_from_civil(year, month, day) * 86_400 + hour * 3_600 + min * 60 + sec;
+    u64::try_from(secs).ok()
+}
+
+/// Days since the Unix epoch (1970-01-01 = 0) for a civil date — the inverse of
+/// [`civil_date_from_epoch_days`]. Howard Hinnant's algorithm:
+/// <http://howardhinnant.github.io/date_algorithms.html>
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
 /// Convert days since the Unix epoch (1970-01-01 = 0) to `"YYYY-MM-DD"`.
 ///
 /// Uses Howard Hinnant's civil-from-days algorithm:
@@ -463,10 +495,37 @@ mod tests {
         compute_spending(&tagged, cache, &PriceBook::default()).total
     }
 
-    // Full Claude-format line including "usage":{ to pass the fast pre-filter.
-    fn claude_line(date: &str, cost: f64, msg_id: &str, req_id: &str) -> String {
+    /// ISO-8601 UTC timestamp for a Unix-seconds instant — round-trips through
+    /// [`iso_to_unix_secs`] back to that same whole second.
+    fn iso_at(secs: u64) -> String {
+        let date = utc_date(secs);
+        let tod = secs % 86_400;
         format!(
-            r#"{{"timestamp":"{date}T10:00:00.000Z","costUSD":{cost},"requestId":"{req_id}","message":{{"id":"{msg_id}","usage":{{"input_tokens":10,"output_tokens":5}}}}}}"#
+            "{date}T{:02}:{:02}:{:02}.000Z",
+            tod / 3_600,
+            (tod % 3_600) / 60,
+            tod % 60
+        )
+    }
+
+    // Full Claude-format line including "usage":{ to pass the fast pre-filter.
+    fn claude_line_ts(ts: &str, cost: f64, msg_id: &str, req_id: &str) -> String {
+        format!(
+            r#"{{"timestamp":"{ts}","costUSD":{cost},"requestId":"{req_id}","message":{{"id":"{msg_id}","usage":{{"input_tokens":10,"output_tokens":5}}}}}}"#
+        )
+    }
+
+    fn claude_line(date: &str, cost: f64, msg_id: &str, req_id: &str) -> String {
+        claude_line_ts(&format!("{date}T10:00:00.000Z"), cost, msg_id, req_id)
+    }
+
+    /// A Claude line stamped `secs_ago` before now — for trailing-window tests.
+    fn claude_line_ago(secs_ago: u64, cost: f64, msg_id: &str, req_id: &str) -> String {
+        claude_line_ts(
+            &iso_at(unix_secs_now().saturating_sub(secs_ago)),
+            cost,
+            msg_id,
+            req_id,
         )
     }
 
@@ -493,6 +552,29 @@ mod tests {
         // 2025-06-01 00:00:00 UTC = 1748736000
         assert_eq!(utc_date(1_748_736_000), "2025-06-01");
         assert_eq!(utc_date(1_748_822_399), "2025-06-01");
+    }
+
+    #[test]
+    fn iso_to_unix_secs_parses_known_instants() {
+        assert_eq!(
+            iso_to_unix_secs("2000-01-01T00:00:00.000Z"),
+            Some(946_684_800)
+        );
+        // 2025-06-01T00:00:00Z = 1748736000; + 12h = +43200.
+        assert_eq!(
+            iso_to_unix_secs("2025-06-01T12:00:00Z"),
+            Some(1_748_779_200)
+        );
+        // A bare date parses to midnight UTC.
+        assert_eq!(iso_to_unix_secs("1970-01-02"), Some(86_400));
+        // Round-trips with the test formatter.
+        assert_eq!(
+            iso_to_unix_secs(&iso_at(1_700_000_123)),
+            Some(1_700_000_123)
+        );
+        // Malformed prefixes are rejected.
+        assert_eq!(iso_to_unix_secs("not-a-date"), None);
+        assert_eq!(iso_to_unix_secs(""), None);
     }
 
     #[test]
@@ -537,7 +619,7 @@ mod tests {
                 FileCacheEntry {
                     mtime_secs: 123,
                     entries: vec![CachedEntry {
-                        date: "2026-01-01".to_string(),
+                        ts_secs: 1_767_225_600,
                         cost_usd: 9.0,
                         tokens: 0,
                         message_id: Some("msg-old".to_string()),
@@ -568,7 +650,7 @@ mod tests {
             FileCacheEntry {
                 mtime_secs: 456,
                 entries: vec![CachedEntry {
-                    date: "2026-02-02".to_string(),
+                    ts_secs: 1_770_000_000,
                     cost_usd: 1.0,
                     tokens: 42,
                     message_id: None,
@@ -587,46 +669,56 @@ mod tests {
     }
 
     #[test]
-    fn today_week_month_bucketing() {
+    fn trailing_windows_bucket_by_age() {
         let dir = TempDir::new().unwrap();
-        let now_secs = unix_secs_now();
-        let today = utc_date(now_secs);
-        let yesterday = utc_date(now_secs - 86_400);
-        let old = utc_date(now_secs - 8 * 86_400); // 8 days ago — outside rolling week
+        const HOUR: u64 = 3_600;
+        const DAY: u64 = 86_400;
 
+        // One entry seated inside each successive window, plus one past the year.
         let file = write_jsonl(
             dir.path(),
             "chat.jsonl",
             &[
-                &claude_line(&today, 1.0, "msg-1", "req-1"),
-                &claude_line(&yesterday, 0.5, "msg-2", "req-2"),
-                &claude_line(&old, 0.25, "msg-3", "req-3"),
+                &claude_line_ago(2 * HOUR, 1.0, "msg-1", "req-1"), // within 24h
+                &claude_line_ago(3 * DAY, 0.5, "msg-2", "req-2"),  // within 7d, not 24h
+                &claude_line_ago(20 * DAY, 0.25, "msg-3", "req-3"), // within 30d, not 7d
+                &claude_line_ago(100 * DAY, 0.1, "msg-4", "req-4"), // within 365d, not 30d
+                &claude_line_ago(400 * DAY, 9.0, "msg-5", "req-5"), // older than a year — dropped
             ],
         );
 
         let mut cache = SpendingDiskCache::default();
         let totals = compute_total(&[file], &mut cache);
 
+        // The windows nest, so each wider one adds the next entry.
         assert!(
             (totals.today.usd - 1.0).abs() < 1e-9,
-            "today = {}",
+            "today (24h) = {}",
             totals.today.usd
         );
-        assert_eq!(totals.today.tokens, 15, "one entry today, 15 tok each");
-        // week = today + yesterday = 1.5 (old is 8 days ago, outside the 7-day window)
+        assert_eq!(totals.today.tokens, 15, "one entry inside 24h");
         assert!(
             (totals.week.usd - 1.5).abs() < 1e-9,
-            "week = {}",
+            "week (7d) = {}",
             totals.week.usd
         );
-        assert_eq!(totals.week.tokens, 30, "two entries in the rolling week");
-        // all-time sums every entry regardless of date — the figure that only grows.
+        assert_eq!(totals.week.tokens, 30);
         assert!(
-            (totals.all_time.usd - 1.75).abs() < 1e-9,
-            "all_time = {}",
-            totals.all_time.usd
+            (totals.month.usd - 1.75).abs() < 1e-9,
+            "month (30d) = {}",
+            totals.month.usd
         );
-        assert_eq!(totals.all_time.tokens, 45, "three entries, 15 tok each");
+        assert_eq!(totals.month.tokens, 45);
+        // year (365d) adds the 100-day entry; the 400-day entry falls out entirely.
+        assert!(
+            (totals.year.usd - 1.85).abs() < 1e-9,
+            "year (365d) = {}",
+            totals.year.usd
+        );
+        assert_eq!(
+            totals.year.tokens, 60,
+            "four entries inside the year; the 400-day one is dropped"
+        );
     }
 
     #[test]

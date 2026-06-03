@@ -68,14 +68,6 @@ struct ClaudeUsage {
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
 
-/// Encode a worktree absolute path to its Claude project directory name.
-///
-/// Claude names project dirs by replacing every `/` with `-`:
-/// `/home/user/my-project` → `-home-user-my-project`.
-pub fn encode_project_dir(path: &Path) -> String {
-    path.to_string_lossy().replace('/', "-")
-}
-
 /// Discover Claude config directories in priority order.
 ///
 /// 1. `CLAUDE_CONFIG_DIR` env (comma-separated; each entry must have `projects/`)
@@ -115,23 +107,16 @@ pub fn claude_config_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Collect Claude `*.jsonl` files scoped to the given worktree paths.
-///
-/// Files live at `~/.claude/projects/{encode_project_dir(path)}/` recursively,
-/// covering both modern `session_id/chat.jsonl` and subagent
-/// `session_id/subagents/worker.jsonl` layouts.
-pub fn project_jsonl_files(worktree_paths: &[&Path]) -> Vec<PathBuf> {
-    let config_dirs = claude_config_dirs();
+/// Every Claude `*.jsonl` across all project dirs — fleet-wide, the same footing
+/// as Codex and Pi (their session logs are not project-scoped either). Walks
+/// `~/.claude/projects/` recursively, covering both modern
+/// `session_id/chat.jsonl` and subagent `session_id/subagents/worker.jsonl`
+/// layouts.
+pub fn all_jsonl_files() -> Vec<PathBuf> {
     let mut files = Vec::new();
-
-    for &worktree_path in worktree_paths {
-        let encoded = encode_project_dir(worktree_path);
-        for config_dir in &config_dirs {
-            let project_dir = config_dir.join("projects").join(&encoded);
-            collect_jsonl(&project_dir, &mut files);
-        }
+    for config_dir in claude_config_dirs() {
+        collect_jsonl(&config_dir.join("projects"), &mut files);
     }
-
     files.sort();
     files.dedup();
     files
@@ -259,9 +244,8 @@ pub fn parse_claude_jsonl(path: &Path) -> Vec<CachedEntry> {
         if cost <= 0.0 {
             continue;
         }
-        let date = match ts.get(..10) {
-            Some(d) if d.as_bytes().get(4) == Some(&b'-') => d.to_string(),
-            _ => continue,
+        let Some(ts_secs) = crate::agents::spending::iso_to_unix_secs(ts) else {
+            continue;
         };
         let is_sidechain = entry.is_sidechain == Some(true);
         let usage = &entry.message.usage;
@@ -270,7 +254,7 @@ pub fn parse_claude_jsonl(path: &Path) -> Vec<CachedEntry> {
             + usage.cache_creation_input_tokens.unwrap_or(0)
             + usage.cache_read_input_tokens.unwrap_or(0);
         let cached = CachedEntry {
-            date,
+            ts_secs,
             cost_usd: cost,
             tokens,
             message_id: entry.message.id.clone(),
@@ -328,15 +312,6 @@ mod tests {
     }
 
     #[test]
-    fn encode_project_dir_replaces_slashes() {
-        assert_eq!(
-            encode_project_dir(Path::new("/home/user/my-project")),
-            "-home-user-my-project"
-        );
-        assert_eq!(encode_project_dir(Path::new("/a/b/c")), "-a-b-c");
-    }
-
-    #[test]
     fn skips_lines_without_usage_object() {
         let dir = TempDir::new().unwrap();
         let file = write_jsonl(
@@ -362,7 +337,10 @@ mod tests {
         );
         let entries = parse_claude_jsonl(&file);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].tokens, 25, "input 10 + output 5 + cache_creation 3 + cache_read 7");
+        assert_eq!(
+            entries[0].tokens, 25,
+            "input 10 + output 5 + cache_creation 3 + cache_read 7"
+        );
     }
 
     #[test]
@@ -377,7 +355,10 @@ mod tests {
         );
         let entries = parse_claude_jsonl(&file);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].tokens, 1150, "input 100 + output 50 + cache_creation 200 + cache_read 800");
+        assert_eq!(
+            entries[0].tokens, 1150,
+            "input 100 + output 50 + cache_creation 200 + cache_read 800"
+        );
     }
 
     #[test]

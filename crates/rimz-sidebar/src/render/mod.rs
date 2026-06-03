@@ -2343,15 +2343,15 @@ mod tests {
     }
 
     /// The value corner: the fleet's quiet, climbing pile pinned at the bottom of
-    /// the dashboard as a two-row ledger. This month's dim companion (`month:`)
-    /// leads, the all-time pile (`total:`) sits under it — each row reading
-    /// `label:  <tokens> tok · $<spend>` flush to the right edge, the labels
-    /// stacked and the `$` figures on one column. Today stays in the cockpit,
-    /// never repeated here. Rendering through a default `UiState`, the figures
-    /// snap to the snapshot's tally (the eased count-up only plays when the serve
-    /// loop folds a fresh tally).
+    /// the dashboard as a two-row ledger. The trailing month's dim companion
+    /// (`month:`) leads, the trailing-year pile (`year:`) sits under it — each row
+    /// reading `label:  <tokens> tok · $<spend>` flush to the right edge, the
+    /// labels stacked and the `$` figures on one column. Today stays in the
+    /// cockpit, never repeated here. Rendering through a default `UiState`, the
+    /// figures snap to the snapshot's tally (the eased count-up only plays when the
+    /// serve loop folds a fresh tally).
     #[test]
-    fn render_value_corner_pins_all_time_pile_under_the_dashboard() {
+    fn render_value_corner_pins_year_pile_under_the_dashboard() {
         let mut claude = agent(
             "claude-1",
             "claude",
@@ -2384,26 +2384,26 @@ mod tests {
                 usd: 1_240.57,
                 tokens: 33_000_000,
             },
-            all_time: rimz::SpendWindow {
+            year: rimz::SpendWindow {
                 usd: 4_821.90,
                 tokens: 47_200_000,
             },
         });
         let rendered = snapshot_to_screen(&snapshot, 54, 34);
 
-        // The `total:` row: the grouped all-time dollars and its `◇`-free token
+        // The `year:` row: the grouped trailing-year dollars and its `◇`-free token
         // burn, labeled on the left and pinned flush right.
         assert!(
-            rendered.contains("total:"),
-            "the all-time row's label:\n{rendered}"
+            rendered.contains("year:"),
+            "the trailing-year row's label:\n{rendered}"
         );
         assert!(
             rendered.contains("$4,821.90"),
-            "grouped all-time spend:\n{rendered}"
+            "grouped trailing-year spend:\n{rendered}"
         );
         assert!(
             rendered.contains("47.2M tok"),
-            "all-time token burn:\n{rendered}"
+            "trailing-year token burn:\n{rendered}"
         );
         // The `month:` row climbs a window the cockpit doesn't show.
         assert!(
