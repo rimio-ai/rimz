@@ -1814,13 +1814,34 @@ fn set_browse_override(ui: &mut UiState) {
 /// Pin the just-selected pane as an optimistic jump override: the highlight holds
 /// the jumped pane until the focus mirror confirms it, a genuine external move
 /// supersedes it, or the settle deadline reverts to the mirror.
+///
+/// The override carries a `lagging` trail — the pre-jump focus plus every pane an
+/// in-flight jump already aimed at. Replacing one in-flight jump with another
+/// folds the old target into the trail, so during a fast click-burst the mirror
+/// catching up to an intermediate self-jump reads as our own focus lagging, not
+/// an external move, and never bounces the highlight. Each click resets the
+/// settle deadline so the latest pick gets a full window to confirm.
 fn set_jump_override(ui: &mut UiState) {
     if let Some(pane) = ui.selected_pane.clone() {
+        let lagging = match ui.selection_override.take() {
+            Some(SelectionOverride {
+                pane: prev,
+                kind: OverrideKind::Jump { mut lagging, .. },
+            }) => {
+                if !lagging.contains(&prev) {
+                    lagging.push(prev);
+                }
+                lagging
+            }
+            // Fresh, or replacing a browse (which moved no focus): the only pane
+            // the mirror may legitimately lag through is the current focus.
+            _ => ui.focus_mirror.clone().into_iter().collect(),
+        };
         ui.selection_override = Some(SelectionOverride {
             pane,
             kind: OverrideKind::Jump {
                 settle_deadline: Instant::now() + SELECTION_SETTLE,
-                from: ui.focus_mirror.clone(),
+                lagging,
             },
         });
     }
@@ -1852,8 +1873,9 @@ fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
 /// 2. **Override resolution.** A `Browse` pick holds the pinned pane until the
 ///    client focus moves off the baseline it began from. A `Jump` pick optimistically
 ///    holds the jumped pane until the mirror confirms focus reached it, a genuine
-///    external move supersedes it (a pane that is neither the jumped pane nor the
-///    pre-jump `from`), or the settle deadline passes — then it follows the mirror.
+///    external move supersedes it (a pane that is neither the jumped pane nor in the
+///    jump's `lagging` trail — the pre-jump focus plus every intermediate self-jump),
+///    or the settle deadline passes — then it follows the mirror.
 /// 3. **Reanchor.** A `focus_mirror` whose pane has left the room is dropped, and
 ///    `anchor_selection` re-derives `selected_index` by identity.
 fn reconcile_selection(
@@ -1886,17 +1908,23 @@ fn reconcile_selection(
             }
             OverrideKind::Jump {
                 settle_deadline,
-                from,
+                lagging,
             } => {
                 if ui.focus_mirror.as_ref() == Some(&ovr.pane) {
                     // Confirmed: the mirror reached the jumped pane.
                     true
-                } else if from.is_some() && ui.focus_mirror.is_some() && ui.focus_mirror != *from {
-                    // Superseded by a genuine external move to a third pane. Gated
-                    // on a known `from`: with no pre-jump baseline we cannot tell a
-                    // genuine move from a lagging first sample of the pre-jump
-                    // focus, so we hold until confirm or the deadline instead of
-                    // risking a bounce.
+                } else if !lagging.is_empty()
+                    && ui
+                        .focus_mirror
+                        .as_ref()
+                        .is_some_and(|mirror| *mirror != ovr.pane && !lagging.contains(mirror))
+                {
+                    // Superseded by a genuine external move: the mirror landed on a
+                    // pane that is neither the jumped pane nor anything this burst
+                    // jumped through, so it is not our own in-flight focus lagging.
+                    // Gated on a non-empty trail — with no baseline we cannot tell a
+                    // genuine move from a lagging first sample of the pre-jump focus,
+                    // so we hold until confirm or the deadline instead of bouncing.
                     true
                 } else if now >= *settle_deadline {
                     // Failed jump: the deadline passed without confirmation — revert
@@ -1904,7 +1932,8 @@ fn reconcile_selection(
                     true
                 } else {
                     // Optimistic window still open: pin the jumped pane even though
-                    // the mirror still shows the pre-jump focus (no bounce-back).
+                    // the mirror still shows a pre-jump or intermediate self-jump
+                    // focus (no bounce-back through our own in-flight jumps).
                     ui.selected_pane = Some(ovr.pane.clone());
                     ui.selection_override = Some(ovr);
                     false
@@ -2790,13 +2819,14 @@ mod tests {
         );
     }
 
-    /// A jump override pinning `pane`, jumped from `from`, expiring at `deadline`.
-    fn jump(pane: &PaneId, from: Option<&PaneId>, deadline: Instant) -> SelectionOverride {
+    /// A jump override pinning `pane`, carrying the `lagging` trail of panes the
+    /// mirror may legitimately lag through, expiring at `deadline`.
+    fn jump(pane: &PaneId, lagging: &[PaneId], deadline: Instant) -> SelectionOverride {
         SelectionOverride {
             pane: pane.clone(),
             kind: OverrideKind::Jump {
                 settle_deadline: deadline,
-                from: from.cloned(),
+                lagging: lagging.to_vec(),
             },
         }
     }
@@ -2908,7 +2938,11 @@ mod tests {
             selected_index: 1,
             selected_pane: Some(jumped.clone()),
             focus_mirror: Some(from.clone()),
-            selection_override: Some(jump(&jumped, Some(&from), now + Duration::from_millis(500))),
+            selection_override: Some(jump(
+                &jumped,
+                std::slice::from_ref(&from),
+                now + Duration::from_millis(500),
+            )),
             ..Default::default()
         };
 
@@ -2940,7 +2974,11 @@ mod tests {
             selected_index: 1,
             selected_pane: Some(jumped.clone()),
             focus_mirror: Some(from.clone()),
-            selection_override: Some(jump(&jumped, Some(&from), now + Duration::from_millis(500))),
+            selection_override: Some(jump(
+                &jumped,
+                std::slice::from_ref(&from),
+                now + Duration::from_millis(500),
+            )),
             ..Default::default()
         };
 
@@ -2976,7 +3014,11 @@ mod tests {
             selected_index: 1,
             selected_pane: Some(jumped.clone()),
             focus_mirror: Some(from.clone()),
-            selection_override: Some(jump(&jumped, Some(&from), now + Duration::from_millis(500))),
+            selection_override: Some(jump(
+                &jumped,
+                std::slice::from_ref(&from),
+                now + Duration::from_millis(500),
+            )),
             ..Default::default()
         };
 
@@ -3013,7 +3055,7 @@ mod tests {
             focus_mirror: Some(real.clone()),
             selection_override: Some(jump(
                 &PaneId::from_parts(MuxName::Zellij, "terminal_2"),
-                Some(&real),
+                std::slice::from_ref(&real),
                 started + Duration::from_millis(500),
             )),
             ..Default::default()
@@ -3148,7 +3190,11 @@ mod tests {
             selected_index: 2,
             selected_pane: Some(latest.clone()),
             focus_mirror: Some(from.clone()),
-            selection_override: Some(jump(&latest, Some(&from), now + Duration::from_millis(500))),
+            selection_override: Some(jump(
+                &latest,
+                std::slice::from_ref(&from),
+                now + Duration::from_millis(500),
+            )),
             ..Default::default()
         };
 
@@ -3156,6 +3202,239 @@ mod tests {
 
         assert_eq!(ui.selected_index, 2);
         assert_eq!(ui.selected_pane, Some(latest), "the latest jump holds");
+    }
+
+    #[test]
+    fn fast_burst_intermediate_self_focus_does_not_flash() {
+        // The reported flash. A burst jumps A→B→C faster than the mirror catches
+        // up, so C's override carries the trail [A, B]. A snapshot then reports B —
+        // the first self-jump landing, our own in-flight focus catching up, not an
+        // external move. The override must HOLD C and never bounce to B.
+        let ws = workspace();
+        let a = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let b = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let c = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+                pane("terminal_3", "tab_0", false),
+            ],
+        );
+        let now = Instant::now();
+        let mut ui = UiState {
+            selected_index: 2,
+            selected_pane: Some(c.clone()),
+            focus_mirror: Some(a.clone()),
+            selection_override: Some(jump(&c, &[a, b.clone()], now + Duration::from_millis(500))),
+            ..Default::default()
+        };
+
+        reconcile_selection(&mut ui, &snapshot, Some(b), now);
+
+        assert_eq!(ui.selected_pane, Some(c), "held the last-clicked pane");
+        assert!(
+            ui.selection_override.is_some(),
+            "the optimistic override is still in flight",
+        );
+    }
+
+    #[test]
+    fn fast_burst_then_confirm_settles_on_last_click() {
+        // After the intermediate self-jump is held, the mirror reaches C (the last
+        // click): the override confirms, clears, and the highlight follows C.
+        let ws = workspace();
+        let a = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let b = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let c = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+                pane("terminal_3", "tab_0", false),
+            ],
+        );
+        let now = Instant::now();
+        let mut ui = UiState {
+            selected_index: 2,
+            selected_pane: Some(c.clone()),
+            focus_mirror: Some(a.clone()),
+            selection_override: Some(jump(&c, &[a, b], now + Duration::from_millis(500))),
+            ..Default::default()
+        };
+
+        reconcile_selection(&mut ui, &snapshot, Some(c.clone()), now);
+
+        assert_eq!(ui.selected_pane, Some(c.clone()));
+        assert_eq!(ui.focus_mirror, Some(c));
+        assert_eq!(ui.selection_override, None, "the confirmed jump cleared");
+    }
+
+    #[test]
+    fn fast_burst_external_move_during_window_still_supersedes() {
+        // The trail must not over-suppress: a mirror report of D — a pane outside
+        // the trail and not the jumped pane — is a genuine external move (a terminal
+        // keybind) and supersedes the override at once, even mid-burst.
+        let ws = workspace();
+        let a = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let b = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let c = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+        let d = PaneId::from_parts(MuxName::Zellij, "terminal_4");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+                pane("terminal_3", "tab_0", false),
+                pane("terminal_4", "tab_0", false),
+            ],
+        );
+        let now = Instant::now();
+        let mut ui = UiState {
+            selected_index: 2,
+            selected_pane: Some(c.clone()),
+            focus_mirror: Some(a.clone()),
+            selection_override: Some(jump(&c, &[a, b], now + Duration::from_millis(500))),
+            ..Default::default()
+        };
+
+        reconcile_selection(&mut ui, &snapshot, Some(d.clone()), now);
+
+        assert_eq!(ui.selected_pane, Some(d.clone()));
+        assert_eq!(ui.focus_mirror, Some(d));
+        assert_eq!(
+            ui.selection_override, None,
+            "a genuine external move cleared the override",
+        );
+    }
+
+    #[test]
+    fn set_jump_override_inherits_trail_from_prior_jump() {
+        // A second click while a jump is still in flight folds the prior target into
+        // the trail (so a later self-jump report won't bounce) and resets the settle
+        // deadline so the latest pick gets a full optimistic window.
+        let a = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let b = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let c = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+        let mut ui = UiState {
+            selected_pane: Some(c.clone()),
+            focus_mirror: Some(a.clone()),
+            selection_override: Some(jump(&b, std::slice::from_ref(&a), Instant::now())),
+            ..Default::default()
+        };
+
+        let before = Instant::now();
+        set_jump_override(&mut ui);
+
+        match ui.selection_override {
+            Some(SelectionOverride {
+                pane,
+                kind:
+                    OverrideKind::Jump {
+                        settle_deadline,
+                        lagging,
+                    },
+            }) => {
+                assert_eq!(pane, c, "pins the latest click");
+                assert_eq!(lagging, vec![a, b], "trail folds in the prior target");
+                assert!(
+                    settle_deadline >= before + SELECTION_SETTLE,
+                    "the deadline reset to a full window",
+                );
+            }
+            other => panic!("expected a jump override, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_jump_override_fresh_seeds_trail_from_mirror() {
+        // A first jump from a settled state seeds the trail with the pre-jump focus.
+        let a = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let b = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let mut ui = UiState {
+            selected_pane: Some(b.clone()),
+            focus_mirror: Some(a.clone()),
+            ..Default::default()
+        };
+
+        set_jump_override(&mut ui);
+
+        match ui.selection_override {
+            Some(SelectionOverride {
+                pane,
+                kind: OverrideKind::Jump { lagging, .. },
+            }) => {
+                assert_eq!(pane, b);
+                assert_eq!(lagging, vec![a], "seeded from the pre-jump focus");
+            }
+            other => panic!("expected a jump override, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_jump_override_replacing_browse_seeds_from_mirror() {
+        // A browse moved no focus, so a jump replacing it inherits no trail — it
+        // seeds from the current mirror, never the browse's pinned pane.
+        let a = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let b = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let c = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+        let mut ui = UiState {
+            selected_pane: Some(c.clone()),
+            focus_mirror: Some(a.clone()),
+            selection_override: Some(browse(&b, Some(&a))),
+            ..Default::default()
+        };
+
+        set_jump_override(&mut ui);
+
+        match ui.selection_override {
+            Some(SelectionOverride {
+                pane,
+                kind: OverrideKind::Jump { lagging, .. },
+            }) => {
+                assert_eq!(pane, c);
+                assert_eq!(
+                    lagging,
+                    vec![a],
+                    "seeded from the mirror, not the browse pane"
+                );
+            }
+            other => panic!("expected a jump override, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_jump_override_trail_dedups_on_alternation() {
+        // Alternating clicks A→B→A→B must not accumulate duplicate trail entries.
+        let a = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let b = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let mut ui = UiState {
+            focus_mirror: Some(a.clone()),
+            ..Default::default()
+        };
+
+        // Click B (fresh): pane=B, trail=[A].
+        ui.selected_pane = Some(b.clone());
+        set_jump_override(&mut ui);
+        // Click A: pane=A, trail=[A] ∪ {B} = [A, B].
+        ui.selected_pane = Some(a.clone());
+        set_jump_override(&mut ui);
+        // Click B: pane=B, trail=[A, B] ∪ {A}; A already present, stays [A, B].
+        ui.selected_pane = Some(b.clone());
+        set_jump_override(&mut ui);
+
+        match ui.selection_override {
+            Some(SelectionOverride {
+                pane,
+                kind: OverrideKind::Jump { lagging, .. },
+            }) => {
+                assert_eq!(pane, b);
+                assert_eq!(lagging, vec![a, b], "no duplicate trail entries");
+            }
+            other => panic!("expected a jump override, got {other:?}"),
+        }
     }
 
     #[test]

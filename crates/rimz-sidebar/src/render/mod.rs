@@ -97,12 +97,14 @@ pub(crate) enum OverrideKind {
     /// Click / `↵` / digit / `␣`: optimistically pins the jumped `pane`. Resolves
     /// (clears, reverting to the mirror) when the mirror confirms focus reached
     /// `pane`, when a genuine external move lands on a pane that is neither `pane`
-    /// nor `from`, or when `now >= settle_deadline` (a jump that never landed).
-    /// `from` is the pre-jump focus, so a lagging re-report of it holds the
-    /// optimistic pick instead of bouncing the highlight back.
+    /// nor in `lagging`, or when `now >= settle_deadline` (a jump that never
+    /// landed). `lagging` is the pre-jump focus plus every pane this click-burst
+    /// already jumped to: a mirror value in this set is our own in-flight focus
+    /// catching up — never an external move — so a fast burst never bounces the
+    /// highlight through an intermediate self-jump.
     Jump {
         settle_deadline: Instant,
-        from: Option<PaneId>,
+        lagging: Vec<PaneId>,
     },
 }
 
