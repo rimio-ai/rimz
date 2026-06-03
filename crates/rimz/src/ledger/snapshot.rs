@@ -4009,10 +4009,8 @@ mod tests {
             "a task-less SubagentStop must not wipe the carried-forward type",
         );
         // The projected sidebar row reads the type, never the hash placeholder.
-        assert_eq!(
-            sub_agent_from_state(child, Timestamp::now()).name,
-            "Explore"
-        );
+        let now = Timestamp::from_second(1_700_000_100).unwrap();
+        assert_eq!(sub_agent_from_state(child, now).name, "Explore");
     }
 
     #[test]
