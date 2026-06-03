@@ -256,7 +256,7 @@ Claude `exec`s the configured `statusLine` command on every render and pipes thi
 | `context_window.used_percentage`, `remaining_percentage` | pre-calculated context fill (from input-side tokens only) |
 | `context_window.current_usage.{input_tokens,output_tokens,cache_creation_input_tokens,cache_read_input_tokens}` | per-component token counts from the last API call |
 | `exceeds_200k_tokens` | whether the most recent response's combined tokens exceed 200k (fixed threshold) |
-| `effort.level` | reasoning effort (`low`\|`medium`\|`high`\|`xhigh`\|`max`); absent when unsupported |
+| `effort.level` | reasoning effort (`low`\|`medium`\|`high`\|`xhigh`\|`max`); reflects live value including mid-session `/effort` changes; Ultracode is not a distinct level and reports as `xhigh`; absent when unsupported |
 | `thinking.enabled` | whether extended thinking is on |
 | `rate_limits.{five_hour,seven_day}.{used_percentage,resets_at}` | 5h/7d window fill (0–100) and reset (Unix epoch seconds) |
 | `session_id`, `session_name` | session id; custom name from `--name` / `/rename` (absent if unset) |
@@ -270,7 +270,7 @@ Claude `exec`s the configured `statusLine` command on every render and pipes thi
 
 **Absence vs null.** `session_name`, `workspace.git_worktree`, `workspace.repo`, `effort`, `vim`, `agent`, `pr`, `worktree` are *absent* unless their feature is active; `rate_limits` appears only for Claude.ai Pro/Max after the first API response, and each window may be absent independently. `context_window.current_usage` is `null` before the first API call and again after `/compact` until the next call; `used_percentage` / `remaining_percentage` may be `null` early in a session. Rimz's parser treats every field as optional and tolerates unknown keys.
 
-**`subagentStatusLine`.** A separate command renders each subagent row in the agent panel. It receives the [common hook fields](#common-input) plus `columns` (usable row width) and a `tasks` array, each task carrying `id`, `name`, `type`, `status`, `description`, `label`, `startTime`, `tokenCount`, `tokenSamples`, and `cwd`. The command writes one `{"id": "<task id>", "content": "<row body>"}` line per row to override.
+**`subagentStatusLine`.** A separate command (`"subagentStatusLine": { "type": "command", "command": "…" }`) renders each subagent row in the agent panel, replacing the default `name · description · token count` body with whatever the script prints. The command runs once per refresh tick with **all visible subagent rows as a single JSON object on stdin**. The input includes the [common hook fields](#common-input) plus `columns` (usable row width) and a `tasks` array, each task carrying `id`, `name`, `type`, `status`, `description`, `label`, `startTime`, `tokenCount`, `tokenSamples`, and `cwd`. Write one JSON line to stdout per row to override: `{"id": "<task id>", "content": "<row body>"}`. The `content` string is rendered as-is, including ANSI escape codes and OSC 8 hyperlinks. Omit a task's `id` to keep its default rendering; emit an empty `content` to hide the row. The same trust and `disableAllHooks` gates that apply to `statusLine` apply here. Plugins can ship a default `subagentStatusLine` in their `settings.json`.
 
 ## Auth surface
 
