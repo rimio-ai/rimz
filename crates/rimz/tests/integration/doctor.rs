@@ -4,7 +4,8 @@
 //! in `docs/guide/product.md`.
 
 use rimz::agents::AgentLifecycleObservation;
-use rimz::feed::{AgentStatus, PermissionPosture};
+use rimz::agents::lifecycle::LifecycleSignal;
+use rimz::feed::PermissionPosture;
 use rimz::ids::{MuxName, ResolverId, SidebarInstanceId};
 use rimz::schema::event::EventEnvelope;
 use rimz::schema::heartbeat::{ResolverHeartbeat, SidebarHeartbeat};
@@ -15,13 +16,13 @@ fn inject_lifecycle(
     env: &Env,
     agent_kind: &str,
     agent_id: &str,
-    status: AgentStatus,
+    signal: LifecycleSignal,
     posture: PermissionPosture,
     branch: Option<&str>,
 ) {
     let obs = AgentLifecycleObservation {
         agent_id: Some(agent_id.to_owned()),
-        status,
+        signal,
         permission_posture: Some(posture),
         agent_pid: None,
         agent_process_start: None,
@@ -38,7 +39,6 @@ fn inject_lifecycle(
         todo_total: None,
         pane_id: None,
         parent_agent_id: None,
-        compacting: false,
     };
     let envelope = EventEnvelope::agent_lifecycle(
         env.workspace_id.clone(),
@@ -77,7 +77,10 @@ fn doctor_renders_mode_pill_per_agent() {
         &env,
         "claude",
         "claude-session-abc",
-        AgentStatus::Waiting,
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+        },
         PermissionPosture::Yolo,
         Some("main"),
     );
@@ -85,7 +88,7 @@ fn doctor_renders_mode_pill_per_agent() {
         &env,
         "codex",
         "codex-session-xyz",
-        AgentStatus::Running,
+        LifecycleSignal::TurnStarted,
         PermissionPosture::Auto,
         Some("feature-migration"),
     );
@@ -115,7 +118,7 @@ fn doctor_renders_mode_pill_per_agent() {
     // Per-agent row: agent id + worktree + status + posture pill.
     assert!(stdout.contains("claude-session-abc"));
     assert!(stdout.contains("main"));
-    assert!(stdout.contains("waiting"));
+    assert!(stdout.contains("failed"));
     assert!(stdout.contains("yolo"));
 
     assert!(stdout.contains("codex-session-xyz"));
@@ -131,7 +134,7 @@ fn doctor_keeps_latest_posture_per_agent_id() {
         &env,
         "claude",
         "claude-session-abc",
-        AgentStatus::Idle,
+        LifecycleSignal::Registered,
         PermissionPosture::Default,
         Some("main"),
     );
@@ -139,7 +142,7 @@ fn doctor_keeps_latest_posture_per_agent_id() {
         &env,
         "claude",
         "claude-session-abc",
-        AgentStatus::Waiting,
+        LifecycleSignal::TurnStarted,
         PermissionPosture::Yolo,
         Some("main"),
     );
@@ -153,7 +156,7 @@ fn doctor_keeps_latest_posture_per_agent_id() {
     let stdout = String::from_utf8(output.stdout).expect("utf8");
 
     assert!(
-        stdout.contains("waiting") && stdout.contains("yolo"),
+        stdout.contains("running") && stdout.contains("yolo"),
         "rollup should reflect the latest observation, got:\n{stdout}"
     );
     assert!(
@@ -255,10 +258,10 @@ fn doctor_reports_protocol_version_mismatches() {
     let stdout = String::from_utf8(output.stdout).expect("utf8");
 
     assert!(stdout.contains(
-        "protocols     : event rimz.event.v1; sidebar rimz.plugin.v3; resolver rimz.resolver.v1",
+        "protocols     : event rimz.event.v2; sidebar rimz.plugin.v3; resolver rimz.resolver.v1",
     ));
     assert!(stdout.contains(
-        "protocol warn : event log schema rimz.event.v0 seen 1 record (expected rimz.event.v1)",
+        "protocol warn : event log schema rimz.event.v0 seen 1 record (expected rimz.event.v2)",
     ));
     assert!(stdout.contains(
         "protocol warn : sidebar heartbeat sidebar.old.json uses rimz.plugin.v0 (expected rimz.plugin.v3)",

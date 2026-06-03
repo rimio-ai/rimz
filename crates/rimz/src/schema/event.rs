@@ -78,7 +78,7 @@ impl EventEnvelope {
         let params = json!({
             "event_name": event_name,
             "agent_id": observation.agent_id,
-            "status": observation.status,
+            "signal": observation.signal,
             "permission_posture": observation.permission_posture,
             "agent_pid": observation.agent_pid,
             "agent_process_start": observation.agent_process_start,
@@ -95,7 +95,6 @@ impl EventEnvelope {
             "todo_total": observation.todo_total,
             "pane_id": observation.pane_id.as_ref().map(|id| id.as_str()),
             "parent_agent_id": observation.parent_agent_id,
-            "compacting": observation.compacting,
         });
         Self::new(
             workspace_id,

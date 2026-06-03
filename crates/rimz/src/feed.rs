@@ -674,6 +674,14 @@ pub struct AgentState {
     /// head while it is recent (see [`COMPACTING_WINDOW_SECS`]). Display-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacting_since: Option<Timestamp>,
+    /// Whether the agent's last turn-end parked on still-in-flight background
+    /// work (Claude Code v2.1.145+) rather than truly ending. The agent stays
+    /// `Running`; the sidebar paints a distinct secondary marker so the row
+    /// reads as "working in the background" without a false `success` and
+    /// without overwriting the real activity description. Activity-bound: set by
+    /// a parked turn-end, cleared by the next signal. Display-only.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub parked_on_background: bool,
     pub last_seen: Timestamp,
     pub last_activity: Timestamp,
 }

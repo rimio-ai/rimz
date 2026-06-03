@@ -610,7 +610,7 @@ fn runtime_projection_reads_under_the_workspace_lock() {
     // One committed agent, so a clean projection has an agent to lose.
     let obs = rimz::agents::AgentLifecycleObservation {
         agent_id: Some("agent-1".to_owned()),
-        status: rimz::feed::AgentStatus::Idle,
+        signal: rimz::agents::lifecycle::LifecycleSignal::Registered,
         permission_posture: Some(rimz::feed::PermissionPosture::Default),
         agent_pid: None,
         agent_process_start: None,
@@ -627,7 +627,6 @@ fn runtime_projection_reads_under_the_workspace_lock() {
         todo_total: None,
         pane_id: None,
         parent_agent_id: None,
-        compacting: false,
     };
     let envelope = EventEnvelope::agent_lifecycle(
         h.workspace_id.clone(),

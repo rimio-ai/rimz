@@ -23,6 +23,7 @@ use tracing::{debug, warn};
 use super::{GlobalFlags, open_ledger};
 use rimz::EventEnvelope;
 use rimz::Ledger;
+use rimz::agents::lifecycle::{self, LifecycleState, TransitionKind};
 use rimz::agents::{
     AgentHookClass, AgentIntegration, AgentLifecycleObservation, integration_by_name,
 };
@@ -81,6 +82,62 @@ pub fn run(args: HooksArgs, globals: &GlobalFlags) -> Result<()> {
     }
 }
 
+/// Fold this observation's signal onto the prior rollup state through the shared
+/// `lifecycle::step` table and log any anomaly once, under the
+/// `rimz::agent::lifecycle` target (stderr — never stdout, the hook decision
+/// channel). Best-effort: a missing cached snapshot just skips the check. The
+/// reducer re-derives the same state on replay, silently — this call exists only
+/// to surface a reconciled or ignored transition while we still have the event
+/// in hand to attribute it.
+fn log_lifecycle_transition(ledger: &Ledger, kind: &str, observation: &AgentLifecycleObservation) {
+    let Some(agent_id) = observation.agent_id.as_deref() else {
+        return;
+    };
+    // The prior state for this one agent, from the lock-free cached snapshot —
+    // the projection of every event before this one, exactly the `prev` the
+    // reducer folds this event onto.
+    let prev = ledger
+        .snapshot_cached()
+        .ok()
+        .and_then(|snap| {
+            snap.agents
+                .into_iter()
+                .find(|agent| agent.kind == kind && agent.agent_id == agent_id)
+        })
+        .map(|agent| LifecycleState {
+            status: agent.status,
+            posture: agent.permission_posture,
+            compacting: agent.compacting_since.is_some(),
+        });
+    let transition = lifecycle::step(
+        prev.as_ref(),
+        &observation.signal,
+        observation.permission_posture,
+    );
+    match transition.kind {
+        TransitionKind::Reconciled { from, reason } => warn!(
+            target: "rimz::agent::lifecycle",
+            kind,
+            agent_id,
+            parent_agent_id = observation.parent_agent_id.as_deref().unwrap_or(""),
+            from = ?from,
+            to = ?transition.next.status,
+            signal = ?observation.signal,
+            reason,
+            "reconciled lifecycle transition",
+        ),
+        TransitionKind::Ignored { reason } => debug!(
+            target: "rimz::agent::lifecycle",
+            kind,
+            agent_id,
+            signal = ?observation.signal,
+            reason,
+            "ignored lifecycle signal",
+        ),
+        TransitionKind::Normal => {}
+    }
+}
+
 fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
@@ -126,6 +183,10 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                 observation.worktree_branch = workspace.worktree_branch.clone();
             }
             model_hint = observation.model.clone();
+            // Validate the transition this event drives against the prior rollup
+            // and log any anomaly once, here at ingestion — the reducer
+            // re-derives the same state silently on every replay.
+            log_lifecycle_transition(&ledger, agent.name(), &observation);
             let envelope = EventEnvelope::agent_lifecycle(
                 workspace.workspace_id.clone(),
                 &workspace.session_name,

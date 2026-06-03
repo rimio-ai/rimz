@@ -153,6 +153,7 @@ mod tests {
             context: None,
             turn_started_at: None,
             compacting_since: None,
+            parked_on_background: false,
             last_seen: Timestamp::UNIX_EPOCH,
             last_activity: Timestamp::UNIX_EPOCH,
         }

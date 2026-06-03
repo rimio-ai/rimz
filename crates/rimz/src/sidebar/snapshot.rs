@@ -1387,6 +1387,7 @@ mod tests {
             context: None,
             turn_started_at: None,
             compacting_since: None,
+            parked_on_background: false,
             last_seen: now,
             last_activity: now,
         }

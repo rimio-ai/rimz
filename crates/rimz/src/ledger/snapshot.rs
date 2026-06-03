@@ -11,8 +11,10 @@ use std::time::SystemTime;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::agent_activity::AgentActivity;
+use crate::agents::lifecycle::{self, LifecycleState, Transition};
 use crate::agents::{AgentAccount, AgentContext, RateLimitWindow, SpendTally};
 use crate::feed::{
     AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, PaneRef, PermissionPosture,
@@ -349,6 +351,13 @@ pub struct SidebarRow {
     /// so it stays out of the cockpit tally. Always `false` for process rows.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compacting: bool,
+    /// The agent parked its last turn on still-in-flight background work
+    /// (Claude Code v2.1.145+) rather than ending it. The row stays `Running`;
+    /// the renderer paints a distinct secondary marker so it reads as "working
+    /// in the background" without a false `success` and without overwriting the
+    /// activity description. Always `false` for process rows.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub parked_on_background: bool,
 }
 
 /// A compact summary of a child agent, nested under its parent's row. Subagents
@@ -1060,6 +1069,13 @@ const WORKTREE_ROW_CAP: usize = 6;
 /// abandoned one clears on its own.
 const GHOST_SESSION_TTL_SECS: i64 = 3 * 60 * 60;
 
+/// Age in seconds after which a *finished* (idle/success) subagent clears from
+/// its parent's expanded list even when no fresh parent turn boundary has
+/// arrived. The turn boundary is the primary signal, but a parent that never
+/// re-prompts would otherwise pin a finished child forever — this is the
+/// backstop that closes that gap. Short: a finished child is pure history.
+const SUBAGENT_FINISHED_TTL_SECS: i64 = 5 * 60;
+
 fn agent_is_pidless(agent: &AgentState) -> bool {
     agent.runtime_owner.is_none() && agent.agent_pid.is_none()
 }
@@ -1411,6 +1427,7 @@ fn idle_agent_row(pane: &PaneRef, kind: &str) -> SidebarRow {
         process_active: false,
         command_detail: None,
         compacting: false,
+        parked_on_background: false,
     }
 }
 
@@ -1528,11 +1545,12 @@ fn build_worktree_groups_from_rows(
     // one chokepoint both the live (`rows_from_panes`) and no-pane
     // (`rows_from_ledger`) builders share, so nesting behaves identically on
     // either path.
-    attach_sub_agents(&mut rows, agents);
+    let now = Timestamp::now();
+    attach_sub_agents(&mut rows, agents, now);
     // Project the displayed status now that each row knows its subagents (the
     // delegated-wait exemption) and the full agent set is in hand (the account
     // rate-limit verdict). The one place display state diverges from the rollup.
-    project_display_status(&mut rows, agents, Timestamp::now());
+    project_display_status(&mut rows, agents, now);
     // A worktree dir holds one branch at a time, so rows under one path
     // normally share a branch and group together — the agent and its shell
     // panes alike. Only when stale ledger rows put two distinct branches under
@@ -1611,41 +1629,85 @@ fn build_worktree_groups_from_rows(
 /// skips it). This pass matches each child to its parent row by
 /// `(kind, parent_agent_id)` and pushes a compact summary onto it.
 ///
-/// Retention is turn-scoped: a still-running child is always shown, but a
-/// finished (idle/success) child whose work predates the parent's *current*
-/// turn (`turn_started_at`, advanced only by `UserPromptSubmit`) belongs to a
-/// past turn and is dropped. A child whose parent row is absent (parent ended,
-/// reaped, or has no live pane) is an orphan and never renders.
-fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState]) {
+/// Retention reaps a child three ways: a finished (idle/success) child whose
+/// work predates the parent's *current* turn (`turn_started_at`, advanced only
+/// by `UserPromptSubmit`) belongs to a past turn and is dropped; a finished
+/// child sat idle past [`SUBAGENT_FINISHED_TTL_SECS`] is dropped even when no
+/// fresh parent turn arrived (the gap that let ghosts linger); and a *running*
+/// child superseded by a newer parent turn, or silent past the generous
+/// [`GHOST_SESSION_TTL_SECS`] backstop, is a ghost that never sent `Stop` —
+/// reaped so it can't freeze the parent's delegated-wait head. A child whose
+/// parent row is absent (parent ended, reaped, or has no live pane) is an
+/// orphan and never renders. Survivors are deduped by child id so a child can
+/// never appear twice, then ordered running-first for a deterministic list.
+fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState], now: Timestamp) {
     let parent_turn_start = |kind: &str, id: &str| -> Option<Timestamp> {
         agents
             .iter()
             .find(|a| a.kind == kind && a.agent_id == id)
             .and_then(|a| a.turn_started_at)
     };
+    let idle_secs = |child: &AgentState| now.duration_since(child.last_activity).as_secs();
     for child in agents.iter().filter(|a| a.parent_agent_id.is_some()) {
         let Some(parent_id) = child.parent_agent_id.as_deref() else {
             continue;
         };
-        // A finished child from a past turn is history — drop it. A running
-        // child is live work and always kept.
-        if child.status != AgentStatus::Running
-            && parent_turn_start(&child.kind, parent_id)
-                .is_some_and(|started| started > child.last_activity)
-        {
+        let superseded = parent_turn_start(&child.kind, parent_id)
+            .is_some_and(|started| started > child.last_activity);
+        let keep = if child.status == AgentStatus::Running {
+            if superseded {
+                warn!(
+                    target: "rimz::agent::lifecycle",
+                    kind = %child.kind,
+                    parent = parent_id,
+                    child = %child.agent_id,
+                    "running subagent superseded by a newer parent turn — reaped",
+                );
+                false
+            } else if idle_secs(child) >= GHOST_SESSION_TTL_SECS {
+                warn!(
+                    target: "rimz::agent::lifecycle",
+                    kind = %child.kind,
+                    parent = parent_id,
+                    child = %child.agent_id,
+                    "subagent stuck running with no Stop past the ghost TTL — reaped",
+                );
+                false
+            } else {
+                true
+            }
+        } else {
+            // Finished: history once the parent moved on, or once idle past the TTL.
+            !superseded && idle_secs(child) < SUBAGENT_FINISHED_TTL_SECS
+        };
+        if !keep {
             continue;
         }
         // Attach to the parent row when one is present; an orphan (no parent
-        // row) is simply never rendered.
+        // row) never renders — but log it, since a child that names a parent
+        // with no row is an anomaly worth tracing.
         if let Some(parent) = rows.iter_mut().find(|row| {
             row.row_kind == SidebarRowKind::Agent && row.name == child.kind && row.id == parent_id
         }) {
             parent.sub_agents.push(sub_agent_from_state(child));
+        } else {
+            warn!(
+                target: "rimz::agent::lifecycle",
+                kind = %child.kind,
+                parent = parent_id,
+                child = %child.agent_id,
+                "subagent names a parent with no row — orphan, not rendered",
+            );
         }
     }
-    // Order each parent's children: running first, then most-recent work, then a
-    // stable id tiebreak so the list is deterministic.
     for row in rows.iter_mut().filter(|r| !r.sub_agents.is_empty()) {
+        // Dedup by child id (freshest activity wins) so the same logical child
+        // can never appear twice and the `subagents (N)` count stays honest.
+        row.sub_agents
+            .sort_by(|a, b| a.id.cmp(&b.id).then(b.last_activity.cmp(&a.last_activity)));
+        row.sub_agents.dedup_by(|a, b| a.id == b.id);
+        // Display order: running first, then most-recent work, then a stable id
+        // tiebreak so the list is deterministic.
         row.sub_agents.sort_by(|a, b| {
             let running = |status: AgentStatus| status == AgentStatus::Running;
             running(b.status)
@@ -1742,13 +1804,41 @@ fn window_spent_unreset(window: &RateLimitWindow, now: Timestamp) -> bool {
 /// A child `AgentState` projected to the compact summary the parent's expanded
 /// card paints. The subagent's type rode in as its `task` (set on both
 /// `SubagentStart` and `SubagentStop`), so it stays labeled after it finishes.
+/// A typeless child is named by a short id placeholder — never the provider
+/// `kind`, which would render as a phantom `claude`/`codex` row indistinguishable
+/// from a real subagent — and the anomaly is logged.
 fn sub_agent_from_state(child: &AgentState) -> SidebarSubAgent {
+    let name = child
+        .task
+        .clone()
+        .filter(|task| !task.is_empty())
+        .unwrap_or_else(|| {
+            warn!(
+                target: "rimz::agent::lifecycle",
+                kind = %child.kind,
+                child = %child.agent_id,
+                "subagent has no type label — rendering a degraded placeholder",
+            );
+            degraded_subagent_label(&child.agent_id)
+        });
     SidebarSubAgent {
         id: child.agent_id.clone(),
-        name: child.task.clone().unwrap_or_else(|| child.kind.clone()),
+        name,
         status: child.status,
         task: child.task.clone(),
         last_activity: child.last_activity,
+    }
+}
+
+/// A placeholder label for a subagent that reported no type — a short id prefix
+/// so it reads as a distinct, traceable child rather than the provider kind.
+fn degraded_subagent_label(agent_id: &str) -> String {
+    let short = agent_id.split('-').next().unwrap_or(agent_id);
+    let short = short.get(..8).unwrap_or(short);
+    if short.is_empty() {
+        "subagent".to_owned()
+    } else {
+        format!("subagent {short}")
     }
 }
 
@@ -1785,6 +1875,7 @@ fn row_from_agent(agent: &AgentState) -> SidebarRow {
         process_active: false,
         command_detail: None,
         compacting: is_compacting(agent, Timestamp::now()),
+        parked_on_background: agent.parked_on_background,
     }
 }
 
@@ -1850,6 +1941,7 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
         process_active: active,
         command_detail,
         compacting: false,
+        parked_on_background: false,
     }
 }
 
@@ -2015,6 +2107,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         process_active: false,
         command_detail: None,
         compacting: false,
+        parked_on_background: false,
     })
 }
 
@@ -2470,57 +2563,52 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             continue;
         }
         let prior = map.get(&(kind.clone(), agent_id.clone()));
-        // A compaction event (`compacting: true`) is a transient head, not a
-        // lifecycle transition: keep the agent's prior status (it resumes there
-        // when compaction finishes) and only stamp `compacting_since`. Every
-        // other event takes its status verbatim, defaulting to idle when absent.
-        let is_compaction = event
-            .params
-            .get("compacting")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let status: AgentStatus = if is_compaction {
-            prior.map(|p| p.status).unwrap_or(AgentStatus::Idle)
-        } else {
-            event
-                .params
-                .get("status")
-                // Deserialize straight from the borrowed `&Value` (itself a
-                // `Deserializer`) rather than `from_value(v.clone())` — no
-                // per-event Value clone on the rebuild path.
-                .and_then(|v| AgentStatus::deserialize(v).ok())
-                .unwrap_or(AgentStatus::Idle)
-        };
-        // Compaction stamps the moment it began; any other lifecycle event for
-        // the agent means compaction is done, so it clears the marker. A crashed
-        // mid-compact can't stick — the projection also expires it past
-        // `COMPACTING_WINDOW_SECS`.
-        let compacting_since = is_compaction.then_some(event.timestamp);
-        // The permission slider is sticky and carried forward: an event that
-        // names no posture keeps the prior value. Back-compat: an event an older
-        // binary wrote encoded plan as a separate `plan_mode: true` flag riding a
-        // `default` posture, so fold that legacy pair back into `Plan`; new
-        // events carry `plan` in the posture directly.
+        // The agent-agnostic lifecycle intent this event carries (a current
+        // `signal`, or one reconstructed from a legacy `status`/`compacting`
+        // pair). The status, posture, and compacting head are all derived from
+        // it through the one shared `lifecycle::step` table — never taken
+        // verbatim — so an illegal jump can't slip through unvalidated. Replay is
+        // silent here; the ingestion path logs anomalies once per fresh event.
+        let signal = lifecycle::signal_from_event_params(&event.params, event_name.unwrap_or(""));
+        // The posture sample this event reported, if any. Back-compat: an event
+        // an older binary wrote encoded plan as a separate `plan_mode: true` flag
+        // riding a `default` posture, so fold that legacy pair back into a `Plan`
+        // sample; new events carry `plan` in the posture directly. A `None`
+        // sample makes `step` carry the prior posture forward.
         let parsed_posture = event
             .params
             .get("permission_posture")
-            // Deserialize straight from the borrowed `&Value` (itself a
-            // `Deserializer`) rather than `from_value(v.clone())` — no per-event
-            // Value clone on the rebuild path.
             .and_then(|v| PermissionPosture::deserialize(v).ok());
         let legacy_plan = event
             .params
             .get("plan_mode")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
-        let permission_posture: PermissionPosture =
+        let posture_sample =
             if legacy_plan && matches!(parsed_posture, None | Some(PermissionPosture::Default)) {
-                PermissionPosture::Plan
+                Some(PermissionPosture::Plan)
             } else {
                 parsed_posture
-                    .or_else(|| prior.map(|p| p.permission_posture))
-                    .unwrap_or(PermissionPosture::Default)
             };
+        let prev_state = prior.map(|p| LifecycleState {
+            status: p.status,
+            posture: p.permission_posture,
+            compacting: p.compacting_since.is_some(),
+        });
+        let Transition { next, .. } = lifecycle::step(prev_state.as_ref(), &signal, posture_sample);
+        let status = next.status;
+        let permission_posture = next.posture;
+        // Compaction stamps the moment it began and preserves it across the
+        // multi-event head; any other signal clears the marker. A crashed
+        // mid-compact can't stick — the projection also expires it past
+        // `COMPACTING_WINDOW_SECS`.
+        let compacting_since = if next.compacting {
+            prior
+                .and_then(|p| p.compacting_since)
+                .or(Some(event.timestamp))
+        } else {
+            None
+        };
         let param_string = |key: &str| {
             event
                 .params
@@ -2618,6 +2706,16 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             .and_then(|raw| PaneId::parse(&raw).ok())
             .map(pane_ref_from_id)
             .or_else(|| prior.and_then(|p| p.pane.clone()));
+        // Activity-bound: a turn-end parked on background work sets it; any other
+        // signal (including a real turn end) clears it. The renderer paints a
+        // secondary "background" marker without overwriting the description.
+        let parked_on_background = matches!(
+            signal,
+            lifecycle::LifecycleSignal::TurnEnded {
+                parked_on_background: true,
+                ..
+            }
+        );
         let state = AgentState {
             agent_id: agent_id.clone(),
             kind: kind.clone(),
@@ -2643,6 +2741,7 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             context: None,
             turn_started_at,
             compacting_since,
+            parked_on_background,
             last_seen: event.timestamp,
             last_activity: event.timestamp,
         };
@@ -2823,6 +2922,7 @@ mod tests {
             context: None,
             turn_started_at: None,
             compacting_since: None,
+            parked_on_background: false,
             last_seen: timestamp,
             last_activity: timestamp,
         }
@@ -3857,7 +3957,7 @@ mod tests {
         let child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
         // Only the parent built a row; the paneless child attaches onto it.
         let mut rows = vec![row_from_agent(&parent)];
-        attach_sub_agents(&mut rows, &[parent.clone(), child]);
+        attach_sub_agents(&mut rows, &[parent.clone(), child], Timestamp::now());
         assert_eq!(rows.len(), 1, "the child is never its own top-level row");
         assert_eq!(rows[0].sub_agents.len(), 1);
         assert_eq!(rows[0].sub_agents[0].id, "child-1");
@@ -3868,7 +3968,7 @@ mod tests {
     fn orphan_sub_agent_is_dropped() {
         let child = child_state("missing-parent", "child-1", AgentStatus::Running, 5);
         let mut rows: Vec<SidebarRow> = Vec::new();
-        attach_sub_agents(&mut rows, &[child]);
+        attach_sub_agents(&mut rows, &[child], Timestamp::now());
         assert!(rows.is_empty(), "a child with no parent row never renders");
     }
 
@@ -3886,12 +3986,12 @@ mod tests {
         parent.turn_started_at = Some(Timestamp::from_second(now.as_second() - 30).unwrap());
         let child = child_state("sess-root", "child-1", AgentStatus::Idle, 60);
         let mut rows = vec![row_from_agent(&parent)];
-        attach_sub_agents(&mut rows, &[parent.clone(), child]);
+        attach_sub_agents(&mut rows, &[parent.clone(), child], now);
         assert!(rows[0].sub_agents.is_empty());
     }
 
     #[test]
-    fn running_sub_agent_survives_parent_turn_boundary() {
+    fn running_sub_agent_of_current_turn_is_kept() {
         let now = Timestamp::now();
         let mut parent = agent(
             "claude",
@@ -3900,14 +4000,38 @@ mod tests {
             PermissionPosture::Default,
             100,
         );
-        parent.turn_started_at = Some(Timestamp::from_second(now.as_second() - 30).unwrap());
-        let child = child_state("sess-root", "child-1", AgentStatus::Running, 60);
+        // The turn began BEFORE the child's activity — live work of this turn.
+        parent.turn_started_at = Some(Timestamp::from_second(now.as_second() - 90).unwrap());
+        let child = child_state("sess-root", "child-1", AgentStatus::Running, 30);
         let mut rows = vec![row_from_agent(&parent)];
-        attach_sub_agents(&mut rows, &[parent.clone(), child]);
+        attach_sub_agents(&mut rows, &[parent.clone(), child], now);
         assert_eq!(
             rows[0].sub_agents.len(),
             1,
-            "a running child is always kept"
+            "a live child of the current turn is kept"
+        );
+    }
+
+    #[test]
+    fn superseded_running_sub_agent_is_reaped_as_ghost() {
+        let now = Timestamp::now();
+        let mut parent = agent(
+            "claude",
+            "sess-root",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            100,
+        );
+        // The parent moved to a newer turn than the child's last activity: the
+        // child never sent `SubagentStop` and is a leftover ghost — reaped so it
+        // can't freeze the parent's delegated-wait head.
+        parent.turn_started_at = Some(Timestamp::from_second(now.as_second() - 30).unwrap());
+        let child = child_state("sess-root", "child-1", AgentStatus::Running, 60);
+        let mut rows = vec![row_from_agent(&parent)];
+        attach_sub_agents(&mut rows, &[parent.clone(), child], now);
+        assert!(
+            rows[0].sub_agents.is_empty(),
+            "a running child from a past turn is a ghost"
         );
     }
 
@@ -3925,7 +4049,7 @@ mod tests {
         parent.turn_started_at = Some(Timestamp::from_second(now.as_second() - 90).unwrap());
         let child = child_state("sess-root", "child-1", AgentStatus::Idle, 30);
         let mut rows = vec![row_from_agent(&parent)];
-        attach_sub_agents(&mut rows, &[parent.clone(), child]);
+        attach_sub_agents(&mut rows, &[parent.clone(), child], now);
         assert_eq!(rows[0].sub_agents.len(), 1);
     }
 
@@ -3942,9 +4066,84 @@ mod tests {
         let idle = child_state("sess-root", "c-idle", AgentStatus::Idle, 2);
         let running = child_state("sess-root", "c-run", AgentStatus::Running, 30);
         let mut rows = vec![row_from_agent(&parent)];
-        attach_sub_agents(&mut rows, &[parent.clone(), idle, running]);
+        attach_sub_agents(
+            &mut rows,
+            &[parent.clone(), idle, running],
+            Timestamp::now(),
+        );
         let ids: Vec<&str> = rows[0].sub_agents.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["c-run", "c-idle"]);
+    }
+
+    #[test]
+    fn duplicate_children_collapse_to_one_row() {
+        // Two reduced states aliasing the same child id must render as one row,
+        // so `subagents (N)` never double-counts. Freshest activity wins.
+        let parent = agent(
+            "claude",
+            "sess-root",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            100,
+        );
+        let stale = child_state("sess-root", "child-dup", AgentStatus::Running, 50);
+        let fresh = child_state("sess-root", "child-dup", AgentStatus::Running, 5);
+        let mut rows = vec![row_from_agent(&parent)];
+        attach_sub_agents(&mut rows, &[parent.clone(), stale, fresh], Timestamp::now());
+        assert_eq!(
+            rows[0].sub_agents.len(),
+            1,
+            "the same child can't appear twice"
+        );
+        assert_eq!(rows[0].sub_agents[0].id, "child-dup");
+    }
+
+    #[test]
+    fn typeless_child_renders_degraded_label_never_the_kind() {
+        // A child with no type label must not borrow the provider kind, which
+        // would render as a phantom `claude` row. This is the "3 Explore + 3
+        // claude" regression.
+        let parent = agent(
+            "claude",
+            "sess-root",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            100,
+        );
+        let mut child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
+        child.task = None;
+        let mut rows = vec![row_from_agent(&parent)];
+        attach_sub_agents(&mut rows, &[parent.clone(), child], Timestamp::now());
+        let name = &rows[0].sub_agents[0].name;
+        assert!(name.starts_with("subagent"), "got {name}");
+        assert_ne!(name, "claude");
+    }
+
+    #[test]
+    fn finished_child_drops_past_ttl_without_a_turn_boundary() {
+        // The parent never took a fresh turn (`turn_started_at` stays None), so
+        // only the TTL backstop can clear a long-finished child — without it the
+        // ghost would linger forever.
+        let parent = agent(
+            "claude",
+            "sess-root",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            100,
+        );
+        assert!(parent.turn_started_at.is_none());
+        let child = child_state(
+            "sess-root",
+            "child-1",
+            AgentStatus::Idle,
+            SUBAGENT_FINISHED_TTL_SECS + 10,
+        );
+        let mut rows = vec![row_from_agent(&parent)];
+        attach_sub_agents(&mut rows, &[parent.clone(), child], Timestamp::now());
+        assert!(
+            rows[0].sub_agents.is_empty(),
+            "a long-finished child clears on the TTL"
+        );
     }
 
     #[test]
