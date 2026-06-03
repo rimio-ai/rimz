@@ -152,9 +152,9 @@ pub struct SidebarSnapshot {
     /// snapshot` spending enrichment (`cli::sidebar::compute_fleet_spending` then
     /// `apply_spending`, via [`crate::agents::spending::compute_spending`]);
     /// `None` until the cache is seeded (the first producer tick after startup)
-    /// or when nothing has been recorded. The cockpit reads `today.usd` so its
-    /// `$X.XX` reflects all sessions today; the value corner reads the all-time
-    /// pile.
+    /// or when nothing has been recorded. The cockpit reads `today` (sessions,
+    /// the token split, and the count-up `$`); the fleet ledger reads the
+    /// trailing `week` and `month` rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_tally: Option<SpendTally>,
 }
@@ -3149,7 +3149,10 @@ mod tests {
             SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![claude, codex]);
 
         let today_tally = |usd: f64| SpendTally {
-            today: SpendWindow { usd, tokens: 0 },
+            today: SpendWindow {
+                usd,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut by_provider: BTreeMap<String, SpendTally> = BTreeMap::new();
@@ -3189,10 +3192,12 @@ mod tests {
                 today: SpendWindow {
                     usd: 2.0,
                     tokens: 100,
+                    ..Default::default()
                 },
                 year: SpendWindow {
                     usd: 9.0,
                     tokens: 900,
+                    ..Default::default()
                 },
                 ..Default::default()
             },

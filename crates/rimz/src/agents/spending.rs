@@ -16,7 +16,7 @@
 //!
 //! [`compute_spending`] returns a [`Spending`]: one fleet-wide trailing
 //! 24h / 7d / 30d / 365d [`SpendTally`] plus a per-provider breakdown, so the
-//! value corner and cockpit read the fleet pile and each dashboard panel reads
+//! fleet ledger and cockpit read the fleet pile and each dashboard panel reads
 //! its own.
 
 use std::collections::{BTreeMap, HashMap};
@@ -33,17 +33,41 @@ use super::transcript::{claude, codex, pi};
 
 /// Spend (USD) and token throughput accumulated over one time window. `tokens`
 /// is `input + output` — the same `◇` total the rest of the sidebar reads, so
-/// the figure stays consistent with the cockpit and per-card token lines.
+/// the figure stays consistent with the cockpit and per-card token lines. The
+/// four-way split (`input` / `output` / `cache_write` / `cache_read`) feeds the
+/// `◇ ↘ ↗ ◍ ◌` breakdown on the cockpit, the provider dashboard, and the W/M
+/// ledger rows; `sessions` counts the distinct threads (transcript files, with a
+/// Claude session's subagent files folded under it) that ran in the window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SpendWindow {
     pub usd: f64,
+    /// The `◇` total: `input + output`. A maintained field (not derived on read)
+    /// so the many `.tokens` read sites need no change.
     pub tokens: u64,
+    #[serde(default)]
+    pub input: u64,
+    #[serde(default)]
+    pub output: u64,
+    #[serde(default)]
+    pub cache_write: u64,
+    #[serde(default)]
+    pub cache_read: u64,
+    /// Distinct sessions (threads) with activity in this window.
+    #[serde(default)]
+    pub sessions: u32,
 }
 
 impl SpendWindow {
-    fn add(&mut self, usd: f64, tokens: u64) {
+    /// Fold one priced entry's spend and token split into the window. `tokens`
+    /// stays `input + output` (the `◇` total); cache tokens ride their own
+    /// fields, never the total.
+    fn add(&mut self, usd: f64, entry: &CachedEntry) {
         self.usd += usd;
-        self.tokens += tokens;
+        self.tokens += entry.input + entry.output;
+        self.input += entry.input;
+        self.output += entry.output;
+        self.cache_write += entry.cache_write;
+        self.cache_read += entry.cache_read;
     }
 }
 
@@ -76,9 +100,9 @@ impl SpendTally {
 }
 
 /// The result of a spending pass: the fleet-wide total plus a per-provider
-/// breakdown keyed by agent kind (`"claude"`, `"codex"`, `"pi"`). The value
-/// corner and cockpit read [`Spending::total`]; each provider dashboard panel
-/// reads its own entry from [`Spending::by_provider`].
+/// breakdown keyed by agent kind (`"claude"`, `"codex"`, `"pi"`). The cockpit and
+/// the fleet ledger read [`Spending::total`]; each provider dashboard panel reads
+/// its own entry from [`Spending::by_provider`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Spending {
     pub total: SpendTally,
@@ -110,12 +134,13 @@ impl ProviderKind {
 /// Bumped whenever the cached parse shape *or values* change, so an upgrade
 /// re-reads every file once. A finalized session's stable mtime otherwise pins
 /// its entries in the cache forever — a field added to or reshaped in
-/// [`CachedEntry`] (such as `tokens`, or the `date` → `ts_secs` switch in v3), or
-/// a change in how a kept cost is computed (v4: Claude turns priced from token
-/// usage now that transcripts omit `costUSD`, so sessions cached as zero entries
-/// must re-parse), would otherwise stay frozen for that session and never heal. A
-/// cache stamped with an older version is discarded on read, forcing a clean
-/// re-parse under the current shape. `0` is the implicit pre-versioning shape (no
+/// [`CachedEntry`] (the `date` → `ts_secs` switch in v3; the `tokens` → four-way
+/// split in v4), or a change in how a kept cost is computed (v4 also prices Claude
+/// turns from token usage now that transcripts omit `costUSD`, so sessions cached
+/// as zero entries must re-parse), would otherwise stay frozen for that session
+/// and never heal. A cache stamped with an older version is discarded on read,
+/// forcing a clean re-parse under the current shape. `0` is the implicit
+/// pre-versioning shape (no
 /// `version` field).
 const SPENDING_CACHE_VERSION: u32 = 4;
 
@@ -155,12 +180,24 @@ pub struct CachedEntry {
     /// in [`accum`].
     pub ts_secs: u64,
     pub cost_usd: f64,
-    /// Input + output tokens for this entry. `#[serde(default)]` keeps an older
-    /// cache parseable; `SPENDING_CACHE_VERSION` is what actually heals it — a
-    /// pre-token cache is discarded on read so every file re-parses, since a
-    /// finalized session's stable mtime would otherwise pin `tokens` at `0`.
+    /// Fresh input tokens (Claude `input_tokens`; Codex uncached input). The `◇`
+    /// total is `input + output`; cache tokens are tracked apart, never folded in.
+    /// `#[serde(default)]` keeps an older cache parseable; `SPENDING_CACHE_VERSION`
+    /// is what actually heals it — a pre-split cache is discarded on read so every
+    /// file re-parses, since a finalized session's stable mtime would otherwise pin
+    /// these at `0`.
     #[serde(default)]
-    pub tokens: u64,
+    pub input: u64,
+    /// Output tokens (Codex `output_tokens` already includes reasoning).
+    #[serde(default)]
+    pub output: u64,
+    /// Cache-write (Claude `cache_creation_input_tokens`); `0` for providers with
+    /// no cache-creation concept (Codex, Pi).
+    #[serde(default)]
+    pub cache_write: u64,
+    /// Cache-read (Claude `cache_read_input_tokens`; Codex `cached_input_tokens`).
+    #[serde(default)]
+    pub cache_read: u64,
     /// `message.id` from Claude entries; `None` for Codex and Pi entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
@@ -284,11 +321,44 @@ pub fn compute_spending(
     for (provider, entry) in &free_entries {
         add(provider, entry);
     }
+
+    // Session counts, keyed by thread rather than file: a Claude session's
+    // subagent files fold under its `session_id` directory so one thread counts
+    // once. Each thread is single-provider; we track its youngest entry and bump
+    // every window that youngest reading still falls within. Counted from the raw
+    // cached entries (not the deduped set) since a thread that ran is a thread,
+    // regardless of which file a duplicated turn was kept in.
+    let mut threads: HashMap<String, (&'static str, u64)> = HashMap::new();
+    for (kind, file) in files {
+        let cache_key = file.to_string_lossy().into_owned();
+        let Some(cached_file) = cache.files.get(&cache_key) else {
+            continue;
+        };
+        let Some(youngest) = cached_file.entries.iter().map(|entry| entry.ts_secs).max() else {
+            continue;
+        };
+        threads
+            .entry(session_key(*kind, file))
+            .and_modify(|(_, ts)| *ts = (*ts).max(youngest))
+            .or_insert((kind.as_str(), youngest));
+    }
+    for (provider, youngest) in threads.values() {
+        bump_sessions(&mut spending.total, *youngest, now_secs);
+        bump_sessions(
+            spending
+                .by_provider
+                .entry((*provider).to_owned())
+                .or_default(),
+            *youngest,
+            now_secs,
+        );
+    }
+
     spending
 }
 
 fn accum(tally: &mut SpendTally, entry: &CachedEntry, now_secs: u64) {
-    let (usd, tokens) = (entry.cost_usd, entry.tokens);
+    let usd = entry.cost_usd;
     // Trailing-window bucketing: an entry counts toward each window whose span it
     // still falls within. The windows nest (24h ⊂ 7d ⊂ 30d ⊂ 365d), so a recent
     // entry lands in all four; one older than a year lands in none.
@@ -296,16 +366,57 @@ fn accum(tally: &mut SpendTally, entry: &CachedEntry, now_secs: u64) {
     if age >= 365 * 86_400 {
         return;
     }
-    tally.year.add(usd, tokens);
+    tally.year.add(usd, entry);
     if age < 30 * 86_400 {
-        tally.month.add(usd, tokens);
+        tally.month.add(usd, entry);
     }
     if age < 7 * 86_400 {
-        tally.week.add(usd, tokens);
+        tally.week.add(usd, entry);
     }
     if age < 86_400 {
-        tally.today.add(usd, tokens);
+        tally.today.add(usd, entry);
     }
+}
+
+/// Count one session (thread) toward each trailing window its youngest entry
+/// still falls within. The windows nest, so a thread young enough for `today` is
+/// counted in `week`/`month`/`year` too; one whose last activity is older than a
+/// year counts nowhere.
+fn bump_sessions(tally: &mut SpendTally, youngest_ts: u64, now_secs: u64) {
+    let age = now_secs.saturating_sub(youngest_ts);
+    if age >= 365 * 86_400 {
+        return;
+    }
+    tally.year.sessions += 1;
+    if age < 30 * 86_400 {
+        tally.month.sessions += 1;
+    }
+    if age < 7 * 86_400 {
+        tally.week.sessions += 1;
+    }
+    if age < 86_400 {
+        tally.today.sessions += 1;
+    }
+}
+
+/// The thread a transcript file belongs to. A Claude session spreads across a
+/// main `…/<session_id>/chat.jsonl` plus subagent `…/<session_id>/subagents/*.jsonl`
+/// files; both fold under the `<session_id>` directory so one thread counts once.
+/// Codex and Pi log one file per session, so the file path is the key.
+fn session_key(kind: ProviderKind, path: &Path) -> String {
+    let dir = match kind {
+        ProviderKind::Claude => {
+            let parent = path.parent();
+            match parent {
+                Some(p) if p.file_name().and_then(|name| name.to_str()) == Some("subagents") => {
+                    p.parent()
+                }
+                other => other,
+            }
+        }
+        ProviderKind::Codex | ProviderKind::Pi => None,
+    };
+    dir.unwrap_or(path).to_string_lossy().into_owned()
 }
 
 fn file_mtime_secs(path: &Path) -> u64 {
@@ -355,10 +466,16 @@ fn codex_entries(path: &Path, prices: &PriceBook) -> Vec<CachedEntry> {
         let Some(ts_secs) = iso_to_unix_secs(&event.timestamp) else {
             continue;
         };
+        // Codex has no cache-creation concept: its cached slice is a read. The `◇`
+        // total is fresh input + output, so `input` is the uncached slice and the
+        // cached slice rides `cache_read`.
         out.push(CachedEntry {
             ts_secs,
             cost_usd: cost,
-            tokens: event.input_tokens + event.output_tokens,
+            input: uncached_input,
+            output: event.output_tokens,
+            cache_write: 0,
+            cache_read: event.cached_input_tokens,
             message_id: None,
             request_id: None,
             is_sidechain: false,
@@ -627,7 +744,10 @@ mod tests {
                     entries: vec![CachedEntry {
                         ts_secs: 1_767_225_600,
                         cost_usd: 9.0,
-                        tokens: 0,
+                        input: 0,
+                        output: 0,
+                        cache_write: 0,
+                        cache_read: 0,
                         message_id: Some("msg-old".to_string()),
                         request_id: Some("req-old".to_string()),
                         is_sidechain: false,
@@ -658,7 +778,10 @@ mod tests {
                 entries: vec![CachedEntry {
                     ts_secs: 1_770_000_000,
                     cost_usd: 1.0,
-                    tokens: 42,
+                    input: 30,
+                    output: 12,
+                    cache_write: 0,
+                    cache_read: 0,
                     message_id: None,
                     request_id: None,
                     is_sidechain: false,
@@ -669,9 +792,42 @@ mod tests {
         let kept = read_spending_cache(&path);
         assert_eq!(kept.version, SPENDING_CACHE_VERSION);
         assert_eq!(
-            kept.files["/new/chat.jsonl"].entries[0].tokens, 42,
+            kept.files["/new/chat.jsonl"].entries[0].input, 30,
             "a same-version cache keeps its entries"
         );
+    }
+
+    #[test]
+    fn token_split_and_session_counts_populate_windows() {
+        let dir = TempDir::new().unwrap();
+        let now_secs = unix_secs_now();
+        let today = utc_date(now_secs);
+        // One Claude thread spread across its `session_id` dir: a main chat file
+        // plus a subagent file. Both fold under the one thread for session counts.
+        let session = dir.path().join("sess-1");
+        std::fs::create_dir_all(session.join("subagents")).unwrap();
+        let main_line = format!(
+            r#"{{"timestamp":"{today}T10:00:00.000Z","costUSD":0.5,"requestId":"req-1","message":{{"id":"msg-1","usage":{{"input_tokens":12000,"output_tokens":64000,"cache_creation_input_tokens":12000,"cache_read_input_tokens":68000}}}}}}"#
+        );
+        let main = write_jsonl(&session, "chat.jsonl", &[&main_line]);
+        let sub_line = format!(
+            r#"{{"timestamp":"{today}T10:01:00.000Z","costUSD":0.1,"requestId":"req-2","isSidechain":true,"message":{{"id":"msg-2","usage":{{"input_tokens":1000,"output_tokens":500,"cache_creation_input_tokens":0,"cache_read_input_tokens":2000}}}}}}"#
+        );
+        let subfile = write_jsonl(&session.join("subagents"), "worker.jsonl", &[&sub_line]);
+
+        let mut cache = SpendingDiskCache::default();
+        let total = compute_total(&[main, subfile], &mut cache);
+
+        // `◇` is input + output only; the cache split rides its own fields.
+        assert_eq!(total.today.input, 13_000, "12000 + 1000");
+        assert_eq!(total.today.output, 64_500, "64000 + 500");
+        assert_eq!(total.today.tokens, 77_500, "◇ = input + output");
+        assert_eq!(total.today.cache_write, 12_000);
+        assert_eq!(total.today.cache_read, 70_000, "68000 + 2000");
+        // The main + subagent files fold under one `session_id` directory, so the
+        // thread counts once across every window its activity falls within.
+        assert_eq!(total.today.sessions, 1, "main + subagent = one thread");
+        assert_eq!(total.year.sessions, 1);
     }
 
     #[test]
@@ -891,7 +1047,14 @@ mod tests {
             "got {}",
             codex.today.usd
         );
-        assert_eq!(codex.today.tokens, 1500, "input 1000 + output 500");
+        // `◇` is fresh input + output: Codex's `input_tokens` includes the cached
+        // slice, so the uncached 600 + output 500 = 1100, with the 400 cached
+        // riding `cache_read` (never the total).
+        assert_eq!(codex.today.tokens, 1100, "uncached input 600 + output 500");
+        assert_eq!(codex.today.input, 600);
+        assert_eq!(codex.today.output, 500);
+        assert_eq!(codex.today.cache_read, 400);
+        assert_eq!(codex.today.cache_write, 0, "Codex has no cache-creation");
         assert!((spending.total.today.usd - 0.00164).abs() < 1e-9);
     }
 

@@ -562,7 +562,7 @@ fn enrich_worktree_groups(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::
 ///
 /// All three providers are discovered fleet-wide (`all_jsonl_files`,
 /// `codex_session_files`, `pi_session_files`) so each counts on the same footing,
-/// and the dashboard panel and value corner read one provider's spend the same
+/// and the dashboard panel and fleet ledger read one provider's spend the same
 /// way regardless of which project it ran in.
 fn compute_fleet_spending(runtime: &rimz::RuntimePaths) -> rimz::agents::spending::Spending {
     use rimz::agents::pricing;

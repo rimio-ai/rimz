@@ -256,7 +256,6 @@ pub fn parse_claude_jsonl(path: &Path, prices: &PriceBook) -> Vec<CachedEntry> {
         let output = usage.output_tokens.unwrap_or(0);
         let cache_creation = usage.cache_creation_input_tokens.unwrap_or(0);
         let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
-        let tokens = input + output + cache_creation + cache_read;
         // Cost source: a positive logged `costUSD` is authoritative (older
         // transcripts carried it); otherwise reconstruct spend from the token
         // usage through the model table, since current transcripts omit it. An
@@ -277,10 +276,16 @@ pub fn parse_claude_jsonl(path: &Path, prices: &PriceBook) -> Vec<CachedEntry> {
             continue;
         }
         let is_sidechain = entry.is_sidechain == Some(true);
+        // Claude reports the four token components separately; `input_tokens` is
+        // already the fresh (uncached) slice. The `◇` total is input + output;
+        // cache creation/reads ride their own fields, never the total.
         let cached = CachedEntry {
             ts_secs,
             cost_usd: cost,
-            tokens,
+            input,
+            output,
+            cache_write: cache_creation,
+            cache_read,
             message_id: entry.message.id.clone(),
             request_id: entry.request_id.clone(),
             is_sidechain,
@@ -382,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn captures_input_plus_output_tokens() {
+    fn captures_the_four_token_components() {
         let dir = TempDir::new().unwrap();
         let file = write_jsonl(
             dir.path(),
@@ -391,10 +396,12 @@ mod tests {
         );
         let entries = parse_claude_jsonl(&file, &no_prices());
         assert_eq!(entries.len(), 1);
-        assert_eq!(
-            entries[0].tokens, 25,
-            "input 10 + output 5 + cache_creation 3 + cache_read 7"
-        );
+        // The components are kept apart — the `◇` total (input + output) and the
+        // cache split are reconstructed downstream, never pre-summed here.
+        assert_eq!(entries[0].input, 10);
+        assert_eq!(entries[0].output, 5);
+        assert_eq!(entries[0].cache_write, 3);
+        assert_eq!(entries[0].cache_read, 7);
     }
 
     #[test]
@@ -409,10 +416,10 @@ mod tests {
         );
         let entries = parse_claude_jsonl(&file, &no_prices());
         assert_eq!(entries.len(), 1);
-        assert_eq!(
-            entries[0].tokens, 1150,
-            "input 100 + output 50 + cache_creation 200 + cache_read 800"
-        );
+        assert_eq!(entries[0].input, 100);
+        assert_eq!(entries[0].output, 50);
+        assert_eq!(entries[0].cache_write, 200, "cache_creation_input_tokens");
+        assert_eq!(entries[0].cache_read, 800, "cache_read_input_tokens");
     }
 
     #[test]
@@ -441,7 +448,10 @@ mod tests {
             "got {}",
             entries[0].cost_usd
         );
-        assert_eq!(entries[0].tokens, 1150);
+        assert_eq!(entries[0].input, 100);
+        assert_eq!(entries[0].output, 50);
+        assert_eq!(entries[0].cache_write, 200);
+        assert_eq!(entries[0].cache_read, 800);
     }
 
     #[test]
@@ -458,7 +468,10 @@ mod tests {
             ],
         );
         let entries = parse_claude_jsonl(&file, &no_prices());
-        assert!(entries.is_empty(), "an unpriced turn is dropped, not zeroed");
+        assert!(
+            entries.is_empty(),
+            "an unpriced turn is dropped, not zeroed"
+        );
     }
 
     #[test]

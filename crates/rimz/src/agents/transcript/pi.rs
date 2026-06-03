@@ -48,6 +48,10 @@ struct PiMessage {
 struct PiUsage {
     input: Option<u64>,
     output: Option<u64>,
+    #[serde(rename = "cacheWrite")]
+    cache_write: Option<u64>,
+    #[serde(rename = "cacheRead")]
+    cache_read: Option<u64>,
     cost: Option<PiCost>,
 }
 
@@ -160,11 +164,7 @@ pub fn parse_pi_jsonl(path: &Path) -> Vec<CachedEntry> {
         if cost <= 0.0 {
             continue;
         }
-        let tokens = msg
-            .usage
-            .as_ref()
-            .map(|u| u.input.unwrap_or(0) + u.output.unwrap_or(0))
-            .unwrap_or(0);
+        let usage = msg.usage.as_ref();
         let Some(ts) = entry.timestamp.as_deref() else {
             continue;
         };
@@ -174,7 +174,10 @@ pub fn parse_pi_jsonl(path: &Path) -> Vec<CachedEntry> {
         out.push(CachedEntry {
             ts_secs,
             cost_usd: cost,
-            tokens,
+            input: usage.and_then(|u| u.input).unwrap_or(0),
+            output: usage.and_then(|u| u.output).unwrap_or(0),
+            cache_write: usage.and_then(|u| u.cache_write).unwrap_or(0),
+            cache_read: usage.and_then(|u| u.cache_read).unwrap_or(0),
             message_id: None,
             request_id: None,
             is_sidechain: false,
@@ -205,7 +208,8 @@ mod tests {
         let entries = parse_pi_jsonl(&path);
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.42).abs() < 1e-9);
-        assert_eq!(entries[0].tokens, 150, "input 100 + output 50");
+        assert_eq!(entries[0].input, 100);
+        assert_eq!(entries[0].output, 50, "◇ total = input 100 + output 50");
         assert_eq!(
             entries[0].ts_secs,
             crate::agents::spending::iso_to_unix_secs("2026-06-02T10:00:00.000Z").unwrap()
