@@ -34,7 +34,7 @@ rimz list [--all] [--json]        # running + recently-active workspaces; --all 
 rimz doctor [--audit]             # diagnose backend, hooks, trust, resolvers
 ```
 
-`rimz` (or `rimz start`) resolves the project root, finds or creates the multiplexer session, launches the native sidebar pane, and enters the session. On an interactive TTY it attaches; otherwise it prints the attach command. `--attach` forces attaching; `--no-attach` and `--print` force printing — the rule is [interactive attach is opportunistic](../../DESIGN.md#commitments). Nothing is written to your shell or an agent's config until you run `rimz hooks install`.
+`rimz` (or `rimz start`) resolves the project root, finds or creates the multiplexer session, launches the native sidebar pane, and enters the session. On an interactive TTY it attaches; otherwise it prints the attach command. `--attach` forces attaching; `--no-attach` and `--print` force printing — the rule is [interactive attach is opportunistic](../../DESIGN.md#commitments). Run from inside a session of the selected backend, `rimz` reports the directory's room and exits without nesting — a same-mux room can't be nested; detach or run from outside to (re)launch. Nothing is written to your shell or an agent's config until you run `rimz hooks install`.
 
 `rimz attach <session>` reattaches by exact session name; `rimz attach` with no name uses the cwd's workspace. `rimz list` joins each known workspace against the live Zellij and tmux sessions so you see which mux currently hosts it, running first.
 

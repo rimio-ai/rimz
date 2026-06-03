@@ -407,6 +407,15 @@ fn join_agent_names(names: impl IntoIterator<Item = &'static str>) -> String {
 fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(&args.path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", args.path.display()))?;
+    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+    // A same-mux room can't be nested: if we're already inside this backend's
+    // session, report the directory's room and stop before any launch side
+    // effect — hook install, session birth, sidebar, or the doomed nested
+    // `attach --create`.
+    if should_report_already_inside(args.attach.mode(), inside_selected_mux(mux)) {
+        report_already_inside(mux, &workspace)?;
+        return Ok(());
+    }
     let machine_config = machine_config();
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let remote_control = &machine_config.remote_control;
@@ -415,7 +424,6 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // effects — never bring a workspace up around a doomed host.
     rimz::remote_control::preflight(remote_control)?;
     ensure_detected_agent_hooks()?;
-    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
     retire_renamed_session(backend.as_ref(), &workspace);
     record_workspace(&workspace)?;
@@ -1085,6 +1093,27 @@ fn inside_selected_mux(mux: MuxName) -> bool {
     }
 }
 
+/// Report the existing room instead of launching only when the attach mode is
+/// opportunistic (`Auto`). Explicit `--print` / `--attach` stay literal escape
+/// hatches (scripting / forced exec), so they fall through to the normal path.
+fn should_report_already_inside(mode: AttachMode, inside_mux: bool) -> bool {
+    matches!(mode, AttachMode::Auto) && inside_mux
+}
+
+fn report_already_inside(mux: MuxName, workspace: &rimz::ResolvedWorkspace) -> Result<()> {
+    let mut stderr = std::io::stderr().lock();
+    writeln!(
+        stderr,
+        "You're already inside a {mux} session, which can't host a nested room.",
+    )?;
+    writeln!(
+        stderr,
+        "This directory's room is `{}`. Detach to (re)launch it, or run `rimz` from outside the session.",
+        workspace.session_name,
+    )?;
+    Ok(())
+}
+
 #[cfg(unix)]
 fn exec_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
     use std::os::unix::process::CommandExt;
@@ -1178,6 +1207,17 @@ mod tests {
             attach_action(AttachMode::Print, true, true, false),
             AttachAction::Print,
         );
+    }
+
+    #[test]
+    fn report_already_inside_only_when_auto_and_nested() {
+        // Opportunistic launch inside the selected mux reports the room.
+        assert!(should_report_already_inside(AttachMode::Auto, true));
+        // Outside the mux there is a room to launch — proceed.
+        assert!(!should_report_already_inside(AttachMode::Auto, false));
+        // Explicit `--print` / `--attach` stay literal escape hatches.
+        assert!(!should_report_already_inside(AttachMode::Print, true));
+        assert!(!should_report_already_inside(AttachMode::Attach, true));
     }
 
     #[test]

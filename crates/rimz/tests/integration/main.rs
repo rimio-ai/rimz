@@ -25,6 +25,7 @@ mod reload;
 mod reset;
 mod resolver;
 mod sidebar_launch;
+mod start;
 mod trust;
 mod wakeup_pipe;
 mod workspace;
