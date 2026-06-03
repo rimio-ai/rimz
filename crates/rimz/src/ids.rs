@@ -136,15 +136,17 @@ macro_rules! uuid_v7_id {
                 &self.0
             }
 
-            /// First 12 hex chars of the UUID portion, with the `<prefix>_`
-            /// stripped. Used to name AF_UNIX sockets, where the 108-byte path
-            /// budget makes the full 32-char UUID wasteful; 48 bits of entropy
-            /// makes a collision within one workspace effectively impossible.
+            /// Last 12 hex chars of the UUID portion. Used to name AF_UNIX
+            /// sockets, where the 108-byte path budget makes the full 32-char
+            /// UUID wasteful. The tail is the v7 UUID's random field, so two ids
+            /// minted in the same millisecond still differ — unlike the leading
+            /// 48 bits, which are the shared `now_v7` timestamp and would collide
+            /// for sidebars launched together, letting one `bind` steal the
+            /// other's path and strand a renderer with no wakeup socket.
             pub fn short(&self) -> &str {
-                // `new`/`parse` guarantee `<prefix>_<32 hex>`, so the hex begins
-                // right after the underscore and this slice is always in bounds.
-                let start = $prefix.len() + 1;
-                &self.0[start..start + 12]
+                // `new`/`parse` guarantee `<prefix>_<32 hex>`, so the last 12
+                // chars are always hex and this slice is always in bounds.
+                &self.0[self.0.len() - 12..]
             }
         }
 
@@ -451,9 +453,9 @@ mod tests {
     }
 
     #[test]
-    fn short_returns_12_hex_chars_after_the_prefix() {
-        // `short()` strips `<prefix>_` before slicing, so it must work across
-        // prefixes of different lengths ("req" vs "sb").
+    fn short_returns_the_12_hex_tail() {
+        // `short()` slices from the end, so it works across prefixes of different
+        // lengths ("req" vs "sb").
         for (short, full) in [
             {
                 let id = RequestId::new();
@@ -466,9 +468,28 @@ mod tests {
         ] {
             assert_eq!(short.len(), 12);
             assert!(short.chars().all(|c| c.is_ascii_hexdigit()));
-            // The short id is the hex immediately after `<prefix>_`.
-            assert!(full.split('_').next_back().unwrap().starts_with(&short));
+            // The short id is the hex tail of the UUID portion.
+            assert!(full.ends_with(&short));
         }
+    }
+
+    #[test]
+    fn short_disambiguates_same_millisecond_ids() {
+        // The first 12 hex of a v7 UUID are the millisecond timestamp, so two ids
+        // minted together share them; `short()` must take the random tail instead
+        // or their socket paths collide and one `bind` steals the other's.
+        let a = SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da04").unwrap();
+        let b = SidebarInstanceId::parse("sb_019e8c565bbd7b22854f93a905e1034c").unwrap();
+        assert_eq!(
+            &a.as_str()[3..15],
+            &b.as_str()[3..15],
+            "same-millisecond ids share the leading v7 timestamp",
+        );
+        assert_ne!(
+            a.short(),
+            b.short(),
+            "the random tail disambiguates same-millisecond ids",
+        );
     }
 
     #[test]
