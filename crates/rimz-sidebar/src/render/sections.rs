@@ -11,47 +11,52 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use rimz::agents::{AgentContext, RateLimitWindow};
 use rimz::config::SidebarDensity;
-use rimz::feed::{AgentState, AgentStatus, PermissionPosture};
+use rimz::feed::{AgentStatus, PermissionPosture};
 use rimz::{
     SidebarProviderPanel, SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarSubAgent,
-    SidebarWorktreeGroup, SidebarWorktreeKind, SpendTally,
+    SidebarWorktreeGroup, SidebarWorktreeKind, SpendTally, SpendWindow,
 };
 
 use super::TallyAnim;
 
 use super::fmt::{
-    activity_short, age_secs, age_short, clip, dollars2, duration_worked, duration_worked_coarse,
-    model_label, pct_label, reset_countdown, time_remaining, tokens_short, window_label,
+    activity_short, age_secs, age_short, clip, dollars2, duration_worked, model_label, pct_label,
+    reset_countdown, time_remaining, tokens_int, tokens_short, window_label,
 };
 use super::labels::{
-    TOKENS_CACHED, TOKENS_IN, TOKENS_OUT, agent_glyph, agent_style, attention_glyph_style,
-    compacting_glyph, compacting_style, context_severity_color, ctx_glyph_color, diff_spans,
-    gauge_spans, infinite_bar_spans, mana_bar_spans, mana_color, posture_pill, posture_style,
-    resolver_glyph, segmented_gauge_spans, status_glyph, status_style, subagent_glyph,
-    subagent_style, thinking_still, todo_spans, tokens_label, working_glyph,
+    TOKENS_CACHED, TOKENS_IN, TOKENS_OUT, TOKENS_TOTAL, agent_glyph, agent_style,
+    attention_blink_on, attention_glyph_style, compacting_glyph, compacting_style,
+    context_severity_color, ctx_glyph_color, diff_spans, gauge_spans, infinite_bar_spans,
+    loading_dots, mana_bar_spans, mana_color, posture_pill, posture_style, resolver_glyph,
+    segmented_gauge_spans, status_glyph, status_style, subagent_glyph, subagent_style,
+    thinking_still, todo_spans, token_breakdown_spans, tokens_total_spans, working_glyph,
 };
 use super::theme::Theme;
 
-/// Lead glyph for the work line — a clock face for "time worked", so the line
-/// reads iconographically (`◷ 12m worked`) and sets the worked span apart from a
-/// row's activity age. One cell, so it never disturbs the card's alignment.
+/// Clock face for a worked / elapsed span. Leads the work line (`◷ 12m worked`)
+/// and prefixes the card's last-activity age (`◷ 1m`), so any time readout on a
+/// card reads iconographically. One cell, so it never disturbs alignment.
 const WORKED_GLYPH: &str = "◷";
 
 /// The context-meter label — a framed square reading as "the window", replacing
 /// the `ctx` word now that it is the row's one bar (the account-scoped budget
-/// bars moved to the provider dashboard).
+/// bars moved to the provider dashboard). A fresh, unfilled window reads as the
+/// hollow [`CONTEXT_EMPTY_GLYPH`].
 const CONTEXT_GLYPH: &str = "▣";
 
-/// Lead glyph for the fleet's committed-work total (`◆ 3`): a filled diamond,
-/// the committed sibling of the `◇` token total — commits ahead of trunk, the
-/// work waiting to land.
-const COMMITS_GLYPH: &str = "◆";
+/// The context-meter label for an empty (0%) window: a hollow square, the
+/// unfilled sibling of `▣`, so a just-started window reads "nothing in it yet".
+const CONTEXT_EMPTY_GLYPH: &str = "▢";
 
-/// The cockpit fleet-size glyphs: a filled `✦` for the main agents you launched,
-/// a hollow `✧` for the subagents they spawned this turn — the same filled/hollow
-/// contrast the status glyphs use, here for "yours" vs "spawned".
-const FLEET_MAIN_GLYPH: &str = "✦";
-const FLEET_SUB_GLYPH: &str = "✧";
+/// The cockpit count glyphs: `¤` for the live agents in the room right now, `◎`
+/// for the sessions (threads) that have run today. `◎` is shared with the W/M
+/// ledger rows, so a session count reads the same in both places.
+const ACTIVE_AGENTS_GLYPH: &str = "¤";
+const SESSIONS_GLYPH: &str = "◎";
+
+/// The expanded card's subagent-section glyph: stacked panes for the children an
+/// agent spawned this turn.
+const SUBAGENTS_GLYPH: &str = "⧉";
 
 /// The selected card's left accent: a bold half-block `▌` running the card's
 /// full height — the one loud lane marker on screen.
@@ -95,28 +100,26 @@ impl Tier {
     }
 }
 
-/// The fixed fleet header — the cockpit, below the repo dashboard's identity and
-/// count/spend lines. Two lines when the room has agents, nothing when it does
-/// not (the `✦ 0` head-count lives on the dashboard above), so the body below
-/// never shifts vertically as agents change *state*:
+/// The fixed fleet header — the cockpit's make-up line, below the repo
+/// dashboard's identity and `¤`/`◎`/spend lines. One line when the room has
+/// agents, nothing when it does not (the `¤ 0` count lives on the summary above),
+/// so the body below never shifts vertically as agents change *state*:
 ///
 /// ```text
 /// ? 2   ! 1   ○ 2                        ✽ 1   ⢿ 3   ✓ 4   make-up: left · right
-/// ◷ 2h34m · ◇ 41k · ◆ 3                                    fleet time · tokens · commits
 /// ```
 ///
-/// The top line splits the make-up by who might want you. The left cluster is the
+/// The line splits the make-up by who might want you. The left cluster is the
 /// rows worth a glance — `waiting` `?` and `failed` `!` (each yellow, reddening
 /// once any of its rows is past the neglect window), then a free `idle` `○` at the
 /// cluster's right edge (calm green, but grouped left because a free agent wants
 /// work). The right cluster is the busy/done tail — thinking `✽` (plan-mode
 /// reasoning, read before acting), working `⢿`, then `success` `✓`. Every bucket
-/// renders, so a zero reads a faint `? 0`. The bottom line is the fleet's time,
-/// token, and committed-work totals. Counts span capped agents (`status_counts`);
-/// the totals sum the full agent list.
+/// renders, so a zero reads a faint `? 0`. Counts span the capped agents
+/// (`status_counts`). The fleet's live time / token / commit totals are gone — the
+/// summary line's today-accumulated breakdown carries the fleet's resource read.
 pub(super) fn fleet_header_lines(
     theme: &Theme,
-    agents: &[AgentState],
     groups: &[SidebarWorktreeGroup],
     width: usize,
     redden_secs: i64,
@@ -138,9 +141,9 @@ pub(super) fn fleet_header_lines(
     let success = status_total(groups, AgentStatus::Success);
     let total = working + thinking + waiting + failed + rate_limited + idle + success;
 
-    // An empty (or process-only) room has no cockpit at all — the `✦ 0` head-count
-    // lives on the dashboard above. The two-line cockpit is reserved for a room
-    // that has agents to summarize.
+    // An empty (or process-only) room has no make-up line — the `¤ 0  ◎ 0` summary
+    // lives on the dashboard above. The make-up line is reserved for a room that
+    // has agents to summarize.
     if total == 0 {
         return Vec::new();
     }
@@ -231,10 +234,7 @@ pub(super) fn fleet_header_lines(
         Line::from(trim_spans_to_width(left, width))
     };
 
-    vec![
-        buckets,
-        fleet_totals_line(theme, &fleet_totals(agents, groups), width),
-    ]
+    vec![buckets]
 }
 
 /// The fleet head-count read by the dashboard's L2: `(main, subs)` — the main
@@ -297,106 +297,71 @@ fn push_count(
     spans.push(Span::styled(format!("{glyph} {count}"), style));
 }
 
-/// The fleet's summed live resource totals for the cockpit's bottom line: time
-/// worked, the token burn, and committed work. Spend is not here — the dashboard
-/// reads today's figure straight from the JSONL `value_tally`, never the live
-/// session sum. Each `Option` stays `None` until some agent reports that metric,
-/// so a consumer renders only what is real.
-pub(super) struct FleetTotals {
-    pub tokens: Option<u64>,
-    pub duration_ms: Option<u64>,
-    pub commits: u64,
-}
-
-pub(super) fn fleet_totals(agents: &[AgentState], groups: &[SidebarWorktreeGroup]) -> FleetTotals {
-    let commits = groups
-        .iter()
-        .filter_map(|group| group.commits_ahead)
-        .map(u64::from)
-        .sum();
-    let mut totals = FleetTotals {
-        tokens: None,
-        duration_ms: None,
-        commits,
-    };
-    for agent in agents {
-        if let Some(n) = agent_total_tokens(agent) {
-            *totals.tokens.get_or_insert(0) += n;
-        }
-        if let Some(ms) = agent
-            .context
-            .as_ref()
-            .and_then(|ctx| ctx.cost.as_ref())
-            .and_then(|record| record.total_duration_ms)
-        {
-            *totals.duration_ms.get_or_insert(0) += ms;
-        }
-    }
-    totals
-}
-
-/// The repo dashboard's L2: the fleet head-count on the left — `✦ {main}` main
-/// agents (a filled star, teal to echo the metric icons) and, when any spawned
-/// children this turn, `✧ {subs}` subagents (a hollow star, faint and
-/// subordinate) — with the bold money-green spend (two decimals) pinned right.
-/// The spend is `today_usd`: today's total across every provider, read from the
-/// JSONL `value_tally`, never the live session sum. Always present beneath the
-/// identity line; an empty room — or a day with no spend yet — reads `✦ 0` with
-/// no spend. Committed work moved down to the cockpit totals line.
-pub(super) fn dashboard_summary_line(
+/// The cockpit summary line, directly beneath the repo identity: `¤ {live}` the
+/// agents in the room now and `◎ {sessions}` the threads that have run today,
+/// then today's accumulated token breakdown `◇ ↘ ↗ ◍ ◌` (integer magnitudes, the
+/// live coarse form). The counts read from the live fleet and the JSONL
+/// `value_tally`'s today window; the breakdown drops when today recorded no
+/// tokens. Always present — an empty room reads `¤ 0  ◎ 0`. Today's spend rides
+/// its own line below ([`cockpit_spend_line`]).
+pub(super) fn cockpit_summary_line(
     theme: &Theme,
-    size: (usize, usize),
-    today_usd: Option<f64>,
+    live_agents: usize,
+    today: Option<&SpendWindow>,
     width: usize,
 ) -> Line<'static> {
-    let (main, subs) = size;
-    let mut left = metric_spans(theme, FLEET_MAIN_GLYPH, Color::Cyan, &main.to_string());
-    if subs > 0 {
+    let sessions = today.map(|window| window.sessions).unwrap_or(0);
+    let mut left = metric_spans(
+        theme,
+        ACTIVE_AGENTS_GLYPH,
+        Color::Cyan,
+        &live_agents.to_string(),
+    );
+    left.push(Span::raw("   "));
+    left.extend(metric_spans(
+        theme,
+        SESSIONS_GLYPH,
+        Color::Cyan,
+        &sessions.to_string(),
+    ));
+    if let Some(window) = today.filter(|w| w.tokens > 0 || w.cache_write > 0 || w.cache_read > 0) {
         left.push(Span::raw("   "));
-        left.push(Span::styled(FLEET_SUB_GLYPH, theme.faint()));
-        left.push(Span::styled(format!(" {subs}"), theme.dim()));
-    }
-    let right = match today_usd {
-        Some(usd) => vec![Span::styled(
-            dollars2(usd),
-            theme.style(Color::Green, Modifier::BOLD),
-        )],
-        None => Vec::new(),
-    };
-    pin_right(left, right, width)
-}
-
-/// The cockpit's bottom line: the fleet's time, token, and committed-work totals
-/// — time worked behind a teal clock, the violet `◇` token total, then the green
-/// `◆` commits ahead of trunk. Spend lives on the dashboard above; this line
-/// carries the running fleet's aggregates and drops a field no agent reported.
-fn fleet_totals_line(theme: &Theme, totals: &FleetTotals, width: usize) -> Line<'static> {
-    let mut left: Vec<Span<'static>> = Vec::new();
-    if let Some(ms) = totals.duration_ms {
-        left.extend(metric_spans(
+        left.extend(token_breakdown_spans(
             theme,
-            WORKED_GLYPH,
-            Color::Cyan,
-            &duration_worked_coarse(ms),
-        ));
-    }
-    if let Some(tokens) = totals.tokens {
-        push_dot(&mut left, theme);
-        left.extend(tokens_label(theme, tokens));
-    }
-    if totals.commits > 0 {
-        push_dot(&mut left, theme);
-        left.extend(metric_spans(
-            theme,
-            COMMITS_GLYPH,
-            Color::Green,
-            &totals.commits.to_string(),
+            window.tokens,
+            window.input,
+            window.output,
+            window.cache_write,
+            window.cache_read,
+            tokens_int,
+            true,
         ));
     }
     Line::from(trim_spans_to_width(left, width))
 }
 
-/// A stats metric as a colored icon glyph + dim value (`◷ 2h34m`, `◆ 3`): the
+/// Today's fleet spend, pinned to the right edge on its own line under the
+/// summary, climbing in a smooth count-up as a turn lands. The figure eases
+/// toward the `value_tally` today total via the shared [`TallyAnim`] roll and
+/// brightens for a beat the instant it settles — the cockpit's one animated
+/// number (the W/M ledger rows below stay static). Bold money-green at rest.
+pub(super) fn cockpit_spend_line(
+    theme: &Theme,
+    today_usd: f64,
+    anim: &TallyAnim,
+    phase: u64,
+    width: usize,
+) -> Line<'static> {
+    let usd = anim.today_usd.display(today_usd, phase);
+    let style = if anim.today_usd.flashing(phase) {
+        theme.style(VALUE_FLASH, Modifier::BOLD)
+    } else {
+        theme.style(Color::Green, Modifier::BOLD)
+    };
+    pin_right(Vec::new(), vec![Span::styled(dollars2(usd), style)], width)
+}
+
+/// A stats metric as a colored icon glyph + dim value (`◷ 2h34m`, `¤ 5`): the
 /// glyph carries a semantic accent (time teal, commits green; the `◇` token
 /// total goes violet via [`tokens_label`]) while the number stays neutral, so
 /// the stats read as a tidy icon column instead of a wall of one tone.
@@ -405,28 +370,6 @@ fn metric_spans(theme: &Theme, glyph: &str, color: Color, value: &str) -> Vec<Sp
         Span::styled(glyph.to_owned(), theme.style(color, Modifier::empty())),
         Span::styled(format!(" {value}"), theme.dim()),
     ]
-}
-
-/// The cumulative token total for an agent: the statusline split when present,
-/// else the transcript rollup scalar.
-fn agent_total_tokens(agent: &AgentState) -> Option<u64> {
-    agent
-        .context
-        .as_ref()
-        .and_then(|ctx| ctx.tokens.as_ref())
-        .map(|tokens| {
-            tokens.total_input_tokens.unwrap_or(0) + tokens.total_output_tokens.unwrap_or(0)
-        })
-        .filter(|total| *total > 0)
-        .or(agent.total_tokens)
-}
-
-/// A faint ` · ` separator between totals fields, pushed only when something
-/// already sits to its left.
-fn push_dot(spans: &mut Vec<Span<'static>>, theme: &Theme) {
-    if !spans.is_empty() {
-        spans.push(Span::styled(" · ", theme.faint()));
-    }
 }
 
 fn clamp_u32(n: u64) -> u32 {
@@ -691,31 +634,35 @@ fn row_lines(
         inner.push(line);
     }
     if row.row_kind == SidebarRowKind::Agent {
-        inner.push(description_line(theme, row, tier, cw));
-        // A just-started idle agent sits on the 0% baseline gauge with nothing
-        // behind it — suppress the bar so the fresh card reads calm.
-        if !idle_unstarted(row)
-            && let Some(line) = gauge_line(theme, row, cw)
-        {
-            inner.push(line);
-        }
-        if selected || density.shows_stats() {
-            if idle_unstarted(row) {
-                // The zeroed token and work lines are noise on a fresh card; keep
-                // only the last-activity age, pinned bottom-right.
+        inner.push(description_line(theme, row, tier, cw, animation_phase));
+        if idle_unstarted(row) {
+            // A just-started idle agent sits on the 0% baseline gauge with nothing
+            // behind it — suppress the bar and the stats so the fresh card reads
+            // calm, keeping only the last-activity age once the card expands.
+            if selected || density.shows_stats() {
                 inner.push(activity_age_line(theme, row, cw));
-            } else {
-                if let Some(line) = token_totals_line(theme, row, cw) {
-                    inner.push(line);
-                }
-                if let Some(line) = work_line(theme, row, cw) {
-                    inner.push(line);
-                }
+            }
+        } else {
+            // The context bar and the token line — the per-card `◇ ↘ ↗ ◍ ◌`
+            // breakdown plus the `◷` last-activity age — are part of the resting
+            // compact card now, not gated behind selection.
+            if let Some(line) = gauge_line(theme, row, cw) {
+                inner.push(line);
+            }
+            if let Some(line) = token_totals_line(theme, row, cw) {
+                inner.push(line);
+            }
+            // The work line (worked time + the agent's own edit count) is an
+            // expanded-card detail; selection only ever appends it.
+            if (selected || density.shows_stats())
+                && let Some(line) = work_line(theme, row, cw)
+            {
+                inner.push(line);
             }
         }
-        // The subagents this agent spawned this turn, listed only in the
-        // expanded card — appended after the stats so the resting card never
-        // reflows (selection only ever adds lines).
+        // The subagents this agent spawned this turn, listed only in the expanded
+        // card — appended after the stats so the resting card never reflows
+        // (selection only ever adds lines).
         if selected && !row.sub_agents.is_empty() {
             inner.extend(sub_agent_lines(theme, &row.sub_agents, cw));
         }
@@ -726,7 +673,7 @@ fn row_lines(
         .collect()
 }
 
-/// The expanded card's subagent list: a dim `subagents (N)` header, then one
+/// The expanded card's subagent list: a dim `⧉ subagents (N)` header, then one
 /// indented line per child — its status glyph, its type, and the task when that
 /// adds anything. Children are subordinate to the parent card, so every line is
 /// dim and indented past the parent's own stat lines.
@@ -737,7 +684,7 @@ fn sub_agent_lines(
 ) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(trim_spans_to_width(
         vec![Span::styled(
-            format!("  subagents ({})", sub_agents.len()),
+            format!("  {SUBAGENTS_GLYPH} subagents ({})", sub_agents.len()),
             theme.dim(),
         )],
         width,
@@ -853,6 +800,12 @@ fn agent_lead_cell(
     {
         return Span::styled(subagent_glyph(animation_phase), subagent_style(theme));
     }
+    // A blocked `?`/`!` slowly blinks to pull the eye back to an unanswered row:
+    // shown for most of the cycle, blanked for a couple of frames. The blank holds
+    // the one-cell width so the column never shifts as it winks.
+    if actionable && !attention_blink_on(animation_phase) {
+        return Span::raw(" ");
+    }
     Span::styled(
         agent_glyph(status, row.permission_posture, animation_phase),
         attention_glyph_style(theme, status, age_secs(row.last_activity), redden_secs),
@@ -930,11 +883,26 @@ fn agent_identity_line(
 }
 
 /// Line 2 for an agent: the description (the user's session name, else the task,
-/// else an em dash) on its own full-width line. At L2 the todo progress
-/// (`●●●○○ 3/5`) pins to a right column, aligning under the cost/age above so
-/// the dots read as a tidy gutter instead of floating after the text.
-fn description_line(theme: &Theme, row: &SidebarRow, tier: Tier, width: usize) -> Line<'static> {
-    let mut left = vec![Span::raw("  "), Span::raw(descriptor(row).to_owned())];
+/// else the prompt) on its own full-width line. An idle agent with nothing to
+/// show yet paints the animated loading-dots cue instead; any other empty
+/// description falls to an em dash. At L2 the todo progress (`●●●○○ 3/5`) pins to
+/// a right column, aligning under the cost/age above so the dots read as a tidy
+/// gutter instead of floating after the text.
+fn description_line(
+    theme: &Theme,
+    row: &SidebarRow,
+    tier: Tier,
+    width: usize,
+    animation_phase: u64,
+) -> Line<'static> {
+    let body = match descriptor(row) {
+        Some(text) => Span::raw(text.to_owned()),
+        None if shows_loading_dots(row) => {
+            Span::styled(loading_dots(animation_phase).to_owned(), theme.dim())
+        }
+        None => Span::raw("—".to_owned()),
+    };
+    let mut left = vec![Span::raw("  "), body];
     // The agent parked its turn on still-in-flight background work: keep the
     // real activity above and add a distinct, faint secondary marker rather than
     // overwriting the description with a synthetic "N background tasks" count.
@@ -967,11 +935,12 @@ fn pin_right(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) 
 }
 
 /// The line-2 description: the user's session name when they set one (`--name` /
-/// `/rename`), else the agent's live task, else the latest prompt, else an em
-/// dash. The name is what a human chose to call this session, so it reads better
-/// than the task. The activity-bound `task` clears on idle, so the persisted
-/// prompt keeps an unnamed session labelled past its turn until it earns a name.
-fn descriptor(row: &SidebarRow) -> &str {
+/// `/rename`), else the agent's live task, else the latest prompt. The name is
+/// what a human chose to call this session, so it reads better than the task. The
+/// activity-bound `task` clears on idle, so the persisted prompt keeps an unnamed
+/// session labelled past its turn until it earns a name. `None` when the session
+/// has nothing to show — the caller paints the idle loading-dots or an em dash.
+fn descriptor(row: &SidebarRow) -> Option<&str> {
     // The producer sanitizes prompt/task before they reach the row; this is a
     // last-ditch backstop so a harness control turn (`<task-notification>…`)
     // can never paint the description even if a future producer regressed.
@@ -981,7 +950,17 @@ fn descriptor(row: &SidebarRow) -> &str {
         .filter(|name| usable(name))
         .or(row.task.as_deref().filter(|task| usable(task)))
         .or(row.prompt.as_deref().filter(|prompt| usable(prompt)))
-        .unwrap_or("—")
+}
+
+/// Whether an agent row paints the idle loading-dots cue in place of a
+/// description — an idle agent with nothing to show yet (no session name, task,
+/// or prompt), the "waiting for your first prompt" state. Shared by the renderer
+/// (to paint the animated dots) and the serve loop's [`super::has_live_animation`]
+/// (to keep the animation tick alive while they cycle).
+pub(super) fn shows_loading_dots(row: &SidebarRow) -> bool {
+    row.row_kind == SidebarRowKind::Agent
+        && matches!(row.status.unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
+        && descriptor(row).is_none()
 }
 
 /// Whether a description candidate is a harness-injected control turn rather
@@ -1174,7 +1153,7 @@ fn bar_row(
 /// per-message token breakdown the fill is split into colored segments (cache
 /// writes / cache reads / fresh input) that add up to exactly that percentage.
 /// The value prefers a one-decimal precise fraction (`78.2%`) over the integer
-/// gauge.
+/// gauge. An empty (0%) window reads the hollow `▢`; any usage fills it to `▣`.
 fn gauge_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     let percent = gauge_percent(row)?;
     let value = pct_label(precise_context_pct(row), percent);
@@ -1188,10 +1167,16 @@ fn gauge_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'sta
         .flatten();
     // The `▣` glyph follows *total* usage (blue when calm), decoupled from the
     // bar's dominant segment — it reads how full the window is, not where it went.
+    // An empty window is the hollow `▢`, so a fresh card reads "nothing in it yet".
     let glyph_color = ctx_glyph_color(percent, used);
+    let glyph = if percent == 0 {
+        CONTEXT_EMPTY_GLYPH
+    } else {
+        CONTEXT_GLYPH
+    };
     Some(bar_row(
         theme,
-        CONTEXT_GLYPH,
+        glyph,
         theme.style(glyph_color, Modifier::empty()),
         &value,
         |bar_width| match &segments {
@@ -1255,67 +1240,63 @@ fn gauge_segments(row: &SidebarRow) -> Option<[(u64, Color); 3]> {
     ])
 }
 
-/// The session's token totals as the glyph set — `◇ 76.5k ↘ 64.2k ↗ 12.3k ◌
-/// 1.6k`: the cumulative total (violet `◇`), then input read in (`↘`), output
-/// generated (`↗`), and the latest message's cached reads (`◌`, dropped when
-/// none). The breakdown glyphs stay dim so only the `◇` total carries a tone.
-/// Falls back to the bare `◇` rollup total for an agent whose context carries no
-/// read-only token split (Codex's app-server exposes none), so the line shows
-/// *something* for every agent.
+/// The card's token line — the `◇ ↘ ↗ ◍ ◌` breakdown (integer magnitudes) with
+/// the `◷` last-activity age pinned right: the cumulative total (violet `◇`),
+/// input read in (`↘`), output generated (`↗`), then the latest message's cache
+/// writes (`◍`) and cache reads (`◌`). The breakdown glyphs stay dim so only the
+/// `◇` total carries a tone. Falls back to the bare `◇` rollup total for an agent
+/// whose context carries no read-only token split (Codex's app-server exposes
+/// none), so the line shows *something* — and the age — for every agent.
 fn token_totals_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
+    let age = Span::styled(
+        format!("{WORKED_GLYPH} {}", activity_short(row.last_activity)),
+        theme.dim(),
+    );
     if let Some(tokens) = ctx(row).and_then(|context| context.tokens.as_ref())
         && (tokens.total_input_tokens.is_some() || tokens.total_output_tokens.is_some())
     {
         let input = tokens.total_input_tokens.unwrap_or(0);
         let output = tokens.total_output_tokens.unwrap_or(0);
-        // The cache split is per-message, so `◌` reads the latest message's
-        // cache (creation + reads); there is no cumulative cached figure.
-        let cached = tokens
-            .current_usage
-            .as_ref()
-            .map(|usage| {
-                usage.cache_creation_input_tokens.unwrap_or(0)
-                    + usage.cache_read_input_tokens.unwrap_or(0)
-            })
-            .filter(|cached| *cached > 0);
-        let mut spans = vec![Span::raw("  ")];
-        spans.extend(tokens_label(theme, input + output));
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            format!("{TOKENS_IN} {}", tokens_short(input)),
-            theme.dim(),
+        // The cache split is per-message: `◍` the latest message's cache writes,
+        // `◌` its cache reads. There is no cumulative cached figure.
+        let usage = tokens.current_usage.as_ref();
+        let cache_write = usage
+            .and_then(|usage| usage.cache_creation_input_tokens)
+            .unwrap_or(0);
+        let cache_read = usage
+            .and_then(|usage| usage.cache_read_input_tokens)
+            .unwrap_or(0);
+        let mut left = vec![Span::raw("  ")];
+        left.extend(token_breakdown_spans(
+            theme,
+            input + output,
+            input,
+            output,
+            cache_write,
+            cache_read,
+            tokens_int,
+            true,
         ));
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            format!("{TOKENS_OUT} {}", tokens_short(output)),
-            theme.dim(),
-        ));
-        if let Some(cached) = cached {
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(
-                format!("{TOKENS_CACHED} {}", tokens_short(cached)),
-                theme.dim(),
-            ));
-        }
-        return Some(Line::from(trim_spans_to_width(spans, width)));
+        return Some(pin_right(left, vec![age], width));
     }
     let total = row.total_tokens?;
-    let mut spans = vec![Span::raw("  ")];
-    spans.extend(tokens_label(theme, total));
-    Some(Line::from(trim_spans_to_width(spans, width)))
+    let mut left = vec![Span::raw("  ")];
+    left.extend(tokens_total_spans(theme, total, tokens_int));
+    Some(pin_right(left, vec![age], width))
 }
 
 /// The session's work line (`◷ 12m worked · +127 -43`): a clock-led span of time
 /// worked and the lines the agent added/removed, from the statusline cost
-/// record. The clock sets the worked time apart from a row's activity age; the
-/// diff is the agent's own edit count, distinct from the worktree-total diff on
-/// the group header. Drawn only when the cost record reports a field.
+/// record. The diff is the agent's own edit count, distinct from the
+/// worktree-total diff on the group header. An expanded-card detail, drawn only
+/// when the cost record reports a field. The last-activity age rides the token
+/// line above, so it is not repeated here.
 fn work_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     let cost = ctx(row)?.cost.as_ref()?;
     let mut spans = vec![Span::raw("  ")];
     let mut printed = false;
     if let Some(ms) = cost.total_duration_ms {
-        // Teal clock icon (matching the cockpit's time total), dim value + word.
+        // Teal clock icon, dim value + word.
         spans.push(Span::styled(
             WORKED_GLYPH,
             theme.style(Color::Cyan, Modifier::empty()),
@@ -1337,11 +1318,7 @@ fn work_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'stat
         ));
         printed = true;
     }
-    // Last-activity age pinned right — the one coarse "how long since this agent
-    // did something" readout, kept to this detail line so the compact row stays
-    // calm.
-    let age = Span::styled(activity_short(row.last_activity), theme.dim());
-    printed.then(|| pin_right(spans, vec![age], width))
+    printed.then(|| Line::from(trim_spans_to_width(spans, width)))
 }
 
 /// The lone last-activity age, pinned bottom-right — the only stat a just-started
@@ -1408,104 +1385,111 @@ const NOT_STARTED_GRACE: SignedDuration = SignedDuration::from_secs(120);
 /// `NO_COLOR` like every other tone.
 const VALUE_FLASH: Color = Color::Indexed(150);
 
-/// The value corner: the fleet's quiet, climbing pile of spend and tokens,
-/// pinned to the bottom of the dashboard as a small two-row ledger. The trailing
-/// month's dim companion leads, the trailing-year pile sits under it as the
-/// `year`, each row reading `label:  <tokens> tok · $<spend>` flush to the right
-/// edge. Today's pulse lives in the cockpit, so the corner never repeats it — it
-/// escalates `today → month → year`. The two rows share their token and spend
-/// column widths, so the labels stack and the `$` figures land on one right edge.
-/// Empty (the corner is dropped) until something has been recorded.
-///
-/// Figures read the eased display values from `anim` at `phase`; the all-time
-/// total brightens briefly the instant it settles.
-pub(super) fn value_corner_lines(
+/// The fleet ledger rows pinned to the bottom of the dashboard: the trailing
+/// week (`W:`) and month (`M:`), each reading `◎ sessions  ◇ ↘ ↗ ◌  $spend`
+/// across every provider (today's headline lives in the cockpit, so these climb
+/// `week → month`). The token figures read the precise one-decimal form (`16.5k`)
+/// — the ledger is the exact record next to the cockpit's coarse live read — with
+/// the `◇` total in violet (matching the cards) and the `$` bold money-green; the
+/// spend deliberately does **not** animate (only today's headline does). Both
+/// rows share one set of right-aligned column widths so the labels stack and
+/// every number column lines up. Empty (dropped) until something is recorded.
+pub(super) fn fleet_ledger_lines(
     theme: &Theme,
     tally: Option<&SpendTally>,
-    anim: &TallyAnim,
-    phase: u64,
     width: usize,
 ) -> Vec<Line<'static>> {
-    // Nothing recorded yet → no corner. The tally is the authoritative target;
-    // each roll eases toward it and snaps to it when no animation is in flight.
     let Some(tally) = tally.filter(|t| !t.is_zero()) else {
         return Vec::new();
     };
-
-    // Both rows share one token column and one spend column, sized to the wider
-    // (trailing-year) settled figure so the labels stack and the `$` lands on one
-    // right edge. Widths come from the settled targets, not the eased display, so
-    // the columns hold steady at rest — a climbing roll may jitter a cell the way
-    // every animated figure does.
-    let tok_w = tokens_short(tally.year.tokens)
-        .chars()
-        .count()
-        .max(tokens_short(tally.month.tokens).chars().count());
-    let usd_w = dollars2(tally.year.usd)
-        .chars()
-        .count()
-        .max(dollars2(tally.month.usd).chars().count());
-
-    // This month's companion, dim, on top — the window the cockpit's today figure
-    // doesn't show.
-    let month = value_corner_row(
-        theme,
-        "month",
-        anim.month_tokens
-            .display(tally.month.tokens as f64, phase)
-            .round() as u64,
-        anim.month_usd.display(tally.month.usd, phase),
-        theme.dim(),
-        (tok_w, usd_w),
-        width,
-    );
-
-    // The trailing-year pile below — the climbing hero. Its `$` rides the
-    // money-green and brightens for a beat as a fresh climb lands.
-    let usd_style = if anim.year_usd.flashing(phase) {
-        theme.style(VALUE_FLASH, Modifier::BOLD)
-    } else {
-        theme.style(Color::Green, Modifier::BOLD)
-    };
-    let year = value_corner_row(
-        theme,
-        "year",
-        anim.year_tokens
-            .display(tally.year.tokens as f64, phase)
-            .round() as u64,
-        anim.year_usd.display(tally.year.usd, phase),
-        usd_style,
-        (tok_w, usd_w),
-        width,
-    );
-
-    vec![month, year]
+    let cols = WmColumns::measure(&tally.week, &tally.month);
+    vec![
+        wm_row(theme, "W", &tally.week, &cols, width),
+        wm_row(theme, "M", &tally.month, &cols, width),
+    ]
 }
 
-/// One value-corner row, pinned flush to the right edge: a faint `{label}:` text
-/// column, the token burn right-aligned in `tok_w` cells with a faint ` tok`,
-/// then the spend right-aligned in `usd_w` cells in `usd_style`. The caller hands
-/// both rows the same `(tok_w, usd_w)`, so right-pinning stacks the label column
-/// and lands every `$` on one column — the rows read as an aligned little ledger.
-fn value_corner_row(
+/// The shared right-aligned column widths for the `W:`/`M:` ledger rows, measured
+/// across both windows so a 2- and a 3-digit figure stack on one right edge.
+struct WmColumns {
+    sessions: usize,
+    total: usize,
+    input: usize,
+    output: usize,
+    cache_read: usize,
+    usd: usize,
+}
+
+impl WmColumns {
+    fn measure(week: &SpendWindow, month: &SpendWindow) -> Self {
+        let max2 = |a: String, b: String| a.chars().count().max(b.chars().count());
+        Self {
+            sessions: max2(week.sessions.to_string(), month.sessions.to_string()),
+            total: max2(tokens_short(week.tokens), tokens_short(month.tokens)),
+            input: max2(tokens_short(week.input), tokens_short(month.input)),
+            output: max2(tokens_short(week.output), tokens_short(month.output)),
+            cache_read: max2(
+                tokens_short(week.cache_read),
+                tokens_short(month.cache_read),
+            ),
+            usd: max2(dollars2(week.usd), dollars2(month.usd)),
+        }
+    }
+}
+
+/// One ledger row — `W: ◎ {sessions}  ◇ {total} ↘ {in} ↗ {out} ◌ {cache_read}`
+/// left-clustered, the `$ {spend}` pinned to the right edge. Every numeric field
+/// is right-aligned to the shared [`WmColumns`] width, so the `W:` and `M:` rows
+/// stack into one tidy grid. The `◍` cache-write field is intentionally omitted
+/// here — the ledger keeps to the four headline figures the all-time read needs.
+fn wm_row(
     theme: &Theme,
     label: &str,
-    tokens: u64,
-    usd: f64,
-    usd_style: Style,
-    (tok_w, usd_w): (usize, usize),
+    window: &SpendWindow,
+    cols: &WmColumns,
     width: usize,
 ) -> Line<'static> {
-    let tokens = tokens_short(tokens);
-    let usd = dollars2(usd);
-    let cluster = vec![
+    let dim = theme.dim();
+    let left = vec![
         Span::styled(format!("{label}: "), theme.faint()),
-        Span::styled(format!("{tokens:>tok_w$}"), theme.dim()),
-        Span::styled(" tok", theme.faint()),
-        Span::styled(" · ", theme.faint()),
-        Span::styled(format!("{usd:>usd_w$}"), usd_style),
+        Span::styled(SESSIONS_GLYPH, theme.style(Color::Cyan, Modifier::empty())),
+        Span::styled(format!(" {:>w$}", window.sessions, w = cols.sessions), dim),
+        Span::raw("  "),
+        Span::styled(TOKENS_TOTAL, theme.style(Color::Magenta, Modifier::empty())),
+        Span::styled(
+            format!(" {:>w$}", tokens_short(window.tokens), w = cols.total),
+            dim,
+        ),
+        Span::styled(
+            format!(
+                " {TOKENS_IN} {:>w$}",
+                tokens_short(window.input),
+                w = cols.input
+            ),
+            dim,
+        ),
+        Span::styled(
+            format!(
+                " {TOKENS_OUT} {:>w$}",
+                tokens_short(window.output),
+                w = cols.output
+            ),
+            dim,
+        ),
+        Span::styled(
+            format!(
+                " {TOKENS_CACHED} {:>w$}",
+                tokens_short(window.cache_read),
+                w = cols.cache_read
+            ),
+            dim,
+        ),
     ];
-    pin_right(Vec::new(), cluster, width)
+    let right = vec![Span::styled(
+        format!("{:>w$}", dollars2(window.usd), w = cols.usd),
+        theme.style(Color::Green, Modifier::BOLD),
+    )];
+    pin_right(left, right, width)
 }
 
 /// The pinned per-provider dashboard: one block per provider (`Claude`,
@@ -1528,6 +1512,9 @@ pub(super) fn provider_panel_lines(
             lines.push(Line::from(""));
         }
         lines.push(provider_header_line(theme, panel, width));
+        // A blank line below the provider name sets the identity apart from the
+        // emblem + stats body, matching the cockpit's breathing room.
+        lines.push(Line::from(""));
         lines.extend(provider_body_lines(theme, panel, width));
     }
     lines
@@ -1580,7 +1567,7 @@ fn provider_body_lines(
     // The right column, top to bottom: aggregate stats then the budget bars,
     // packed directly so the three rows line up against the three-line emblem and
     // the bars sit right under the numbers (no separator row).
-    let mut rights: Vec<Vec<Span<'static>>> = vec![provider_stats_spans(theme, panel)];
+    let mut rights: Vec<Vec<Span<'static>>> = vec![provider_stats_spans(theme, panel, bar_region)];
     rights.extend(provider_bar_rows(theme, panel, bar_region));
 
     let rows = panel.art.len().max(rights.len());
@@ -1603,27 +1590,40 @@ fn provider_body_lines(
     lines
 }
 
-/// The provider's aggregate stats line: bold money-green spend (two decimals)
-/// and the `◇` token total — always rendered, reading `$0.00 · ◇ 0` for an idle
-/// account so the line above the budget bars is never blank. Both figures are
-/// today's transcript-history spend and token burn for this provider, summed
+/// The provider's aggregate stats line beside the emblem: today's token
+/// breakdown `◇ ↘ ↗ ◍ ◌` (integer magnitudes) on the left, the bold money-green
+/// spend pinned to the right edge of the bar `region`. Always rendered — an idle
+/// account reads `◇ 0 …  $0.00` so the line above the budget bars is never blank.
+/// Every figure is today's transcript-history burn for this provider, summed
 /// across every session from the JSONL — the accurate cross-session total, and
 /// the only cost source for token-only providers like Codex. The summed `+/-`
 /// churn is intentionally absent — a noisy per-account aggregate; per-worktree
 /// churn lives on the group headers and per-agent churn on the work line.
-fn provider_stats_spans(theme: &Theme, panel: &SidebarProviderPanel) -> Vec<Span<'static>> {
+fn provider_stats_spans(
+    theme: &Theme,
+    panel: &SidebarProviderPanel,
+    region: usize,
+) -> Vec<Span<'static>> {
     let today = panel
         .spending
         .as_ref()
         .map(|spending| spending.today)
         .unwrap_or_default();
-    let mut spans: Vec<Span<'static>> = vec![Span::styled(
+    let left = token_breakdown_spans(
+        theme,
+        today.tokens,
+        today.input,
+        today.output,
+        today.cache_write,
+        today.cache_read,
+        tokens_int,
+        true,
+    );
+    let right = vec![Span::styled(
         dollars2(today.usd),
         theme.style(Color::Green, Modifier::BOLD),
     )];
-    push_dot(&mut spans, theme);
-    spans.extend(tokens_label(theme, today.tokens));
-    spans
+    pin_right(left, right, region).spans
 }
 
 /// The provider's budget bars within `region`: a metered account drains one

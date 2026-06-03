@@ -105,10 +105,10 @@ pub(super) fn window_label(duration_mins: Option<u32>) -> String {
 
 /// Spend at full cent resolution with thousands grouped — `$0.00`, `$3.50`,
 /// `$124.05`, `$1,240.57`. Every spend in the sidebar reads as money at two
-/// decimals: the per-row cost, the cockpit fleet total, the provider dashboard,
-/// and the value corner all share this one shape, so a price never jitters
-/// between a cents and a whole-dollar form. Grouping keeps a large accumulating
-/// pile (`$12,480.13`) legible without changing that shape.
+/// decimals: the per-row cost, the cockpit's count-up today total, the provider
+/// dashboard, and the fleet ledger all share this one shape, so a price never
+/// jitters between a cents and a whole-dollar form. Grouping keeps a large
+/// accumulating pile (`$12,480.13`) legible without changing that shape.
 pub(super) fn dollars2(usd: f64) -> String {
     // Work in integer cents so rounding matches `{:.2}` and grouping is exact.
     let cents = (usd.max(0.0) * 100.0).round() as u64;
@@ -201,6 +201,23 @@ fn title_word(word: &str) -> String {
     }
 }
 
+/// A token count as a whole-unit magnitude with no decimal — `523`, `76k`,
+/// `1M`, `2B` — for the agent card and the live cockpit / provider lines, where a
+/// tenths place is noise beside the precise `76.5k` the W/M ledger rows carry.
+/// Truncates to the unit (`76_500` → `76k`), matching the live figures' coarser
+/// read; sub-thousand counts stay exact.
+pub(super) fn tokens_int(count: u64) -> String {
+    if count >= 1_000_000_000 {
+        format!("{}B", count / 1_000_000_000)
+    } else if count >= 1_000_000 {
+        format!("{}M", count / 1_000_000)
+    } else if count >= 1_000 {
+        format!("{}k", count / 1_000)
+    } else {
+        count.to_string()
+    }
+}
+
 /// A token count as a thin magnitude with no unit suffix — `523`, `76.5k`,
 /// `1.2M`, `1.2B` — so callers compose it into a label (`{} tok`) or a split
 /// line. The `B` tier keeps an all-time token pile compact as it crosses a
@@ -260,27 +277,6 @@ pub(super) fn duration_worked(ms: u64) -> String {
         return "0s".to_owned();
     }
     compact_seconds(seconds)
-}
-
-/// Like [`duration_worked`] but never finer than minutes — for the cockpit
-/// fleet clock, where a ticking seconds field on an aggregate is noise. Floors
-/// to whole minutes (a span under a minute reads `0m`) and takes the two
-/// highest non-zero units from `d`/`h`/`m`.
-pub(super) fn duration_worked_coarse(ms: u64) -> String {
-    let minutes = (ms / 60_000) as i64;
-    if minutes <= 0 {
-        return "0m".to_owned();
-    }
-    [
-        (minutes / 1_440, 'd'),
-        (minutes % 1_440 / 60, 'h'),
-        (minutes % 60, 'm'),
-    ]
-    .into_iter()
-    .filter(|(value, _)| *value > 0)
-    .take(2)
-    .map(|(value, unit)| format!("{value}{unit}"))
-    .collect()
 }
 
 #[cfg(test)]
@@ -363,24 +359,23 @@ mod tests {
     }
 
     #[test]
-    fn duration_worked_coarse_floors_to_minutes() {
-        assert_eq!(duration_worked_coarse(13 * 60_000 + 3_000), "13m"); // 13m3s → 13m
-        assert_eq!(duration_worked_coarse(60 * 60_000 + 12 * 60_000), "1h12m");
-        assert_eq!(
-            duration_worked_coarse(3 * 86_400_000 + 4 * 3_600_000),
-            "3d4h"
-        );
-        assert_eq!(duration_worked_coarse(30_000), "0m"); // sub-minute floors to 0m
-        assert_eq!(duration_worked_coarse(0), "0m");
-    }
-
-    #[test]
     fn tokens_short_scales_by_magnitude() {
         assert_eq!(tokens_short(523), "523");
         assert_eq!(tokens_short(76_500), "76.5k");
         assert_eq!(tokens_short(1_200_000), "1.2M");
         assert_eq!(tokens_short(1_200_000_000), "1.2B");
         assert_eq!(tokens_short(47_200_000), "47.2M");
+    }
+
+    #[test]
+    fn tokens_int_truncates_to_whole_units() {
+        assert_eq!(tokens_int(523), "523");
+        // 76.5k reads `76k` (truncated, not rounded) — the coarse live form.
+        assert_eq!(tokens_int(76_500), "76k");
+        assert_eq!(tokens_int(12_000), "12k");
+        assert_eq!(tokens_int(999), "999");
+        assert_eq!(tokens_int(1_900_000), "1M");
+        assert_eq!(tokens_int(2_500_000_000), "2B");
     }
 
     #[test]

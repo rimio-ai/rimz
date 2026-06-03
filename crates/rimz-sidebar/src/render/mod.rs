@@ -35,8 +35,8 @@ use rimz::{SidebarRowKind, SidebarSnapshot};
 
 use self::fmt::age_short;
 use self::sections::{
-    content_width, dashboard_summary_line, first_run_hint_lines, fleet_header_lines, fleet_size,
-    provider_panel_lines, value_corner_lines, worktree_group_lines,
+    cockpit_spend_line, cockpit_summary_line, content_width, first_run_hint_lines,
+    fleet_header_lines, fleet_ledger_lines, fleet_size, provider_panel_lines, worktree_group_lines,
 };
 use self::theme::Theme;
 
@@ -48,7 +48,7 @@ pub struct UiState {
     /// animation tick. The renderer derives the running-agent spin frame from
     /// it; freshness gating (per row) keeps a quiet agent frozen.
     pub animation_phase: u64,
-    /// The value corner's count-up state — one eased roll per animated figure.
+    /// The cockpit spend's count-up state — one eased roll for today's `$`.
     /// Folded forward on each data refresh (`TallyAnim::observe`) and read by the
     /// renderer at `animation_phase`; the serve loop keeps the fast tick alive
     /// while a roll is in flight. Crate-internal: an implementation detail of the
@@ -138,20 +138,29 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Al
 }
 
 /// Whether any visible row is in an animated state — a running agent (working
-/// or plan-mode thinking), a resolver mid-flight, or an active process spinning
-/// on real work (a build, a test, a `sudo` install). The serve loop uses this to
-/// switch to the fast animation tick only while there is live motion to paint;
-/// a calm sidebar (only idle/waiting/done/failed rows, all static) keeps idling
-/// on the slow data tick. A stalled agent is projected to `failed` upstream, so
-/// it reads as static `!` and never keeps the fast tick alive.
+/// or plan-mode thinking), a resolver mid-flight, an active process spinning on
+/// real work (a build, a test, a `sudo` install), an attention row whose `?`/`!`
+/// glyph slowly blinks, or an idle agent showing the loading-dots cue. The serve
+/// loop uses this to switch to the fast animation tick only while there is live
+/// motion to paint; a fully settled sidebar (only quiet idle/done rows) keeps
+/// idling on the slow data tick. A stalled agent is projected to `failed`
+/// upstream, so it reads as a blinking `!` here. The cockpit's today-spend
+/// count-up rides a separate gate (`UiState::tally`), so a finished-turn climb
+/// keeps the tick alive even when every row is otherwise static.
 pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {
+    use rimz::feed::AgentStatus;
     snapshot
         .worktree_groups
         .iter()
         .flat_map(|group| &group.rows)
         .any(|row| match row.row_kind {
             SidebarRowKind::Agent => {
-                row.resolver.is_some() || row.status == Some(rimz::feed::AgentStatus::Running)
+                row.resolver.is_some()
+                    || row.status == Some(AgentStatus::Running)
+                    // `?`/`!` blink to pull the eye back to an unanswered row.
+                    || matches!(row.status, Some(AgentStatus::Waiting | AgentStatus::Failed))
+                    // The idle "waiting for a prompt" loading-dots cue.
+                    || sections::shows_loading_dots(row)
             }
             SidebarRowKind::Process => row.process_active,
         })
@@ -226,18 +235,12 @@ pub(crate) fn compose_lines(
                 .map(pad_chrome),
         );
     }
-    // The value corner — the quiet, climbing all-time pile — seals the bottom of
-    // the dashboard. It rides under the dashboard's blank-line block separator
+    // The fleet ledger — the static `W:`/`M:` week/month rows — seals the bottom
+    // of the dashboard. It rides under the dashboard's blank-line block separator
     // when an account block is present, else carries its own hairline so it never
     // floats unsealed against the body.
     if !active {
-        let corner = value_corner_lines(
-            &theme,
-            snapshot.value_tally.as_ref(),
-            &ui.tally,
-            ui.animation_phase,
-            inner,
-        );
+        let corner = fleet_ledger_lines(&theme, snapshot.value_tally.as_ref(), inner);
         if !corner.is_empty() {
             if dashboard_present {
                 bottom.push(Line::from(""));
@@ -351,28 +354,38 @@ fn snapshot_lines(
     let inner = content_width(width);
 
     // Borderless repo header: the workspace name and its path behind their
-    // glyphs, then the count/spend line and a faint hairline rule sealing the
-    // header from the cockpit. Inert chrome, so every line maps to `None`.
+    // glyphs, a blank line, then the cockpit summary and spend lines and a faint
+    // hairline rule sealing the header from the cockpit. Inert chrome, so every
+    // line maps to `None`.
     let mut header = repo_header_lines(theme, snapshot, inner);
-    // Dashboard L2: the fleet head-count (`✦`/`✧`, left) and the bold spend
-    // (right), directly under the name. Always present — an empty room, or a day
-    // with no spend yet, reads `✦ 0` with no spend. The spend is today's total
-    // across every provider, read from the JSONL `value_tally`, so the cockpit
-    // reflects all of today's sessions rather than only the live statusline sum.
-    let today_usd = snapshot
-        .value_tally
-        .as_ref()
-        .map(|t| t.today.usd)
-        .filter(|usd| *usd > 0.0);
-    let size = fleet_size(&snapshot.worktree_groups);
-    header.push(dashboard_summary_line(theme, size, today_usd, inner));
+    // A blank line sets the repo identity apart from the cockpit summary below.
+    header.push(Line::from(""));
+    // The cockpit summary: `¤` live agents, `◎` sessions today, then today's
+    // accumulated token breakdown — the counts from the live fleet and the JSONL
+    // `value_tally`'s today window, so the cockpit reflects all of today's
+    // sessions rather than only the live statusline sum. Always present — an empty
+    // room reads `¤ 0  ◎ 0`.
+    let today = snapshot.value_tally.as_ref().map(|tally| &tally.today);
+    let live_agents = fleet_size(&snapshot.worktree_groups).0;
+    header.push(cockpit_summary_line(theme, live_agents, today, inner));
+    // Today's spend on its own line, right-pinned, counting up as a turn lands.
+    let today_usd = today.map(|window| window.usd).unwrap_or(0.0);
+    if today_usd > 0.0 {
+        header.push(cockpit_spend_line(
+            theme,
+            today_usd,
+            &ui.tally,
+            ui.animation_phase,
+            inner,
+        ));
+    }
     header.push(hairline_rule(theme, inner));
     extend_inert(&mut lines, &mut map, header);
 
-    // The fleet header (the cockpit) is always present and a fixed height — two
-    // lines for a populated room, one for an empty one — so the body below never
-    // shifts vertically as agents change state. It is chrome, never a jump
-    // target, so every header line maps to `None`.
+    // The fleet header (the cockpit make-up line) is always present and a fixed
+    // height — one line for a populated room, none for an empty one — so the body
+    // below never shifts vertically as agents change state. It is chrome, never a
+    // jump target, so every header line maps to `None`.
     // The configurable neglect window (seconds an unanswered `?`/`!` stays
     // yellow before it reddens) rides in on the snapshot like `density` does, so
     // the renderer stays a pure consumer. Clamp into the `i64` age space.
@@ -380,13 +393,7 @@ fn snapshot_lines(
     extend_inert(
         &mut lines,
         &mut map,
-        fleet_header_lines(
-            theme,
-            &snapshot.agents,
-            &snapshot.worktree_groups,
-            inner,
-            redden_secs,
-        ),
+        fleet_header_lines(theme, &snapshot.worktree_groups, inner, redden_secs),
     );
     let density = snapshot.sidebar.density;
     if snapshot.worktree_groups.is_empty() {
@@ -1044,12 +1051,15 @@ mod tests {
         // the provider dashboard now.
         assert!(!rendered.contains("5h↻"));
         assert!(!rendered.contains("7d↻"));
-        // Selection appends the token line (glyph set) and the work line (the
-        // agent's own edit count). Tokens read ◇ total ↘ input ↗ output ◌ cached;
-        // the window size no longer rides this line.
-        assert!(rendered.contains("◇ 76.5k"));
-        assert!(rendered.contains("↘ 64.2k"));
-        assert!(rendered.contains("↗ 12.3k"));
+        // The compact card carries the token line; the work line (the agent's own
+        // edit count) appends on selection. Tokens read the integer split
+        // ◇ total ↘ input ↗ output ◍ cache-write ◌ cache-read; the window size no
+        // longer rides this line.
+        assert!(rendered.contains("◇ 76k"));
+        assert!(rendered.contains("↘ 64k"));
+        assert!(rendered.contains("↗ 12k"));
+        assert!(rendered.contains("◍ 20k"), "cache-write split:\n{rendered}");
+        assert!(rendered.contains("◌ 48k"), "cache-read split:\n{rendered}");
         assert!(
             !rendered.contains("ctx"),
             "window size left the token line:\n{rendered}"
@@ -1135,7 +1145,7 @@ mod tests {
             12,
         );
 
-        assert!(rendered.contains("◇ 5.0k"));
+        assert!(rendered.contains("◇ 5k"));
         assert!(!rendered.contains('↻'));
         assert!(!rendered.contains('$'));
     }
@@ -1187,9 +1197,9 @@ mod tests {
         assert!(!rendered.contains('↻'));
         assert!(!rendered.contains("5h"));
         assert!(!rendered.contains("7d"));
-        // No read-only token usage or cost: the bare rollout total (`◇ 48.0k`)
-        // stands in for the token line, and no cost pins to the row.
-        assert!(rendered.contains("◇ 48.0k"));
+        // No read-only token usage or cost: the bare rollout total (`◇ 48k`,
+        // integer form) stands in for the token line, and no cost pins to the row.
+        assert!(rendered.contains("◇ 48k"));
         assert!(!rendered.contains('↗'));
         assert!(!rendered.contains('$'));
     }
@@ -1431,7 +1441,9 @@ mod tests {
         );
         codex.last_activity = fixed_now() - Duration::from_secs(3);
         let snapshot = snapshot_with(Vec::new(), vec![codex]);
-        let rendered = snapshot_to_screen(&snapshot, 24, 8);
+        // Tall enough that the card clears the bottom-pinned footer after the
+        // cockpit's blank-line + summary header (the agent row is what we measure).
+        let rendered = snapshot_to_screen(&snapshot, 24, 10);
 
         assert!(
             // phase 0 of the working spinner is the first frame `⣾`.
@@ -1460,8 +1472,10 @@ mod tests {
     }
 
     /// Honesty test: a running agent silent past the stall window is projected
-    /// to the attention bucket, so it reads as a static `!` and its cell does
-    /// not animate — a wedged agent stops spinning and asks for a look.
+    /// to the attention bucket, so its cell reads as the attention `!` rather than
+    /// the working spinner — a wedged agent stops spinning and asks for a look.
+    /// (The `!` slowly blinks to draw the eye, but does not cycle the working
+    /// braille; phases 0 and 2 both fall in the blink's shown window.)
     #[test]
     fn render_stalled_agent_reads_as_static_attention() {
         let mut claude = agent(
@@ -1476,8 +1490,8 @@ mod tests {
         claude.last_activity =
             fixed_now() - Duration::from_secs(rimz::feed::STALL_WINDOW_SECS as u64 + 60);
         let snapshot = snapshot_with(Vec::new(), vec![claude]);
-        let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 8);
-        let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 40, 8);
+        let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 10);
+        let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 40, 10);
 
         assert_eq!(first, second, "a stalled agent's cell must not spin");
         assert!(
@@ -1502,8 +1516,8 @@ mod tests {
         );
         claude.last_activity = fixed_now() - Duration::from_secs(30);
         let snapshot = snapshot_with(Vec::new(), vec![claude]);
-        let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 8);
-        let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 40, 8);
+        let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 10);
+        let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 40, 10);
 
         assert_ne!(
             first, second,
@@ -1681,16 +1695,24 @@ mod tests {
         let strip = |line: &String| line.chars().skip(1).collect::<String>();
         let fold: Vec<String> = unselected[1..].iter().map(strip).collect();
         let full: Vec<String> = selected[1..].iter().map(strip).collect();
-        // Compact fold is exactly identity + description + ctx bar.
-        assert_eq!(fold.len(), 3, "compact fold is three card lines: {fold:?}");
-        // Those three are a byte-identical prefix of the expanded card.
+        // Compact fold is identity + description + ctx bar + the token line.
+        assert_eq!(
+            fold.len(),
+            4,
+            "compact fold is four card lines (incl. the token line): {fold:?}"
+        );
+        // Those four are a byte-identical prefix of the expanded card.
         assert_eq!(fold, full[..fold.len()], "selection reshaped a fold line");
-        // Selection only appended beneath — the token line and the work line.
+        // The token line now rides the resting fold; selection only appends the
+        // work line (and any subagents) beneath it.
+        assert!(
+            fold.iter().any(|line| line.contains("◇ ")),
+            "the token line is part of the compact fold: {fold:?}"
+        );
         assert!(
             full.len() > fold.len(),
-            "selection must append detail lines"
+            "selection must append the work line"
         );
-        assert!(full[fold.len()..].iter().any(|line| line.contains("◇ ")));
         assert!(
             full[fold.len()..]
                 .iter()
@@ -1781,8 +1803,12 @@ mod tests {
         let resting = |density| card_lines(density, usize::MAX).len() - 1;
         let selected = |density| card_lines(density, 0).len() - 1;
 
-        assert_eq!(resting(Compact), 3, "compact: identity, description, ctx");
-        assert_eq!(resting(Full), 5, "full: + the token line and work line");
+        assert_eq!(
+            resting(Compact),
+            4,
+            "compact: identity, description, ctx, token line"
+        );
+        assert_eq!(resting(Full), 5, "full: + the work line");
         // Selection reaches the full five-line card from either density (the
         // account-scoped budgets moved to the provider dashboard).
         assert_eq!(selected(Compact), 5);
@@ -1851,7 +1877,9 @@ mod tests {
         let expanded = line_texts(&group_lines(&idle, &theme, Compact, 0));
 
         assert!(
-            resting.iter().all(|line| !line.contains('▣')),
+            resting
+                .iter()
+                .all(|line| !line.contains('▣') && !line.contains('▢')),
             "fresh idle card hides the context bar:\n{}",
             resting.join("\n")
         );
@@ -1872,8 +1900,8 @@ mod tests {
             usize::MAX,
         ));
         assert!(
-            running.iter().any(|line| line.contains('▣')),
-            "a running 0% agent keeps its bar:\n{}",
+            running.iter().any(|line| line.contains('▢')),
+            "a running 0% agent keeps its bar (the hollow ▢ at 0%):\n{}",
             running.join("\n")
         );
     }
@@ -2011,6 +2039,11 @@ mod tests {
                 today: rimz::SpendWindow {
                     usd: 3.5,
                     tokens: 486_000,
+                    input: 422_000,
+                    output: 64_000,
+                    cache_write: 12_000,
+                    cache_read: 68_000,
+                    sessions: 12,
                 },
                 ..Default::default()
             }),
@@ -2226,12 +2259,19 @@ mod tests {
             today: rimz::SpendWindow {
                 usd: 4.20,
                 tokens: 486_000,
+                input: 422_000,
+                output: 64_000,
+                cache_write: 0,
+                cache_read: 68_000,
+                sessions: 5,
             },
             ..Default::default()
         });
         let stats = stats_line(&theme, &codex);
         assert!(stats.contains("$4.20"), "today's JSONL spend: {stats:?}");
-        assert!(stats.contains("486.0k"), "today's JSONL tokens: {stats:?}");
+        // The today line reads the coarse integer form (`◇ 486k`), with the split.
+        assert!(stats.contains("486k"), "today's JSONL tokens: {stats:?}");
+        assert!(stats.contains("↗ 64k"), "the output split: {stats:?}");
     }
 
     /// A started window — its reset has ticked well below the full window — keeps
@@ -2308,6 +2348,11 @@ mod tests {
                     today: rimz::SpendWindow {
                         usd: 1.2,
                         tokens: 88_000,
+                        input: 76_000,
+                        output: 12_000,
+                        cache_write: 0,
+                        cache_read: 8_000,
+                        sessions: 3,
                     },
                     ..Default::default()
                 });
@@ -2342,16 +2387,13 @@ mod tests {
         assert_snapshot("provider_dashboard", rendered);
     }
 
-    /// The value corner: the fleet's quiet, climbing pile pinned at the bottom of
-    /// the dashboard as a two-row ledger. The trailing month's dim companion
-    /// (`month:`) leads, the trailing-year pile (`year:`) sits under it — each row
-    /// reading `label:  <tokens> tok · $<spend>` flush to the right edge, the
-    /// labels stacked and the `$` figures on one column. Today stays in the
-    /// cockpit, never repeated here. Rendering through a default `UiState`, the
-    /// figures snap to the snapshot's tally (the eased count-up only plays when the
-    /// serve loop folds a fresh tally).
+    /// The fleet ledger pinned at the bottom of the dashboard: the static
+    /// `W:` (week) and `M:` (month) rows, each reading `◎ sessions  ◇ ↘ ↗ ◌
+    /// $spend` across every provider — precise one-decimal token figures and the
+    /// bold money-green spend, right-aligned into one aligned grid. Today's
+    /// headline stays in the cockpit's animated `$`, never repeated here.
     #[test]
-    fn render_value_corner_pins_year_pile_under_the_dashboard() {
+    fn render_fleet_ledger_pins_week_month_rows_under_the_dashboard() {
         let mut claude = agent(
             "claude-1",
             "claude",
@@ -2375,51 +2417,65 @@ mod tests {
             today: rimz::SpendWindow {
                 usd: 40.23,
                 tokens: 3_300_000,
+                input: 300_000,
+                output: 3_000_000,
+                cache_write: 120_000,
+                cache_read: 6_800_000,
+                sessions: 12,
             },
             week: rimz::SpendWindow {
                 usd: 312.40,
                 tokens: 21_000_000,
+                input: 2_300_000,
+                output: 18_700_000,
+                cache_write: 900_000,
+                cache_read: 51_000_000,
+                sessions: 92,
             },
             month: rimz::SpendWindow {
                 usd: 1_240.57,
                 tokens: 33_000_000,
+                input: 4_300_000,
+                output: 28_700_000,
+                cache_write: 1_900_000,
+                cache_read: 121_000_000,
+                sessions: 212,
             },
             year: rimz::SpendWindow {
                 usd: 4_821.90,
                 tokens: 47_200_000,
+                input: 7_200_000,
+                output: 40_000_000,
+                cache_write: 3_000_000,
+                cache_read: 210_000_000,
+                sessions: 980,
             },
         });
-        let rendered = snapshot_to_screen(&snapshot, 54, 34);
+        let rendered = snapshot_to_screen(&snapshot, 60, 34);
 
-        // The `year:` row: the grouped trailing-year dollars and its `◇`-free token
-        // burn, labeled on the left and pinned flush right.
+        // The `W:` and `M:` rows: each labelled left, the `$` spend pinned right.
+        assert!(rendered.contains("W:"), "the week ledger row:\n{rendered}");
+        assert!(rendered.contains("M:"), "the month ledger row:\n{rendered}");
         assert!(
-            rendered.contains("year:"),
-            "the trailing-year row's label:\n{rendered}"
-        );
-        assert!(
-            rendered.contains("$4,821.90"),
-            "grouped trailing-year spend:\n{rendered}"
-        );
-        assert!(
-            rendered.contains("47.2M tok"),
-            "trailing-year token burn:\n{rendered}"
-        );
-        // The `month:` row climbs a window the cockpit doesn't show.
-        assert!(
-            rendered.contains("month:"),
-            "this month's row label:\n{rendered}"
+            rendered.contains("$312.40"),
+            "this week's spend:\n{rendered}"
         );
         assert!(
             rendered.contains("$1,240.57"),
             "this month's spend:\n{rendered}"
         );
-        // Today stays in the cockpit's `$` — the corner never repeats it.
+        // Session counts and the precise (one-decimal) token total.
+        assert!(rendered.contains("212"), "month session count:\n{rendered}");
         assert!(
-            rendered.contains("$40.23"),
-            "today's spend in the cockpit:\n{rendered}"
+            rendered.contains("33.0M"),
+            "month token total, precise form:\n{rendered}"
         );
-        assert_snapshot("value_corner", rendered);
+        // The `year` window is no longer surfaced — the ledger tops out at month.
+        assert!(
+            !rendered.contains("$4,821.90"),
+            "the year pile is gone from the ledger:\n{rendered}"
+        );
+        assert_snapshot("fleet_ledger", rendered);
     }
 
     /// The borderless repo header (dashboard L1): the workspace name behind `⌘`
@@ -2462,42 +2518,19 @@ mod tests {
         assert_eq!(abbreviate_under("/srv/code", None), "/srv/code");
     }
 
-    /// The cockpit folds the worktrees' commits-ahead into the fleet total as a
-    /// `◆ N` count beside the `+/-` churn it came from.
-    #[test]
-    fn cockpit_totals_show_commits_ahead() {
-        let mut claude = agent(
-            "claude-1",
-            "claude",
-            AgentStatus::Running,
-            PermissionPosture::Auto,
-            Some("/repo/feature-migration"),
-            Some("feature-migration"),
-            Some("db migrate"),
-        );
-        claude.context = Some(claude_context(fixed_now()));
-        let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
-        snapshot.worktree_groups[0].diff_added = Some(127);
-        snapshot.worktree_groups[0].diff_removed = Some(43);
-        snapshot.worktree_groups[0].commits_ahead = Some(3);
-        let rendered = snapshot_to_screen(&snapshot, 54, 14);
-        assert!(rendered.contains("◆ 3"), "{rendered}");
-    }
-
-    /// The dashboard's L2 carries the fleet head-count (`✦ N`, under the name);
-    /// the cockpit below it splits the make-up at a fixed height — the left
-    /// cluster (`? ! ○`, each glyph spaced from its count, a zero reading `? 0`)
-    /// and the busy/done tail (`✽ ⢿ ✓`) — so the body never shifts as agents
-    /// change state.
+    /// The cockpit summary carries the fleet count (`¤ N`, under the name); the
+    /// cockpit below it splits the make-up at a fixed height — the left cluster
+    /// (`? ! ○`, each glyph spaced from its count, a zero reading `? 0`) and the
+    /// busy/done tail (`✽ ⢿ ✓`) — so the body never shifts as agents change state.
     #[test]
     fn fleet_header_is_fixed_and_splits_the_make_up() {
-        // Borderless layout: row 0 is the name, row 1 the count+spend line, row 2
-        // the hairline rule. An empty room reads `✦ 0` on row 1 with no cockpit
-        // beneath, so the body below never moves.
+        // Borderless layout: row 0 is the name, row 1 a blank line, row 2 the
+        // `¤`/`◎` summary, row 3 the hairline rule. An empty room reads `¤ 0` on
+        // row 2 with no cockpit beneath, so the body below never moves.
         let empty = snapshot_with(Vec::new(), Vec::new());
         let empty_screen = snapshot_to_screen(&empty, 40, 12);
         assert!(
-            empty_screen.lines().nth(1).unwrap().contains("✦ 0"),
+            empty_screen.lines().nth(2).unwrap().contains("¤ 0"),
             "{empty_screen}"
         );
 
@@ -2521,9 +2554,10 @@ mod tests {
         );
         let snapshot = snapshot_with(Vec::new(), vec![working, thinking]);
         let screen = snapshot_to_screen(&snapshot, 40, 12);
-        // Row 1 is the head-count; row 3 is the bucket make-up (row 2 is the rule).
-        assert!(screen.lines().nth(1).unwrap().contains("✦ 2"), "{screen}");
-        let buckets = screen.lines().nth(3).unwrap();
+        // Row 2 is the `¤`/`◎` summary; row 4 is the bucket make-up (row 1 is the
+        // blank line, row 3 the hairline rule).
+        assert!(screen.lines().nth(2).unwrap().contains("¤ 2"), "{screen}");
+        let buckets = screen.lines().nth(4).unwrap();
         // Left cluster: waiting/failed/idle each show their count (a zero reads
         // `? 0`); the running pair splits one working (⢿) one thinking (✽) right.
         assert!(buckets.contains("? 0"), "{buckets}");

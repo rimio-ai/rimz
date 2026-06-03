@@ -9,7 +9,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use rimz::feed::{AgentStatus, PermissionPosture};
 
-use super::fmt::tokens_short;
 use super::theme::{ORANGE, Theme};
 
 /// The static status glyph — used for the legend, the worktree tally, the
@@ -71,8 +70,28 @@ const COMPACTING_FRAMES: [&str; 10] = ["▁", "▃", "▄", "▅", "▆", "▇",
 /// live head, just delegating.
 const SUBAGENT_FRAMES: [&str; 8] = ["_", "-", "`", "´", "'", "´", "`", "-"];
 
+/// Idle, waiting-for-a-prompt: a quiet `.` → `..` → `...` loading cue that stands
+/// in for the em-dash on a just-started agent with nothing to describe yet. Held
+/// a few ticks per step so it breathes rather than flickers.
+const LOADING_FRAMES: [&str; 3] = [".", "..", "..."];
+
 fn frame(frames: &[&'static str], animation_phase: u64) -> &'static str {
     frames[(animation_phase as usize) % frames.len()]
+}
+
+/// The idle loading-dots cue (`.` / `..` / `...`), each step held three ticks
+/// (~300ms) so the cycle reads as a gentle breath, not a strobe.
+pub(super) fn loading_dots(animation_phase: u64) -> &'static str {
+    LOADING_FRAMES[((animation_phase / 3) as usize) % LOADING_FRAMES.len()]
+}
+
+/// Whether a blinking attention glyph (`?` / `!`) paints on this frame. It shows
+/// for most of a slow ~2s cycle and blanks for the final two frames — one quiet
+/// blink that pulls the eye back to an unanswered row without strobing. The
+/// caller paints a same-width blank on the off frames so the column never shifts.
+pub(super) fn attention_blink_on(animation_phase: u64) -> bool {
+    const CYCLE: u64 = 20; // ~2s at the 100ms animation tick
+    (animation_phase % CYCLE) < CYCLE - 2
 }
 
 pub(super) fn working_glyph(animation_phase: u64) -> &'static str {
@@ -216,14 +235,58 @@ pub(super) fn posture_style(theme: &Theme, posture: PermissionPosture) -> Style 
     }
 }
 
-/// Token-composition glyphs for the expanded card's token line: a diamond for
-/// the cumulative total, the directional arrows for input read in / output
-/// generated, and a filled ring for the cached reads. Aggregate sites (the
-/// cockpit, the provider stats) use [`TOKENS_TOTAL`] alone.
+/// Token-composition glyphs for the `◇ ↘ ↗ ◍ ◌` breakdown: a diamond for the
+/// cumulative total (input + output), the directional arrows for input read in /
+/// output generated, a half-filled ring for cache writes, and a hollow ring for
+/// cache reads. The breakdown reads the same on the agent card, the cockpit, the
+/// provider dashboard, and the W/M ledger rows — one grammar, built by
+/// [`token_breakdown_spans`].
 pub(super) const TOKENS_TOTAL: &str = "◇";
 pub(super) const TOKENS_IN: &str = "↘";
 pub(super) const TOKENS_OUT: &str = "↗";
+pub(super) const TOKENS_CACHE_WRITE: &str = "◍";
 pub(super) const TOKENS_CACHED: &str = "◌";
+
+/// The `◇ ↘ ↗ ◍ ◌` token breakdown as styled spans — the one shape every token
+/// line shares (agent card, cockpit today line, provider today line, W/M ledger
+/// rows). The `◇` total carries the soft-violet domain color; every other field
+/// stays dim chrome so only the total reads as a colored marker. `fmt` chooses
+/// the magnitude form (`tokens_int` live, `tokens_short` for the precise W/M
+/// rows); `include_cache_write` drops the `◍` field for the W/M rows, which omit
+/// it. `total` is the caller's `◇` value (input + output), passed in so a row can
+/// read it straight from its accumulated window.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn token_breakdown_spans(
+    theme: &Theme,
+    total: u64,
+    input: u64,
+    output: u64,
+    cache_write: u64,
+    cache_read: u64,
+    fmt: fn(u64) -> String,
+    include_cache_write: bool,
+) -> Vec<Span<'static>> {
+    let mut spans = tokens_total_spans(theme, total, fmt);
+    spans.push(Span::styled(
+        format!(" {TOKENS_IN} {}", fmt(input)),
+        theme.dim(),
+    ));
+    spans.push(Span::styled(
+        format!(" {TOKENS_OUT} {}", fmt(output)),
+        theme.dim(),
+    ));
+    if include_cache_write {
+        spans.push(Span::styled(
+            format!(" {TOKENS_CACHE_WRITE} {}", fmt(cache_write)),
+            theme.dim(),
+        ));
+    }
+    spans.push(Span::styled(
+        format!(" {TOKENS_CACHED} {}", fmt(cache_read)),
+        theme.dim(),
+    ));
+    spans
+}
 
 /// Heavy `━` for the thin context/rule bars' filled run, light `─` for the
 /// remaining track. The weight difference — not just the color — carries the
@@ -488,14 +551,20 @@ pub(super) fn todo_spans(theme: &Theme, done: u32, total: u32) -> Vec<Span<'stat
     ]
 }
 
-/// Aggregate token total behind the `◇` diamond (`◇ 12.4k`, `◇ 523`) — the
-/// cockpit and provider stats read the cumulative total alone. The diamond is a
-/// soft-violet icon; the value stays dim so the glyph reads as a colored marker,
-/// not noise. Display-only, never a decision driver.
-pub(super) fn tokens_label(theme: &Theme, total: u64) -> Vec<Span<'static>> {
+/// The `◇ {total}` marker: the soft-violet diamond + the formatted cumulative
+/// total. The shared head of every token line — [`token_breakdown_spans`] builds
+/// on it, and a breakdown-less line (a Codex rollup-only total) uses it alone.
+/// `fmt` picks the magnitude form ([`tokens_int`](super::fmt::tokens_int) live,
+/// `tokens_short` for the precise W/M rows). The diamond is a colored marker; the
+/// value stays dim. Display-only, never a decision driver.
+pub(super) fn tokens_total_spans(
+    theme: &Theme,
+    total: u64,
+    fmt: fn(u64) -> String,
+) -> Vec<Span<'static>> {
     vec![
         Span::styled(TOKENS_TOTAL, theme.style(Color::Magenta, Modifier::empty())),
-        Span::styled(format!(" {}", tokens_short(total)), theme.dim()),
+        Span::styled(format!(" {}", fmt(total)), theme.dim()),
     ]
 }
 
@@ -844,6 +913,58 @@ mod tests {
             working_glyph(u64::MAX),
             WORKING_FRAMES[(u64::MAX % WORKING_FRAMES.len() as u64) as usize]
         );
+    }
+
+    /// The loading dots cycle `.` → `..` → `...`, holding each step a few ticks,
+    /// and the slow attention blink shows for most of its cycle then blanks for a
+    /// short tail — a single quiet blink, never a strobe.
+    #[test]
+    fn loading_dots_and_attention_blink_cadence() {
+        assert_eq!(loading_dots(0), ".");
+        assert_eq!(loading_dots(2), "."); // held across ticks
+        assert_eq!(loading_dots(3), "..");
+        assert_eq!(loading_dots(6), "...");
+        assert_eq!(loading_dots(9), ".", "wraps back to one dot");
+
+        // On for the bulk of the cycle, off only at the tail two frames.
+        assert!(attention_blink_on(0));
+        assert!(attention_blink_on(17));
+        assert!(!attention_blink_on(18));
+        assert!(!attention_blink_on(19));
+        assert!(attention_blink_on(20), "next cycle blinks back on");
+    }
+
+    /// The token breakdown reads `◇ ↘ ↗ ◍ ◌` with only the `◇` total carrying a
+    /// tone; the `◍` cache-write field drops when excluded (the W/M rows). Under
+    /// `NO_COLOR` the glyph shapes still spell the split.
+    #[test]
+    fn token_breakdown_shape_and_optional_cache_write() {
+        let theme = Theme::fixed(true);
+        let full = token_breakdown_spans(
+            &theme,
+            76_000,
+            12_000,
+            64_000,
+            12_000,
+            68_000,
+            super::super::fmt::tokens_int,
+            true,
+        );
+        let text: String = full.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "◇ 76k ↘ 12k ↗ 64k ◍ 12k ◌ 68k");
+
+        let lean = token_breakdown_spans(
+            &theme,
+            76_000,
+            12_000,
+            64_000,
+            12_000,
+            68_000,
+            super::super::fmt::tokens_int,
+            false,
+        );
+        let text: String = lean.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "◇ 76k ↘ 12k ↗ 64k ◌ 68k", "no ◍ when excluded");
     }
 
     /// The rate-limited glyph is the media `pause` mark carrying the

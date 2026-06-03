@@ -3,16 +3,16 @@ source: crates/rimz-sidebar/src/render/mod.rs
 expression: screen
 ---
  ⌘ query-engine
- ✦ 1
+
+ ¤ 1   ◎ 0
  ────────────────────────────────────────────────────
  ? 0   ! 0   ○ 0                      ✽ 0   ⢿ 1   ✓ 0
- ◷ <t> · ◇ 76.5k
 
 ▏⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ +127 -43
 ▌⣾ claude · Opus 4.8 (1M) · high · auto         $1.27
 ▌  ledger refactor                          ●●●○○ 3/5
 ▌  ▣ ━━━━━━━━━━━━━━━━────────────────────────── 38.2%
-▌  ◇ 76.5k ↘ 64.2k ↗ 12.3k ◌ 68.0k
-▌  ◷ <t> worked · +214 -31                         <t>
+▌  ◇ 76k ↘ 64k ↗ 12k ◍ 20k ◌ 48k                 ◷ <t>
+▌  ◷ <t> worked · +214 -31
 
                       ? for help

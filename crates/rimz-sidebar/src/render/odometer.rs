@@ -1,6 +1,6 @@
-//! The value corner's count-up animation.
+//! The cockpit today-spend count-up animation.
 //!
-//! Each animated figure is a [`Roll`]: it remembers where it is painted on
+//! The animated figure is a [`Roll`]: it remembers where it is painted on
 //! screen and where the latest snapshot says it should be, then eases between
 //! the two. Motion is driven purely by the wall-clock animation phase
 //! ([`super::UiState::animation_phase`]) — never by the age of the fetched data
@@ -8,8 +8,9 @@
 //! render-thread performance contract.
 //!
 //! A roll fires only on an *increase*: a decrease (today's UTC-midnight reset)
-//! and the first observed value both snap, so the corner never plays a sad
-//! count-down or a dramatic `0 → all-time` roll on boot.
+//! and the first observed value both snap, so the cockpit never plays a sad
+//! count-down or a dramatic `0 → today` roll on boot. The provider dashboard's
+//! W/M ledger rows are deliberately static — only today's headline figure climbs.
 
 use rimz::SpendTally;
 
@@ -106,36 +107,27 @@ impl Roll {
     }
 }
 
-/// The value corner's animated figures: the trailing-year pile (the hero that
-/// climbs) and the trailing-month companion, each split into spend and tokens.
-/// Today's figure is the cockpit's, never repeated here.
+/// The cockpit's one animated figure: today's fleet spend, the headline that
+/// climbs as a turn lands. The W/M ledger rows below read straight from the
+/// tally with no roll.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct TallyAnim {
-    pub(crate) year_usd: Roll,
-    pub(crate) year_tokens: Roll,
-    pub(crate) month_usd: Roll,
-    pub(crate) month_tokens: Roll,
+    pub(crate) today_usd: Roll,
 }
 
 impl TallyAnim {
-    /// Fold the latest tally's targets into every roll. Called on each data
-    /// refresh that carries a tally; a refresh without one leaves the rolls
-    /// untouched, so a transient missing snapshot never snaps the pile to zero.
+    /// Fold the latest tally's today-spend target into the roll. Called on each
+    /// data refresh that carries a tally; a refresh without one leaves the roll
+    /// untouched, so a transient missing snapshot never snaps the figure to zero.
     pub(crate) fn observe(&mut self, tally: &SpendTally, phase: u64) {
-        self.year_usd.observe(tally.year.usd, phase);
-        self.year_tokens.observe(tally.year.tokens as f64, phase);
-        self.month_usd.observe(tally.month.usd, phase);
-        self.month_tokens.observe(tally.month.tokens as f64, phase);
+        self.today_usd.observe(tally.today.usd, phase);
     }
 
-    /// Whether any figure is still mid-roll — the serve loop ORs this into its
+    /// Whether the figure is still mid-roll — the serve loop ORs this into its
     /// animation gate so a finished-turn climb plays even when no agent is
     /// running, then lets the loop fall back to the slow data tick once settled.
     pub(crate) fn any_rolling(&self, phase: u64) -> bool {
-        self.year_usd.rolling(phase)
-            || self.year_tokens.rolling(phase)
-            || self.month_usd.rolling(phase)
-            || self.month_tokens.rolling(phase)
+        self.today_usd.rolling(phase)
     }
 }
 
