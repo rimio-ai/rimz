@@ -46,7 +46,7 @@ A compaction hook (`compacting: true`) is a fifth, transient lifetime: it stamps
 
 ## The state machine
 
-The reducer takes each observation's `status` verbatim; the adapter decides which native event maps to which status (the [hooks.md](./hooks.md) appendices). The five values, in ranking order — most attention-hungry first, so a working `running` agent settles *below* the calm `idle`/`success`:
+An adapter emits an agent-agnostic **lifecycle signal** — the *intent* a native event carries ([`LifecycleSignal`](../../crates/rimz/src/agents/lifecycle.rs)) — not a final status. One pure transition function, [`step`](../../crates/rimz/src/agents/lifecycle.rs), folds that signal onto the prior state through the directed graph below; it is the single home for every transition and is reused identically for a root agent and a subagent. The reducer calls it on replay to derive the rollup, and the hook ingestion path calls it once per fresh event to log any anomaly — same table, so the two can never disagree. The five values, in ranking order — most attention-hungry first, so a working `running` agent settles *below* the calm `idle`/`success`:
 
 - `waiting` — blocked on a human decision *(raises attention)*
 - `failed` — the last turn errored *(raises attention)*
@@ -57,20 +57,23 @@ The reducer takes each observation's `status` verbatim; the adapter decides whic
 The glyph, animation, and color for each are the canonical table in [the interface legend](../interface/sidebar.md#reading-the-glyphs); this doc owns the transitions, not the painting.
 
 ```text
-   (none) ──registers──► idle ──turn starts / subagent starts──► running
-                          ▲                                        │
-           next prompt    │   turn ends clean ──► success          │
-           re-enters ─────┤   turn ends errored ──► failed  ◄──────┤
-           running        │   subagent ends ──► idle (child)       │
-                          └────────────────────────────────────────┘
+   (none) ──registered──► idle ──turn started / subagent started──► running
+                          ▲                                          │
+           turn started   │   turn ended clean ──► success           │
+           re-enters ─────┤   turn ended errored ──► failed   ◄───────┤
+           running        │   subagent stopped ──► idle (child)       │
+                          │   tool used (mutating) ──► running        │
+                          └──────────────────────────────────────────┘
+   compacting : prior status held, compacting head stamped (cleared by next signal)
    blocking ask pending while running ──► waiting (feed channel, not lifecycle)
-
-   session ends / pid dead / pane reverted to shell ──► removed (no row)
+   session ended / pid dead / pane reverted to shell ──► removed (no row)
 ```
 
-A turn-end observation resolves the turn to `success`, or `failed` on an error signal — never back to `idle`. One exception keeps it `running`: a turn end the adapter recognises as the main thread *parking on still-in-flight background work* is not a turn end, so the row stays `running` and labels itself with that work rather than painting a false `✓` (the provider-specific detection lives in [hooks.md → Appendix Claude](./hooks.md#appendix--claude-code)). An error still wins.
+A `TurnEnded` signal resolves the turn to `success`, or `failed` on its error bit — never back to `idle`. One exception keeps it `running`: a clean end whose signal also carries `parked_on_background` is the main thread *parking on still-in-flight background work*, not a turn end, so the row stays `running` and paints a distinct secondary `⋯ bg` marker rather than a false `✓` — the activity description stays the agent's real task, never a synthetic count (the provider-specific detection lives in [hooks.md → Appendix Claude](./hooks.md#appendix--claude-code)). An error bit still wins.
 
 `waiting` is **not** a lifecycle transition — it is a pending blocking feed item joined to the agent (the feed channel; see [hooks.md → Two hook channels](./hooks.md#two-hook-channels)). The lifecycle channel drives the other four.
+
+**Fail-soft, never silent.** `step` is total: an unexpected `(state, signal)` pair never panics and never freezes. It takes the signal's natural edge — the agent is authoritative about its own activity — and tags the result [`TransitionKind::Reconciled`](../../crates/rimz/src/agents/lifecycle.rs) with the state it overrode and why. The reducer discards the tag (it only wants the next state); the ingestion path ([`cli/hooks.rs`](../../crates/rimz/src/cli/hooks.rs)) logs it once per fresh event under the `rimz::agent::lifecycle` tracing target (`warn!` on a reconciled edge, `debug!` on an ignored no-op, `error!` on a quarantined identity), to stderr — never the hook stdout. So a drift between the model and reality leaves a structured, traceable breadcrumb instead of a wrong-but-quiet row. The headline reconciliation: a **mutating tool observed while the slider still reads `plan`** is impossible (plan mode is read-only), so `step` moves the posture off `plan` and logs it — the structural fix for an agent stuck reading "thinking" while it edits in auto mode.
 
 The **displayed** status refines the rollup without changing it — `snapshot.agents` keeps the agent-owned truth; the projection ([sidebar.md](./sidebar.md)) decides what the row shows:
 
@@ -86,7 +89,7 @@ The **displayed** status refines the rollup without changing it — `snapshot.ag
 `plan` is one position of the permission slider, not a separate flag: thinking is `running` joined to `permission_posture == plan`. Rimz samples posture from lifecycle observations only (`posture_from_mode`); an observation that names no slider carries the prior value forward. It never infers plan mode from prompt text or transcript content.
 
 - **Approving a plan** moves the slider off `plan`; the next observation that reports the new posture drops the thinking state.
-- **Shift-tabbing out of `plan`** mid-turn may raise no observation, so the sidebar can lag until the next one. That bounded latency is intentional — the sidebar is observational, and the simpler model avoids transcript/prompt heuristics.
+- **Shift-tabbing out of `plan`** mid-turn may report no new posture, but the first *mutating* tool that follows proves the agent has left read-only plan mode — `step` reconciles the posture off `plan` and logs it (see [Fail-soft, never silent](#the-state-machine)). This closes the "shows thinking while editing in auto mode" lag without inferring posture from prompt or transcript text; the trigger is a hook event (`PostToolUse` for a mutating tool), not content.
 - **Subagents** own separate `agent_id`s, so a child observation never mutates its parent's posture.
 
 The agent owns status and posture; Rimz observes and renders. `yolo` is read from the agent's own bypass flag; `interactive` folds into `default`. The vocabulary is defined once in [the interface legend](../interface/sidebar.md#reading-the-glyphs).
