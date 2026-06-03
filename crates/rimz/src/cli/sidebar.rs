@@ -286,8 +286,8 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 &runtime.root.join("provider-spending.json"),
                 &spending,
             );
-            // Fold the per-machine config onto the snapshot: row density plus the
-            // per-provider dashboard (account-scoped budgets, spend, emblem). The
+            // Fold the per-machine config onto the snapshot: the per-provider
+            // dashboard (account-scoped budgets, spend, emblem). The
             // producer owns the out-of-band account probe (a subprocess) and
             // publishes it to `accounts.json` for consumer tabs to read back.
             // Best-effort — a config read failure falls back to defaults, so

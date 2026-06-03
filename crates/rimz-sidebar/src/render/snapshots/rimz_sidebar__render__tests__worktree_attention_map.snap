@@ -1,12 +1,14 @@
 ---
 source: crates/rimz-sidebar/src/render/mod.rs
+assertion_line: 734
 expression: screen
 ---
  ⌘ query-engine
 
- ¤ 3   ◎ 0
+ ¤ 3
+ ◎ 0
  ────────────────────────────────────
- ? 2   ! 0   ○ 0      ✽ 0   ⢿ 1   ✓ 0
+ ? 2   ! 0   ○ 0   ⏸︎ 0   ✽ 0   ⢿ 1
 
 ▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌? claude
@@ -19,4 +21,5 @@ expression: screen
 
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1
  ? deploy.sh
+   Deploy staging?
         ␣ next ?!   ? for help

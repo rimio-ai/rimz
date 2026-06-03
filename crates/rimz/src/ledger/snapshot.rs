@@ -131,11 +131,11 @@ pub struct SidebarSnapshot {
     /// it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub worktree_roots: Vec<PathBuf>,
-    /// Per-machine sidebar display preferences (row density). Like
-    /// `project_root`, this is machine state the pure reducer can't read, so the
-    /// reducer leaves it default (`compact`) and the `rimz sidebar snapshot` CLI
-    /// fills it from `MachineConfig`. The renderer — a pure snapshot consumer —
-    /// reads it to pick each card's resting height.
+    /// Per-machine sidebar display preferences (the attention-redden window and
+    /// the per-provider dashboard styling). Like `project_root`, this is machine
+    /// state the pure reducer can't read, so the reducer leaves it default and the
+    /// `rimz sidebar snapshot` CLI fills it from `MachineConfig`. The renderer — a
+    /// pure snapshot consumer — reads it to tune the cards and the dashboard.
     #[serde(default)]
     pub sidebar: crate::config::SidebarConfig,
     /// Per-provider dashboard blocks pinned to the bottom of the sidebar — the

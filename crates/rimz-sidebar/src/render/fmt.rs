@@ -30,13 +30,14 @@ pub(super) fn age_short(at: Timestamp) -> String {
     age_label(age_secs(at))
 }
 
-/// A row's last-activity age for the work line: floors at `1m` (a sub-minute span
-/// reads `1m`, never seconds), shows whole hours `{h}h` from 1h on, and caps at
-/// `>1d` from a day on — a coarse "how long since this agent did something" that
-/// never competes with the precise worked-time on the same line.
+/// A row's last-activity age, floored to its highest whole unit: `{m}m` up to an
+/// hour, whole hours `{h}h` from 1h on, capped at `>1d` from a day on — a coarse
+/// "how long since this agent last did something". Sub-minute ages never reach
+/// here; [`activity_short`] withholds them so the card stays quiet until a real
+/// gap opens.
 pub(super) fn activity_label(seconds: i64) -> String {
     if seconds < 60 * 60 {
-        format!("{}m", (seconds / 60).max(1))
+        format!("{}m", seconds / 60)
     } else if seconds < 60 * 60 * 24 {
         format!("{}h", seconds / 3_600)
     } else {
@@ -44,8 +45,12 @@ pub(super) fn activity_label(seconds: i64) -> String {
     }
 }
 
-pub(super) fn activity_short(at: Timestamp) -> String {
-    activity_label(age_secs(at))
+/// The last-activity age once it crosses a full minute (floored), or `None` while
+/// it is still sub-minute — a just-active agent shows nothing rather than a
+/// misleading `1m`, so the age surfaces only once a real gap has opened.
+pub(super) fn activity_short(at: Timestamp) -> Option<String> {
+    let seconds = age_secs(at);
+    (seconds >= 60).then(|| activity_label(seconds))
 }
 
 pub(super) fn time_remaining(deadline: Timestamp) -> String {
@@ -247,53 +252,11 @@ pub(super) fn pct_label(precise: Option<f64>, whole: u8) -> String {
     }
 }
 
-/// A span as its two highest non-zero units — `3d12h`, `3h12m`, `2m30s`, `45s`.
-/// Skipping zero units keeps it short, so a span with no minutes reads `3h3s`
-/// rather than padding a `0m`; a non-positive span is empty (callers special-case
-/// it). The shared core behind the worked-time spans.
-fn compact_seconds(seconds: i64) -> String {
-    if seconds <= 0 {
-        return String::new();
-    }
-    [
-        (seconds / 86_400, 'd'),
-        (seconds % 86_400 / 3_600, 'h'),
-        (seconds % 3_600 / 60, 'm'),
-        (seconds % 60, 's'),
-    ]
-    .into_iter()
-    .filter(|(value, _)| *value > 0)
-    .take(2)
-    .map(|(value, unit)| format!("{value}{unit}"))
-    .collect()
-}
-
-/// A worked-time span (`12m`, `1h12m`, `3d4h`) from a millisecond duration — the
-/// session's `total_duration_ms`. A zero span reads `0s` rather than the empty
-/// core, which would misread as missing data.
-pub(super) fn duration_worked(ms: u64) -> String {
-    let seconds = (ms / 1_000) as i64;
-    if seconds <= 0 {
-        return "0s".to_owned();
-    }
-    compact_seconds(seconds)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::time::Duration;
 
-    #[test]
-    fn compact_seconds_takes_two_highest_nonzero_units() {
-        assert_eq!(compact_seconds(3 * 86_400 + 12 * 3_600), "3d12h");
-        assert_eq!(compact_seconds(3 * 3_600 + 12 * 60), "3h12m");
-        assert_eq!(compact_seconds(2 * 60 + 30), "2m30s");
-        assert_eq!(compact_seconds(45), "45s");
-        // Zero minutes between non-zero hours and seconds collapses out.
-        assert_eq!(compact_seconds(3 * 3_600 + 3), "3h3s");
-        // A non-positive span is the empty core (callers special-case it).
-        assert_eq!(compact_seconds(0), "");
-    }
+    use super::*;
 
     #[test]
     fn reset_countdown_scales_units_to_time_left() {
@@ -399,19 +362,10 @@ mod tests {
     }
 
     #[test]
-    fn duration_worked_spans_two_units_and_floors_zero() {
-        assert_eq!(duration_worked(720_000), "12m"); // 12 minutes
-        assert_eq!(duration_worked(4_320_000), "1h12m"); // 1h12m
-        assert_eq!(duration_worked(0), "0s");
-        assert_eq!(duration_worked(500), "0s"); // sub-second floors to 0s, not "now"
-    }
-
-    #[test]
-    fn activity_label_floors_at_one_minute_and_caps_at_a_day() {
-        // Sub-minute and the first minute both floor to `1m` — never seconds.
-        assert_eq!(activity_label(0), "1m");
-        assert_eq!(activity_label(59), "1m");
-        assert_eq!(activity_label(90), "1m");
+    fn activity_label_floors_to_its_highest_unit_and_caps_at_a_day() {
+        // Whole minutes, floored — the sub-minute gating lives in `activity_short`.
+        assert_eq!(activity_label(60), "1m");
+        assert_eq!(activity_label(119), "1m");
         assert_eq!(activity_label(120), "2m");
         assert_eq!(activity_label(59 * 60), "59m");
         // Whole hours from 1h on, capped at `>1d` from a day on.
@@ -419,5 +373,22 @@ mod tests {
         assert_eq!(activity_label(23 * 3_600), "23h");
         assert_eq!(activity_label(24 * 3_600), ">1d");
         assert_eq!(activity_label(100 * 3_600), ">1d");
+    }
+
+    #[test]
+    fn activity_short_withholds_sub_minute_ages() {
+        let now = Timestamp::now();
+        // A just-active agent shows nothing rather than a misleading `1m`.
+        assert_eq!(activity_short(now), None);
+        assert_eq!(activity_short(now - Duration::from_secs(59)), None);
+        // Once a full minute has passed the floored age surfaces.
+        assert_eq!(
+            activity_short(now - Duration::from_secs(60)),
+            Some("1m".to_owned())
+        );
+        assert_eq!(
+            activity_short(now - Duration::from_secs(150)),
+            Some("2m".to_owned())
+        );
     }
 }

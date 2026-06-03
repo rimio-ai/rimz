@@ -22,7 +22,7 @@ The sidebar is a worktree-keyed presence and attention map: one row per live pan
 - **Shape carries meaning; color reinforces.** Two symbols carry every call for attention — `?` *needs your answer* and `!` *needs a look* — so the signal survives `NO_COLOR` and color-blindness, with color as a second, redundant channel. Only genuinely-live work animates; a calm, blocked, or finished agent holds still.
 - **Ranking is the triage.** The most overdue attention rises to the top, oldest first; calm work settles below; a per-worktree cap trims only the calm tail and never hides a row that needs you. You don't sort — the column arrives triaged.
 - **One line summarises the room.** A fixed cockpit make-up (`? 2  ! 1 …`) compresses the whole fleet to a single line: a row of zeros means nothing needs you, so you skip the scan entirely.
-- **Rich stats, display-only.** A context meter, token totals, diff stats, todo progress, time worked, and account-scoped usage budgets ride the rows and a per-provider dashboard, so "how far along" and "how healthy" read without leaving the sidebar. These enrich display; they never drive a decision.
+- **Rich stats, display-only.** A context meter, token totals, diff stats, todo progress, a last-activity age, and account-scoped usage budgets ride the rows and a per-provider dashboard, so "how far along" and "how healthy" read without leaving the sidebar. These enrich display; they never drive a decision.
 
 The full glyph vocabulary and every rendered frame live in [the interface reference](./docs/interface/sidebar.md); how presence, ranking, and recovery are computed lives in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
 

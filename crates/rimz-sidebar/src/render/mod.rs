@@ -142,11 +142,11 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Al
 /// Whether any visible row is in an animated state — a running agent (working
 /// or plan-mode thinking), a resolver mid-flight, an active process spinning on
 /// real work (a build, a test, a `sudo` install), an attention row whose `?`/`!`
-/// glyph slowly blinks, or an idle agent showing the loading-dots cue. The serve
+/// glyph breathes, or an idle agent showing the loading-dots cue. The serve
 /// loop uses this to switch to the fast animation tick only while there is live
 /// motion to paint; a fully settled sidebar (only quiet idle/done rows) keeps
 /// idling on the slow data tick. A stalled agent is projected to `failed`
-/// upstream, so it reads as a blinking `!` here. The cockpit's today-spend
+/// upstream, so it reads as a breathing `!` here. The cockpit's today-spend
 /// count-up rides a separate gate (`UiState::tally`), so a finished-turn climb
 /// keeps the tick alive even when every row is otherwise static.
 pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {
@@ -159,7 +159,7 @@ pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {
             SidebarRowKind::Agent => {
                 row.resolver.is_some()
                     || row.status == Some(AgentStatus::Running)
-                    // `?`/`!` blink to pull the eye back to an unanswered row.
+                    // `?`/`!` breathe to pull the eye back to an unanswered row.
                     || matches!(row.status, Some(AgentStatus::Waiting | AgentStatus::Failed))
                     // The idle "waiting for a prompt" loading-dots cue.
                     || sections::shows_loading_dots(row)
@@ -362,25 +362,26 @@ fn snapshot_lines(
     let mut header = repo_header_lines(theme, snapshot, inner);
     // A blank line sets the repo identity apart from the cockpit summary below.
     header.push(Line::from(""));
-    // The cockpit summary: `¤` live agents, `◎` sessions today, then today's
-    // accumulated token breakdown — the counts from the live fleet and the JSONL
-    // `value_tally`'s today window, so the cockpit reflects all of today's
-    // sessions rather than only the live statusline sum. Always present — an empty
-    // room reads `¤ 0  ◎ 0`.
+    // The cockpit summary, two lines: line 1 is `¤` live agents on the left with
+    // today's accumulated token breakdown pinned right; line 2 is `◎` sessions
+    // today on the left with today's spend pinned right. The counts read from the
+    // live fleet and the JSONL `value_tally`'s today window, so the cockpit
+    // reflects all of today's sessions rather than only the live statusline sum.
     let today = snapshot.value_tally.as_ref().map(|tally| &tally.today);
     let live_agents = fleet_size(&snapshot.worktree_groups).0;
     header.push(cockpit_summary_line(theme, live_agents, today, inner));
-    // Today's spend on its own line, right-pinned, counting up as a turn lands.
+    // Line 2 is always present — sessions read `◎ 0` in an empty room — with the
+    // spend joining the right edge and counting up as a turn lands.
+    let sessions = today.map(|window| window.sessions).unwrap_or(0);
     let today_usd = today.map(|window| window.usd).unwrap_or(0.0);
-    if today_usd > 0.0 {
-        header.push(cockpit_spend_line(
-            theme,
-            today_usd,
-            &ui.tally,
-            ui.animation_phase,
-            inner,
-        ));
-    }
+    header.push(cockpit_spend_line(
+        theme,
+        sessions,
+        today_usd,
+        &ui.tally,
+        ui.animation_phase,
+        inner,
+    ));
     header.push(hairline_rule(theme, inner));
     extend_inert(&mut lines, &mut map, header);
 
@@ -389,15 +390,14 @@ fn snapshot_lines(
     // below never shifts vertically as agents change state. It is chrome, never a
     // jump target, so every header line maps to `None`.
     // The configurable neglect window (seconds an unanswered `?`/`!` stays
-    // yellow before it reddens) rides in on the snapshot like `density` does, so
-    // the renderer stays a pure consumer. Clamp into the `i64` age space.
+    // yellow before it reddens) rides in on the snapshot like `project_root`
+    // does, so the renderer stays a pure consumer. Clamp into the `i64` age space.
     let redden_secs = i64::try_from(snapshot.sidebar.attention_redden_secs).unwrap_or(i64::MAX);
     extend_inert(
         &mut lines,
         &mut map,
         fleet_header_lines(theme, &snapshot.worktree_groups, inner, redden_secs),
     );
-    let density = snapshot.sidebar.density;
     if snapshot.worktree_groups.is_empty() {
         if !active && should_show_first_run_hint(snapshot) {
             push_section_gap(&mut lines, &mut map);
@@ -420,7 +420,6 @@ fn snapshot_lines(
                 group,
                 &snapshot.providers,
                 width,
-                density,
                 redden_secs,
                 &mut row_index,
                 ui.selected_index,
@@ -970,7 +969,7 @@ mod tests {
 
         assert_snapshot(
             "worktree_attention_map",
-            snapshot_to_screen(&snapshot, 38, 18),
+            snapshot_to_screen(&snapshot, 38, 20),
         );
     }
 
@@ -1031,8 +1030,7 @@ mod tests {
             14,
         );
 
-        // The worktree-total diff sits on the group header (distinct from the
-        // agent's own edit count on the work line below).
+        // The worktree-total diff sits on the group header.
         assert!(rendered.contains("+127 -43"));
         // Line 1 carries identity + capability + cost; line 2 is the session
         // name; the model display name is shortened (`(1M context)` → `(1M)`).
@@ -1053,8 +1051,7 @@ mod tests {
         // the provider dashboard now.
         assert!(!rendered.contains("5h↻"));
         assert!(!rendered.contains("7d↻"));
-        // The compact card carries the token line; the work line (the agent's own
-        // edit count) appends on selection. Tokens read the integer split
+        // The card carries the token line at rest. Tokens read the integer split
         // ◇ total ↘ input ↗ output ◍ cache-write ◌ cache-read; the window size no
         // longer rides this line.
         assert!(rendered.contains("◇ 76k"));
@@ -1066,8 +1063,6 @@ mod tests {
             !rendered.contains("ctx"),
             "window size left the token line:\n{rendered}"
         );
-        assert!(rendered.contains("worked"));
-        assert!(rendered.contains("+214 -31"));
         assert_snapshot("enriched_selected_agent_card", rendered);
     }
 
@@ -1084,7 +1079,7 @@ mod tests {
         );
         claude.context = Some(claude_context(fixed_now()));
         let snapshot = snapshot_with(Vec::new(), vec![claude]);
-        let rendered = snapshot_to_screen(&snapshot, 44, 10);
+        let rendered = snapshot_to_screen(&snapshot, 44, 12);
 
         assert!(rendered.contains("ledger refactor"));
         assert!(!rendered.contains("db migrate"));
@@ -1106,7 +1101,7 @@ mod tests {
         );
         claude.prompt = Some("wire the bridge".to_owned());
         let snapshot = snapshot_with(Vec::new(), vec![claude]);
-        let rendered = snapshot_to_screen(&snapshot, 44, 10);
+        let rendered = snapshot_to_screen(&snapshot, 44, 12);
 
         assert!(rendered.contains("wire the bridge"));
         assert!(
@@ -1144,7 +1139,7 @@ mod tests {
                 ..Default::default()
             },
             44,
-            12,
+            14,
         );
 
         assert!(rendered.contains("◇ 5k"));
@@ -1366,7 +1361,7 @@ mod tests {
                 ..Default::default()
             },
             80,
-            18,
+            20,
         );
         assert!(help.contains("keys & legend"));
         assert!(help.contains("? waiting"));
@@ -1444,8 +1439,9 @@ mod tests {
         codex.last_activity = fixed_now() - Duration::from_secs(3);
         let snapshot = snapshot_with(Vec::new(), vec![codex]);
         // Tall enough that the card clears the bottom-pinned footer after the
-        // cockpit's blank-line + summary header (the agent row is what we measure).
-        let rendered = snapshot_to_screen(&snapshot, 24, 10);
+        // cockpit's blank-line + two-line summary header (the agent row is what we
+        // measure).
+        let rendered = snapshot_to_screen(&snapshot, 24, 11);
 
         assert!(
             // phase 0 of the working spinner is the first frame `⣾`.
@@ -1628,9 +1624,9 @@ mod tests {
     }
 
     /// A fully-enriched single-agent group, rendered as raw card lines at a
-    /// fixed width and density. Returns the group lines (header first), each
-    /// flattened to its text — the seam the structural card tests share.
-    fn card_lines(density: rimz::config::SidebarDensity, selected_index: usize) -> Vec<String> {
+    /// fixed width. Returns the group lines (header first), each flattened to its
+    /// text — the seam the structural card tests share.
+    fn card_lines(selected_index: usize) -> Vec<String> {
         let mut claude = agent(
             "claude-1",
             "claude",
@@ -1651,7 +1647,6 @@ mod tests {
             &snapshot.worktree_groups[0],
             &snapshot.providers,
             54,
-            density,
             30 * 60,
             &mut row_index,
             selected_index,
@@ -1672,12 +1667,12 @@ mod tests {
 
     /// The load-bearing no-flicker guarantee: selecting a row only *appends*
     /// lines beneath the card — the resting fold lines (identity, description,
-    /// ctx bar) keep their exact content, differing only by the selection gutter.
+    /// ctx bar, token line) keep their exact content, differing only by the
+    /// selection gutter.
     #[test]
     fn selecting_a_row_only_appends_never_reshapes_the_fold_lines() {
-        use rimz::config::SidebarDensity::Compact;
-        let unselected = card_lines(Compact, usize::MAX);
-        let selected = card_lines(Compact, 0);
+        let unselected = card_lines(usize::MAX);
+        let selected = card_lines(0);
 
         // Selecting the worktree adds the lane gutter and the dotted seal to its
         // header — chrome, not a card line — but never touches the label itself.
@@ -1697,28 +1692,22 @@ mod tests {
         let strip = |line: &String| line.chars().skip(1).collect::<String>();
         let fold: Vec<String> = unselected[1..].iter().map(strip).collect();
         let full: Vec<String> = selected[1..].iter().map(strip).collect();
-        // Compact fold is identity + description + ctx bar + the token line.
+        // The resting fold is identity + description + ctx bar + the token line.
         assert_eq!(
             fold.len(),
             4,
-            "compact fold is four card lines (incl. the token line): {fold:?}"
+            "the fold is four card lines (incl. the token line): {fold:?}"
         );
-        // Those four are a byte-identical prefix of the expanded card.
-        assert_eq!(fold, full[..fold.len()], "selection reshaped a fold line");
-        // The token line now rides the resting fold; selection only appends the
-        // work line (and any subagents) beneath it.
+        // The token line rides the resting fold, not a reveal-on-select detail.
         assert!(
             fold.iter().any(|line| line.contains("◇ ")),
-            "the token line is part of the compact fold: {fold:?}"
+            "the token line is part of the resting fold: {fold:?}"
         );
-        assert!(
-            full.len() > fold.len(),
-            "selection must append the work line"
-        );
-        assert!(
-            full[fold.len()..]
-                .iter()
-                .any(|line| line.contains("worked"))
+        // This card has no subagents, so selection appends nothing — it only
+        // lights the gutter (already stripped), never reshaping a fold line.
+        assert_eq!(
+            fold, full,
+            "selection only appends; it never reshapes the fold lines"
         );
     }
 
@@ -1759,7 +1748,6 @@ mod tests {
                 &snapshot.worktree_groups[0],
                 &snapshot.providers,
                 54,
-                rimz::config::SidebarDensity::Compact,
                 30 * 60,
                 &mut row_index,
                 selected_index,
@@ -1796,25 +1784,18 @@ mod tests {
         );
     }
 
-    /// Density sets the resting height; selection always reaches the full card,
-    /// so the deepest data is one keystroke away in every density.
+    /// The resting card is four lines (identity, description, ctx bar, token
+    /// line); selecting it appends only the subagent list, so the deepest data is
+    /// one keystroke away without ever reshaping a resting line.
     #[test]
-    fn density_sets_resting_height_and_selection_reaches_full() {
-        use rimz::config::SidebarDensity::{Compact, Full};
+    fn resting_card_is_four_lines_and_selection_only_appends() {
         // Card lines, excluding the group header.
-        let resting = |density| card_lines(density, usize::MAX).len() - 1;
-        let selected = |density| card_lines(density, 0).len() - 1;
-
-        assert_eq!(
-            resting(Compact),
-            4,
-            "compact: identity, description, ctx, token line"
-        );
-        assert_eq!(resting(Full), 5, "full: + the work line");
-        // Selection reaches the full five-line card from either density (the
-        // account-scoped budgets moved to the provider dashboard).
-        assert_eq!(selected(Compact), 5);
-        assert_eq!(selected(Full), 5);
+        let resting = card_lines(usize::MAX).len() - 1;
+        let selected = card_lines(0).len() - 1;
+        assert_eq!(resting, 4, "identity, description, ctx, token line");
+        // This single-agent fixture has no subagents, so selection appends
+        // nothing — the resting height already carries every per-row stat.
+        assert_eq!(selected, 4);
     }
 
     /// Render one worktree group's lines, asserting the hit-test map stays in
@@ -1822,7 +1803,6 @@ mod tests {
     fn group_lines(
         snapshot: &SidebarSnapshot,
         theme: &Theme,
-        density: rimz::config::SidebarDensity,
         selected_index: usize,
     ) -> Vec<Line<'static>> {
         let mut row_index = 0;
@@ -1833,7 +1813,6 @@ mod tests {
             &snapshot.worktree_groups[0],
             &snapshot.providers,
             54,
-            density,
             30 * 60,
             &mut row_index,
             selected_index,
@@ -1853,13 +1832,12 @@ mod tests {
     }
 
     /// A just-started idle agent — idle, on the `Some(0)` baseline gauge with no
-    /// usage behind it — sheds the 0% context bar at rest, and when expanded drops
-    /// the zeroed token and work lines, keeping only the last-activity age. The
-    /// same 0% reading while *running* still paints the bar, so the suppression is
-    /// gated on idle, not merely on a zero percent.
+    /// usage behind it — sheds the 0% context bar and the zeroed stats, resting at
+    /// identity + description alone with nothing to append on selection. The same
+    /// 0% reading while *running* still paints the bar, so the suppression is gated
+    /// on idle, not merely on a zero percent.
     #[test]
     fn just_started_idle_agent_sheds_the_gauge_and_zeroed_stats() {
-        use rimz::config::SidebarDensity::Compact;
         let theme = Theme::fixed(true);
         let mk = |status| {
             let state = agent(
@@ -1875,8 +1853,8 @@ mod tests {
         };
 
         let idle = mk(AgentStatus::Idle);
-        let resting = line_texts(&group_lines(&idle, &theme, Compact, usize::MAX));
-        let expanded = line_texts(&group_lines(&idle, &theme, Compact, 0));
+        let resting = line_texts(&group_lines(&idle, &theme, usize::MAX));
+        let expanded = line_texts(&group_lines(&idle, &theme, 0));
 
         assert!(
             resting
@@ -1885,22 +1863,18 @@ mod tests {
             "fresh idle card hides the context bar:\n{}",
             resting.join("\n")
         );
-        // Header + identity + description — no gauge at rest.
+        // Header + identity + description — no gauge or stats at rest.
         assert_eq!(resting.len(), 3, "{resting:?}");
         let joined = expanded.join("\n");
         assert!(
-            !joined.contains('▣') && !joined.contains('◇') && !joined.contains("worked"),
+            !joined.contains('▣') && !joined.contains('◇'),
             "expanded fresh idle card hides the bar and the zeroed stats:\n{joined}"
         );
-        // Selection only appends the lone age line beneath the two resting lines.
-        assert_eq!(expanded.len(), 4, "{expanded:?}");
+        // A fresh idle card has nothing to append on selection — no stats, no age,
+        // no subagents — so expanding it adds no line.
+        assert_eq!(expanded.len(), 3, "{expanded:?}");
 
-        let running = line_texts(&group_lines(
-            &mk(AgentStatus::Running),
-            &theme,
-            Compact,
-            usize::MAX,
-        ));
+        let running = line_texts(&group_lines(&mk(AgentStatus::Running), &theme, usize::MAX));
         assert!(
             running.iter().any(|line| line.contains('▢')),
             "a running 0% agent keeps its bar (the hollow ▢ at 0%):\n{}",
@@ -1913,7 +1887,6 @@ mod tests {
     /// spine would tint it) — exactly one all-blank line, never more.
     #[test]
     fn consecutive_cards_get_one_blank_separator() {
-        use rimz::config::SidebarDensity::Compact;
         let theme = Theme::fixed(true);
         let one = agent(
             "claude-1",
@@ -1934,7 +1907,7 @@ mod tests {
             Some("task two"),
         );
         let snapshot = snapshot_with(Vec::new(), vec![one, two]);
-        let rendered = line_texts(&group_lines(&snapshot, &theme, Compact, usize::MAX));
+        let rendered = line_texts(&group_lines(&snapshot, &theme, usize::MAX));
 
         let names: Vec<usize> = rendered
             .iter()
@@ -1990,12 +1963,7 @@ mod tests {
         )];
         let expected = snapshot.providers[0].color;
 
-        let lines = group_lines(
-            &snapshot,
-            &theme,
-            rimz::config::SidebarDensity::Compact,
-            usize::MAX,
-        );
+        let lines = group_lines(&snapshot, &theme, usize::MAX);
         let name = lines
             .iter()
             .flat_map(|line| &line.spans)
@@ -2522,17 +2490,21 @@ mod tests {
 
     /// The cockpit summary carries the fleet count (`¤ N`, under the name); the
     /// cockpit below it splits the make-up at a fixed height — the left cluster
-    /// (`? ! ○`, each glyph spaced from its count, a zero reading `? 0`) and the
+    /// (`? ! ○ ⏸`, each glyph spaced from its count, a zero reading `? 0`) and the
     /// busy/done tail (`✽ ⢿ ✓`) — so the body never shifts as agents change state.
     #[test]
     fn fleet_header_is_fixed_and_splits_the_make_up() {
-        // Borderless layout: row 0 is the name, row 1 a blank line, row 2 the
-        // `¤`/`◎` summary, row 3 the hairline rule. An empty room reads `¤ 0` on
-        // row 2 with no cockpit beneath, so the body below never moves.
+        // Borderless layout: row 0 is the name, row 1 a blank line, row 2 the `¤`
+        // summary, row 3 the `◎` summary, row 4 the hairline rule. An empty room
+        // reads `¤ 0` on row 2 with no make-up beneath, so the body never moves.
         let empty = snapshot_with(Vec::new(), Vec::new());
         let empty_screen = snapshot_to_screen(&empty, 40, 12);
         assert!(
             empty_screen.lines().nth(2).unwrap().contains("¤ 0"),
+            "{empty_screen}"
+        );
+        assert!(
+            empty_screen.lines().nth(3).unwrap().contains("◎ 0"),
             "{empty_screen}"
         );
 
@@ -2556,15 +2528,18 @@ mod tests {
         );
         let snapshot = snapshot_with(Vec::new(), vec![working, thinking]);
         let screen = snapshot_to_screen(&snapshot, 40, 12);
-        // Row 2 is the `¤`/`◎` summary; row 4 is the bucket make-up (row 1 is the
-        // blank line, row 3 the hairline rule).
+        // Row 2 is the `¤` summary, row 3 the `◎` summary; row 5 is the bucket
+        // make-up (row 1 is the blank line, row 4 the hairline rule).
         assert!(screen.lines().nth(2).unwrap().contains("¤ 2"), "{screen}");
-        let buckets = screen.lines().nth(4).unwrap();
-        // Left cluster: waiting/failed/idle each show their count (a zero reads
-        // `? 0`); the running pair splits one working (⢿) one thinking (✽) right.
+        let buckets = screen.lines().nth(5).unwrap();
+        // Left cluster: waiting/failed/idle and the parked rate-limited each show
+        // their count (a zero reads `? 0`); the running pair splits one working
+        // (⢿) one thinking (✽) into the right cluster.
         assert!(buckets.contains("? 0"), "{buckets}");
         assert!(buckets.contains("! 0"), "{buckets}");
         assert!(buckets.contains("○ 0"), "{buckets}");
+        // The rate-limited glyph carries the U+FE0E text-presentation selector.
+        assert!(buckets.contains("⏸\u{FE0E} 0"), "{buckets}");
         assert!(buckets.contains("⢿ 1"), "{buckets}");
         assert!(buckets.contains("✽ 1"), "{buckets}");
         // The default selection lands on the first row, so its worktree reads as
@@ -2595,7 +2570,8 @@ mod tests {
         compacting.compacting_since = Some(fixed_now());
         let snapshot = snapshot_with(Vec::new(), vec![compacting]);
         let screen = snapshot_to_screen(&snapshot, 40, 12);
-        let buckets = screen.lines().nth(4).unwrap();
+        // Row 5 is the make-up: name(0), blank(1), `¤`(2), `◎`(3), hairline(4).
+        let buckets = screen.lines().nth(5).unwrap();
         assert!(
             buckets.contains("⢿ 1"),
             "compacting counts as working: {buckets}"

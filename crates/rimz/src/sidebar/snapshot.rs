@@ -477,10 +477,10 @@ pub fn enrich_consumer(
         snapshot = snapshot.with_live_panes(panes, exclude);
     }
     snapshot.agent_hooks_ready = agent_hooks_ready();
-    // Per-machine display preferences (row density) and the per-provider
-    // dashboard are environment, not ledger, so the producer's published rollup
-    // carries neither. Fold them here so a consumer tab honours the user's
-    // preference and paints the same provider panel — a cheap config read plus
+    // Per-machine display preferences and the per-provider dashboard are
+    // environment, not ledger, so the producer's published rollup carries
+    // neither. Fold them here so a consumer tab honours the user's preference
+    // and paints the same provider panel — a cheap config read plus
     // the producer's published account and spending caches, never a per-tick
     // fork or a ledger lock. The account probe and JSONL walk stay on the producer.
     let spending;
@@ -495,7 +495,7 @@ pub fn enrich_consumer(
 }
 
 /// Fold the per-machine config and the per-provider dashboard onto a *producer*
-/// snapshot: row density, the `⇅ rc` flags, and the account-scoped budget blocks.
+/// snapshot: the `⇅ rc` flags and the account-scoped budget blocks.
 /// The account facts come from a live out-of-band probe (`claude auth status`, a
 /// `codex` auth-file read) — a subprocess — so this is the producer's job. The
 /// probed map is published to the shared `accounts.json` cache for consumers to
@@ -738,7 +738,7 @@ fn produce_accounts(
 /// the producer's published `accounts.json` instead of probing. A consumer forks
 /// zero subprocesses (the single-flight contract); a cold cache (no producer
 /// publish yet) carries no blocks until the elder's first publish. The cheap
-/// config read stays local so each tab honours its own row density.
+/// config read stays local so each tab honours its own display preferences.
 pub fn fold_machine_config_cached(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
@@ -760,7 +760,7 @@ pub fn fold_machine_config_cached(
 }
 
 /// Apply the resolved config and already-resolved accounts onto the snapshot:
-/// row density, the per-provider `⇅ rc` flags, and the dashboard aggregates.
+/// the per-provider `⇅ rc` flags and the dashboard aggregates.
 fn fold_machine_config_with(
     mut snapshot: SidebarSnapshot,
     config: crate::config::MachineConfig,

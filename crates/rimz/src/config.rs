@@ -290,37 +290,11 @@ impl TmuxPaneBorderLines {
     }
 }
 
-/// How much of each agent card the sidebar renders by default (unselected).
-/// Selecting a row always reveals the full card, so density only sets the
-/// resting height — it never hides data a selection can't bring back.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SidebarDensity {
-    /// Identity, description, and the context bar. The token/work stats stay
-    /// reveal-on-select. The calm default — most agents fit on screen.
-    #[default]
-    Compact,
-    /// The whole card on every row — the context bar plus the token and work
-    /// stats. Richest, and tallest, so the fewest agents fit. The budget
-    /// windows are account-scoped and live in the provider panel, never a row,
-    /// so `bars` is a legacy alias that now folds into `full`.
-    #[serde(alias = "bars")]
-    Full,
-}
-
-impl SidebarDensity {
-    /// Whether the resting card includes the token and work stat lines.
-    pub fn shows_stats(self) -> bool {
-        matches!(self, Self::Full)
-    }
-}
-
 /// Sidebar display preferences. A personal, machine-wide tuning of how the
 /// renderer paints; it never affects ledger correctness.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SidebarConfig {
-    pub density: SidebarDensity,
     /// Per-provider styling for the bottom dashboard panel, keyed by agent kind
     /// (`claude`/`codex`/`pi`/…). Any field a user omits falls back to the
     /// built-in default for that kind, so overriding just the color leaves the
@@ -340,7 +314,6 @@ pub struct SidebarConfig {
 impl Default for SidebarConfig {
     fn default() -> Self {
         Self {
-            density: SidebarDensity::default(),
             providers: BTreeMap::new(),
             max_provider_blocks: default_max_provider_blocks(),
             attention_redden_secs: default_attention_redden_secs(),
@@ -568,43 +541,15 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_density_defaults_to_compact() {
-        let dir = tempdir().expect("tempdir");
-        let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
-        assert_eq!(config.sidebar.density, SidebarDensity::Compact);
-    }
-
-    #[test]
-    fn sidebar_density_parses_each_level() {
-        let dir = tempdir().expect("tempdir");
-        let full = MachineConfig::load_from(&write(&dir, "[sidebar]\ndensity = \"full\"\n"))
-            .expect("load");
-        assert_eq!(full.sidebar.density, SidebarDensity::Full);
-        // `bars` is the legacy name for the densest card; it now folds into
-        // `full` because the budget bars moved to the provider panel.
-        let bars = MachineConfig::load_from(&write(&dir, "[sidebar]\ndensity = \"bars\"\n"))
-            .expect("load");
-        assert_eq!(bars.sidebar.density, SidebarDensity::Full);
-    }
-
-    #[test]
-    fn sidebar_unknown_density_surfaces_an_error() {
-        let dir = tempdir().expect("tempdir");
-        let err = MachineConfig::load_from(&write(&dir, "[sidebar]\ndensity = \"cozy\"\n"))
-            .expect_err("unknown density should fail");
-        assert!(matches!(err, ConfigErr::Parse { .. }));
-    }
-
-    #[test]
     fn provider_block_cap_defaults_to_three() {
         let dir = tempdir().expect("tempdir");
         let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
         assert_eq!(config.sidebar.max_provider_blocks, 3);
-        // Set just the density: the cap still falls back to its default.
-        let density_only =
-            MachineConfig::load_from(&write(&dir, "[sidebar]\ndensity = \"full\"\n"))
+        // Set just one sidebar field: the cap still falls back to its default.
+        let partial =
+            MachineConfig::load_from(&write(&dir, "[sidebar]\nattention_redden_secs = 600\n"))
                 .expect("load");
-        assert_eq!(density_only.sidebar.max_provider_blocks, 3);
+        assert_eq!(partial.sidebar.max_provider_blocks, 3);
     }
 
     #[test]

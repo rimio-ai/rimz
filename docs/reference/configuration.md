@@ -86,15 +86,6 @@ When a session is reborn — reboot, multiplexer crash, or a Rimz-initiated rebi
 
 Per-machine, display-only tuning of how the sidebar paints. None of it affects ledger correctness.
 
-#### Card density
-
-```toml
-[sidebar]
-density = "compact"    # "compact" (default) | "full"
-```
-
-`compact` shows each agent's identity, description, and context bar; `full` adds the token line and the time/lines-worked line. Selecting a row always reveals the full card, so density only sets the resting height. (`"bars"` is a legacy alias that now reads as `"full"`.)
-
 #### Attention escalation
 
 ```toml

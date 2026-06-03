@@ -85,13 +85,23 @@ pub(super) fn loading_dots(animation_phase: u64) -> &'static str {
     LOADING_FRAMES[((animation_phase / 3) as usize) % LOADING_FRAMES.len()]
 }
 
-/// Whether a blinking attention glyph (`?` / `!`) paints on this frame. It shows
-/// for most of a slow ~2s cycle and blanks for the final two frames — one quiet
-/// blink that pulls the eye back to an unanswered row without strobing. The
-/// caller paints a same-width blank on the off frames so the column never shifts.
-pub(super) fn attention_blink_on(animation_phase: u64) -> bool {
-    const CYCLE: u64 = 20; // ~2s at the 100ms animation tick
-    (animation_phase % CYCLE) < CYCLE - 2
+/// The brightness modifier for a breathing attention glyph (`?` / `!`) on this
+/// frame: a slow triangle pulse — `DIM` at the troughs, normal through the
+/// middle, `BOLD` at the peak — so the marker swells and fades like a breath,
+/// pulling the eye back to an unanswered row without strobing. It never blanks, so
+/// the glyph holds its cell and the column never shifts. At the 100ms animation
+/// tick the cycle is ~2.4s. Modifier-only, so the breath survives under
+/// `NO_COLOR`.
+pub(super) fn attention_breath(animation_phase: u64) -> Modifier {
+    const CYCLE: u64 = 24;
+    let pos = animation_phase % CYCLE;
+    // Distance toward the peak at the half-cycle: rise 0→12, then fall 12→24.
+    let level = if pos <= CYCLE / 2 { pos } else { CYCLE - pos };
+    match level {
+        0..=3 => Modifier::DIM,
+        4..=8 => Modifier::empty(),
+        _ => Modifier::BOLD,
+    }
 }
 
 pub(super) fn working_glyph(animation_phase: u64) -> &'static str {
@@ -183,16 +193,17 @@ pub(super) fn agent_style(theme: &Theme, status: AgentStatus) -> Style {
 }
 
 /// Style for an agent row's leading glyph. Both attention states — `?` waiting
-/// and `!` failed — rest in bold yellow ("a human is needed here") and escalate
-/// to bold red once the row has gone unanswered past `redden_secs` (the
-/// configurable neglect window), so a fresh ask reads calm-urgent and a
-/// long-ignored one visibly heats up. Every calm state keeps its resting
-/// [`agent_style`] tone.
+/// and `!` failed — breathe (a slow `DIM`↔`BOLD` brightness pulse, see
+/// [`attention_breath`]) in yellow ("a human is needed here") and escalate to red
+/// once the row has gone unanswered past `redden_secs` (the configurable neglect
+/// window), so a fresh ask reads calm-urgent and a long-ignored one visibly heats
+/// up. Every calm state keeps its resting [`agent_style`] tone, unbreathing.
 pub(super) fn attention_glyph_style(
     theme: &Theme,
     status: AgentStatus,
     age_secs: i64,
     redden_secs: i64,
+    animation_phase: u64,
 ) -> Style {
     if matches!(status, AgentStatus::Waiting | AgentStatus::Failed) {
         let color = if age_secs >= redden_secs {
@@ -200,7 +211,7 @@ pub(super) fn attention_glyph_style(
         } else {
             Color::Yellow
         };
-        theme.style(color, Modifier::BOLD)
+        theme.style(color, attention_breath(animation_phase))
     } else {
         agent_style(theme, status)
     }
@@ -849,27 +860,26 @@ mod tests {
         let redden = 30 * 60;
 
         // Both attention states rest yellow while fresh — `!` no longer starts
-        // red; it earns red only by going unanswered.
+        // red; it earns red only by going unanswered. The glyph breathes, so its
+        // brightness modifier varies by frame; only the color is asserted here.
         for status in [AgentStatus::Waiting, AgentStatus::Failed] {
-            let fresh = attention_glyph_style(&theme, status, 5 * 60, redden);
+            let fresh = attention_glyph_style(&theme, status, 5 * 60, redden, 0);
             assert_eq!(fresh.fg, yellow);
-            assert!(fresh.add_modifier.contains(Modifier::BOLD));
-            let stale = attention_glyph_style(&theme, status, 31 * 60, redden);
+            let stale = attention_glyph_style(&theme, status, 31 * 60, redden, 0);
             assert_eq!(stale.fg, red);
-            assert!(stale.add_modifier.contains(Modifier::BOLD));
         }
         // The threshold is honoured: a shorter window reddens sooner.
         assert_eq!(
-            attention_glyph_style(&theme, AgentStatus::Waiting, 6 * 60, 5 * 60).fg,
+            attention_glyph_style(&theme, AgentStatus::Waiting, 6 * 60, 5 * 60, 0).fg,
             red
         );
         // Calm states never redden, however old — they take their plain style.
         assert_eq!(
-            attention_glyph_style(&theme, AgentStatus::Idle, 60 * 60, redden).fg,
+            attention_glyph_style(&theme, AgentStatus::Idle, 60 * 60, redden, 0).fg,
             agent_style(&theme, AgentStatus::Idle).fg
         );
         assert_eq!(
-            attention_glyph_style(&theme, AgentStatus::Running, 60 * 60, redden).fg,
+            attention_glyph_style(&theme, AgentStatus::Running, 60 * 60, redden, 0).fg,
             agent_style(&theme, AgentStatus::Running).fg
         );
     }
@@ -916,22 +926,26 @@ mod tests {
     }
 
     /// The loading dots cycle `.` → `..` → `...`, holding each step a few ticks,
-    /// and the slow attention blink shows for most of its cycle then blanks for a
-    /// short tail — a single quiet blink, never a strobe.
+    /// and the attention glyph breathes a slow brightness pulse — `DIM` at the
+    /// troughs, `BOLD` at the peak — that wraps with the phase, never strobing.
     #[test]
-    fn loading_dots_and_attention_blink_cadence() {
+    fn loading_dots_and_attention_breath_cadence() {
         assert_eq!(loading_dots(0), ".");
         assert_eq!(loading_dots(2), "."); // held across ticks
         assert_eq!(loading_dots(3), "..");
         assert_eq!(loading_dots(6), "...");
         assert_eq!(loading_dots(9), ".", "wraps back to one dot");
 
-        // On for the bulk of the cycle, off only at the tail two frames.
-        assert!(attention_blink_on(0));
-        assert!(attention_blink_on(17));
-        assert!(!attention_blink_on(18));
-        assert!(!attention_blink_on(19));
-        assert!(attention_blink_on(20), "next cycle blinks back on");
+        // DIM at the troughs, normal between, BOLD at the half-cycle peak.
+        assert_eq!(attention_breath(0), Modifier::DIM);
+        assert_eq!(attention_breath(6), Modifier::empty());
+        assert_eq!(
+            attention_breath(12),
+            Modifier::BOLD,
+            "peak at the half-cycle"
+        );
+        assert_eq!(attention_breath(18), Modifier::empty());
+        assert_eq!(attention_breath(24), Modifier::DIM, "wraps to the trough");
     }
 
     /// The token breakdown reads `◇ ↘ ↗ ◍ ◌` with only the `◇` total carrying a
@@ -994,7 +1008,8 @@ mod tests {
         let style = status_style(&theme, AgentStatus::RateLimited);
         assert_eq!(style.fg, Some(Color::Indexed(179)));
         assert!(!style.add_modifier.contains(Modifier::BOLD));
-        let long_parked = attention_glyph_style(&theme, AgentStatus::RateLimited, 60 * 60, 30 * 60);
+        let long_parked =
+            attention_glyph_style(&theme, AgentStatus::RateLimited, 60 * 60, 30 * 60, 0);
         assert_eq!(long_parked.fg, Some(Color::Indexed(179)));
         assert!(!long_parked.add_modifier.contains(Modifier::BOLD));
     }

@@ -1,16 +1,17 @@
 ---
 source: crates/rimz-sidebar/src/render/mod.rs
+assertion_line: 734
 expression: screen
 ---
  ⌘ query-engine
 
- ¤ 0   ◎ 0
+ ¤ 0
+ ◎ 0
  ──────────────────────────────────────────────────────────────────────────────
 
  no agents yet
  install hooks:
  rimz hooks install claude
-
 
 
 

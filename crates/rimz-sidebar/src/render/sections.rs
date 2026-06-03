@@ -10,7 +10,6 @@ use jiff::{SignedDuration, Timestamp};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use rimz::agents::{AgentContext, RateLimitWindow};
-use rimz::config::SidebarDensity;
 use rimz::feed::{AgentStatus, PermissionPosture};
 use rimz::{
     SidebarProviderPanel, SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarSubAgent,
@@ -20,16 +19,16 @@ use rimz::{
 use super::TallyAnim;
 
 use super::fmt::{
-    activity_short, age_secs, age_short, clip, dollars2, duration_worked, model_label, pct_label,
-    reset_countdown, time_remaining, tokens_int, tokens_short, window_label,
+    activity_short, age_secs, age_short, clip, dollars2, model_label, pct_label, reset_countdown,
+    time_remaining, tokens_int, tokens_short, window_label,
 };
 use super::labels::{
     TOKENS_CACHED, TOKENS_IN, TOKENS_OUT, TOKENS_TOTAL, agent_glyph, agent_style,
-    attention_blink_on, attention_glyph_style, compacting_glyph, compacting_style,
-    context_severity_color, ctx_glyph_color, diff_spans, gauge_spans, infinite_bar_spans,
-    loading_dots, mana_bar_spans, mana_color, posture_pill, posture_style, resolver_glyph,
-    segmented_gauge_spans, status_glyph, status_style, subagent_glyph, subagent_style,
-    thinking_still, todo_spans, token_breakdown_spans, tokens_total_spans, working_glyph,
+    attention_glyph_style, compacting_glyph, compacting_style, context_severity_color,
+    ctx_glyph_color, diff_spans, gauge_spans, infinite_bar_spans, loading_dots, mana_bar_spans,
+    mana_color, posture_pill, posture_style, resolver_glyph, segmented_gauge_spans, status_glyph,
+    status_style, subagent_glyph, subagent_style, thinking_still, todo_spans,
+    token_breakdown_spans, tokens_total_spans, working_glyph,
 };
 use super::theme::Theme;
 
@@ -106,18 +105,19 @@ impl Tier {
 /// so the body below never shifts vertically as agents change *state*:
 ///
 /// ```text
-/// ? 2   ! 1   ○ 2                        ✽ 1   ⢿ 3   ✓ 4   make-up: left · right
+/// ? 2   ! 1   ○ 2   ⏸ 0                  ✽ 1   ⢿ 3   ✓ 4   make-up: left · right
 /// ```
 ///
 /// The line splits the make-up by who might want you. The left cluster is the
 /// rows worth a glance — `waiting` `?` and `failed` `!` (each yellow, reddening
-/// once any of its rows is past the neglect window), then a free `idle` `○` at the
-/// cluster's right edge (calm green, but grouped left because a free agent wants
-/// work). The right cluster is the busy/done tail — thinking `✽` (plan-mode
-/// reasoning, read before acting), working `⢿`, then `success` `✓`. Every bucket
-/// renders, so a zero reads a faint `? 0`. Counts span the capped agents
-/// (`status_counts`). The fleet's live time / token / commit totals are gone — the
-/// summary line's today-accumulated breakdown carries the fleet's resource read.
+/// once any of its rows is past the neglect window), a free `idle` `○` (calm
+/// green, but grouped left because a free agent wants work), then a parked
+/// `rate-limited` `⏸` (held amber, never reddening) closing the cluster. The right
+/// cluster is the busy/done tail — thinking `✽` (plan-mode reasoning, read before
+/// acting), working `⢿`, then `success` `✓`. Every bucket renders, so a zero reads
+/// a faint `? 0`. Counts span the capped agents (`status_counts`). The fleet's
+/// live time / token / commit totals are gone — the summary line's
+/// today-accumulated breakdown carries the fleet's resource read.
 pub(super) fn fleet_header_lines(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
@@ -151,10 +151,10 @@ pub(super) fn fleet_header_lines(
 
     // Top line — the make-up split by who might want you. The left cluster gathers
     // the rows worth a glance: `waiting` `?` and `failed` `!` (yellow, reddening
-    // once any of their rows is stale), then a free `idle` `○` at the cluster's
-    // right edge — calm green, but grouped left because a free agent wants work.
-    // The right cluster is the busy/done tail: thinking before working, then
-    // success. Every bucket shows its count.
+    // once any of their rows is stale), a free `idle` `○` — calm green, but grouped
+    // left because a free agent wants work — then a parked `rate-limited` `⏸`
+    // closing the cluster. The right cluster is the busy/done tail: thinking before
+    // working, then success. Every bucket shows its count.
     let mut left: Vec<Span<'static>> = Vec::new();
     push_count(
         theme,
@@ -176,27 +176,25 @@ pub(super) fn fleet_header_lines(
             any_attention_stale(groups, AgentStatus::Failed, redden_secs),
         ),
     );
-    // Rate-limited sits right after `!`: attention-class, but parked. Unlike the
-    // always-on buckets it shows *only when populated* — it is a rare,
-    // non-actionable state, and the cockpit's width is precious (a permanent
-    // `⏸ 0` would push the busy tail off a narrow sidebar). When it does appear
-    // it takes the held-amber resting tone — never the reddening
-    // `attention_bucket_style` — since there is nothing to do but wait.
-    if rate_limited > 0 {
-        push_count(
-            theme,
-            &mut left,
-            status_glyph(AgentStatus::RateLimited),
-            rate_limited,
-            status_style(theme, AgentStatus::RateLimited),
-        );
-    }
     push_count(
         theme,
         &mut left,
         status_glyph(AgentStatus::Idle),
         idle,
         status_style(theme, AgentStatus::Idle),
+    );
+    // Rate-limited closes the left cluster, after the free `○` idle agent:
+    // attention-class but parked. It renders like every other bucket — a faint
+    // `⏸ 0` when empty — so the make-up stays a fixed dashboard, scannable by
+    // position. It takes the held-amber resting tone (`status_style`), never the
+    // reddening `attention_bucket_style`, since there is nothing to do but wait
+    // for the window to reset.
+    push_count(
+        theme,
+        &mut left,
+        status_glyph(AgentStatus::RateLimited),
+        rate_limited,
+        status_style(theme, AgentStatus::RateLimited),
     );
     let mut right: Vec<Span<'static>> = Vec::new();
     push_count(
@@ -298,68 +296,72 @@ fn push_count(
     spans.push(Span::styled(format!("{glyph} {count}"), style));
 }
 
-/// The cockpit summary line, directly beneath the repo identity: `¤ {live}` the
-/// agents in the room now and `◎ {sessions}` the threads that have run today,
-/// then today's accumulated token breakdown `◇ ↘ ↗ ◍ ◌` (integer magnitudes, the
-/// live coarse form). The counts read from the live fleet and the JSONL
-/// `value_tally`'s today window; the breakdown drops when today recorded no
-/// tokens. Always present — an empty room reads `¤ 0  ◎ 0`. Today's spend rides
-/// its own line below ([`cockpit_spend_line`]).
+/// The cockpit's first summary line, directly beneath the repo identity:
+/// `¤ {live}` — the agents in the room right now — on the left, with today's
+/// accumulated token breakdown `◇ ↘ ↗ ◍ ◌` (integer magnitudes, the live coarse
+/// form) pinned to the right edge. The count reads from the live fleet; the
+/// breakdown reads the JSONL `value_tally`'s today window and drops when today
+/// recorded no tokens, leaving `¤ {live}` alone. Sessions and spend ride the
+/// second line ([`cockpit_spend_line`]).
 pub(super) fn cockpit_summary_line(
     theme: &Theme,
     live_agents: usize,
     today: Option<&SpendWindow>,
     width: usize,
 ) -> Line<'static> {
-    let sessions = today.map(|window| window.sessions).unwrap_or(0);
-    let mut left = metric_spans(
+    let left = metric_spans(
         theme,
         ACTIVE_AGENTS_GLYPH,
         Color::Cyan,
         &live_agents.to_string(),
     );
-    left.push(Span::raw("   "));
-    left.extend(metric_spans(
-        theme,
-        SESSIONS_GLYPH,
-        Color::Cyan,
-        &sessions.to_string(),
-    ));
-    if let Some(window) = today.filter(|w| w.tokens > 0 || w.cache_write > 0 || w.cache_read > 0) {
-        left.push(Span::raw("   "));
-        left.extend(token_breakdown_spans(
-            theme,
-            window.tokens,
-            window.input,
-            window.output,
-            window.cache_write,
-            window.cache_read,
-            tokens_int,
-            true,
-        ));
-    }
-    Line::from(trim_spans_to_width(left, width))
+    let right = today
+        .filter(|w| w.tokens > 0 || w.cache_write > 0 || w.cache_read > 0)
+        .map(|window| {
+            token_breakdown_spans(
+                theme,
+                window.tokens,
+                window.input,
+                window.output,
+                window.cache_write,
+                window.cache_read,
+                tokens_int,
+                true,
+            )
+        })
+        .unwrap_or_default();
+    pin_right(left, right, width)
 }
 
-/// Today's fleet spend, pinned to the right edge on its own line under the
-/// summary, climbing in a smooth count-up as a turn lands. The figure eases
-/// toward the `value_tally` today total via the shared [`TallyAnim`] roll and
-/// brightens for a beat the instant it settles — the cockpit's one animated
-/// number (the W/M ledger rows below stay static). Bold money-green at rest.
+/// The cockpit's second summary line: `◎ {sessions}` — the threads that have run
+/// today — on the left, with today's fleet spend pinned to the right edge,
+/// climbing in a smooth count-up as a turn lands. The figure eases toward the
+/// `value_tally` today total via the shared [`TallyAnim`] roll and brightens for a
+/// beat the instant it settles — the cockpit's one animated number (the W/M
+/// ledger rows below stay static). Always present — sessions read `◎ 0` in an
+/// empty room; the bold money-green `$` joins the right edge once today records
+/// spend.
 pub(super) fn cockpit_spend_line(
     theme: &Theme,
+    sessions: u32,
     today_usd: f64,
     anim: &TallyAnim,
     phase: u64,
     width: usize,
 ) -> Line<'static> {
-    let usd = anim.today_usd.display(today_usd, phase);
-    let style = if anim.today_usd.flashing(phase) {
-        theme.style(VALUE_FLASH, Modifier::BOLD)
+    let left = metric_spans(theme, SESSIONS_GLYPH, Color::Cyan, &sessions.to_string());
+    let right = if today_usd > 0.0 {
+        let usd = anim.today_usd.display(today_usd, phase);
+        let style = if anim.today_usd.flashing(phase) {
+            theme.style(VALUE_FLASH, Modifier::BOLD)
+        } else {
+            theme.style(Color::Green, Modifier::BOLD)
+        };
+        vec![Span::styled(dollars2(usd), style)]
     } else {
-        theme.style(Color::Green, Modifier::BOLD)
+        Vec::new()
     };
-    pin_right(Vec::new(), vec![Span::styled(dollars2(usd), style)], width)
+    pin_right(left, right, width)
 }
 
 /// A stats metric as a colored icon glyph + dim value (`◷ 2h34m`, `¤ 5`): the
@@ -371,10 +373,6 @@ fn metric_spans(theme: &Theme, glyph: &str, color: Color, value: &str) -> Vec<Sp
         Span::styled(glyph.to_owned(), theme.style(color, Modifier::empty())),
         Span::styled(format!(" {value}"), theme.dim()),
     ]
-}
-
-fn clamp_u32(n: u64) -> u32 {
-    u32::try_from(n).unwrap_or(u32::MAX)
 }
 
 /// Dim getting-started hint for a healthy room with no agent or feed rows.
@@ -413,7 +411,6 @@ pub(super) fn worktree_group_lines(
     group: &SidebarWorktreeGroup,
     providers: &[SidebarProviderPanel],
     width: usize,
-    density: SidebarDensity,
     redden_secs: i64,
     row_index: &mut usize,
     selected_index: usize,
@@ -466,7 +463,6 @@ pub(super) fn worktree_group_lines(
             providers,
             width,
             tier,
-            density,
             selected,
             animation_phase,
             redden_secs,
@@ -604,7 +600,6 @@ fn row_lines(
     providers: &[SidebarProviderPanel],
     width: usize,
     tier: Tier,
-    density: SidebarDensity,
     selected: bool,
     animation_phase: u64,
     redden_secs: i64,
@@ -612,11 +607,10 @@ fn row_lines(
 ) -> Vec<Line<'static>> {
     let cw = content_width(width);
     // The resting (unselected) card is line 1 (identity), line 2 (description),
-    // and the ctx bar — plus whatever `density` keeps resident. Selection only
-    // *appends* the deeper lines (the token and work stats); it never reshapes a
-    // line already on screen, so the card never reflows on expand. The budgets
-    // are account-scoped, so they live in the pinned provider dashboard,
-    // never on a row.
+    // the ctx bar, and the token line. Selection only *appends* the subagent
+    // list; it never reshapes a line already on screen, so the card never reflows
+    // on expand. The budgets are account-scoped, so they live in the pinned
+    // provider dashboard, never on a row.
     let mut inner = vec![identity_line(
         theme,
         row,
@@ -636,28 +630,15 @@ fn row_lines(
     }
     if row.row_kind == SidebarRowKind::Agent {
         inner.push(description_line(theme, row, tier, cw, animation_phase));
-        if idle_unstarted(row) {
-            // A just-started idle agent sits on the 0% baseline gauge with nothing
-            // behind it — suppress the bar and the stats so the fresh card reads
-            // calm, keeping only the last-activity age once the card expands.
-            if selected || density.shows_stats() {
-                inner.push(activity_age_line(theme, row, cw));
-            }
-        } else {
-            // The context bar and the token line — the per-card `◇ ↘ ↗ ◍ ◌`
-            // breakdown plus the `◷` last-activity age — are part of the resting
-            // compact card now, not gated behind selection.
+        // A just-started idle agent sits on the 0% baseline gauge with nothing
+        // behind it, so it rests at identity + description alone. Once an agent
+        // has real context, the bar and the token line — the per-card `◇ ↘ ↗ ◍ ◌`
+        // breakdown with the `◷` last-activity age — join the resting card.
+        if !idle_unstarted(row) {
             if let Some(line) = gauge_line(theme, row, cw) {
                 inner.push(line);
             }
             if let Some(line) = token_totals_line(theme, row, cw) {
-                inner.push(line);
-            }
-            // The work line (worked time + the agent's own edit count) is an
-            // expanded-card detail; selection only ever appends it.
-            if (selected || density.shows_stats())
-                && let Some(line) = work_line(theme, row, cw)
-            {
                 inner.push(line);
             }
         }
@@ -801,20 +782,23 @@ fn agent_lead_cell(
     {
         return Span::styled(subagent_glyph(animation_phase), subagent_style(theme));
     }
-    // A blocked `?`/`!` slowly blinks to pull the eye back to an unanswered row:
-    // shown for most of the cycle, blanked for a couple of frames. The blank holds
-    // the one-cell width so the column never shifts as it winks.
-    if actionable && !attention_blink_on(animation_phase) {
-        return Span::raw(" ");
-    }
+    // A blocked `?`/`!` breathes — a slow brightness pulse via
+    // `attention_glyph_style` — to pull the eye back to an unanswered row. It
+    // never blanks, so the one-cell column never shifts as it swells and fades.
     Span::styled(
         agent_glyph(status, row.permission_posture, animation_phase),
-        attention_glyph_style(theme, status, age_secs(row.last_activity), redden_secs),
+        attention_glyph_style(
+            theme,
+            status,
+            age_secs(row.last_activity),
+            redden_secs,
+            animation_phase,
+        ),
     )
 }
 
-/// Line 1 for an agent: the leading cell (animated only while the agent is
-/// actively working or plan-mode thinking — attention markers stay still), the
+/// Line 1 for an agent: the leading cell (the working fill or plan-mode thinking
+/// sparkle while active; a blocked `?`/`!` breathes a slow brightness pulse), the
 /// agent name, then the dim capability tokens (`· model · effort`) and the
 /// permission posture pill, with the bold `$cost` (money-green) pinned right.
 /// Capability tokens degrade by width tier: L2 carries model + effort + posture,
@@ -1247,12 +1231,13 @@ fn gauge_segments(row: &SidebarRow) -> Option<[(u64, Color); 3]> {
 /// writes (`◍`) and cache reads (`◌`). The breakdown glyphs stay dim so only the
 /// `◇` total carries a tone. Falls back to the bare `◇` rollup total for an agent
 /// whose context carries no read-only token split (Codex's app-server exposes
-/// none), so the line shows *something* — and the age — for every agent.
+/// none), so the line shows *something* for every agent. The `◷` age rides the
+/// right edge only once it crosses a full minute — a just-active agent shows the
+/// breakdown alone, left-aligned, rather than a misleading `1m`.
 fn token_totals_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
-    let age = Span::styled(
-        format!("{WORKED_GLYPH} {}", activity_short(row.last_activity)),
-        theme.dim(),
-    );
+    let age = activity_short(row.last_activity)
+        .map(|label| vec![Span::styled(format!("{WORKED_GLYPH} {label}"), theme.dim())])
+        .unwrap_or_default();
     if let Some(tokens) = ctx(row).and_then(|context| context.tokens.as_ref())
         && (tokens.total_input_tokens.is_some() || tokens.total_output_tokens.is_some())
     {
@@ -1278,55 +1263,12 @@ fn token_totals_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Li
             tokens_int,
             true,
         ));
-        return Some(pin_right(left, vec![age], width));
+        return Some(pin_right(left, age, width));
     }
     let total = row.total_tokens?;
     let mut left = vec![Span::raw("  ")];
     left.extend(tokens_total_spans(theme, total, tokens_int));
-    Some(pin_right(left, vec![age], width))
-}
-
-/// The session's work line (`◷ 12m worked · +127 -43`): a clock-led span of time
-/// worked and the lines the agent added/removed, from the statusline cost
-/// record. The diff is the agent's own edit count, distinct from the
-/// worktree-total diff on the group header. An expanded-card detail, drawn only
-/// when the cost record reports a field. The last-activity age rides the token
-/// line above, so it is not repeated here.
-fn work_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
-    let cost = ctx(row)?.cost.as_ref()?;
-    let mut spans = vec![Span::raw("  ")];
-    let mut printed = false;
-    if let Some(ms) = cost.total_duration_ms {
-        // Teal clock icon, dim value + word.
-        spans.push(Span::styled(
-            WORKED_GLYPH,
-            theme.style(Color::Cyan, Modifier::empty()),
-        ));
-        spans.push(Span::styled(
-            format!(" {} worked", duration_worked(ms)),
-            theme.dim(),
-        ));
-        printed = true;
-    }
-    if cost.total_lines_added.is_some() || cost.total_lines_removed.is_some() {
-        if printed {
-            spans.push(Span::styled(" · ", theme.faint()));
-        }
-        spans.extend(diff_spans(
-            theme,
-            clamp_u32(cost.total_lines_added.unwrap_or(0)),
-            clamp_u32(cost.total_lines_removed.unwrap_or(0)),
-        ));
-        printed = true;
-    }
-    printed.then(|| Line::from(trim_spans_to_width(spans, width)))
-}
-
-/// The lone last-activity age, pinned bottom-right — the only stat a just-started
-/// idle agent shows once the zeroed token and work lines are suppressed.
-fn activity_age_line(theme: &Theme, row: &SidebarRow, width: usize) -> Line<'static> {
-    let age = Span::styled(activity_short(row.last_activity), theme.dim());
-    pin_right(vec![Span::raw("  ")], vec![age], width)
+    Some(pin_right(left, age, width))
 }
 
 /// Total display width of a span run, in terminal cells.
