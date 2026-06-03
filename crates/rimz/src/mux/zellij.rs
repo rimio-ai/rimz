@@ -677,7 +677,8 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn list_panes(&self, opts: PaneListOptions) -> Result<Vec<PaneRef>> {
-        let raws = self.list_panes_with_session(opts.session_name.as_deref())?;
+        let timeout = opts.command_timeout.unwrap_or(super::COMMAND_TIMEOUT);
+        let raws = self.list_panes_bounded(opts.session_name.as_deref(), timeout)?;
         let session_name = opts.session_name.unwrap_or_default();
         Ok(raws
             .into_iter()

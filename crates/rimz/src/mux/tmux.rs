@@ -420,6 +420,7 @@ impl MuxBackend for TmuxBackend {
     }
 
     fn list_panes(&self, opts: PaneListOptions) -> Result<Vec<PaneRef>> {
+        let timeout = opts.command_timeout.unwrap_or(super::COMMAND_TIMEOUT);
         let mut spec = self.cmd().args([
             "list-panes",
             "-a",
@@ -429,7 +430,7 @@ impl MuxBackend for TmuxBackend {
         if let Some(session) = opts.session_name {
             spec = spec.args(["-t".to_owned(), session]);
         }
-        let output = spec.run()?;
+        let output = spec.run_with_timeout(timeout)?;
         let panes = String::from_utf8_lossy(&output.stdout)
             .lines()
             .filter_map(parse_pane_line)
@@ -563,6 +564,7 @@ impl MuxBackend for TmuxBackend {
         // dance and no session teardown is needed.
         let panes = self.list_panes(PaneListOptions {
             session_name: Some(opts.session_name.clone()),
+            ..Default::default()
         })?;
         let views = tmux_views_with_sidebars(&panes);
         let plan = super::plan_reconcile(&views, live);

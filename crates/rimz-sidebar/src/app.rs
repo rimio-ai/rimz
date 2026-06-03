@@ -110,7 +110,9 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // a slow fetch can never queue more than one extra run.
     let (request_tx, request_rx) = std::sync::mpsc::channel::<FetchRequest>();
     let (result_tx, result_rx) = std::sync::mpsc::channel::<FetchOutcome>();
-    spawn_fetch_worker(
+    // `JoinHandle` drops without blocking: the thread runs to completion on its
+    // own when `request_tx` is dropped at function exit.
+    let _fetch_handle = spawn_fetch_worker(
         config.clone(),
         runtime.clone(),
         socket_path.clone(),
@@ -128,7 +130,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         std::sync::mpsc::channel::<SelfCloseProbeRequest>();
     let (self_close_result_tx, self_close_result_rx) =
         std::sync::mpsc::channel::<SelfCloseProbeOutcome>();
-    spawn_self_close_probe_worker(
+    let _probe_handle = spawn_self_close_probe_worker(
         config.clone(),
         socket_path.clone(),
         self_close_probe_rx,
@@ -137,39 +139,30 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     let mut self_close_probe_in_flight = false;
     let mut pending_self_close_probe: Option<Duration> = None;
 
-    // First frame synchronously: nothing animates yet, so there is no loop to
-    // stall, and it avoids a placeholder flash before the worker's first result.
-    let mut fetched_at = Instant::now();
-    // First frame: `prev_good` is the empty placeholder, so the gate always
-    // accepts and there is no loop yet to fire a self-heal refetch — ignore
-    // `rejected` here.
-    let mut should_exit = apply_fetch_outcome(
-        &config,
-        run_fetch(
-            &config,
-            &runtime,
-            &socket_path,
-            FetchRequest::default(),
-            true,
-        ),
-        &mut last_snapshot,
-        &mut current,
-        &mut health,
-        &mut gate,
-        &mut self_close,
-        &mut session_exit,
-        &mut ui,
-        anim_start,
-    )?
-    .should_exit;
-    if !should_exit && current.own_view.as_ref().map(|view| view.sibling_count) == Some(0) {
-        request_self_close_probe(
-            &self_close_probe_tx,
-            &mut self_close_probe_in_flight,
-            &mut pending_self_close_probe,
-            STARTUP_SELF_CLOSE_RECHECK_AFTER,
+    // Write the heartbeat immediately so the freshness gate never sees a gap.
+    // Errors are non-fatal; the gate re-probes after the TTL.
+    if let Err(err) = write_heartbeat(&config, &runtime, &socket_path) {
+        warn!(
+            session = %config.session_name,
+            error = %err,
+            "initial heartbeat write failed",
         );
     }
+
+    // Fire the first fetch on the background worker and start the main loop
+    // immediately rather than blocking on a synchronous call: the first fetch
+    // can take several seconds (Zellij just started, git cold-start), and a
+    // blocked main thread delays the self-close watchdog, stalling cleanup.
+    // The placeholder snapshot renders while the first real result is in flight.
+    let mut fetched_at = Instant::now();
+    let mut should_exit = false;
+    request_fetch(
+        &request_tx,
+        &mut in_flight,
+        &mut pending_refetch,
+        FetchRequest::default(),
+        false,
+    );
 
     // One fixed-timestep event loop. Events fold into the in-process model and
     // mark the frame dirty; the loop paints at most once per `ANIMATION_FRAME`
@@ -183,6 +176,10 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // keypress.
     let mut dirty = true;
     let mut next_frame = Instant::now();
+    let mut last_close_probe = Instant::now();
+    // Heartbeat writes live on the main thread (fast in-process atomic writes)
+    // so the exit path can remove the file without racing a background writer.
+    let mut last_heartbeat: Option<Instant> = None;
     while !should_exit {
         // A live row's spinner or a value-corner count-up keeps the frame grid
         // warm; a pending fold (`dirty`) does too. With neither, drop to the
@@ -195,7 +192,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 .saturating_duration_since(Instant::now())
                 .max(FRAME_MIN_TIMEOUT)
         } else {
-            tick
+            // Cap by the watchdog so the probe fires on time even when the data
+            // tick is much longer (e.g. the test's 20s tick vs the 3s watchdog).
+            let watchdog_due =
+                SELF_CLOSE_PROBE_WATCHDOG.saturating_sub(last_close_probe.elapsed());
+            tick.min(watchdog_due).max(FRAME_MIN_TIMEOUT)
         };
         socket.set_read_timeout(Some(timeout))?;
         match wait_for_wakeup(&socket)? {
@@ -311,6 +312,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     &mut pending_self_close_probe,
                     Duration::ZERO,
                 );
+                last_close_probe = Instant::now();
                 // A resize is the mux telling us topology changed: a split
                 // opened/closed, or the sidebar got space back. Pull a fresh
                 // pane list immediately and require a cache produced after this
@@ -397,6 +399,33 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 &mut pending_refetch,
                 FetchRequest::default(),
                 false,
+            );
+        }
+
+        // Heartbeat: fast in-process atomic write on the main thread so the
+        // exit path (drop _heartbeat_cleanup) never races a background writer.
+        if heartbeat_write_due(last_heartbeat) {
+            last_heartbeat = Some(Instant::now());
+            if let Err(err) = write_heartbeat(&config, &runtime, &socket_path) {
+                warn!(
+                    session = %config.session_name,
+                    error = %err,
+                    "heartbeat write failed",
+                );
+            }
+        }
+
+        // Self-close watchdog: if no resize event fired (e.g. background sessions
+        // where the mux omits SIGWINCH after a pane closes), poll the pane list
+        // on a slow backstop so the sidebar still closes promptly. The resize path
+        // remains the fast lane; this is only a fallback for when it stays silent.
+        if last_close_probe.elapsed() >= SELF_CLOSE_PROBE_WATCHDOG {
+            last_close_probe = Instant::now();
+            request_self_close_probe(
+                &self_close_probe_tx,
+                &mut self_close_probe_in_flight,
+                &mut pending_self_close_probe,
+                Duration::ZERO,
             );
         }
 
@@ -669,7 +698,18 @@ impl SelfCloseState {
 }
 
 const EMPTY_STARTUP_OBSERVATIONS_BEFORE_CLOSE: u8 = 2;
-const STARTUP_SELF_CLOSE_RECHECK_AFTER: Duration = Duration::from_secs(1);
+/// Watchdog interval for the self-close probe: when no resize event arrives
+/// (e.g. background Zellij sessions that omit SIGWINCH after a pane closes),
+/// this backstop polls the live pane list to detect an empty tab. Sized at 2s
+/// so that even a slow probe (up to `PROBE_COMMAND_TIMEOUT`) finishes inside
+/// the 7s integration-test window with margin to spare.
+const SELF_CLOSE_PROBE_WATCHDOG: Duration = Duration::from_secs(2);
+/// Maximum time the self-close probe spends waiting for the mux backend's
+/// `list-panes` subprocess. Shorter than the default 30s backend timeout so
+/// a hung Zellij does not pin the sidebar open indefinitely. Combined with
+/// `SELF_CLOSE_PROBE_WATCHDOG` (2s), worst-case close time is ≤ 2+4 = 6s —
+/// safely inside the 7s integration-test window.
+const PROBE_COMMAND_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// Decide whether the daemon-view sidebar should detach the client because the
 /// `rimzd` daemon tab is the only tab left in the session. Mirrors
@@ -1082,17 +1122,14 @@ fn fetch_snapshot_for(
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
-/// One refresh cycle's result: the liveness-write error (if any) and the
-/// snapshot fetch, kept separate so [`compute_next_state`] can tell a
-/// heartbeat-only failure apart from a snapshot failure.
+/// One refresh cycle's result: the snapshot fetch outcome.
 struct FetchOutcome {
-    heartbeat_err: Option<String>,
     snapshot: std::result::Result<SidebarSnapshot, String>,
 }
 
-/// Write the heartbeat and fetch the snapshot. Runs on the fetch worker thread
-/// (and once inline for the first frame), keeping the producer's `list-panes` +
-/// git round-trip off the render/input loop so animation never stalls on it.
+/// Fetch the snapshot. Runs on the fetch worker thread (and once inline for the
+/// first frame), keeping the producer's `list-panes` + git round-trip off the
+/// render/input loop so animation never stalls on it.
 ///
 /// One producer per workspace, one renderer per tab. The eldest live instance
 /// is the producer: it forks `rimz sidebar snapshot` (`list-panes`/git) and
@@ -1102,20 +1139,7 @@ struct FetchOutcome {
 /// runs `list-panes`/git, and never exits — a per-tab renderer stays alive and
 /// paints. The mux/git round-trip is paid once per workspace; a consumer with no
 /// published frame yet reports a soft miss so the gate holds its last good frame.
-fn run_fetch(
-    config: &ServeConfig,
-    runtime: &RuntimePaths,
-    socket_path: &Path,
-    request: FetchRequest,
-    write_heartbeat_now: bool,
-) -> FetchOutcome {
-    let heartbeat_err = if write_heartbeat_now {
-        write_heartbeat(config, runtime, socket_path)
-            .err()
-            .map(|err| err.to_string())
-    } else {
-        None
-    };
+fn run_fetch(config: &ServeConfig, runtime: &RuntimePaths, request: FetchRequest) -> FetchOutcome {
     let is_producer = !rimz::sidebar::elder_sidebar_present(runtime, &config.instance_id);
     let exclude = own_pane_id(config.mux);
     // Take the producer path — fork the real `list-panes`/git snapshot — when we
@@ -1157,10 +1181,7 @@ fn run_fetch(
             Err(err) => Err(err.to_string()),
         }
     };
-    FetchOutcome {
-        heartbeat_err,
-        snapshot,
-    }
+    FetchOutcome { snapshot }
 }
 
 /// One request to the fetch worker. `force_produce` makes the run take the
@@ -1208,10 +1229,9 @@ fn spawn_fetch_worker(
     socket_path: PathBuf,
     request_rx: std::sync::mpsc::Receiver<FetchRequest>,
     result_tx: std::sync::mpsc::Sender<FetchOutcome>,
-) {
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let waker = UnixDatagram::unbound().ok();
-        let mut last_heartbeat: Option<Instant> = None;
         while let Ok(first) = request_rx.recv() {
             // Coalesce any requests that piled up into one run, keeping the
             // strongest intent and the newest pane-freshness floor.
@@ -1219,17 +1239,7 @@ fn spawn_fetch_worker(
             while let Ok(extra) = request_rx.try_recv() {
                 request.merge(extra);
             }
-            let write_heartbeat_now = heartbeat_write_due(last_heartbeat);
-            if write_heartbeat_now {
-                last_heartbeat = Some(Instant::now());
-            }
-            let outcome = run_fetch(
-                &config,
-                &runtime,
-                &socket_path,
-                request,
-                write_heartbeat_now,
-            );
+            let outcome = run_fetch(&config, &runtime, request);
             if result_tx.send(outcome).is_err() {
                 return;
             }
@@ -1237,7 +1247,7 @@ fn spawn_fetch_worker(
                 let _ = waker.send_to(SNAPSHOT_WAKEUP, &socket_path);
             }
         }
-    });
+    })
 }
 
 fn heartbeat_write_due(last_heartbeat: Option<Instant>) -> bool {
@@ -1249,7 +1259,7 @@ fn spawn_self_close_probe_worker(
     socket_path: PathBuf,
     request_rx: std::sync::mpsc::Receiver<SelfCloseProbeRequest>,
     result_tx: std::sync::mpsc::Sender<SelfCloseProbeOutcome>,
-) {
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let waker = UnixDatagram::unbound().ok();
         while let Ok(first) = request_rx.recv() {
@@ -1268,7 +1278,7 @@ fn spawn_self_close_probe_worker(
                 let _ = waker.send_to(SELF_CLOSE_WAKEUP, &socket_path);
             }
         }
-    });
+    })
 }
 
 fn run_self_close_probe(config: &ServeConfig) -> SelfCloseProbeOutcome {
@@ -1280,6 +1290,7 @@ fn run_self_close_probe(config: &ServeConfig) -> SelfCloseProbeOutcome {
     };
     match rimz::mux::backend_for(config.mux).list_panes(PaneListOptions {
         session_name: Some(config.session_name.clone()),
+        command_timeout: Some(PROBE_COMMAND_TIMEOUT),
     }) {
         Ok(panes) => SelfCloseProbeOutcome {
             // This probe reads only `sibling_count`.
@@ -1406,7 +1417,7 @@ fn apply_fetch_outcome(
     let prev_good = current.clone();
     let computed = compute_next_state(
         &config.workspace_id,
-        outcome.heartbeat_err,
+        None,
         outcome.snapshot,
         last_snapshot.take(),
         health,

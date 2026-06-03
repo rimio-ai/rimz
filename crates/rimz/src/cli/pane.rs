@@ -75,6 +75,7 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
             };
             let panes = backend.list_panes(PaneListOptions {
                 session_name: Some(session_name),
+                ..Default::default()
             })?;
             if json {
                 let rendered = serde_json::to_string_pretty(&panes)?;
@@ -125,7 +126,7 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
         } => {
             let pane = PaneId::parse(&pane_id)?;
             if let Some(expected_start) = pane_process_start.as_deref() {
-                let panes = backend.list_panes(PaneListOptions { session_name })?;
+                let panes = backend.list_panes(PaneListOptions { session_name, ..Default::default() })?;
                 let Some(live) = panes.iter().find(|candidate| candidate.pane_id == pane) else {
                     bail!("pane {pane} is no longer present");
                 };

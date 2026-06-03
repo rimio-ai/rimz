@@ -137,6 +137,7 @@ impl TmuxServer {
                 .backend
                 .list_panes(PaneListOptions {
                     session_name: Some(session.to_owned()),
+                    ..Default::default()
                 })
                 .expect("list_panes");
             if listed
@@ -242,6 +243,7 @@ fn list_panes_with_session_returns_terminals() {
             .backend
             .list_panes(PaneListOptions {
                 session_name: Some("panes".to_owned()),
+                ..Default::default()
             })
             .expect("list_panes");
         if panes.first().and_then(|p| p.command.as_deref()) == Some("sh")
@@ -330,8 +332,9 @@ fn open_background_view_creates_named_window_idempotently() {
     // Born `sidebar | host`: the hook-docked sidebar beside the host pane.
     let rc_panes = server
         .backend
-        .list_panes(rimz::mux::PaneListOptions {
+        .list_panes(PaneListOptions {
             session_name: Some("rimz-bgview".to_owned()),
+            ..Default::default()
         })
         .expect("list panes")
         .into_iter()
@@ -379,6 +382,7 @@ fn split_pane_injects_env_vars() {
         .backend
         .list_panes(PaneListOptions {
             session_name: Some("split".to_owned()),
+            ..Default::default()
         })
         .expect("list_panes after split");
     assert_eq!(
@@ -415,6 +419,7 @@ fn capture_and_send_keys_round_trip() {
         .backend
         .list_panes(PaneListOptions {
             session_name: Some("io".to_owned()),
+            ..Default::default()
         })
         .expect("list_panes");
     let pane_id = panes[0].pane_id.clone();
@@ -468,6 +473,7 @@ fn open_sidebar_split_window_succeeds() {
         .backend
         .list_panes(PaneListOptions {
             session_name: Some("sidebar".to_owned()),
+            ..Default::default()
         })
         .expect("list_panes");
     assert_eq!(
@@ -494,6 +500,7 @@ fn reconcile_sidebars_adds_one_to_a_sidebarless_window() {
         .backend
         .list_panes(PaneListOptions {
             session_name: Some("room".to_owned()),
+            ..Default::default()
         })
         .expect("list_panes before")
         .len();
@@ -525,6 +532,7 @@ fn reconcile_sidebars_adds_one_to_a_sidebarless_window() {
         .backend
         .list_panes(PaneListOptions {
             session_name: Some("room".to_owned()),
+            ..Default::default()
         })
         .expect("list_panes after")
         .len();

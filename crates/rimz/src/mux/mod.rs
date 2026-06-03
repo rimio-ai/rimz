@@ -217,6 +217,11 @@ pub struct PaneCapture {
 #[derive(Clone, Debug, Default)]
 pub struct PaneListOptions {
     pub session_name: Option<String>,
+    /// Override the backend's default subprocess timeout. `None` uses the
+    /// backend's default (30s). Set to a shorter value for latency-sensitive
+    /// probes (e.g. the self-close watchdog) where a hung Zellij should not
+    /// block the caller for the full timeout.
+    pub command_timeout: Option<Duration>,
 }
 
 #[derive(Clone, Debug)]

@@ -177,6 +177,7 @@ fn reconcile_live(
 fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorkspace) -> usize {
     let live_panes: HashSet<PaneId> = match backend.list_panes(PaneListOptions {
         session_name: Some(ws.session_name.clone()),
+        ..Default::default()
     }) {
         Ok(panes) => panes.into_iter().map(|pane| pane.pane_id).collect(),
         Err(err) => {

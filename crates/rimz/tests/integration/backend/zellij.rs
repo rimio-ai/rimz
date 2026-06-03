@@ -836,6 +836,7 @@ fn wait_for_pane_with_command(xdg: &Path, session: &str) -> Vec<PaneRef> {
         let panes = ZellijBackend::with_runtime_dir(xdg)
             .list_panes(PaneListOptions {
                 session_name: Some(session.to_owned()),
+                ..Default::default()
             })
             .unwrap_or_default();
         let ready = panes.iter().any(|pane| {
@@ -858,6 +859,7 @@ fn wait_for_pane_count(xdg: &Path, session: &str, want: usize) -> Vec<PaneRef> {
         let panes = ZellijBackend::with_runtime_dir(xdg)
             .list_panes(PaneListOptions {
                 session_name: Some(session.to_owned()),
+                ..Default::default()
             })
             .unwrap_or_default();
         if panes.len() >= want || Instant::now() >= deadline {

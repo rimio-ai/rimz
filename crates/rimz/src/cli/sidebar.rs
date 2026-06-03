@@ -408,6 +408,7 @@ fn list_session_panes(mux: MuxName, session: &str) -> Result<Vec<rimz::feed::Pan
     let backend = rimz::mux::backend_for(mux);
     let mut panes = backend.list_panes(PaneListOptions {
         session_name: Some(session.to_owned()),
+        ..Default::default()
     })?;
     // Overlay the per-client focus set onto `client_focused` so the sidebar
     // focus mirror tracks the user, not every tab's active pane (`is_focused`).
