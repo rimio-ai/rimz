@@ -35,19 +35,21 @@ use jiff::Timestamp;
 use self::app_server::CodexAppServer;
 use self::payloads::{
     CodexPermissionBehavior, CodexPermissionDecisionOutput, CodexPermissionHookOutput,
-    parse_session_start, parse_stop, parse_subagent_start, parse_subagent_stop,
-    parse_user_prompt_submit,
+    parse_post_tool_use, parse_session_start, parse_stop, parse_subagent_start,
+    parse_subagent_stop, parse_user_prompt_submit,
 };
 use super::context::AgentContext;
 use super::hook_types::SessionSource;
+use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::{
     AgentErr, AgentIntegration, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, Result, agent_config_path, choice_is_allow,
-    classify_agent_hook, optional_payload_string, posture_from_mode, read_optional_file,
-    read_transcript_tail, stop_status_from_payload,
+    HookInstallReport, HookUninstallReport, Result, SubagentIdentity, agent_config_path,
+    choice_is_allow, classify_agent_hook, optional_payload_string, posture_from_mode,
+    read_optional_file, read_transcript_tail, resolve_subagent_identity, sanitize_user_prompt,
+    stop_payload_errored, tool_mutates,
 };
-use crate::feed::{AgentStatus, FeedItem, FeedKind, Resolution};
+use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ledger::atomic;
 
 /// Codex's effective hook cap. Upstream's blocking-hook deadline is shorter
@@ -187,65 +189,67 @@ impl AgentIntegration for CodexIntegration {
         let subagent_stop = (event_name == "SubagentStop").then(|| parse_subagent_stop(payload));
         let stop = (event_name == "Stop").then(|| parse_stop(payload));
         // The permission slider rides every event's flattened common; `None` (no
-        // slider) makes the reducer carry the prior posture forward.
-        let (status, posture) = match event_name {
+        // slider) makes the reducer carry the prior posture forward. The status
+        // decision lives in the shared `lifecycle::step` table — here the adapter
+        // only names the intent.
+        let posture_sample = |mode| posture_from_mode(mode, payload, &["approval_policy", "mode"]);
+        let (signal, posture) = match event_name {
             "SessionStart" => {
                 let p = session_start.as_ref().unwrap();
-                (
-                    AgentStatus::Idle,
-                    posture_from_mode(
-                        p.common.permission_mode.as_ref(),
-                        payload,
-                        &["approval_policy", "mode"],
-                    ),
-                )
+                // Codex has no pre-compaction hook; it re-fires `SessionStart`
+                // with `source = "compact"` once condensed — the only source that
+                // flags the transient compacting head, the rest register fresh.
+                let signal = if p.source == SessionSource::Compact {
+                    LifecycleSignal::Compacting
+                } else {
+                    LifecycleSignal::Registered
+                };
+                (signal, posture_sample(p.common.permission_mode.as_ref()))
             }
             // A subagent fires before the child model request, so it registers
             // running under the child `agent_id`.
             "SubagentStart" => {
                 let p = subagent_start.as_ref().unwrap();
                 (
-                    AgentStatus::Running,
-                    posture_from_mode(
-                        p.common.permission_mode.as_ref(),
-                        payload,
-                        &["approval_policy", "mode"],
-                    ),
+                    LifecycleSignal::SubagentStarted,
+                    posture_sample(p.common.permission_mode.as_ref()),
                 )
             }
             "UserPromptSubmit" => {
                 let p = user_prompt.as_ref().unwrap();
                 (
-                    AgentStatus::Running,
-                    posture_from_mode(
-                        p.common.permission_mode.as_ref(),
-                        payload,
-                        &["approval_policy", "mode"],
-                    ),
+                    LifecycleSignal::TurnStarted,
+                    posture_sample(p.common.permission_mode.as_ref()),
                 )
             }
             // A child finishing returns its row to idle; the root Stop completes
-            // the turn (success), or fails it on an error signal.
+            // the turn (success), or fails it on an error signal. Codex has no
+            // background-task parking.
             "SubagentStop" => {
                 let p = subagent_stop.as_ref().unwrap();
                 (
-                    AgentStatus::Idle,
-                    posture_from_mode(
-                        p.common.permission_mode.as_ref(),
-                        payload,
-                        &["approval_policy", "mode"],
-                    ),
+                    LifecycleSignal::SubagentStopped,
+                    posture_sample(p.common.permission_mode.as_ref()),
                 )
             }
             "Stop" => {
                 let p = stop.as_ref().unwrap();
                 (
-                    stop_status_from_payload(payload),
-                    posture_from_mode(
-                        p.common.permission_mode.as_ref(),
-                        payload,
-                        &["approval_policy", "mode"],
-                    ),
+                    LifecycleSignal::TurnEnded {
+                        errored: stop_payload_errored(payload),
+                        parked_on_background: false,
+                    },
+                    posture_sample(p.common.permission_mode.as_ref()),
+                )
+            }
+            // Only a *mutating* tool rides the lifecycle channel: it is proof of
+            // real work and reconciles a stale `plan` posture. Read-only tools
+            // stay silent.
+            "PostToolUse" if tool_mutates(payload) => {
+                let p = parse_post_tool_use(payload);
+                (
+                    LifecycleSignal::ToolUsed { mutates: true },
+                    posture_sample(p.common.permission_mode.as_ref()),
                 )
             }
             _ => return None,
@@ -261,6 +265,29 @@ impl AgentIntegration for CodexIntegration {
                     .as_ref()
                     .map(|p| (&p.agent_id, &p.agent_type, &p.common.common.session_id))
             });
+        // A subagent keys on its own child id under its parent root; a malformed
+        // subagent event (no distinct child id) is quarantined — never folded
+        // onto, and never corrupting, the parent's row. Root events key on the
+        // session id and carry no parent link.
+        let (agent_id, parent_agent_id) = match subagent {
+            Some((child, _, parent)) => match resolve_subagent_identity(
+                self.name(),
+                event_name,
+                child.as_deref(),
+                parent.as_deref(),
+                payload,
+            ) {
+                SubagentIdentity::Resolved {
+                    agent_id,
+                    parent_agent_id,
+                } => (Some(agent_id), Some(parent_agent_id)),
+                SubagentIdentity::Quarantined => return None,
+            },
+            None => (
+                optional_payload_string(payload, &["agent_id", "session_id"]),
+                None,
+            ),
+        };
         // Context budget lives in the rollout JSONL, not the payload — locate the
         // session's file by id and read its tail. The rollout carries a precomputed
         // percentage (it has the window directly), unlike Claude's raw tokens.
@@ -268,24 +295,26 @@ impl AgentIntegration for CodexIntegration {
             .and_then(|id| find_session_transcript(&id))
             .map(|path| usage_from_transcript(&path))
             .unwrap_or_default();
-        // Root events key on `session_id`; a subagent keys on its own `agent_id`
-        // (its `session_id` is the parent root, captured below).
-        let agent_id = match subagent {
-            Some((id, _, parent)) => id.clone().or_else(|| parent.clone()),
-            None => optional_payload_string(payload, &["agent_id", "session_id"]),
-        };
         let mut observation =
-            AgentLifecycleObservation::new(agent_id, status).with_worktree_from_payload(payload);
+            AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
         observation.permission_posture = posture;
-        // A subagent labels its row with its `agent_type`, kept across stop so a
-        // finished child stays labelled while it lingers in the parent's list.
+        observation.parent_agent_id = parent_agent_id;
+        // A subagent labels its row with its `agent_type` (trusted agent
+        // metadata), kept across stop so a finished child stays labelled while it
+        // lingers in the parent's list. A root labels with the user's *sanitized*
+        // task/prompt, so harness control text never reaches the row.
         observation.task = match subagent {
-            Some((_, agent_type, _)) => agent_type
-                .clone()
-                .or_else(|| optional_payload_string(payload, &["task", "prompt"])),
-            None => optional_payload_string(payload, &["task", "prompt"]),
+            Some((_, agent_type, _)) => agent_type.clone().or_else(|| {
+                sanitize_user_prompt(
+                    optional_payload_string(payload, &["task", "prompt"]).as_deref(),
+                )
+            }),
+            None => sanitize_user_prompt(
+                optional_payload_string(payload, &["task", "prompt"]).as_deref(),
+            ),
         };
-        observation.prompt = user_prompt.as_ref().and_then(|p| p.prompt.clone());
+        observation.prompt =
+            sanitize_user_prompt(user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
         observation.model = optional_payload_string(payload, &["model"]).or(usage.model);
         observation.effort = optional_payload_string(
             payload,
@@ -296,13 +325,6 @@ impl AgentIntegration for CodexIntegration {
         // Codex exposes no stable todo-state hook field; the dots stay None.
         observation.todo_done = None;
         observation.todo_total = None;
-        observation.parent_agent_id = subagent.and_then(|(_, _, parent)| parent.clone());
-        // Codex has no pre-compaction hook; it re-fires `SessionStart` with
-        // `source = "compact"` once condensed, which flags the transient head the
-        // reducer stamps without changing status.
-        observation.compacting = session_start
-            .as_ref()
-            .is_some_and(|p| p.source == SessionSource::Compact);
         Some(observation)
     }
 
@@ -916,12 +938,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
-        // Wired in, nothing asked yet — idle, no task.
-        assert_eq!(obs.status, AgentStatus::Idle);
+        // Wired in, nothing asked yet — a plain startup registers fresh (not a
+        // compaction), no task.
+        assert_eq!(obs.signal, LifecycleSignal::Registered);
         assert_eq!(obs.task, None);
         assert_eq!(obs.permission_posture, Some(PermissionPosture::Default));
-        // A plain startup is not a compaction.
-        assert!(!obs.compacting);
     }
 
     #[test]
@@ -935,7 +956,7 @@ mod tests {
                 &json!({ "session_id": "sess-1", "source": "compact" }),
             )
             .unwrap();
-        assert!(compact.compacting);
+        assert_eq!(compact.signal, LifecycleSignal::Compacting);
         for source in ["startup", "resume", "clear"] {
             let obs = CodexIntegration
                 .observe_lifecycle(
@@ -943,7 +964,11 @@ mod tests {
                     &json!({ "session_id": "sess-1", "source": source }),
                 )
                 .unwrap();
-            assert!(!obs.compacting, "{source} is not a compaction");
+            assert_eq!(
+                obs.signal,
+                LifecycleSignal::Registered,
+                "{source} is not a compaction",
+            );
         }
     }
 
@@ -956,7 +981,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
-        assert_eq!(obs.status, AgentStatus::Running);
+        assert_eq!(obs.signal, LifecycleSignal::TurnStarted);
         assert_eq!(obs.task.as_deref(), Some("fix auth flow"));
         // The prompt carries no policy field, so it reports no posture: the
         // reducer keeps the posture SessionStart established.
@@ -996,10 +1021,14 @@ mod tests {
     #[test]
     fn turn_end_samples_slider_last_sample_wins() {
         // A mode-less `Stop`/`SubagentStop` reports `None` so the reducer
-        // carries the prior posture forward.
+        // carries the prior posture forward. A `SubagentStop` needs a distinct
+        // child id (else it is quarantined), so give it one.
         for event in ["Stop", "SubagentStop"] {
             let obs = CodexIntegration
-                .observe_lifecycle(event, &json!({ "session_id": "sess-1" }))
+                .observe_lifecycle(
+                    event,
+                    &json!({ "session_id": "sess-1", "agent_id": "child-1" }),
+                )
                 .unwrap();
             assert_eq!(obs.permission_posture, None, "{event} carries forward");
         }
@@ -1033,7 +1062,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(obs.agent_id.as_deref(), Some("child-thread-1"));
-        assert_eq!(obs.status, AgentStatus::Running);
+        assert_eq!(obs.signal, LifecycleSignal::SubagentStarted);
         assert_eq!(obs.task.as_deref(), Some("review"));
         assert_eq!(obs.permission_posture, Some(PermissionPosture::Auto));
         // The child keys off `agent_id`; the payload's `session_id` is its parent
@@ -1055,7 +1084,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(obs.agent_id.as_deref(), Some("child-thread-1"));
-        assert_eq!(obs.status, AgentStatus::Idle);
+        assert_eq!(obs.signal, LifecycleSignal::SubagentStopped);
         // The type label persists across stop so a finished child stays labeled
         // while it lingers in the parent's list.
         assert_eq!(obs.task.as_deref(), Some("review"));
@@ -1089,7 +1118,13 @@ mod tests {
         let obs = CodexIntegration
             .observe_lifecycle("Stop", &json!({ "session_id": "sess-1" }))
             .unwrap();
-        assert_eq!(obs.status, AgentStatus::Success);
+        assert_eq!(
+            obs.signal,
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            }
+        );
     }
 
     #[test]
@@ -1100,7 +1135,13 @@ mod tests {
                 &json!({ "session_id": "sess-1", "status": "failed" }),
             )
             .unwrap();
-        assert_eq!(obs.status, AgentStatus::Failed);
+        assert_eq!(
+            obs.signal,
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+            }
+        );
     }
 
     #[test]

@@ -30,19 +30,21 @@ use serde_json::{Map, Value};
 
 use self::payloads::{
     ClaudePermissionBehavior, ClaudePermissionDecisionOutput, ClaudePermissionHookOutput,
-    ClaudePreToolUseDecisionOutput, ClaudePreToolUseHookOutput, parse_pre_compact,
-    parse_pre_tool_use, parse_session_start, parse_stop, parse_subagent_start, parse_subagent_stop,
-    parse_user_prompt_submit,
+    ClaudePreToolUseDecisionOutput, ClaudePreToolUseHookOutput, parse_post_tool_use,
+    parse_pre_compact, parse_pre_tool_use, parse_session_start, parse_stop, parse_subagent_start,
+    parse_subagent_stop, parse_user_prompt_submit,
 };
 use super::hook_types::BackgroundTask;
+use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::{
     AgentContext, AgentErr, AgentIntegration, AgentLifecycleObservation, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, Result, StatusLineChange,
-    agent_config_path, choice_is_allow, classify_agent_hook, optional_payload_string,
-    posture_from_mode, read_optional_file, read_transcript_tail, stop_status_from_payload,
+    SubagentIdentity, agent_config_path, choice_is_allow, classify_agent_hook,
+    optional_payload_string, posture_from_mode, read_optional_file, read_transcript_tail,
+    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored, tool_mutates,
 };
-use crate::feed::{AgentStatus, FeedItem, FeedKind, Resolution};
+use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ledger::atomic;
 
 /// Claude's effective hook cap. The upstream cap is ~125s; we leave a small
@@ -239,9 +241,9 @@ impl AgentIntegration for ClaudeIntegration {
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
         // Each event that yields an observation parses through its own typed
-        // struct; silent events (PostToolUse, Notification) and the blocking
-        // PermissionRequest return `None`. The per-event status mapping is the
-        // Claude column of docs/internals/hooks.md.
+        // struct; silent events (read-only PostToolUse, Notification) and the
+        // blocking PermissionRequest return `None`. The native-event → signal
+        // mapping is the Claude column of docs/internals/hooks.md.
         let session_start = (event_name == "SessionStart").then(|| parse_session_start(payload));
         let user_prompt =
             (event_name == "UserPromptSubmit").then(|| parse_user_prompt_submit(payload));
@@ -254,19 +256,20 @@ impl AgentIntegration for ClaudeIntegration {
             .unwrap_or_default();
         // The permission slider rides every event's flattened common; `None` (no
         // slider) makes the reducer carry the prior posture forward, so a prompt
-        // or stop can never demote a yolo agent.
-        let (status, posture) = match event_name {
+        // or stop can never demote a yolo agent. The status decision lives in the
+        // shared `lifecycle::step` table — here the adapter only names the intent.
+        let (signal, posture) = match event_name {
             "SessionStart" => {
                 let p = session_start.as_ref().unwrap();
                 (
-                    AgentStatus::Idle,
+                    LifecycleSignal::Registered,
                     posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
                 )
             }
             "UserPromptSubmit" => {
                 let p = user_prompt.as_ref().unwrap();
                 (
-                    AgentStatus::Running,
+                    LifecycleSignal::TurnStarted,
                     posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
                 )
             }
@@ -275,39 +278,52 @@ impl AgentIntegration for ClaudeIntegration {
             "SubagentStart" => {
                 let p = subagent_start.as_ref().unwrap();
                 (
-                    AgentStatus::Running,
+                    LifecycleSignal::SubagentStarted,
                     posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
                 )
             }
             "SubagentStop" => {
                 let p = subagent_stop.as_ref().unwrap();
                 (
-                    AgentStatus::Idle,
+                    LifecycleSignal::SubagentStopped,
                     posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
                 )
             }
-            // A clean Stop completes the turn, but in-flight `background_tasks`
-            // (Claude Code v2.1.145+) keep it running — the main thread has only
-            // parked, so this is never a false success.
+            // A clean Stop completes the turn; in-flight `background_tasks`
+            // (Claude Code v2.1.145+) mean the main thread only parked, so `step`
+            // keeps it running and the row paints a secondary background marker
+            // rather than a false success.
             "Stop" => {
                 let p = stop.as_ref().unwrap();
                 (
-                    stop_status_with_background(payload, &pending_background),
+                    LifecycleSignal::TurnEnded {
+                        errored: stop_payload_errored(payload),
+                        parked_on_background: !pending_background.is_empty(),
+                    },
                     posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
                 )
             }
-            // Compaction is a transient head, not a transition: the reducer keeps
-            // the prior status and only stamps `compacting_since` (the status here
-            // is a placeholder it overrides).
+            // Only a *mutating* tool rides the lifecycle channel: it is proof of
+            // real work and reconciles a stale `plan` posture (plan mode is
+            // read-only). Read-only tools stay silent.
+            "PostToolUse" if tool_mutates(payload) => {
+                let p = parse_post_tool_use(payload);
+                (
+                    LifecycleSignal::ToolUsed { mutates: true },
+                    posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
+                )
+            }
+            // Compaction is a transient head, not a transition: `step` keeps the
+            // prior status and only stamps the compacting marker.
             "PreCompact" => {
                 let p = parse_pre_compact(payload);
                 (
-                    AgentStatus::Running,
+                    LifecycleSignal::Compacting,
                     posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
                 )
             }
             // SessionEnd drops the row; `ends_session` then expires its pending asks.
-            "SessionEnd" => (AgentStatus::Idle, None),
+            "SessionEnd" => (LifecycleSignal::Ended, None),
             _ => return None,
         };
         // Both subagent events flatten the same `ClaudeCommon`; unify on it so the
@@ -316,6 +332,26 @@ impl AgentIntegration for ClaudeIntegration {
             .as_ref()
             .map(|p| &p.common)
             .or_else(|| subagent_stop.as_ref().map(|p| &p.common));
+        // A subagent keys on its own child id under its parent root; a malformed
+        // subagent event (no distinct child id) is quarantined — never folded
+        // onto, and never corrupting, the parent's row. Root events key on the
+        // session id and carry no parent link.
+        let (agent_id, parent_agent_id) = match subagent_common {
+            Some(c) => match resolve_subagent_identity(
+                self.name(),
+                event_name,
+                c.agent_id.as_deref(),
+                c.common.session_id.as_deref(),
+                payload,
+            ) {
+                SubagentIdentity::Resolved {
+                    agent_id,
+                    parent_agent_id,
+                } => (Some(agent_id), Some(parent_agent_id)),
+                SubagentIdentity::Quarantined => return None,
+            },
+            None => (optional_payload_string(payload, &["session_id"]), None),
+        };
         // Context budget lives in the transcript, not the payload — read its tail
         // on these low-frequency events. Resolve the model first: only the payload
         // id carries the `[1m]` marker that widens the window (the transcript id
@@ -337,25 +373,25 @@ impl AgentIntegration for ClaudeIntegration {
                 .map(|tokens| (tokens.saturating_mul(100) / window).min(100) as u8),
         );
         let (todo_done, todo_total) = todos_from_payload(payload);
-        // Root events key on `session_id`; a subagent keys on its own `agent_id`
-        // (its `session_id` is the parent root, captured below).
-        let agent_id = subagent_common
-            .and_then(|c| c.agent_id.clone())
-            .or_else(|| optional_payload_string(payload, &["session_id"]));
         let mut observation =
-            AgentLifecycleObservation::new(agent_id, status).with_worktree_from_payload(payload);
+            AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
         observation.permission_posture = posture;
+        observation.parent_agent_id = parent_agent_id;
         // A subagent labels its row with what it is (`agent_type`) or what it was
-        // asked (`description`) — kept across stop so a finished child stays
-        // labelled while it lingers in the parent's list.
+        // asked (`description`) — trusted agent metadata, kept across stop so a
+        // finished child stays labelled while it lingers in the parent's list. A
+        // root labels with the user's *sanitized* task/prompt, so a synthetic
+        // background-task count and harness control text never reach the row.
         observation.task = match subagent_common {
             Some(c) => c.agent_type.clone().or_else(|| {
                 optional_payload_string(payload, &["subagent_type", "description", "task"])
             }),
-            None => background_task_label(&pending_background)
-                .or_else(|| optional_payload_string(payload, &["task", "prompt"])),
+            None => sanitize_user_prompt(
+                optional_payload_string(payload, &["task", "prompt"]).as_deref(),
+            ),
         };
-        observation.prompt = user_prompt.as_ref().and_then(|p| p.prompt.clone());
+        observation.prompt =
+            sanitize_user_prompt(user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
         observation.model = model;
         // `effort` is an `{ "level": … }` object on the tool-use-context events
         // (Stop / SubagentStop here); the flat `thinking_level` string is a legacy
@@ -374,8 +410,6 @@ impl AgentIntegration for ClaudeIntegration {
         observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
         observation.todo_done = todo_done;
         observation.todo_total = todo_total;
-        observation.parent_agent_id = subagent_common.and_then(|c| c.common.session_id.clone());
-        observation.compacting = event_name == "PreCompact";
         Some(observation)
     }
 
@@ -459,28 +493,6 @@ fn pending_background_tasks(tasks: &[BackgroundTask]) -> Vec<String> {
                 .to_owned()
         })
         .collect()
-}
-
-/// Status for a Claude `Stop`. An explicit error wins — the failure is the
-/// attention signal — otherwise pending background work upgrades the clean
-/// stop to `running` so the sidebar keeps the row live instead of painting a
-/// false `success`.
-fn stop_status_with_background(payload: &Value, pending: &[String]) -> AgentStatus {
-    match stop_status_from_payload(payload) {
-        AgentStatus::Success if !pending.is_empty() => AgentStatus::Running,
-        other => other,
-    }
-}
-
-/// Concise task label for a `Stop` parked on background work: the single
-/// task's label, or a count when several are in flight. `None` when nothing is
-/// pending, so the caller falls back to the payload's own task/prompt.
-fn background_task_label(pending: &[String]) -> Option<String> {
-    match pending {
-        [] => None,
-        [one] => Some(one.clone()),
-        many => Some(format!("{} background tasks", many.len())),
-    }
 }
 
 /// Read a Claude `TodoWrite` payload's `tool_input.todos` (or the post-hook
@@ -1245,9 +1257,9 @@ mod tests {
             .observe_lifecycle("PreCompact", &json!({ "session_id": "sess-1" }))
             .unwrap();
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
-        // It flags compaction; the reducer keeps the prior status (the placeholder
-        // status here is overridden), so it never paints a false transition.
-        assert!(obs.compacting);
+        // It carries the compaction signal; the reducer keeps the prior status
+        // and only stamps the compacting head, never a false transition.
+        assert_eq!(obs.signal, LifecycleSignal::Compacting);
     }
 
     #[test]
@@ -1267,7 +1279,7 @@ mod tests {
 
         // Keyed off the child's own id, not the parent session.
         assert_eq!(obs.agent_id.as_deref(), Some("child-1"));
-        assert_eq!(obs.status, AgentStatus::Running);
+        assert_eq!(obs.signal, LifecycleSignal::SubagentStarted);
         // The type labels the child row; `session_id` is captured as the parent.
         assert_eq!(obs.task.as_deref(), Some("Explore"));
         assert_eq!(obs.parent_agent_id.as_deref(), Some("sess-parent"));
@@ -1288,7 +1300,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(obs.agent_id.as_deref(), Some("child-1"));
-        assert_eq!(obs.status, AgentStatus::Idle);
+        assert_eq!(obs.signal, LifecycleSignal::SubagentStopped);
         // The label persists past stop; the parent link survives.
         assert_eq!(obs.task.as_deref(), Some("Explore"));
         assert_eq!(obs.parent_agent_id.as_deref(), Some("sess-parent"));
@@ -1301,6 +1313,58 @@ mod tests {
             .unwrap();
         assert_eq!(obs.agent_id.as_deref(), Some("sess-root"));
         assert_eq!(obs.parent_agent_id, None);
+    }
+
+    #[test]
+    fn subagent_event_without_child_id_is_quarantined() {
+        // A SubagentStart that carries only the parent `session_id` (no distinct
+        // child `agent_id`) must produce no observation — it can never fold onto
+        // the parent's row and rename it to the subagent type. This is the
+        // "main row becomes Explore" regression.
+        let obs = ClaudeIntegration.observe_lifecycle(
+            "SubagentStart",
+            &json!({ "session_id": "sess-parent", "subagent_type": "Explore" }),
+        );
+        assert!(
+            obs.is_none(),
+            "a child with no distinct id is dropped, not folded onto the parent"
+        );
+    }
+
+    #[test]
+    fn harness_control_prompt_is_not_adopted_as_description() {
+        // The harness injects synthetic user turns (a completed background task);
+        // their raw text must never become the agent's description line.
+        let obs = ClaudeIntegration
+            .observe_lifecycle(
+                "UserPromptSubmit",
+                &json!({
+                    "session_id": "sess-1",
+                    "prompt": "<task-notification><task-id>afdc639e18e7ebdb9</task-id></task-notification>",
+                }),
+            )
+            .unwrap();
+        assert_eq!(obs.prompt, None, "control text is rejected, not shown");
+        assert_eq!(obs.task, None);
+    }
+
+    #[test]
+    fn post_tool_use_rides_lifecycle_only_for_mutating_tools() {
+        // A mutating tool proves real work and reconciles a stale plan posture,
+        // so it records a `ToolUsed` signal; a read-only tool stays silent so the
+        // lifecycle channel isn't flooded.
+        let edit = ClaudeIntegration
+            .observe_lifecycle(
+                "PostToolUse",
+                &json!({ "session_id": "sess-1", "tool_name": "Edit" }),
+            )
+            .unwrap();
+        assert_eq!(edit.signal, LifecycleSignal::ToolUsed { mutates: true });
+        let read = ClaudeIntegration.observe_lifecycle(
+            "PostToolUse",
+            &json!({ "session_id": "sess-1", "tool_name": "Read" }),
+        );
+        assert!(read.is_none(), "a read-only tool stays silent");
     }
 
     #[test]
@@ -2005,8 +2069,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
-        // Wired in, nothing asked yet — idle, no task.
-        assert_eq!(obs.status, AgentStatus::Idle);
+        // Wired in, nothing asked yet — registered, no task.
+        assert_eq!(obs.signal, LifecycleSignal::Registered);
         assert_eq!(obs.task, None);
         assert_eq!(obs.permission_posture, Some(PermissionPosture::Default));
     }
@@ -2020,7 +2084,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
-        assert_eq!(obs.status, AgentStatus::Running);
+        assert_eq!(obs.signal, LifecycleSignal::TurnStarted);
         assert_eq!(obs.task.as_deref(), Some("fix auth flow"));
         // The prompt reports no posture, so the reducer keeps the posture
         // SessionStart established (a yolo agent stays yolo).
@@ -2117,7 +2181,13 @@ mod tests {
         let obs = ClaudeIntegration
             .observe_lifecycle("Stop", &json!({ "session_id": "sess-1" }))
             .unwrap();
-        assert_eq!(obs.status, AgentStatus::Success);
+        assert_eq!(
+            obs.signal,
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            }
+        );
         // Turn over: the task clears back to "—".
         assert_eq!(obs.task, None);
     }
@@ -2127,15 +2197,22 @@ mod tests {
         let obs = ClaudeIntegration
             .observe_lifecycle("Stop", &json!({ "session_id": "sess-1", "is_error": true }))
             .unwrap();
-        assert_eq!(obs.status, AgentStatus::Failed);
+        assert_eq!(
+            obs.signal,
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+            }
+        );
     }
 
     #[test]
     fn stop_with_pending_background_tasks_observes_running() {
         // Claude Code v2.1.145+ reports in-flight `background_tasks` on Stop.
-        // The main thread has parked waiting for that work to reawaken it — the
-        // turn is not over, so the row stays running (never a false success)
-        // and is labelled with the single task's description.
+        // The main thread has parked waiting for that work — the turn is not
+        // over, so the signal flags `parked_on_background` (the reducer keeps it
+        // running) and the description is left to the real task/prompt, never a
+        // synthetic background-task label.
         let obs = ClaudeIntegration
             .observe_lifecycle(
                 "Stop",
@@ -2153,14 +2230,20 @@ mod tests {
                 }),
             )
             .unwrap();
-        assert_eq!(obs.status, AgentStatus::Running);
-        assert_eq!(obs.task.as_deref(), Some("Build process"));
+        assert_eq!(
+            obs.signal,
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: true,
+            }
+        );
+        assert_eq!(obs.task, None);
     }
 
     #[test]
-    fn stop_with_multiple_pending_background_tasks_labels_count() {
-        // Several in-flight tasks collapse to a count — the row says it is busy
-        // without trying to render every label.
+    fn stop_with_multiple_pending_background_tasks_still_parks() {
+        // Several in-flight tasks still just park the turn — there is no
+        // synthetic "N background tasks" label overwriting the description.
         let obs = ClaudeIntegration
             .observe_lifecycle(
                 "Stop",
@@ -2173,14 +2256,20 @@ mod tests {
                 }),
             )
             .unwrap();
-        assert_eq!(obs.status, AgentStatus::Running);
-        assert_eq!(obs.task.as_deref(), Some("2 background tasks"));
+        assert_eq!(
+            obs.signal,
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: true,
+            }
+        );
+        assert_eq!(obs.task, None);
     }
 
     #[test]
     fn stop_with_only_completed_background_tasks_observes_success() {
         // A registry that reports only terminal tasks has nothing in flight —
-        // this is a genuine turn end, so the clean stop stays success.
+        // this is a genuine turn end, so the signal is a clean (unparked) end.
         let obs = ClaudeIntegration
             .observe_lifecycle(
                 "Stop",
@@ -2192,14 +2281,20 @@ mod tests {
                 }),
             )
             .unwrap();
-        assert_eq!(obs.status, AgentStatus::Success);
+        assert_eq!(
+            obs.signal,
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            }
+        );
         assert_eq!(obs.task, None);
     }
 
     #[test]
     fn errored_stop_with_pending_background_tasks_still_observes_failed() {
-        // The failure is the attention signal: an errored turn stays failed
-        // even while background work is still in flight.
+        // The failure is the attention signal: the signal carries `errored`
+        // alongside the park flag, and `step` resolves errored over the park.
         let obs = ClaudeIntegration
             .observe_lifecycle(
                 "Stop",
@@ -2212,7 +2307,13 @@ mod tests {
                 }),
             )
             .unwrap();
-        assert_eq!(obs.status, AgentStatus::Failed);
+        assert_eq!(
+            obs.signal,
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: true,
+            }
+        );
     }
 
     #[test]
