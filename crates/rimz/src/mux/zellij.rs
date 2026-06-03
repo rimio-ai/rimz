@@ -20,8 +20,9 @@ use serde_json::Value;
 
 use super::{
     BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, DaemonView, HostPane, MuxBackend,
-    MuxErr, PaneCapture, PaneListOptions, Result, SessionHealth, SessionOptions, SidebarLiveness,
-    SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, ViewSidebars, ensure_pane_backend,
+    MuxErr, PaneCapture, PaneListOptions, Result, ResumePane, SessionHealth, SessionOptions,
+    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, ViewSidebars,
+    ensure_pane_backend,
 };
 use crate::config::ZellijConfig;
 use crate::feed::PaneRef;
@@ -308,13 +309,15 @@ impl ZellijBackend {
         opts: &SidebarPaneOptions,
         daemon: Option<&DaemonView>,
     ) -> Result<()> {
-        // A daemon view leads only if it is born first: Zellij can't reorder
-        // tabs, so the session is born from a two-tab layout (`daemon` then the
-        // focused working tab) when one is supplied, and the single working-tab
-        // template otherwise.
-        let body = match daemon {
-            Some(daemon) => render_session_layout_with_daemon(opts, daemon)?,
-            None => render_sidebar_layout(opts)?,
+        // A daemon view leads only if it is born first, and resumed agents only
+        // come back as command panes the birth layout spells out: Zellij can't
+        // reorder tabs or add command panes after birth. So a room that leads
+        // with a daemon and/or re-seeds prior agents is born from an explicit
+        // multi-tab layout; a plain room uses the single working-tab template.
+        let body = if daemon.is_some() || !opts.resume_panes.is_empty() {
+            render_session_layout(opts, daemon, &opts.resume_panes)?
+        } else {
+            render_sidebar_layout(opts)?
         };
         let layout = TempLayoutFile::new(body)?;
         let mut option_args = vec![
@@ -1360,33 +1363,74 @@ fn render_sidebar_layout(opts: &SidebarPaneOptions) -> Result<String> {
     ))
 }
 
-/// The session-birth layout when a daemon view ([`DaemonView`]) leads. Zellij
-/// can't reorder tabs after birth, so the lead order is fixed here: the daemon
-/// tab (`sidebar | hosts…`, first), then the focused working tab
-/// (`sidebar | terminal`). A `new_tab_template` — distinct from
-/// `default_tab_template`, applying only to tabs the user opens *later* — carries
-/// the same `sidebar | terminal` shape so future tabs keep their sidebar and
-/// terminal focus without the `children` focus-strand bug
-/// ([`render_sidebar_layout`] explains why `children` is avoided). All panes
-/// inherit the session's `--default-cwd` except the hosts, which carry their own.
-fn render_session_layout_with_daemon(
+/// The session-birth layout for a room that leads with a daemon view and/or
+/// re-seeds prior agents. Zellij can't reorder tabs or add command panes after
+/// birth, so the order and content are fixed here: the daemon tab
+/// (`sidebar | hosts…`, first, when present), then one tab per resumed agent
+/// (`sidebar | agent`), then the working tab (`sidebar | terminal`). Focus lands
+/// on the most-recently-active resumed agent when there is one, else on the
+/// working terminal — so attach drops the user straight onto a restored agent.
+/// A `new_tab_template` — distinct from `default_tab_template`, applying only to
+/// tabs the user opens *later* — carries the `sidebar | terminal` shape so future
+/// tabs keep their sidebar and terminal focus without the `children`
+/// focus-strand bug ([`render_sidebar_layout`] explains why `children` is
+/// avoided). All panes inherit the session's `--default-cwd` except the daemon
+/// hosts and resumed agents, which carry their own worktree cwd.
+fn render_session_layout(
     opts: &SidebarPaneOptions,
-    daemon: &DaemonView,
+    daemon: Option<&DaemonView>,
+    resume: &[ResumePane],
 ) -> Result<String> {
-    if daemon.hosts.is_empty() {
-        return Err(MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: "daemon view has no host panes".to_owned(),
-        });
-    }
     let sidebar = sidebar_pane_kdl(opts, None)?;
-    let daemon_name = kdl_string(&daemon.name)?;
-    let host_panes = daemon
-        .hosts
-        .iter()
-        .enumerate()
-        .map(|(index, host)| render_host_pane(host, index == 0))
-        .collect::<Result<String>>()?;
+
+    // The daemon tab leads, when present.
+    let daemon_tab = match daemon {
+        Some(daemon) => {
+            if daemon.hosts.is_empty() {
+                return Err(MuxErr::Output {
+                    program: "zellij".to_owned(),
+                    reason: "daemon view has no host panes".to_owned(),
+                });
+            }
+            let daemon_name = kdl_string(&daemon.name)?;
+            let host_panes = daemon
+                .hosts
+                .iter()
+                .enumerate()
+                .map(|(index, host)| render_host_pane(host, index == 0))
+                .collect::<Result<String>>()?;
+            format!(
+                r#"    tab name={daemon_name} {{
+        pane split_direction="vertical" {{
+            {sidebar}
+{host_panes}        }}
+        {COMPACT_BAR_KDL}
+    }}
+"#,
+            )
+        }
+        None => String::new(),
+    };
+
+    // One tab per resumed agent, focusing the first (most-recently-active).
+    let mut agent_tabs = String::new();
+    for (index, pane) in resume.iter().enumerate() {
+        let tab_name = kdl_string(&pane.label)?;
+        let agent_pane = render_command_pane(&pane.command, &pane.cwd, true)?;
+        let focus_attr = if index == 0 { " focus=true" } else { "" };
+        agent_tabs.push_str(&format!(
+            r#"    tab name={tab_name}{focus_attr} {{
+        pane split_direction="vertical" {{
+            {sidebar}
+{agent_pane}        }}
+        {COMPACT_BAR_KDL}
+    }}
+"#,
+        ));
+    }
+
+    // The free working terminal: focused only when no resumed agent took focus.
+    let work_focus = if resume.is_empty() { " focus=true" } else { "" };
     Ok(format!(
         r#"layout {{
     new_tab_template {{
@@ -1396,13 +1440,7 @@ fn render_session_layout_with_daemon(
         }}
         {COMPACT_BAR_KDL}
     }}
-    tab name={daemon_name} {{
-        pane split_direction="vertical" {{
-            {sidebar}
-{host_panes}        }}
-        {COMPACT_BAR_KDL}
-    }}
-    tab focus=true {{
+{daemon_tab}{agent_tabs}    tab{work_focus} {{
         pane split_direction="vertical" {{
             {sidebar}
             pane focus=true
@@ -1457,15 +1495,18 @@ fn render_background_view_layout(opts: &BackgroundViewOptions) -> Result<String>
     ))
 }
 
-/// One host pane in the daemon view's right side, indented to nest under the
-/// vertical split. `focus` pins the view's focus on it (the first host).
-fn render_host_pane(host: &HostPane, focus: bool) -> Result<String> {
-    let (program, args) = host.argv.split_first().ok_or_else(|| MuxErr::Output {
+/// One command pane in a tab's right side (`argv` run in `cwd`), indented to
+/// nest under the vertical split beside the sidebar. Born unsuspended and
+/// closing with its process — an exit means the pane is gone. `focus` pins the
+/// tab's focus on it. Shared by the daemon hosts and the resumed agents, so both
+/// render identically.
+fn render_command_pane(argv: &[String], cwd: &Path, focus: bool) -> Result<String> {
+    let (program, args) = argv.split_first().ok_or_else(|| MuxErr::Output {
         program: "zellij".to_owned(),
-        reason: "background view host has no command".to_owned(),
+        reason: "command pane has no program".to_owned(),
     })?;
     let program = kdl_string(program)?;
-    let cwd = kdl_string(&host.cwd.to_string_lossy())?;
+    let cwd = kdl_string(&cwd.to_string_lossy())?;
     let focus_attr = if focus { " focus=true" } else { "" };
     let args_line = if args.is_empty() {
         String::new()
@@ -1485,6 +1526,12 @@ fn render_host_pane(host: &HostPane, focus: bool) -> Result<String> {
         }}
 "#,
     ))
+}
+
+/// One host pane in the daemon view's right side. Thin wrapper over
+/// [`render_command_pane`] for the daemon hosts.
+fn render_host_pane(host: &HostPane, focus: bool) -> Result<String> {
+    render_command_pane(&host.argv, &host.cwd, focus)
 }
 
 /// Defensive ANSI strip for `list-sessions` output. Zellij ships a colored
@@ -1919,6 +1966,7 @@ mod tests {
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),
+            resume_panes: Vec::new(),
         };
         let layout = render_sidebar_layout(&opts).expect("render layout");
         assert!(
@@ -1939,6 +1987,7 @@ mod tests {
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),
+            resume_panes: Vec::new(),
         };
         let layout = render_sidebar_layout(&opts).expect("render layout");
         // The template must spell out the focused terminal instead of relying
@@ -1981,6 +2030,7 @@ mod tests {
                 rimz_bin: PathBuf::from("/usr/bin/rimz"),
                 replace_existing: false,
                 config: crate::config::MultiplexerConfig::default(),
+                resume_panes: Vec::new(),
             },
         }
     }
@@ -2047,6 +2097,66 @@ mod tests {
         }
     }
 
+    fn resume_pane(label: &str, argv: &[&str], cwd: &str) -> ResumePane {
+        ResumePane {
+            command: argv.iter().map(|arg| arg.to_string()).collect(),
+            cwd: PathBuf::from(cwd),
+            label: label.to_owned(),
+        }
+    }
+
+    #[test]
+    fn session_layout_seeds_resumed_agents_focusing_the_first() {
+        let opts = background_view_opts(vec![]).sidebar;
+        let resume = vec![
+            resume_pane(
+                "claude:feature",
+                &["claude", "--resume", "sess-1"],
+                "/proj/feature",
+            ),
+            resume_pane("codex:main", &["codex", "resume", "sess-2"], "/proj/main"),
+        ];
+        let layout = render_session_layout(&opts, None, &resume).expect("render resume layout");
+        // Each agent runs its resume CLI in its own worktree, born unsuspended.
+        assert!(layout.contains(r#"command "claude""#), "{layout}");
+        assert!(layout.contains(r#"args "--resume" "sess-1""#), "{layout}");
+        assert!(layout.contains(r#"command "codex""#), "{layout}");
+        assert!(layout.contains(r#"args "resume" "sess-2""#), "{layout}");
+        assert!(layout.contains(r#"cwd="/proj/feature""#), "{layout}");
+        assert!(layout.contains(r#"cwd="/proj/main""#), "{layout}");
+        assert!(layout.contains("start_suspended false"), "{layout}");
+        // One tab per agent, named by label; the first (most-recent) takes focus.
+        assert!(
+            layout.contains(r#"tab name="claude:feature" focus=true"#),
+            "the freshest resumed agent leads:\n{layout}",
+        );
+        assert!(
+            !layout.contains(r#"tab name="codex:main" focus=true"#),
+            "only the first resumed tab is focused:\n{layout}",
+        );
+        // A free working terminal tab still exists, unfocused (an agent has focus).
+        assert!(
+            layout.contains("    tab {"),
+            "a bare working terminal tab remains:\n{layout}",
+        );
+        // Future user tabs inherit the sidebar+terminal template, no `children`.
+        assert!(layout.contains("new_tab_template"), "{layout}");
+        assert!(!layout.contains("children"), "{layout}");
+    }
+
+    #[test]
+    fn session_layout_without_daemon_or_resume_focuses_the_working_tab() {
+        let opts = background_view_opts(vec![]).sidebar;
+        let layout = render_session_layout(&opts, None, &[]).expect("render layout");
+        // No agents, no daemon: the working terminal tab takes focus and there
+        // are no named daemon/agent tabs to seed.
+        assert!(layout.contains("tab focus=true"), "{layout}");
+        assert!(
+            !layout.contains("tab name="),
+            "no daemon or agent tabs without a daemon or resume set:\n{layout}",
+        );
+    }
+
     #[test]
     fn session_layout_with_daemon_leads_with_the_daemon_tab() {
         let bg = background_view_opts(vec![
@@ -2056,7 +2166,7 @@ mod tests {
                 "/proj/worktree",
             ),
         ]);
-        let layout = render_session_layout_with_daemon(&bg.sidebar, &daemon_view(bg.hosts.clone()))
+        let layout = render_session_layout(&bg.sidebar, Some(&daemon_view(bg.hosts.clone())), &[])
             .expect("render session layout with daemon");
         // The daemon tab is declared first — before the focused working tab — so
         // it leads. Zellij fixes tab order at birth (it can't reorder later).
@@ -2087,9 +2197,10 @@ mod tests {
     #[test]
     fn session_layout_with_daemon_rejects_no_hosts() {
         assert!(
-            render_session_layout_with_daemon(
+            render_session_layout(
                 &background_view_opts(vec![]).sidebar,
-                &daemon_view(vec![])
+                Some(&daemon_view(vec![])),
+                &[],
             )
             .is_err()
         );
@@ -2106,6 +2217,7 @@ mod tests {
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),
+            resume_panes: Vec::new(),
         };
         let layout = render_sidebar_layout(&opts).expect("render layout");
         assert!(

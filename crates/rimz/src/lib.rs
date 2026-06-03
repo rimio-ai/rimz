@@ -20,6 +20,7 @@ pub mod proc;
 pub mod reload;
 pub mod remote_control;
 pub mod resolver;
+pub mod resume;
 pub mod schema;
 pub mod sidebar;
 pub mod trust;

@@ -19,7 +19,7 @@ The per-machine tier is personal and never committed — a clone never inherits 
 
 ## Per-machine config — `~/.config/rimz/config.toml`
 
-Four sections, each optional: `[remote_control]`, `[sidebar]`, `[zellij]`, `[tmux]`.
+Five sections, each optional: `[remote_control]`, `[sidebar]`, `[zellij]`, `[tmux]`, `[resume]`.
 
 ### Remote control auto-launch
 
@@ -71,6 +71,16 @@ pane_border_lines = "simple"           # "simple" | "single" | "double" | "heavy
 ```
 
 Zellij receives these as `zellij attach … options …` on session birth and attach, so they never touch `~/.config/zellij/config.kdl`. tmux applies them across the right scopes — session, window, and the few that are server-global (clipboard and rich-key handling have no per-session equivalent). The backend-by-backend mapping is in [internals/multiplexers.md](../internals/multiplexers.md).
+
+### Resume on rebirth
+
+```toml
+[resume]
+on_rebirth = true   # re-seed prior agents when a session is reborn (default true)
+max = 8             # cap auto-resumed agents per birth (default 8); overflow is reported
+```
+
+When a session is reborn — reboot, multiplexer crash, or a Rimz-initiated rebirth of a stuck room — Rimz re-seeds the prior agents from the durable rollup, each restored idle in its own pane (`claude --resume`, `codex resume`), so the room comes up where you left off. `on_rebirth = false` (or `--no-resume` per invocation) comes up empty for a deliberately fresh start; `max` bounds how many agents one birth relaunches so a long-lived workspace never fork-bombs a fleet of processes. Mechanics in [internals/sidebar.md](../internals/sidebar.md#resume-on-rebirth).
 
 ### Sidebar appearance
 

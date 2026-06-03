@@ -304,6 +304,19 @@ pub trait AgentIntegration: Send + Sync {
         false
     }
 
+    /// The argv that resumes a prior session of this agent by `session_id`,
+    /// launched fresh in `cwd` (the agent's worktree). The launcher seeds a
+    /// reborn pane with it so a rebirth restores the conversation idle rather
+    /// than coming up empty; the agent's own hooks re-fire on its
+    /// `SessionStart` with `source: "resume"`, coalescing back onto the same
+    /// `(kind, agent_id)` rollup row and re-stamping the new pane. `None` when
+    /// the agent has no resume CLI, so [`crate::resume::plan_resume`] skips it.
+    /// Default `None` keeps the contract "implement nothing else" for an agent
+    /// that cannot resume yet.
+    fn resume_command(&self, _session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
+        None
+    }
+
     /// Write or merge the adapter's hook config into the agent's per-user
     /// config file. Defaults to an explicit "not implemented" error until an
     /// adapter owns installation.

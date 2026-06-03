@@ -245,6 +245,28 @@ pub struct SidebarPaneOptions {
     pub rimz_bin: PathBuf,
     pub replace_existing: bool,
     pub config: crate::config::MultiplexerConfig,
+    /// Prior agents the reborn session re-seeds, one running pane each, so a
+    /// rebirth comes back where the user left off instead of empty. Empty on
+    /// every launch that births nothing to restore (first start, healthy
+    /// reattach) — then the birth is exactly the bare working room. Built from
+    /// the durable agent rollup by [`crate::resume::plan_resume`]; the backend
+    /// seeds the panes and stays ignorant of agents and the ledger.
+    pub resume_panes: Vec<ResumePane>,
+}
+
+/// One prior agent the reborn session re-seeds: a fresh pane running the
+/// agent's resume CLI in its worktree, restoring the conversation idle (no
+/// auto-prompt, no new token spend until the user types). Pure data — the
+/// backend seeds `{command, cwd}` and knows nothing of agents or the ledger.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResumePane {
+    /// Resume argv, program first — e.g. `["claude", "--resume", "<uuid>"]`.
+    pub command: Vec<String>,
+    /// The agent's worktree: the cwd the resumed pane runs in.
+    pub cwd: PathBuf,
+    /// Short display and view label, e.g. `claude:feature-migration`. Doubles
+    /// as the Zellij tab / tmux window name and the seed's idempotency key.
+    pub label: String,
 }
 
 /// Tally of one in-place sidebar reconcile pass ([`MuxBackend::reconcile_sidebars`]).

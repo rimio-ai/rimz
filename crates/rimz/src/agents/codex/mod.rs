@@ -104,6 +104,18 @@ impl AgentIntegration for CodexIntegration {
         "codex"
     }
 
+    /// `codex resume <id>` resolves the UUID to its rollout file and restores
+    /// the session interactively, firing `SessionStart` with
+    /// `source: "resume"`. `resume` is a top-level command (the non-interactive
+    /// form is `codex exec resume <id>`); the launching pane sets the cwd.
+    fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
+        Some(vec![
+            "codex".to_owned(),
+            "resume".to_owned(),
+            session_id.to_owned(),
+        ])
+    }
+
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
         let feed_kind = (event_name == "PermissionRequest").then_some(FeedKind::Permission);
         classify_agent_hook(
@@ -377,31 +389,31 @@ pub fn refresh_context(
     // Compute accumulated session cost from the rollout JSONL when a session_id
     // is provided.  Best-effort: a missing file, an unknown model, or a zero
     // cost all result in `cost` staying `None`, matching current behaviour.
-    if let Some(sid) = session_id {
-        if let Some(path) = find_session_transcript(sid) {
-            let usage = usage_from_transcript(&path);
-            if let (Some(total_input), Some(total_output)) = (
-                usage.cumulative_input_tokens,
-                usage.cumulative_output_tokens,
-            ) {
-                let model_id = context
-                    .model_id
-                    .as_deref()
-                    .or(model_hint)
-                    .or(usage.model.as_deref())
-                    .unwrap_or("");
-                let price_book = PriceBook::embedded();
-                if let Some(price) = price_book.price(model_id) {
-                    let uncached = total_input.saturating_sub(usage.cumulative_cached_tokens);
-                    let cost = uncached as f64 * price.input
-                        + usage.cumulative_cached_tokens as f64 * price.cache_read
-                        + total_output as f64 * price.output;
-                    if cost > 0.0 {
-                        context.cost = Some(AgentCost {
-                            total_cost_usd: Some(cost),
-                            ..AgentCost::default()
-                        });
-                    }
+    if let Some(sid) = session_id
+        && let Some(path) = find_session_transcript(sid)
+    {
+        let usage = usage_from_transcript(&path);
+        if let (Some(total_input), Some(total_output)) = (
+            usage.cumulative_input_tokens,
+            usage.cumulative_output_tokens,
+        ) {
+            let model_id = context
+                .model_id
+                .as_deref()
+                .or(model_hint)
+                .or(usage.model.as_deref())
+                .unwrap_or("");
+            let price_book = PriceBook::embedded();
+            if let Some(price) = price_book.price(model_id) {
+                let uncached = total_input.saturating_sub(usage.cumulative_cached_tokens);
+                let cost = uncached as f64 * price.input
+                    + usage.cumulative_cached_tokens as f64 * price.cache_read
+                    + total_output as f64 * price.output;
+                if cost > 0.0 {
+                    context.cost = Some(AgentCost {
+                        total_cost_usd: Some(cost),
+                        ..AgentCost::default()
+                    });
                 }
             }
         }
@@ -930,6 +942,14 @@ mod tests {
     use crate::feed::{PermissionPosture, ResolutionMethod, Surface};
     use crate::ids::WorkspaceId;
     use std::path::Path;
+
+    #[test]
+    fn resume_command_is_codex_resume_with_the_session_id() {
+        let argv = CodexIntegration
+            .resume_command("sess-abc", Path::new("/code/query-engine"))
+            .expect("codex resumes");
+        assert_eq!(argv, vec!["codex", "resume", "sess-abc"]);
+    }
 
     fn fixture(kind: FeedKind) -> FeedItem {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/rimz-test"));

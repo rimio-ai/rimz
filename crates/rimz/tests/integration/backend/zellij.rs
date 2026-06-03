@@ -303,6 +303,7 @@ fn open_sidebar_births_native_layout_and_template() {
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
+                resume_panes: Vec::new(),
             },
             None,
         )
@@ -373,6 +374,7 @@ fn open_sidebar_on_live_session_is_idempotent() {
         rimz_bin: stub,
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
+        resume_panes: Vec::new(),
     };
 
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
@@ -422,6 +424,7 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
         rimz_bin: stub,
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
+        resume_panes: Vec::new(),
     };
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
 
@@ -518,6 +521,7 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
+                resume_panes: Vec::new(),
             },
             None,
         )
@@ -972,6 +976,7 @@ fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundView
             rimz_bin: stub.to_path_buf(),
             replace_existing: false,
             config: rimz::config::MultiplexerConfig::default(),
+            resume_panes: Vec::new(),
         },
     }
 }
@@ -1069,6 +1074,7 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
+                resume_panes: Vec::new(),
             },
             Some(&daemon),
         )

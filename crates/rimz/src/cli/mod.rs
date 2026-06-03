@@ -64,6 +64,7 @@ pub fn dispatch() -> Result<()> {
             StartArgs {
                 path: cli.path.unwrap_or_else(|| PathBuf::from(".")),
                 attach: cli.attach,
+                no_resume: cli.no_resume,
             },
             &globals,
         ),
@@ -88,6 +89,10 @@ struct Cli {
 
     #[clap(flatten)]
     attach: AttachFlags,
+
+    /// Come up empty: skip re-seeding prior agents when the session is reborn.
+    #[arg(long)]
+    no_resume: bool,
 
     #[command(subcommand)]
     subcommand: Option<Subcmd>,
@@ -156,6 +161,9 @@ pub struct StartArgs {
     /// Path to use as the workspace cwd.
     #[arg(default_value = ".")]
     pub path: PathBuf,
+    /// Come up empty: skip re-seeding prior agents when the session is reborn.
+    #[arg(long)]
+    pub no_resume: bool,
 }
 
 #[derive(Debug, Args, Default)]
@@ -191,6 +199,9 @@ pub struct AttachArgs {
     /// Workspace session name (omit to use the cwd's workspace).
     #[arg(value_name = "SESSION")]
     workspace: Option<String>,
+    /// Come up empty: skip re-seeding prior agents when the session is reborn.
+    #[arg(long)]
+    pub no_resume: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -426,6 +437,10 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     ensure_detected_agent_hooks()?;
     let backend = rimz::mux::backend_for(mux);
     retire_renamed_session(backend.as_ref(), &workspace);
+    // Capture whether this is a plain reattach *before* `ensure_session`, which on
+    // tmux would create the session and erase the distinction. A healthy live room
+    // re-seeds nothing; only a birth (absent or stuck) resumes prior agents.
+    let was_live = session_is_healthy_live(backend.as_ref(), &workspace.session_name);
     record_workspace(&workspace)?;
     backend.ensure_session(&SessionOptions {
         session_name: workspace.session_name.clone(),
@@ -441,6 +456,20 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         name: view.name.clone(),
         hosts: view.hosts.clone(),
     });
+    // Plan which prior agents the reborn room re-seeds, from the durable rollup.
+    // Empty on a healthy reattach (the agents are still alive), when nothing is
+    // recoverable, or when the user opted out — then the birth is exactly today's
+    // bare working room.
+    let resume_plan = if was_live {
+        rimz::resume::ResumePlan::default()
+    } else {
+        plan_room_resume(
+            &workspace.workspace_id,
+            &workspace.session_name,
+            &machine_config.resume,
+            args.no_resume,
+        )
+    };
     launch_sidebar_for_workspace(
         backend.as_ref(),
         &workspace.workspace_id,
@@ -448,6 +477,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         &workspace.worktree_root,
         &mux_config,
         daemon.as_ref(),
+        &resume_plan.panes,
     );
     maybe_launch_remote_control(
         backend.as_ref(),
@@ -458,7 +488,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // Authoritative gate before the resurrecting `attach --create`: rebirth an
     // inspected stale/serialized room, and on one that cannot self-heal or
     // cannot be inspected, offer a reset (interactive) or fail fast with the fix
-    // (non-interactive).
+    // (non-interactive). The reborn room is seeded with the resume panes.
     gate_room_before_attach(
         backend.as_ref(),
         &workspace.workspace_id,
@@ -466,7 +496,9 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         &workspace.worktree_root,
         &mux_config,
         daemon.as_ref(),
+        &resume_plan.panes,
     )?;
+    report_resume(&resume_plan);
     let spec = backend.attach_command(&workspace.session_name, &mux_config);
     tracing::info!(
         workspace = %workspace.workspace_id,
@@ -480,24 +512,35 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
 fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
     let mode = args.attach.mode();
     match args.workspace {
-        Some(session) => attach_named(&session, mode, globals),
-        None => attach_cwd(mode, globals),
+        Some(session) => attach_named(&session, mode, args.no_resume, globals),
+        None => attach_cwd(mode, args.no_resume, globals),
     }
 }
 
-fn attach_cwd(mode: AttachMode, globals: &GlobalFlags) -> Result<()> {
+fn attach_cwd(mode: AttachMode, no_resume: bool, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
     let machine_config = machine_config();
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
     retire_renamed_session(backend.as_ref(), &workspace);
+    let was_live = session_is_healthy_live(backend.as_ref(), &workspace.session_name);
     record_workspace(&workspace)?;
     backend.ensure_session(&SessionOptions {
         session_name: workspace.session_name.clone(),
         cwd: workspace.worktree_root.clone(),
         config: mux_config.clone(),
     })?;
+    let resume_plan = if was_live {
+        rimz::resume::ResumePlan::default()
+    } else {
+        plan_room_resume(
+            &workspace.workspace_id,
+            &workspace.session_name,
+            &machine_config.resume,
+            no_resume,
+        )
+    };
     launch_sidebar_for_workspace(
         backend.as_ref(),
         &workspace.workspace_id,
@@ -505,6 +548,7 @@ fn attach_cwd(mode: AttachMode, globals: &GlobalFlags) -> Result<()> {
         &workspace.worktree_root,
         &mux_config,
         None,
+        &resume_plan.panes,
     );
     gate_room_before_attach(
         backend.as_ref(),
@@ -513,12 +557,19 @@ fn attach_cwd(mode: AttachMode, globals: &GlobalFlags) -> Result<()> {
         &workspace.worktree_root,
         &mux_config,
         None,
+        &resume_plan.panes,
     )?;
+    report_resume(&resume_plan);
     let spec = backend.attach_command(&workspace.session_name, &mux_config);
     run_attach_action(&spec, mode, mux)
 }
 
-fn attach_named(session: &str, mode: AttachMode, globals: &GlobalFlags) -> Result<()> {
+fn attach_named(
+    session: &str,
+    mode: AttachMode,
+    no_resume: bool,
+    globals: &GlobalFlags,
+) -> Result<()> {
     let record = workspace_record_for_session(session);
     let missing_report = if matches!(record, Ok(Some(_))) {
         MissingSessionReport::Silent
@@ -529,6 +580,8 @@ fn attach_named(session: &str, mode: AttachMode, globals: &GlobalFlags) -> Resul
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let mux = pick_mux_for_session(session, globals.mux, missing_report)?;
     let backend = rimz::mux::backend_for(mux);
+    // Captured before `ensure_session` so a tmux create never masks a reattach.
+    let was_live = session_is_healthy_live(backend.as_ref(), session);
     match record {
         Ok(Some(record)) => {
             backend.ensure_session(&SessionOptions {
@@ -536,6 +589,16 @@ fn attach_named(session: &str, mode: AttachMode, globals: &GlobalFlags) -> Resul
                 cwd: record.project_root.clone(),
                 config: mux_config.clone(),
             })?;
+            let resume_plan = if was_live {
+                rimz::resume::ResumePlan::default()
+            } else {
+                plan_room_resume(
+                    &record.workspace_id,
+                    &record.session_name,
+                    &machine_config.resume,
+                    no_resume,
+                )
+            };
             launch_sidebar_for_workspace(
                 backend.as_ref(),
                 &record.workspace_id,
@@ -543,6 +606,7 @@ fn attach_named(session: &str, mode: AttachMode, globals: &GlobalFlags) -> Resul
                 &record.project_root,
                 &mux_config,
                 None,
+                &resume_plan.panes,
             );
             // Only a session Rimz owns (a matching record) is force-reset; a bare
             // external session by this name is never torn down.
@@ -553,7 +617,9 @@ fn attach_named(session: &str, mode: AttachMode, globals: &GlobalFlags) -> Resul
                 &record.project_root,
                 &mux_config,
                 None,
+                &resume_plan.panes,
             )?;
+            report_resume(&resume_plan);
         }
         Ok(None) => {
             tracing::warn!(
@@ -685,11 +751,101 @@ fn workspace_record_for_session(session: &str) -> Result<Option<WorkspaceRecord>
 
 /// Build the sidebar/room options shared by the best-effort sidebar launch and
 /// the authoritative pre-attach health gate, so the room shape is defined once.
+/// Whether the session is already a healthy, live room we will simply reattach
+/// to — so there is no birth to re-seed prior agents into. Probed before any
+/// launch side effect (tmux's `ensure_session` would otherwise create it). An
+/// absent or stuck/unhealthy room returns `false`: a birth is coming, and that
+/// is what resume seeds. Best-effort: an unprobeable backend reads as not-live,
+/// so resume errs toward seeding rather than silently coming up empty.
+fn session_is_healthy_live(backend: &dyn MuxBackend, session_name: &str) -> bool {
+    let exists = backend
+        .list_sessions()
+        .map(|sessions| sessions.iter().any(|name| name == session_name))
+        .unwrap_or(false);
+    exists
+        && matches!(
+            backend.probe_session_health(session_name),
+            Ok(SessionHealth::Healthy)
+        )
+}
+
+/// Plan the agents a reborn session re-seeds, reading the durable *audit*
+/// rollup — the one that keeps the dead-process agents a runtime read would
+/// expel, which is exactly the set a rebirth must bring back. Best-effort: a
+/// disabled feature, the `--no-resume` override, or any ledger read error yields
+/// an empty plan (the birth comes up bare) and never blocks the launch.
+fn plan_room_resume(
+    workspace_id: &rimz::WorkspaceId,
+    session_name: &str,
+    resume_cfg: &rimz::config::ResumeConfig,
+    disabled: bool,
+) -> rimz::resume::ResumePlan {
+    if disabled || !resume_cfg.on_rebirth {
+        return rimz::resume::ResumePlan::default();
+    }
+    let planned = (|| -> Result<rimz::resume::ResumePlan> {
+        let paths = StatePaths::for_workspace(workspace_id.clone())?;
+        let runtime = RuntimePaths::for_workspace(workspace_id.clone())?;
+        let ledger = Ledger::open(paths, runtime)?;
+        let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit)?;
+        let ended = rimz::ledger::snapshot::agent_tombstones_for_events(&projection.events);
+        Ok(rimz::resume::plan_resume(
+            &projection.agents,
+            session_name,
+            &ended,
+            resume_cfg.max,
+            |path| path.is_dir(),
+        ))
+    })();
+    planned.unwrap_or_else(|err| {
+        tracing::warn!(workspace = %workspace_id, error = %err, "resume planning skipped");
+        rimz::resume::ResumePlan::default()
+    })
+}
+
+/// Tell the user which prior agents the reborn room brought back, and which it
+/// could not — to stderr, so the attach command on stdout stays clean for
+/// scripting. Silent when there is nothing to resume.
+fn report_resume(plan: &rimz::resume::ResumePlan) {
+    if !plan.panes.is_empty() {
+        let labels = plan
+            .panes
+            .iter()
+            .map(|pane| pane.label.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(
+            std::io::stderr(),
+            "resumed {} agent{}: {labels}",
+            plan.panes.len(),
+            if plan.panes.len() == 1 { "" } else { "s" },
+        );
+    }
+    if !plan.skipped.is_empty() {
+        let detail = plan
+            .skipped
+            .iter()
+            .map(|skip| format!("{} ({})", skip.label, resume_skip_reason(skip.reason)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(std::io::stderr(), "not resumed: {detail}");
+    }
+}
+
+fn resume_skip_reason(reason: rimz::resume::ResumeSkipReason) -> &'static str {
+    match reason {
+        rimz::resume::ResumeSkipReason::NoResumeSupport => "no resume CLI",
+        rimz::resume::ResumeSkipReason::WorktreeMissing => "worktree gone",
+        rimz::resume::ResumeSkipReason::OverCap => "over the resume cap",
+    }
+}
+
 fn build_sidebar_opts(
     workspace_id: &rimz::WorkspaceId,
     session_name: &str,
     cwd: &Path,
     mux_config: &rimz::config::MultiplexerConfig,
+    resume_panes: Vec<rimz::mux::ResumePane>,
 ) -> Result<SidebarPaneOptions> {
     let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
     Ok(SidebarPaneOptions {
@@ -700,6 +856,7 @@ fn build_sidebar_opts(
         rimz_bin,
         replace_existing: false,
         config: mux_config.clone(),
+        resume_panes,
     })
 }
 
@@ -710,6 +867,7 @@ fn launch_sidebar_for_workspace(
     cwd: &Path,
     mux_config: &rimz::config::MultiplexerConfig,
     daemon: Option<&DaemonView>,
+    resume_panes: &[rimz::mux::ResumePane],
 ) -> rimz::sidebar::SidebarLaunchOutcome {
     let runtime = match RuntimePaths::for_workspace(workspace_id.clone()) {
         Ok(runtime) => runtime,
@@ -722,7 +880,13 @@ fn launch_sidebar_for_workspace(
             return rimz::sidebar::SidebarLaunchOutcome::Failed;
         }
     };
-    let opts = match build_sidebar_opts(workspace_id, session_name, cwd, mux_config) {
+    let opts = match build_sidebar_opts(
+        workspace_id,
+        session_name,
+        cwd,
+        mux_config,
+        resume_panes.to_vec(),
+    ) {
         Ok(opts) => opts,
         Err(err) => {
             tracing::warn!(
@@ -750,8 +914,15 @@ fn ensure_clean_room(
     cwd: &Path,
     mux_config: &rimz::config::MultiplexerConfig,
     daemon: Option<&DaemonView>,
+    resume_panes: &[rimz::mux::ResumePane],
 ) -> SessionHealth {
-    let opts = match build_sidebar_opts(workspace_id, session_name, cwd, mux_config) {
+    let opts = match build_sidebar_opts(
+        workspace_id,
+        session_name,
+        cwd,
+        mux_config,
+        resume_panes.to_vec(),
+    ) {
         Ok(opts) => opts,
         Err(err) => {
             tracing::warn!(error = %err, "session health gate skipped; attaching as-is");
@@ -777,11 +948,26 @@ fn gate_room_before_attach(
     cwd: &Path,
     mux_config: &rimz::config::MultiplexerConfig,
     daemon: Option<&DaemonView>,
+    resume_panes: &[rimz::mux::ResumePane],
 ) -> Result<()> {
-    if let SessionHealth::Stuck =
-        ensure_clean_room(backend, workspace_id, session_name, cwd, mux_config, daemon)
-    {
-        recover_stuck_room(backend, workspace_id, session_name, cwd, mux_config, daemon)?;
+    if let SessionHealth::Stuck = ensure_clean_room(
+        backend,
+        workspace_id,
+        session_name,
+        cwd,
+        mux_config,
+        daemon,
+        resume_panes,
+    ) {
+        recover_stuck_room(
+            backend,
+            workspace_id,
+            session_name,
+            cwd,
+            mux_config,
+            daemon,
+            resume_panes,
+        )?;
     }
     Ok(())
 }
@@ -796,6 +982,7 @@ fn recover_stuck_room(
     cwd: &Path,
     mux_config: &rimz::config::MultiplexerConfig,
     daemon: Option<&DaemonView>,
+    resume_panes: &[rimz::mux::ResumePane],
 ) -> Result<()> {
     if !std::io::stdin().is_terminal() {
         return Err(ResetRequired {
@@ -809,7 +996,15 @@ fn recover_stuck_room(
     let runtime = RuntimePaths::for_workspace(workspace_id.clone())?;
     let report = rimz::mux::recovery::teardown_room(backend, workspace_id, session_name, &runtime);
     print_reset_report(&report)?;
-    match ensure_clean_room(backend, workspace_id, session_name, cwd, mux_config, daemon) {
+    match ensure_clean_room(
+        backend,
+        workspace_id,
+        session_name,
+        cwd,
+        mux_config,
+        daemon,
+        resume_panes,
+    ) {
         SessionHealth::Stuck => {
             anyhow::bail!("the room is still stuck after a reset; inspect with `rimz doctor`")
         }
@@ -845,6 +1040,10 @@ pub(crate) fn rebirth_room(path: PathBuf, globals: &GlobalFlags) -> Result<()> {
         StartArgs {
             attach: AttachFlags::default(),
             path,
+            // A reset fixes the room; the agents are ledger truth, so the rebirth
+            // still resumes them. `rimz reset --no-resume` would clean-slate, but
+            // reset itself does not force one.
+            no_resume: false,
         },
         globals,
     )
@@ -969,6 +1168,7 @@ fn build_daemon_view(
             rimz_bin,
             replace_existing: false,
             config: mux_config.clone(),
+            resume_panes: Vec::new(),
         },
     })
 }

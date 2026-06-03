@@ -175,6 +175,72 @@ impl TmuxBackend {
         }
     }
 
+    /// Re-seed the reborn session's prior agents, one window each, born
+    /// `sidebar | agent` via the `after-new-window` hook. Idempotent on the
+    /// window name so a re-run (a heal that re-adds the sidebar) never doubles an
+    /// agent window; the freshest agent (the first in the plan) is selected so
+    /// attach lands on it, mirroring the Zellij layout's focus. Best-effort:
+    /// a failed window is logged and skipped — the room is still usable.
+    fn seed_resume_windows(&self, opts: &SidebarPaneOptions) {
+        let mut focus_window: Option<String> = None;
+        for pane in &opts.resume_panes {
+            match self.session_has_window(&opts.session_name, &pane.label) {
+                Ok(true) => continue, // already seeded by an earlier birth
+                Ok(false) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        session = %opts.session_name,
+                        agent = %pane.label,
+                        error = %err,
+                        "resume: window probe failed; leaving the agent out",
+                    );
+                    continue;
+                }
+            }
+            // `-d` keeps the user on the working window; `-P -F` prints the new
+            // window id so we can land focus on the freshest agent without the
+            // `session:name` colon ambiguity a label can carry. The agent argv
+            // follows directly, run via execvp (no shell), so it needs no quoting.
+            let launched = self
+                .cmd()
+                .args([
+                    "new-window".to_owned(),
+                    "-d".to_owned(),
+                    "-P".to_owned(),
+                    "-F".to_owned(),
+                    "#{window_id}".to_owned(),
+                    "-t".to_owned(),
+                    opts.session_name.clone(),
+                    "-n".to_owned(),
+                    pane.label.clone(),
+                    "-c".to_owned(),
+                    pane.cwd.to_string_lossy().into_owned(),
+                ])
+                .args(pane.command.clone())
+                .run();
+            match launched {
+                Ok(output) => {
+                    let window_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                    if focus_window.is_none() && !window_id.is_empty() {
+                        focus_window = Some(window_id);
+                    }
+                }
+                Err(err) => tracing::warn!(
+                    session = %opts.session_name,
+                    agent = %pane.label,
+                    error = %err,
+                    "resume: launching the agent window failed; leaving it out",
+                ),
+            }
+        }
+        if let Some(window_id) = focus_window {
+            let _ = self
+                .cmd()
+                .args(["select-window".to_owned(), "-t".to_owned(), window_id])
+                .run();
+        }
+    }
+
     /// The session's first window index (`base-index`, default 0 — almost always
     /// a global option).
     fn base_index(&self) -> String {
@@ -549,8 +615,12 @@ impl MuxBackend for TmuxBackend {
                 "after-new-window".to_owned(),
                 hook,
             ])
-            .run()
-            .map(|_| ())
+            .run()?;
+        // With the `after-new-window` hook installed, re-seed the reborn
+        // session's prior agents: each becomes its own window, born
+        // `sidebar | agent` as the hook docks the sidebar on its left.
+        self.seed_resume_windows(opts);
+        Ok(())
     }
 
     fn reconcile_sidebars(

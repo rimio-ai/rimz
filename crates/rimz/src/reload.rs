@@ -154,6 +154,7 @@ fn reconcile_live(
         rimz_bin: rimz_bin.to_path_buf(),
         replace_existing: false,
         config: MultiplexerConfig::from(machine_config),
+        resume_panes: Vec::new(),
     };
     let liveness = crate::sidebar::sidebar_liveness(runtime);
     match backend.reconcile_sidebars(&opts, &liveness) {

@@ -2512,7 +2512,11 @@ fn merge_agent_rollups_with_tombstones(
     map.into_values().collect()
 }
 
-fn agent_tombstones_for_events(events: &[EventEnvelope]) -> BTreeSet<(String, String)> {
+/// The `(kind, agent_id)` set whose sessions ended in `events` — a `SessionEnd`
+/// or an `offline` status. Exposed so resume-on-rebirth can drop a cleanly-ended
+/// agent from the audit rollup (which, unlike the carryover merge, keeps a
+/// within-log `SessionEnd` row), never re-spawning a session the user closed.
+pub fn agent_tombstones_for_events(events: &[EventEnvelope]) -> BTreeSet<(String, String)> {
     let mut tombstones = BTreeSet::new();
     for event in events {
         if event.method != "agent.lifecycle" {

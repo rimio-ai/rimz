@@ -131,6 +131,17 @@ impl AgentIntegration for ClaudeIntegration {
         "claude"
     }
 
+    /// `claude --resume <id>` launches straight into the prior session,
+    /// restoring its conversation and firing `SessionStart` with
+    /// `source: "resume"`. The cwd is set by the launching pane, not the argv.
+    fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
+        Some(vec![
+            "claude".to_owned(),
+            "--resume".to_owned(),
+            session_id.to_owned(),
+        ])
+    }
+
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
         let feed_kind = match event_name {
             "PermissionRequest" => Some(FeedKind::Permission),
@@ -1087,6 +1098,14 @@ mod tests {
     use crate::feed::{PermissionPosture, ResolutionMethod, Surface};
     use crate::ids::WorkspaceId;
     use std::path::Path;
+
+    #[test]
+    fn resume_command_is_claude_resume_with_the_session_id() {
+        let argv = ClaudeIntegration
+            .resume_command("sess-123", Path::new("/code/query-engine"))
+            .expect("claude resumes");
+        assert_eq!(argv, vec!["claude", "--resume", "sess-123"]);
+    }
 
     fn fixture(kind: FeedKind) -> FeedItem {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/rimz-test"));
