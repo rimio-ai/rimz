@@ -194,8 +194,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         } else {
             // Cap by the watchdog so the probe fires on time even when the data
             // tick is much longer (e.g. the test's 20s tick vs the 3s watchdog).
-            let watchdog_due =
-                SELF_CLOSE_PROBE_WATCHDOG.saturating_sub(last_close_probe.elapsed());
+            let watchdog_due = SELF_CLOSE_PROBE_WATCHDOG.saturating_sub(last_close_probe.elapsed());
             tick.min(watchdog_due).max(FRAME_MIN_TIMEOUT)
         };
         socket.set_read_timeout(Some(timeout))?;
