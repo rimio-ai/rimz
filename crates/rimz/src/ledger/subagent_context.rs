@@ -97,6 +97,7 @@ mod tests {
 
     fn ctx(observed_at: Timestamp) -> SubagentContext {
         SubagentContext {
+            agent_type: None,
             description: Some("locate the render seam".to_owned()),
             token_count: Some(12_400),
             started_at: Some(observed_at),

@@ -66,14 +66,19 @@ pub struct AgentContext {
 
 /// Per-subagent enrichment a paneless child cannot publish for itself. Claude's
 /// `subagentStatusLine` is `exec`d to render the agent panel's child rows and is
-/// handed each task's `description`, `tokenCount`, and `startTime`; Rimz harvests
-/// those into one of these per child so the expanded card paints what the child
-/// is doing, what it has spent, and how long it has run. Identity-free like
+/// handed each task's `type`, `description`, `tokenCount`, and `startTime`; Rimz
+/// harvests those into one of these per child so the expanded card paints what the
+/// child is doing, what it has spent, and how long it has run. Identity-free like
 /// [`AgentContext`] — the child it belongs to is the `(kind, agent_id)` key it is
 /// filed under, never a field here. `subagentStatusLine` is Claude-only, so a
 /// Codex child simply has no record and the card degrades to its bare type line.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SubagentContext {
+    /// The agent's type label (`Explore`, `review`, …) from the task's `type`
+    /// field. Folds onto `AgentState.task` when the lifecycle events never
+    /// provided one — the common case for fork agents that carry no `agent_type`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
     /// What the parent asked this child to do (the Task tool's `description`).
     /// Painted after the child's type on the first row; absent before the first
     /// render.

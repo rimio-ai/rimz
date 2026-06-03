@@ -11,7 +11,7 @@ use std::time::SystemTime;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::agent_activity::AgentActivity;
 use crate::agents::lifecycle::{self, LifecycleState, Transition};
@@ -569,6 +569,13 @@ impl SidebarSnapshot {
         let mut changed = false;
         for agent in &mut self.agents {
             if let Some(context) = by_key.remove(&(agent.kind.clone(), agent.agent_id.clone())) {
+                // Back-fill the type label when the lifecycle hook never provided one.
+                // Fork agents carry no `agent_type` in `SubagentStart`, so `task`
+                // stays `None` until the first `subagentStatusLine` render. Never
+                // overwrite a type the lifecycle already established.
+                if agent.task.is_none() {
+                    agent.task = context.agent_type;
+                }
                 agent.subagent_description = context.description;
                 agent.subagent_started_at = context.started_at;
                 if context.token_count.is_some() {
@@ -576,6 +583,17 @@ impl SidebarSnapshot {
                 }
                 changed = true;
             }
+        }
+        // Unmatched sidecars mean the task `id` from `subagentStatusLine` doesn't
+        // match the lifecycle `agent_id`. Log at debug so the mismatch is visible
+        // without polluting production output.
+        for (key, _) in &by_key {
+            debug!(
+                target: "rimz::sidebar::subagent",
+                kind = %key.0,
+                agent_id = %key.1,
+                "subagent context sidecar has no matching agent row — possible id mismatch",
+            );
         }
         if changed {
             self.rebuild_groups();
@@ -4185,6 +4203,7 @@ mod tests {
             kind: "claude".to_owned(),
             agent_id: "child-1".to_owned(),
             context: SubagentContext {
+                agent_type: None,
                 description: Some("locate the render seam".to_owned()),
                 token_count: Some(12_400),
                 started_at: Some(started),
@@ -4210,6 +4229,7 @@ mod tests {
             kind: "claude".to_owned(),
             agent_id: "ghost".to_owned(),
             context: SubagentContext {
+                agent_type: None,
                 description: Some("nowhere".to_owned()),
                 token_count: None,
                 started_at: None,
@@ -4218,6 +4238,85 @@ mod tests {
         };
         let folded = folded.with_subagent_context(vec![absent]);
         assert!(folded.agents.iter().all(|a| a.agent_id != "ghost"));
+    }
+
+    #[test]
+    fn with_subagent_context_back_fills_task_from_agent_type() {
+        use crate::agents::context::SubagentContext;
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let parent = agent(
+            "claude",
+            "sess-root",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            100,
+        );
+        // A fork child: parent_agent_id set, task None (no agent_type in SubagentStart).
+        let mut fork = child_state("sess-root", "fork-1", AgentStatus::Running, 5);
+        fork.task = None;
+        let snapshot =
+            SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![parent, fork]);
+
+        let record = SubagentContextRecord {
+            kind: "claude".to_owned(),
+            agent_id: "fork-1".to_owned(),
+            context: SubagentContext {
+                agent_type: Some("Explore".to_owned()),
+                description: Some("search the ledger".to_owned()),
+                token_count: Some(5_000),
+                started_at: None,
+                observed_at: Timestamp::now(),
+            },
+        };
+        let folded = snapshot.with_subagent_context(vec![record]);
+        let fork = folded
+            .agents
+            .iter()
+            .find(|a| a.agent_id == "fork-1")
+            .expect("fork in rollup");
+        assert_eq!(fork.task.as_deref(), Some("Explore"), "agent_type back-fills task");
+        assert_eq!(fork.subagent_description.as_deref(), Some("search the ledger"));
+    }
+
+    #[test]
+    fn with_subagent_context_does_not_overwrite_existing_task() {
+        use crate::agents::context::SubagentContext;
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let parent = agent(
+            "claude",
+            "sess-root",
+            AgentStatus::Running,
+            PermissionPosture::Default,
+            100,
+        );
+        // Typed child: task already set by SubagentStart.
+        let mut typed = child_state("sess-root", "child-1", AgentStatus::Running, 5);
+        typed.task = Some("review".to_owned());
+        let snapshot =
+            SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![parent, typed]);
+
+        let record = SubagentContextRecord {
+            kind: "claude".to_owned(),
+            agent_id: "child-1".to_owned(),
+            context: SubagentContext {
+                agent_type: Some("SomethingElse".to_owned()),
+                description: None,
+                token_count: None,
+                started_at: None,
+                observed_at: Timestamp::now(),
+            },
+        };
+        let folded = snapshot.with_subagent_context(vec![record]);
+        let typed = folded
+            .agents
+            .iter()
+            .find(|a| a.agent_id == "child-1")
+            .expect("child in rollup");
+        assert_eq!(
+            typed.task.as_deref(),
+            Some("review"),
+            "lifecycle-established task must not be overwritten by enrichment",
+        );
     }
 
     #[test]

@@ -1,5 +1,6 @@
 ---
 source: crates/rimz-sidebar/src/render/mod.rs
+assertion_line: 736
 expression: screen
 ---
  ⌘ query-engine

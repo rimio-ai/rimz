@@ -24,15 +24,20 @@ pub(crate) struct SubagentStatuslinePayload {
     tasks: Vec<SubagentTask>,
 }
 
-/// One child row. `type`, `name`, `status`, `label`, `cwd`, and `tokenSamples`
-/// are carried by the upstream payload but Rimz reads only the three it paints;
-/// the rest ride along ignored.
+/// One child row. `name`, `status`, `label`, `cwd`, and `tokenSamples` are
+/// carried by the upstream payload but Rimz ignores them; `type`, `description`,
+/// `tokenCount`, and `startTime` are the four it paints.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct SubagentTask {
     /// The task id, equal to the child's `agent_id` — the key its sidecar files
     /// under. A task with no id can't be attributed to a row, so it's dropped.
     id: Option<String>,
+    /// The agent's type label (`Explore`, `review`, …). Folds onto
+    /// `AgentState.task` when the lifecycle hook never provided one — common
+    /// for fork agents that carry no `agent_type` in `SubagentStart`.
+    #[serde(rename = "type")]
+    r#type: Option<String>,
     /// What the parent asked the child to do.
     description: Option<String>,
     /// `startTime`. The unit is unpinned upstream, so it is held as a raw value
@@ -58,6 +63,7 @@ impl SubagentStatuslinePayload {
                 Some(SubagentObservation {
                     agent_id,
                     context: SubagentContext {
+                        agent_type: task.r#type.filter(|t| !t.is_empty()),
                         description: task.description.filter(|d| !d.is_empty()),
                         token_count: task.token_count.as_ref().and_then(value_as_u64),
                         started_at: task.start_time.as_ref().and_then(value_as_timestamp),
@@ -145,6 +151,7 @@ mod tests {
         }));
         assert_eq!(obs.len(), 2);
         assert_eq!(obs[0].agent_id, "child-1");
+        assert_eq!(obs[0].context.agent_type.as_deref(), Some("Explore"));
         assert_eq!(
             obs[0].context.description.as_deref(),
             Some("locate the render seam")
@@ -155,6 +162,7 @@ mod tests {
             Some(Timestamp::from_second(1_700_000_000).unwrap())
         );
         assert_eq!(obs[1].agent_id, "child-2");
+        assert_eq!(obs[1].context.agent_type.as_deref(), Some("review"));
     }
 
     #[test]
@@ -167,9 +175,19 @@ mod tests {
     fn sparse_task_keeps_only_present_fields() {
         let obs = observe(json!({ "tasks": [{ "id": "child-1" }] }));
         assert_eq!(obs.len(), 1);
+        assert_eq!(obs[0].context.agent_type, None);
         assert_eq!(obs[0].context.description, None);
         assert_eq!(obs[0].context.token_count, None);
         assert_eq!(obs[0].context.started_at, None);
+    }
+
+    #[test]
+    fn empty_type_is_dropped() {
+        // An empty `type` string is not a useful label — treat it as absent so
+        // fork agents without a type don't render as an empty name.
+        let obs = observe(json!({ "tasks": [{ "id": "c", "type": "" }] }));
+        assert_eq!(obs.len(), 1);
+        assert_eq!(obs[0].context.agent_type, None);
     }
 
     #[test]
