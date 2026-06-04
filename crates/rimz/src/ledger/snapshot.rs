@@ -593,7 +593,7 @@ impl SidebarSnapshot {
         // Unmatched sidecars mean the task `id` from `subagentStatusLine` doesn't
         // match the lifecycle `agent_id`. Log at debug so the mismatch is visible
         // without polluting production output.
-        for (key, _) in &by_key {
+        for key in by_key.keys() {
             debug!(
                 target: "rimz::sidebar::subagent",
                 kind = %key.0,
