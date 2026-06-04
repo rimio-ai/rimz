@@ -306,13 +306,18 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             // producer owns the out-of-band account probe (a subprocess) and
             // publishes it to `accounts.json` for consumer tabs to read back.
             // Best-effort — a config read failure falls back to defaults, so
-            // display preference is enrichment, never a precondition.
+            // display preference is enrichment, never a precondition. Loaded
+            // once here: the fold consumes it and the git probe reads the
+            // preferred trunk from it.
+            let config = rimz::config::MachineConfig::load().unwrap_or_default();
+            let trunk = config.sidebar.trunk.clone();
             snapshot = rimz::sidebar::snapshot::fold_machine_config_producing(
                 snapshot,
                 runtime,
                 &spending.by_provider,
+                config,
             );
-            enrich_worktree_groups(&mut snapshot, runtime);
+            enrich_worktree_groups(&mut snapshot, runtime, trunk.as_deref());
             apply_spending(&mut snapshot, &spending);
             emit(&snapshot)
         }
@@ -546,14 +551,20 @@ const DIFF_STATS_WAIT_STEPS: u32 = 15;
 /// snapshot's worktree groups. The git forks are the producer's job — a
 /// consumer reads the published frame in process via
 /// [`rimz::sidebar::snapshot::read_published_snapshot`] and never reaches here.
-fn enrich_worktree_groups(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::RuntimePaths) {
+/// `configured_trunk` is the per-machine `[sidebar] trunk` preference the trunk
+/// ladder tries first.
+fn enrich_worktree_groups(
+    snapshot: &mut rimz::SidebarSnapshot,
+    runtime: &rimz::RuntimePaths,
+    configured_trunk: Option<&str>,
+) {
     let cache_path = runtime.root.join("diff-stats.json");
     let now_ms = unix_now_ms();
     // The producer refreshes the live worktrees' diff stats (single-flighted,
     // git forks parallel across worktrees), then the shared projection folds the
     // resulting cache onto the groups — the same projection a consumer applies.
     let needed = needed_worktree_paths(snapshot);
-    let cache = refresh_diff_stats(&cache_path, runtime, &needed, now_ms);
+    let cache = refresh_diff_stats(&cache_path, runtime, &needed, now_ms, configured_trunk);
     project_diff_stats(snapshot, &cache);
 }
 
@@ -630,6 +641,7 @@ fn refresh_diff_stats(
     runtime: &rimz::RuntimePaths,
     needed: &[String],
     now_ms: u64,
+    configured_trunk: Option<&str>,
 ) -> DiffStatsCache {
     let stale = |cache: &DiffStatsCache| -> Vec<String> {
         needed
@@ -669,7 +681,7 @@ fn refresh_diff_stats(
         // run in parallel across worktrees — and write once.
         Coalesced::Produce(_guard) => {
             let mut cache = read_diff_stats_cache(cache_path);
-            let refreshed = refresh_entries(&stale(&cache), now_ms);
+            let refreshed = refresh_entries(&stale(&cache), now_ms, configured_trunk);
             let changed = !refreshed.is_empty();
             for (path, entry) in refreshed {
                 cache.entries.insert(path, entry);
@@ -683,7 +695,7 @@ fn refresh_diff_stats(
         // write — the producer's map will be fresher.
         Coalesced::ProduceLocal => {
             let mut cache = cache;
-            for (path, entry) in refresh_entries(&stale(&cache), now_ms) {
+            for (path, entry) in refresh_entries(&stale(&cache), now_ms, configured_trunk) {
                 cache.entries.insert(path, entry);
             }
             cache
@@ -699,16 +711,24 @@ const MAX_PARALLEL_GIT: usize = 8;
 /// Refresh several worktrees' diff-stats concurrently, returning each path's
 /// fresh entry. Independent worktrees run in parallel — bounded to
 /// [`MAX_PARALLEL_GIT`] live `git` chains at a time — while each path's own
-/// `trunk ref → merge-base → numstat + rev-list → branch` chain stays
+/// `trunk ref → merge-base → numstat + rev-list ×2 → branch` chain stays
 /// sequential. Runs on the diff-stats producer (the fetch worker), never the
 /// render thread.
-fn refresh_entries(paths: &[String], now_ms: u64) -> Vec<(String, DiffStatsCacheEntry)> {
+fn refresh_entries(
+    paths: &[String],
+    now_ms: u64,
+    configured_trunk: Option<&str>,
+) -> Vec<(String, DiffStatsCacheEntry)> {
     let mut out = Vec::with_capacity(paths.len());
     for chunk in paths.chunks(MAX_PARALLEL_GIT) {
         std::thread::scope(|scope| {
             let handles: Vec<_> = chunk
                 .iter()
-                .map(|path| scope.spawn(move || (path.clone(), refresh_entry(path, now_ms))))
+                .map(|path| {
+                    scope.spawn(move || {
+                        (path.clone(), refresh_entry(path, now_ms, configured_trunk))
+                    })
+                })
                 .collect();
             for handle in handles {
                 if let Ok(entry) = handle.join() {
@@ -721,20 +741,34 @@ fn refresh_entries(paths: &[String], now_ms: u64) -> Vec<(String, DiffStatsCache
 }
 
 /// Produce a fresh diff-stats entry for one worktree path: the sequential `git`
-/// forks behind the columns (trunk ref → merge-base, then numstat and
-/// commit-count off that one base) plus the live branch label. The merge-base
-/// is resolved once and shared by the diff and the commit count, so the two
-/// columns cost one extra fork, not two full chains.
-fn refresh_entry(path: &str, now_ms: u64) -> DiffStatsCacheEntry {
+/// forks behind the columns (trunk ref → merge-base, then numstat and the two
+/// commit counts off that one base) plus the live branch label. The trunk and
+/// merge-base are resolved once and shared by the diff and both commit counts,
+/// so each extra column costs one fork, not a full chain.
+fn refresh_entry(path: &str, now_ms: u64, configured_trunk: Option<&str>) -> DiffStatsCacheEntry {
     let worktree = Path::new(path);
-    let base = diff_base(worktree);
+    let trunk = trunk_ref(worktree, configured_trunk);
+    let base = trunk
+        .as_deref()
+        .and_then(|trunk| diff_base(worktree, trunk));
     let stats = base
         .as_deref()
         .and_then(|base| worktree_diff_stats(worktree, base));
     let commits = base
         .as_deref()
         .and_then(|base| worktree_commits_ahead(worktree, base));
-    DiffStatsCacheEntry::new(now_ms, stats, commits, worktree_branch(worktree))
+    let behind = base
+        .as_deref()
+        .zip(trunk.as_deref())
+        .and_then(|(base, trunk)| worktree_commits_behind(worktree, base, trunk));
+    DiffStatsCacheEntry::new(
+        now_ms,
+        stats,
+        commits,
+        behind,
+        trunk,
+        worktree_branch(worktree),
+    )
 }
 
 fn worktree_branch(worktree: &Path) -> Option<String> {
@@ -769,8 +803,22 @@ fn worktree_diff_stats(worktree: &Path, base: &str) -> Option<DiffStats> {
 /// fork, never the trunk's. The diff's `+/-` also folds in staged/unstaged
 /// change; this column is committed work alone.
 fn worktree_commits_ahead(worktree: &Path, base: &str) -> Option<u32> {
-    let range = format!("{base}..HEAD");
-    let count = git_line(worktree, &["rev-list", "--count", &range])?;
+    rev_list_count(worktree, &format!("{base}..HEAD"))
+}
+
+/// The commits the trunk has advanced past the worktree's fork point — `git
+/// rev-list --count <base>..<trunk>`, the work a rebase would pick up. The
+/// mirror of [`worktree_commits_ahead`], off the same merge-base. Deliberately
+/// no part of the header's `≡` landed test: a fully-landed worktree is safe to
+/// remove however far the trunk has moved on.
+fn worktree_commits_behind(worktree: &Path, base: &str, trunk: &str) -> Option<u32> {
+    rev_list_count(worktree, &format!("{base}..{trunk}"))
+}
+
+/// `git rev-list --count <range>` as a capped `u32` — the shared tail of the
+/// ahead/behind columns.
+fn rev_list_count(worktree: &Path, range: &str) -> Option<u32> {
+    let count = git_line(worktree, &["rev-list", "--count", range])?;
     count
         .parse::<u64>()
         .ok()
@@ -779,19 +827,23 @@ fn worktree_commits_ahead(worktree: &Path, base: &str) -> Option<u32> {
 
 /// The commit a worktree's diff is measured against: the merge-base between its
 /// HEAD and the repo's trunk — the fork point a PR diffs against. Returns
-/// `None` (so the header simply omits stats) when there is no trunk or no
-/// shared ancestor, e.g. an orphan branch or a repo without `main`/`master`.
-fn diff_base(worktree: &Path) -> Option<String> {
-    let trunk = trunk_ref(worktree)?;
-    git_line(worktree, &["merge-base", "HEAD", &trunk])
+/// `None` (so the header simply omits stats) when there is no shared ancestor,
+/// e.g. an orphan branch.
+fn diff_base(worktree: &Path, trunk: &str) -> Option<String> {
+    git_line(worktree, &["merge-base", "HEAD", trunk])
 }
 
-/// The repo's trunk branch: the local `main`/`master` a worktree forks from and
+/// The repo's trunk branch: the configured `[sidebar] trunk` when it resolves
+/// in this repo, else the local `main`/`master` a worktree forks from and
 /// merges back into, falling back to the remote's advertised default for a
-/// non-standard name. Branch refs are shared across a repo's worktrees, so this
-/// resolves from inside any of them.
-fn trunk_ref(worktree: &Path) -> Option<String> {
-    for name in ["main", "master"] {
+/// non-standard name. The configured name is a machine-wide *preference* — a
+/// repo without that branch falls through to detection rather than losing its
+/// stats — and an option-shaped name (leading `-`) is never handed to git.
+/// Branch refs are shared across a repo's worktrees, so this resolves from
+/// inside any of them.
+fn trunk_ref(worktree: &Path, configured: Option<&str>) -> Option<String> {
+    let configured = configured.filter(|name| !name.is_empty() && !name.starts_with('-'));
+    for name in configured.into_iter().chain(["main", "master"]) {
         if git_line(worktree, &["rev-parse", "--verify", "--quiet", name]).is_some() {
             return Some(name.to_owned());
         }
@@ -1040,7 +1092,7 @@ mod tests {
         // `-b main` needs Git >= 2.28; an older git fails init and the helper
         // degrades to None, which is the documented fallback.
         if !git(&["init", "-q", "-b", "main"]) {
-            assert_eq!(refresh_entry(path, 0).stats(), None);
+            assert_eq!(refresh_entry(path, 0, None).stats(), None);
             return;
         }
         let _ = git(&["config", "user.email", "t@example.com"]);
@@ -1069,7 +1121,7 @@ mod tests {
         // Unstaged: one more line appended to a tracked file.
         write("base.txt", "a\nb\nc\nd\n");
 
-        let entry = refresh_entry(path, 0);
+        let entry = refresh_entry(path, 0, None);
         assert_eq!(
             entry.stats(),
             Some(DiffStats {
@@ -1087,12 +1139,64 @@ mod tests {
             Some(1),
             "the commit count is the branch's commits ahead of the trunk merge-base"
         );
+        // Main's one post-fork commit is the branch's behind count, and the
+        // resolved trunk names the header's `≡` marker.
+        assert_eq!(
+            entry.behind,
+            Some(1),
+            "the behind count is the trunk's commits past the merge-base"
+        );
+        assert_eq!(entry.trunk.as_deref(), Some("main"));
 
         // A non-repository path has nothing to diff or count.
         let plain = tempfile::tempdir().unwrap();
-        let plain_entry = refresh_entry(plain.path().to_str().unwrap(), 0);
+        let plain_entry = refresh_entry(plain.path().to_str().unwrap(), 0, None);
         assert_eq!(plain_entry.stats(), None);
         assert_eq!(plain_entry.commits, None);
+        assert_eq!(plain_entry.behind, None);
+        assert_eq!(plain_entry.trunk, None);
+    }
+
+    #[test]
+    fn trunk_ladder_prefers_a_configured_branch_that_resolves() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+        };
+        if !git(&["init", "-q", "-b", "main"]) {
+            assert_eq!(trunk_ref(dir.path(), Some("develop")), None);
+            return;
+        }
+        let _ = git(&["config", "user.email", "t@example.com"]);
+        let _ = git(&["config", "user.name", "t"]);
+        std::fs::write(dir.path().join("f"), "x").unwrap();
+        let _ = git(&["add", "f"]);
+        let _ = git(&["commit", "-q", "-m", "init"]);
+        let _ = git(&["branch", "develop"]);
+
+        // The configured branch exists here, so it wins over `main`.
+        assert_eq!(
+            trunk_ref(dir.path(), Some("develop")).as_deref(),
+            Some("develop")
+        );
+        // A machine-wide preference this repo lacks falls through to detection
+        // rather than losing the repo's stats.
+        assert_eq!(
+            trunk_ref(dir.path(), Some("absent")).as_deref(),
+            Some("main")
+        );
+        // An option-shaped name is never handed to git; detection stands alone.
+        assert_eq!(
+            trunk_ref(dir.path(), Some("--help")).as_deref(),
+            Some("main")
+        );
+        assert_eq!(trunk_ref(dir.path(), None).as_deref(), Some("main"));
     }
 
     #[test]

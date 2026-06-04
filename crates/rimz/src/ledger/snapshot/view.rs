@@ -226,6 +226,18 @@ pub struct SidebarWorktreeGroup {
     /// when no git read was attempted or the worktree is not a git repository.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commits_ahead: Option<u32>,
+    /// Commits the trunk has advanced past this worktree's fork point — `git
+    /// rev-list --count <merge-base>..<trunk>`, the work the branch would pick
+    /// up by rebasing. Projected alongside `commits_ahead`; `None` on the same
+    /// terms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commits_behind: Option<u32>,
+    /// The resolved trunk name the diff and commit delta compare against
+    /// (configured `[sidebar] trunk`, else detected `main`/`master`/remote
+    /// default; `origin/` stripped for display). Names the `≡` landed marker —
+    /// a worktree with zero commits ahead and a zero diff renders `≡ <trunk>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trunk: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1470,6 +1482,8 @@ fn build_worktree_groups_from_rows(
                 diff_added: None,
                 diff_removed: None,
                 commits_ahead: None,
+                commits_behind: None,
+                trunk: None,
             }
         })
         .collect::<Vec<_>>();

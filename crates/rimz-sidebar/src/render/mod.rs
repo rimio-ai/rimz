@@ -1054,6 +1054,8 @@ mod tests {
         let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
         snapshot.worktree_groups[0].diff_added = Some(127);
         snapshot.worktree_groups[0].diff_removed = Some(43);
+        snapshot.worktree_groups[0].commits_ahead = Some(3);
+        snapshot.worktree_groups[0].commits_behind = Some(1);
 
         let rendered = snapshot_to_screen_with_alert_and_ui(
             &snapshot,
@@ -1069,8 +1071,9 @@ mod tests {
             14,
         );
 
-        // The worktree-total diff sits on the group header.
-        assert!(rendered.contains("+127 -43"));
+        // The worktree's git story sits on the group header: the ⇡/⇣ commit
+        // delta leads the worktree-total diff.
+        assert!(rendered.contains("⇡3 ⇣1 +127 -43"), "header:\n{rendered}");
         // Line 1 carries identity + capability + cost; line 2 is the session
         // name; the model display name sheds its window qualifier (`Opus 4.8
         // (1M context)` → `Opus 4.8`) — the dedicated window token (the
@@ -1110,6 +1113,42 @@ mod tests {
             "window size left the token line:\n{rendered}"
         );
         assert_snapshot("enriched_selected_agent_card", rendered);
+    }
+
+    #[test]
+    fn render_worktree_equal_to_trunk() {
+        // A fully-landed worktree — zero commits ahead, zero diff against the
+        // fork point — collapses the header's git cluster to `≡ <trunk>`:
+        // nothing left to land, safe to remove. Behind deliberately doesn't
+        // count against it, so the marker holds even as the trunk moves on.
+        let mut codex = agent(
+            "codex-1",
+            "codex",
+            AgentStatus::Idle,
+            Some("/home/me/query-engine"),
+            Some("main"),
+            None,
+        );
+        codex.last_activity = fixed_now() - Duration::from_secs(30);
+        let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+        snapshot.worktree_groups[0].diff_added = Some(0);
+        snapshot.worktree_groups[0].diff_removed = Some(0);
+        snapshot.worktree_groups[0].commits_ahead = Some(0);
+        snapshot.worktree_groups[0].commits_behind = Some(5);
+        snapshot.worktree_groups[0].trunk = Some("main".to_owned());
+
+        let rendered = snapshot_to_screen(&snapshot, 38, 14);
+
+        assert!(rendered.contains("≡ main"), "header:\n{rendered}");
+        assert!(
+            !rendered.contains("+0 -0"),
+            "the landed marker replaces the zero diff"
+        );
+        assert!(
+            !rendered.contains('⇣'),
+            "behind stays out of the landed header"
+        );
+        assert_snapshot("worktree_equal_to_trunk", rendered);
     }
 
     #[test]

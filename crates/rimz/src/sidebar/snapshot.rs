@@ -265,6 +265,15 @@ pub struct DiffStatsCacheEntry {
     /// <merge-base>..HEAD`), refreshed on the same git tick as the diff.
     #[serde(default)]
     pub commits: Option<u32>,
+    /// Commits the trunk has advanced past the fork point (`rev-list --count
+    /// <merge-base>..<trunk>`), refreshed on the same git tick.
+    #[serde(default)]
+    pub behind: Option<u32>,
+    /// The trunk ref the stats compared against, as the ladder resolved it
+    /// (configured `[sidebar] trunk`, else `main`/`master`/remote default).
+    /// Names the header's `≡` landed marker.
+    #[serde(default)]
+    pub trunk: Option<String>,
     /// Live branch resolved from the worktree path, cached under the same TTL
     /// as the diff stats so the group header tracks `git checkout` without a
     /// git call every tick.
@@ -277,6 +286,8 @@ impl DiffStatsCacheEntry {
         refreshed_at_ms: u64,
         stats: Option<DiffStats>,
         commits: Option<u32>,
+        behind: Option<u32>,
+        trunk: Option<String>,
         branch: Option<String>,
     ) -> Self {
         Self {
@@ -284,6 +295,8 @@ impl DiffStatsCacheEntry {
             added: stats.map(|stats| stats.added),
             removed: stats.map(|stats| stats.removed),
             commits,
+            behind,
+            trunk,
             branch,
         }
     }
@@ -376,6 +389,15 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
         }
         if let Some(commits) = entry.commits {
             group.commits_ahead = Some(commits);
+        }
+        if let Some(behind) = entry.behind {
+            group.commits_behind = Some(behind);
+        }
+        // A remote-default trunk resolves as `origin/<name>`; the header's `≡`
+        // marker names the branch, so the remote prefix is display noise.
+        if let Some(trunk) = entry.trunk.filter(|trunk| !trunk.is_empty()) {
+            let display = trunk.strip_prefix("origin/").unwrap_or(&trunk).to_owned();
+            group.trunk = Some(display);
         }
         if let Some(branch) = entry.branch.filter(|branch| !branch.is_empty()) {
             group.label = branch;
@@ -510,20 +532,17 @@ pub fn enrich_consumer(
 /// `codex` auth-file read) — a subprocess — so this is the producer's job. The
 /// probed map is published to the shared `accounts.json` cache for consumers to
 /// read, mirroring the diff-stats single-flight: one fork on the elder, a cache
-/// read on every other tab. Best-effort: a config read failure falls back to
-/// defaults; the probe is memoized so it stays off the hot path.
+/// read on every other tab. The caller loads the per-machine config once
+/// (best-effort, defaults on a read failure) and threads it here and to the git
+/// probe's trunk ladder; the probe is memoized so it stays off the hot path.
 pub fn fold_machine_config_producing(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
     provider_spending: &BTreeMap<String, crate::agents::SpendTally>,
+    config: crate::config::MachineConfig,
 ) -> SidebarSnapshot {
     let accounts = produce_accounts(&snapshot, runtime);
-    let mut snapshot = fold_machine_config_with(
-        snapshot,
-        crate::config::MachineConfig::load().unwrap_or_default(),
-        accounts,
-        provider_spending,
-    );
+    let mut snapshot = fold_machine_config_with(snapshot, config, accounts, provider_spending);
     // The producer owns the account-scoped window cache: it writes live readings
     // back so the budgets survive a session ending or going idle.
     apply_rate_limit_cache(&mut snapshot, runtime, true);
@@ -1133,8 +1152,8 @@ mod tests {
         };
         atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
 
-        // Publish diff stats for the worktree path: +7 / -2, 3 commits ahead, on
-        // branch `feat`.
+        // Publish diff stats for the worktree path: +7 / -2, 3 commits ahead and
+        // 1 behind a remote-default trunk, on branch `feat`.
         let mut diff = DiffStatsCache::default();
         diff.entries.insert(
             wt.clone(),
@@ -1145,6 +1164,8 @@ mod tests {
                     removed: 2,
                 }),
                 Some(3),
+                Some(1),
+                Some("origin/main".to_owned()),
                 Some("feat".to_owned()),
             ),
         );
@@ -1163,6 +1184,13 @@ mod tests {
             .expect("a worktree group");
         assert_eq!(group.diff_added, Some(7));
         assert_eq!(group.diff_removed, Some(2));
+        assert_eq!(group.commits_ahead, Some(3));
+        assert_eq!(group.commits_behind, Some(1));
+        assert_eq!(
+            group.trunk.as_deref(),
+            Some("main"),
+            "the ≡ marker names the branch, so origin/ strips for display",
+        );
         assert_eq!(group.label, "feat");
         // The own (sidebar) pane is excluded; the sibling renders as a row.
         assert!(
@@ -1334,6 +1362,8 @@ mod tests {
                 removed: 1,
             }),
             Some(4),
+            Some(2),
+            Some("main".to_owned()),
             Some("feature-migration".to_owned()),
         );
 
@@ -1347,6 +1377,8 @@ mod tests {
             })
         );
         assert_eq!(entry.commits, Some(4));
+        assert_eq!(entry.behind, Some(2));
+        assert_eq!(entry.trunk.as_deref(), Some("main"));
         assert_eq!(entry.branch.as_deref(), Some("feature-migration"));
     }
 

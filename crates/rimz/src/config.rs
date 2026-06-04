@@ -316,6 +316,14 @@ pub struct SidebarConfig {
     /// leaves calm blue for yellow, amber, and red. Display-only; it tunes the
     /// colour ramp, never the ledger.
     pub context: ContextSeverityConfig,
+    /// Preferred comparison target for the worktree header's git stats (the
+    /// `+/-` diff, the `⇡`/`⇣` commit delta, and the `≡` landed marker). Tried
+    /// first in the trunk ladder, per repo: a repo where the branch doesn't
+    /// resolve falls back to the `main` → `master` → remote-default detection,
+    /// so one machine-wide value never breaks other projects. Unset means
+    /// detection alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trunk: Option<String>,
 }
 
 impl Default for SidebarConfig {
@@ -325,6 +333,7 @@ impl Default for SidebarConfig {
             max_provider_blocks: default_max_provider_blocks(),
             max_cols: default_sidebar_max_cols(),
             context: ContextSeverityConfig::default(),
+            trunk: None,
         }
     }
 }
@@ -528,6 +537,19 @@ mod tests {
         // A zero-width sidebar can never work: fail at config load, with the
         // parse error naming the field, rather than launching a broken pane.
         assert!(MachineConfig::load_from(&write(&dir, "[sidebar]\nmax_cols = 0\n")).is_err());
+    }
+
+    #[test]
+    fn sidebar_trunk_parses_and_defaults_unset() {
+        let dir = tempdir().expect("tempdir");
+        let config = MachineConfig::load_from(&write(&dir, "[sidebar]\ntrunk = \"develop\"\n"))
+            .expect("load");
+        assert_eq!(config.sidebar.trunk.as_deref(), Some("develop"));
+        assert_eq!(
+            MachineConfig::default().sidebar.trunk,
+            None,
+            "unset leaves the trunk ladder to detection alone",
+        );
     }
 
     #[test]

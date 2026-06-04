@@ -26,11 +26,11 @@ use super::fmt::{
 use super::labels::{
     SEGMENT_CACHE_READ, SEGMENT_CACHE_WRITE, SEGMENT_INPUT, TOKENS_CACHED, TOKENS_IN, TOKENS_OUT,
     TOKENS_TOTAL, activity_age_style, age_heat, agent_glyph, agent_style, attention_glyph_style,
-    compacting_glyph, compacting_style, context_breakdown_spans, context_severity_color,
-    context_total_spans, diff_spans, elapsed_glyph, gauge_spans, infinite_bar_spans, loading_dots,
-    mana_bar_spans, mana_color, resolver_glyph, segmented_gauge_spans, status_glyph, status_style,
-    subagent_glyph, subagent_style, todo_spans, token_breakdown_spans, tokens_total_spans,
-    window_style, working_glyph,
+    branch_delta_spans, compacting_glyph, compacting_style, context_breakdown_spans,
+    context_severity_color, context_total_spans, diff_spans, elapsed_glyph, gauge_spans,
+    infinite_bar_spans, loading_dots, mana_bar_spans, mana_color, resolver_glyph,
+    segmented_gauge_spans, status_glyph, status_style, subagent_glyph, subagent_style, todo_spans,
+    token_breakdown_spans, tokens_total_spans, trunk_equal_spans, window_style, working_glyph,
 };
 use super::theme::Theme;
 
@@ -476,30 +476,28 @@ fn group_header(
     // here in bold teal — no inline `▌`, the spine carries the lane. The header
     // builds to the content width left after the gutter cell.
     let cw = content_width(width);
-    // The worktree's churn (lines added/removed vs trunk) pins right. The
-    // per-worktree status tally is gone: the cockpit owns the fleet make-up and
-    // each row carries its own status glyph, so repeating it here was noise. The
-    // label clips to whatever's left after the diff claims its width, always
-    // leaving a cell so the header never shrinks to zero on extreme narrowness.
-    let diff = group
-        .diff_added
-        .zip(group.diff_removed)
-        .filter(|(added, removed)| *added + *removed > 0);
-    let diff_text = diff.map(|(added, removed)| format!("+{added} -{removed}"));
-    let right_width = diff_text.as_deref().map_or(0, |text| text.chars().count());
+    // The worktree's git story pins right: `≡ <trunk>` when the branch is fully
+    // landed, else the `⇡/⇣` commit delta ahead of the `+/-` churn, zero
+    // components omitted. The per-worktree status tally is gone: the cockpit
+    // owns the fleet make-up and each row carries its own status glyph, so
+    // repeating it here was noise. The label clips to whatever's left after the
+    // stats claim their width, always leaving a cell so the header never
+    // shrinks to zero on extreme narrowness.
+    let right = group_git_spans(theme, group);
+    let right_width: usize = right.iter().map(|span| span.content.chars().count()).sum();
     let label_width = cw.saturating_sub(right_width + 1).max(1);
     let label_with_prefix = format!("⑂ {}", group.label);
     let left = clip(&label_with_prefix, label_width);
     // The dotted `┄` seal caps only the *selected* worktree's header, so the lane
     // reads as one bracketed block; every other header is just its bold label and
-    // right-pinned diff, with plain space filling the gap. Sized to land the line
+    // right-pinned stats, with plain space filling the gap. Sized to land the line
     // exactly on the content width — a space frames the dotted run from the text
     // on each side it touches.
     let middle = cw.saturating_sub(left.chars().count() + right_width);
     let fill = if sealed {
-        match (diff.is_some(), middle) {
-            (true, m) if m >= 2 => format!(" {} ", "┄".repeat(m - 2)),
-            (false, m) if m >= 1 => format!(" {}", "┄".repeat(m - 1)),
+        match (right.is_empty(), middle) {
+            (false, m) if m >= 2 => format!(" {} ", "┄".repeat(m - 2)),
+            (true, m) if m >= 1 => format!(" {}", "┄".repeat(m - 1)),
             (_, m) => " ".repeat(m),
         }
     } else {
@@ -510,10 +508,40 @@ fn group_header(
         Span::styled(left, theme.style(Color::Cyan, Modifier::BOLD)),
         Span::styled(fill, theme.faint()),
     ];
+    spans.extend(right);
+    Line::from(spans)
+}
+
+/// The header's right-pinned git cluster. `≡ <trunk>` when the worktree is
+/// fully landed — zero commits ahead *and* a zero diff against the fork point
+/// (`Some(0)`, a read that found nothing, never an unprobed `None`) — replacing
+/// every other stat: behind deliberately doesn't count against it, since a
+/// landed worktree is safe to remove however far the trunk has moved on.
+/// Otherwise the `⇡/⇣` commit delta leads the `+/-` churn, zero components
+/// omitted. Empty when no git read reached this group.
+fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'static>> {
+    let landed = group.commits_ahead == Some(0)
+        && group.diff_added == Some(0)
+        && group.diff_removed == Some(0);
+    if landed && let Some(trunk) = group.trunk.as_deref() {
+        return trunk_equal_spans(theme, trunk);
+    }
+    let mut spans = branch_delta_spans(
+        theme,
+        group.commits_ahead.unwrap_or(0),
+        group.commits_behind.unwrap_or(0),
+    );
+    let diff = group
+        .diff_added
+        .zip(group.diff_removed)
+        .filter(|(added, removed)| *added + *removed > 0);
     if let Some((added, removed)) = diff {
+        if !spans.is_empty() {
+            spans.push(Span::raw(" "));
+        }
         spans.extend(diff_spans(theme, added, removed));
     }
-    Line::from(spans)
+    spans
 }
 
 /// The `workspace` catch-all (untethered scripts/CI and out-of-project shells)

@@ -106,6 +106,17 @@ red    = { percent = 95, tokens = 420000 }   # amber escalates to red
 
 The agent card's context meter — the bar, the `▣` glyph, and the `▤` head — ramps calm blue → yellow → amber → red on these bands. Each tier names the inclusive lower bound where it begins, on two axes at once: the window's fill `percent` and the absolute `tokens` occupying it. The meter wears the worse of the two axes, so a large-window model calm by percentage still warms by sheer volume. The defaults above are the shipped values (the 258k amber edge matches Codex's effective GPT-5.5 window); a tier you omit keeps its default, and within a tier both fields are stated together.
 
+#### Trunk branch
+
+```toml
+[sidebar]
+trunk = "develop"   # preferred comparison target for the worktree header's git stats (default: auto-detect)
+```
+
+The worktree header's git stats — the `+/-` diff, the `⇡`/`⇣` commit delta, and the `≡` landed marker — compare against the repo's trunk. `trunk` names the preferred target, tried first per repo: a repo without that branch falls back to the auto-detection (`main` → `master` → the remote's advertised default), so one machine-wide value never costs another project its stats.
+
+#### Provider dashboard
+
 ```toml
 [sidebar]
 max_provider_blocks = 3        # cap the dashboard at N provider blocks (default 3)

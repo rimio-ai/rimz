@@ -20,7 +20,7 @@ A real room: one Claude agent working in `main`, its card selected, with the per
  ────────────────────────────────────────────────────
  ? 0   ! 0   ○ 0   ⏸ 0                      ⢿ 1   ✓ 0    ← make-up: who needs you | who's busy
 
-▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← the worktree you're in (lane spine ▏)
+▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ +127 -43    ← the worktree you're in (lane spine ▏)
 ▌⣾ claude · Opus 4.8 · high · 1m                $1.27    ← line 1: identity · capability · $cost
 ▌  ledger refactor                                       ← line 2: what it's on
 ▌  ▣ ━━━━━━━━━━━━━━━━────────────────────────── 38.2%    ← context meter: how full the window is
@@ -83,6 +83,8 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `◇` `↘` `↗` `◍` `◌` | tokens: total · input · output · cache-write · cache-read. On the card's context line each composition marker wears its bar-segment color (`◌` blue · `◍` yellow · `↘` red · `↗` green), so the line legends the bar; everywhere else they stay dim chrome |
 | `◔ 1m`            | last-activity age — shown only once it crosses a full minute; the clock face fills by the quarter hour (`◔` ≤15m · `◑` ≤30m · `◕` ≤45m · `●` ≤60m · `◉` past it) and its tone steps the same quarters: dim through `◔` (a resume still hits cache), yellow to the half hour, amber beyond it, red past the hour — a red age means resuming likely re-reads the whole context uncached |
 | `+127 -43`        | lines added / removed |
+| `⇡3 ⇣1`           | commits ahead / behind the trunk (worktree header; zero components drop) |
+| `≡ main`          | worktree fully landed on the trunk — zero ahead, zero diff, safe to remove (behind doesn't count against it) |
 | `●●●○○ 3/5`       | todo progress |
 | `$1.27`           | spend — money-green, always two decimals |
 | `▰▱` / `∞`        | provider budget bar (fill = left) / unmetered account |
@@ -96,6 +98,7 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `¤ N`           | the live agents in the room right now |
 | `◎ N`           | sessions (threads) that have run today (cockpit) / in the window (ledger) |
 | `⧉ N`           | the subagents an agent spawned this turn (expanded card) |
+| `⑂ name`        | a worktree group header — its live branch |
 | `▏`             | the selection lane — the worktree you're in |
 | `▌`             | the selected card |
 | `┄ external ┄`  | out-of-project panes (scripts, CI, stray shells) |
@@ -188,7 +191,7 @@ The description, tokens, and elapsed ride in from Claude's `subagentStatusLine` 
 A waiting or failed agent is the whole point. Its glyph leads, bold, and the card rises to the top of its worktree:
 
 ```
-▏feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▏⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄
 ▌! claude · Opus · 1m
 ▌  db migrate
 ▌  ▢ ──────────────────────    0%
@@ -216,10 +219,17 @@ The label is the program the pane runs, read past a `sudo` wrapper and through a
 
 ### Worktree groups and the selection lane
 
-Worktrees stack as bounded blocks. The one **holding your selection** reads as a single bracketed lane: a thin `▏` spine down its header and every row, a dotted `┄` seal on its header, and the selected card itself lit with a bold `▌`. Every other worktree carries a blank gutter, so the lane is the only marker on screen and the selection is unmistakable. The worktree header carries the worktree's total diff against trunk (`+230 -23`) on the right.
+Worktrees stack as bounded blocks. The one **holding your selection** reads as a single bracketed lane: a thin `▏` spine down its header and every row, a dotted `┄` seal on its header, and the selected card itself lit with a bold `▌`. Every other worktree carries a blank gutter, so the lane is the only marker on screen and the selection is unmistakable.
+
+The worktree header carries the worktree's git story on the right: the `⇡`/`⇣` commit delta against the trunk, then the worktree's total diff (`⇡3 ⇣1 +230 -23`, zero components dropped). A fully-landed worktree — zero commits ahead and a zero diff against its fork point — collapses the whole cluster to `≡ main`: nothing left to land, safe to remove. Behind sits outside that test, since the trunk moving on makes a landed worktree no less removable. The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../reference/configuration.md#trunk-branch)).
 
 ```
-▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← selected worktree: lane spine + dotted seal
+▏⑂ feature-migration ┄┄┄┄┄┄ ⇡3 ⇣1 +230 -23    ← in flight: commits ahead/behind, then the diff
+▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ≡ main    ← fully landed: nothing to land, safe to remove
+```
+
+```
+▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← selected worktree: lane spine + dotted seal
 ▌? claude
 ▌  permission
 ▌  ▢ ──────────────────────────    0%
@@ -239,7 +249,7 @@ The `external` block is the catch-all for panes outside the project — untether
 **The cap.** Each worktree shows a capped number of rows (configurable) with a dim `+K more`. The cap trims only the calm tail; every `waiting`/`failed` row is always shown, so the cap can never hide something that needs you:
 
 ```
-▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌⣾ codex
 ▌  task-0
 ▌  ▢ ────────────────────────    0%
@@ -356,6 +366,7 @@ The renderer's golden tests in [`crates/rimz-sidebar/src/render/`](../../crates/
 | capability + window | `agent_capability` |
 | selected, enriched card | `enriched_selected_agent_card` |
 | worktree grouping + external | `worktree_attention_map` |
+| landed worktree header (`≡`) | `worktree_equal_to_trunk` |
 | per-worktree cap | `group_cap_with_overflow` |
 | provider dashboard | `provider_dashboard` |
 | fleet ledger (week/month) | `fleet_ledger` |

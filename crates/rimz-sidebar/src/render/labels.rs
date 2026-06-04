@@ -692,6 +692,37 @@ pub(super) fn tokens_total_spans(
     ]
 }
 
+/// `⇡3 ⇣1`-style commit delta against the trunk: ahead then behind, zero
+/// components omitted. Both dim cyan — commit-level branch facts rhyme with
+/// the bold-cyan worktree name and stay a category apart from the green/red
+/// line-level churn; the `⇡`/`⇣` shape carries the direction under `NO_COLOR`.
+pub(super) fn branch_delta_spans(theme: &Theme, ahead: u32, behind: u32) -> Vec<Span<'static>> {
+    let style = theme.style(Color::Cyan, Modifier::DIM);
+    let mut spans = Vec::new();
+    if ahead > 0 {
+        spans.push(Span::styled(format!("⇡{ahead}"), style));
+    }
+    if behind > 0 {
+        if !spans.is_empty() {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(format!("⇣{behind}"), style));
+    }
+    spans
+}
+
+/// `≡ main` — the worktree is fully landed on the trunk: zero commits ahead
+/// and a zero diff against the fork point, so it is safe to remove. Dim green,
+/// the calm-positive tone an idle/done agent wears — quiet enough to stay
+/// chrome yet scannable when hunting removable worktrees; the `≡` shape
+/// carries the verdict under `NO_COLOR`.
+pub(super) fn trunk_equal_spans(theme: &Theme, trunk: &str) -> Vec<Span<'static>> {
+    vec![Span::styled(
+        format!("≡ {trunk}"),
+        theme.style(Color::Green, Modifier::DIM),
+    )]
+}
+
 /// `+127 -43`-style diff stat. Added in green, removed in red, both dim to
 /// stay chrome — the gauge ramp owns the loud color slots.
 pub(super) fn diff_spans(theme: &Theme, added: u32, removed: u32) -> Vec<Span<'static>> {
@@ -713,6 +744,22 @@ mod tests {
     use rimz::config::ContextBand;
 
     use super::*;
+
+    /// The commit delta spells only what's there: zero components drop rather
+    /// than printing `⇡0`, and a fully-zero delta is no spans at all — the
+    /// header's landed marker owns that state.
+    #[test]
+    fn branch_delta_omits_zero_components() {
+        let theme = Theme::fixed(true);
+        let text = |spans: Vec<Span<'static>>| -> String {
+            spans.iter().map(|s| s.content.as_ref()).collect()
+        };
+        assert_eq!(text(branch_delta_spans(&theme, 3, 1)), "⇡3 ⇣1");
+        assert_eq!(text(branch_delta_spans(&theme, 3, 0)), "⇡3");
+        assert_eq!(text(branch_delta_spans(&theme, 0, 5)), "⇣5");
+        assert_eq!(text(branch_delta_spans(&theme, 0, 0)), "");
+        assert_eq!(text(trunk_equal_spans(&theme, "main")), "≡ main");
+    }
 
     /// `NO_COLOR` strips the green→amber→red ramp, but the heavy/light weight
     /// split still spells the meter — the `━`/`─` shape carries the reading by
