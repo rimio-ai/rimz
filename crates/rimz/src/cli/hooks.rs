@@ -23,7 +23,7 @@ use tracing::{debug, warn};
 use super::{GlobalFlags, open_ledger};
 use rimz::EventEnvelope;
 use rimz::Ledger;
-use rimz::agents::lifecycle::{self, LifecycleState, TransitionKind};
+use rimz::agents::lifecycle::{self, TransitionKind};
 use rimz::agents::{
     AgentHookClass, AgentIntegration, AgentLifecycleObservation, integration_by_name,
 };
@@ -105,11 +105,7 @@ fn log_lifecycle_transition(ledger: &Ledger, kind: &str, observation: &AgentLife
                 .into_iter()
                 .find(|agent| agent.kind == kind && agent.agent_id == agent_id)
         })
-        .map(|agent| LifecycleState {
-            status: agent.status,
-            thinking: agent.thinking,
-            compacting: agent.compacting_since.is_some(),
-        });
+        .map(|agent| agent.lifecycle());
     let transition = lifecycle::step(prev.as_ref(), &observation.signal);
     match transition.kind {
         TransitionKind::Reconciled { from, reason } => warn!(

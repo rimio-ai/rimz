@@ -10,6 +10,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::agents::lifecycle::{LifecycleState, TurnPhase};
 use crate::ids::{PaneId, RequestId, ResolverId, ViewKind, WorkspaceId};
 
 /// Runtime owner class for records that should appear in live views.
@@ -627,12 +628,12 @@ pub struct AgentState {
     pub agent_id: String,
     pub kind: String,
     pub status: AgentStatus,
-    /// Whether the running turn is still in its pre-edit reasoning phase — the
-    /// transient head the sidebar paints as the thinking sparkle. Set by the
-    /// turn start, cleared by its first file-editing tool or the turn end;
-    /// meaningful only while `status == Running`.
+    /// The running turn's shape (reasoning / acting / parked on background
+    /// work), written verbatim from the lifecycle machine's output. Always
+    /// [`TurnPhase::Idle`] outside `Running` — the machine normalizes it, so
+    /// the illegal combinations are unrepresentable here too.
     #[serde(default)]
-    pub thinking: bool,
+    pub phase: TurnPhase,
     pub pane: Option<PaneRef>,
     #[serde(default)]
     pub agent_pid: Option<u32>,
@@ -713,16 +714,22 @@ pub struct AgentState {
     /// head while it is recent (see [`COMPACTING_WINDOW_SECS`]). Display-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacting_since: Option<Timestamp>,
-    /// Whether the agent's last turn-end parked on still-in-flight background
-    /// work (Claude Code v2.1.145+) rather than truly ending. The agent stays
-    /// `Running`; the sidebar paints a distinct secondary marker so the row
-    /// reads as "working in the background" without a false `success` and
-    /// without overwriting the real activity description. Activity-bound: set by
-    /// a parked turn-end, cleared by the next signal. Display-only.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub parked_on_background: bool,
     pub last_seen: Timestamp,
     pub last_activity: Timestamp,
+}
+
+impl AgentState {
+    /// The lifecycle-machine view of this rollup entry — exactly the `prev` the
+    /// reducer (and the ingestion anomaly log) folds the next signal onto.
+    /// Lossless: `status` and `phase` are stored verbatim from the machine's
+    /// last output, and the compacting head persists as `compacting_since`.
+    pub fn lifecycle(&self) -> LifecycleState {
+        LifecycleState {
+            status: self.status,
+            phase: self.phase,
+            compacting: self.compacting_since.is_some(),
+        }
+    }
 }
 
 #[cfg(test)]

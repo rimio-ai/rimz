@@ -3,6 +3,7 @@
 
 use jiff::Timestamp;
 
+use crate::agents::lifecycle::TurnPhase;
 use crate::feed::{AgentState, AgentStatus, PaneRef};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::schema::event::EventEnvelope;
@@ -19,7 +20,7 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
         agent_id: id.into(),
         kind: kind.into(),
         status,
-        thinking: false,
+        phase: TurnPhase::Idle,
         pane: None,
         agent_pid: None,
         agent_process_start: None,
@@ -41,7 +42,6 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
         subagent_started_at: None,
         turn_started_at: None,
         compacting_since: None,
-        parked_on_background: false,
         last_seen: timestamp,
         last_activity: timestamp,
     }

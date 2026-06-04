@@ -1016,6 +1016,7 @@ pub fn unix_now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::TurnPhase;
     use crate::feed::{AgentState, AgentStatus};
     use crate::ids::{MuxName, WorkspaceId};
     use crate::ledger::atomic;
@@ -1403,7 +1404,7 @@ mod tests {
             agent_id: agent_id.to_owned(),
             kind: kind.to_owned(),
             status: AgentStatus::Running,
-            thinking: false,
+            phase: TurnPhase::Idle,
             pane: None,
             agent_pid: None,
             agent_process_start: None,
@@ -1425,7 +1426,6 @@ mod tests {
             subagent_started_at: None,
             turn_started_at: None,
             compacting_since: None,
-            parked_on_background: false,
             last_seen: now,
             last_activity: now,
         }

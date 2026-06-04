@@ -52,9 +52,9 @@ pub enum LifecycleSignal {
     /// *mutating* tool, so it doubles as proof the agent is doing real work —
     /// which is why it can reconcile a rollup that wrongly thinks the agent is
     /// resting. `edits` marks the file-editing subset (Claude `Edit`/`Write`/…,
-    /// Codex `apply_patch`): the first edit of a turn ends the thinking head.
-    /// Defaulted so a `tool_used` event written before the bit existed still
-    /// replays.
+    /// Codex `apply_patch`): the first edit of a turn moves it from reasoning
+    /// to acting. Defaulted so a `tool_used` event written before the bit
+    /// existed still replays.
     ToolUsed {
         mutates: bool,
         #[serde(default)]
@@ -69,6 +69,32 @@ pub enum LifecycleSignal {
     Ended,
 }
 
+/// The shape of the running turn — the orthogonal axis next to
+/// [`AgentStatus`]. One typed value where three independent bools (`thinking`,
+/// `parked_on_background`, and the reducer's separate parked derivation) used
+/// to live, so the illegal combinations (parked + thinking, a resting agent
+/// mid-phase) are unrepresentable. Meaningful only while `status == Running`;
+/// every other status carries [`TurnPhase::Idle`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnPhase {
+    /// Resting — the phase of every non-running status.
+    #[default]
+    Idle,
+    /// The turn's pre-edit opening: reading, searching, reasoning. The sidebar
+    /// paints the thinking sparkle. Set by a turn (or child task) start,
+    /// carried through non-editing tools.
+    Reasoning,
+    /// The turn has begun mutating the workspace — its first file-editing tool
+    /// completed. The sidebar paints the working spinner. A phase that left
+    /// reasoning never re-arms mid-turn.
+    Acting,
+    /// The main thread parked on still-in-flight background work after a clean
+    /// turn end (Claude Code v2.1.145+). The agent stays running; the sidebar
+    /// paints a secondary "background" marker instead of a false success.
+    Parked,
+}
+
 /// The small reduced lifecycle state [`step`] owns — and the only fields it
 /// writes. Everything else on the agent rollup (identity, task, prompt, model,
 /// gauges, worktree, parent link, timestamps) is governed by the reducer's
@@ -76,13 +102,11 @@ pub enum LifecycleSignal {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LifecycleState {
     pub status: AgentStatus,
-    /// Whether the running turn is still in its pre-edit reasoning phase — a
-    /// transient head the sidebar paints as the thinking sparkle. Set by a turn
-    /// (or subagent) start, cleared by the turn's first file-editing tool or
-    /// its end; only ever rendered while `status == Running`.
-    pub thinking: bool,
+    /// The running turn's shape; [`TurnPhase::Idle`] outside `Running`.
+    pub phase: TurnPhase,
     /// Whether the agent is mid-compaction — a transient head the sidebar
-    /// paints, cleared by the next non-compaction signal.
+    /// paints over any base status, cleared by the next non-compaction signal.
+    /// Orthogonal to `phase`: compaction preserves the turn shape it interrupts.
     pub compacting: bool,
 }
 
@@ -114,8 +138,8 @@ pub struct Transition {
 /// total: any `(prev, signal)` pair returns a `Transition` and never panics.
 pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transition {
     let prior_status = prev.map(|p| p.status);
+    let prior_phase = prev.map(|p| p.phase).unwrap_or_default();
     let was_compacting = prev.is_some_and(|p| p.compacting);
-    let was_thinking = prev.is_some_and(|p| p.thinking);
     let mut kind = TransitionKind::Normal;
 
     // `Ended` is handled as removal upstream and should never be stepped; if it
@@ -124,7 +148,7 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
         return Transition {
             next: LifecycleState {
                 status: prior_status.unwrap_or(AgentStatus::Idle),
-                thinking: was_thinking,
+                phase: prior_phase,
                 compacting: was_compacting,
             },
             kind: TransitionKind::Ignored {
@@ -136,22 +160,6 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
     // Compaction is the one signal that preserves the prior status; it is a
     // transient head, not a transition. Every other signal clears the head.
     let compacting = matches!(signal, LifecycleSignal::Compacting);
-
-    // The thinking head: a fresh turn (or child task) opens in its reasoning
-    // phase; the turn's first file-editing tool ends it; any turn boundary
-    // clears it. A non-editing mutating tool (a shell command) is work, but the
-    // turn has still written nothing — the head carries forward. Compaction
-    // preserves it like it preserves the status.
-    let thinking = match signal {
-        LifecycleSignal::TurnStarted | LifecycleSignal::SubagentStarted => true,
-        LifecycleSignal::ToolUsed { edits, .. } => was_thinking && !edits,
-        LifecycleSignal::Compacting => was_thinking,
-        LifecycleSignal::Registered
-        | LifecycleSignal::TurnEnded { .. }
-        | LifecycleSignal::SubagentStopped => false,
-        // Handled above.
-        LifecycleSignal::Ended => unreachable!("Ended returns early"),
-    };
 
     let status = match signal {
         LifecycleSignal::Registered => AgentStatus::Idle,
@@ -200,10 +208,47 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
         LifecycleSignal::Ended => unreachable!("Ended returns early"),
     };
 
+    // The turn phase: a fresh turn (or child task) opens reasoning; its first
+    // file edit moves it to acting; a clean end parking on background work
+    // parks it; any other boundary rests it. Compaction preserves the phase
+    // like it preserves the status.
+    let phase = match signal {
+        LifecycleSignal::TurnStarted | LifecycleSignal::SubagentStarted => TurnPhase::Reasoning,
+        // A shell command during the reasoning phase is work, but the turn has
+        // still written nothing — the sparkle carries forward. Anywhere else a
+        // completed tool is visible work (acting): a phase that left reasoning
+        // never re-arms mid-turn, and a parked turn that runs a tool is
+        // visibly back at work.
+        LifecycleSignal::ToolUsed { edits, .. } => {
+            if !edits && prior_phase == TurnPhase::Reasoning {
+                TurnPhase::Reasoning
+            } else {
+                TurnPhase::Acting
+            }
+        }
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: true,
+        } => TurnPhase::Parked,
+        LifecycleSignal::Compacting => prior_phase,
+        LifecycleSignal::Registered
+        | LifecycleSignal::TurnEnded { .. }
+        | LifecycleSignal::SubagentStopped => TurnPhase::Idle,
+        // Handled above.
+        LifecycleSignal::Ended => unreachable!("Ended returns early"),
+    };
+    // The phase axis exists only inside a running turn — a resting or
+    // attention status always reads `Idle`, by construction.
+    let phase = if status == AgentStatus::Running {
+        phase
+    } else {
+        TurnPhase::Idle
+    };
+
     Transition {
         next: LifecycleState {
             status,
-            thinking,
+            phase,
             compacting,
         },
         kind,
@@ -263,10 +308,10 @@ pub(crate) fn signal_from_event_params(params: &Value, event_name: &str) -> Life
 mod tests {
     use super::*;
 
-    fn state(status: AgentStatus, thinking: bool, compacting: bool) -> LifecycleState {
+    fn state(status: AgentStatus, phase: TurnPhase, compacting: bool) -> LifecycleState {
         LifecycleState {
             status,
-            thinking,
+            phase,
             compacting,
         }
     }
@@ -282,52 +327,61 @@ mod tests {
     fn registered_is_idle() {
         let t = step(None, &LifecycleSignal::Registered);
         assert_eq!(t.next.status, AgentStatus::Idle);
-        assert!(!t.next.thinking);
+        assert_eq!(t.next.phase, TurnPhase::Idle);
         assert_eq!(t.kind, TransitionKind::Normal);
     }
 
     #[test]
-    fn turn_started_is_running_and_thinking() {
-        let prev = state(AgentStatus::Idle, false, false);
+    fn turn_started_opens_reasoning() {
+        let prev = state(AgentStatus::Idle, TurnPhase::Idle, false);
         let t = step(Some(&prev), &LifecycleSignal::TurnStarted);
         assert_eq!(t.next.status, AgentStatus::Running);
-        assert!(t.next.thinking, "a fresh turn opens in its reasoning phase");
+        assert_eq!(
+            t.next.phase,
+            TurnPhase::Reasoning,
+            "a fresh turn opens in its reasoning phase"
+        );
         assert_eq!(t.kind, TransitionKind::Normal);
     }
 
     #[test]
-    fn first_file_edit_ends_thinking() {
-        let prev = state(AgentStatus::Running, true, false);
+    fn first_file_edit_moves_to_acting() {
+        let prev = state(AgentStatus::Running, TurnPhase::Reasoning, false);
         let t = step(Some(&prev), &tool(true));
         assert_eq!(t.next.status, AgentStatus::Running);
-        assert!(
-            !t.next.thinking,
+        assert_eq!(
+            t.next.phase,
+            TurnPhase::Acting,
             "the turn's first edit flips it to working"
         );
         assert_eq!(t.kind, TransitionKind::Normal);
     }
 
     #[test]
-    fn non_editing_tool_keeps_thinking() {
+    fn non_editing_tool_keeps_reasoning() {
         // A shell command is work, but the turn has written nothing yet — the
-        // thinking head carries forward until a real file edit.
-        let prev = state(AgentStatus::Running, true, false);
+        // reasoning phase carries forward until a real file edit.
+        let prev = state(AgentStatus::Running, TurnPhase::Reasoning, false);
         let t = step(Some(&prev), &tool(false));
         assert_eq!(t.next.status, AgentStatus::Running);
-        assert!(t.next.thinking);
+        assert_eq!(t.next.phase, TurnPhase::Reasoning);
         assert_eq!(t.kind, TransitionKind::Normal);
     }
 
     #[test]
-    fn thinking_stays_cleared_for_the_rest_of_the_turn() {
-        let prev = state(AgentStatus::Running, false, false);
+    fn acting_never_rearms_to_reasoning() {
+        let prev = state(AgentStatus::Running, TurnPhase::Acting, false);
         let t = step(Some(&prev), &tool(false));
-        assert!(!t.next.thinking, "a cleared head never re-arms mid-turn");
+        assert_eq!(
+            t.next.phase,
+            TurnPhase::Acting,
+            "a phase that left reasoning never re-arms mid-turn"
+        );
     }
 
     #[test]
-    fn clean_turn_end_is_success_and_clears_thinking() {
-        let prev = state(AgentStatus::Running, true, false);
+    fn clean_turn_end_is_success_and_rests_phase() {
+        let prev = state(AgentStatus::Running, TurnPhase::Reasoning, false);
         let t = step(
             Some(&prev),
             &LifecycleSignal::TurnEnded {
@@ -336,13 +390,13 @@ mod tests {
             },
         );
         assert_eq!(t.next.status, AgentStatus::Success);
-        assert!(!t.next.thinking);
+        assert_eq!(t.next.phase, TurnPhase::Idle);
         assert_eq!(t.kind, TransitionKind::Normal);
     }
 
     #[test]
     fn errored_turn_end_is_failed() {
-        let prev = state(AgentStatus::Running, false, false);
+        let prev = state(AgentStatus::Running, TurnPhase::Acting, false);
         let t = step(
             Some(&prev),
             &LifecycleSignal::TurnEnded {
@@ -351,11 +405,12 @@ mod tests {
             },
         );
         assert_eq!(t.next.status, AgentStatus::Failed);
+        assert_eq!(t.next.phase, TurnPhase::Idle);
     }
 
     #[test]
-    fn background_park_stays_running_normal_without_thinking() {
-        let prev = state(AgentStatus::Running, true, false);
+    fn background_park_stays_running_in_parked_phase() {
+        let prev = state(AgentStatus::Running, TurnPhase::Reasoning, false);
         let t = step(
             Some(&prev),
             &LifecycleSignal::TurnEnded {
@@ -364,15 +419,15 @@ mod tests {
             },
         );
         // A designed edge — running, no log noise. The foreground reasoning is
-        // done (the turn parked on background work), so the thinking head drops.
+        // done (the turn parked on background work), so the phase is the park.
         assert_eq!(t.next.status, AgentStatus::Running);
-        assert!(!t.next.thinking);
+        assert_eq!(t.next.phase, TurnPhase::Parked);
         assert_eq!(t.kind, TransitionKind::Normal);
     }
 
     #[test]
     fn errored_wins_over_background_park() {
-        let prev = state(AgentStatus::Running, false, false);
+        let prev = state(AgentStatus::Running, TurnPhase::Acting, false);
         let t = step(
             Some(&prev),
             &LifecycleSignal::TurnEnded {
@@ -381,40 +436,72 @@ mod tests {
             },
         );
         assert_eq!(t.next.status, AgentStatus::Failed);
+        assert_eq!(t.next.phase, TurnPhase::Idle);
     }
 
     #[test]
-    fn subagent_start_running_thinking_stop_idle() {
+    fn tool_after_park_resumes_acting() {
+        // A parked turn that completes a tool is visibly back at work — the
+        // background marker drops in favor of the working spinner.
+        let prev = state(AgentStatus::Running, TurnPhase::Parked, false);
+        let t = step(Some(&prev), &tool(false));
+        assert_eq!(t.next.status, AgentStatus::Running);
+        assert_eq!(t.next.phase, TurnPhase::Acting);
+        assert_eq!(t.kind, TransitionKind::Normal);
+    }
+
+    #[test]
+    fn subagent_start_reasoning_stop_idle() {
         let start = step(None, &LifecycleSignal::SubagentStarted);
         assert_eq!(start.next.status, AgentStatus::Running);
-        assert!(start.next.thinking, "a child task opens reasoning too");
+        assert_eq!(
+            start.next.phase,
+            TurnPhase::Reasoning,
+            "a child task opens reasoning too"
+        );
         let stop = step(Some(&start.next), &LifecycleSignal::SubagentStopped);
         assert_eq!(stop.next.status, AgentStatus::Idle);
-        assert!(!stop.next.thinking);
+        assert_eq!(stop.next.phase, TurnPhase::Idle);
     }
 
     #[test]
-    fn compacting_keeps_status_and_thinking_and_sets_head() {
-        let prev = state(AgentStatus::Running, true, false);
+    fn compacting_keeps_status_and_phase_and_sets_head() {
+        let prev = state(AgentStatus::Running, TurnPhase::Reasoning, false);
         let t = step(Some(&prev), &LifecycleSignal::Compacting);
         assert_eq!(t.next.status, AgentStatus::Running);
-        assert!(t.next.thinking, "compaction preserves the turn phase");
+        assert_eq!(
+            t.next.phase,
+            TurnPhase::Reasoning,
+            "compaction preserves the turn phase"
+        );
         assert!(t.next.compacting);
         assert_eq!(t.kind, TransitionKind::Normal);
     }
 
     #[test]
+    fn compacting_preserves_a_parked_turn() {
+        // Compaction is a head over the state, not a transition: an agent that
+        // parked on background work is still parked when the head lifts.
+        let prev = state(AgentStatus::Running, TurnPhase::Parked, false);
+        let t = step(Some(&prev), &LifecycleSignal::Compacting);
+        assert_eq!(t.next.status, AgentStatus::Running);
+        assert_eq!(t.next.phase, TurnPhase::Parked);
+        assert!(t.next.compacting);
+    }
+
+    #[test]
     fn any_signal_clears_compacting_head() {
-        let prev = state(AgentStatus::Running, false, true);
+        let prev = state(AgentStatus::Running, TurnPhase::Acting, true);
         let t = step(Some(&prev), &LifecycleSignal::TurnStarted);
         assert!(!t.next.compacting);
     }
 
     #[test]
     fn tool_while_resting_reconciles_to_running() {
-        let prev = state(AgentStatus::Idle, false, false);
+        let prev = state(AgentStatus::Idle, TurnPhase::Idle, false);
         let t = step(Some(&prev), &tool(true));
         assert_eq!(t.next.status, AgentStatus::Running);
+        assert_eq!(t.next.phase, TurnPhase::Acting);
         assert_eq!(
             t.kind,
             TransitionKind::Reconciled {
@@ -426,30 +513,84 @@ mod tests {
 
     #[test]
     fn ended_is_ignored_and_preserves_state() {
-        let prev = state(AgentStatus::Running, true, false);
+        let prev = state(AgentStatus::Running, TurnPhase::Reasoning, false);
         let t = step(Some(&prev), &LifecycleSignal::Ended);
         assert_eq!(t.next.status, AgentStatus::Running);
-        assert!(t.next.thinking);
+        assert_eq!(t.next.phase, TurnPhase::Reasoning);
         assert!(matches!(t.kind, TransitionKind::Ignored { .. }));
+    }
+
+    /// Every signal stepped from every reachable `(status, phase)` pair: the
+    /// machine is total, and a non-running result never carries a phase.
+    #[test]
+    fn resting_status_never_carries_a_phase() {
+        let statuses = [
+            AgentStatus::Running,
+            AgentStatus::Waiting,
+            AgentStatus::Idle,
+            AgentStatus::Success,
+            AgentStatus::Failed,
+            AgentStatus::RateLimited,
+        ];
+        let phases = [
+            TurnPhase::Idle,
+            TurnPhase::Reasoning,
+            TurnPhase::Acting,
+            TurnPhase::Parked,
+        ];
+        for status in statuses {
+            for phase in phases {
+                for compacting in [false, true] {
+                    let prev = state(status, phase, compacting);
+                    for signal in all_signals() {
+                        let t = step(Some(&prev), &signal);
+                        // `Ended` is the explicit no-op carry; everything else
+                        // upholds the invariant by construction.
+                        if !matches!(signal, LifecycleSignal::Ended)
+                            && t.next.status != AgentStatus::Running
+                        {
+                            assert_eq!(
+                                t.next.phase,
+                                TurnPhase::Idle,
+                                "{status:?}/{phase:?} + {signal:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
     fn none_prev_never_panics_for_any_signal() {
-        for signal in [
-            LifecycleSignal::Registered,
-            LifecycleSignal::TurnStarted,
-            LifecycleSignal::TurnEnded {
-                errored: false,
-                parked_on_background: false,
-            },
-            LifecycleSignal::SubagentStarted,
-            LifecycleSignal::SubagentStopped,
-            tool(true),
-            LifecycleSignal::Compacting,
-            LifecycleSignal::Ended,
-        ] {
+        for signal in all_signals() {
             let _ = step(None, &signal);
         }
+    }
+
+    fn all_signals() -> Vec<LifecycleSignal> {
+        let mut signals = vec![
+            LifecycleSignal::Registered,
+            LifecycleSignal::TurnStarted,
+            LifecycleSignal::SubagentStarted,
+            LifecycleSignal::SubagentStopped,
+            LifecycleSignal::Compacting,
+            LifecycleSignal::Ended,
+        ];
+        for errored in [false, true] {
+            for parked_on_background in [false, true] {
+                signals.push(LifecycleSignal::TurnEnded {
+                    errored,
+                    parked_on_background,
+                });
+            }
+        }
+        for mutates in [false, true] {
+            for edits in [false, true] {
+                signals.push(LifecycleSignal::ToolUsed { mutates, edits });
+            }
+        }
+        signals
     }
 
     #[test]
@@ -463,6 +604,24 @@ mod tests {
         assert_eq!(wire["edits"], true);
         let back: LifecycleSignal = serde_json::from_value(wire).unwrap();
         assert_eq!(signal, back);
+    }
+
+    #[test]
+    fn turn_phase_round_trips_through_json() {
+        for phase in [
+            TurnPhase::Idle,
+            TurnPhase::Reasoning,
+            TurnPhase::Acting,
+            TurnPhase::Parked,
+        ] {
+            let wire = serde_json::to_value(phase).unwrap();
+            let back: TurnPhase = serde_json::from_value(wire).unwrap();
+            assert_eq!(phase, back);
+        }
+        assert_eq!(
+            serde_json::to_value(TurnPhase::Reasoning).unwrap(),
+            serde_json::json!("reasoning"),
+        );
     }
 
     #[test]

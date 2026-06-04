@@ -34,7 +34,7 @@ pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
     AgentTokenUsage, AgentTurnError, RateLimitWindow, SubagentContext, SubagentObservation,
 };
-pub use lifecycle::{LifecycleSignal, LifecycleState, Transition, TransitionKind, step};
+pub use lifecycle::{LifecycleSignal, LifecycleState, Transition, TransitionKind, TurnPhase, step};
 pub use observation::AgentLifecycleObservation;
 pub use pricing::{PriceBook, Pricing};
 pub use spending::{ProviderKind, SpendTally, SpendWindow, Spending};

@@ -183,6 +183,7 @@ fn build_label(kind: &str, branch: Option<&str>, worktree: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::TurnPhase;
     use crate::feed::{AgentStatus, PaneRef};
     use crate::ids::{MuxName, PaneId};
     use jiff::Timestamp;
@@ -220,7 +221,7 @@ mod tests {
             agent_id: id.to_owned(),
             kind: kind.to_owned(),
             status: AgentStatus::Idle,
-            thinking: false,
+            phase: TurnPhase::Idle,
             pane: Some(pane_in(SESSION, &format!("terminal_{id}"))),
             agent_pid: None,
             agent_process_start: None,
@@ -242,7 +243,6 @@ mod tests {
             subagent_started_at: None,
             turn_started_at: None,
             compacting_since: None,
-            parked_on_background: false,
             last_seen: when,
             last_activity: when,
         }

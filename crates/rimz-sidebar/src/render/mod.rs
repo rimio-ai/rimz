@@ -805,7 +805,7 @@ mod tests {
             agent_id: id.to_owned(),
             kind: kind.to_owned(),
             status,
-            thinking: false,
+            phase: rimz::agents::TurnPhase::Idle,
             pane: None,
             agent_pid: None,
             agent_process_start: None,
@@ -827,7 +827,6 @@ mod tests {
             subagent_started_at: None,
             turn_started_at: None,
             compacting_since: None,
-            parked_on_background: false,
             last_seen: now,
             last_activity: now,
         }
@@ -2756,7 +2755,7 @@ mod tests {
         );
         // The thinking head is a per-row animation, never a cockpit bucket: a
         // pre-edit turn still tallies as working.
-        reasoning.thinking = true;
+        reasoning.phase = rimz::agents::TurnPhase::Reasoning;
         let snapshot = snapshot_with(Vec::new(), vec![working, reasoning]);
         let screen = snapshot_to_screen(&snapshot, 40, 12);
         // Row 2 is the `¤` summary, row 3 the `◎` summary; row 5 is the bucket
@@ -2837,7 +2836,7 @@ mod tests {
             Some("t"),
         );
         compacting.compacting_since = Some(fixed_now());
-        compacting.thinking = true;
+        compacting.phase = rimz::agents::TurnPhase::Reasoning;
         let snapshot = snapshot_with(Vec::new(), vec![compacting]);
         let screen = snapshot_to_screen(&snapshot, 40, 12);
         // Row 5 is the make-up: name(0), blank(1), `¤`(2), `◎`(3), hairline(4).

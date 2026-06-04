@@ -9,7 +9,7 @@
 use jiff::{SignedDuration, Timestamp};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use rimz::agents::{AgentContext, RateLimitWindow};
+use rimz::agents::{AgentContext, RateLimitWindow, TurnPhase};
 use rimz::config::ContextSeverityConfig;
 use rimz::feed::AgentStatus;
 use rimz::{
@@ -798,7 +798,7 @@ fn agent_lead_cell(
     // `attention_glyph_style` — to pull the eye back to an unanswered row. It
     // never blanks, so the one-cell column never shifts as it swells and fades.
     Span::styled(
-        agent_glyph(status, row.thinking, animation_phase),
+        agent_glyph(status, row.phase, animation_phase),
         attention_glyph_style(theme, status, age_secs(row.last_activity), animation_phase),
     )
 }
@@ -916,7 +916,7 @@ fn description_line(
     // The agent parked its turn on still-in-flight background work: keep the
     // real activity above and add a distinct, faint secondary marker rather than
     // overwriting the description with a synthetic "N background tasks" count.
-    if row.parked_on_background {
+    if row.phase == TurnPhase::Parked {
         left.push(Span::styled("  ⋯ bg", theme.faint()));
     }
     if tier == Tier::L2 && row.todo_total.unwrap_or(0) > 0 {

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::process::{command_agent_kind, program_label};
 use super::view::{SidebarRow, SidebarRowKind};
+use crate::agents::lifecycle::TurnPhase;
 use crate::feed::{AgentState, AgentStatus, PaneRef};
 use crate::ids::PaneId;
 
@@ -225,7 +226,7 @@ fn idle_agent_row(pane: &PaneRef, kind: &str) -> SidebarRow {
         id: pane.pane_id.to_string(),
         name: kind.to_owned(),
         status: Some(AgentStatus::Idle),
-        thinking: false,
+        phase: TurnPhase::Idle,
         pane: Some(pane.clone()),
         request_id: None,
         surface: None,
@@ -250,7 +251,6 @@ fn idle_agent_row(pane: &PaneRef, kind: &str) -> SidebarRow {
         process_active: false,
         command_detail: None,
         compacting: false,
-        parked_on_background: false,
         turn_error_label: None,
         rss_kb: pane.rss_kb,
         cpu_pct: pane.cpu_pct,

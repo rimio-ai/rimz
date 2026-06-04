@@ -106,7 +106,7 @@ pub fn agent_tombstones_for_events(events: &[EventEnvelope]) -> BTreeSet<(String
 
 /// Bump when [`RollupCache`]'s shape changes — a mismatched cache reads as
 /// absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 1;
+const ROLLUP_CACHE_VERSION: u32 = 2;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map and this generation's tombstones, stamped

@@ -4,6 +4,7 @@
 use jiff::Timestamp;
 
 use super::view::{SidebarRow, SidebarRowKind};
+use crate::agents::lifecycle::TurnPhase;
 use crate::feed::PaneRef;
 
 pub(super) fn row_from_process(pane: &PaneRef) -> SidebarRow {
@@ -37,7 +38,7 @@ pub(super) fn row_from_process(pane: &PaneRef) -> SidebarRow {
         id: pane.pane_id.to_string(),
         name,
         status: None,
-        thinking: false,
+        phase: TurnPhase::Idle,
         pane: Some(pane.clone()),
         request_id: None,
         surface: None,
@@ -60,7 +61,6 @@ pub(super) fn row_from_process(pane: &PaneRef) -> SidebarRow {
         process_active: active,
         command_detail,
         compacting: false,
-        parked_on_background: false,
         turn_error_label: None,
         rss_kb: pane.rss_kb,
         cpu_pct: pane.cpu_pct,

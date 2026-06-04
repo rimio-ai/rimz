@@ -1,5 +1,5 @@
 //! The agent-lifecycle reducer: folds `agent.lifecycle` events into
-//! [`AgentState`] rollups, carrying turn, thinking, subagent, and model
+//! [`AgentState`] rollups, carrying turn, phase, subagent, and model
 //! state forward.
 
 use std::collections::BTreeMap;
@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use tracing::warn;
 
 use super::panes::pane_ref_from_id;
-use crate::agents::lifecycle::{self, LifecycleState, Transition};
+use crate::agents::lifecycle::{self, Transition};
 use crate::feed::{AgentState, RuntimeOwner, RuntimeOwnerKind};
 use crate::ids::PaneId;
 use crate::schema::event::EventEnvelope;
@@ -102,19 +102,15 @@ pub(super) fn reduce_agent_states_seeded(
         }
         // The agent-agnostic lifecycle intent this event carries (a current
         // `signal`, or one reconstructed from a legacy `status`/`compacting`
-        // pair). The status and the thinking/compacting heads are all derived
-        // from it through the one shared `lifecycle::step` table — never taken
+        // pair). The status, the turn phase, and the compacting head are all
+        // derived from it through the one shared `lifecycle::step` table — never taken
         // verbatim — so an illegal jump can't slip through unvalidated. Replay is
         // silent here; the ingestion path logs anomalies once per fresh event.
         let signal = lifecycle::signal_from_event_params(&event.params, event_name.unwrap_or(""));
-        let prev_state = prior.map(|p| LifecycleState {
-            status: p.status,
-            thinking: p.thinking,
-            compacting: p.compacting_since.is_some(),
-        });
+        let prev_state = prior.map(AgentState::lifecycle);
         let Transition { next, .. } = lifecycle::step(prev_state.as_ref(), &signal);
         let status = next.status;
-        let thinking = next.thinking;
+        let phase = next.phase;
         // Compaction stamps the moment it began and preserves it across the
         // multi-event head; any other signal clears the marker. A crashed
         // mid-compact can't stick — the projection also expires it past
@@ -236,21 +232,11 @@ pub(super) fn reduce_agent_states_seeded(
             .and_then(|raw| PaneId::parse(&raw).ok())
             .map(pane_ref_from_id)
             .or_else(|| prior.and_then(|p| p.pane.clone()));
-        // Activity-bound: a turn-end parked on background work sets it; any other
-        // signal (including a real turn end) clears it. The renderer paints a
-        // secondary "background" marker without overwriting the description.
-        let parked_on_background = matches!(
-            signal,
-            lifecycle::LifecycleSignal::TurnEnded {
-                parked_on_background: true,
-                ..
-            }
-        );
         let state = AgentState {
             agent_id: agent_id.clone(),
             kind: kind.clone(),
             status,
-            thinking,
+            phase,
             pane,
             agent_pid,
             agent_process_start,
@@ -275,7 +261,6 @@ pub(super) fn reduce_agent_states_seeded(
             subagent_started_at: None,
             turn_started_at,
             compacting_since,
-            parked_on_background,
             last_seen: event.timestamp,
             last_activity: event.timestamp,
         };
@@ -292,6 +277,7 @@ mod tests {
 
     use super::super::view::{attach_sub_agents, row_from_agent, sub_agent_from_state};
     use crate::agent_activity::AgentActivity;
+    use crate::agents::lifecycle::TurnPhase;
     use crate::feed::AgentStatus;
     use crate::ids::WorkspaceId;
     use crate::ledger::snapshot::SidebarSnapshot;
@@ -326,7 +312,11 @@ mod tests {
         }));
         let running = reduce_agent_states(&[start.clone(), prompt.clone()]);
         assert_eq!(running[0].status, AgentStatus::Running);
-        assert!(running[0].thinking, "a fresh turn opens thinking");
+        assert_eq!(
+            running[0].phase,
+            TurnPhase::Reasoning,
+            "a fresh turn opens reasoning"
+        );
 
         // A mutating-but-not-editing tool (a shell command) keeps the head.
         let shell = lifecycle(serde_json::json!({
@@ -335,7 +325,11 @@ mod tests {
             "signal": { "signal": "tool_used", "mutates": true, "edits": false },
         }));
         let still = reduce_agent_states(&[start.clone(), prompt.clone(), shell.clone()]);
-        assert!(still[0].thinking, "a shell command is not a file edit");
+        assert_eq!(
+            still[0].phase,
+            TurnPhase::Reasoning,
+            "a shell command is not a file edit"
+        );
 
         // The turn's first file edit flips it to working.
         let edit = lifecycle(serde_json::json!({
@@ -345,7 +339,7 @@ mod tests {
         }));
         let working = reduce_agent_states(&[start.clone(), prompt.clone(), shell, edit]);
         assert_eq!(working[0].status, AgentStatus::Running);
-        assert!(!working[0].thinking);
+        assert_eq!(working[0].phase, TurnPhase::Acting);
 
         // The turn end clears the head regardless.
         let stop = lifecycle(serde_json::json!({
@@ -355,15 +349,15 @@ mod tests {
         }));
         let stopped = reduce_agent_states(&[start, prompt, stop]);
         assert_eq!(stopped[0].status, AgentStatus::Success);
-        assert!(!stopped[0].thinking);
+        assert_eq!(stopped[0].phase, TurnPhase::Idle);
     }
 
     #[test]
-    fn subagent_activity_does_not_change_parent_thinking() {
+    fn subagent_activity_does_not_change_parent_phase() {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let last_seen = Timestamp::now() - std::time::Duration::from_secs(50);
         let mut parent = agent("claude", "sess-1", AgentStatus::Running, 50_000);
-        parent.thinking = true;
+        parent.phase = TurnPhase::Reasoning;
         let subagent = agent("claude", "sess-1.sub", AgentStatus::Running, 50_000);
 
         let subagent_touch = AgentActivity {
@@ -374,14 +368,15 @@ mod tests {
         let snap =
             SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![parent, subagent])
                 .with_agent_activity(&[subagent_touch]);
-        let parent_thinking = snap
+        let parent_phase = snap
             .agents
             .iter()
             .find(|a| a.agent_id == "sess-1")
             .unwrap()
-            .thinking;
-        assert!(
-            parent_thinking,
+            .phase;
+        assert_eq!(
+            parent_phase,
+            TurnPhase::Reasoning,
             "a subagent heartbeat must not clobber the parent's turn phase"
         );
     }

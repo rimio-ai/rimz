@@ -15,6 +15,7 @@ use super::panes::{
 };
 use super::process::{program_label, row_from_process};
 use crate::agent_activity::AgentActivity;
+use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentAccount, AgentContext, RateLimitWindow, SpendTally};
 use crate::feed::{
     AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, PaneRef, ResolverStepState, Surface,
@@ -250,12 +251,12 @@ pub struct SidebarRow {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<AgentStatus>,
-    /// The running turn is still in its pre-edit reasoning phase: the renderer
-    /// paints the thinking sparkle instead of the working spinner. A transient
-    /// head like `compacting`, never a status bucket of its own. Always `false`
-    /// for process rows and outside `Running`.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub thinking: bool,
+    /// The running turn's shape, copied from the rollup: `reasoning` paints the
+    /// thinking sparkle, `acting` the working spinner, `parked` the secondary
+    /// "background" marker. A transient axis like `compacting`, never a status
+    /// bucket of its own. Always `idle` for process rows and outside `Running`.
+    #[serde(default, skip_serializing_if = "turn_phase_is_idle")]
+    pub phase: TurnPhase,
     pub pane: Option<PaneRef>,
     pub request_id: Option<RequestId>,
     pub surface: Option<Surface>,
@@ -322,13 +323,6 @@ pub struct SidebarRow {
     /// Always `false` for process rows.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compacting: bool,
-    /// The agent parked its last turn on still-in-flight background work
-    /// (Claude Code v2.1.145+) rather than ending it. The row stays `Running`;
-    /// the renderer paints a distinct secondary marker so it reads as "working
-    /// in the background" without a false `success` and without overwriting the
-    /// activity description. Always `false` for process rows.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub parked_on_background: bool,
     /// Why the displayed status escalated to `failed` when the agent's latest
     /// turn died on a provider API error with no `Stop` hook — the upstream
     /// error text ("API Error: Overloaded") from the transcript-tail marker.
@@ -352,6 +346,12 @@ pub struct SidebarRow {
     /// first tick, on non-Linux, or when the file was unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub io_bps: Option<u64>,
+}
+
+/// `skip_serializing_if` helper: the resting phase is the default and stays off
+/// the wire.
+fn turn_phase_is_idle(phase: &TurnPhase) -> bool {
+    *phase == TurnPhase::Idle
 }
 
 /// A compact summary of a child agent, nested under its parent's row. The
@@ -1753,7 +1753,7 @@ pub(super) fn row_from_agent(agent: &AgentState) -> SidebarRow {
         id: agent.agent_id.clone(),
         name: agent.kind.clone(),
         status: Some(agent.status),
-        thinking: agent.thinking,
+        phase: agent.phase,
         pane: agent.pane.clone(),
         request_id: None,
         surface: None,
@@ -1776,7 +1776,6 @@ pub(super) fn row_from_agent(agent: &AgentState) -> SidebarRow {
         process_active: false,
         command_detail: None,
         compacting: is_compacting(agent, Timestamp::now()),
-        parked_on_background: agent.parked_on_background,
         // Filled by the turn-death projection (`project_display_status`) when
         // the escalation holds; never carried from the rollup.
         turn_error_label: None,
@@ -1824,8 +1823,8 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         id,
         name: item.source.clone(),
         status: Some(AgentStatus::Waiting),
-        // A waiting row is blocked on the human, not reasoning — no thinking head.
-        thinking: false,
+        // A waiting row is blocked on the human, not reasoning — no turn phase.
+        phase: TurnPhase::Idle,
         pane: item
             .pane
             .clone()
@@ -1861,7 +1860,6 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         process_active: false,
         command_detail: None,
         compacting: false,
-        parked_on_background: false,
         turn_error_label: None,
         rss_kb: None,
         cpu_pct: None,
@@ -2224,10 +2222,10 @@ mod tests {
     }
 
     #[test]
-    fn activity_heartbeat_updates_last_activity_not_thinking() {
+    fn activity_heartbeat_updates_last_activity_not_phase() {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let mut agent = agent("claude", "sess-1", AgentStatus::Running, 50_000);
-        agent.thinking = true;
+        agent.phase = TurnPhase::Reasoning;
         let original_seen = agent.last_seen;
         let at = original_seen + std::time::Duration::from_secs(10);
         let touch = AgentActivity {
@@ -2240,7 +2238,7 @@ mod tests {
 
         // The heartbeat is latency, not a lifecycle signal — it advances
         // `last_activity` only, never the turn-phase head.
-        assert!(snap.agents[0].thinking);
+        assert_eq!(snap.agents[0].phase, TurnPhase::Reasoning);
         assert_eq!(snap.agents[0].last_activity, at);
         assert_eq!(snap.agents[0].last_seen, original_seen);
     }

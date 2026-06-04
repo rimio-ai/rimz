@@ -124,6 +124,7 @@ fn linux_process_start_from_stat(stat: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::TurnPhase;
     use crate::feed::{AgentStatus, FeedKind, Surface};
     use crate::ids::WorkspaceId;
     use jiff::Timestamp;
@@ -134,7 +135,7 @@ mod tests {
             agent_id: "sess-1".to_owned(),
             kind: "claude".to_owned(),
             status: AgentStatus::Idle,
-            thinking: false,
+            phase: TurnPhase::Idle,
             pane: None,
             agent_pid: owner.as_ref().map(|owner| owner.pid),
             agent_process_start: owner.as_ref().and_then(|owner| owner.process_start.clone()),
@@ -156,7 +157,6 @@ mod tests {
             subagent_started_at: None,
             turn_started_at: None,
             compacting_since: None,
-            parked_on_background: false,
             last_seen: Timestamp::UNIX_EPOCH,
             last_activity: Timestamp::UNIX_EPOCH,
         }

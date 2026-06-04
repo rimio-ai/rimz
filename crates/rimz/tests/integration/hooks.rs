@@ -478,7 +478,7 @@ fn codex_uninstall_cli_removes_legacy_config_block() {
 }
 
 #[test]
-fn codex_turn_opens_thinking_until_the_first_file_edit() {
+fn codex_turn_opens_reasoning_until_the_first_file_edit() {
     let env = Env::new();
     let run = |payload: &serde_json::Value| {
         let payload = serde_json::to_string(payload).expect("payload");
@@ -498,18 +498,18 @@ fn codex_turn_opens_thinking_until_the_first_file_edit() {
     let parsed = env.snapshot_json();
     assert_eq!(parsed["agents"][0]["status"], "running");
     assert_eq!(
-        parsed["agents"][0]["thinking"], true,
+        parsed["agents"][0]["phase"], "reasoning",
         "a fresh turn opens in its reasoning phase"
     );
 
-    // A shell command mutates but edits nothing — still thinking.
+    // A shell command mutates but edits nothing — still reasoning.
     run(&json!({
         "hook_event_name": "PostToolUse",
         "session_id": "sess-codex-phase",
         "tool_name": "shell",
     }));
     let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["thinking"], true);
+    assert_eq!(parsed["agents"][0]["phase"], "reasoning");
 
     // The first file edit flips the turn to working.
     run(&json!({
@@ -519,7 +519,7 @@ fn codex_turn_opens_thinking_until_the_first_file_edit() {
     }));
     let parsed = env.snapshot_json();
     assert_eq!(parsed["agents"][0]["status"], "running");
-    assert_eq!(parsed["agents"][0]["thinking"], false);
+    assert_eq!(parsed["agents"][0]["phase"], "acting");
 }
 
 // --- Claude PreToolUse blocking events ---
@@ -720,7 +720,7 @@ fn claude_context_and_tool_lifecycle_hooks_are_silent() {
 }
 
 #[test]
-fn claude_turn_opens_thinking_until_the_first_file_edit() {
+fn claude_turn_opens_reasoning_until_the_first_file_edit() {
     let env = Env::new();
     let run = |payload: &serde_json::Value| {
         let payload = serde_json::to_string(payload).expect("payload");
@@ -740,18 +740,18 @@ fn claude_turn_opens_thinking_until_the_first_file_edit() {
     let parsed = env.snapshot_json();
     assert_eq!(parsed["agents"][0]["status"], "running");
     assert_eq!(
-        parsed["agents"][0]["thinking"], true,
+        parsed["agents"][0]["phase"], "reasoning",
         "a fresh turn opens in its reasoning phase"
     );
 
-    // Bash mutates but edits nothing — still thinking.
+    // Bash mutates but edits nothing — still reasoning.
     run(&json!({
         "hook_event_name": "PostToolUse",
         "session_id": "sess-claude-phase",
         "tool_name": "Bash",
     }));
     let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["thinking"], true);
+    assert_eq!(parsed["agents"][0]["phase"], "reasoning");
 
     // The first file edit flips the turn to working.
     run(&json!({
@@ -761,7 +761,7 @@ fn claude_turn_opens_thinking_until_the_first_file_edit() {
     }));
     let parsed = env.snapshot_json();
     assert_eq!(parsed["agents"][0]["status"], "running");
-    assert_eq!(parsed["agents"][0]["thinking"], false);
+    assert_eq!(parsed["agents"][0]["phase"], "acting");
 }
 
 #[test]

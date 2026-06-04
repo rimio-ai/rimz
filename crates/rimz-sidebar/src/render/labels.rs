@@ -7,6 +7,7 @@
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
+use rimz::agents::TurnPhase;
 use rimz::config::ContextSeverityConfig;
 use rimz::feed::AgentStatus;
 
@@ -189,17 +190,17 @@ pub(super) fn subagent_glyph(animation_phase: u64) -> &'static str {
 }
 
 /// The leading cell for an agent row, animated when the agent is actively doing
-/// something. A `running` agent sparkles (thinking, before the turn's first
-/// file edit) or fills (working); every other state is the static
+/// something. A `running` agent sparkles (reasoning, before the turn's first
+/// file edit) or fills (acting or parked); every other state is the static
 /// [`status_glyph`]. Stall is already folded into `Failed` upstream, so it
 /// falls through to the static `!`.
 pub(super) fn agent_glyph(
     status: AgentStatus,
-    thinking: bool,
+    phase: TurnPhase,
     animation_phase: u64,
 ) -> &'static str {
     match status {
-        AgentStatus::Running if thinking => thinking_glyph(animation_phase),
+        AgentStatus::Running if phase == TurnPhase::Reasoning => thinking_glyph(animation_phase),
         AgentStatus::Running => working_glyph(animation_phase),
         other => status_glyph(other),
     }
@@ -1341,19 +1342,19 @@ mod tests {
     #[test]
     fn agent_glyph_animates_only_active_states() {
         assert_eq!(
-            agent_glyph(AgentStatus::Running, false, 2),
+            agent_glyph(AgentStatus::Running, TurnPhase::Acting, 2),
             WORKING_FRAMES[2]
         );
         assert_eq!(
-            agent_glyph(AgentStatus::Running, true, 2),
+            agent_glyph(AgentStatus::Running, TurnPhase::Reasoning, 2),
             THINKING_FRAMES[2]
         );
         // The sparkle is the running-state indicator — a stale thinking bit on
         // a non-running agent never sparkles.
-        assert_eq!(agent_glyph(AgentStatus::Idle, true, 2), "○");
-        assert_eq!(agent_glyph(AgentStatus::Waiting, false, 2), "?");
-        assert_eq!(agent_glyph(AgentStatus::Failed, false, 2), "!");
-        assert_eq!(agent_glyph(AgentStatus::Idle, false, 2), "○");
-        assert_eq!(agent_glyph(AgentStatus::Success, false, 2), "✓");
+        assert_eq!(agent_glyph(AgentStatus::Idle, TurnPhase::Idle, 2), "○");
+        assert_eq!(agent_glyph(AgentStatus::Waiting, TurnPhase::Idle, 2), "?");
+        assert_eq!(agent_glyph(AgentStatus::Failed, TurnPhase::Idle, 2), "!");
+        assert_eq!(agent_glyph(AgentStatus::Idle, TurnPhase::Idle, 2), "○");
+        assert_eq!(agent_glyph(AgentStatus::Success, TurnPhase::Idle, 2), "✓");
     }
 }
