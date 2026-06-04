@@ -488,6 +488,106 @@ mod tests {
         );
     }
 
+    fn test_event(method: &str) -> EventEnvelope {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        EventEnvelope::new(
+            workspace,
+            "session",
+            "rimz",
+            "cli",
+            method,
+            json!({ "a": 1 }),
+        )
+    }
+
+    #[test]
+    fn read_from_offset_resumes_after_complete_frames() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.log.jsonl");
+        append(&path, &test_event("event.first")).unwrap();
+        let first_end = fs::metadata(&path).unwrap().len();
+        append(&path, &test_event("event.second")).unwrap();
+        append(&path, &test_event("event.third")).unwrap();
+        let full_len = fs::metadata(&path).unwrap().len();
+
+        let (delta, end) = read_from_offset(&path, first_end).unwrap();
+        assert_eq!(
+            delta.iter().map(|e| e.method.as_str()).collect::<Vec<_>>(),
+            ["event.second", "event.third"],
+            "resume folds exactly the frames appended past the start offset"
+        );
+        assert_eq!(end, full_len, "extent advances to the end of the last complete frame");
+    }
+
+    #[test]
+    fn read_from_offset_zero_matches_read_all() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.log.jsonl");
+        append(&path, &test_event("event.first")).unwrap();
+        append(&path, &test_event("event.second")).unwrap();
+        let full_len = fs::metadata(&path).unwrap().len();
+
+        let (from_zero, end) = read_from_offset(&path, 0).unwrap();
+        let all = read_all(&path).unwrap();
+        assert_eq!(
+            from_zero.iter().map(|e| &e.method).collect::<Vec<_>>(),
+            all.iter().map(|e| &e.method).collect::<Vec<_>>(),
+        );
+        assert_eq!(end, full_len);
+    }
+
+    #[test]
+    fn read_from_offset_on_a_missing_log_is_empty_at_zero() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.log.jsonl");
+        let (events, end) = read_from_offset(&path, 64).unwrap();
+        assert!(events.is_empty());
+        assert_eq!(end, 0, "no log, no extent — a fresh workspace folds nothing");
+    }
+
+    #[test]
+    fn read_from_offset_stops_before_an_inflight_unterminated_tail() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.log.jsonl");
+        append(&path, &test_event("event.first")).unwrap();
+        append(&path, &test_event("event.second")).unwrap();
+        let committed = fs::metadata(&path).unwrap().len();
+        // A lock-free reader racing a writer mid-append: bytes present, no
+        // terminator yet.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"47 {\"half\":")
+            .unwrap();
+
+        let (events, end) = read_from_offset(&path, 0).unwrap();
+        assert_eq!(events.len(), 2, "the in-flight frame is not folded");
+        assert_eq!(
+            end, committed,
+            "the extent never claims bytes the fold skipped, so the completing append re-triggers the fold"
+        );
+    }
+
+    #[test]
+    fn read_from_offset_reports_offset_before_a_torn_terminated_tail() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.log.jsonl");
+        append(&path, &test_event("event.first")).unwrap();
+        let committed = fs::metadata(&path).unwrap().len();
+        // A power-cut corpse: terminated frame whose claimed length is wrong.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"999 {\"oops\":true}\n")
+            .unwrap();
+
+        let (events, end) = read_from_offset(&path, 0).unwrap();
+        assert_eq!(events.len(), 1, "torn trailing record skipped");
+        assert_eq!(end, committed, "extent stops at the last complete frame");
+    }
+
     #[test]
     fn torn_trailing_record_is_skipped() {
         let dir = tempdir().unwrap();

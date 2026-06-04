@@ -229,4 +229,95 @@ mod tests {
         let err = list(dir.path()).unwrap_err();
         assert!(matches!(err, FeedStoreErr::Json { .. }));
     }
+
+    #[test]
+    fn terminal_status_relocates_out_of_the_pending_scan() {
+        let dir = tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut item = FeedItem::new(
+            workspace,
+            Surface::Bridge,
+            FeedKind::Permission,
+            "decide me",
+            "claude",
+            "agent-hook",
+        );
+        write(dir.path(), &item).unwrap();
+        assert!(pending_path(dir.path(), &item.request_id).exists());
+
+        item.status = FeedStatus::Resolved;
+        write(dir.path(), &item).unwrap();
+
+        assert!(
+            !pending_path(dir.path(), &item.request_id).exists(),
+            "the decided item leaves the pending side"
+        );
+        assert!(terminal_path(dir.path(), &item.request_id).exists());
+        assert!(
+            list_pending(dir.path()).unwrap().is_empty(),
+            "the decision-path scan stays O(pending)"
+        );
+        let audit = list(dir.path()).unwrap();
+        assert_eq!(audit.len(), 1, "the audit read spans both sides");
+        assert_eq!(
+            load(dir.path(), &item.request_id).unwrap().status,
+            FeedStatus::Resolved,
+            "load finds the relocated item"
+        );
+    }
+
+    #[test]
+    fn list_dedupes_a_straggler_pair_with_the_pending_side_winning() {
+        // A crash between a terminal rewrite and its relocation leaves the same
+        // request id on both sides; the pending-side copy is the newer write.
+        let dir = tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut item = FeedItem::new(
+            workspace,
+            Surface::Bridge,
+            FeedKind::Permission,
+            "older terminal copy",
+            "claude",
+            "agent-hook",
+        );
+        item.status = FeedStatus::Resolved;
+        write(dir.path(), &item).unwrap();
+        assert!(terminal_path(dir.path(), &item.request_id).exists());
+
+        item.title = "newer pending-side copy".to_owned();
+        let bytes = serde_json::to_vec(&item).unwrap();
+        std::fs::write(pending_path(dir.path(), &item.request_id), bytes).unwrap();
+
+        let items = list(dir.path()).unwrap();
+        assert_eq!(items.len(), 1, "one row per request id");
+        assert_eq!(items[0].title, "newer pending-side copy");
+    }
+
+    #[test]
+    fn pending_side_terminal_straggler_is_listed_for_the_status_check() {
+        // Pre-partition layouts and crash stragglers park terminal-status files
+        // on the pending side; `list_pending` returns them so the caller's
+        // pending-status check skips them, and `load` still finds them.
+        let dir = tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut item = FeedItem::new(
+            workspace,
+            Surface::Script,
+            FeedKind::Question,
+            "legacy terminal record",
+            "rimz",
+            "cli",
+        );
+        item.status = FeedStatus::Abandoned;
+        let bytes = serde_json::to_vec(&item).unwrap();
+        std::fs::write(pending_path(dir.path(), &item.request_id), bytes).unwrap();
+
+        let items = list_pending(dir.path()).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].status, FeedStatus::Abandoned);
+        assert_eq!(
+            load(dir.path(), &item.request_id).unwrap().title,
+            "legacy terminal record"
+        );
+    }
 }
