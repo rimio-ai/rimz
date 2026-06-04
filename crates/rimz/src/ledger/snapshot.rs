@@ -2954,7 +2954,9 @@ pub fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
 }
 
 pub fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
-    let items = feed_store::list(&paths.feed_dir)?;
+    // Pending items only: the view folds nothing else, and the pending scan
+    // stays O(pending) regardless of feed history.
+    let items = feed_store::list_pending(&paths.feed_dir)?;
     let events = event_log::read_all(&paths.events_log)?;
     let carryover = read_carryover(&paths.agents_carryover)?;
     let agents = agent_rollup_with_carryover(&events, carryover.agents);

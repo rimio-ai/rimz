@@ -208,7 +208,7 @@ fn abandon_dead_owned_items_locked(
     session_name: &str,
 ) -> Result<Vec<(WorkspaceId, RequestId)>> {
     let mut abandoned = Vec::new();
-    for mut item in feed_store::list(&paths.feed_dir)? {
+    for mut item in feed_store::list_pending(&paths.feed_dir)? {
         if item.status != FeedStatus::Pending {
             continue;
         }
@@ -859,7 +859,7 @@ impl Ledger {
         let mut expired = Vec::new();
         {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            for mut item in feed_store::list(&self.inner.paths.feed_dir)? {
+            for mut item in feed_store::list_pending(&self.inner.paths.feed_dir)? {
                 if item.source_kind != "agent-hook"
                     || item.source != source
                     || item.status != FeedStatus::Pending
