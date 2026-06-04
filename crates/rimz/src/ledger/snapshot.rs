@@ -214,11 +214,15 @@ impl SidebarProviderPanel {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SidebarOwnView {
     pub sibling_count: usize,
-    pub own_is_focused: bool,
-    /// The agent pane the mux client is focused on within this view, if any. The
-    /// renderer mirrors it as the authoritative highlight (see `rimz-sidebar`'s
-    /// `reconcile_selection`).
-    pub focused_pane_id: Option<PaneId>,
+    /// True iff the sidebar's own pane is its view's active pane — the user
+    /// focused the sidebar itself, so the derived baseline is `None` and the
+    /// renderer holds its last selection.
+    pub own_is_active: bool,
+    /// The view's active working pane: the non-sidebar sibling carrying the
+    /// per-view `is_focused` mark. The renderer derives its selection baseline
+    /// from it (see `rimz-sidebar`'s `reconcile_selection`) — same-tab by
+    /// construction, defined whether or not a client is viewing the tab.
+    pub active_pane_id: Option<PaneId>,
     /// Whether the caller's own view is the `rimzd` daemon view: its siblings,
     /// after dropping any sidebar pane, are non-empty and all managed hosts
     /// ([`crate::remote_control::pane_is_host`]). The daemon-view sidebar gates
@@ -1114,10 +1118,9 @@ fn provider_title_case(value: &str) -> String {
 impl SidebarOwnView {
     /// Summarize the panes sharing `own`'s view (tab/window) from a live pane
     /// list. Pure and backend-agnostic: callers own pane discovery and pass the
-    /// result in, along with `observed_at` — when the focus sample was taken, so
-    /// the renderer can order it against a local selection. Returns `None` when
-    /// `own` is absent from `panes` — the caller cannot reason about a view it
-    /// cannot find itself in, so it must not self-close.
+    /// result in. Returns `None` when `own` is absent from `panes` — the caller
+    /// cannot reason about a view it cannot find itself in, so it must not
+    /// self-close.
     pub fn from_panes(own: &PaneId, panes: &[PaneRef]) -> Option<Self> {
         let own_pane = panes.iter().find(|pane| pane.pane_id == *own)?;
         let own_view = own_pane.view_id.as_deref();
@@ -1125,15 +1128,6 @@ impl SidebarOwnView {
             .iter()
             .filter(|pane| pane.pane_id != *own && pane.view_id.as_deref() == own_view)
             .collect::<Vec<_>>();
-        // The focus mirror tracks the *client's* focus, not the per-view active
-        // pane (`is_focused`), so a sidebar in a tab the client isn't looking at
-        // reports no focus and holds. Under multiplayer Zellij (two clients in
-        // one tab on different panes) the set can hold two siblings; picking the
-        // first is acceptable for a single-attached sidebar.
-        let focused_pane_id = siblings
-            .iter()
-            .find(|pane| pane.client_focused)
-            .map(|pane| pane.pane_id.clone());
         // The own view is the daemon view iff, after dropping sidebar panes, its
         // remaining siblings are non-empty and all managed hosts. Keys on
         // `pane_is_host`, never `view_name`, for Zellij/tmux parity.
@@ -1146,14 +1140,22 @@ impl SidebarOwnView {
                     .is_none_or(|command| program_label(command) != "rimz-sidebar")
             })
             .collect();
+        // The view's *active* pane (`is_focused` — exactly one per view on both
+        // backends), not the client focus: it is defined even when no client is
+        // viewing this tab, and it stays one deterministic value per tab under
+        // multiplayer Zellij — the only shape a shared sidebar pane can render.
+        let active_pane_id = non_sidebar_siblings
+            .iter()
+            .find(|pane| pane.is_focused)
+            .map(|pane| pane.pane_id.clone());
         let own_view_is_daemon = !non_sidebar_siblings.is_empty()
             && non_sidebar_siblings
                 .iter()
                 .all(|&pane| crate::remote_control::pane_is_host(pane));
         Some(Self {
             sibling_count: siblings.len(),
-            own_is_focused: own_pane.client_focused,
-            focused_pane_id,
+            own_is_active: own_pane.is_focused,
+            active_pane_id,
             own_view_is_daemon,
         })
     }
@@ -6566,8 +6568,8 @@ mod tests {
 
     /// A sibling fixture whose `focused` flag sets both the per-view active bit
     /// and the per-client focus bit — the common single-client case where the
-    /// pane the user looks at is also its tab's active pane. The regression test
-    /// below diverges them deliberately.
+    /// pane the user looks at is also its tab's active pane. The divergence test
+    /// below splits them to prove the active bit alone drives the baseline.
     fn view_pane(raw: &str, view: &str, focused: bool) -> PaneRef {
         PaneRef {
             pane_id: PaneId::from_parts(MuxName::Zellij, raw),
@@ -6597,12 +6599,12 @@ mod tests {
         let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane is present");
 
         assert_eq!(view.sibling_count, 1);
-        assert!(!view.own_is_focused);
-        assert_eq!(view.focused_pane_id, Some(focused_here));
+        assert!(!view.own_is_active);
+        assert_eq!(view.active_pane_id, Some(focused_here));
     }
 
     #[test]
-    fn own_view_marks_when_the_sidebar_itself_is_focused() {
+    fn own_view_marks_when_the_sidebar_itself_is_active() {
         let own = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let panes = vec![
             view_pane("terminal_1", "tab_0", true),
@@ -6611,8 +6613,8 @@ mod tests {
 
         let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane is present");
 
-        assert!(view.own_is_focused);
-        assert_eq!(view.focused_pane_id, None);
+        assert!(view.own_is_active);
+        assert_eq!(view.active_pane_id, None);
     }
 
     #[test]
@@ -6625,23 +6627,24 @@ mod tests {
     }
 
     #[test]
-    fn focus_mirror_ignores_a_tab_active_pane_no_client_is_on() {
-        // The reported bug: a sidebar's own tab has an active pane
-        // (`is_focused`), but the attached client is focused elsewhere, so no
-        // sibling is `client_focused`. The mirror must report no focus and hold,
-        // not adopt the tab's active pane.
+    fn own_view_picks_the_view_active_pane_without_a_client() {
+        // The tab has an active pane (`is_focused`) but no client is looking at
+        // it. The baseline is the per-view active pane, defined regardless of
+        // where any client is — so the sidebar in an unviewed tab still points
+        // at the pane the user would land on.
         let own = PaneId::from_parts(MuxName::Zellij, "terminal_52");
+        let active = PaneId::from_parts(MuxName::Zellij, "terminal_53");
         let sibling = PaneRef {
             is_focused: true,      // the active pane of this tab
-            client_focused: false, // but no client is looking at it
+            client_focused: false, // no client is looking at it
             ..view_pane("terminal_53", "tab_11", false)
         };
         let panes = vec![view_pane("terminal_52", "tab_11", false), sibling];
 
         let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane is present");
 
-        assert!(!view.own_is_focused);
-        assert_eq!(view.focused_pane_id, None);
+        assert!(!view.own_is_active);
+        assert_eq!(view.active_pane_id, Some(active));
     }
 
     /// A pane fixture with an explicit command and optional window name, so a

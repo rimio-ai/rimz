@@ -1523,8 +1523,8 @@ fn apply_fetch_outcome(
     let focused_agent = current
         .own_view
         .as_ref()
-        .filter(|view| !view.own_is_focused)
-        .and_then(|view| view.focused_pane_id.clone())
+        .filter(|view| !view.own_is_active)
+        .and_then(|view| view.active_pane_id.clone())
         .filter(|pane| row_index_of_pane(current, pane).is_some());
     reconcile_selection(ui, current, focused_agent, Instant::now());
     ui.animation_phase = wall_clock_phase(anim_start);
@@ -1940,7 +1940,7 @@ fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
 /// identity, never position.
 ///
 /// `focused_agent` is the snapshot's focus report, pre-filtered at the call site
-/// to a non-sidebar **agent row**: `Some(pane)` iff `!own_is_focused` and the
+/// to a non-sidebar **agent row**: `Some(pane)` iff `!own_is_active` and the
 /// focused pane is a row in this snapshot; `None` otherwise (sidebar-self,
 /// undiscoverable, or a non-row helper pane). `now` is a monotonic instant used
 /// only for the jump settle deadline.
