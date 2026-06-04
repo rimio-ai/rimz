@@ -8,7 +8,7 @@ Local runner: `cargo xtask test` (wraps `cargo nextest run`). Doctests run separ
 
 ## Test tiers
 
-- **Function/unit tests** live inline with the module under test and cover pure state transitions, parsers, render helpers, trust hashing, and formatting rules. They do not spawn subprocesses or touch real ledgers.
+- **Function/unit tests** live with the module under test — inline `mod tests`, or a sibling `tests.rs` once it outgrows the file (see [rust-conventions.md](./rust-conventions.md#tests)) — and cover pure state transitions, parsers, render helpers, trust hashing, and formatting rules. They do not spawn subprocesses or touch real ledgers.
 - **Integration tests** live under `crates/rimz/tests/integration/` and cover public CLI, ledger files, sockets, hooks, resolvers, and subprocess round trips through the shared harness.
 - **Journey tests** live under `crates/rimz/tests/integration/journey/` and assert rendered end-user flows through a real `rimz-sidebar serve` process and `vt100` screen capture.
 - **Live-backend tests** cover real tmux/Zellij behavior and self-skip when the backend binary or socket permissions are unavailable. They stay narrow and backend-specific.

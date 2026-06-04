@@ -132,7 +132,7 @@ CLI binary, hook entrypoints, and the runtime/domain library. Start here for any
 - `src/resolver/mod.rs` — re-exports for the resolver subsystem.
 - `src/resolver/allowlist.rs` — per-machine TOML allowlist with atomic writes.
 - `src/resolver/freshness.rs` — heartbeat TTL walk, single-resolver health check, TOCTOU `restat`.
-- Hook stdout goldens live inline as `insta::assert_*_snapshot!(... @"...")` macros inside each adapter module.
+- Hook stdout goldens live as inline `insta::assert_*_snapshot!(... @"...")` macros inside each adapter's `tests` module.
 
 Crate-local rules:
 

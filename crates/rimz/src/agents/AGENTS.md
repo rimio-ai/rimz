@@ -23,4 +23,4 @@ An adapter is the *single* place a native agent protocol is normalized. It owns 
 
 ## Tests
 
-Golden every stdout shape inline in the adapter module with `insta::assert_*_snapshot!(... @"...")`: neutral no-op, allow, deny, modified-input (where supported), malformed payload, and version-drift fallback. Cover install/uninstall, lifecycle mapping, feed classification, and PID attribution. Run through `cargo xtask test`.
+Golden every stdout shape in the adapter's `tests` module with inline `insta::assert_*_snapshot!(... @"...")`: neutral no-op, allow, deny, modified-input (where supported), malformed payload, and version-drift fallback. Cover install/uninstall, lifecycle mapping, feed classification, and PID attribution. Run through `cargo xtask test`.
