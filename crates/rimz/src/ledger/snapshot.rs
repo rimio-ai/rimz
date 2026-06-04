@@ -3080,9 +3080,11 @@ pub fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
     let snapshot = assemble_snapshot(paths, rollup.extent, agents)?;
     // The fold base lands first: its extent always runs at or past
     // `latest.json`'s stamp, so a crash between the two leaves a stale view
-    // that the next catch-up refreshes from the newer base.
+    // that the next catch-up refreshes from the newer base. Both writes are
+    // cache-class — crash-durability lives in the event log and the feed
+    // files; a torn-after-power-cut cache parses to a miss and cold-rebuilds.
     write_rollup_cache(&paths.rollup_cache, &rollup)?;
-    write_temp_then_rename(&paths.latest_snapshot, &snapshot)?;
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &snapshot)?;
     Ok(snapshot)
 }
 
@@ -3122,31 +3124,20 @@ fn assemble_snapshot(
 }
 
 /// Read the pre-built `latest.json` rollup when it already reflects every event
-/// in the active log — i.e. it was rebuilt at or after the log's last append.
+/// in the active log.
 ///
-/// `latest.json` is rewritten under the workspace lock on every mutation (right
-/// after the event append), so its mtime is `>=` the log's exactly when it is
-/// current. A write racing this read leaves the log newer than `latest.json`;
-/// the guard then returns `None` and the caller re-projects, so a just-appended
-/// event is never missed. Lock-free and O(snapshot): a torn or absent file
-/// deserializes to `None` and falls back. `write_temp_then_rename` makes the
-/// file all-or-nothing, so a readable `latest.json` is always a complete rollup.
+/// The verdict is the embedded extent stamp: the parsed snapshot must claim
+/// exactly the live log's byte length. The publish runs after the workspace
+/// lock releases, so file mtimes carry no ordering — the stamp is the one
+/// freshness authority. A write racing this read moves the log past the
+/// stamp; the guard then returns `None` and the caller folds the missing
+/// delta itself, so a just-appended event is never missed. Lock-free and
+/// O(snapshot): a torn or absent file deserializes to `None` and falls back,
+/// and the atomic rename means a readable `latest.json` is always a complete
+/// rollup.
 pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
     let meta = fs::metadata(&paths.latest_snapshot).ok()?;
     let latest_mtime = meta.modified().ok()?;
-    // A missing log means there are no appended events to lag behind.
-    let reflects_log = match modified_time(&paths.events_log) {
-        Some(log_mtime) => latest_mtime >= log_mtime,
-        None => true,
-    };
-    if !reflects_log {
-        return None;
-    }
-    // Second gate, on the embedded extent stamp: the parsed snapshot must
-    // claim exactly the live log's byte length. Dual-gated with mtime while
-    // the stamp proves itself; the stamp becomes the sole authority when the
-    // publish moves past the lock release (mtime ordering stops meaning
-    // anything there).
     let log_len = fs::metadata(&paths.events_log)
         .map(|meta| meta.len())
         .unwrap_or(0);
@@ -3202,10 +3193,6 @@ struct ParsedLatest {
 thread_local! {
     static LATEST_PARSE_CACHE: std::cell::RefCell<Option<ParsedLatest>> =
         const { std::cell::RefCell::new(None) };
-}
-
-fn modified_time(path: &Path) -> Option<SystemTime> {
-    fs::metadata(path).and_then(|meta| meta.modified()).ok()
 }
 
 pub(crate) fn display_name_for(paths: &StatePaths) -> String {

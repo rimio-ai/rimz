@@ -38,6 +38,7 @@ pub struct StatePaths {
     pub feed_dir: PathBuf,
     pub locks_dir: PathBuf,
     pub workspace_lock: PathBuf,
+    pub publish_lock: PathBuf,
     pub workspace_record: PathBuf,
 }
 
@@ -67,6 +68,7 @@ impl StatePaths {
             snapshots_dir,
             feed_dir,
             workspace_lock: locks_dir.join("workspace.lock"),
+            publish_lock: locks_dir.join("publish.lock"),
             workspace_record: root.join("workspace.json"),
             locks_dir,
             root,

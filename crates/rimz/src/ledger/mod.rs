@@ -343,6 +343,11 @@ impl Ledger {
     ) -> Result<WorkspaceRewriteOutcome> {
         let (feed_items_rewritten, events_rewritten) = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+            // Also fence the snapshot publishers: this rewrite replaces the
+            // caches in place, and a publisher mid-fold must not clobber
+            // them. Ordering is workspace → publish; publishers take only
+            // the publish lock, so the pair can never deadlock.
+            let _publish_guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
 
             let mut items = feed_store::list(&self.inner.paths.feed_dir)?;
             let feed_items_rewritten = items.len();
@@ -408,13 +413,13 @@ impl Ledger {
                 )?,
                 None => Vec::new(),
             };
-            snapshot::rebuild(&self.inner.paths)?;
             (abandoned, expired)
         };
         for (workspace_id, request_id) in abandoned.iter().chain(expired.iter()) {
             self.wake_sidebars_best_effort(workspace_id, request_id);
         }
         self.wake_sidebars_for_event_best_effort(event);
+        self.publish_snapshot_best_effort();
         Ok(expired.len())
     }
 
@@ -456,13 +461,13 @@ impl Ledger {
                 &self.inner.paths.events_log,
                 &EventEnvelope::feed_pushed(item, session_name),
             )?;
-            snapshot::rebuild(&self.inner.paths)?;
             (abandoned, expired)
         };
         for (workspace_id, request_id) in abandoned.iter().chain(expired.iter()) {
             self.wake_sidebars_best_effort(workspace_id, request_id);
         }
         self.wake_sidebars_best_effort(&item.workspace_id, &item.request_id);
+        self.publish_snapshot_best_effort();
         Ok(())
     }
 
@@ -480,13 +485,13 @@ impl Ledger {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             let abandoned = abandon_dead_owned_items_locked(&self.inner.paths, session_name)?;
             touch_abandon_sweep_stamp(&self.inner.paths);
-            if !abandoned.is_empty() {
-                snapshot::rebuild(&self.inner.paths)?;
-            }
             abandoned
         };
         for (workspace_id, request_id) in &abandoned {
             self.wake_sidebars_best_effort(workspace_id, request_id);
+        }
+        if !abandoned.is_empty() {
+            self.publish_snapshot_best_effort();
         }
         Ok(abandoned.len())
     }
@@ -614,10 +619,6 @@ impl Ledger {
                     }),
                 ),
             )?;
-            // Rebuild after the append so `latest.json` reflects the
-            // `feed.resolve` event — rebuilding first leaves the cache stale
-            // against the log and forces the next reader into a full replay.
-            snapshot::rebuild(&self.inner.paths)?;
 
             item_to_wake
         };
@@ -626,6 +627,7 @@ impl Ledger {
             self.wake_per_request_best_effort(item);
             self.wake_sidebars_best_effort(&item.workspace_id, &item.request_id);
         }
+        self.publish_snapshot_best_effort();
 
         Ok(ResolveOutcome {
             request_id: request_id.clone(),
@@ -681,13 +683,13 @@ impl Ledger {
                     }),
                 ),
             )?;
-            snapshot::rebuild(&self.inner.paths)?;
             Some((item.workspace_id.clone(), item.request_id.clone()))
         };
 
         if let Some((workspace_id, request_id)) = &wake_target {
             self.wake_sidebars_best_effort(workspace_id, request_id);
         }
+        self.publish_snapshot_best_effort();
 
         Ok(TimeoutOutcome {
             request_id: request_id.clone(),
@@ -768,7 +770,6 @@ impl Ledger {
                     }),
                 ),
             )?;
-            snapshot::rebuild(&self.inner.paths)?;
             let outcome = AbstainOutcome {
                 request_id: request_id.clone(),
                 next_resolver: next,
@@ -780,6 +781,7 @@ impl Ledger {
         };
 
         self.wake_sidebars_best_effort(&wake_target.0, &wake_target.1);
+        self.publish_snapshot_best_effort();
         Ok(outcome)
     }
 
@@ -847,7 +849,6 @@ impl Ledger {
                     }),
                 ),
             )?;
-            snapshot::rebuild(&self.inner.paths)?;
             let outcome = ElapseOutcome {
                 request_id: request_id.clone(),
                 next_resolver: next,
@@ -859,6 +860,7 @@ impl Ledger {
         };
 
         self.wake_sidebars_best_effort(&wake_target.0, &wake_target.1);
+        self.publish_snapshot_best_effort();
         Ok(outcome)
     }
 
@@ -906,13 +908,13 @@ impl Ledger {
                     }),
                 ),
             )?;
-            snapshot::rebuild(&self.inner.paths)?;
             Some((item.workspace_id.clone(), item.request_id.clone()))
         };
 
         if let Some((workspace_id, request_id)) = &wake_target {
             self.wake_sidebars_best_effort(workspace_id, request_id);
         }
+        self.publish_snapshot_best_effort();
         Ok(())
     }
 
@@ -962,20 +964,13 @@ impl Ledger {
     ) -> Result<usize> {
         let expired = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let expired = expire_agent_asks_locked(
-                &self.inner.paths,
-                source,
-                agent_id,
-                session_name,
-                expiry,
-            )?;
-            if !expired.is_empty() {
-                snapshot::rebuild(&self.inner.paths)?;
-            }
-            expired
+            expire_agent_asks_locked(&self.inner.paths, source, agent_id, session_name, expiry)?
         };
         for (workspace_id, request_id) in &expired {
             self.wake_sidebars_best_effort(workspace_id, request_id);
+        }
+        if !expired.is_empty() {
+            self.publish_snapshot_best_effort();
         }
         Ok(expired.len())
     }
@@ -995,15 +990,14 @@ impl Ledger {
     }
 
     /// Like [`Self::snapshot`] but O(1) in the common case: serve the pre-built
-    /// `latest.json` rollup when it already reflects every appended event,
-    /// falling back to a full re-projection on a miss. The fast path is
-    /// lock-free — it reads no event log and takes no workspace lock — so a hot
-    /// fleet's snapshot fetches never contend with the agent hooks appending
-    /// events. `latest.json` is rebuilt under the lock on every mutation and
+    /// `latest.json` rollup when its extent stamp matches the live log,
+    /// falling back to a re-projection on a miss. The fast path is lock-free
+    /// — it reads no event log and takes no lock — so a hot fleet's snapshot
+    /// fetches never contend with the agent hooks appending events.
+    /// `latest.json` is published after every mutation's lock releases and
     /// carries the same runtime liveness expel as [`Self::snapshot`], so the
-    /// served rollup matches the live read; the staleness guard (its mtime vs
-    /// the event log's) catches a fetch racing a just-appended event and
-    /// re-projects instead.
+    /// served rollup matches the live read; the extent stamp catches a fetch
+    /// racing a just-appended event and re-projects instead.
     pub fn snapshot_cached(&self) -> Result<SidebarSnapshot> {
         if let Some(snapshot) = snapshot::read_fresh_latest(&self.inner.paths) {
             return Ok(snapshot);
@@ -1014,14 +1008,15 @@ impl Ledger {
     /// Rotate the active event log when it exceeds `min_bytes`, preserving
     /// the agent rollup across the archive boundary.
     ///
-    /// Steps under the workspace lock:
+    /// Steps under the workspace and publish locks:
     /// 1. Project the current event log's agent rollup, merge it with the
     ///    existing carryover, and persist before the rename so a rotation
     ///    crash leaves both files coherent.
     /// 2. Rename the active log into `events.log.archive/`. UUIDv7 filenames
     ///    keep archives sorted chronologically without an external index.
-    /// 3. Rebuild the persisted snapshot (`latest.json`) from the merged
-    ///    rollup so it no longer depends on the rotated log.
+    /// 3. Reseed the rollup fold base as a new generation and rebuild the
+    ///    persisted snapshot (`latest.json`) from the merged rollup so
+    ///    neither depends on the rotated log.
     /// 4. Prune archives older than `archive_older_than` when set.
     #[must_use = "durability barrier; check the result"]
     pub fn rotate_event_log(
@@ -1031,6 +1026,9 @@ impl Ledger {
     ) -> Result<EventLogRotationOutcome> {
         let outcome = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+            // Fence the snapshot publishers across the rename + reseed, same
+            // workspace → publish ordering as the identity rewrite.
+            let _publish_guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
 
             let events = event_log::read_all(&self.inner.paths.events_log)?;
             let existing = snapshot::read_carryover(&self.inner.paths.agents_carryover)?;
@@ -1080,6 +1078,26 @@ impl Ledger {
     /// torn records at `warn`.
     pub fn read_events(&self) -> Result<Vec<EventEnvelope>> {
         Ok(event_log::read_all(&self.inner.paths.events_log)?)
+    }
+
+    /// Catch the snapshot caches up to the live log, after the workspace
+    /// lock released and the wakeups went out. Serialized on its own
+    /// advisory lock so concurrent writers group-commit: each holder folds
+    /// to the log's *current* end, so the last queued publisher always lands
+    /// the newest state regardless of arrival order, and a queued no-op pays
+    /// only an O(0-delta) fold. Best-effort: the mutation is already durable
+    /// in the event log and feed files, and a reader self-serves any missing
+    /// delta through the same incremental fold — a failed or skipped publish
+    /// costs the next reader latency, never truth.
+    fn publish_snapshot_best_effort(&self) {
+        let publish = || -> Result<()> {
+            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
+            snapshot::rebuild(&self.inner.paths)?;
+            Ok(())
+        };
+        if let Err(err) = publish() {
+            warn!(error = %err, "snapshot publish failed after ledger commit");
+        }
     }
 
     fn wake_per_request_best_effort(&self, item: &FeedItem) {
