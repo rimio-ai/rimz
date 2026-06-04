@@ -44,7 +44,7 @@ The **thinking head** is the second transient: a turn (or subagent) start sets `
 
 ### Instance identity and age
 
-`last_activity` is always the agent's *own* latest event, never inherited from a previous instance of the same kind. When a payload carries no session id the reducer keys the event on a single shared `{kind}:anonymous` bucket, so every unidentified event of a kind folds into one row. This is a known limitation, not a feature: two genuinely distinct session-less instances would merge. It bites no agent today — Claude and Codex both carry a session id on their first state-bearing event (Codex's lazy `SessionStart` rides with the first `UserPromptSubmit`) — and the [instance lifecycle](#the-instance-lifecycle) is where a real per-instance key would land if a future agent emits session-less transitions.
+`last_activity` is always the agent's *own* latest event, never inherited from a previous instance of the same kind. Identity is required: a payload that carries no session id is quarantined — logged under `rimz::agent::lifecycle` and folded to nothing — mirroring the malformed-subagent-identity rule, so two distinct session-less instances can never merge into one row. It bites no agent today: Claude and Codex both carry a session id on their first state-bearing event (Codex's lazy `SessionStart` rides with the first `UserPromptSubmit`), and the [instance lifecycle](#the-instance-lifecycle) is where a real per-instance key would land if a future agent emits session-less transitions.
 
 ## The state machine
 

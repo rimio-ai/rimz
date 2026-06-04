@@ -25,8 +25,8 @@ fn canonical_model(model: &str) -> String {
 }
 
 /// Fold `agent.lifecycle` events into the latest [`AgentState`] per
-/// agent_id, keyed by `(agent_kind, agent_id)`. Anonymous lifecycle events
-/// (no agent_id) collapse to a single rollup keyed by `agent_kind`. Events
+/// agent_id, keyed by `(agent_kind, agent_id)`. A session-less event is
+/// quarantined (logged, folded to nothing) — identity is required. Events
 /// are walked in log order, so the newest observation wins.
 ///
 /// Each event is a *partial* update: `status` always comes from the event,
@@ -69,12 +69,25 @@ pub(super) fn reduce_agent_states_seeded(
             );
             continue;
         };
-        let agent_id = event
+        // Identity is required: a session-less event is quarantined (logged,
+        // folded to nothing), mirroring the malformed-subagent-identity rule —
+        // never silently merged into a shared per-kind bucket where two
+        // distinct instances would collapse into one row.
+        let Some(agent_id) = event
             .params
             .get("agent_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| format!("{kind}:anonymous"));
+        else {
+            warn!(
+                target: "rimz::agent::lifecycle",
+                event_id = %event.event_id,
+                workspace = %event.workspace_id,
+                kind = %kind,
+                "session-less agent.lifecycle event quarantined",
+            );
+            continue;
+        };
         let event_name = event.params.get("event_name").and_then(|v| v.as_str());
         let param_non_empty_string = |key: &str| {
             event
@@ -792,6 +805,29 @@ mod tests {
         assert_eq!(agent.todo_done, Some(3));
         assert_eq!(agent.todo_total, Some(5));
         assert_eq!(agent.task.as_deref(), Some("fix auth flow"));
+    }
+
+    #[test]
+    fn session_less_lifecycle_events_are_quarantined_not_merged() {
+        // Identity is required: an event without an agent_id folds to nothing
+        // (with a log) rather than collapsing into a shared per-kind bucket
+        // where two distinct session-less instances would merge into one row.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let event = EventEnvelope::new(
+            workspace,
+            "session",
+            "claude",
+            "agent-hook",
+            "agent.lifecycle",
+            serde_json::json!({
+                "event_name": "SessionStart",
+                "signal": { "signal": "registered" },
+            }),
+        );
+        assert!(
+            reduce_agent_states(&[event]).is_empty(),
+            "a session-less event produces no rollup entry"
+        );
     }
 
     #[test]

@@ -94,14 +94,15 @@ pub fn agent_tombstones_for_events(events: &[EventEnvelope]) -> BTreeSet<(String
         ) {
             continue;
         }
-        let kind = event.source.clone();
-        let agent_id = event
+        let Some(agent_id) = event
             .params
             .get("agent_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| format!("{kind}:anonymous"));
-        tombstones.insert((kind, agent_id));
+        else {
+            continue;
+        };
+        tombstones.insert((event.source.clone(), agent_id));
     }
     tombstones
 }
