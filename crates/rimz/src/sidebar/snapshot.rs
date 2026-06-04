@@ -227,6 +227,18 @@ fn frame_age_exceeds(produced_at_ms: u64, now_ms: u64) -> bool {
     now_ms.saturating_sub(produced_at_ms) > PUBLISHED_FRAME_STALE_AFTER.as_millis() as u64
 }
 
+/// Age of the producer's published same-session frame at `now_ms`, in
+/// milliseconds — the fork gate reads this to skip a fork while the frame is
+/// younger than one data tick. `None` when no same-session frame exists yet
+/// (cold start, or a session-handoff mismatch), which the gate reads as "no
+/// usable frame: produce". Saturating like [`frame_age_exceeds`], so a clock
+/// that ran backwards reads as fresh (age 0) rather than forcing a fork.
+pub fn published_frame_age_ms(runtime: &RuntimePaths, session: &str, now_ms: u64) -> Option<u64> {
+    let cache_path = runtime.root.join("snapshot.json");
+    read_snapshot_cache(&cache_path, session)
+        .map(|cache| now_ms.saturating_sub(cache.produced_at_ms))
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiffStats {
     pub added: u32,

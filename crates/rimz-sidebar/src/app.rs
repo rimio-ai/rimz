@@ -205,14 +205,21 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         };
         socket.set_read_timeout(Some(timeout))?;
         match wait_for_wakeup(&socket)? {
-            // A background fetch finished. Take the most recent result (drop any
-            // older queued ones), fold it, then fire the deferred refetch a
-            // ledger delta asked for while this one was in flight.
+            // A background fetch posted a result. Take the most recent one
+            // (drop any older queued posts — later is fresher), fold it, then
+            // fire the deferred refetch a ledger delta asked for while the
+            // cycle was in flight. A cycle's fast in-process frame arrives
+            // marked non-final while its fork still runs; only a final outcome
+            // closes the cycle for the single-flight accounting.
             Wakeup::Snapshot => {
-                in_flight = false;
                 let mut latest = None;
+                let mut saw_final = false;
                 while let Ok(outcome) = result_rx.try_recv() {
+                    saw_final |= outcome.final_for_request;
                     latest = Some(outcome);
+                }
+                if saw_final {
+                    in_flight = false;
                 }
                 let mut rejected = false;
                 if let Some(outcome) = latest {
@@ -244,7 +251,10 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                         paint_held = false;
                     }
                 }
-                if !should_exit && let Some(request) = pending_refetch.take() {
+                if !should_exit
+                    && saw_final
+                    && let Some(request) = pending_refetch.take()
+                {
                     request_fetch(
                         &request_tx,
                         &mut in_flight,
@@ -258,7 +268,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 // flight bounds this to one extra run; once the escape hatch
                 // opens, the fetch is accepted and `rejected` clears, so this
                 // never spins.
-                if !should_exit && rejected {
+                if !should_exit && saw_final && rejected {
                     request_fetch(
                         &request_tx,
                         &mut in_flight,
@@ -1182,66 +1192,121 @@ fn fetch_snapshot_for(
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
-/// One refresh cycle's result: the snapshot fetch outcome.
+/// One refresh cycle's result: the snapshot fetch outcome. A cycle can post
+/// two — the in-process fast frame, then the forked produce that reconciles
+/// it. `final_for_request` marks the cycle's last outcome: the loop clears
+/// `in_flight` (and releases any deferred refetch) only on it, so the
+/// single-flight discipline still counts whole cycles, not posts.
 struct FetchOutcome {
     snapshot: std::result::Result<SidebarSnapshot, String>,
+    final_for_request: bool,
 }
 
-/// Fetch the snapshot. Runs on the fetch worker thread (and once inline for the
-/// first frame), keeping the producer's `list-panes` + git round-trip off the
-/// render/input loop so animation never stalls on it.
+/// One fetch cycle, posting one or two outcomes. Runs on the fetch worker
+/// thread, keeping the `list-panes` + git round-trip off the render/input loop
+/// so animation never stalls on it.
 ///
-/// One producer per workspace, one renderer per tab. The eldest live instance
-/// is the producer: it forks `rimz sidebar snapshot` (`list-panes`/git) and
-/// publishes the shared cache. Every younger instance is a consumer — it reads
-/// that published frame **in process** ([`rimz::sidebar::snapshot::read_published_snapshot`]),
-/// folding only its own-pane exclusion, so it never forks a subprocess, never
-/// runs `list-panes`/git, and never exits — a per-tab renderer stays alive and
-/// paints. The mux/git round-trip is paid once per workspace; a consumer with no
-/// published frame yet reports a soft miss so the gate holds its last good frame.
-fn run_fetch(config: &ServeConfig, runtime: &RuntimePaths, request: FetchRequest) -> FetchOutcome {
+/// **Fast lane (every cycle, producer and consumer alike):** fold the
+/// event-fresh ledger rollup over the published pane frame entirely in process
+/// ([`rimz::sidebar::snapshot::read_published_snapshot`]) — no fork, no
+/// `list-panes`, no git. This is the paint that lands a status flip or a cost
+/// update within one wakeup, in single-digit milliseconds. Skipped only when
+/// no usable frame exists (cold start) or the frame outlived the stale
+/// threshold; the produce below recovers both.
+///
+/// **Produce lane (the fork):** `rimz sidebar snapshot` refreshes pane truth,
+/// git, spending, and accounts, and publishes the shared caches. One producer
+/// per workspace — the eldest live instance — and on it the fork is gated to
+/// the data tick: a ledger-delta storm paints per delta but forks at most once
+/// per tick. A consumer forks only when forced (reload, fresh panes) or when
+/// the producer's frame went stale — the self-heal that keeps a stalled
+/// producer from freezing a tab; `cached_base_or_produce` single-flights, so a
+/// fleet self-healing at once still elects one producer.
+fn run_fetch_cycle(
+    config: &ServeConfig,
+    runtime: &RuntimePaths,
+    request: FetchRequest,
+    post: &mut dyn FnMut(FetchOutcome),
+) {
     let is_producer = !rimz::sidebar::elder_sidebar_present(runtime, &config.instance_id);
     let exclude = rimz::mux::own_pane_id(config.mux);
-    // Take the producer path — fork the real `list-panes`/git snapshot — when we
-    // are the elected producer, when the user forced a reload (`r`), or when the
-    // producer's published frame has gone stale. The last is the consumer
-    // self-heal: rather than hold a stalled producer's last frame forever (the
-    // freeze), a consumer produces its own current frame; `cached_base_or_produce`
-    // single-flights, so a fleet self-healing at once still elects one producer.
-    let produce = is_producer
-        || request.force_produce
-        || rimz::sidebar::snapshot::published_frame_is_stale(
-            runtime,
-            &config.session_name,
-            rimz::sidebar::snapshot::unix_now_ms(),
-        );
-    let snapshot = if produce {
-        fetch_snapshot_for(
-            &resolve_snapshot_bin(&config.rimz_bin),
-            &config.workspace_id,
-            Some(config.mux),
-            Some(&config.session_name),
-            exclude,
-            request.min_pane_cache_ms,
-        )
-        .map_err(|err| err.to_string())
-    } else {
-        // Consumer: fold the producer's coalesced panes with the event-fresh
-        // rollup read in process from `latest.json` (read-only — no ledger-writer
-        // import), so a status change or a new agent in an existing pane repaints
-        // within one wakeup without forking `list-panes`.
-        match rimz::ledger::paths::StatePaths::for_workspace(config.workspace_id.clone()) {
-            Ok(state) => rimz::sidebar::snapshot::read_published_snapshot(
+    let now_ms = rimz::sidebar::snapshot::unix_now_ms();
+    let frame_stale =
+        rimz::sidebar::snapshot::published_frame_is_stale(runtime, &config.session_name, now_ms);
+    let fast = (!frame_stale)
+        .then(|| rimz::ledger::paths::StatePaths::for_workspace(config.workspace_id.clone()).ok())
+        .flatten()
+        .and_then(|state| {
+            rimz::sidebar::snapshot::read_published_snapshot(
                 &state,
                 runtime,
                 &config.session_name,
                 exclude.as_ref(),
             )
-            .ok_or_else(|| "waiting for the producer's first published snapshot".to_owned()),
-            Err(err) => Err(err.to_string()),
-        }
-    };
-    FetchOutcome { snapshot }
+        });
+    // The published frame's age decides whether the producer pays the fork this
+    // cycle: a frame younger than one data tick still carries the truth the
+    // fork would re-derive (pane TTL, git TTL, spend caches all outlive it).
+    // Read from the published pane-frame stamp, and only when the fast lane
+    // actually folded that frame — an unreadable ledger must produce, never
+    // coast on a young stamp it could not use.
+    let frame_age_ms = fast.as_ref().and_then(|_| {
+        rimz::sidebar::snapshot::published_frame_age_ms(runtime, &config.session_name, now_ms)
+    });
+    let produce = produce_this_cycle(
+        is_producer,
+        request.force_produce,
+        frame_stale,
+        frame_age_ms,
+        tick_for(config.tick_seconds).as_millis() as u64,
+    );
+    let fast_posted = fast.is_some();
+    if let Some(snapshot) = fast {
+        post(FetchOutcome {
+            snapshot: Ok(snapshot),
+            final_for_request: !produce,
+        });
+    }
+    if produce {
+        post(FetchOutcome {
+            snapshot: fetch_snapshot_for(
+                &resolve_snapshot_bin(&config.rimz_bin),
+                &config.workspace_id,
+                Some(config.mux),
+                Some(&config.session_name),
+                exclude,
+                request.min_pane_cache_ms,
+            )
+            .map_err(|err| err.to_string()),
+            final_for_request: true,
+        });
+    } else if !fast_posted {
+        // Consumer with no published frame yet (cold start): report the soft
+        // miss so the gate holds its last good frame.
+        post(FetchOutcome {
+            snapshot: Err("waiting for the producer's first published snapshot".to_owned()),
+            final_for_request: true,
+        });
+    }
+}
+
+/// Whether this cycle pays the fork, decided from cheap pre-reads. Pure, so
+/// the fork-gating contract is unit-testable: the producer forks when forced
+/// or when the published frame outlived one data tick (`None` age = no usable
+/// frame — cold start); a consumer forks only when forced or self-healing a
+/// stale producer. Everything else rides the in-process fast lane alone.
+fn produce_this_cycle(
+    is_producer: bool,
+    force_produce: bool,
+    frame_stale: bool,
+    frame_age_ms: Option<u64>,
+    tick_ms: u64,
+) -> bool {
+    if is_producer {
+        force_produce || frame_age_ms.is_none_or(|age| age >= tick_ms)
+    } else {
+        force_produce || frame_stale
+    }
 }
 
 /// One request to the fetch worker. `force_produce` makes the run take the
@@ -1299,12 +1364,20 @@ fn spawn_fetch_worker(
             while let Ok(extra) = request_rx.try_recv() {
                 request.merge(extra);
             }
-            let outcome = run_fetch(&config, &runtime, request);
-            if result_tx.send(outcome).is_err() {
+            // Post each outcome as it lands and poke the loop per post, so the
+            // fast in-process frame paints while the fork (if any) still runs.
+            let mut disconnected = false;
+            run_fetch_cycle(&config, &runtime, request, &mut |outcome| {
+                if result_tx.send(outcome).is_err() {
+                    disconnected = true;
+                    return;
+                }
+                if let Some(waker) = &waker {
+                    let _ = waker.send_to(SNAPSHOT_WAKEUP, &socket_path);
+                }
+            });
+            if disconnected {
                 return;
-            }
-            if let Some(waker) = &waker {
-                let _ = waker.send_to(SNAPSHOT_WAKEUP, &socket_path);
             }
         }
     })
@@ -2596,6 +2669,34 @@ mod tests {
     #[test]
     fn tick_for_clamps_zero_to_one() {
         assert_eq!(tick_for(0), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn producer_skips_the_fork_while_its_frame_is_within_one_tick() {
+        // The two-speed contract: a ledger-delta storm paints per delta off the
+        // in-process fast lane, forking at most once per data tick.
+        assert!(!produce_this_cycle(true, false, false, Some(100), 1000));
+        assert!(produce_this_cycle(true, false, false, Some(1000), 1000));
+        assert!(
+            produce_this_cycle(true, false, false, None, 1000),
+            "no usable frame (cold start) always produces"
+        );
+    }
+
+    #[test]
+    fn forced_requests_always_fork() {
+        assert!(produce_this_cycle(true, true, false, Some(0), 1000));
+        assert!(
+            produce_this_cycle(false, true, false, Some(0), 1000),
+            "a consumer reload/resize forks regardless of election"
+        );
+    }
+
+    #[test]
+    fn consumer_forks_only_to_self_heal_a_stale_producer() {
+        assert!(!produce_this_cycle(false, false, false, Some(5_000), 1000));
+        assert!(!produce_this_cycle(false, false, false, None, 1000));
+        assert!(produce_this_cycle(false, false, true, None, 1000));
     }
 
     #[test]
