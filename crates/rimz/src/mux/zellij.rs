@@ -699,7 +699,7 @@ impl MuxBackend for ZellijBackend {
         Ok(raws
             .into_iter()
             .filter(RawPane::is_live_terminal)
-            .map(|mut p| PaneRef {
+            .map(|p| PaneRef {
                 pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", p.id)),
                 session_name: session_name.clone(),
                 view_id: Some(format!("tab_{}", p.tab_id)),
@@ -711,8 +711,8 @@ impl MuxBackend for ZellijBackend {
                 is_focused: p.is_focused,
                 pane_pid: p.pid(),
                 pane_process_start: p.process_start(),
-                command: p.take_command(),
-                cwd: p.take_cwd(),
+                command: p.pane_ref_command(),
+                cwd: p.reported_cwd().map(str::to_owned),
                 // Zellij's `list-panes -j` exposes no per-pane "tab is active"
                 // or "session attached" signal, so pane visibility is unknown
                 // here. `None` makes the renderer's visibility gate fall back
@@ -1170,9 +1170,7 @@ fn tabs_with_sidebars(panes: &[RawPane]) -> std::collections::HashSet<String> {
 }
 
 fn is_daemon_host_pane(pane: &RawPane) -> bool {
-    pane.pane_command
-        .as_deref()
-        .or(pane.command.as_deref())
+    pane.reported_command()
         .is_some_and(crate::remote_control::command_is_host)
 }
 
@@ -1276,30 +1274,41 @@ impl RawPane {
         self.is_terminal() && !self.is_held && !self.exited
     }
 
-    /// Move the command out of the owned `RawPane` (consumed once, during
-    /// `list_panes`) rather than cloning it. A title-identified sidebar wins:
-    /// Zellij can omit command fields for the layout pane, and it must still be
-    /// filtered as chrome rather than rendered as an anonymous process row.
-    /// Otherwise `pane_command` wins, falling back through the older command
-    /// field and the newer full `terminal_command`.
-    fn take_command(&mut self) -> Option<String> {
+    /// The command the pane reports, by the field ladder Zellij has emitted
+    /// across versions: `pane_command` (the foreground program) wins, falling
+    /// back through the older `command` to the newer full `terminal_command`.
+    /// A present-but-empty field falls through rather than masking a later
+    /// one. The one ladder shared by the `PaneRef` projection and the raw-pane
+    /// classifiers, so the two layers always agree on a pane.
+    fn reported_command(&self) -> Option<&str> {
+        [
+            self.pane_command.as_deref(),
+            self.command.as_deref(),
+            self.terminal_command.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|value| !value.is_empty())
+    }
+
+    /// The command the pane's `PaneRef` carries. A title-identified sidebar
+    /// wins: Zellij can omit command fields for the layout pane, and it must
+    /// still be filtered as chrome rather than rendered as an anonymous
+    /// process row. Otherwise the reported-command ladder decides.
+    fn pane_ref_command(&self) -> Option<String> {
         if is_sidebar_pane(self) {
             return Some(SIDEBAR_PANE_NAME.to_owned());
         }
-        self.pane_command
-            .take()
-            .or_else(|| self.command.take())
-            .or_else(|| self.terminal_command.take())
-            .filter(|value| !value.is_empty())
+        self.reported_command().map(str::to_owned)
     }
 
-    /// Move the cwd out of the owned `RawPane`; `pane_cwd` wins, falling back
-    /// to `cwd`.
-    fn take_cwd(&mut self) -> Option<String> {
-        self.pane_cwd
-            .take()
-            .or_else(|| self.cwd.take())
-            .filter(|value| !value.is_empty())
+    /// The cwd the pane reports; `pane_cwd` wins, falling back to `cwd`, with
+    /// a present-but-empty field falling through like the command ladder.
+    fn reported_cwd(&self) -> Option<&str> {
+        [self.pane_cwd.as_deref(), self.cwd.as_deref()]
+            .into_iter()
+            .flatten()
+            .find(|value| !value.is_empty())
     }
 
     fn pid(&self) -> Option<u32> {
@@ -1794,24 +1803,37 @@ mod tests {
             "title": "shell",
             "pane_command": "zsh",
             "terminal_command": "ignored"
+          },
+          {
+            "id": 3,
+            "is_plugin": false,
+            "tab_id": 0,
+            "title": "claude",
+            "pane_command": "",
+            "terminal_command": "claude remote-control --spawn worktree"
           }
         ]"#;
-        let mut parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
+        let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
 
         assert_eq!(
-            parsed[0].take_command().as_deref(),
+            parsed[0].pane_ref_command().as_deref(),
             Some("rimz-sidebar"),
             "a title-identified sidebar stays chrome even when command fields are missing or point at the launcher",
         );
         assert_eq!(
-            parsed[1].take_command().as_deref(),
+            parsed[1].pane_ref_command().as_deref(),
             Some("claude remote-control --spawn worktree"),
             "Zellij's full terminal command is the host-process signal",
         );
         assert_eq!(
-            parsed[2].take_command().as_deref(),
+            parsed[2].pane_ref_command().as_deref(),
             Some("zsh"),
             "pane_command remains the foreground-command source when present",
+        );
+        assert_eq!(
+            parsed[3].pane_ref_command().as_deref(),
+            Some("claude remote-control --spawn worktree"),
+            "a present-but-empty field falls through the ladder instead of masking a later one",
         );
     }
 
@@ -1857,12 +1879,19 @@ mod tests {
             "tab_id": 0,
             "title": "/home/marvin/.cargo/bin/rimz codex app-server serve --workspace-id ws_1 --session-name rimz-home",
             "pane_command": "/home/marvin/.cargo/bin/rimz codex app-server serve --workspace-id ws_1 --session-name rimz-home"
+          },
+          {
+            "id": 3,
+            "is_plugin": false,
+            "tab_id": 1,
+            "title": "claude remote-control --spawn worktree",
+            "terminal_command": "claude remote-control --spawn worktree"
           }
         ]"#;
         let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
         let views = views_with_sidebars(&panes);
 
-        assert_eq!(views.len(), 1);
+        assert_eq!(views.len(), 2);
         assert_eq!(views[0].view, "0");
         assert!(!views[0].has_working);
         assert!(
@@ -1870,6 +1899,10 @@ mod tests {
             "a daemon host marks the view so reload never collapses it as an orphan",
         );
         assert!(views[0].sidebar_panes.is_empty());
+        assert!(
+            views[1].has_daemon_host && !views[1].has_working,
+            "a host reported only via terminal_command is still a daemon host, not user work",
+        );
     }
 
     #[test]

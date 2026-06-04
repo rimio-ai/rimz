@@ -42,10 +42,12 @@ Backend-specific fast paths cannot become correctness requirements. If a feature
 
 `list_panes` reports each pane's **foreground command** and **cwd** alongside its id and view. The sidebar uses these for presence: a pane is a row, its command labels it, and its cwd groups it by worktree (see [sidebar.md → Presence model](./sidebar.md#presence-model)). Both fields are cross-backend:
 
-| field        | tmux                       | Zellij (`list-panes -j`) |
-|--------------|----------------------------|--------------------------|
-| command      | `#{pane_current_command}`  | `pane_command`           |
-| cwd          | `#{pane_current_path}`     | `pane_cwd`               |
+| field        | tmux                       | Zellij (`list-panes -j`)                          |
+|--------------|----------------------------|---------------------------------------------------|
+| command      | `#{pane_current_command}`  | `pane_command` → `command` → `terminal_command`   |
+| cwd          | `#{pane_current_path}`     | `pane_cwd` → `cwd`                                |
+
+Zellij's command and cwd fields are a ladder, not a single field: the adapter takes the first **non-empty** field in the order shown, spanning the names Zellij has emitted across versions (`terminal_command` carries the full launch command line, which is also the remote-control host signal). One exception: a pane titled `rimz-sidebar` — the layout-named sidebar — reports `rimz-sidebar` as its command regardless of the command fields, because Zellij can omit them for the layout pane and the sidebar must still be filtered as chrome rather than rendered as an anonymous process row.
 
 `PaneRef.pane_process_start` stays the reused-id reconciliation key. Neither backend's pane PID feeds the sidebar: tmux's `#{pane_pid}` is the pane's *shell*, not the agent it launched, and Zellij exposes no pane PID at all. Agent liveness instead uses the agent's own pid, captured best-effort by its hook ([agent.md](./agent.md)) — so the parity floor for presence is command + cwd, which both backends meet.
 
