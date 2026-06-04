@@ -93,6 +93,16 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // resolver chain budgets identically across agents.
     hook_cap: Duration::from_secs(120),
     process_names: &["pi"],
+    // Pi's progress-proving events, in its own wire vocabulary. The blocking
+    // `tool_call` is excluded like Claude's `PreToolUse`: it fires while the
+    // ask is being created, so touching on it would instantly un-block the
+    // row. Every *completed* tool still touches via `tool_execution_end`.
+    activity_events: &[
+        "session_start",
+        "before_agent_start",
+        "agent_end",
+        "tool_execution_end",
+    ],
     hook_install_unavailable: None,
     thread_key: ThreadKey::PerFile,
 };
@@ -628,6 +638,24 @@ mod tests {
         assert!(PiAdapter.moves_on("before_agent_start"));
         assert!(PiAdapter.moves_on("agent_end"));
         assert!(!PiAdapter.moves_on("session_start"));
+    }
+
+    #[test]
+    fn progress_events_touch_the_activity_heartbeat() {
+        let descriptor = PiAdapter.descriptor();
+        for event in [
+            "session_start",
+            "before_agent_start",
+            "agent_end",
+            "tool_execution_end",
+        ] {
+            assert!(descriptor.records_activity(event), "event {event}");
+        }
+        // The blocking gate races the ask it creates; a shutdown is an end,
+        // not progress.
+        assert!(!descriptor.records_activity("tool_call"));
+        assert!(!descriptor.records_activity("session_shutdown"));
+        assert!(!descriptor.records_activity("session_before_compact"));
     }
 
     #[test]

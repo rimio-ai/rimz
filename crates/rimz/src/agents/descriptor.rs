@@ -38,6 +38,15 @@ pub struct AgentDescriptor {
     /// plus any launcher (`node` for a JS bundle). Drives the PID-attribution
     /// `/proc` walk.
     pub process_names: &'static [&'static str],
+    /// Lifecycle events, in this agent's own wire vocabulary, that prove the
+    /// agent is actively making progress — a tool completed, a turn started
+    /// or ended, a subagent spawned or finished. These refresh the per-agent
+    /// activity heartbeat. A blocking pre-tool gate (Claude's `PreToolUse`,
+    /// pi's `tool_call`) is deliberately excluded: it can fire in the same
+    /// tool call as a blocking ask, so touching on it would race the ask
+    /// creation and instantly un-block the row. An idle notification is
+    /// excluded too — waiting for input is not progress.
+    pub activity_events: &'static [&'static str],
     /// User-facing reason shown by doctor/start when
     /// [`Capabilities::hook_install`] is false.
     pub hook_install_unavailable: Option<&'static str>,
@@ -133,6 +142,12 @@ impl AgentDescriptor {
     /// [`AgentKind`](crate::ids::AgentKind) for a known adapter.
     pub fn kind_id(&self) -> crate::ids::AgentKind {
         crate::ids::AgentKind::new_unchecked(self.kind)
+    }
+
+    /// Whether an event refreshes the per-agent activity heartbeat. See
+    /// [`activity_events`](Self::activity_events).
+    pub fn records_activity(&self, event_name: &str) -> bool {
+        self.activity_events.contains(&event_name)
     }
 
     pub fn tool_mutates(&self, payload: &Value) -> bool {

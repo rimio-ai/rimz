@@ -97,6 +97,16 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // Codex commonly runs as a `node` bundle, so PID attribution accepts the
     // launcher process name beside its own.
     process_names: &["codex", "node"],
+    // Codex hooks ride Claude-style event names; `PreToolUse` (races the
+    // blocking ask) and `Notification` (idle) are deliberately absent.
+    activity_events: &[
+        "PostToolUse",
+        "Stop",
+        "UserPromptSubmit",
+        "SessionStart",
+        "SubagentStart",
+        "SubagentStop",
+    ],
     hook_install_unavailable: None,
     // Codex logs one rollout file per session.
     thread_key: ThreadKey::PerFile,

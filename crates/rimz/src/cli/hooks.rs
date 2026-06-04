@@ -258,10 +258,11 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                 );
             }
             // Refresh the agent's activity heartbeat on progress-proving events
-            // so the sidebar's `last_activity` advances per tool call, not just
-            // per turn. A latency hint, never correctness — log and continue on
-            // failure.
-            if event_records_activity(&event_name)
+            // (the descriptor's `activity_events`, in each agent's own wire
+            // vocabulary) so the sidebar's `last_activity` advances per tool
+            // call, not just per turn. A latency hint, never correctness —
+            // log and continue on failure.
+            if agent.descriptor().records_activity(&event_name)
                 && let Err(err) = rimz::agent_activity::touch(
                     ledger.runtime_paths(),
                     agent.descriptor().kind,
@@ -752,24 +753,6 @@ fn build_item(
     item.worktree_path = Some(workspace.worktree_root.display().to_string());
     item.worktree_branch = workspace.worktree_branch.clone();
     item
-}
-
-/// Lifecycle events that prove the agent is actively making progress — a tool
-/// completed, a turn started or ended, a subagent spawned or finished. These
-/// refresh the per-agent activity heartbeat. `PreToolUse` is deliberately
-/// excluded: it can fire in the same tool call as a blocking ask, so touching
-/// on it would race the ask creation and instantly un-block the row. A
-/// `Notification` means the agent is idle awaiting input, so it is excluded too.
-fn event_records_activity(event_name: &str) -> bool {
-    matches!(
-        event_name,
-        "PostToolUse"
-            | "Stop"
-            | "UserPromptSubmit"
-            | "SessionStart"
-            | "SubagentStart"
-            | "SubagentStop"
-    )
 }
 
 /// Spawn an adapter-requested `rimz` helper detached, with all stdio nulled

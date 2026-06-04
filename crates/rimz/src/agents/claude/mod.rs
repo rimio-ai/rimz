@@ -86,6 +86,16 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     },
     hook_cap: CLAUDE_HOOK_CAP,
     process_names: &["claude"],
+    // `PreToolUse` (races the blocking ask) and `Notification` (idle) are
+    // deliberately absent.
+    activity_events: &[
+        "PostToolUse",
+        "Stop",
+        "UserPromptSubmit",
+        "SessionStart",
+        "SubagentStart",
+        "SubagentStop",
+    ],
     hook_install_unavailable: None,
     // A Claude session spreads across `<session_id>/chat.jsonl` plus
     // `<session_id>/subagents/*.jsonl`; the session directory is the thread.
