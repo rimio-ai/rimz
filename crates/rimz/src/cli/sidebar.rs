@@ -257,7 +257,6 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 }
             }
             if let Some(frame) = frame {
-                snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
                 let mut panes = frame.panes;
                 if let Some(own) = exclude.as_ref() {
                     snapshot.own_view = rimz::SidebarOwnView::from_panes(own, &panes);

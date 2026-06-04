@@ -22,12 +22,12 @@ use rimz::mux::PaneListOptions;
 use rimz::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use tracing::{debug, info, warn};
 
-use crate::render::{self, Alert, Browse, JumpStamp, UiState};
+use crate::render::{self, Alert, Browse, UiState};
 
 mod input;
 use input::{
-    JUMP_NUDGE_WAKEUP, KeyAction, SELF_CLOSE_WAKEUP, SNAPSHOT_WAKEUP, Wakeup, encode_key,
-    encode_mouse, wait_for_wakeup,
+    KeyAction, SELF_CLOSE_WAKEUP, SNAPSHOT_WAKEUP, Wakeup, encode_key, encode_mouse,
+    wait_for_wakeup,
 };
 
 #[derive(Clone, Debug)]
@@ -312,20 +312,6 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     true,
                 );
             }
-            // The detached jump thread reports its focus command landed: pull a
-            // fresh pane list now and require a cache produced after this
-            // signal — a frame predating the jump cannot confirm the stamp —
-            // so the derived baseline converges in one mux round-trip instead
-            // of waiting out the backstop tick.
-            Wakeup::JumpNudge => {
-                request_fetch(
-                    &request_tx,
-                    &mut in_flight,
-                    &mut pending_refetch,
-                    FetchRequest::fresh_panes(),
-                    true,
-                );
-            }
             Wakeup::Resize => {
                 // A grow is the mux handing the sidebar a freed sibling's space —
                 // the precondition for the self-close full-width flash. Hold the
@@ -354,7 +340,6 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                         &mut terminal,
                         &current,
                         anim_start,
-                        &socket_path,
                     )? {
                         dirty = false;
                     }
@@ -437,7 +422,6 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     &mut terminal,
                     &current,
                     anim_start,
-                    &socket_path,
                 )? {
                     dirty = false;
                 }
@@ -1082,16 +1066,6 @@ const SLOW_ANIMATION_FRAME: Duration = Duration::from_millis(300);
 /// already-queued datagram drain on this turn without a zero-timeout busy spin.
 const FRAME_MIN_TIMEOUT: Duration = Duration::from_millis(1);
 
-/// How long a jump stamp pins the jumped pane before reverting to the derived
-/// baseline — the failure-mode ceiling for a jump the queried state never
-/// confirms (a focus command that failed, or a cross-tab jump whose confirm
-/// belongs to the destination tab's sidebar). It outlasts one pane-cache window
-/// (750ms) so a confirm that is merely one window late never flicker-reverts,
-/// yet stays under two backstop ticks (~2s) so it self-heals quickly. A
-/// same-tab jump clears *early* the instant a post-stamp frame derives the
-/// jumped pane, so this is never the steady-state latency.
-const JUMP_STAMP_TTL: Duration = Duration::from_millis(1500);
-
 /// The animation frame index for `now`, derived from elapsed wall-clock since
 /// the serve loop's monotonic base. Every redraw path sets the phase from this,
 /// so the spin advances on real time and survives re-fetches and ledger deltas
@@ -1144,7 +1118,6 @@ fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
         agent_hooks_ready: false,
         wired_lazy_kinds: Vec::new(),
         own_view: None,
-        panes_produced_at_ms: None,
         only_daemon_view_remains: false,
         project_root: None,
         worktree_roots: Vec::new(),
@@ -1537,13 +1510,7 @@ fn apply_fetch_outcome(
         .filter(|view| !view.own_is_active)
         .and_then(|view| view.active_pane_id.clone())
         .filter(|pane| row_index_of_pane(current, pane).is_some());
-    reconcile_selection(
-        ui,
-        current,
-        derived,
-        current.panes_produced_at_ms,
-        Instant::now(),
-    );
+    reconcile_selection(ui, current, derived);
     ui.animation_phase = wall_clock_phase(anim_start);
     // Fold the fresh tally into the count-up: a higher figure starts an eased
     // roll that the next frames paint, a reset or first value snaps. A fetch
@@ -1743,7 +1710,6 @@ fn apply_input(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     snapshot: &SidebarSnapshot,
     anim_start: Instant,
-    wake_socket: &Path,
 ) -> Result<bool> {
     let outcome = handle_wakeup(wakeup, ui, snapshot);
     if outcome.dismiss {
@@ -1755,18 +1721,11 @@ fn apply_input(
         ui.animation_phase = wall_clock_phase(anim_start);
         render::draw_to_terminal_with_ui(terminal, snapshot, health.alert.as_ref(), ui)?;
     }
-    if outcome.focus
-        && let Some(pane) = ui.selected_pane.clone()
-    {
-        // The handler already stamped the jump echo and repainted; fire the
-        // one-way async focus command at the very pane the echo pinned —
-        // stamped and focused are the same value by construction. The derived
-        // baseline confirms or expires the stamp when the queried state
-        // catches up — there is no sync protocol behind the jump, only the
-        // post-`Ok` nudge back to our own wakeup socket so a fresh frame
-        // confirms in one round-trip. (A pane-less row selects with no pane,
-        // so it stamps nothing and jumps nowhere.)
-        spawn_pane_focus(pane, wake_socket.to_owned());
+    if let Some(pane) = outcome.focus {
+        // A jump fires the one-way focus command at the resolved pane and
+        // mutates no UI state. The highlight moves only when the derived
+        // baseline catches up on a later fold — late, never wrong.
+        spawn_pane_focus(pane);
     }
     Ok(outcome.redraw)
 }
@@ -1776,25 +1735,25 @@ fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -
         Wakeup::Key(action) => handle_key(action, ui, snapshot),
         Wakeup::MouseClick { column, row } => handle_mouse_click(column, row, ui, snapshot),
         Wakeup::Resize => InputOutcome::redraw(),
-        // The serve loop intercepts these before dispatching here: a tick, a
-        // ledger delta, or a jump nudge is a re-fetch trigger, worker
-        // completions are folded, and a reload re-execs.
+        // The serve loop intercepts these before dispatching here: a tick or a
+        // ledger delta is a re-fetch trigger, worker completions are folded,
+        // and a reload re-execs.
         Wakeup::Tick
         | Wakeup::Ledger { .. }
-        | Wakeup::JumpNudge
         | Wakeup::Reload
         | Wakeup::Snapshot
         | Wakeup::SelfCloseProbe => InputOutcome::default(),
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct InputOutcome {
     redraw: bool,
-    /// Jump to the pane the handler just selected and stamped
-    /// (`UiState::selected_pane`) — the outcome carries the intent, never a
-    /// row position to re-resolve.
-    focus: bool,
+    /// The pane to fire the one-way focus command at — `Some` only on a jump
+    /// action. The handler resolves the target and returns it without moving
+    /// the highlight: selection stays derived state, so there is nothing to
+    /// repaint until the baseline catches up.
+    focus: Option<PaneId>,
     dismiss: bool,
 }
 
@@ -1802,15 +1761,15 @@ impl InputOutcome {
     fn redraw() -> Self {
         Self {
             redraw: true,
-            focus: false,
+            focus: None,
             dismiss: false,
         }
     }
 
-    fn focus() -> Self {
+    fn focus(pane: PaneId) -> Self {
         Self {
-            redraw: true,
-            focus: true,
+            redraw: false,
+            focus: Some(pane),
             dismiss: false,
         }
     }
@@ -1818,7 +1777,7 @@ impl InputOutcome {
     fn dismiss() -> Self {
         Self {
             redraw: true,
-            focus: false,
+            focus: None,
             dismiss: true,
         }
     }
@@ -1844,17 +1803,19 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
             InputOutcome::default()
         }
         KeyAction::Enter => {
-            // Jump on the current row: stamp it so the highlight holds through
-            // any pre-jump frame still in flight, identical to a click.
-            select_row(ui, snapshot, ui.selected_index);
-            stamp_jump(ui);
-            InputOutcome::focus()
+            // Jump on the current row: fire the focus command at the selected
+            // pane without touching selection — the highlight follows once the
+            // derived baseline catches up, identical to a click.
+            match ui.selected_pane.clone() {
+                Some(pane) => InputOutcome::focus(pane),
+                None => InputOutcome::default(),
+            }
         }
         KeyAction::Space => {
-            if let Some(index) = next_attention_index(snapshot, ui.selected_index) {
-                select_row(ui, snapshot, index);
-                stamp_jump(ui);
-                return InputOutcome::focus();
+            if let Some(index) = next_attention_index(snapshot, ui.selected_index)
+                && let Some(pane) = pane_at_row(snapshot, index)
+            {
+                return InputOutcome::focus(pane);
             }
             InputOutcome::default()
         }
@@ -1865,10 +1826,8 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
         KeyAction::Dismiss => InputOutcome::dismiss(),
         KeyAction::Digit(digit) => {
             let index = usize::from(digit.saturating_sub(1));
-            if index < visible_row_count(snapshot) {
-                select_row(ui, snapshot, index);
-                stamp_jump(ui);
-                return InputOutcome::focus();
+            if let Some(pane) = pane_at_row(snapshot, index) {
+                return InputOutcome::focus(pane);
             }
             InputOutcome::default()
         }
@@ -1881,34 +1840,38 @@ fn handle_mouse_click(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
 ) -> InputOutcome {
-    if let Some(index) = row_index_at_screen_position(ui, row) {
-        select_row(ui, snapshot, index);
-        stamp_jump(ui);
-        return InputOutcome::focus();
+    if let Some(index) = row_index_at_screen_position(ui, row)
+        && let Some(pane) = pane_at_row(snapshot, index)
+    {
+        return InputOutcome::focus(pane);
     }
     InputOutcome::default()
 }
 
 /// Point the highlight at a visible row by index — the identity-keyed selection
-/// (`selected_pane`) plus its derived render index. A pure positioner: the
-/// browse-vs-jump semantics live in the layer the caller then sets
-/// (`begin_or_continue_browse` / `stamp_jump`), so the highlight is always
-/// anchored to a pane, never a bare position.
+/// (`selected_pane`) plus its derived render index. A pure positioner for the
+/// arrow-key browse; the jump actions resolve their target through
+/// [`pane_at_row`] instead and never move the highlight.
 fn select_row(ui: &mut UiState, snapshot: &SidebarSnapshot, index: usize) {
     ui.selected_index = index;
-    ui.selected_pane = visible_rows(snapshot)
+    ui.selected_pane = pane_at_row(snapshot, index);
+}
+
+/// The pane backing visible row `index`, or `None` for a pane-less row or an
+/// out-of-range index.
+fn pane_at_row(snapshot: &SidebarSnapshot, index: usize) -> Option<PaneId> {
+    visible_rows(snapshot)
         .nth(index)
         .and_then(|row| row.pane.as_ref())
-        .map(|pane| pane.pane_id.clone());
+        .map(|pane| pane.pane_id.clone())
 }
 
 /// Pin the just-selected pane as the arrow-browse pick. The first arrow of a
 /// browse captures the baseline it began from — the clear condition — and a
 /// later arrow only moves the pick, so a long browse keeps one anchor and a
 /// mid-browse baseline change still ends it. Roams every visible row, other
-/// tabs' rows included. Browsing locally supersedes any in-flight jump echo.
+/// tabs' rows included.
 fn begin_or_continue_browse(ui: &mut UiState) {
-    ui.jump_stamp = None;
     if let Some(pane) = ui.selected_pane.clone() {
         let baseline_at_start = match ui.browse.take() {
             Some(browse) => browse.baseline_at_start,
@@ -1917,22 +1880,6 @@ fn begin_or_continue_browse(ui: &mut UiState) {
         ui.browse = Some(Browse {
             pane,
             baseline_at_start,
-        });
-    }
-}
-
-/// Stamp the just-selected pane as the optimistic echo of the one-way jump the
-/// caller is about to fire: the highlight moves the instant the user acts, and
-/// the queried state confirms or reverts it (`reconcile_selection` rule 2). A
-/// burst overwrites the stamp wholesale — the last click wins and gets a full
-/// TTL window. Replaces any browse: the jump is the act that ends browsing.
-fn stamp_jump(ui: &mut UiState) {
-    ui.browse = None;
-    if let Some(pane) = ui.selected_pane.clone() {
-        ui.jump_stamp = Some(JumpStamp {
-            pane,
-            at_ms: rimz::sidebar::snapshot::unix_now_ms(),
-            deadline: Instant::now() + JUMP_STAMP_TTL,
         });
     }
 }
@@ -1950,64 +1897,34 @@ fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
 /// state: the baseline is the own view's active working pane, re-queried from
 /// the mux every fold — same-tab by construction — so the highlight always
 /// reconverges on where the user actually is; it cannot desynchronize, only lag
-/// a frame. Two transient local layers ride above it: an arrow-key [`Browse`]
-/// pick and an in-flight [`JumpStamp`] echo. Keyed on pane identity, never
-/// position.
+/// a frame. One transient local layer rides above it: the arrow-key [`Browse`]
+/// pick. A jump moves no local state — its highlight arrives here, when the
+/// baseline catches up. Keyed on pane identity, never position.
 ///
 /// `derived` is the snapshot's active-pane derivation, pre-filtered at the call
 /// site to a non-sidebar row: `Some(pane)` iff `!own_is_active` and the view's
 /// active pane is a row in this snapshot; `None` otherwise.
-/// `frame_produced_at_ms` is when that frame's pane list was read
-/// (`panes_produced_at_ms`), so a stamp can tell a pre-jump frame from a
-/// post-jump one; `now` is monotonic, used only for the stamp TTL.
 ///
 /// Ordered rules:
 /// 1. **Hold-last baseline.** A `Some` derivation advances `baseline_pane`; a
 ///    `None` holds it, so a momentary "no active row" gap (the sidebar itself
 ///    focused) never blanks or moves the highlight.
-/// 2. **Jump stamp.** A live stamp pins the jumped pane. It clears when a frame
-///    read at/after the stamp derives the jumped pane (confirmed — the queried
-///    state caught up), or when the TTL passes (a failed or cross-tab jump); a
-///    frame read *before* the stamp predates the jump and decides nothing.
-/// 3. **Browse.** A live browse pins its pick while the baseline still equals
+/// 2. **Browse.** A live browse pins its pick while the baseline still equals
 ///    the value captured at browse start; a genuine baseline change ends it.
-/// 4. **Follow the baseline** — the steady state.
-/// 5. **Reanchor.** State whose pane left the room is dropped, and
+/// 3. **Follow the baseline** — the steady state.
+/// 4. **Reanchor.** State whose pane left the room is dropped, and
 ///    `anchor_selection` re-derives `selected_index` by identity.
-fn reconcile_selection(
-    ui: &mut UiState,
-    snapshot: &SidebarSnapshot,
-    derived: Option<PaneId>,
-    frame_produced_at_ms: Option<u64>,
-    now: Instant,
-) {
+fn reconcile_selection(ui: &mut UiState, snapshot: &SidebarSnapshot, derived: Option<PaneId>) {
     // 1. Hold-last baseline: a Some derivation advances it, a None holds it.
     if let Some(pane) = derived {
         ui.baseline_pane = Some(pane);
     }
 
-    // 2. Jump stamp: pin the jumped pane until a post-stamp frame confirms it
-    //    or the TTL reverts a jump that never landed. On either clear the
-    //    highlight falls through to the baseline — the jumped pane itself on a
-    //    confirm, the real one on an expiry: late, never wrong.
-    let mut pinned = false;
-    if let Some(stamp) = ui.jump_stamp.take() {
-        let frame_is_post_stamp = frame_produced_at_ms.is_some_and(|ms| ms >= stamp.at_ms);
-        let confirmed = frame_is_post_stamp && ui.baseline_pane.as_ref() == Some(&stamp.pane);
-        if !confirmed && now < stamp.deadline {
-            ui.selected_pane = Some(stamp.pane.clone());
-            ui.jump_stamp = Some(stamp);
-            pinned = true;
-        }
-    }
-
-    // 3. Browse: hold the roamed pick while the baseline hasn't genuinely
+    // 2. Browse: hold the roamed pick while the baseline hasn't genuinely
     //    moved; on a baseline change the take stands — the browse ends and the
-    //    highlight follows the new baseline. (At most one of stamp/browse is
-    //    live — each setter clears the other — so the `pinned` gate is
-    //    belt-and-braces, not a priority rule.)
-    if !pinned
-        && let Some(browse) = ui.browse.take()
+    //    highlight follows the new baseline.
+    let mut pinned = false;
+    if let Some(browse) = ui.browse.take()
         && ui.baseline_pane == browse.baseline_at_start
     {
         ui.selected_pane = Some(browse.pane.clone());
@@ -2015,22 +1932,17 @@ fn reconcile_selection(
         pinned = true;
     }
 
-    // 4. Steady state: the highlight is the derived baseline.
+    // 3. Steady state: the highlight is the derived baseline.
     if !pinned && let Some(pane) = ui.baseline_pane.clone() {
         ui.selected_pane = Some(pane);
     }
 
-    // 5. Drop state whose pane left the room — so a pick or stamp whose pane
-    //    closed stops shadowing the baseline — then re-anchor by identity.
+    // 4. Drop state whose pane left the room — so a pick whose pane closed
+    //    stops shadowing the baseline — then re-anchor by identity.
     if let Some(pane) = ui.baseline_pane.clone()
         && row_index_of_pane(snapshot, &pane).is_none()
     {
         ui.baseline_pane = None;
-    }
-    if let Some(stamp) = &ui.jump_stamp
-        && row_index_of_pane(snapshot, &stamp.pane).is_none()
-    {
-        ui.jump_stamp = None;
     }
     if let Some(browse) = &ui.browse
         && row_index_of_pane(snapshot, &browse.pane).is_none()
@@ -2108,27 +2020,14 @@ fn next_attention_index(snapshot: &SidebarSnapshot, selected: usize) -> Option<u
 /// re-validation; a pane recycled in the sub-second window since the snapshot
 /// self-corrects on the next refresh.
 /// Errors are logged, not surfaced — a missed jump is a retriable annoyance,
-/// never a reason to block the UI. Once the focus command lands, the thread
-/// posts the [`JUMP_NUDGE_WAKEUP`] back to this renderer's own wakeup socket so
-/// the loop pulls a fresh pane frame and the derived baseline confirms the
-/// stamp in one mux round-trip. The nudge is best-effort latency: a failed send
-/// degrades to the backstop tick, never to a wrong highlight.
-fn spawn_pane_focus(pane_id: PaneId, wake_socket: PathBuf) {
+/// never a reason to block the UI. The command is the whole jump: no local
+/// state changes, and the highlight converges on the next data fold (the
+/// backstop tick or a ledger wakeup) once the mux reports the new focus.
+fn spawn_pane_focus(pane_id: PaneId) {
     std::thread::spawn(move || {
         let backend = rimz::mux::backend_for(pane_id.mux());
         if let Err(err) = backend.focus_pane(&pane_id) {
             warn!(pane = %pane_id, error = %err, "sidebar pane focus failed");
-            return;
-        }
-        match UnixDatagram::unbound() {
-            Ok(socket) => {
-                if let Err(err) = socket.send_to(JUMP_NUDGE_WAKEUP, &wake_socket) {
-                    debug!(error = %err, "post-jump nudge send failed; backstop tick converges");
-                }
-            }
-            Err(err) => {
-                debug!(error = %err, "post-jump nudge socket failed; backstop tick converges");
-            }
         }
     });
 }
@@ -2984,20 +2883,6 @@ mod tests {
         );
     }
 
-    /// Wall-clock base for stamp/frame ordering in tests: any fixed Unix-ms
-    /// value works — only the relative order of stamp vs frame matters.
-    const STAMP_MS: u64 = 1_700_000_000_000;
-
-    /// A jump stamp pinning `pane`, fired at wall-clock `at_ms`, expiring at
-    /// the monotonic `deadline`.
-    fn stamp(pane: &PaneId, at_ms: u64, deadline: Instant) -> JumpStamp {
-        JumpStamp {
-            pane: pane.clone(),
-            at_ms,
-            deadline,
-        }
-    }
-
     /// A browse pick of `pane`, begun while the derived baseline was `baseline`.
     fn browse(pane: &PaneId, baseline: Option<&PaneId>) -> Browse {
         Browse {
@@ -3021,13 +2906,7 @@ mod tests {
         );
         let mut ui = UiState::default();
 
-        reconcile_selection(
-            &mut ui,
-            &snapshot,
-            Some(active.clone()),
-            Some(STAMP_MS),
-            Instant::now(),
-        );
+        reconcile_selection(&mut ui, &snapshot, Some(active.clone()));
 
         assert_eq!(ui.selected_index, 1);
         assert_eq!(ui.selected_pane, Some(active.clone()));
@@ -3050,7 +2929,7 @@ mod tests {
         );
         let mut ui = UiState::default();
 
-        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
+        reconcile_selection(&mut ui, &snapshot, None);
 
         assert_eq!(ui.selected_pane, None);
         assert_eq!(ui.selected_index, 0);
@@ -3079,13 +2958,7 @@ mod tests {
             ..Default::default()
         };
 
-        reconcile_selection(
-            &mut ui,
-            &snapshot,
-            Some(now_active.clone()),
-            Some(STAMP_MS),
-            Instant::now(),
-        );
+        reconcile_selection(&mut ui, &snapshot, Some(now_active.clone()));
 
         assert_eq!(ui.selected_index, 2);
         assert_eq!(ui.selected_pane, Some(now_active.clone()));
@@ -3113,21 +2986,21 @@ mod tests {
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
+        reconcile_selection(&mut ui, &snapshot, None);
 
         assert_eq!(ui.selected_pane, Some(held.clone()));
         assert_eq!(ui.baseline_pane, Some(held));
     }
 
     #[test]
-    fn lagging_pre_jump_frame_does_not_bounce() {
-        // A jump stamped terminal_2 (from terminal_1) while the producer's
-        // frame still predates the click and derives the pre-jump active pane.
-        // The stamp pins the jumped pane — no bounce — because a pre-stamp
-        // frame can neither confirm the jump nor move the highlight.
+    fn highlight_moves_only_when_the_baseline_catches_up() {
+        // The "accepts latency" contract behind the one-packet jump: a jump
+        // action fires the focus command and mutates nothing, so a fold still
+        // deriving the old pane keeps the old highlight, and the jumped pane
+        // lights up only once the mux reports it focused.
         let ws = workspace();
-        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let from = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
@@ -3136,188 +3009,27 @@ mod tests {
             ],
         );
         let mut ui = UiState {
-            selected_index: 1,
-            selected_pane: Some(jumped.clone()),
+            selected_index: 0,
+            selected_pane: Some(from.clone()),
             baseline_pane: Some(from.clone()),
-            jump_stamp: Some(stamp(
-                &jumped,
-                STAMP_MS,
-                Instant::now() + Duration::from_secs(60),
-            )),
+            line_map: line_map_for(&snapshot, 0),
             ..Default::default()
         };
 
-        // The frame was read 100ms before the click and still derives `from`.
-        reconcile_selection(
-            &mut ui,
-            &snapshot,
-            Some(from),
-            Some(STAMP_MS - 100),
-            Instant::now(),
-        );
+        // Click terminal_2's row: the outcome carries the target, the UI holds.
+        let row1 = ui.line_map.iter().position(|m| *m == Some(1)).unwrap();
+        let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
+        assert_eq!(outcome.focus, Some(jumped.clone()));
+        assert_eq!(ui.selected_pane, Some(from.clone()));
 
-        assert_eq!(
-            ui.selected_pane,
-            Some(jumped),
-            "the stamp holds — no bounce"
-        );
-        assert!(ui.jump_stamp.is_some(), "undecided: the stamp stays live");
-    }
+        // A fold still deriving the pre-jump pane keeps the old highlight.
+        reconcile_selection(&mut ui, &snapshot, Some(from.clone()));
+        assert_eq!(ui.selected_pane, Some(from));
 
-    #[test]
-    fn jump_stamp_confirms_on_fresh_matching_frame() {
-        // A frame read after the stamp derives the jumped pane: the queried
-        // state caught up, the stamp clears, and the highlight follows the
-        // baseline — which now IS the jumped pane.
-        let ws = workspace();
-        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", false),
-                pane("terminal_2", "tab_0", true),
-            ],
-        );
-        let mut ui = UiState {
-            selected_index: 1,
-            selected_pane: Some(jumped.clone()),
-            baseline_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
-            jump_stamp: Some(stamp(
-                &jumped,
-                STAMP_MS,
-                Instant::now() + Duration::from_secs(60),
-            )),
-            ..Default::default()
-        };
-
-        reconcile_selection(
-            &mut ui,
-            &snapshot,
-            Some(jumped.clone()),
-            Some(STAMP_MS + 100),
-            Instant::now(),
-        );
-
-        assert_eq!(ui.jump_stamp, None, "confirmed: the stamp clears");
+        // The fold that derives the jumped pane moves it.
+        reconcile_selection(&mut ui, &snapshot, Some(jumped.clone()));
         assert_eq!(ui.selected_pane, Some(jumped.clone()));
         assert_eq!(ui.baseline_pane, Some(jumped));
-    }
-
-    #[test]
-    fn jump_stamp_ttl_expiry_reverts_to_baseline() {
-        // The TTL passed without a confirming frame — a focus command that
-        // failed, or a cross-tab jump whose confirm belongs to the destination
-        // tab's sidebar. The stamp clears and the highlight reconverges on the
-        // real baseline: late, never wrong.
-        let ws = workspace();
-        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let real = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", true),
-                pane("terminal_2", "tab_0", false),
-            ],
-        );
-        let now = Instant::now();
-        let mut ui = UiState {
-            selected_index: 1,
-            selected_pane: Some(jumped.clone()),
-            baseline_pane: Some(real.clone()),
-            jump_stamp: Some(stamp(&jumped, STAMP_MS, now)),
-            ..Default::default()
-        };
-
-        reconcile_selection(
-            &mut ui,
-            &snapshot,
-            Some(real.clone()),
-            Some(STAMP_MS + 100),
-            now,
-        );
-
-        assert_eq!(ui.jump_stamp, None, "expired: the stamp clears");
-        assert_eq!(ui.selected_pane, Some(real));
-    }
-
-    #[test]
-    fn post_stamp_disagreeing_frame_holds_until_ttl() {
-        // A frame read after the stamp that derives a *different* pane is most
-        // often the focus command still in flight — `list-panes` ran between
-        // the click and the focus landing. The stamp holds until confirm or
-        // TTL rather than bouncing; a genuine external move during the window
-        // simply lands when the TTL clears: late, never wrong.
-        let ws = workspace();
-        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let other = PaneId::from_parts(MuxName::Zellij, "terminal_3");
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", false),
-                pane("terminal_2", "tab_0", false),
-                pane("terminal_3", "tab_0", true),
-            ],
-        );
-        let mut ui = UiState {
-            selected_index: 1,
-            selected_pane: Some(jumped.clone()),
-            baseline_pane: None,
-            jump_stamp: Some(stamp(
-                &jumped,
-                STAMP_MS,
-                Instant::now() + Duration::from_secs(60),
-            )),
-            ..Default::default()
-        };
-
-        reconcile_selection(
-            &mut ui,
-            &snapshot,
-            Some(other.clone()),
-            Some(STAMP_MS + 100),
-            Instant::now(),
-        );
-
-        assert_eq!(ui.selected_pane, Some(jumped), "the stamp still pins");
-        assert!(ui.jump_stamp.is_some());
-        assert_eq!(
-            ui.baseline_pane,
-            Some(other),
-            "the baseline tracks the queried truth underneath"
-        );
-    }
-
-    #[test]
-    fn burst_overwrites_stamp() {
-        // Two jumps in a burst: the second stamp replaces the first wholesale —
-        // the last click wins, with its own at_ms and a full TTL window. No
-        // trail, no per-pane reasoning.
-        let ws = workspace();
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", false),
-                pane("terminal_2", "tab_0", false),
-                pane("terminal_3", "tab_0", false),
-            ],
-        );
-        let mut ui = UiState::default();
-
-        select_row(&mut ui, &snapshot, 1);
-        stamp_jump(&mut ui);
-        let first = ui.jump_stamp.clone().expect("first stamp");
-        select_row(&mut ui, &snapshot, 2);
-        stamp_jump(&mut ui);
-        let second = ui.jump_stamp.clone().expect("second stamp");
-
-        assert_eq!(
-            second.pane,
-            PaneId::from_parts(MuxName::Zellij, "terminal_3"),
-            "the last click wins"
-        );
-        assert_ne!(first.pane, second.pane);
-        assert!(second.at_ms >= first.at_ms);
-        assert!(second.deadline >= first.deadline);
     }
 
     #[test]
@@ -3345,7 +3057,7 @@ mod tests {
         select_row(&mut ui, &snapshot, 1);
         begin_or_continue_browse(&mut ui);
         // While browsing the user has the sidebar focused, so frames derive None.
-        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
+        reconcile_selection(&mut ui, &snapshot, None);
 
         assert_eq!(ui.selected_pane, Some(remote), "the pick roams cross-tab");
         assert_eq!(ui.baseline_pane, Some(here), "the baseline never moves");
@@ -3373,8 +3085,8 @@ mod tests {
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
-        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
+        reconcile_selection(&mut ui, &snapshot, None);
+        reconcile_selection(&mut ui, &snapshot, None);
 
         assert_eq!(ui.selected_pane, Some(picked));
         assert!(ui.browse.is_some(), "still browsing");
@@ -3404,45 +3116,49 @@ mod tests {
             ..Default::default()
         };
 
-        reconcile_selection(
-            &mut ui,
-            &snapshot,
-            Some(moved.clone()),
-            Some(STAMP_MS),
-            Instant::now(),
-        );
+        reconcile_selection(&mut ui, &snapshot, Some(moved.clone()));
 
         assert_eq!(ui.browse, None, "a real move ends the browse");
         assert_eq!(ui.selected_pane, Some(moved));
     }
 
     #[test]
-    fn local_actions_supersede_each_other() {
-        // A jump replaces a browse; a fresh arrow replaces the jump echo. At
-        // most one local layer is ever live.
+    fn browse_survives_a_jump_and_ends_on_baseline_change() {
+        // A jump mutates nothing, the browse included: an Enter mid-browse
+        // leaves the pick in place, so the highlight holds still until the
+        // derived baseline catches up underneath it — no flicker back to the
+        // old pane. The browse then ends on the genuine baseline change.
         let ws = workspace();
+        let anchor = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let picked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
-                pane("terminal_1", "tab_0", false),
+                pane("terminal_1", "tab_0", true),
                 pane("terminal_2", "tab_0", false),
             ],
         );
-        let mut ui = UiState::default();
-
-        select_row(&mut ui, &snapshot, 0);
-        begin_or_continue_browse(&mut ui);
-        assert!(ui.browse.is_some());
+        let mut ui = UiState {
+            baseline_pane: Some(anchor.clone()),
+            ..Default::default()
+        };
 
         select_row(&mut ui, &snapshot, 1);
-        stamp_jump(&mut ui);
-        assert_eq!(ui.browse, None, "the jump ends the browse");
-        assert!(ui.jump_stamp.is_some());
-
-        select_row(&mut ui, &snapshot, 0);
         begin_or_continue_browse(&mut ui);
-        assert_eq!(ui.jump_stamp, None, "browsing supersedes the jump echo");
+        let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
+        assert_eq!(outcome.focus, Some(picked.clone()));
+        assert!(ui.browse.is_some(), "the jump leaves the browse in place");
+
+        // An inert fold (baseline unchanged) keeps the pick pinned.
+        reconcile_selection(&mut ui, &snapshot, Some(anchor));
         assert!(ui.browse.is_some());
+        assert_eq!(ui.selected_pane, Some(picked.clone()));
+
+        // The fold that derives the jumped pane ends the browse seamlessly —
+        // the baseline takes over on the same pane.
+        reconcile_selection(&mut ui, &snapshot, Some(picked.clone()));
+        assert_eq!(ui.browse, None, "a real baseline change ends the browse");
+        assert_eq!(ui.selected_pane, Some(picked));
     }
 
     #[test]
@@ -3499,13 +3215,7 @@ mod tests {
             ..Default::default()
         };
 
-        reconcile_selection(
-            &mut ui,
-            &snapshot,
-            Some(active.clone()),
-            Some(STAMP_MS),
-            Instant::now(),
-        );
+        reconcile_selection(&mut ui, &snapshot, Some(active.clone()));
 
         assert_eq!(ui.selected_index, 0, "re-anchored to the pane's new row");
         assert_eq!(ui.selected_pane, Some(active));
@@ -3531,7 +3241,7 @@ mod tests {
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
+        reconcile_selection(&mut ui, &snapshot, None);
 
         assert_eq!(ui.selected_pane, None, "dangling identity dropped");
         assert_eq!(ui.baseline_pane, None, "absent baseline cleared");
@@ -3561,45 +3271,11 @@ mod tests {
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
+        reconcile_selection(&mut ui, &snapshot, None);
         assert_eq!(ui.browse, None, "the dead pick is dropped");
 
         // The next fold reconverges on the live baseline.
-        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
-        assert_eq!(ui.selected_pane, Some(real));
-    }
-
-    #[test]
-    fn stamp_drops_when_its_pane_leaves_the_room() {
-        // A jump stamped a pane that closed mid-flight: the stamp is dropped
-        // rather than pinning a ghost until the TTL.
-        let ws = workspace();
-        let gone = PaneId::from_parts(MuxName::Zellij, "terminal_9");
-        let real = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", true),
-                pane("terminal_2", "tab_0", false),
-            ],
-        );
-        let mut ui = UiState {
-            selected_index: 1,
-            selected_pane: Some(gone.clone()),
-            baseline_pane: Some(real.clone()),
-            jump_stamp: Some(stamp(
-                &gone,
-                STAMP_MS,
-                Instant::now() + Duration::from_secs(60),
-            )),
-            ..Default::default()
-        };
-
-        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
-        assert_eq!(ui.jump_stamp, None, "the dead stamp is dropped");
-
-        // The next fold reconverges on the live baseline.
-        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
+        reconcile_selection(&mut ui, &snapshot, None);
         assert_eq!(ui.selected_pane, Some(real));
     }
 
@@ -3720,8 +3396,9 @@ mod tests {
     }
 
     #[test]
-    fn mouse_click_selects_clicked_row() {
+    fn mouse_click_fires_focus_without_moving_selection() {
         let ws = workspace();
+        let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
@@ -3740,14 +3417,56 @@ mod tests {
 
         let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
 
-        assert_eq!(outcome, InputOutcome::focus());
-        assert_eq!(ui.selected_index, 1);
-        assert_eq!(
-            ui.jump_stamp.as_ref().map(|stamp| &stamp.pane),
-            ui.selected_pane.as_ref(),
-            "a click stamps the optimistic jump echo on the selected pane — the one the focus fires at"
+        assert_eq!(outcome, InputOutcome::focus(target));
+        assert!(!outcome.redraw, "a jump changes nothing to repaint");
+        assert_eq!(ui.selected_index, 0, "the click moves no selection");
+        assert_eq!(ui.selected_pane, None);
+        assert_eq!(ui.browse, None);
+    }
+
+    #[test]
+    fn digit_fires_focus_at_the_ordinal_row_without_selecting() {
+        let ws = workspace();
+        let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+            ],
         );
-        assert!(ui.selected_pane.is_some());
+        let mut ui = UiState::default();
+
+        let outcome = handle_key(KeyAction::Digit(2), &mut ui, &snapshot);
+
+        assert_eq!(outcome, InputOutcome::focus(target));
+        assert_eq!(ui.selected_index, 0, "the digit moves no selection");
+        assert_eq!(ui.selected_pane, None);
+
+        // An out-of-range ordinal resolves no pane and does nothing.
+        let outcome = handle_key(KeyAction::Digit(9), &mut ui, &snapshot);
+        assert_eq!(outcome, InputOutcome::default());
+    }
+
+    #[test]
+    fn space_fires_focus_at_the_next_attention_row_without_selecting() {
+        let ws = workspace();
+        let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let mut snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", true),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        snapshot.worktree_groups[0].rows[1].status = Some(rimz::feed::AgentStatus::Waiting);
+        let mut ui = UiState::default();
+
+        let outcome = handle_key(KeyAction::Space, &mut ui, &snapshot);
+
+        assert_eq!(outcome, InputOutcome::focus(target));
+        assert_eq!(ui.selected_index, 0, "the triage key moves no selection");
+        assert_eq!(ui.selected_pane, None);
     }
 
     #[test]
@@ -3772,10 +3491,7 @@ mod tests {
 
         assert_eq!(outcome, InputOutcome::redraw());
         assert_eq!(ui.selected_index, 1);
-        assert!(
-            ui.browse.is_some() && ui.jump_stamp.is_none(),
-            "arrow browse begins a browse pick, never a jump echo"
-        );
+        assert!(ui.browse.is_some(), "an arrow begins a browse pick");
     }
 
     #[test]
@@ -3794,8 +3510,9 @@ mod tests {
     }
 
     #[test]
-    fn enter_reports_focus_after_highlight_redraw() {
+    fn enter_fires_focus_at_the_selected_pane_without_mutating_ui() {
         let ws = workspace();
+        let selected = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
@@ -3805,6 +3522,7 @@ mod tests {
         );
         let mut ui = UiState {
             selected_index: 1,
+            selected_pane: Some(selected.clone()),
             help_visible: false,
             animation_phase: 0,
             line_map: Vec::new(),
@@ -3813,14 +3531,18 @@ mod tests {
 
         let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
 
-        assert_eq!(outcome, InputOutcome::focus());
+        assert_eq!(outcome, InputOutcome::focus(selected.clone()));
         assert_eq!(ui.selected_index, 1);
         assert_eq!(
-            ui.jump_stamp.as_ref().map(|stamp| &stamp.pane),
-            ui.selected_pane.as_ref(),
-            "Enter stamps the optimistic jump echo on the selected pane — the one the focus fires at"
+            ui.selected_pane,
+            Some(selected),
+            "Enter reads, never writes"
         );
-        assert!(ui.selected_pane.is_some());
+
+        // With nothing selected there is no target and nothing happens.
+        ui.selected_pane = None;
+        let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
+        assert_eq!(outcome, InputOutcome::default());
     }
 
     // ---- last-known-good commit gate -------------------------------------

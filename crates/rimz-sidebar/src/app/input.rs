@@ -25,11 +25,6 @@ pub(super) enum Wakeup {
     /// A resize-triggered sibling-count probe finished. This carries only
     /// pane-list metadata for the self-close latch, never a rendered snapshot.
     SelfCloseProbe,
-    /// The detached jump thread reports its one-way focus command landed. The
-    /// loop pulls a fresh pane list (a cached frame predating the jump cannot
-    /// confirm the stamp), so the derived baseline converges in one mux
-    /// round-trip instead of waiting out the backstop tick.
-    JumpNudge,
     Resize,
     /// `rimz reload` asks the renderer to re-exec its own binary in place so a
     /// freshly-installed build takes effect without a session rebirth.
@@ -57,9 +52,6 @@ pub(super) enum KeyAction {
 /// wakeup uses keeps the loop blocking in exactly one place.
 pub(super) const SNAPSHOT_WAKEUP: &[u8] = b"snapshot";
 pub(super) const SELF_CLOSE_WAKEUP: &[u8] = b"self_close_probe";
-/// The control word the detached jump thread posts once `focus_pane` returns
-/// `Ok` — the post-jump fresh-frame nudge.
-pub(super) const JUMP_NUDGE_WAKEUP: &[u8] = b"jump_nudge";
 
 pub(super) fn encode_key(code: KeyCode) -> Option<String> {
     let wire = match code {
@@ -111,7 +103,6 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
     match raw {
         "snapshot" => Wakeup::Snapshot,
         "self_close_probe" => Wakeup::SelfCloseProbe,
-        "jump_nudge" => Wakeup::JumpNudge,
         "resize" => Wakeup::Resize,
         "reload" => Wakeup::Reload,
         "key:up" => Wakeup::Key(KeyAction::Up),
@@ -238,13 +229,6 @@ mod tests {
     }
 
     #[test]
-    fn jump_nudge_control_word_decodes_to_a_fetch_trigger() {
-        // The detached jump thread and the decoder share one constant so the
-        // post-jump fresh-frame nudge cannot drift into a no-op Tick.
-        assert_eq!(decode_wakeup(JUMP_NUDGE_WAKEUP), Wakeup::JumpNudge);
-    }
-
-    #[test]
     fn r_key_triggers_a_reload() {
         // Pressing `r` re-execs the renderer in place by riding the same
         // `reload` control word the CLI's wakeup posts.
@@ -282,7 +266,6 @@ mod tests {
             "reload".to_owned(),
             String::from_utf8(SNAPSHOT_WAKEUP.to_vec()).unwrap(),
             String::from_utf8(SELF_CLOSE_WAKEUP.to_vec()).unwrap(),
-            String::from_utf8(JUMP_NUDGE_WAKEUP.to_vec()).unwrap(),
             String::from_utf8(rimz::ledger::wakeup::RELOAD_WAKEUP.to_vec()).unwrap(),
         ];
         for code in [

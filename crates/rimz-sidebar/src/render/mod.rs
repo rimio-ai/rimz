@@ -21,7 +21,6 @@ mod theme;
 pub(crate) use odometer::TallyAnim;
 
 use std::io::{self, Write};
-use std::time::Instant;
 
 use jiff::Timestamp;
 use ratatui::backend::{Backend, CrosstermBackend};
@@ -62,9 +61,9 @@ pub struct UiState {
     pub line_map: Vec<Option<usize>>,
     /// The pane the highlight is pinned to — selection keyed by identity, not
     /// position. Re-derived each fold by `app::reconcile_selection` from the
-    /// derived `baseline_pane` and any live `browse`/`jump_stamp`. Keying on
-    /// the pane means a status-churn reorder re-anchors the highlight to the
-    /// same pane instead of sliding it onto a neighbour.
+    /// derived `baseline_pane` and any live `browse`. Keying on the pane means
+    /// a status-churn reorder re-anchors the highlight to the same pane
+    /// instead of sliding it onto a neighbour.
     pub selected_pane: Option<PaneId>,
     /// The hold-last derived baseline: the own view's active working pane from
     /// the last frame that reported one. Selection is *derived* — recomputed
@@ -76,40 +75,17 @@ pub struct UiState {
     /// The transient arrow-key browse pick riding above the baseline, or `None`
     /// when not browsing (see [`Browse`]).
     pub(crate) browse: Option<Browse>,
-    /// The optimistic local echo of an in-flight jump, or `None` when no jump
-    /// is pending (see [`JumpStamp`]). At most one of `browse`/`jump_stamp` is
-    /// live — each setter clears the other.
-    pub(crate) jump_stamp: Option<JumpStamp>,
 }
 
 /// Arrow-key browse: pins `pane` WITHOUT moving focus, roaming every visible
 /// row — other tabs' rows included, so any card is one keystroke from
-/// expanding. Holds until the user jumps (the stamp replaces it) or the derived
-/// baseline genuinely changes from `baseline_at_start` — the value captured
-/// when browsing began. A `None` derivation holds the baseline, so an inert
-/// frame never ends a browse.
+/// expanding. Holds until the derived baseline genuinely changes from
+/// `baseline_at_start` — the value captured when browsing began. A `None`
+/// derivation holds the baseline, so an inert frame never ends a browse.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Browse {
     pub(crate) pane: PaneId,
     pub(crate) baseline_at_start: Option<PaneId>,
-}
-
-/// Click / `↵` / digit / `␣`: the optimistic local echo of a fire-and-forget
-/// jump. The jump itself is one one-way mux focus command; the stamp only keeps
-/// the highlight on the jumped `pane` until the *queried* state catches up. It
-/// clears when a frame read at/after `at_ms` derives the jumped pane as the
-/// baseline (confirmed), or when `deadline` passes (a jump that never landed —
-/// or a cross-tab jump, which confirms in the destination tab's sidebar, not
-/// here). A frame read *before* `at_ms` predates the jump and decides nothing.
-/// A burst overwrites the stamp wholesale: the last click wins.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct JumpStamp {
-    pub(crate) pane: PaneId,
-    /// Wall-clock Unix ms when the jump fired, ordered against the snapshot's
-    /// `panes_produced_at_ms` (producer and renderer share one host clock).
-    pub(crate) at_ms: u64,
-    /// Monotonic failure-mode ceiling (`app::JUMP_STAMP_TTL`).
-    pub(crate) deadline: Instant,
 }
 
 /// A sticky health alert pinned to the bottom of the sidebar.

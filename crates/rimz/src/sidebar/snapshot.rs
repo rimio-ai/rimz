@@ -498,7 +498,6 @@ pub fn enrich_consumer(
     // it before folding panes, not after.
     snapshot.wired_lazy_kinds = wired_lazy_kinds();
     if let Some(frame) = frame {
-        snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
         let panes = frame.panes;
         if let Some(own) = exclude {
             snapshot.own_view = SidebarOwnView::from_panes(own, &panes);
