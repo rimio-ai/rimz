@@ -33,6 +33,7 @@ use rimz::feed::{
     RuntimeOwnerKind, Surface,
 };
 use rimz::ids::{MuxName, PaneId};
+use rimz::ledger::AskExpiry;
 use rimz::ledger::runtime::process_owner;
 use rimz::resolver::{Allowlist, AllowlistEntry, fresh_enrolled, is_resolver_fresh, restat};
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
@@ -169,6 +170,25 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         // Captured for the out-of-band Codex context refresh below: the model id
         // the observation resolved, used to look up the model's display name.
         let mut model_hint: Option<String> = None;
+        // A lifecycle boundary can strand the session's pending native_ui asks:
+        // the agent answers those in its own UI and never reports back, so they
+        // pile up as duplicate attention. When the session *ends*, expire every
+        // surface it left pending; when it merely *moves on* (a new prompt or
+        // turn end), expire only its native_ui asks so an in-flight bridge ask
+        // keeps resolving. The sidebar's read-side guard self-heals races. The
+        // expiry rides the lifecycle append's own lock cycle below.
+        let expiry_scope = if agent.ends_session(&event_name) {
+            Some(AskExpiry::SessionEnded)
+        } else if agent.moves_on(&event_name) {
+            Some(AskExpiry::MovedOn)
+        } else {
+            None
+        };
+        let agent_id = payload_agent_id(&payload);
+        let expiry = match (agent_id, expiry_scope) {
+            (Some(agent_id), Some(scope)) => Some((agent.name(), agent_id, scope)),
+            _ => None,
+        };
         if let Some(mut observation) = agent.observe_lifecycle(&event_name, &payload) {
             attach_agent_owner(agent.name(), &mut observation);
             attach_agent_pane(&mut observation);
@@ -190,34 +210,26 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                 &event_name,
                 &observation,
             );
-            if let Err(err) = ledger.append_event(&envelope) {
+            if let Err(err) = ledger.append_event_and_expire(&envelope, expiry) {
                 warn!(
                     agent = agent.name(),
                     event = %event_name,
                     error = %err,
-                    "lifecycle: failed to append agent.lifecycle event",
+                    "lifecycle: failed to record the agent.lifecycle event",
                 );
             }
-        }
-        // A lifecycle boundary can strand the session's pending native_ui asks:
-        // the agent answers those in its own UI and never reports back, so they
-        // pile up as duplicate attention. When the session *ends*, expire every
-        // surface it left pending; when it merely *moves on* (a new prompt or
-        // turn end), expire only its native_ui asks so an in-flight bridge ask
-        // keeps resolving. The sidebar's read-side guard self-heals races.
-        if let Some(agent_id) = payload_agent_id(&payload) {
-            let expiry = if agent.ends_session(&event_name) {
-                Some(ledger.expire_agent_session(agent.name(), agent_id, &workspace.session_name))
-            } else if agent.moves_on(&event_name) {
-                Some(ledger.expire_agent_native_ui_asks(
-                    agent.name(),
-                    agent_id,
-                    &workspace.session_name,
-                ))
-            } else {
-                None
+        } else if let Some((source, agent_id, scope)) = expiry {
+            // A boundary event the adapter doesn't observe still expires the
+            // session's superseded asks through the standalone path.
+            let result = match scope {
+                AskExpiry::SessionEnded => {
+                    ledger.expire_agent_session(source, agent_id, &workspace.session_name)
+                }
+                AskExpiry::MovedOn => {
+                    ledger.expire_agent_native_ui_asks(source, agent_id, &workspace.session_name)
+                }
             };
-            if let Some(Err(err)) = expiry {
+            if let Err(err) = result {
                 warn!(
                     agent = agent.name(),
                     event = %event_name,
@@ -225,6 +237,8 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                     "lifecycle: failed to expire the session's pending asks",
                 );
             }
+        }
+        if let Some(agent_id) = agent_id {
             // Tombstone the session's statusline context sidecar so it can't
             // pin stale enrichment to a session the rollup has dropped.
             if agent.ends_session(&event_name)
@@ -427,20 +441,14 @@ fn handle_blocking_feed(
     payload: Value,
 ) -> Result<()> {
     // A fresh ask supersedes any earlier native_ui ask this session left
-    // pending — the agent only ever shows one at a time in its own UI. Expire
-    // the priors before pushing so the sidebar never stacks two rows for one
-    // session. Bridge asks resolve via their socket and are left alone.
-    if let Some(agent_id) = payload_agent_id(&payload)
-        && let Err(err) =
-            ledger.expire_agent_native_ui_asks(agent.name(), agent_id, &workspace.session_name)
-    {
-        warn!(
-            agent = agent.name(),
-            event = %event_name,
-            error = %err,
-            "blocking feed: failed to expire the session's prior native_ui asks",
-        );
-    }
+    // pending — the agent only ever shows one at a time in its own UI. The
+    // push below expires the priors inside its own critical section, so the
+    // sidebar never stacks two rows for one session and the hook pays one
+    // lock cycle. Bridge asks resolve via their socket and are left alone.
+    let superseded_session: Option<String> = payload_agent_id(&payload).map(ToOwned::to_owned);
+    let supersede = superseded_session
+        .as_deref()
+        .map(|agent_id| (agent.name(), agent_id));
 
     let allowlist = Allowlist::load().context("loading resolver allowlist")?;
     let fresh = fresh_enrolled(ledger.runtime_paths(), &allowlist)
@@ -451,7 +459,7 @@ fn handle_blocking_feed(
         // item, wakes sidebars, returns the neutral no-op, and exits — the
         // agent's own UI is the answer surface.
         let item = build_item(workspace, Surface::NativeUi, feed_kind, agent, payload);
-        ledger.push_feed_item(&item, &workspace.session_name)?;
+        ledger.push_feed_item_superseding(&item, supersede, &workspace.session_name)?;
         emit_neutral(agent, event_name)?;
         return Ok(());
     }
@@ -488,7 +496,7 @@ fn handle_blocking_feed(
         downgraded.chain.clear();
         downgraded.chain_active_resolver = None;
         downgraded.chain_active_until = None;
-        ledger.push_feed_item(&downgraded, &workspace.session_name)?;
+        ledger.push_feed_item_superseding(&downgraded, supersede, &workspace.session_name)?;
         emit_neutral(agent, event_name)?;
         return Ok(());
     }
@@ -500,7 +508,7 @@ fn handle_blocking_feed(
         nonce: item.nonce.clone(),
     };
 
-    ledger.push_feed_item(&item, &workspace.session_name)?;
+    ledger.push_feed_item_superseding(&item, supersede, &workspace.session_name)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

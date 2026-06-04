@@ -62,7 +62,7 @@ pub use crate::ledger::workspace_record::WorkspaceRecord;
 /// both scopes which surfaces are eligible and supplies the audit reason, so
 /// the two can never drift apart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AskExpiry {
+pub enum AskExpiry {
     /// The session ended outright; expire every surface it left pending.
     SessionEnded,
     /// A live session moved on; expire only its native_ui asks. Bridge asks
@@ -203,6 +203,57 @@ fn sweep_dead_owned_items_debounced(
     Ok(abandoned)
 }
 
+/// Move a session's matching pending agent-hook asks to `Abandoned` with an
+/// `AgentMovedOn`/`AgentSessionEnded` resolution and a `feed.expire` audit
+/// event. Caller holds the workspace lock and owns the snapshot rebuild and
+/// the wakeups for the returned targets.
+fn expire_agent_asks_locked(
+    paths: &StatePaths,
+    source: &str,
+    agent_id: &str,
+    session_name: &str,
+    expiry: AskExpiry,
+) -> Result<Vec<(WorkspaceId, RequestId)>> {
+    let reason = expiry.reason();
+    let mut expired = Vec::new();
+    for mut item in feed_store::list_pending(&paths.feed_dir)? {
+        if item.source_kind != "agent-hook"
+            || item.source != source
+            || item.status != FeedStatus::Pending
+            || item.agent_session_id() != Some(agent_id)
+            || !expiry.includes(item.surface)
+        {
+            continue;
+        }
+        item.mark_active_resolver_budget_elapsed(reason);
+        let mut resolution =
+            Resolution::new(json!({ "expired": true }), ResolutionMethod::AgentMovedOn);
+        resolution.reason = Some(reason.as_str().to_owned());
+        item.status = FeedStatus::Abandoned;
+        item.resolution = Some(resolution);
+        item.updated_at = Timestamp::now();
+        feed_store::write(&paths.feed_dir, &item)?;
+        event_log::append(
+            &paths.events_log,
+            &EventEnvelope::new(
+                item.workspace_id.clone(),
+                session_name,
+                "rimz",
+                "cli",
+                "feed.expire",
+                json!({
+                    "request_id": item.request_id,
+                    "source": source,
+                    "agent_id": agent_id,
+                    "reason": reason.as_str(),
+                }),
+            ),
+        )?;
+        expired.push((item.workspace_id.clone(), item.request_id.clone()));
+    }
+    Ok(expired)
+}
+
 fn abandon_dead_owned_items_locked(
     paths: &StatePaths,
     session_name: &str,
@@ -324,19 +375,44 @@ impl Ledger {
     /// Append a freestanding event (no feed item write).
     #[must_use = "durability barrier; check the result"]
     pub fn append_event(&self, event: &EventEnvelope) -> Result<()> {
-        let abandoned = {
+        self.append_event_and_expire(event, None).map(|_| ())
+    }
+
+    /// Append a lifecycle event and expire the session's superseded pending
+    /// asks under one lock cycle with one snapshot rebuild — the
+    /// highest-cadence hook path (a turn boundary from every live agent)
+    /// pays one flock acquire instead of two. `expiry` carries
+    /// `(source, agent_id, scope)`; `None` is a plain append. Returns the
+    /// number of asks expired.
+    #[must_use = "durability barrier; check the result"]
+    pub fn append_event_and_expire(
+        &self,
+        event: &EventEnvelope,
+        expiry: Option<(&str, &str, AskExpiry)>,
+    ) -> Result<usize> {
+        let (abandoned, expired) = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             let abandoned =
                 sweep_dead_owned_items_debounced(&self.inner.paths, &event.session_name)?;
             event_log::append(&self.inner.paths.events_log, event)?;
+            let expired = match expiry {
+                Some((source, agent_id, scope)) => expire_agent_asks_locked(
+                    &self.inner.paths,
+                    source,
+                    agent_id,
+                    &event.session_name,
+                    scope,
+                )?,
+                None => Vec::new(),
+            };
             snapshot::rebuild(&self.inner.paths)?;
-            abandoned
+            (abandoned, expired)
         };
-        for (workspace_id, request_id) in &abandoned {
+        for (workspace_id, request_id) in abandoned.iter().chain(expired.iter()) {
             self.wake_sidebars_best_effort(workspace_id, request_id);
         }
         self.wake_sidebars_for_event_best_effort(event);
-        Ok(())
+        Ok(expired.len())
     }
 
     /// Write a new feed item to disk, append a `feed.push` event, and rebuild
@@ -344,18 +420,43 @@ impl Ledger {
     /// lock so partial writes can't surface to the sidebar.
     #[must_use = "durability barrier; check the result"]
     pub fn push_feed_item(&self, item: &FeedItem, session_name: &str) -> Result<()> {
-        let abandoned = {
+        self.push_feed_item_superseding(item, None, session_name)
+    }
+
+    /// [`Self::push_feed_item`] that also expires the session's prior
+    /// native_ui asks in the same critical section — a fresh ask supersedes
+    /// them before being pushed, under one lock cycle with one snapshot
+    /// rebuild. `supersede` carries `(source, agent_id)`; `None` is a plain
+    /// push.
+    #[must_use = "durability barrier; check the result"]
+    pub fn push_feed_item_superseding(
+        &self,
+        item: &FeedItem,
+        supersede: Option<(&str, &str)>,
+        session_name: &str,
+    ) -> Result<()> {
+        let (abandoned, expired) = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             let abandoned = sweep_dead_owned_items_debounced(&self.inner.paths, session_name)?;
+            let expired = match supersede {
+                Some((source, agent_id)) => expire_agent_asks_locked(
+                    &self.inner.paths,
+                    source,
+                    agent_id,
+                    session_name,
+                    AskExpiry::MovedOn,
+                )?,
+                None => Vec::new(),
+            };
             feed_store::write(&self.inner.paths.feed_dir, item)?;
             event_log::append(
                 &self.inner.paths.events_log,
                 &EventEnvelope::feed_pushed(item, session_name),
             )?;
             snapshot::rebuild(&self.inner.paths)?;
-            abandoned
+            (abandoned, expired)
         };
-        for (workspace_id, request_id) in &abandoned {
+        for (workspace_id, request_id) in abandoned.iter().chain(expired.iter()) {
             self.wake_sidebars_best_effort(workspace_id, request_id);
         }
         self.wake_sidebars_best_effort(&item.workspace_id, &item.request_id);
@@ -841,10 +942,11 @@ impl Ledger {
         self.expire_agent_asks(source, agent_id, session_name, AskExpiry::MovedOn)
     }
 
-    /// Move a session's matching pending agent-hook asks to `Abandoned` with an
-    /// `AgentMovedOn` resolution and a `feed.expire` audit event, then rebuild
-    /// the snapshot and wake sidebars. `expiry` scopes which surfaces are
-    /// eligible and supplies the audit reason. Closing the loop here is
+    /// Standalone wrapper over [`expire_agent_asks_locked`]: one lock cycle,
+    /// a snapshot rebuild when anything expired, then wakeups. The hook flows
+    /// fold the same scan into their own critical sections via
+    /// [`Self::append_event_and_expire`] and
+    /// [`Self::push_feed_item_superseding`]. Closing the loop here is
     /// deterministic; the snapshot's read-side guard self-heals anything that
     /// races this write. Returns the number of items expired.
     #[must_use = "durability barrier; check the result"]
@@ -855,49 +957,20 @@ impl Ledger {
         session_name: &str,
         expiry: AskExpiry,
     ) -> Result<usize> {
-        let reason = expiry.reason();
-        let mut expired = Vec::new();
-        {
+        let expired = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            for mut item in feed_store::list_pending(&self.inner.paths.feed_dir)? {
-                if item.source_kind != "agent-hook"
-                    || item.source != source
-                    || item.status != FeedStatus::Pending
-                    || item.agent_session_id() != Some(agent_id)
-                    || !expiry.includes(item.surface)
-                {
-                    continue;
-                }
-                item.mark_active_resolver_budget_elapsed(reason);
-                let mut resolution =
-                    Resolution::new(json!({ "expired": true }), ResolutionMethod::AgentMovedOn);
-                resolution.reason = Some(reason.as_str().to_owned());
-                item.status = FeedStatus::Abandoned;
-                item.resolution = Some(resolution);
-                item.updated_at = Timestamp::now();
-                feed_store::write(&self.inner.paths.feed_dir, &item)?;
-                event_log::append(
-                    &self.inner.paths.events_log,
-                    &EventEnvelope::new(
-                        item.workspace_id.clone(),
-                        session_name,
-                        "rimz",
-                        "cli",
-                        "feed.expire",
-                        json!({
-                            "request_id": item.request_id,
-                            "source": source,
-                            "agent_id": agent_id,
-                            "reason": reason.as_str(),
-                        }),
-                    ),
-                )?;
-                expired.push((item.workspace_id.clone(), item.request_id.clone()));
-            }
+            let expired = expire_agent_asks_locked(
+                &self.inner.paths,
+                source,
+                agent_id,
+                session_name,
+                expiry,
+            )?;
             if !expired.is_empty() {
                 snapshot::rebuild(&self.inner.paths)?;
             }
-        }
+            expired
+        };
         for (workspace_id, request_id) in &expired {
             self.wake_sidebars_best_effort(workspace_id, request_id);
         }
