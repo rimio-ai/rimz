@@ -162,29 +162,27 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             // call): resolve the base — ledger rollup plus live pane list,
             // single-flighted across the fleet — then fold the git enrichments
             // and publish the cache the consumers read.
-            let (mut snapshot, frame): (rimz::SidebarSnapshot, Option<SnapshotCache>) =
-                match (&session_name, fixture) {
-                    // A test fixture stands in for the mux; never touch the shared
-                    // cache so deterministic tests can neither poison nor read it.
-                    (Some(session), Some(fixture)) => (
-                        ledger.snapshot()?,
-                        Some(SnapshotCache {
-                            produced_at_ms: unix_now_ms(),
-                            session_name: session.clone(),
-                            panes: fixture,
-                        }),
-                    ),
-                    (Some(session), None) => {
-                        let mux = mux
-                            .or(globals.mux)
-                            .or_else(|| rimz::mux::auto_detect_backend(None).ok());
-                        match mux {
-                            Some(mux) => match cached_base_or_produce(
-                                &ledger,
-                                mux,
-                                session,
-                                min_pane_cache_ms,
-                            ) {
+            let (mut snapshot, frame): (rimz::SidebarSnapshot, Option<SnapshotCache>) = match (
+                &session_name,
+                fixture,
+            ) {
+                // A test fixture stands in for the mux; never touch the shared
+                // cache so deterministic tests can neither poison nor read it.
+                (Some(session), Some(fixture)) => (
+                    ledger.snapshot()?,
+                    Some(SnapshotCache {
+                        produced_at_ms: unix_now_ms(),
+                        session_name: session.clone(),
+                        panes: fixture,
+                    }),
+                ),
+                (Some(session), None) => {
+                    let mux = mux
+                        .or(globals.mux)
+                        .or_else(|| rimz::mux::auto_detect_backend(None).ok());
+                    match mux {
+                        Some(mux) => {
+                            match cached_base_or_produce(&ledger, mux, session, min_pane_cache_ms) {
                                 Ok((rollup, frame)) => (rollup, Some(frame)),
                                 // The serve loop owns a live session, so a
                                 // discovery failure there is real: fail hard and
@@ -200,12 +198,13 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                                     tracing::warn!(error = %err, "sidebar snapshot pane discovery failed; showing ledger rollup");
                                     (ledger.snapshot()?, None)
                                 }
-                            },
-                            None => (ledger.snapshot()?, None),
+                            }
                         }
+                        None => (ledger.snapshot()?, None),
                     }
-                    (None, _) => (ledger.snapshot()?, None),
-                };
+                }
+                (None, _) => (ledger.snapshot()?, None),
+            };
 
             // Enumerate the repo's worktrees so a checkout parked outside the
             // project root still earns its own pod instead of folding into

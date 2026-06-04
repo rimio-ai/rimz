@@ -22,7 +22,7 @@ use rimz::mux::PaneListOptions;
 use rimz::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use tracing::{debug, info, warn};
 
-use crate::render::{self, Alert, OverrideKind, SelectionOverride, UiState};
+use crate::render::{self, Alert, Browse, JumpStamp, UiState};
 
 mod input;
 use input::{
@@ -1077,13 +1077,15 @@ const SLOW_ANIMATION_FRAME: Duration = Duration::from_millis(300);
 /// already-queued datagram drain on this turn without a zero-timeout busy spin.
 const FRAME_MIN_TIMEOUT: Duration = Duration::from_millis(1);
 
-/// How long an optimistic jump override pins the jumped pane before reverting to
-/// the focus mirror. It outlasts one pane-cache window (750ms) so a confirm that
-/// is merely one window late never flicker-reverts, yet stays under two backstop
-/// ticks (~2s) so a jump that never lands self-heals to the real focus quickly.
-/// The override also clears *early* the instant the mirror confirms the jump, so
-/// this is only the failure-mode ceiling, never the steady-state latency.
-const SELECTION_SETTLE: Duration = Duration::from_millis(1500);
+/// How long a jump stamp pins the jumped pane before reverting to the derived
+/// baseline — the failure-mode ceiling for a jump the queried state never
+/// confirms (a focus command that failed, or a cross-tab jump whose confirm
+/// belongs to the destination tab's sidebar). It outlasts one pane-cache window
+/// (750ms) so a confirm that is merely one window late never flicker-reverts,
+/// yet stays under two backstop ticks (~2s) so it self-heals quickly. A
+/// same-tab jump clears *early* the instant a post-stamp frame derives the
+/// jumped pane, so this is never the steady-state latency.
+const JUMP_STAMP_TTL: Duration = Duration::from_millis(1500);
 
 /// The animation frame index for `now`, derived from elapsed wall-clock since
 /// the serve loop's monotonic base. Every redraw path sets the phase from this,
@@ -1517,17 +1519,25 @@ fn apply_fetch_outcome(
     *current = state.snapshot;
     // Reconcile the highlight as part of the fold, before the next frame paints:
     // re-anchor the identity-keyed selection to its row (so a status-churn
-    // reorder never slides it onto a neighbour) and apply the level-triggered
-    // focus mirror. Folding it here means an external focus move is on the very
-    // next frame. The report is filtered to a non-sidebar agent row — a
-    // sidebar-self, undiscoverable, or non-row focus is inert and the mirror holds.
-    let focused_agent = current
+    // reorder never slides it onto a neighbour) and re-derive the baseline from
+    // the own view's active pane. Selection is derived state — queried from the
+    // mux each fold and same-tab by construction — so an external tab switch or
+    // focus move lands on the very next frame. The derivation is filtered to a
+    // non-sidebar row: a sidebar-self-active or non-row active pane derives
+    // `None` and the baseline holds its last value.
+    let derived = current
         .own_view
         .as_ref()
         .filter(|view| !view.own_is_active)
         .and_then(|view| view.active_pane_id.clone())
         .filter(|pane| row_index_of_pane(current, pane).is_some());
-    reconcile_selection(ui, current, focused_agent, Instant::now());
+    reconcile_selection(
+        ui,
+        current,
+        derived,
+        current.panes_produced_at_ms,
+        Instant::now(),
+    );
     ui.animation_phase = wall_clock_phase(anim_start);
     // Fold the fresh tally into the count-up: a higher figure starts an eased
     // roll that the next frames paint, a reset or first value snaps. A fetch
@@ -1739,10 +1749,10 @@ fn apply_input(
         render::draw_to_terminal_with_ui(terminal, snapshot, health.alert.as_ref(), ui)?;
     }
     if let Some(index) = outcome.focus_index {
-        // The handler already pinned `selected_pane`; fire the async jump. The
-        // fold's edge-triggered mirror (`reconcile_selection`) holds the
-        // highlight on the clicked pane through the briefly-stale focus, so no
-        // optimistic-focus guard is needed.
+        // The handler already stamped the jump echo and repainted; fire the
+        // one-way async focus command. The derived baseline confirms or expires
+        // the stamp when the queried state catches up — there is no sync
+        // protocol behind the jump.
         focus_selected_row(snapshot, index);
     }
     Ok(outcome.redraw)
@@ -1802,7 +1812,7 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
         KeyAction::Up => {
             if ui.selected_index > 0 {
                 select_row(ui, snapshot, ui.selected_index - 1);
-                set_browse_override(ui);
+                begin_or_continue_browse(ui);
                 return InputOutcome::redraw();
             }
             InputOutcome::default()
@@ -1811,23 +1821,22 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
             let len = visible_row_count(snapshot);
             if ui.selected_index + 1 < len {
                 select_row(ui, snapshot, ui.selected_index + 1);
-                set_browse_override(ui);
+                begin_or_continue_browse(ui);
                 return InputOutcome::redraw();
             }
             InputOutcome::default()
         }
         KeyAction::Enter => {
-            // Jump on the current row: pin it as an optimistic override so the
-            // highlight holds through the briefly-stale post-jump focus, identical
-            // to a click.
+            // Jump on the current row: stamp it so the highlight holds through
+            // any pre-jump frame still in flight, identical to a click.
             select_row(ui, snapshot, ui.selected_index);
-            set_jump_override(ui);
+            stamp_jump(ui);
             InputOutcome::focus(ui.selected_index)
         }
         KeyAction::Space => {
             if let Some(index) = next_attention_index(snapshot, ui.selected_index) {
                 select_row(ui, snapshot, index);
-                set_jump_override(ui);
+                stamp_jump(ui);
                 return InputOutcome::focus(index);
             }
             InputOutcome::default()
@@ -1841,7 +1850,7 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
             let index = usize::from(digit.saturating_sub(1));
             if index < visible_row_count(snapshot) {
                 select_row(ui, snapshot, index);
-                set_jump_override(ui);
+                stamp_jump(ui);
                 return InputOutcome::focus(index);
             }
             InputOutcome::default()
@@ -1857,7 +1866,7 @@ fn handle_mouse_click(
 ) -> InputOutcome {
     if let Some(index) = row_index_at_screen_position(ui, row) {
         select_row(ui, snapshot, index);
-        set_jump_override(ui);
+        stamp_jump(ui);
         return InputOutcome::focus(index);
     }
     InputOutcome::default()
@@ -1865,8 +1874,8 @@ fn handle_mouse_click(
 
 /// Point the highlight at a visible row by index — the identity-keyed selection
 /// (`selected_pane`) plus its derived render index. A pure positioner: the
-/// browse-vs-jump semantics live in the override the caller then sets
-/// (`set_browse_override` / `set_jump_override`), so the highlight is always
+/// browse-vs-jump semantics live in the layer the caller then sets
+/// (`begin_or_continue_browse` / `stamp_jump`), so the highlight is always
 /// anchored to a pane, never a bare position.
 fn select_row(ui: &mut UiState, snapshot: &SidebarSnapshot, index: usize) {
     ui.selected_index = index;
@@ -1876,52 +1885,37 @@ fn select_row(ui: &mut UiState, snapshot: &SidebarSnapshot, index: usize) {
         .map(|pane| pane.pane_id.clone());
 }
 
-/// Pin the just-selected pane as an arrow-browse override: the highlight holds
-/// without moving focus until the user acts again or the client focus moves off
-/// the baseline mirror value captured here.
-fn set_browse_override(ui: &mut UiState) {
+/// Pin the just-selected pane as the arrow-browse pick. The first arrow of a
+/// browse captures the baseline it began from — the clear condition — and a
+/// later arrow only moves the pick, so a long browse keeps one anchor and a
+/// mid-browse baseline change still ends it. Roams every visible row, other
+/// tabs' rows included. Browsing locally supersedes any in-flight jump echo.
+fn begin_or_continue_browse(ui: &mut UiState) {
+    ui.jump_stamp = None;
     if let Some(pane) = ui.selected_pane.clone() {
-        ui.selection_override = Some(SelectionOverride {
+        let baseline_at_start = match ui.browse.take() {
+            Some(browse) => browse.baseline_at_start,
+            None => ui.baseline_pane.clone(),
+        };
+        ui.browse = Some(Browse {
             pane,
-            kind: OverrideKind::Browse {
-                baseline: ui.focus_mirror.clone(),
-            },
+            baseline_at_start,
         });
     }
 }
 
-/// Pin the just-selected pane as an optimistic jump override: the highlight holds
-/// the jumped pane until the focus mirror confirms it, a genuine external move
-/// supersedes it, or the settle deadline reverts to the mirror.
-///
-/// The override carries a `lagging` trail — the pre-jump focus plus every pane an
-/// in-flight jump already aimed at. Replacing one in-flight jump with another
-/// folds the old target into the trail, so during a fast click-burst the mirror
-/// catching up to an intermediate self-jump reads as our own focus lagging, not
-/// an external move, and never bounces the highlight. Each click resets the
-/// settle deadline so the latest pick gets a full window to confirm.
-fn set_jump_override(ui: &mut UiState) {
+/// Stamp the just-selected pane as the optimistic echo of the one-way jump the
+/// caller is about to fire: the highlight moves the instant the user acts, and
+/// the queried state confirms or reverts it (`reconcile_selection` rule 2). A
+/// burst overwrites the stamp wholesale — the last click wins and gets a full
+/// TTL window. Replaces any browse: the jump is the act that ends browsing.
+fn stamp_jump(ui: &mut UiState) {
+    ui.browse = None;
     if let Some(pane) = ui.selected_pane.clone() {
-        let lagging = match ui.selection_override.take() {
-            Some(SelectionOverride {
-                pane: prev,
-                kind: OverrideKind::Jump { mut lagging, .. },
-            }) => {
-                if !lagging.contains(&prev) {
-                    lagging.push(prev);
-                }
-                lagging
-            }
-            // Fresh, or replacing a browse (which moved no focus): the only pane
-            // the mirror may legitimately lag through is the current focus.
-            _ => ui.focus_mirror.clone().into_iter().collect(),
-        };
-        ui.selection_override = Some(SelectionOverride {
+        ui.jump_stamp = Some(JumpStamp {
             pane,
-            kind: OverrideKind::Jump {
-                settle_deadline: Instant::now() + SELECTION_SETTLE,
-                lagging,
-            },
+            at_ms: rimz::sidebar::snapshot::unix_now_ms(),
+            deadline: Instant::now() + JUMP_STAMP_TTL,
         });
     }
 }
@@ -1935,107 +1929,96 @@ fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
     }
 }
 
-/// Reconcile the highlight after folding a new snapshot. The live client focus is
-/// authoritative — the highlight follows it by default and always reconverges on
-/// it — while a bounded local override briefly overrides it. Keyed on pane
-/// identity, never position.
+/// Reconcile the highlight after folding a new snapshot. Selection is *derived*
+/// state: the baseline is the own view's active working pane, re-queried from
+/// the mux every fold — same-tab by construction — so the highlight always
+/// reconverges on where the user actually is; it cannot desynchronize, only lag
+/// a frame. Two transient local layers ride above it: an arrow-key [`Browse`]
+/// pick and an in-flight [`JumpStamp`] echo. Keyed on pane identity, never
+/// position.
 ///
-/// `focused_agent` is the snapshot's focus report, pre-filtered at the call site
-/// to a non-sidebar **agent row**: `Some(pane)` iff `!own_is_active` and the
-/// focused pane is a row in this snapshot; `None` otherwise (sidebar-self,
-/// undiscoverable, or a non-row helper pane). `now` is a monotonic instant used
-/// only for the jump settle deadline.
+/// `derived` is the snapshot's active-pane derivation, pre-filtered at the call
+/// site to a non-sidebar row: `Some(pane)` iff `!own_is_active` and the view's
+/// active pane is a row in this snapshot; `None` otherwise.
+/// `frame_produced_at_ms` is when that frame's pane list was read
+/// (`panes_produced_at_ms`), so a stamp can tell a pre-jump frame from a
+/// post-jump one; `now` is monotonic, used only for the stamp TTL.
 ///
-/// 1. **Level-triggered mirror.** A `Some` report advances `focus_mirror`; a
-///    `None` *holds* its previous value, so a momentary "no agent focus" gap never
-///    blanks or moves the highlight.
-/// 2. **Override resolution.** A `Browse` pick holds the pinned pane until the
-///    client focus moves off the baseline it began from. A `Jump` pick optimistically
-///    holds the jumped pane until the mirror confirms focus reached it, a genuine
-///    external move supersedes it (a pane that is neither the jumped pane nor in the
-///    jump's `lagging` trail — the pre-jump focus plus every intermediate self-jump),
-///    or the settle deadline passes — then it follows the mirror.
-/// 3. **Reanchor.** A `focus_mirror` whose pane has left the room is dropped, and
+/// Ordered rules:
+/// 1. **Hold-last baseline.** A `Some` derivation advances `baseline_pane`; a
+///    `None` holds it, so a momentary "no active row" gap (the sidebar itself
+///    focused) never blanks or moves the highlight.
+/// 2. **Jump stamp.** A live stamp pins the jumped pane. It clears when a frame
+///    read at/after the stamp derives the jumped pane (confirmed — the queried
+///    state caught up), or when the TTL passes (a failed or cross-tab jump); a
+///    frame read *before* the stamp predates the jump and decides nothing.
+/// 3. **Browse.** A live browse pins its pick while the baseline still equals
+///    the value captured at browse start; a genuine baseline change ends it.
+/// 4. **Follow the baseline** — the steady state.
+/// 5. **Reanchor.** State whose pane left the room is dropped, and
 ///    `anchor_selection` re-derives `selected_index` by identity.
 fn reconcile_selection(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
-    focused_agent: Option<PaneId>,
+    derived: Option<PaneId>,
+    frame_produced_at_ms: Option<u64>,
     now: Instant,
 ) {
-    // 1. Level-triggered mirror: a genuine agent-row focus advances it; an inert
-    //    report holds the last value.
-    if let Some(pane) = focused_agent {
-        ui.focus_mirror = Some(pane);
+    // 1. Hold-last baseline: a Some derivation advances it, a None holds it.
+    if let Some(pane) = derived {
+        ui.baseline_pane = Some(pane);
     }
 
-    // 2. Resolve the active override; `follow_mirror` means it has yielded.
-    let follow_mirror = match ui.selection_override.take() {
-        None => true,
-        Some(ovr) => match &ovr.kind {
-            OverrideKind::Browse { baseline } => {
-                if ui.focus_mirror == *baseline {
-                    // Still browsing: hold the pinned pane (a None report did not
-                    // advance the mirror, so the baseline still matches).
-                    ui.selected_pane = Some(ovr.pane.clone());
-                    ui.selection_override = Some(ovr);
-                    false
-                } else {
-                    // A genuine external move off the baseline ends the browse.
-                    true
-                }
-            }
-            OverrideKind::Jump {
-                settle_deadline,
-                lagging,
-            } => {
-                if ui.focus_mirror.as_ref() == Some(&ovr.pane) {
-                    // Confirmed: the mirror reached the jumped pane.
-                    true
-                } else if !lagging.is_empty()
-                    && ui
-                        .focus_mirror
-                        .as_ref()
-                        .is_some_and(|mirror| *mirror != ovr.pane && !lagging.contains(mirror))
-                {
-                    // Superseded by a genuine external move: the mirror landed on a
-                    // pane that is neither the jumped pane nor anything this burst
-                    // jumped through, so it is not our own in-flight focus lagging.
-                    // Gated on a non-empty trail — with no baseline we cannot tell a
-                    // genuine move from a lagging first sample of the pre-jump focus,
-                    // so we hold until confirm or the deadline instead of bouncing.
-                    true
-                } else if now >= *settle_deadline {
-                    // Failed jump: the deadline passed without confirmation — revert
-                    // to the real focus rather than shadowing it forever.
-                    true
-                } else {
-                    // Optimistic window still open: pin the jumped pane even though
-                    // the mirror still shows a pre-jump or intermediate self-jump
-                    // focus (no bounce-back through our own in-flight jumps).
-                    ui.selected_pane = Some(ovr.pane.clone());
-                    ui.selection_override = Some(ovr);
-                    false
-                }
-            }
-        },
-    };
-    if follow_mirror && let Some(pane) = ui.focus_mirror.clone() {
+    // 2. Jump stamp: pin the jumped pane until a post-stamp frame confirms it
+    //    or the TTL reverts a jump that never landed. On either clear the
+    //    highlight falls through to the baseline — the jumped pane itself on a
+    //    confirm, the real one on an expiry: late, never wrong.
+    let mut pinned = false;
+    if let Some(stamp) = ui.jump_stamp.take() {
+        let frame_is_post_stamp = frame_produced_at_ms.is_some_and(|ms| ms >= stamp.at_ms);
+        let confirmed = frame_is_post_stamp && ui.baseline_pane.as_ref() == Some(&stamp.pane);
+        if !confirmed && now < stamp.deadline {
+            ui.selected_pane = Some(stamp.pane.clone());
+            ui.jump_stamp = Some(stamp);
+            pinned = true;
+        }
+    }
+
+    // 3. Browse: hold the roamed pick while the baseline hasn't genuinely
+    //    moved; on a baseline change the take stands — the browse ends and the
+    //    highlight follows the new baseline. (At most one of stamp/browse is
+    //    live — each setter clears the other — so the `pinned` gate is
+    //    belt-and-braces, not a priority rule.)
+    if !pinned
+        && let Some(browse) = ui.browse.take()
+        && ui.baseline_pane == browse.baseline_at_start
+    {
+        ui.selected_pane = Some(browse.pane.clone());
+        ui.browse = Some(browse);
+        pinned = true;
+    }
+
+    // 4. Steady state: the highlight is the derived baseline.
+    if !pinned && let Some(pane) = ui.baseline_pane.clone() {
         ui.selected_pane = Some(pane);
     }
 
-    // 3. Drop a mirror or override pane that left the room — so a pick whose pane
-    //    closed stops shadowing the mirror and the highlight reconverges — then
-    //    re-anchor by identity.
-    if let Some(pane) = ui.focus_mirror.clone()
+    // 5. Drop state whose pane left the room — so a pick or stamp whose pane
+    //    closed stops shadowing the baseline — then re-anchor by identity.
+    if let Some(pane) = ui.baseline_pane.clone()
         && row_index_of_pane(snapshot, &pane).is_none()
     {
-        ui.focus_mirror = None;
+        ui.baseline_pane = None;
     }
-    if let Some(ovr) = &ui.selection_override
-        && row_index_of_pane(snapshot, &ovr.pane).is_none()
+    if let Some(stamp) = &ui.jump_stamp
+        && row_index_of_pane(snapshot, &stamp.pane).is_none()
     {
-        ui.selection_override = None;
+        ui.jump_stamp = None;
+    }
+    if let Some(browse) = &ui.browse
+        && row_index_of_pane(snapshot, &browse.pane).is_none()
+    {
+        ui.browse = None;
     }
     anchor_selection(ui, snapshot);
 }
@@ -2975,34 +2958,34 @@ mod tests {
         );
     }
 
-    /// A jump override pinning `pane`, carrying the `lagging` trail of panes the
-    /// mirror may legitimately lag through, expiring at `deadline`.
-    fn jump(pane: &PaneId, lagging: &[PaneId], deadline: Instant) -> SelectionOverride {
-        SelectionOverride {
+    /// Wall-clock base for stamp/frame ordering in tests: any fixed Unix-ms
+    /// value works — only the relative order of stamp vs frame matters.
+    const STAMP_MS: u64 = 1_700_000_000_000;
+
+    /// A jump stamp pinning `pane`, fired at wall-clock `at_ms`, expiring at
+    /// the monotonic `deadline`.
+    fn stamp(pane: &PaneId, at_ms: u64, deadline: Instant) -> JumpStamp {
+        JumpStamp {
             pane: pane.clone(),
-            kind: OverrideKind::Jump {
-                settle_deadline: deadline,
-                lagging: lagging.to_vec(),
-            },
+            at_ms,
+            deadline,
         }
     }
 
-    /// A browse override pinning `pane`, begun from the `baseline` mirror value.
-    fn browse(pane: &PaneId, baseline: Option<&PaneId>) -> SelectionOverride {
-        SelectionOverride {
+    /// A browse pick of `pane`, begun while the derived baseline was `baseline`.
+    fn browse(pane: &PaneId, baseline: Option<&PaneId>) -> Browse {
+        Browse {
             pane: pane.clone(),
-            kind: OverrideKind::Browse {
-                baseline: baseline.cloned(),
-            },
+            baseline_at_start: baseline.cloned(),
         }
     }
 
     #[test]
-    fn cold_start_follows_the_first_focus_report() {
-        // No mirror and no override: the first valid focus report seeds both the
-        // mirror and the highlight.
+    fn cold_start_derives_from_first_active_pane() {
+        // No baseline and no local layer: the first frame's active-pane
+        // derivation seeds both the baseline and the highlight.
         let ws = workspace();
-        let focused = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
@@ -3012,17 +2995,25 @@ mod tests {
         );
         let mut ui = UiState::default();
 
-        reconcile_selection(&mut ui, &snapshot, Some(focused.clone()), Instant::now());
+        reconcile_selection(
+            &mut ui,
+            &snapshot,
+            Some(active.clone()),
+            Some(STAMP_MS),
+            Instant::now(),
+        );
 
         assert_eq!(ui.selected_index, 1);
-        assert_eq!(ui.selected_pane, Some(focused.clone()));
-        assert_eq!(ui.focus_mirror, Some(focused));
+        assert_eq!(ui.selected_pane, Some(active.clone()));
+        assert_eq!(ui.baseline_pane, Some(active));
     }
 
     #[test]
-    fn cold_start_with_no_focus_clamps_to_first_row() {
-        // No mirror, no override, an inert report: the highlight has nothing to
-        // follow, so it clamps to the first row.
+    fn cold_start_with_no_derivation_holds_none() {
+        // No baseline, no local layer, a None derivation: nothing to follow, so
+        // the highlight stays unseated (index clamped to row 0) until a frame
+        // derives an active row — never a fleet-row guess that may sit in
+        // another tab.
         let ws = workspace();
         let snapshot = snapshot_with_panes(
             &ws,
@@ -3033,212 +3024,53 @@ mod tests {
         );
         let mut ui = UiState::default();
 
-        reconcile_selection(&mut ui, &snapshot, None, Instant::now());
+        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
 
         assert_eq!(ui.selected_pane, None);
         assert_eq!(ui.selected_index, 0);
     }
 
     #[test]
-    fn tab_switch_is_followed() {
-        // No override: the highlight follows the live focus mirror. A genuine
-        // external move (a Zellij tab click) to terminal_3 moves it.
+    fn baseline_change_moves_the_highlight() {
+        // No local layer: the highlight follows the derived baseline, so a
+        // genuine external move (the user focused terminal_3) lands on the very
+        // next fold.
         let ws = workspace();
         let was = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let now_focused = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+        let now_active = PaneId::from_parts(MuxName::Zellij, "terminal_3");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
                 pane("terminal_1", "tab_0", false),
                 pane("terminal_2", "tab_0", false),
-                pane("terminal_3", "tab_1", false),
+                pane("terminal_3", "tab_0", true),
             ],
         );
         let mut ui = UiState {
             selected_index: 0,
             selected_pane: Some(was.clone()),
-            focus_mirror: Some(was),
+            baseline_pane: Some(was),
             ..Default::default()
         };
 
         reconcile_selection(
             &mut ui,
             &snapshot,
-            Some(now_focused.clone()),
+            Some(now_active.clone()),
+            Some(STAMP_MS),
             Instant::now(),
         );
 
         assert_eq!(ui.selected_index, 2);
-        assert_eq!(ui.selected_pane, Some(now_focused.clone()));
-        assert_eq!(ui.focus_mirror, Some(now_focused));
+        assert_eq!(ui.selected_pane, Some(now_active.clone()));
+        assert_eq!(ui.baseline_pane, Some(now_active));
     }
 
     #[test]
-    fn lagging_pre_jump_report_does_not_bounce() {
-        // Root cause A. A jump pins terminal_2 (from terminal_1) with the deadline
-        // in the future; the producer is still reporting the pre-jump focus
-        // (terminal_1, == `from`). The override holds the jumped pane — no bounce —
-        // because a lagging re-report of `from` neither confirms nor supersedes.
-        let ws = workspace();
-        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let from = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", false),
-                pane("terminal_2", "tab_0", false),
-            ],
-        );
-        let now = Instant::now();
-        let mut ui = UiState {
-            selected_index: 1,
-            selected_pane: Some(jumped.clone()),
-            focus_mirror: Some(from.clone()),
-            selection_override: Some(jump(
-                &jumped,
-                std::slice::from_ref(&from),
-                now + Duration::from_millis(500),
-            )),
-            ..Default::default()
-        };
-
-        reconcile_selection(&mut ui, &snapshot, Some(from), now);
-
-        assert_eq!(ui.selected_pane, Some(jumped), "held the jumped pane");
-        assert!(
-            ui.selection_override.is_some(),
-            "the optimistic override is still in flight"
-        );
-    }
-
-    #[test]
-    fn jump_resolves_when_mirror_confirms() {
-        // The mirror reaches the jumped pane before the deadline: the override
-        // clears early and the highlight follows the (now-equal) mirror.
-        let ws = workspace();
-        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let from = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", false),
-                pane("terminal_2", "tab_0", false),
-            ],
-        );
-        let now = Instant::now();
-        let mut ui = UiState {
-            selected_index: 1,
-            selected_pane: Some(jumped.clone()),
-            focus_mirror: Some(from.clone()),
-            selection_override: Some(jump(
-                &jumped,
-                std::slice::from_ref(&from),
-                now + Duration::from_millis(500),
-            )),
-            ..Default::default()
-        };
-
-        reconcile_selection(&mut ui, &snapshot, Some(jumped.clone()), now);
-
-        assert_eq!(ui.selected_pane, Some(jumped.clone()));
-        assert_eq!(ui.focus_mirror, Some(jumped));
-        assert_eq!(
-            ui.selection_override, None,
-            "confirmed jump clears the override"
-        );
-    }
-
-    #[test]
-    fn genuine_external_move_supersedes_an_override() {
-        // While a jump to terminal_2 (from terminal_1) is in flight, the client
-        // focuses a third pane (terminal_3) by keybind. That is neither the jumped
-        // pane nor `from`, so it supersedes the override at once.
-        let ws = workspace();
-        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let from = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let third = PaneId::from_parts(MuxName::Zellij, "terminal_3");
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", false),
-                pane("terminal_2", "tab_0", false),
-                pane("terminal_3", "tab_0", false),
-            ],
-        );
-        let now = Instant::now();
-        let mut ui = UiState {
-            selected_index: 1,
-            selected_pane: Some(jumped.clone()),
-            focus_mirror: Some(from.clone()),
-            selection_override: Some(jump(
-                &jumped,
-                std::slice::from_ref(&from),
-                now + Duration::from_millis(500),
-            )),
-            ..Default::default()
-        };
-
-        reconcile_selection(&mut ui, &snapshot, Some(third.clone()), now);
-
-        assert_eq!(ui.selected_index, 2);
-        assert_eq!(ui.selected_pane, Some(third.clone()));
-        assert_eq!(ui.focus_mirror, Some(third));
-        assert_eq!(
-            ui.selection_override, None,
-            "a genuine move clears the override"
-        );
-    }
-
-    #[test]
-    fn failed_jump_reconverges_after_settle() {
-        // Root cause B. A jump pins terminal_2 but never lands — the mirror stays
-        // stuck on terminal_1. Once the deadline passes the override is abandoned
-        // and the highlight reconverges on the true focus.
-        let ws = workspace();
-        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let real = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", false),
-                pane("terminal_2", "tab_0", false),
-            ],
-        );
-        let started = Instant::now();
-        let mut ui = UiState {
-            selected_index: 1,
-            selected_pane: Some(jumped),
-            focus_mirror: Some(real.clone()),
-            selection_override: Some(jump(
-                &PaneId::from_parts(MuxName::Zellij, "terminal_2"),
-                std::slice::from_ref(&real),
-                started + Duration::from_millis(500),
-            )),
-            ..Default::default()
-        };
-
-        // A fold past the deadline, mirror still stuck on the real focus.
-        reconcile_selection(
-            &mut ui,
-            &snapshot,
-            Some(real.clone()),
-            started + Duration::from_secs(1),
-        );
-
-        assert_eq!(ui.selected_index, 0);
-        assert_eq!(
-            ui.selected_pane,
-            Some(real),
-            "reconverged on the true focus"
-        );
-        assert_eq!(ui.selection_override, None, "the failed jump was abandoned");
-    }
-
-    #[test]
-    fn inert_report_holds_the_mirror() {
-        // A `None` report — the sidebar itself focused, an undiscoverable focus, or
-        // a non-row helper pane filtered out at the call site — holds the mirror's
-        // last value and does not blank or move the highlight.
+    fn none_derivation_holds_last_baseline() {
+        // The sidebar itself is the view's active pane (the user focused it to
+        // type), or the active pane is not a row: the derivation is None, the
+        // baseline holds, and the highlight stays put.
         let ws = workspace();
         let held = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let snapshot = snapshot_with_panes(
@@ -3251,378 +3083,412 @@ mod tests {
         let mut ui = UiState {
             selected_index: 0,
             selected_pane: Some(held.clone()),
-            focus_mirror: Some(held.clone()),
+            baseline_pane: Some(held.clone()),
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, None, Instant::now());
+        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
 
         assert_eq!(ui.selected_pane, Some(held.clone()));
-        assert_eq!(ui.focus_mirror, Some(held));
+        assert_eq!(ui.baseline_pane, Some(held));
     }
 
     #[test]
-    fn browse_holds_across_inert_reports() {
-        // An arrow-browse pins terminal_2 without moving focus. Inert (`None`)
-        // reports do not advance the mirror off the baseline, so the browse holds.
+    fn lagging_pre_jump_frame_does_not_bounce() {
+        // A jump stamped terminal_2 (from terminal_1) while the producer's
+        // frame still predates the click and derives the pre-jump active pane.
+        // The stamp pins the jumped pane — no bounce — because a pre-stamp
+        // frame can neither confirm the jump nor move the highlight.
         let ws = workspace();
-        let browsed = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let baseline = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let from = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
-                pane("terminal_1", "tab_0", false),
+                pane("terminal_1", "tab_0", true),
                 pane("terminal_2", "tab_0", false),
             ],
         );
         let mut ui = UiState {
             selected_index: 1,
-            selected_pane: Some(browsed.clone()),
-            focus_mirror: Some(baseline.clone()),
-            selection_override: Some(browse(&browsed, Some(&baseline))),
+            selected_pane: Some(jumped.clone()),
+            baseline_pane: Some(from.clone()),
+            jump_stamp: Some(stamp(
+                &jumped,
+                STAMP_MS,
+                Instant::now() + Duration::from_secs(60),
+            )),
             ..Default::default()
         };
 
-        for _ in 0..2 {
-            reconcile_selection(&mut ui, &snapshot, None, Instant::now());
-            assert_eq!(ui.selected_pane, Some(browsed.clone()), "browse holds");
-            assert!(ui.selection_override.is_some());
-        }
+        // The frame was read 100ms before the click and still derives `from`.
+        reconcile_selection(
+            &mut ui,
+            &snapshot,
+            Some(from),
+            Some(STAMP_MS - 100),
+            Instant::now(),
+        );
+
+        assert_eq!(
+            ui.selected_pane,
+            Some(jumped),
+            "the stamp holds — no bounce"
+        );
+        assert!(ui.jump_stamp.is_some(), "undecided: the stamp stays live");
     }
 
     #[test]
-    fn browse_holds_then_yields_to_a_genuine_external_move() {
-        // The browse pins terminal_2 (baseline terminal_1); when the client focus
-        // genuinely moves off the baseline (to terminal_3), the browse ends and the
-        // highlight follows the mirror.
+    fn jump_stamp_confirms_on_fresh_matching_frame() {
+        // A frame read after the stamp derives the jumped pane: the queried
+        // state caught up, the stamp clears, and the highlight follows the
+        // baseline — which now IS the jumped pane.
         let ws = workspace();
-        let browsed = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", true),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 1,
+            selected_pane: Some(jumped.clone()),
+            baseline_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
+            jump_stamp: Some(stamp(
+                &jumped,
+                STAMP_MS,
+                Instant::now() + Duration::from_secs(60),
+            )),
+            ..Default::default()
+        };
+
+        reconcile_selection(
+            &mut ui,
+            &snapshot,
+            Some(jumped.clone()),
+            Some(STAMP_MS + 100),
+            Instant::now(),
+        );
+
+        assert_eq!(ui.jump_stamp, None, "confirmed: the stamp clears");
+        assert_eq!(ui.selected_pane, Some(jumped.clone()));
+        assert_eq!(ui.baseline_pane, Some(jumped));
+    }
+
+    #[test]
+    fn jump_stamp_ttl_expiry_reverts_to_baseline() {
+        // The TTL passed without a confirming frame — a focus command that
+        // failed, or a cross-tab jump whose confirm belongs to the destination
+        // tab's sidebar. The stamp clears and the highlight reconverges on the
+        // real baseline: late, never wrong.
+        let ws = workspace();
+        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let real = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", true),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let now = Instant::now();
+        let mut ui = UiState {
+            selected_index: 1,
+            selected_pane: Some(jumped.clone()),
+            baseline_pane: Some(real.clone()),
+            jump_stamp: Some(stamp(&jumped, STAMP_MS, now)),
+            ..Default::default()
+        };
+
+        reconcile_selection(
+            &mut ui,
+            &snapshot,
+            Some(real.clone()),
+            Some(STAMP_MS + 100),
+            now,
+        );
+
+        assert_eq!(ui.jump_stamp, None, "expired: the stamp clears");
+        assert_eq!(ui.selected_pane, Some(real));
+    }
+
+    #[test]
+    fn post_stamp_disagreeing_frame_holds_until_ttl() {
+        // A frame read after the stamp that derives a *different* pane is most
+        // often the focus command still in flight — `list-panes` ran between
+        // the click and the focus landing. The stamp holds until confirm or
+        // TTL rather than bouncing; a genuine external move during the window
+        // simply lands when the TTL clears: late, never wrong.
+        let ws = workspace();
+        let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let other = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+                pane("terminal_3", "tab_0", true),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 1,
+            selected_pane: Some(jumped.clone()),
+            baseline_pane: None,
+            jump_stamp: Some(stamp(
+                &jumped,
+                STAMP_MS,
+                Instant::now() + Duration::from_secs(60),
+            )),
+            ..Default::default()
+        };
+
+        reconcile_selection(
+            &mut ui,
+            &snapshot,
+            Some(other.clone()),
+            Some(STAMP_MS + 100),
+            Instant::now(),
+        );
+
+        assert_eq!(ui.selected_pane, Some(jumped), "the stamp still pins");
+        assert!(ui.jump_stamp.is_some());
+        assert_eq!(
+            ui.baseline_pane,
+            Some(other),
+            "the baseline tracks the queried truth underneath"
+        );
+    }
+
+    #[test]
+    fn burst_overwrites_stamp() {
+        // Two jumps in a burst: the second stamp replaces the first wholesale —
+        // the last click wins, with its own at_ms and a full TTL window. No
+        // trail, no per-pane reasoning.
+        let ws = workspace();
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", false),
+                pane("terminal_2", "tab_0", false),
+                pane("terminal_3", "tab_0", false),
+            ],
+        );
+        let mut ui = UiState::default();
+
+        select_row(&mut ui, &snapshot, 1);
+        stamp_jump(&mut ui);
+        let first = ui.jump_stamp.clone().expect("first stamp");
+        select_row(&mut ui, &snapshot, 2);
+        stamp_jump(&mut ui);
+        let second = ui.jump_stamp.clone().expect("second stamp");
+
+        assert_eq!(
+            second.pane,
+            PaneId::from_parts(MuxName::Zellij, "terminal_3"),
+            "the last click wins"
+        );
+        assert_ne!(first.pane, second.pane);
+        assert!(second.at_ms >= first.at_ms);
+        assert!(second.deadline >= first.deadline);
+    }
+
+    #[test]
+    fn browse_roams_other_tabs_rows() {
+        // The browse pick may walk every visible row — another tab's included
+        // (the cross-tab peek that expands a remote card) — while the derived
+        // baseline stays untouched underneath.
+        let ws = workspace();
+        let here = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let remote = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", true),
+                pane("terminal_9", "tab_7", false),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 0,
+            selected_pane: Some(here.clone()),
+            baseline_pane: Some(here.clone()),
+            ..Default::default()
+        };
+
+        select_row(&mut ui, &snapshot, 1);
+        begin_or_continue_browse(&mut ui);
+        // While browsing the user has the sidebar focused, so frames derive None.
+        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
+
+        assert_eq!(ui.selected_pane, Some(remote), "the pick roams cross-tab");
+        assert_eq!(ui.baseline_pane, Some(here), "the baseline never moves");
+    }
+
+    #[test]
+    fn browse_holds_across_inert_frames() {
+        // Browsing with the baseline unchanged: None derivations hold the
+        // baseline, the anchor still matches, the pick holds.
+        let ws = workspace();
+        let picked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let baseline = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", true),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 1,
+            selected_pane: Some(picked.clone()),
+            baseline_pane: Some(baseline.clone()),
+            browse: Some(browse(&picked, Some(&baseline))),
+            ..Default::default()
+        };
+
+        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
+        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
+
+        assert_eq!(ui.selected_pane, Some(picked));
+        assert!(ui.browse.is_some(), "still browsing");
+    }
+
+    #[test]
+    fn browse_clears_on_baseline_change() {
+        // A genuine baseline change — the user focused another working pane —
+        // ends the browse, and the highlight follows the new baseline.
+        let ws = workspace();
+        let picked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let anchor = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let moved = PaneId::from_parts(MuxName::Zellij, "terminal_3");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
                 pane("terminal_1", "tab_0", false),
                 pane("terminal_2", "tab_0", false),
-                pane("terminal_3", "tab_0", false),
+                pane("terminal_3", "tab_0", true),
             ],
         );
         let mut ui = UiState {
             selected_index: 1,
-            selected_pane: Some(browsed.clone()),
-            focus_mirror: Some(baseline.clone()),
-            selection_override: Some(browse(&browsed, Some(&baseline))),
+            selected_pane: Some(picked.clone()),
+            baseline_pane: Some(anchor.clone()),
+            browse: Some(browse(&picked, Some(&anchor))),
             ..Default::default()
         };
 
-        // Inert report first: browse still holds.
-        reconcile_selection(&mut ui, &snapshot, None, Instant::now());
-        assert_eq!(ui.selected_pane, Some(browsed));
+        reconcile_selection(
+            &mut ui,
+            &snapshot,
+            Some(moved.clone()),
+            Some(STAMP_MS),
+            Instant::now(),
+        );
 
-        // Then a genuine external move ends the browse.
-        reconcile_selection(&mut ui, &snapshot, Some(moved.clone()), Instant::now());
-        assert_eq!(ui.selected_pane, Some(moved.clone()));
-        assert_eq!(ui.focus_mirror, Some(moved));
-        assert_eq!(ui.selection_override, None, "the browse yielded");
+        assert_eq!(ui.browse, None, "a real move ends the browse");
+        assert_eq!(ui.selected_pane, Some(moved));
     }
 
     #[test]
-    fn rapid_successive_jumps_take_the_latest() {
-        // A second jump overwrites the override with the newest pane; the latest
-        // pinned pane wins, with no stacking.
+    fn local_actions_supersede_each_other() {
+        // A jump replaces a browse; a fresh arrow replaces the jump echo. At
+        // most one local layer is ever live.
         let ws = workspace();
-        let latest = PaneId::from_parts(MuxName::Zellij, "terminal_3");
-        let from = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
                 pane("terminal_1", "tab_0", false),
                 pane("terminal_2", "tab_0", false),
-                pane("terminal_3", "tab_0", false),
             ],
         );
-        let now = Instant::now();
-        let mut ui = UiState {
-            selected_index: 2,
-            selected_pane: Some(latest.clone()),
-            focus_mirror: Some(from.clone()),
-            selection_override: Some(jump(
-                &latest,
-                std::slice::from_ref(&from),
-                now + Duration::from_millis(500),
-            )),
-            ..Default::default()
-        };
+        let mut ui = UiState::default();
 
-        reconcile_selection(&mut ui, &snapshot, Some(from), now);
+        select_row(&mut ui, &snapshot, 0);
+        begin_or_continue_browse(&mut ui);
+        assert!(ui.browse.is_some());
 
-        assert_eq!(ui.selected_index, 2);
-        assert_eq!(ui.selected_pane, Some(latest), "the latest jump holds");
+        select_row(&mut ui, &snapshot, 1);
+        stamp_jump(&mut ui);
+        assert_eq!(ui.browse, None, "the jump ends the browse");
+        assert!(ui.jump_stamp.is_some());
+
+        select_row(&mut ui, &snapshot, 0);
+        begin_or_continue_browse(&mut ui);
+        assert_eq!(ui.jump_stamp, None, "browsing supersedes the jump echo");
+        assert!(ui.browse.is_some());
     }
 
     #[test]
-    fn fast_burst_intermediate_self_focus_does_not_flash() {
-        // The reported flash. A burst jumps A→B→C faster than the mirror catches
-        // up, so C's override carries the trail [A, B]. A snapshot then reports B —
-        // the first self-jump landing, our own in-flight focus catching up, not an
-        // external move. The override must HOLD C and never bounce to B.
+    fn continued_browse_keeps_the_first_anchor() {
+        // The second arrow continues the browse: the pick moves, but the anchor
+        // (baseline_at_start) stays the one captured when browsing began, so a
+        // baseline change mid-browse still ends it.
         let ws = workspace();
-        let a = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let b = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let c = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+        let anchor = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
-                pane("terminal_1", "tab_0", false),
+                pane("terminal_1", "tab_0", true),
                 pane("terminal_2", "tab_0", false),
                 pane("terminal_3", "tab_0", false),
             ],
         );
-        let now = Instant::now();
         let mut ui = UiState {
-            selected_index: 2,
-            selected_pane: Some(c.clone()),
-            focus_mirror: Some(a.clone()),
-            selection_override: Some(jump(&c, &[a, b.clone()], now + Duration::from_millis(500))),
+            baseline_pane: Some(anchor.clone()),
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, Some(b), now);
+        select_row(&mut ui, &snapshot, 1);
+        begin_or_continue_browse(&mut ui);
+        // The baseline advances mid-browse (rule 1 of an intervening fold)...
+        ui.baseline_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_3"));
+        select_row(&mut ui, &snapshot, 2);
+        begin_or_continue_browse(&mut ui);
 
-        assert_eq!(ui.selected_pane, Some(c), "held the last-clicked pane");
-        assert!(
-            ui.selection_override.is_some(),
-            "the optimistic override is still in flight",
-        );
-    }
-
-    #[test]
-    fn fast_burst_then_confirm_settles_on_last_click() {
-        // After the intermediate self-jump is held, the mirror reaches C (the last
-        // click): the override confirms, clears, and the highlight follows C.
-        let ws = workspace();
-        let a = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let b = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let c = PaneId::from_parts(MuxName::Zellij, "terminal_3");
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", false),
-                pane("terminal_2", "tab_0", false),
-                pane("terminal_3", "tab_0", false),
-            ],
-        );
-        let now = Instant::now();
-        let mut ui = UiState {
-            selected_index: 2,
-            selected_pane: Some(c.clone()),
-            focus_mirror: Some(a.clone()),
-            selection_override: Some(jump(&c, &[a, b], now + Duration::from_millis(500))),
-            ..Default::default()
-        };
-
-        reconcile_selection(&mut ui, &snapshot, Some(c.clone()), now);
-
-        assert_eq!(ui.selected_pane, Some(c.clone()));
-        assert_eq!(ui.focus_mirror, Some(c));
-        assert_eq!(ui.selection_override, None, "the confirmed jump cleared");
-    }
-
-    #[test]
-    fn fast_burst_external_move_during_window_still_supersedes() {
-        // The trail must not over-suppress: a mirror report of D — a pane outside
-        // the trail and not the jumped pane — is a genuine external move (a terminal
-        // keybind) and supersedes the override at once, even mid-burst.
-        let ws = workspace();
-        let a = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let b = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let c = PaneId::from_parts(MuxName::Zellij, "terminal_3");
-        let d = PaneId::from_parts(MuxName::Zellij, "terminal_4");
-        let snapshot = snapshot_with_panes(
-            &ws,
-            vec![
-                pane("terminal_1", "tab_0", false),
-                pane("terminal_2", "tab_0", false),
-                pane("terminal_3", "tab_0", false),
-                pane("terminal_4", "tab_0", false),
-            ],
-        );
-        let now = Instant::now();
-        let mut ui = UiState {
-            selected_index: 2,
-            selected_pane: Some(c.clone()),
-            focus_mirror: Some(a.clone()),
-            selection_override: Some(jump(&c, &[a, b], now + Duration::from_millis(500))),
-            ..Default::default()
-        };
-
-        reconcile_selection(&mut ui, &snapshot, Some(d.clone()), now);
-
-        assert_eq!(ui.selected_pane, Some(d.clone()));
-        assert_eq!(ui.focus_mirror, Some(d));
         assert_eq!(
-            ui.selection_override, None,
-            "a genuine external move cleared the override",
+            ui.browse.as_ref().map(|b| b.baseline_at_start.clone()),
+            Some(Some(anchor)),
+            "the anchor is the browse-start baseline, not the latest one"
         );
-    }
-
-    #[test]
-    fn set_jump_override_inherits_trail_from_prior_jump() {
-        // A second click while a jump is still in flight folds the prior target into
-        // the trail (so a later self-jump report won't bounce) and resets the settle
-        // deadline so the latest pick gets a full optimistic window.
-        let a = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let b = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let c = PaneId::from_parts(MuxName::Zellij, "terminal_3");
-        let mut ui = UiState {
-            selected_pane: Some(c.clone()),
-            focus_mirror: Some(a.clone()),
-            selection_override: Some(jump(&b, std::slice::from_ref(&a), Instant::now())),
-            ..Default::default()
-        };
-
-        let before = Instant::now();
-        set_jump_override(&mut ui);
-
-        match ui.selection_override {
-            Some(SelectionOverride {
-                pane,
-                kind:
-                    OverrideKind::Jump {
-                        settle_deadline,
-                        lagging,
-                    },
-            }) => {
-                assert_eq!(pane, c, "pins the latest click");
-                assert_eq!(lagging, vec![a, b], "trail folds in the prior target");
-                assert!(
-                    settle_deadline >= before + SELECTION_SETTLE,
-                    "the deadline reset to a full window",
-                );
-            }
-            other => panic!("expected a jump override, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn set_jump_override_fresh_seeds_trail_from_mirror() {
-        // A first jump from a settled state seeds the trail with the pre-jump focus.
-        let a = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let b = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let mut ui = UiState {
-            selected_pane: Some(b.clone()),
-            focus_mirror: Some(a.clone()),
-            ..Default::default()
-        };
-
-        set_jump_override(&mut ui);
-
-        match ui.selection_override {
-            Some(SelectionOverride {
-                pane,
-                kind: OverrideKind::Jump { lagging, .. },
-            }) => {
-                assert_eq!(pane, b);
-                assert_eq!(lagging, vec![a], "seeded from the pre-jump focus");
-            }
-            other => panic!("expected a jump override, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn set_jump_override_replacing_browse_seeds_from_mirror() {
-        // A browse moved no focus, so a jump replacing it inherits no trail — it
-        // seeds from the current mirror, never the browse's pinned pane.
-        let a = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let b = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let c = PaneId::from_parts(MuxName::Zellij, "terminal_3");
-        let mut ui = UiState {
-            selected_pane: Some(c.clone()),
-            focus_mirror: Some(a.clone()),
-            selection_override: Some(browse(&b, Some(&a))),
-            ..Default::default()
-        };
-
-        set_jump_override(&mut ui);
-
-        match ui.selection_override {
-            Some(SelectionOverride {
-                pane,
-                kind: OverrideKind::Jump { lagging, .. },
-            }) => {
-                assert_eq!(pane, c);
-                assert_eq!(
-                    lagging,
-                    vec![a],
-                    "seeded from the mirror, not the browse pane"
-                );
-            }
-            other => panic!("expected a jump override, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn set_jump_override_trail_dedups_on_alternation() {
-        // Alternating clicks A→B→A→B must not accumulate duplicate trail entries.
-        let a = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let b = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let mut ui = UiState {
-            focus_mirror: Some(a.clone()),
-            ..Default::default()
-        };
-
-        // Click B (fresh): pane=B, trail=[A].
-        ui.selected_pane = Some(b.clone());
-        set_jump_override(&mut ui);
-        // Click A: pane=A, trail=[A] ∪ {B} = [A, B].
-        ui.selected_pane = Some(a.clone());
-        set_jump_override(&mut ui);
-        // Click B: pane=B, trail=[A, B] ∪ {A}; A already present, stays [A, B].
-        ui.selected_pane = Some(b.clone());
-        set_jump_override(&mut ui);
-
-        match ui.selection_override {
-            Some(SelectionOverride {
-                pane,
-                kind: OverrideKind::Jump { lagging, .. },
-            }) => {
-                assert_eq!(pane, b);
-                assert_eq!(lagging, vec![a, b], "no duplicate trail entries");
-            }
-            other => panic!("expected a jump override, got {other:?}"),
-        }
     }
 
     #[test]
     fn selection_reanchors_to_its_pane_after_a_reorder() {
-        // terminal_2 moved from row 1 to row 0 between folds with no focus edge;
-        // the highlight follows its pane, not the old index.
+        // terminal_2 moved from row 1 to row 0 between folds with no baseline
+        // change; the highlight follows its pane, not the old index.
         let ws = workspace();
-        let focus = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
-                pane("terminal_2", "tab_0", false),
+                pane("terminal_2", "tab_0", true),
                 pane("terminal_1", "tab_0", false),
             ],
         );
         let mut ui = UiState {
             selected_index: 1,
-            selected_pane: Some(focus.clone()),
-            focus_mirror: Some(focus.clone()),
+            selected_pane: Some(active.clone()),
+            baseline_pane: Some(active.clone()),
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, Some(focus.clone()), Instant::now());
+        reconcile_selection(
+            &mut ui,
+            &snapshot,
+            Some(active.clone()),
+            Some(STAMP_MS),
+            Instant::now(),
+        );
 
         assert_eq!(ui.selected_index, 0, "re-anchored to the pane's new row");
-        assert_eq!(ui.selected_pane, Some(focus));
+        assert_eq!(ui.selected_pane, Some(active));
     }
 
     #[test]
     fn selection_drops_when_its_pane_leaves_the_room() {
-        // The mirror's pane is gone from the snapshot: drop the dangling identity
-        // and clamp, so the next report can re-seat it.
+        // The baseline's pane is gone from the snapshot: drop the dangling
+        // identity and clamp, so the next derivation can re-seat it.
         let ws = workspace();
         let gone = PaneId::from_parts(MuxName::Zellij, "terminal_9");
         let snapshot = snapshot_with_panes(
@@ -3635,45 +3501,79 @@ mod tests {
         let mut ui = UiState {
             selected_index: 1,
             selected_pane: Some(gone.clone()),
-            focus_mirror: Some(gone),
+            baseline_pane: Some(gone),
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, None, Instant::now());
+        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
 
         assert_eq!(ui.selected_pane, None, "dangling identity dropped");
-        assert_eq!(ui.focus_mirror, None, "absent mirror cleared");
+        assert_eq!(ui.baseline_pane, None, "absent baseline cleared");
         assert!(ui.selected_index < 2, "clamped to a valid row");
     }
 
     #[test]
-    fn override_drops_when_its_pane_leaves_the_room() {
-        // A browse pins terminal_9, which then closes. The override must not keep
-        // shadowing the mirror — it is dropped, so the highlight reconverges on the
-        // real focus on the next fold.
+    fn browse_drops_when_its_pane_leaves_the_room() {
+        // A browse picks terminal_9, which then closes. The pick must not keep
+        // shadowing the baseline — it is dropped, so the highlight reconverges
+        // on the next fold.
         let ws = workspace();
         let gone = PaneId::from_parts(MuxName::Zellij, "terminal_9");
         let real = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let snapshot = snapshot_with_panes(
             &ws,
             vec![
-                pane("terminal_1", "tab_0", false),
+                pane("terminal_1", "tab_0", true),
                 pane("terminal_2", "tab_0", false),
             ],
         );
         let mut ui = UiState {
             selected_index: 1,
             selected_pane: Some(gone.clone()),
-            focus_mirror: Some(real.clone()),
-            selection_override: Some(browse(&gone, Some(&real))),
+            baseline_pane: Some(real.clone()),
+            browse: Some(browse(&gone, Some(&real))),
             ..Default::default()
         };
 
-        reconcile_selection(&mut ui, &snapshot, None, Instant::now());
-        assert_eq!(ui.selection_override, None, "the dead override is dropped");
+        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
+        assert_eq!(ui.browse, None, "the dead pick is dropped");
 
-        // The next fold reconverges on the live focus mirror.
-        reconcile_selection(&mut ui, &snapshot, None, Instant::now());
+        // The next fold reconverges on the live baseline.
+        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
+        assert_eq!(ui.selected_pane, Some(real));
+    }
+
+    #[test]
+    fn stamp_drops_when_its_pane_leaves_the_room() {
+        // A jump stamped a pane that closed mid-flight: the stamp is dropped
+        // rather than pinning a ghost until the TTL.
+        let ws = workspace();
+        let gone = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+        let real = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let snapshot = snapshot_with_panes(
+            &ws,
+            vec![
+                pane("terminal_1", "tab_0", true),
+                pane("terminal_2", "tab_0", false),
+            ],
+        );
+        let mut ui = UiState {
+            selected_index: 1,
+            selected_pane: Some(gone.clone()),
+            baseline_pane: Some(real.clone()),
+            jump_stamp: Some(stamp(
+                &gone,
+                STAMP_MS,
+                Instant::now() + Duration::from_secs(60),
+            )),
+            ..Default::default()
+        };
+
+        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
+        assert_eq!(ui.jump_stamp, None, "the dead stamp is dropped");
+
+        // The next fold reconverges on the live baseline.
+        reconcile_selection(&mut ui, &snapshot, None, Some(STAMP_MS), Instant::now());
         assert_eq!(ui.selected_pane, Some(real));
     }
 
@@ -3817,14 +3717,8 @@ mod tests {
         assert_eq!(outcome, InputOutcome::focus(1));
         assert_eq!(ui.selected_index, 1);
         assert!(
-            matches!(
-                ui.selection_override,
-                Some(SelectionOverride {
-                    kind: OverrideKind::Jump { .. },
-                    ..
-                })
-            ),
-            "a click pins an optimistic jump override"
+            ui.jump_stamp.is_some(),
+            "a click stamps the optimistic jump echo"
         );
     }
 
@@ -3851,14 +3745,8 @@ mod tests {
         assert_eq!(outcome, InputOutcome::redraw());
         assert_eq!(ui.selected_index, 1);
         assert!(
-            matches!(
-                ui.selection_override,
-                Some(SelectionOverride {
-                    kind: OverrideKind::Browse { .. },
-                    ..
-                })
-            ),
-            "arrow browse pins a browse override, not a jump"
+            ui.browse.is_some() && ui.jump_stamp.is_none(),
+            "arrow browse begins a browse pick, never a jump echo"
         );
     }
 
@@ -3900,14 +3788,8 @@ mod tests {
         assert_eq!(outcome, InputOutcome::focus(1));
         assert_eq!(ui.selected_index, 1);
         assert!(
-            matches!(
-                ui.selection_override,
-                Some(SelectionOverride {
-                    kind: OverrideKind::Jump { .. },
-                    ..
-                })
-            ),
-            "Enter pins an optimistic jump override"
+            ui.jump_stamp.is_some(),
+            "Enter stamps the optimistic jump echo"
         );
     }
 

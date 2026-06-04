@@ -62,50 +62,54 @@ pub struct UiState {
     pub line_map: Vec<Option<usize>>,
     /// The pane the highlight is pinned to — selection keyed by identity, not
     /// position. Re-derived each fold by `app::reconcile_selection` from the
-    /// `focus_mirror` and any active `selection_override`. Keying on the pane
-    /// means a status-churn reorder re-anchors the highlight to the same pane
-    /// instead of sliding it onto a neighbour.
+    /// derived `baseline_pane` and any live `browse`/`jump_stamp`. Keying on
+    /// the pane means a status-churn reorder re-anchors the highlight to the
+    /// same pane instead of sliding it onto a neighbour.
     pub selected_pane: Option<PaneId>,
-    /// The last agent row the mux client was observed focused on — the
-    /// level-triggered baseline and the *default* highlight. It advances on every
-    /// valid focus report and HOLDS its value across a `None` / sidebar-self /
-    /// undiscoverable / non-row report, so a momentary "no agent focus" gap never
-    /// blanks or moves the highlight. With no active override the highlight simply
-    /// follows this, so the sidebar always reconverges on the real focus.
-    pub(crate) focus_mirror: Option<PaneId>,
-    /// The active local override of the focus mirror, or `None` to follow the
-    /// mirror. Set by every local selection action and cleared by
-    /// `app::reconcile_selection` once it resolves (see [`OverrideKind`]).
-    pub(crate) selection_override: Option<SelectionOverride>,
+    /// The hold-last derived baseline: the own view's active working pane from
+    /// the last frame that reported one. Selection is *derived* — recomputed
+    /// from the queried mux state every fold, so it is same-tab by construction
+    /// and can never desynchronize, only lag a frame. It advances on a `Some`
+    /// derivation and holds across a `None` (the sidebar itself is the view's
+    /// active pane, or the active pane is not a row).
+    pub(crate) baseline_pane: Option<PaneId>,
+    /// The transient arrow-key browse pick riding above the baseline, or `None`
+    /// when not browsing (see [`Browse`]).
+    pub(crate) browse: Option<Browse>,
+    /// The optimistic local echo of an in-flight jump, or `None` when no jump
+    /// is pending (see [`JumpStamp`]). At most one of `browse`/`jump_stamp` is
+    /// live — each setter clears the other.
+    pub(crate) jump_stamp: Option<JumpStamp>,
 }
 
-/// A local selection that overrides the [`UiState::focus_mirror`] for a bounded
-/// window. `pane` is the identity it pins; `kind` decides when it yields.
+/// Arrow-key browse: pins `pane` WITHOUT moving focus, roaming every visible
+/// row — other tabs' rows included, so any card is one keystroke from
+/// expanding. Holds until the user jumps (the stamp replaces it) or the derived
+/// baseline genuinely changes from `baseline_at_start` — the value captured
+/// when browsing began. A `None` derivation holds the baseline, so an inert
+/// frame never ends a browse.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SelectionOverride {
+pub(crate) struct Browse {
     pub(crate) pane: PaneId,
-    pub(crate) kind: OverrideKind,
+    pub(crate) baseline_at_start: Option<PaneId>,
 }
 
+/// Click / `↵` / digit / `␣`: the optimistic local echo of a fire-and-forget
+/// jump. The jump itself is one one-way mux focus command; the stamp only keeps
+/// the highlight on the jumped `pane` until the *queried* state catches up. It
+/// clears when a frame read at/after `at_ms` derives the jumped pane as the
+/// baseline (confirmed), or when `deadline` passes (a jump that never landed —
+/// or a cross-tab jump, which confirms in the destination tab's sidebar, not
+/// here). A frame read *before* `at_ms` predates the jump and decides nothing.
+/// A burst overwrites the stamp wholesale: the last click wins.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum OverrideKind {
-    /// Arrow-key browse: pins `pane` WITHOUT moving focus. Holds until the user
-    /// acts again or the client focus moves off `baseline` — the mirror value
-    /// captured when browsing began. A `None`/inert report does not advance the
-    /// mirror, so it is not "moving off baseline" and the browse holds.
-    Browse { baseline: Option<PaneId> },
-    /// Click / `↵` / digit / `␣`: optimistically pins the jumped `pane`. Resolves
-    /// (clears, reverting to the mirror) when the mirror confirms focus reached
-    /// `pane`, when a genuine external move lands on a pane that is neither `pane`
-    /// nor in `lagging`, or when `now >= settle_deadline` (a jump that never
-    /// landed). `lagging` is the pre-jump focus plus every pane this click-burst
-    /// already jumped to: a mirror value in this set is our own in-flight focus
-    /// catching up — never an external move — so a fast burst never bounces the
-    /// highlight through an intermediate self-jump.
-    Jump {
-        settle_deadline: Instant,
-        lagging: Vec<PaneId>,
-    },
+pub(crate) struct JumpStamp {
+    pub(crate) pane: PaneId,
+    /// Wall-clock Unix ms when the jump fired, ordered against the snapshot's
+    /// `panes_produced_at_ms` (producer and renderer share one host clock).
+    pub(crate) at_ms: u64,
+    /// Monotonic failure-mode ceiling (`app::JUMP_STAMP_TTL`).
+    pub(crate) deadline: Instant,
 }
 
 /// A sticky health alert pinned to the bottom of the sidebar.
