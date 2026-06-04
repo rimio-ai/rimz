@@ -7,6 +7,7 @@ use clap::Args;
 use jiff::Timestamp;
 
 use super::{GlobalFlags, open_ledger};
+use rimz::bridge::AF_UNIX_PATH_LIMIT;
 use rimz::config::MachineConfig;
 use rimz::feed::AgentState;
 use rimz::ids::{MuxName, ResolverId};
@@ -28,12 +29,10 @@ pub struct DoctorArgs {
     audit: bool,
 }
 
-/// AF_UNIX paths are 108 bytes including the terminator. The longest socket
-/// name under `sock_dir` is the sidebar wakeup socket
-/// `<sock_dir>/sidebar.<12-hex>.sock`; the per-request `feed.<12-hex>.sock` is
-/// shorter. Both use the 12-hex short id (`SidebarInstanceId::short`,
-/// `RequestId::short`) so the dir can be as long as possible.
-const AF_UNIX_PATH_LIMIT: usize = 108;
+/// The longest socket name under `sock_dir` is the sidebar wakeup socket
+/// `<sock_dir>/sidebar.<12-hex>.sock`; the per-request `feed.<12-hex>.sock`
+/// is shorter. The budget itself is [`AF_UNIX_PATH_LIMIT`] — one authority
+/// shared with the bridge binder's fail-fast precondition.
 const LONGEST_SOCKET_TAIL_LEN: usize = "/sidebar.123456789012.sock".len();
 
 pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
