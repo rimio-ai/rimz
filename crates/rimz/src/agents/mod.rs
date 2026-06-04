@@ -32,7 +32,7 @@ use crate::feed::{FeedItem, FeedKind, Resolution};
 
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
-    AgentTokenUsage, RateLimitWindow, SubagentContext, SubagentObservation,
+    AgentTokenUsage, AgentTurnError, RateLimitWindow, SubagentContext, SubagentObservation,
 };
 pub use lifecycle::{LifecycleSignal, LifecycleState, Transition, TransitionKind, step};
 pub use observation::AgentLifecycleObservation;
@@ -222,6 +222,21 @@ pub trait AgentIntegration: Send + Sync {
     /// tag, stamped onto the record so downstream knows the provenance.
     /// Display-only enrichment — it never reaches the event log or a decision.
     fn observe_context(&self, _source: &str, _payload: &Value) -> Option<AgentContext> {
+        None
+    }
+
+    /// Detect a turn that died without a hook to record it — an API-error abort
+    /// the agent wrote into its transcript but never reported on the lifecycle
+    /// channel (Claude fires no `Stop` on an "API Error" abort). The adapter
+    /// reads its own transcript tail from the out-of-band payload's path and
+    /// recognizes its own turn-terminal marker. Returns `None` when the newest
+    /// turn is alive or recovered, the transcript is unreadable, or the adapter
+    /// has no verified marker shape (Codex — its rollout error records are
+    /// unverified, so it inherits this default). Display-only enrichment, like
+    /// [`observe_context`](Self::observe_context) — it rides the context
+    /// sidecar and refines the displayed row; it never becomes a lifecycle
+    /// event or a ledger fact.
+    fn observe_turn_error(&self, _payload: &Value) -> Option<AgentTurnError> {
         None
     }
 

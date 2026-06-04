@@ -9,10 +9,11 @@
 
 use jiff::Timestamp;
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::agents::context::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits, AgentTokenUsage,
-    RateLimitWindow,
+    AgentTurnError, RateLimitWindow,
 };
 
 /// The statusline payload Claude pipes on stdin. Only the fields Rimz projects
@@ -172,6 +173,82 @@ fn current_usage(field: Option<CurrentUsageField>) -> Option<AgentCurrentUsage> 
     })
 }
 
+/// Cap on the surfaced error text. The upstream message is one short line
+/// ("API Error: Overloaded"); the cap only guards a pathological entry.
+const TURN_ERROR_LABEL_MAX: usize = 80;
+
+/// Detect a turn that died on a provider API error with no `Stop` hook to
+/// record it. Claude aborts such a turn by writing an `assistant` transcript
+/// entry flagged `isApiErrorMessage: true` (followed by a `system` /
+/// `turn_duration` record) and firing no hook, so the transcript tail is the
+/// only machine-readable death certificate.
+///
+/// Scanning the bounded tail newest-first, the first conversation-bearing
+/// entry — `type` of `assistant`/`user`, not a sidechain, carrying a parseable
+/// `timestamp` — decides: flagged means the turn died at that instant;
+/// anything else means the newest turn is alive or recovered, so `None`.
+/// Non-conversation records (`system`, `file-history-snapshot`, `summary`),
+/// sidechain replay, and unparseable lines are passed over, never decisive.
+pub(crate) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
+    for line in tail.lines().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // A truncated leading line from the tail seek fails to parse; skip it.
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        // Subagent replay never decides the parent's turn.
+        if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let entry_type = value.get("type").and_then(Value::as_str);
+        if !matches!(entry_type, Some("assistant" | "user")) {
+            continue;
+        }
+        // A conversation entry with no clock cannot anchor the self-clear
+        // guard the projection runs against `last_activity`; keep scanning.
+        let Some(at) = value
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(|ts| ts.parse::<Timestamp>().ok())
+        else {
+            continue;
+        };
+        // The first conversation-bearing, timestamped entry decides.
+        if entry_type == Some("assistant")
+            && value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
+        {
+            return Some(AgentTurnError {
+                at,
+                label: turn_error_label(&value),
+            });
+        }
+        return None;
+    }
+    None
+}
+
+/// The error entry's text ("API Error: Overloaded"): the first text block of
+/// `message.content` (or a flat string), trimmed and capped. `None` when the
+/// shape is unfamiliar — the marker still escalates, just unlabeled.
+fn turn_error_label(entry: &Value) -> Option<String> {
+    let content = entry.get("message")?.get("content")?;
+    let text = match content {
+        Value::String(text) => text.as_str(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .find_map(|block| block.get("text").and_then(Value::as_str))?,
+        _ => return None,
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(text.chars().take(TURN_ERROR_LABEL_MAX).collect())
+}
+
 impl StatuslinePayload {
     /// Project the parsed payload onto the agent-agnostic record. `observed_at`
     /// is stamped by the caller so the parser stays pure and deterministic in
@@ -223,6 +300,9 @@ impl StatuslinePayload {
             // probed separately (`claude auth status`) and folded at the
             // provider panel, never here.
             account: None,
+            // The payload carries no turn error either; the handler folds the
+            // transcript-tail detection in post-hoc (`observe_turn_error`).
+            turn_error: None,
             observed_at,
         }
     }
@@ -405,5 +485,101 @@ mod tests {
             Some(100),
             "exactly 100% used remains exhausted"
         );
+    }
+
+    /// The verbatim shape an API-error abort writes (observed live 2026-06-04):
+    /// the flagged assistant entry, then a `system`/`turn_duration` record 4ms
+    /// later, then nothing — and no `Stop` hook.
+    const API_ERROR_ENTRY: &str = r#"{"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-06-04T02:56:32.919Z","message":{"role":"assistant","content":[{"type":"text","text":"API Error: Overloaded"}]}}"#;
+    const TURN_DURATION_ENTRY: &str =
+        r#"{"type":"system","subtype":"turn_duration","timestamp":"2026-06-04T02:56:32.923Z"}"#;
+    const NORMAL_ASSISTANT_ENTRY: &str = r#"{"type":"assistant","timestamp":"2026-06-04T03:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}"#;
+
+    #[test]
+    fn verified_incident_shape_marks_turn_error() {
+        // The newer `turn_duration` record is a non-conversation entry: passed
+        // over, never decisive, so the flagged assistant entry decides.
+        let tail = format!("{API_ERROR_ENTRY}\n{TURN_DURATION_ENTRY}\n");
+        let error = detect_turn_error(&tail).expect("the dead turn is detected");
+        assert_eq!(
+            error.at,
+            "2026-06-04T02:56:32.919Z".parse::<Timestamp>().unwrap(),
+            "the marker carries the error entry's own wall-clock instant"
+        );
+        assert_eq!(error.label.as_deref(), Some("API Error: Overloaded"));
+    }
+
+    #[test]
+    fn normal_newest_turn_yields_none() {
+        let tail = format!("{NORMAL_ASSISTANT_ENTRY}\n");
+        assert!(detect_turn_error(&tail).is_none());
+    }
+
+    #[test]
+    fn recovered_turn_yields_none() {
+        // A normal conversation entry newer than the error means the session
+        // moved on (a resume, a rewind, a fresh prompt): alive, not dead.
+        let tail = format!("{API_ERROR_ENTRY}\n{TURN_DURATION_ENTRY}\n{NORMAL_ASSISTANT_ENTRY}\n");
+        assert!(detect_turn_error(&tail).is_none());
+    }
+
+    #[test]
+    fn non_conversation_records_are_skipped_not_decisive() {
+        // Rewind/fork artifacts (`file-history-snapshot`, no timestamp) and
+        // `summary` records ride the tail; the scan passes over them to the
+        // newest conversation entry.
+        let tail = format!(
+            "{API_ERROR_ENTRY}\n{TURN_DURATION_ENTRY}\n{{\"type\":\"file-history-snapshot\"}}\n{{\"type\":\"summary\",\"summary\":\"t\"}}\n"
+        );
+        assert!(detect_turn_error(&tail).is_some());
+    }
+
+    #[test]
+    fn sidechain_error_never_decides_the_parent() {
+        // A subagent replay's API error is the child's problem; the parent's
+        // newest own entry (older, normal) decides.
+        let sidechain = r#"{"type":"assistant","isSidechain":true,"isApiErrorMessage":true,"timestamp":"2026-06-04T03:01:00.000Z","message":{"content":[{"type":"text","text":"API Error: Overloaded"}]}}"#;
+        let tail = format!("{NORMAL_ASSISTANT_ENTRY}\n{sidechain}\n");
+        assert!(detect_turn_error(&tail).is_none());
+    }
+
+    #[test]
+    fn truncated_leading_line_is_skipped() {
+        // The 64KB tail seek can split the first line mid-JSON; it fails to
+        // parse and is passed over.
+        let tail = format!("age\":{{\"truncated\":true}}}}\n{API_ERROR_ENTRY}\n");
+        assert!(detect_turn_error(&tail).is_some());
+    }
+
+    #[test]
+    fn error_entry_without_timestamp_is_not_decisive() {
+        // No clock, no self-clear guard: the scan passes over it rather than
+        // emitting a marker the projection could never expire.
+        let unclocked = r#"{"type":"assistant","isApiErrorMessage":true,"message":{"content":[{"type":"text","text":"API Error: Overloaded"}]}}"#;
+        assert!(detect_turn_error(&format!("{unclocked}\n")).is_none());
+    }
+
+    #[test]
+    fn empty_tail_yields_none() {
+        assert!(detect_turn_error("").is_none());
+        assert!(detect_turn_error("\n\n").is_none());
+    }
+
+    #[test]
+    fn turn_error_label_is_length_capped() {
+        let long = "x".repeat(500);
+        let entry = format!(
+            r#"{{"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-06-04T02:56:32.919Z","message":{{"content":[{{"type":"text","text":"{long}"}}]}}}}"#
+        );
+        let error = detect_turn_error(&entry).expect("detected");
+        assert_eq!(error.label.unwrap().chars().count(), TURN_ERROR_LABEL_MAX);
+    }
+
+    #[test]
+    fn flat_string_content_still_labels() {
+        // Tolerate a flat-string `message.content` alongside the block array.
+        let entry = r#"{"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-06-04T02:56:32.919Z","message":{"content":"API Error: Overloaded"}}"#;
+        let error = detect_turn_error(entry).expect("detected");
+        assert_eq!(error.label.as_deref(), Some("API Error: Overloaded"));
     }
 }

@@ -367,6 +367,14 @@ pub struct SidebarRow {
     /// activity description. Always `false` for process rows.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub parked_on_background: bool,
+    /// Why the displayed status escalated to `failed` when the agent's latest
+    /// turn died on a provider API error with no `Stop` hook — the upstream
+    /// error text ("API Error: Overloaded") from the transcript-tail marker.
+    /// Set only by the turn-death projection (`project_display_status`), so it
+    /// is present exactly while that escalation holds; the renderer paints it
+    /// as the card's dim line-2 body. Always `None` for process rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_error_label: Option<String>,
 }
 
 /// A compact summary of a child agent, nested under its parent's row. The
@@ -1528,6 +1536,7 @@ fn idle_agent_row(pane: &PaneRef, kind: &str) -> SidebarRow {
         command_detail: None,
         compacting: false,
         parked_on_background: false,
+        turn_error_label: None,
     }
 }
 
@@ -1828,6 +1837,11 @@ fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState], now: Timest
 ///   wedged — its own heartbeat is silent because the work is theirs — so it
 ///   keeps `running` (the renderer paints the delegated-wait head) and is exempt
 ///   from the stall escalation.
+/// - A `running` agent whose latest turn died on a provider API error with no
+///   `Stop` hook (the transcript-tail marker postdates its activity) is
+///   projected to `failed` at once — the explicit death certificate beats the
+///   stall window — and the row carries the upstream error text as
+///   `turn_error_label`.
 /// - A `running` agent silent past the stall window is projected to `failed`, so
 ///   a wedge becomes actionable instead of a frozen spinner.
 /// - A resting (`idle`/`success`) agent on a rate-limited account is projected
@@ -1853,6 +1867,16 @@ fn project_display_status(rows: &mut [SidebarRow], agents: &[AgentState], now: T
         // and the rate-limit verdict is account- (kind-) scoped.
         let projected = if status == AgentStatus::Running && has_live_child {
             AgentStatus::Running
+        } else if crate::feed::is_turn_dead(status, row.context.as_ref(), row.last_activity) {
+            // The turn died on a provider API error with no `Stop` hook — the
+            // transcript marker is explicit, so escalate now rather than
+            // waiting out the stall window, and surface the upstream text.
+            row.turn_error_label = row
+                .context
+                .as_ref()
+                .and_then(|context| context.turn_error.as_ref())
+                .and_then(|error| error.label.clone());
+            AgentStatus::Failed
         } else if crate::feed::is_stalled(status, row.last_activity, now) {
             AgentStatus::Failed
         } else if crate::feed::is_rate_limited(status, limited_kinds.contains(&row.name)) {
@@ -1992,6 +2016,9 @@ fn row_from_agent(agent: &AgentState) -> SidebarRow {
         command_detail: None,
         compacting: is_compacting(agent, Timestamp::now()),
         parked_on_background: agent.parked_on_background,
+        // Filled by the turn-death projection (`project_display_status`) when
+        // the escalation holds; never carried from the rollup.
+        turn_error_label: None,
     }
 }
 
@@ -2059,6 +2086,7 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
         command_detail,
         compacting: false,
         parked_on_background: false,
+        turn_error_label: None,
     }
 }
 
@@ -2227,6 +2255,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         command_detail: None,
         compacting: false,
         parked_on_background: false,
+        turn_error_label: None,
     })
 }
 
@@ -5049,6 +5078,7 @@ mod tests {
             rate_limits: Some(crate::agents::AgentRateLimits { windows }),
             pr: None,
             account: None,
+            turn_error: None,
             observed_at: Timestamp::now(),
         }
     }
@@ -5160,6 +5190,166 @@ mod tests {
                 .any(|child| child.status == AgentStatus::Running),
             "the live child is nested so the renderer can paint the wait head"
         );
+    }
+
+    fn ctx_with_turn_error(at: Timestamp, label: &str) -> AgentContext {
+        AgentContext {
+            source: "claude".to_owned(),
+            session_name: None,
+            model_id: None,
+            model_display_name: None,
+            effort: None,
+            thinking_enabled: None,
+            output_style: None,
+            vim_mode: None,
+            agent_version: None,
+            exceeds_200k_tokens: None,
+            cost: None,
+            tokens: None,
+            rate_limits: None,
+            pr: None,
+            account: None,
+            turn_error: Some(crate::agents::AgentTurnError {
+                at,
+                label: Some(label.to_owned()),
+            }),
+            observed_at: Timestamp::now(),
+        }
+    }
+
+    #[test]
+    fn api_error_turn_escalates_running_to_attention() {
+        // A turn that died on a provider API error fires no Stop hook, so the
+        // rollup keeps `running` — but the transcript marker postdates the
+        // agent's own activity, and the projection escalates at once. The
+        // headline: the agent is *inside* the stall window (silent only a
+        // minute), so this beats the 10-minute backstop.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut session = agent("claude", "live-claude", AgentStatus::Running, 0);
+        session.worktree_path = Some("/repo/main".to_owned());
+        session.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+        session.last_activity = Timestamp::now() - std::time::Duration::from_secs(60);
+        session.context = Some(ctx_with_turn_error(
+            Timestamp::now() - std::time::Duration::from_secs(10),
+            "API Error: Overloaded",
+        ));
+
+        let snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![session])
+                .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+
+        let row = &snapshot.worktree_groups[0].rows[0];
+        assert_eq!(
+            row.status,
+            Some(AgentStatus::Failed),
+            "the explicit death certificate escalates without waiting out the stall window"
+        );
+        assert_eq!(
+            row.turn_error_label.as_deref(),
+            Some("API Error: Overloaded"),
+            "the row carries the upstream error text for the card's line 2"
+        );
+        assert!(
+            snapshot.worktree_groups[0]
+                .status_counts
+                .iter()
+                .any(|count| count.status == AgentStatus::Failed && count.count == 1),
+            "the dead turn counts in the attention tally"
+        );
+        let rolled_up = snapshot
+            .agents
+            .iter()
+            .find(|a| a.agent_id == "live-claude")
+            .expect("agent in rollup");
+        assert_eq!(
+            rolled_up.status,
+            AgentStatus::Running,
+            "the rollup keeps the agent-owned status; only the display row escalates"
+        );
+    }
+
+    #[test]
+    fn api_error_self_clears_when_activity_resumes() {
+        // Any newer hook event (a prompt, a resume, a rewind) advances
+        // `last_activity` past the stale marker and the escalation drops with
+        // no human action — the self-clear guard.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut session = agent("claude", "live-claude", AgentStatus::Running, 0);
+        session.worktree_path = Some("/repo/main".to_owned());
+        session.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+        session.last_activity = Timestamp::now() - std::time::Duration::from_secs(30);
+        session.context = Some(ctx_with_turn_error(
+            Timestamp::now() - std::time::Duration::from_secs(120),
+            "API Error: Overloaded",
+        ));
+
+        let snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![session])
+                .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+
+        let row = &snapshot.worktree_groups[0].rows[0];
+        assert_eq!(
+            row.status,
+            Some(AgentStatus::Running),
+            "activity newer than the marker means the session moved on"
+        );
+        assert!(
+            row.turn_error_label.is_none(),
+            "a cleared escalation leaves no stale reason label"
+        );
+    }
+
+    #[test]
+    fn api_error_does_not_override_waiting() {
+        // A human-blocked ask outranks every derived state, the dead-turn
+        // escalation included.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut session = agent("claude", "live-claude", AgentStatus::Waiting, 0);
+        session.worktree_path = Some("/repo/main".to_owned());
+        session.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+        session.last_activity = Timestamp::now() - std::time::Duration::from_secs(60);
+        session.context = Some(ctx_with_turn_error(
+            Timestamp::now() - std::time::Duration::from_secs(10),
+            "API Error: Overloaded",
+        ));
+
+        let snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![session])
+                .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+
+        let row = &snapshot.worktree_groups[0].rows[0];
+        assert_eq!(row.status, Some(AgentStatus::Waiting));
+        assert!(row.turn_error_label.is_none());
+    }
+
+    #[test]
+    fn dead_parent_with_live_child_keeps_running() {
+        // The delegated-wait exemption wins: a live child's heartbeats are the
+        // parent's work, so a stale parent marker never escalates over it. If
+        // the children also die, the stall window remains the backstop.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut parent = agent("claude", "root", AgentStatus::Running, 1_000);
+        parent.worktree_path = Some("/repo/main".to_owned());
+        parent.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+        parent.last_activity = Timestamp::now() - std::time::Duration::from_secs(60);
+        parent.context = Some(ctx_with_turn_error(
+            Timestamp::now() - std::time::Duration::from_secs(10),
+            "API Error: Overloaded",
+        ));
+        let mut child = child_state("root", "child-1", AgentStatus::Running, 5);
+        child.kind = "claude".to_owned();
+
+        let snapshot = SidebarSnapshot::build_with_carryover(
+            workspace,
+            Vec::new(),
+            Vec::new(),
+            vec![parent, child],
+        )
+        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+
+        let row = &snapshot.worktree_groups[0].rows[0];
+        assert_eq!(row.status, Some(AgentStatus::Running));
+        assert!(row.turn_error_label.is_none());
     }
 
     #[test]

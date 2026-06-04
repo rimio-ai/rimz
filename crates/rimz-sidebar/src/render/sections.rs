@@ -889,9 +889,13 @@ fn display_context_window(row: &SidebarRow) -> Option<u64> {
 /// Line 2 for an agent: the description (the user's session name, else the task,
 /// else the prompt) on its own full-width line. An idle agent with nothing to
 /// show yet paints the animated loading-dots cue instead; any other empty
-/// description falls to an em dash. At L2 the todo progress (`●●●○○ 3/5`) pins to
-/// a right column, aligning under the cost/age above so the dots read as a tidy
-/// gutter instead of floating after the text.
+/// description falls to an em dash. A turn that died on a provider API error
+/// takes the line over the fall-through — the dim upstream error text
+/// (`turn_error_label`, quoted verbatim) is the row's most important fact while
+/// the `!` escalation holds, and the fall-through returns once it clears. At L2
+/// the todo progress (`●●●○○ 3/5`) pins to a right column, aligning under the
+/// cost/age above so the dots read as a tidy gutter instead of floating after
+/// the text.
 fn description_line(
     theme: &Theme,
     row: &SidebarRow,
@@ -899,12 +903,16 @@ fn description_line(
     width: usize,
     animation_phase: u64,
 ) -> Line<'static> {
-    let body = match descriptor(row) {
-        Some(text) => Span::raw(text.to_owned()),
-        None if shows_loading_dots(row) => {
-            Span::styled(loading_dots(animation_phase).to_owned(), theme.dim())
+    let body = if let Some(label) = row.turn_error_label.as_deref() {
+        Span::styled(label.to_owned(), theme.dim())
+    } else {
+        match descriptor(row) {
+            Some(text) => Span::raw(text.to_owned()),
+            None if shows_loading_dots(row) => {
+                Span::styled(loading_dots(animation_phase).to_owned(), theme.dim())
+            }
+            None => Span::raw("—".to_owned()),
         }
-        None => Span::raw("—".to_owned()),
     };
     let mut left = vec![Span::raw("  "), body];
     // The agent parked its turn on still-in-flight background work: keep the

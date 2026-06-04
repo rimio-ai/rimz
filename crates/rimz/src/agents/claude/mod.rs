@@ -39,11 +39,12 @@ use super::hook_types::BackgroundTask;
 use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::{
-    AgentContext, AgentErr, AgentIntegration, AgentLifecycleObservation, ClassifiedHook,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, Result, StatusLineChange,
-    SubagentIdentity, SubagentObservation, agent_config_path, choice_is_allow, classify_agent_hook,
-    optional_payload_string, read_optional_file, read_transcript_tail, resolve_subagent_identity,
-    sanitize_user_prompt, stop_payload_errored, tool_edits_files, tool_mutates,
+    AgentContext, AgentErr, AgentIntegration, AgentLifecycleObservation, AgentTurnError,
+    ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
+    StatusLineChange, SubagentIdentity, SubagentObservation, agent_config_path, choice_is_allow,
+    classify_agent_hook, optional_payload_string, read_optional_file, read_transcript_tail,
+    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored, tool_edits_files,
+    tool_mutates,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ledger::atomic;
@@ -419,6 +420,16 @@ impl AgentIntegration for ClaudeIntegration {
         // non-object payload yields `None` rather than an error.
         let parsed: statusline::StatuslinePayload = serde_json::from_value(payload.clone()).ok()?;
         Some(parsed.into_context(source, Timestamp::now()))
+    }
+
+    fn observe_turn_error(&self, payload: &Value) -> Option<AgentTurnError> {
+        // The statusline payload names the live transcript, and its tail is the
+        // only record of an API-error abort — Claude fires no `Stop` for one
+        // (docs/internals/hooks.md → Appendix Claude). Best-effort: an absent
+        // path or unreadable file is `None`, never an error.
+        let path = optional_payload_string(payload, &["transcript_path"])?;
+        let tail = read_transcript_tail(Path::new(&path))?;
+        statusline::detect_turn_error(&tail)
     }
 
     fn observe_subagent_context(&self, payload: &Value) -> Vec<SubagentObservation> {
@@ -2416,6 +2427,48 @@ mod tests {
         assert_eq!(obs.context_pct, Some(10));
         assert_eq!(obs.total_tokens, Some(100_500));
         assert_eq!(obs.model.as_deref(), Some("claude-opus-4-8[1m]"));
+    }
+
+    #[test]
+    fn observe_turn_error_reads_the_tail_from_the_payload_path() {
+        // End-to-end over the real file path: the statusline payload names the
+        // transcript, the adapter reads its bounded tail, and the verified
+        // incident shape (flagged assistant entry + turn_duration, no Stop)
+        // yields the marker. A missing path or file yields None, never an error.
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("session.jsonl");
+        std::fs::write(
+            &transcript,
+            concat!(
+                "{\"type\":\"assistant\",\"isApiErrorMessage\":true,\"timestamp\":\"2026-06-04T02:56:32.919Z\",",
+                "\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"API Error: Overloaded\"}]}}\n",
+                "{\"type\":\"system\",\"subtype\":\"turn_duration\",\"timestamp\":\"2026-06-04T02:56:32.923Z\"}\n",
+            ),
+        )
+        .unwrap();
+        let error = ClaudeIntegration
+            .observe_turn_error(&json!({
+                "session_id": "sess-1",
+                "transcript_path": transcript.to_str().unwrap(),
+            }))
+            .expect("the dead turn is detected");
+        assert_eq!(error.label.as_deref(), Some("API Error: Overloaded"));
+
+        assert!(
+            ClaudeIntegration
+                .observe_turn_error(&json!({ "session_id": "sess-1" }))
+                .is_none(),
+            "no transcript path, no marker"
+        );
+        assert!(
+            ClaudeIntegration
+                .observe_turn_error(&json!({
+                    "session_id": "sess-1",
+                    "transcript_path": dir.path().join("gone.jsonl").to_str().unwrap(),
+                }))
+                .is_none(),
+            "an unreadable transcript degrades to no marker"
+        );
     }
 
     #[test]

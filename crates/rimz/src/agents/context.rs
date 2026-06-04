@@ -59,6 +59,15 @@ pub struct AgentContext {
     /// from the freshest session of each kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<AgentAccount>,
+    /// A turn that died on a provider API error with no `Stop` hook to record
+    /// it — detected from the transcript tail (Claude's "API Error" abort fires
+    /// no hook). Display-only like every field here: the projection reads it to
+    /// escalate a falsely-`running` row to the attention `!`, and it never
+    /// reaches the event log, a decision, or the rollup. Self-clears once a
+    /// newer hook event advances `last_activity` past
+    /// [`AgentTurnError::at`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_error: Option<AgentTurnError>,
     /// When the producer observed this record. The snapshot reaper drops a
     /// sidecar past the ghost-session TTL even if a `SessionEnd` was missed.
     pub observed_at: Timestamp,
@@ -226,6 +235,27 @@ impl AgentRateLimits {
     pub fn any_spent(&self) -> bool {
         self.windows.iter().any(RateLimitWindow::is_spent)
     }
+}
+
+/// A turn that ended on a provider API error without a `Stop` hook — the
+/// transcript is the only record of the death (an `assistant` entry flagged
+/// `isApiErrorMessage` and nothing newer), so the detector that reads the tail
+/// emits one of these. The projection compares [`at`](Self::at) against the
+/// row's `last_activity`: newer means the row's `running` is a corpse and the
+/// sidebar escalates it; any later hook event self-clears it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AgentTurnError {
+    /// The transcript wall-clock timestamp of the dead turn's error entry — the
+    /// guard the projection compares against `last_activity`. A clock skew
+    /// fails safe: a suppressed real death still hits the stall window, and a
+    /// stale error can never escalate a row whose activity has moved past it.
+    pub at: Timestamp,
+    /// The upstream error text ("API Error: Overloaded"), length-capped by the
+    /// detector. Provider-generated, not user content, but content-ish all the
+    /// same — gate it under a payload-mode content loader when one lands, never
+    /// the timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// The pull request the agent associates with the session, when it reports one.

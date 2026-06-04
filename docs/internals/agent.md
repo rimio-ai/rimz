@@ -81,10 +81,11 @@ The **displayed** status refines the rollup without changing it — `snapshot.ag
 
 - a `running` agent still in its pre-edit turn phase renders as **thinking** (the sparkle; see [Thinking is the turn's opening phase](#thinking-is-the-turns-opening-phase));
 - a `running` agent silent past the stall window escalates to the attention `!` (see [Liveness and presence](#liveness-and-presence)) — *unless* it has a live subagent, in which case it is **waiting on its children** (a quiet wave, exempt from the stall escalation) rather than wedged;
+- a `running` agent whose latest turn **died on a provider API error with no `Stop` hook** escalates to `!` at once — the transcript-tail marker ([transcript.md → Turn-death marker](./transcript.md#appendix--claude-code)) postdates its `last_activity`, so the explicit death certificate beats the stall window; the card quotes the upstream error text, and any newer hook event (a prompt, a resume, a rewind) self-clears it. The live-subagent exemption wins over it, and the stall window stays the backstop when no marker exists (a transcript Rimz cannot read, or a statusline never wired);
 - a resting (`idle`/`success`) agent on an account whose rate-limit window is spent projects to **`rate_limited`** — a sixth, Rimz-*derived* status ([`is_rate_limited`](../../crates/rimz/src/feed.rs)), never emitted by a hook, that joins the cockpit tally and ranks just under the actionable attention states (account-spread: every resting agent of a spent kind is parked, including one that just launched into it);
 - a `compacting` head pulses over any base status while the agent condenses its context window.
 
-`rate_limited` is the rate-limit analogue of the stall projection: both read enrichment plus liveness to refine the displayed cell, and both leave `snapshot.agents` holding the true lifecycle status.
+`rate_limited`, the stall escalation, and the turn-death escalation are one family: each reads enrichment plus liveness to refine the displayed cell, and each leaves `snapshot.agents` holding the true lifecycle status.
 
 ### Thinking is the turn's opening phase
 

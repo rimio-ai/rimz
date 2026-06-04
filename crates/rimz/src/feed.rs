@@ -567,6 +567,30 @@ pub fn is_stalled(status: AgentStatus, last_activity: Timestamp, now: Timestamp)
         && now.duration_since(last_activity).as_secs() >= STALL_WINDOW_SECS
 }
 
+/// Whether a `running` agent's latest turn died on a provider API error with no
+/// `Stop` hook to record it — the transcript-tail marker
+/// ([`AgentTurnError`](crate::agents::AgentTurnError), folded in via the context
+/// sidecar) postdates the agent's `last_activity`. The faster, more-specific
+/// sibling of [`is_stalled`]: the death certificate is explicit, so the sidebar
+/// escalates within a statusline push instead of waiting out the stall window.
+/// Only `Running` can be turn-dead — a hook-reported turn end already resolved
+/// every other status. Self-clearing: any newer hook event (a prompt, a resume,
+/// a rewind) advances `last_activity` past the stale marker. The two clocks
+/// (transcript wall-clock vs heartbeat) skew fail-safe — a suppressed real
+/// death still hits the stall window, and a stale error can never escalate a
+/// row whose activity moved past it. Like [`is_stalled`], a Rimz-derived
+/// projection over enrichment, never a status the agent reports.
+pub fn is_turn_dead(
+    status: AgentStatus,
+    context: Option<&crate::agents::context::AgentContext>,
+    last_activity: Timestamp,
+) -> bool {
+    status == AgentStatus::Running
+        && context
+            .and_then(|context| context.turn_error.as_ref())
+            .is_some_and(|error| error.at > last_activity)
+}
+
 /// Whether a resting agent should project to [`AgentStatus::RateLimited`]: its
 /// account's rate-limit budget is spent (`account_limited`) while it sits in a
 /// calm, non-actionable state — `Idle` or `Success`. A `Running` agent is still

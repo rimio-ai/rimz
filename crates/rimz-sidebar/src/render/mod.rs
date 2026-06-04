@@ -689,7 +689,7 @@ mod tests {
     use jiff::Timestamp;
     use rimz::agents::{
         AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage,
-        RateLimitWindow,
+        AgentTurnError, RateLimitWindow,
     };
     use rimz::feed::{AgentState, AgentStatus, FeedKind, PaneRef};
     use rimz::ids::{MuxName, PaneId, ViewKind};
@@ -920,6 +920,7 @@ mod tests {
             }),
             pr: None,
             account: None,
+            turn_error: None,
             observed_at: now,
         }
     }
@@ -959,6 +960,7 @@ mod tests {
             }),
             pr: None,
             account: None,
+            turn_error: None,
             observed_at: now,
         }
     }
@@ -1104,6 +1106,46 @@ mod tests {
             "window size left the token line:\n{rendered}"
         );
         assert_snapshot("enriched_selected_agent_card", rendered);
+    }
+
+    #[test]
+    fn render_api_error_dead_turn_card() {
+        // A turn that died on a provider API error fires no Stop hook; the
+        // projection escalates the row to the attention `!` and line 2 quotes
+        // the upstream error text (dim) instead of the task fall-through, so
+        // the card says why without a jump.
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            Some("/repo/main"),
+            Some("main"),
+            Some("db migrate"),
+        );
+        claude.last_activity = fixed_now() - Duration::from_secs(60);
+        let mut context = claude_context(fixed_now());
+        context.turn_error = Some(AgentTurnError {
+            at: fixed_now() - Duration::from_secs(10),
+            label: Some("API Error: Overloaded".to_owned()),
+        });
+        claude.context = Some(context);
+        let snapshot = snapshot_with(Vec::new(), vec![claude]);
+
+        let rendered = snapshot_to_screen(&snapshot, 54, 14);
+
+        assert!(
+            rendered.contains("! claude"),
+            "the dead turn escalates to the attention glyph:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("API Error: Overloaded"),
+            "line 2 quotes the upstream error text:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("ledger refactor"),
+            "the reason takes the line over the session-name fall-through:\n{rendered}"
+        );
+        assert_snapshot("api_error_dead_turn_card", rendered);
     }
 
     #[test]

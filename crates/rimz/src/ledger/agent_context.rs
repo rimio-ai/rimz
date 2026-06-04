@@ -120,6 +120,7 @@ mod tests {
             rate_limits: None,
             pr: None,
             account: None,
+            turn_error: None,
             observed_at,
         }
     }

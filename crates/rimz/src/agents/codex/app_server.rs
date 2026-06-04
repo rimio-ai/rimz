@@ -655,6 +655,7 @@ fn into_context(
         rate_limits,
         pr: None,
         account,
+        turn_error: None,
         observed_at,
     }
 }

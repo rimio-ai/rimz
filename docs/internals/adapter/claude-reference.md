@@ -289,3 +289,14 @@ The 5h/7d balance windows have no source outside a live statusline — there is 
 ## Transcript JSONL
 
 Anthropic publishes **no official schema** for the conversation transcript at `transcript_path`. Rimz reads it best-effort and reverse-engineered: each assistant line carries a `message` object, and the newest `message.usage` (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`) plus `message.model` feed the context gauge. The field → internal mapping and the window-divisor rule are in [transcript.md](../transcript.md#appendix--claude-code); there is no source URL to pin.
+
+### Transcript death certificate
+
+A turn Claude aborts on a provider API error fires **no `Stop` hook** (observed live, 2026-06-04; upstream's `StopFailure` event covers this case natively but is unwired today — see the [catalog](#full-event-catalog-index)). The transcript records the death twice, milliseconds apart:
+
+```jsonc
+{"type": "assistant", "isApiErrorMessage": true, "timestamp": "2026-06-04T02:56:32.919Z", "message": {"content": [{"type": "text", "text": "API Error: Overloaded"}]}}
+{"type": "system", "subtype": "turn_duration", "timestamp": "2026-06-04T02:56:32.923Z"}
+```
+
+[`detect_turn_error`](../../../crates/rimz/src/agents/claude/statusline.rs) reads the flagged assistant entry off the bounded tail on each statusline push; the decision rule and the internal mapping are [transcript.md → Turn-death marker](../transcript.md#appendix--claude-code). Reverse-engineered like the rest of this section; no source URL to pin.
