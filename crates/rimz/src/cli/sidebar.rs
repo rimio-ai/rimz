@@ -162,11 +162,18 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             // call): resolve the base — ledger rollup plus live pane list,
             // single-flighted across the fleet — then fold the git enrichments
             // and publish the cache the consumers read.
-            let (mut snapshot, panes): (rimz::SidebarSnapshot, Option<Vec<rimz::feed::PaneRef>>) =
+            let (mut snapshot, frame): (rimz::SidebarSnapshot, Option<SnapshotCache>) =
                 match (&session_name, fixture) {
                     // A test fixture stands in for the mux; never touch the shared
                     // cache so deterministic tests can neither poison nor read it.
-                    (Some(_), Some(fixture)) => (ledger.snapshot()?, Some(fixture)),
+                    (Some(session), Some(fixture)) => (
+                        ledger.snapshot()?,
+                        Some(SnapshotCache {
+                            produced_at_ms: unix_now_ms(),
+                            session_name: session.clone(),
+                            panes: fixture,
+                        }),
+                    ),
                     (Some(session), None) => {
                         let mux = mux
                             .or(globals.mux)
@@ -178,7 +185,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                                 session,
                                 min_pane_cache_ms,
                             ) {
-                                Ok((rollup, panes)) => (rollup, Some(panes)),
+                                Ok((rollup, frame)) => (rollup, Some(frame)),
                                 // The serve loop owns a live session, so a
                                 // discovery failure there is real: fail hard and
                                 // let the loop hold its last good frame via the
@@ -251,7 +258,9 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     snapshot.drop_dead_daemon_sessions(&daemon_pids, loaded.as_ref());
                 }
             }
-            if let Some(mut panes) = panes {
+            if let Some(frame) = frame {
+                snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
+                let mut panes = frame.panes;
                 if let Some(own) = exclude.as_ref() {
                     snapshot.own_view = rimz::SidebarOwnView::from_panes(own, &panes);
                 }
@@ -475,14 +484,16 @@ fn cached_base_or_produce(
     mux: MuxName,
     session: &str,
     min_pane_cache_ms: Option<u64>,
-) -> Result<(rimz::SidebarSnapshot, Vec<rimz::feed::PaneRef>)> {
-    let panes = cached_panes_or_produce(ledger, mux, session, min_pane_cache_ms)?;
+) -> Result<(rimz::SidebarSnapshot, SnapshotCache)> {
+    let frame = cached_panes_or_produce(ledger, mux, session, min_pane_cache_ms)?;
     let rollup = ledger.snapshot_cached()?;
-    Ok((rollup, panes))
+    Ok((rollup, frame))
 }
 
-/// Return the live pane list for `session`, sharing one `list-panes` round-trip
-/// across every sidebar via a short-lived single-flight cache.
+/// Return the live pane frame for `session` — the pane list plus the
+/// `produced_at_ms` read stamp the renderer's jump guard orders against —
+/// sharing one `list-panes` round-trip across every sidebar via a short-lived
+/// single-flight cache.
 ///
 /// Fast path: a fresh same-session cache is read back with no mux work. Slow
 /// path: a non-blocking `try_lock` elects one producer; losers poll briefly for
@@ -493,49 +504,50 @@ fn cached_panes_or_produce(
     mux: MuxName,
     session: &str,
     min_pane_cache_ms: Option<u64>,
-) -> Result<Vec<rimz::feed::PaneRef>> {
+) -> Result<SnapshotCache> {
     let runtime = ledger.runtime_paths();
     let cache_path = runtime.root.join("snapshot.json");
 
     // Fast path: a fresh same-session entry needs no mux work.
     if let Some(cache) = fresh_snapshot_cache(&cache_path, session, min_pane_cache_ms) {
-        return Ok(cache.panes);
+        return Ok(cache);
     }
 
     // Slow path: elect one producer for this `(workspace, session)` refresh.
     // Losers read its write back; if it wedges, they fall back to an uncached
     // local produce rather than block.
     let lock_path = runtime.root.join("snapshot.lock");
-    let fresh =
-        || fresh_snapshot_cache(&cache_path, session, min_pane_cache_ms).map(|cache| cache.panes);
+    let fresh = || fresh_snapshot_cache(&cache_path, session, min_pane_cache_ms);
+    let produce_local = || -> Result<SnapshotCache> {
+        Ok(SnapshotCache {
+            produced_at_ms: unix_now_ms(),
+            session_name: session.to_owned(),
+            panes: list_session_panes(mux, session)?,
+        })
+    };
     match single_flight::coalesce(
         &lock_path,
         SNAPSHOT_CACHE_WAIT_STEP,
         SNAPSHOT_CACHE_WAIT_STEPS,
         fresh,
     ) {
-        Coalesced::Shared(panes) => Ok(panes),
-        Coalesced::ProduceLocal => list_session_panes(mux, session),
+        Coalesced::Shared(cache) => Ok(cache),
+        Coalesced::ProduceLocal => produce_local(),
         // We won: fork `list-panes` and publish it. The guard holds the lock
         // until this arm returns.
         Coalesced::Produce(_guard) => {
-            let mut panes = list_session_panes(mux, session)?;
+            let mut cache = produce_local()?;
             // A mid-tick `list-panes` race can drop a live pane's command/cwd/
             // process-start; rather than fold an anonymous `external`/`process`
             // row that blinks out next tick, backfill the missing fields from
             // the last good read of the same pane id.
             if let Some(prev) = read_snapshot_cache(&cache_path, session) {
-                carry_forward_pane_fields(&mut panes, &prev.panes);
+                carry_forward_pane_fields(&mut cache.panes, &prev.panes);
             }
-            let cache = SnapshotCache {
-                produced_at_ms: unix_now_ms(),
-                session_name: session.to_owned(),
-                panes: panes.clone(),
-            };
             if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &cache) {
                 tracing::warn!(path = %cache_path.display(), error = %err, "sidebar snapshot cache write failed");
             }
-            Ok(panes)
+            Ok(cache)
         }
     }
 }

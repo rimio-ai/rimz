@@ -440,19 +440,21 @@ pub fn read_published_snapshot(
     let cache_path = runtime.root.join("snapshot.json");
     let cache = read_snapshot_cache(&cache_path, session)?;
     let base = consumer_rollup(state)?;
-    Some(enrich_consumer(base, Some(cache.panes), runtime, exclude))
+    Some(enrich_consumer(base, Some(cache), runtime, exclude))
 }
 
 /// Fold the read-only enrichments onto a consumer's base snapshot: the cached
 /// worktree roots, each session's statusline context and per-tool activity, the
 /// live-pane overlay with this renderer's own-pane exclusion, and the cached
 /// diff-stats projection. Every input is a runtime cache or sidecar read — no
-/// `list-panes`, no git, no ledger lock. `panes` is `None` only on a cold start
-/// (no base published yet), where the bare rollup's groups stand until the
-/// producer's first publish, mirroring the producer's own pane-fold guard.
+/// `list-panes`, no git, no ledger lock. `frame` is the producer's published
+/// pane frame (panes plus their `produced_at_ms` read stamp); `None` only on a
+/// cold start (no base published yet), where the bare rollup's groups stand
+/// until the producer's first publish, mirroring the producer's own pane-fold
+/// guard.
 pub fn enrich_consumer(
     mut snapshot: SidebarSnapshot,
-    panes: Option<Vec<PaneRef>>,
+    frame: Option<SnapshotCache>,
     runtime: &RuntimePaths,
     exclude: Option<&PaneId>,
 ) -> SidebarSnapshot {
@@ -473,7 +475,9 @@ pub fn enrich_consumer(
     // Wiring state gates the live-pane fold (the idle-instance synthesis), so set
     // it before folding panes, not after.
     snapshot.wired_lazy_kinds = wired_lazy_kinds();
-    if let Some(panes) = panes {
+    if let Some(frame) = frame {
+        snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
+        let panes = frame.panes;
         if let Some(own) = exclude {
             snapshot.own_view = SidebarOwnView::from_panes(own, &panes);
         }

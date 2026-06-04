@@ -103,6 +103,14 @@ pub struct SidebarSnapshot {
     /// `None`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub own_view: Option<SidebarOwnView>,
+    /// Wall-clock Unix ms when the live pane frame was read (the producer's
+    /// `list-panes` publish stamp). The renderer's jump stamp orders itself
+    /// against it, so a frame read *before* a jump can never confirm the jump
+    /// or move the highlight. Producer and renderer share one host clock, so
+    /// the comparison is skew-free in practice. Like `own_view`, live-pane
+    /// state the pure reducer can't read: `None` until a pane fold supplies it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panes_produced_at_ms: Option<u64>,
     /// True iff every live, non-sidebar view in the session is the `rimzd`
     /// daemon view — the user has closed every working tab and only the managed
     /// daemon tab remains. The daemon view's own sidebar reads it (gated by
@@ -493,6 +501,7 @@ impl SidebarSnapshot {
             agent_hooks_ready: false,
             wired_lazy_kinds: Vec::new(),
             own_view: None,
+            panes_produced_at_ms: None,
             only_daemon_view_remains: false,
             project_root: None,
             worktree_roots: Vec::new(),
