@@ -1345,6 +1345,9 @@ fn agent_moved_past_ask(agent: &AgentState, ask: &FeedItem) -> bool {
 /// surface, resolver, options, and age.
 fn fold_ask_onto_row(row: &mut SidebarRow, ask: &FeedItem) {
     row.status = Some(AgentStatus::Waiting);
+    // Phase is a head on Running — the reduced state's invariant — so the
+    // waiting overlay drops it rather than carrying a stale Reasoning/Acting.
+    row.phase = TurnPhase::Idle;
     row.request_id = Some(ask.request_id.clone());
     row.surface = Some(ask.surface);
     row.resolver = active_resolver_state(ask);
@@ -1657,6 +1660,12 @@ fn project_display_status(rows: &mut [SidebarRow], agents: &[AgentState], now: T
             status
         };
         row.status = Some(projected);
+        if projected != AgentStatus::Running {
+            // Phase is a head on Running — the reduced state's invariant —
+            // so a Failed/RateLimited override drops it rather than carrying
+            // a stale Reasoning/Acting onto a resting row.
+            row.phase = TurnPhase::Idle;
+        }
     }
 }
 
