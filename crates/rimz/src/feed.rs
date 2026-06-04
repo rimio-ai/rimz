@@ -299,6 +299,11 @@ pub struct ResolverStep {
 pub struct PaneRef {
     pub pane_id: PaneId,
     pub session_name: String,
+    /// The view (tab/window) holding the pane, by the backend's *internal* id
+    /// (Zellij `tab_15`, tmux `@3`). An opaque grouping key, never the view's
+    /// on-screen label: a Zellij tab *named* "Tab #15" and the internal id
+    /// `tab_15` are routinely different tabs — see
+    /// docs/internals/multiplexers.md → Pane and view IDs.
     #[serde(default)]
     pub view_id: Option<String>,
     #[serde(default)]

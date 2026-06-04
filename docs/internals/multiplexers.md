@@ -63,13 +63,17 @@ The pane a user actually looks at is **per-client**, and `client_focused_panes` 
 
 The producer overlays this set onto `PaneRef.client_focused` (see [sidebar.md](./sidebar.md)), so the sidebar focus mirror tracks the user, not every view's active pane. It is best-effort enrichment, never a precondition: a backend that cannot answer returns an empty set and the mirror holds. `is_focused` stays the per-view signal the row cap uses to keep each view's active row visible.
 
-## Pane IDs
+## Pane and view IDs
 
 - Raw Zellij IDs look like `terminal_3` or `plugin_1`.
 - Raw tmux IDs look like `%3`.
 - Rimz-normalized IDs are `zellij:<raw>` and `tmux:<raw>`.
 
 Normalized IDs travel through env vars (`RIMZ_PANE_ID`), feed items, snapshots, and CLI arguments. Raw IDs stay inside the backend adapter, where the multiplexer's native command expects them.
+
+`PaneRef.view_id` names the view (tab/window) holding the pane by the backend's **internal** id — Zellij `tab_15`, tmux `@3`. It is an opaque grouping key that joins panes into views for sidebar-per-view bookkeeping.
+
+**A view id is never the view's on-screen label.** Zellij's default tab names are themselves number-shaped (`Tab #16`), so an internal `tab_15` invites a lexical match against a tab *named* "Tab #15" — a join across two unrelated id spaces that lands on the wrong tab in any session that has ever closed one. The name is a sticky label minted at tab creation; the internal id is the backend's own counter; nothing reconciles them, and Zellij reports no per-pane tab name that could (`PaneRef.view_name` is tmux-only). Resolve "which tab holds this pane?" through the pane id — focus it, or read the live layout — never by matching `view_id` against a label.
 
 ## Zellij backend
 
