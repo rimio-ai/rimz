@@ -1,9 +1,9 @@
 //! Codex agent JSONL transcript parser.
 //!
 //! Codex JSONL records **token usage events** and carries **no** `costUSD`
-//! field, so [spending](super::super::spending) multiplies each
-//! [`CodexTokenEvent`] through the [`pricing`](super::super::pricing) table to a
-//! USD cost. This module stays pure and network-free — it only parses tokens.
+//! field, so [`parse_codex_spend`] multiplies each [`CodexTokenEvent`] through
+//! the [`pricing`](crate::agents::pricing) table to a USD cost. Discovery and
+//! parsing stay pure and network-free.
 //!
 //! Codex session files live at `~/.codex/sessions/` (or `CODEX_HOME` env).
 //!
@@ -36,7 +36,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use super::{collect_jsonl, home_dir};
+use crate::agents::pricing::PriceBook;
+use crate::agents::spending::{CachedEntry, iso_to_unix_secs};
+use crate::agents::transcript_fs::{collect_jsonl, home_dir};
 
 // ── Public output type ────────────────────────────────────────────────────────
 
@@ -48,8 +50,6 @@ use super::{collect_jsonl, home_dir};
 pub struct CodexTokenEvent {
     /// ISO-8601 / RFC-3339 timestamp string from the event.
     pub timestamp: String,
-    /// Session identifier derived from the file path relative to the sessions dir.
-    pub session_id: String,
     /// Model name, resolved from the event payload and tracked `turn_context`.
     /// `None` only when the file contained no model hint at all.
     pub model: Option<String>,
@@ -57,11 +57,6 @@ pub struct CodexTokenEvent {
     /// Cached (prompt-cache-hit) input tokens, capped to `input_tokens`.
     pub cached_input_tokens: u64,
     pub output_tokens: u64,
-    pub reasoning_output_tokens: u64,
-    pub total_tokens: u64,
-    /// `true` when the model name is a fallback guess (`"gpt-5"`), not
-    /// observed directly from a log entry.
-    pub is_fallback_model: bool,
 }
 
 // ── Typed structs — session format ───────────────────────────────────────────
@@ -487,13 +482,6 @@ fn codex_line_kind(line: &[u8]) -> Option<CodexLineKind> {
     None
 }
 
-/// Return `true` when `line` is a Codex session entry worth parsing for token
-/// usage. A cheap classifier covered directly by tests; `parse_codex_session`
-/// applies the same classification internally.
-pub fn is_codex_token_line(line: &[u8]) -> bool {
-    codex_line_kind(line).is_some()
-}
-
 // ── Parser ────────────────────────────────────────────────────────────────────
 
 /// Parse a Codex session JSONL file into `CodexTokenEvent` values.
@@ -512,16 +500,14 @@ pub fn is_codex_token_line(line: &[u8]) -> bool {
 /// Checked in order: `payload.model` → `payload.model_name` →
 /// `payload.metadata.model` → `info.model` → `info.model_name` →
 /// `info.metadata.model` → remembered `current_model` → fallback `"gpt-5"`.
-pub fn parse_codex_session(sessions_dir: &Path, path: &Path) -> Vec<CodexTokenEvent> {
+pub fn parse_codex_session(path: &Path) -> Vec<CodexTokenEvent> {
     let Ok(file) = std::fs::File::open(path) else {
         return Vec::new();
     };
     let mut reader = BufReader::with_capacity(128 * 1024, file);
     let mut line = Vec::new();
-    let session_id = session_id_from_path(sessions_dir, path);
     let mut previous_totals: Option<CodexRawUsage> = None;
     let mut current_model: Option<String> = None;
-    let mut current_model_is_fallback = false;
     let fallback_timestamp = file_mtime_rfc3339(path);
     let mut out = Vec::new();
 
@@ -539,25 +525,11 @@ pub fn parse_codex_session(sessions_dir: &Path, path: &Path) -> Vec<CodexTokenEv
                 let Ok(entry) = serde_json::from_slice::<CodexSessionEntry<'_>>(&line) else {
                     continue;
                 };
-                visit_session_entry(
-                    &session_id,
-                    entry,
-                    &mut previous_totals,
-                    &mut current_model,
-                    &mut current_model_is_fallback,
-                    &mut out,
-                );
+                visit_session_entry(entry, &mut previous_totals, &mut current_model, &mut out);
             }
             Some(CodexLineKind::Headless) => {
                 if let Ok(entry) = serde_json::from_slice::<CodexLogEntry<'_>>(&line) {
-                    visit_headless_entry(
-                        &session_id,
-                        &entry,
-                        &fallback_timestamp,
-                        &mut current_model,
-                        &mut current_model_is_fallback,
-                        &mut out,
-                    );
+                    visit_headless_entry(&entry, &fallback_timestamp, &mut current_model, &mut out);
                 }
             }
             None => {}
@@ -567,18 +539,15 @@ pub fn parse_codex_session(sessions_dir: &Path, path: &Path) -> Vec<CodexTokenEv
 }
 
 fn visit_session_entry(
-    session_id: &str,
     entry: CodexSessionEntry<'_>,
     previous_totals: &mut Option<CodexRawUsage>,
     current_model: &mut Option<String>,
-    current_model_is_fallback: &mut bool,
     out: &mut Vec<CodexTokenEvent>,
 ) {
     let entry_type = entry.entry_type.as_deref();
     if entry_type == Some("turn_context") {
         if let Some(model) = entry.payload.as_ref().and_then(model_from_payload) {
             *current_model = Some(model);
-            *current_model_is_fallback = false;
         }
         return;
     }
@@ -611,30 +580,22 @@ fn visit_session_entry(
     let parsed_model = model_from_payload(payload).or_else(|| info.and_then(model_from_info));
     if let Some(ref m) = parsed_model {
         *current_model = Some(m.clone());
-        *current_model_is_fallback = false;
     }
-    let (model, is_fallback) =
-        resolve_model(parsed_model, current_model, current_model_is_fallback);
+    let model = resolve_model(parsed_model, current_model);
 
     out.push(CodexTokenEvent {
-        session_id: session_id.to_string(),
         timestamp: ts,
         model,
         input_tokens: raw.input_tokens,
         cached_input_tokens: raw.cached_input_tokens.min(raw.input_tokens),
         output_tokens: raw.output_tokens,
-        reasoning_output_tokens: raw.reasoning_output_tokens,
-        total_tokens: raw.total_tokens,
-        is_fallback_model: is_fallback,
     });
 }
 
 fn visit_headless_entry(
-    session_id: &str,
     entry: &CodexLogEntry<'_>,
     fallback_timestamp: &str,
     current_model: &mut Option<String>,
-    current_model_is_fallback: &mut bool,
     out: &mut Vec<CodexTokenEvent>,
 ) {
     let Some(raw) = headless_usage(entry) else {
@@ -647,21 +608,15 @@ fn visit_headless_entry(
     let parsed_model = headless_model(entry);
     if let Some(ref m) = parsed_model {
         *current_model = Some(m.clone());
-        *current_model_is_fallback = false;
     }
-    let (model, is_fallback) =
-        resolve_model(parsed_model, current_model, current_model_is_fallback);
+    let model = resolve_model(parsed_model, current_model);
 
     out.push(CodexTokenEvent {
-        session_id: session_id.to_string(),
         timestamp: ts,
         model,
         input_tokens: raw.input_tokens,
         cached_input_tokens: raw.cached_input_tokens.min(raw.input_tokens),
         output_tokens: raw.output_tokens,
-        reasoning_output_tokens: raw.reasoning_output_tokens,
-        total_tokens: raw.total_tokens,
-        is_fallback_model: is_fallback,
     });
 }
 
@@ -703,19 +658,13 @@ fn non_empty_cow(v: Option<&Cow<'_, str>>) -> Option<String> {
     })
 }
 
-/// Return `(model, is_fallback_model)`, using `"gpt-5"` as the ultimate fallback.
-fn resolve_model(
-    parsed: Option<String>,
-    current_model: &mut Option<String>,
-    current_is_fallback: &mut bool,
-) -> (Option<String>, bool) {
-    let model = parsed.or_else(|| current_model.clone()).or_else(|| {
-        *current_is_fallback = true;
+/// The event's model — the parsed hint, else the file's remembered model,
+/// else the `"gpt-5"` ultimate fallback (remembered for later entries).
+fn resolve_model(parsed: Option<String>, current_model: &mut Option<String>) -> Option<String> {
+    parsed.or_else(|| current_model.clone()).or_else(|| {
         *current_model = Some("gpt-5".to_string());
         current_model.clone()
-    });
-    let is_fallback = model.is_some() && current_model.is_some() && *current_is_fallback;
-    (model, is_fallback)
+    })
 }
 
 // ── Usage helpers ─────────────────────────────────────────────────────────────
@@ -818,85 +767,86 @@ fn file_mtime_rfc3339(path: &Path) -> String {
 
 // ── Path utilities ────────────────────────────────────────────────────────────
 
-/// Derive a session ID from a Codex file path by stripping `sessions_dir` and
-/// the `.jsonl` extension, then joining the remaining path components with `/`.
-pub fn session_id_from_path(sessions_dir: &Path, path: &Path) -> String {
-    let rel = path.strip_prefix(sessions_dir).unwrap_or(path);
-    let s: String = rel
-        .with_extension("")
-        .components()
-        .filter_map(|c| c.as_os_str().to_str())
-        .collect::<Vec<_>>()
-        .join("/");
-    if s.is_empty() {
-        "unknown".to_owned()
-    } else {
-        s
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+/// Turn a Codex session's token events into priced [`CachedEntry`] values.
+///
+/// Codex logs token counts, not dollars, so each event is multiplied through
+/// the price book: uncached input at the input rate, the cached slice at the
+/// cache-read rate, and output (which already includes reasoning tokens) at the
+/// output rate. The recorded `tokens` is `input + output` — the same `◇` total
+/// the rest of the sidebar reads. Events whose model has no known price, or that
+/// price to zero, are dropped. Codex entries carry no message/request IDs, so
+/// they bypass the Claude dedup and bucket directly under the `codex` provider.
+pub(crate) fn parse_codex_spend(path: &Path, prices: &PriceBook) -> Vec<CachedEntry> {
+    let events = parse_codex_session(path);
+    let mut out = Vec::with_capacity(events.len());
+    for event in events {
+        let Some(model) = event.model.as_deref() else {
+            continue;
+        };
+        let Some(price) = prices.price(model) else {
+            continue;
+        };
+        let uncached_input = event.input_tokens.saturating_sub(event.cached_input_tokens);
+        let cost = uncached_input as f64 * price.input
+            + event.cached_input_tokens as f64 * price.cache_read
+            + event.output_tokens as f64 * price.output;
+        if cost <= 0.0 {
+            continue;
+        }
+        let Some(ts_secs) = iso_to_unix_secs(&event.timestamp) else {
+            continue;
+        };
+        // Codex has no cache-creation concept: its cached slice is a read. The `◇`
+        // total is fresh input + output, so `input` is the uncached slice and the
+        // cached slice rides `cache_read`.
+        out.push(CachedEntry {
+            ts_secs,
+            cost_usd: cost,
+            input: uncached_input,
+            output: event.output_tokens,
+            cache_write: 0,
+            cache_read: event.cached_input_tokens,
+            message_id: None,
+            request_id: None,
+            is_sidechain: false,
+        });
+    }
+    out
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The line classifier feeding `parse_codex_session` — exercised here
+    /// through the kind probe so each accepted/skipped shape stays pinned.
+    fn token_line(line: &[u8]) -> bool {
+        codex_line_kind(line).is_some()
+    }
+
     #[test]
-    fn is_codex_token_line_session_event_msg() {
-        assert!(is_codex_token_line(
+    fn token_line_accepts_each_known_shape() {
+        assert!(token_line(
             br#"{"type":"event_msg","payload":{"type":"token_count","info":{}}}"#
         ));
-    }
-
-    #[test]
-    fn is_codex_token_line_turn_context() {
-        assert!(is_codex_token_line(
-            br#"{"type":"turn_context","payload":{}}"#
-        ));
-    }
-
-    #[test]
-    fn is_codex_token_line_headless_usage() {
-        assert!(is_codex_token_line(
+        assert!(token_line(br#"{"type":"turn_context","payload":{}}"#));
+        assert!(token_line(
             br#"{"usage":{"input_tokens":100,"output_tokens":50},"model":"gpt-5"}"#
         ));
-    }
-
-    #[test]
-    fn is_codex_token_line_headless_prompt_tokens() {
-        assert!(is_codex_token_line(
+        assert!(token_line(
             br#"{"prompt_tokens":100,"completion_tokens":50,"model":"gpt-5"}"#
         ));
     }
 
     #[test]
-    fn skips_tool_call_event_msg() {
-        assert!(!is_codex_token_line(
+    fn token_line_skips_non_usage_shapes() {
+        assert!(!token_line(
             br#"{"type":"event_msg","payload":{"type":"tool_call"}}"#
         ));
-    }
-
-    #[test]
-    fn skips_unrelated_lines() {
-        assert!(!is_codex_token_line(br#"{"type":"other","foo":"bar"}"#));
-        assert!(!is_codex_token_line(b"{}"));
-    }
-
-    #[test]
-    fn session_id_strips_prefix_and_extension() {
-        let sessions_dir = Path::new("/home/me/.codex/sessions");
-        let path = Path::new("/home/me/.codex/sessions/2026/01/session-abc.jsonl");
-        assert_eq!(
-            session_id_from_path(sessions_dir, path),
-            "2026/01/session-abc"
-        );
-    }
-
-    #[test]
-    fn session_id_handles_flat_path() {
-        let sessions_dir = Path::new("/home/me/.codex/sessions");
-        let path = Path::new("/home/me/.codex/sessions/session-xyz.jsonl");
-        assert_eq!(session_id_from_path(sessions_dir, path), "session-xyz");
+        assert!(!token_line(br#"{"type":"other","foo":"bar"}"#));
+        assert!(!token_line(b"{}"));
     }
 
     #[test]
@@ -986,12 +936,11 @@ mod tests {
             r#"{{"type":"event_msg","timestamp":"2026-01-01T10:00:00.000Z","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":100,"output_tokens":50}}}}}}}}"#
         ).unwrap();
 
-        let events = parse_codex_session(sessions_dir, &path);
+        let events = parse_codex_session(&path);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].input_tokens, 100);
         assert_eq!(events[0].output_tokens, 50);
         assert_eq!(events[0].model.as_deref(), Some("gpt-5"));
-        assert!(!events[0].is_fallback_model);
     }
 
     #[test]
@@ -1015,7 +964,7 @@ mod tests {
             r#"{{"type":"event_msg","timestamp":"2026-01-01T10:01:00.000Z","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":300,"output_tokens":120}}}}}}}}"#
         ).unwrap();
 
-        let events = parse_codex_session(sessions_dir, &path);
+        let events = parse_codex_session(&path);
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].input_tokens, 100);
         assert_eq!(events[1].input_tokens, 200);
@@ -1037,7 +986,7 @@ mod tests {
             r#"{{"model":"gpt-5","timestamp":"2026-01-01T10:00:00.000Z","usage":{{"input_tokens":200,"output_tokens":80}}}}"#
         ).unwrap();
 
-        let events = parse_codex_session(sessions_dir, &path);
+        let events = parse_codex_session(&path);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].input_tokens, 200);
         assert_eq!(events[0].output_tokens, 80);

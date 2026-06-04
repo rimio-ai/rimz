@@ -433,6 +433,33 @@ fn invariants(root: &Path) -> Result<()> {
         )?;
     }
 
+    // Adapter spend parsers are the read-only, sidebar-safe cost surface
+    // (`crates/rimz/src/agents/<name>/spend.rs` + the shared `transcript_fs`):
+    // they must stay free of ledger-write, bridge, and broker imports so the
+    // spending walk can never write durable state or block on a socket.
+    let outside_spend_parsers = {
+        let agents_root = root.join("crates/rimz/src/agents");
+        move |path: &Path| {
+            !(path.starts_with(&agents_root)
+                && matches!(
+                    path.file_name().and_then(OsStr::to_str),
+                    Some("spend.rs" | "transcript_fs.rs")
+                ))
+        }
+    };
+    for needle in [
+        concat!("ledger", "::", "atomic"),
+        concat!("crate", "::", "bridge"),
+        concat!("::", "broker"),
+    ] {
+        ensure_no_match(
+            &files,
+            needle,
+            &outside_spend_parsers,
+            "adapter spend parsers are read-only: no ledger writes, bridge, or broker imports",
+        )?;
+    }
+
     ensure_no_core_pane_auto_use(root, &files)?;
     Ok(())
 }

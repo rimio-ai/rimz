@@ -18,6 +18,7 @@
 //! broad `PreToolUse` hook and self-classify from `tool_name`.
 
 pub(crate) mod payloads;
+pub(crate) mod spend;
 mod statusline;
 mod subagent_statusline;
 
@@ -35,10 +36,14 @@ use self::payloads::{
     parse_session_start, parse_stop, parse_subagent_start, parse_subagent_stop,
     parse_user_prompt_submit,
 };
-use super::descriptor::{AgentDescriptor, Brand, Capabilities, PlanLabel, ToolClassification};
+use super::descriptor::{
+    AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
+};
 use super::hook_types::BackgroundTask;
 use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
+use super::pricing::PriceBook;
+use super::spending::CachedEntry;
 use super::{
     AgentAdapter, AgentContext, AgentErr, AgentLifecycleObservation, AgentTurnError,
     ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
@@ -80,6 +85,9 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     hook_cap: CLAUDE_HOOK_CAP,
     process_names: &["claude"],
     hook_install_unavailable: None,
+    // A Claude session spreads across `<session_id>/chat.jsonl` plus
+    // `<session_id>/subagents/*.jsonl`; the session directory is the thread.
+    thread_key: ThreadKey::SessionDir,
 };
 
 /// Per-hook timeout written into the Claude config (seconds). Matches
@@ -497,6 +505,17 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn hooks_installed(&self) -> bool {
         claude_settings_path().is_ok_and(|path| hooks_installed_at(&path))
+    }
+
+    fn transcript_files(&self) -> Vec<PathBuf> {
+        spend::all_jsonl_files()
+    }
+
+    /// Current Claude transcripts log no `costUSD`, so each turn is priced
+    /// from its `message.usage` through the book; an older transcript's
+    /// positive `costUSD` is used verbatim.
+    fn parse_spend(&self, path: &Path, prices: &PriceBook) -> Vec<CachedEntry> {
+        spend::parse_claude_jsonl(path, prices)
     }
 }
 

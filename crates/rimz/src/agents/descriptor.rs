@@ -41,6 +41,21 @@ pub struct AgentDescriptor {
     /// User-facing reason shown by doctor/start when
     /// [`Capabilities::hook_install`] is false.
     pub hook_install_unavailable: Option<&'static str>,
+    /// How this agent's transcript files map to billing threads, for the
+    /// spending session count.
+    pub thread_key: ThreadKey,
+}
+
+/// How a provider's transcript files map to billing threads (sessions), so the
+/// spending pass counts one thread once however many files it spread across.
+#[derive(Clone, Copy, Debug)]
+pub enum ThreadKey {
+    /// One transcript file per session — the file path is the thread.
+    PerFile,
+    /// One directory per session holding a main JSONL plus `subagents/*.jsonl`
+    /// children — the session directory is the thread, so a subagent file
+    /// folds under its parent session (Claude).
+    SessionDir,
 }
 
 /// Brand styling for the provider dashboard panel.

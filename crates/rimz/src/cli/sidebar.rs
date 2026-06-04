@@ -580,35 +580,28 @@ fn enrich_worktree_groups(
 /// refresh) so Codex's token counts become dollars. Best-effort: a read/write or
 /// fetch failure degrades gracefully to the cached or embedded data.
 ///
-/// All three providers are discovered fleet-wide (`all_jsonl_files`,
-/// `codex_session_files`, `pi_session_files`) so each counts on the same footing,
-/// and the dashboard panel and fleet ledger read one provider's spend the same
-/// way regardless of which project it ran in.
+/// Every registered adapter is discovered fleet-wide
+/// ([`transcript_files`](rimz::agents::AgentAdapter::transcript_files)) so each
+/// counts on the same footing, and the dashboard panel and fleet ledger read
+/// one provider's spend the same way regardless of which project it ran in.
 fn compute_fleet_spending(runtime: &rimz::RuntimePaths) -> rimz::agents::spending::Spending {
     use rimz::agents::pricing;
     use rimz::agents::spending::{
-        ProviderKind, Spending, all_jsonl_files, codex_session_files, compute_spending,
-        pi_session_files, read_spending_cache, write_spending_cache,
+        Spending, compute_spending, read_spending_cache, write_spending_cache,
     };
+    use rimz::agents::{ADAPTERS, AgentAdapter};
 
-    // Tag each file with its provider at discovery — the source knows the kind,
+    // Tag each file with its adapter at discovery — the source knows the kind,
     // so pricing/bucketing never has to guess it from the path.
-    let mut files: Vec<(ProviderKind, PathBuf)> = Vec::new();
-    files.extend(
-        all_jsonl_files()
-            .into_iter()
-            .map(|file| (ProviderKind::Claude, file)),
-    );
-    files.extend(
-        codex_session_files()
-            .into_iter()
-            .map(|file| (ProviderKind::Codex, file)),
-    );
-    files.extend(
-        pi_session_files()
-            .into_iter()
-            .map(|file| (ProviderKind::Pi, file)),
-    );
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = ADAPTERS
+        .iter()
+        .flat_map(|adapter| {
+            adapter
+                .transcript_files()
+                .into_iter()
+                .map(move |file| (*adapter, file))
+        })
+        .collect();
     if files.is_empty() {
         return Spending::default();
     }

@@ -8,7 +8,7 @@
 //! directly, so neither needs a hardcoded builtin.
 //!
 //! `gpt-5` is mandatory: it is the Codex parser's fallback model
-//! (`transcript::codex`), so a Codex event with no resolvable model still prices.
+//! (`codex::spend`), so a Codex event with no resolvable model still prices.
 //!
 //! Values are USD per token, taken from the upstream LiteLLM table; refresh them
 //! alongside `cargo xtask pricing-refresh` when OpenAI changes prices.

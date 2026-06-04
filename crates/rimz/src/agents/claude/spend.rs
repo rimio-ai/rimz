@@ -33,7 +33,7 @@ use serde::Deserialize;
 use crate::agents::pricing::PriceBook;
 use crate::agents::spending::CachedEntry;
 
-use super::{bytes_contains, collect_jsonl, expand_tilde, home_dir};
+use crate::agents::transcript_fs::{bytes_contains, collect_jsonl, expand_tilde, home_dir};
 
 // ── Typed structs ─────────────────────────────────────────────────────────────
 

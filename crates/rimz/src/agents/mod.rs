@@ -21,10 +21,11 @@ pub mod descriptor;
 pub(crate) mod hook_types;
 pub mod lifecycle;
 mod observation;
+pub mod pi;
 pub mod pricing;
 pub mod registry;
 pub mod spending;
-pub mod transcript;
+pub(crate) mod transcript_fs;
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -39,15 +40,18 @@ pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
     AgentTokenUsage, AgentTurnError, RateLimitWindow, SubagentContext, SubagentObservation,
 };
-pub use descriptor::{AgentDescriptor, Brand, Capabilities, PlanLabel, ToolClassification};
+pub use descriptor::{
+    AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
+};
 pub use lifecycle::{LifecycleSignal, LifecycleState, Transition, TransitionKind, TurnPhase, step};
 pub use observation::AgentLifecycleObservation;
 pub use pricing::{PriceBook, Pricing};
 pub use registry::{ADAPTERS, adapter_by_kind, descriptor_by_kind, find_adapter, known_kinds};
-pub use spending::{ProviderKind, SpendTally, SpendWindow, Spending};
+pub use spending::{SpendTally, SpendWindow, Spending};
 
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
+pub use pi::PiAdapter;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentErr {
@@ -266,6 +270,25 @@ pub trait AgentAdapter: Send + Sync {
     /// Defaults to `false`; adapters override for their turn-boundary events.
     fn moves_on(&self, _event_name: &str) -> bool {
         false
+    }
+
+    /// Every transcript/rollout JSONL this agent has on disk, fleet-wide — the
+    /// discovery walk for the full-history spending pass
+    /// ([`spending::compute_spending`]). Distinct from the bounded tail read in
+    /// [`observe_lifecycle`](Self::observe_lifecycle): this walks the whole
+    /// history for spend. Defaults to none for an agent with no transcript
+    /// surface.
+    fn transcript_files(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    /// Parse one transcript file into cost entries for the spending pass. An
+    /// adapter whose transcripts log dollars reads them verbatim and ignores
+    /// `prices`; a token-only adapter (Codex) multiplies its counts through
+    /// the book. Read-only and sidebar-safe — spend parsing never writes the
+    /// ledger or blocks on a socket (CI grep on the adapter `spend.rs` files).
+    fn parse_spend(&self, _path: &Path, _prices: &PriceBook) -> Vec<spending::CachedEntry> {
+        Vec::new()
     }
 
     /// The argv that resumes a prior session of this agent by `session_id`,

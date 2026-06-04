@@ -21,6 +21,7 @@
 pub(crate) mod app_server;
 pub mod broker;
 pub(crate) mod payloads;
+pub(crate) mod spend;
 
 use std::env;
 use std::fs;
@@ -37,11 +38,14 @@ use self::payloads::{
     parse_session_start, parse_subagent_start, parse_subagent_stop, parse_user_prompt_submit,
 };
 use super::context::{AgentContext, AgentCost};
-use super::descriptor::{AgentDescriptor, Brand, Capabilities, PlanLabel, ToolClassification};
+use super::descriptor::{
+    AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
+};
 use super::hook_types::SessionSource;
 use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::pricing::PriceBook;
+use super::spending::CachedEntry;
 use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, Result, SubagentIdentity, agent_config_path,
@@ -91,6 +95,8 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // launcher process name beside its own.
     process_names: &["codex", "node"],
     hook_install_unavailable: None,
+    // Codex logs one rollout file per session.
+    thread_key: ThreadKey::PerFile,
 };
 
 /// Installed events. Tuple is `(event_name, optional_matcher)` — the single
@@ -353,6 +359,16 @@ impl AgentAdapter for CodexAdapter {
 
     fn hooks_installed(&self) -> bool {
         codex_config_path().is_ok_and(|path| hooks_installed_at(&path))
+    }
+
+    fn transcript_files(&self) -> Vec<PathBuf> {
+        spend::codex_session_files()
+    }
+
+    /// Codex logs token counts, not dollars — each event is multiplied
+    /// through the price book.
+    fn parse_spend(&self, path: &Path, prices: &PriceBook) -> Vec<CachedEntry> {
+        spend::parse_codex_spend(path, prices)
     }
 }
 

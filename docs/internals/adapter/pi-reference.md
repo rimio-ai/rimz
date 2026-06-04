@@ -2,7 +2,7 @@
 
 > The mapping onto Rimz's internal types lands beside this doc when the adapter does: [hooks.md](../hooks.md) owns the lifecycle/feed mapping recipe ([Adding an agent](../hooks.md#adding-an-agent)), [transcript.md](../transcript.md) the context read-path, [account.md](../account.md) the account/balance mapping.
 
-This is the single home for the **Pi upstream protocol surface** a Rimz adapter binds to — the in-process extension API (events, payloads, blocking returns), the session JSONL, the headless RPC/JSON modes, the auth file, and the CLI/env surface. It is a hand-maintained mirror of the pi.dev docs, pinned to the source URLs below; the session and auth shapes are additionally verified against a live `pi` 0.78.0 install (2026-06-04). The only code reading this surface today is the read-only spending parser [`transcript/pi.rs`](../../../crates/rimz/src/agents/transcript/pi.rs); the adapter itself is roadmap work ([roadmap.md](../../contributing/roadmap.md)).
+This is the single home for the **Pi upstream protocol surface** a Rimz adapter binds to — the in-process extension API (events, payloads, blocking returns), the session JSONL, the headless RPC/JSON modes, the auth file, and the CLI/env surface. It is a hand-maintained mirror of the pi.dev docs, pinned to the source URLs below; the session and auth shapes are additionally verified against a live `pi` 0.78.0 install (2026-06-04). The only code reading this surface today is the adapter's read-only spending parser [`pi/spend.rs`](../../../crates/rimz/src/agents/pi/spend.rs); the hook surface is roadmap work ([roadmap.md](../../contributing/roadmap.md)).
 
 Coverage is **depth on what an adapter would wire, breadth as an index**: the events, session fields, and decision returns a future `src/agents/pi/` adapter parses or emits are documented in full; the rest of the catalog is listed so a contributor wiring a new path knows it exists. [Mapping feasibility](#mapping-feasibility) closes the doc with the Rimz-side analysis — what maps cleanly and what Pi cannot support — and migrates into a [hooks.md](../hooks.md) appendix when the adapter lands.
 
@@ -113,7 +113,7 @@ Pi writes one session file per conversation:
 e.g.   sessions/--home-marvin-workspace-project-rimz-rimz--/2026-06-04T06-45-56-308Z_019e9161-a5d0-791d-879e-39679acd4ded.jsonl
 ```
 
-The directory key is the working directory with `/` replaced by `-`; the filename stem is `<ISO timestamp, : and . as ->_<session uuid>`, so the session id is everything after the first `_`. Overrides: `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, settings `sessionDir`; `--no-session` skips persistence entirely. [`transcript/pi.rs`](../../../crates/rimz/src/agents/transcript/pi.rs) walks this tree fleet-wide for spending (its `PI_AGENT_DIR` env is a Rimz test override, not a pi variable).
+The directory key is the working directory with `/` replaced by `-`; the filename stem is `<ISO timestamp, : and . as ->_<session uuid>`, so the session id is everything after the first `_`. Overrides: `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, settings `sessionDir`; `--no-session` skips persistence entirely. [`pi/spend.rs`](../../../crates/rimz/src/agents/pi/spend.rs) walks this tree fleet-wide for spending (its `PI_AGENT_DIR` env is a Rimz test override, not a pi variable).
 
 The first line is the header; every later line is a tree entry (`id` is 8-char hex, `parentId` links it, `timestamp` is ISO):
 
@@ -150,7 +150,7 @@ The `message` roles are `user`, `assistant`, `toolResult`, `bashExecution` (`!` 
 
 Two properties matter for any tail read:
 
-- **Dollars are logged directly.** `usage.cost.total` is the priced cost per assistant message — no pricing-table multiplication ([`transcript/pi.rs`](../../../crates/rimz/src/agents/transcript/pi.rs) reads it verbatim). The token split mirrors Anthropic's: context tokens are `input + cacheRead + cacheWrite`; the transcript carries **no context window**, so a gauge divisor resolves from the model registry (`contextWindow` per model) or a table, the way Claude's payload model resolves its divisor.
+- **Dollars are logged directly.** `usage.cost.total` is the priced cost per assistant message — no pricing-table multiplication ([`pi/spend.rs`](../../../crates/rimz/src/agents/pi/spend.rs) reads it verbatim). The token split mirrors Anthropic's: context tokens are `input + cacheRead + cacheWrite`; the transcript carries **no context window**, so a gauge divisor resolves from the model registry (`contextWindow` per model) or a table, the way Claude's payload model resolves its divisor.
 - **The file is a tree, not a log.** `/tree` and `/fork` move the leaf to an earlier entry in place, so file order is append order, not branch order — the newest record by file position can sit on an abandoned branch right after a rewind. `buildSessionContext()` (the upstream context builder) walks leaf→root; a bounded tail read is an approximation that self-corrects on the next turn.
 
 ## Headless modes (index)

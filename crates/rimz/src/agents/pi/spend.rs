@@ -1,8 +1,9 @@
 //! Pi agent JSONL transcript parser.
 //!
-//! [`spending`](super::super::spending) consumes this parser through `parse_for`,
-//! fed every Pi session fleet-wide by the producer. Pi logs `costUSD` directly,
-//! so each entry carries a cost as parsed — no pricing table needed.
+//! [`spending`](crate::agents::spending) consumes this parser through the
+//! adapter's `parse_spend`, fed every Pi session fleet-wide by the producer. Pi
+//! logs `costUSD` directly, so each entry carries a cost as parsed — no pricing
+//! table needed.
 //!
 //! Pi session files live under `~/.pi/agent/sessions/--<cwd-with-dashes>--/`
 //! (upstream overrides: `--session-dir` / `PI_CODING_AGENT_SESSION_DIR`); the
@@ -30,7 +31,7 @@ use serde::Deserialize;
 
 use crate::agents::spending::CachedEntry;
 
-use super::{collect_jsonl, home_dir};
+use crate::agents::transcript_fs::{collect_jsonl, home_dir};
 
 // ── Typed structs ─────────────────────────────────────────────────────────────
 
@@ -62,42 +63,6 @@ struct PiUsage {
 #[derive(Deserialize)]
 struct PiCost {
     total: Option<f64>,
-}
-
-// ── Path utilities ────────────────────────────────────────────────────────────
-
-/// Extract a Pi session ID from a JSONL file path.
-///
-/// Pi filenames follow the pattern `<timestamp>_<uuid>.jsonl` (the timestamp
-/// contains no underscores), so everything after the first `_` is the session
-/// ID.  Files without an underscore use the full stem as the session ID.
-pub fn pi_session_id_from_path(path: &Path) -> String {
-    let stem = path
-        .file_stem()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown");
-    stem.split_once('_')
-        .map_or(stem, |(_, session)| session)
-        .to_string()
-}
-
-/// Extract the Pi project name from a session file path.
-///
-/// Pi sessions are organized as `sessions/--<cwd-with-dashes>--/<file>.jsonl`;
-/// the component immediately after `sessions/` is the per-directory project
-/// key.
-pub fn pi_project_from_path(path: &Path) -> String {
-    let mut after_sessions = false;
-    for component in path.components() {
-        let seg = component.as_os_str().to_string_lossy();
-        if after_sessions {
-            return seg.into_owned();
-        }
-        if seg == "sessions" {
-            after_sessions = true;
-        }
-    }
-    "unknown".to_string()
 }
 
 // ── Path discovery ────────────────────────────────────────────────────────────
@@ -249,34 +214,6 @@ mod tests {
         .unwrap();
 
         assert!(parse_pi_jsonl(&path).is_empty());
-    }
-
-    #[test]
-    fn pi_session_id_takes_suffix_after_first_underscore() {
-        assert_eq!(
-            pi_session_id_from_path(Path::new(
-                "/home/me/.pi/agent/sessions/--home-me-project-a--/2026-06-04T06-45-56-308Z_019e9161-a5d0-791d-879e-39679acd4ded.jsonl"
-            )),
-            "019e9161-a5d0-791d-879e-39679acd4ded"
-        );
-    }
-
-    #[test]
-    fn pi_session_id_no_prefix() {
-        assert_eq!(
-            pi_session_id_from_path(Path::new("/sessions/session-xyz.jsonl")),
-            "session-xyz"
-        );
-    }
-
-    #[test]
-    fn pi_project_from_path_extracts_component() {
-        assert_eq!(
-            pi_project_from_path(Path::new(
-                "/home/me/.pi/agent/sessions/--home-me-my-project--/2026-06-04T06-45-56-308Z_abc.jsonl"
-            )),
-            "--home-me-my-project--"
-        );
     }
 
     #[test]
