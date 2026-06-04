@@ -447,10 +447,17 @@ fn invariants(root: &Path) -> Result<()> {
                 ))
         }
     };
+    // Both the path form (`…::atomic`, catching `crate::ledger::atomic` and
+    // `rimz::ledger::atomic` alike) and the usage form (`atomic::…`, catching
+    // a grouped `use crate::ledger::{atomic, …}` through its call sites —
+    // an unused grouped import already fails the lint gate).
     for needle in [
-        concat!("ledger", "::", "atomic"),
-        concat!("crate", "::", "bridge"),
+        concat!("::", "atomic"),
+        concat!("atomic", "::"),
+        concat!("::", "bridge"),
+        concat!("bridge", "::"),
         concat!("::", "broker"),
+        concat!("broker", "::"),
     ] {
         ensure_no_match(
             &files,
