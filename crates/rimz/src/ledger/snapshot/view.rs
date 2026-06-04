@@ -1065,17 +1065,6 @@ fn default_provider_style(kind: &str) -> (String, Vec<String>, u8) {
             descriptor.brand.color,
         );
     }
-    // Pi's brand ships ahead of its adapter; it moves onto the Pi descriptor
-    // when the adapter lands.
-    if kind == "pi" {
-        return (
-            "Pi".to_owned(),
-            [" ▗▛████▜▖", "  ▐▌  ▐▌", "  ▝▘  ▝▘"]
-                .map(str::to_owned)
-                .to_vec(),
-            28,
-        );
-    }
     (provider_title_case(kind), Vec::new(), 244)
 }
 
