@@ -29,9 +29,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::agents::spending::CachedEntry;
+use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse};
 
-use crate::agents::transcript_fs::{collect_jsonl, home_dir};
+use crate::agents::transcript_fs::{collect_jsonl, home_dir, read_spend_lines};
 
 // ── Typed structs ─────────────────────────────────────────────────────────────
 
@@ -99,16 +99,25 @@ pub fn pi_session_files() -> Vec<PathBuf> {
 
 // ── Parser ────────────────────────────────────────────────────────────────────
 
-/// Parse a Pi JSONL file into `CachedEntry` values.
+/// Parse a Pi JSONL file into `CachedEntry` values from `from_offset` (0 =
+/// the whole file). Lines are independent — no cross-line state — so the
+/// cursor is just the consumed-byte offset.
 ///
 /// Accepts only lines where `"type":"message"` (or `type` is absent) and
 /// `message.role == "assistant"`.  Cost is read from `message.usage.cost.total`.
 /// Lines without both `"usage"` and `"message"` keywords are skipped before
 /// deserialization.
-pub fn parse_pi_jsonl(path: &Path) -> Vec<CachedEntry> {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return Vec::new();
+pub fn parse_pi_spend(path: &Path, from_offset: u64) -> SpendParse {
+    let Some((content, next_offset)) = read_spend_lines(path, from_offset) else {
+        return SpendParse {
+            entries: Vec::new(),
+            cursor: SpendCursor {
+                offset: from_offset,
+                state: None,
+            },
+        };
     };
+    let content = String::from_utf8_lossy(&content);
     let mut out = Vec::new();
 
     for line in content.lines() {
@@ -153,7 +162,13 @@ pub fn parse_pi_jsonl(path: &Path) -> Vec<CachedEntry> {
             is_sidechain: false,
         });
     }
-    out
+    SpendParse {
+        entries: out,
+        cursor: SpendCursor {
+            offset: next_offset,
+            state: None,
+        },
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -175,7 +190,7 @@ mod tests {
         )
         .unwrap();
 
-        let entries = parse_pi_jsonl(&path);
+        let entries = parse_pi_spend(&path, 0).entries;
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.42).abs() < 1e-9);
         assert_eq!(entries[0].input, 100);
@@ -199,7 +214,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(parse_pi_jsonl(&path).is_empty());
+        assert!(parse_pi_spend(&path, 0).entries.is_empty());
     }
 
     #[test]
@@ -213,7 +228,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(parse_pi_jsonl(&path).is_empty());
+        assert!(parse_pi_spend(&path, 0).entries.is_empty());
     }
 
     #[test]
@@ -224,6 +239,6 @@ mod tests {
         writeln!(f, r#"{{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{{"role":"assistant","usage":{{"cost":{{"total":0.0}}}}}}}}"#).unwrap();
         writeln!(f, r#"{{"type":"message","timestamp":"2026-06-02T11:00:00.000Z","message":{{"role":"assistant","usage":{{"cost":{{"total":-1.0}}}}}}}}"#).unwrap();
 
-        assert!(parse_pi_jsonl(&path).is_empty());
+        assert!(parse_pi_spend(&path, 0).entries.is_empty());
     }
 }

@@ -113,11 +113,12 @@ pub struct Spending {
 /// split in v4), or a change in how a kept cost is computed (v4 also prices Claude
 /// turns from token usage now that transcripts omit `costUSD`, so sessions cached
 /// as zero entries must re-parse), would otherwise stay frozen for that session
-/// and never heal. A cache stamped with an older version is discarded on read,
-/// forcing a clean re-parse under the current shape. `0` is the implicit
-/// pre-versioning shape (no
-/// `version` field).
-const SPENDING_CACHE_VERSION: u32 = 4;
+/// and never heal. v5 makes the parse incremental: an entry without a real
+/// `len`/`cursor` would read as "grown from offset 0" and append a duplicate
+/// full parse, so the pre-cursor shape must cold-rebuild. A cache stamped with
+/// an older version is discarded on read, forcing a clean re-parse under the
+/// current shape. `0` is the implicit pre-versioning shape (no `version` field).
+const SPENDING_CACHE_VERSION: u32 = 5;
 
 /// On-disk cache persisted at `{runtime_root}/spending.json`.
 ///
@@ -139,8 +140,38 @@ pub struct SpendingDiskCache {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FileCacheEntry {
     pub mtime_secs: u64,
-    /// One entry per deduplicated JSONL line with a positive cost.
+    /// File length at the last parse — the growth/truncation detector: a
+    /// longer file parses only its suffix, a shorter (rotated/truncated) one
+    /// re-parses cold, an equal length with a new mtime re-parses cold (an
+    /// in-place rewrite).
+    #[serde(default)]
+    pub len: u64,
+    /// Where the last parse left off — the next incremental parse resumes here.
+    #[serde(default)]
+    pub cursor: SpendCursor,
+    /// One entry per JSONL line with a positive cost. Duplicates within a file
+    /// (retry writes) are kept raw here; the aggregation pass owns all dedup.
     pub entries: Vec<CachedEntry>,
+}
+
+/// Where an incremental spend parse left off: the byte offset just past the
+/// last consumed line, plus the adapter's opaque cross-line state (Codex
+/// carries its cumulative token totals and tracked model so a resumed delta
+/// subtraction stays exact). Stored per file in the spending cache; a state
+/// shape change bumps [`SPENDING_CACHE_VERSION`].
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SpendCursor {
+    pub offset: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<serde_json::Value>,
+}
+
+/// One spend parse: the entries read past the resume point and the cursor the
+/// cache stores for the next pass.
+#[derive(Debug, Default)]
+pub struct SpendParse {
+    pub entries: Vec<CachedEntry>,
+    pub cursor: SpendCursor,
 }
 
 /// A single cost entry with dedup keys for cross-file deduplication.
@@ -190,9 +221,12 @@ pub struct CachedEntry {
 /// token tally for the given adapter-tagged JSONL files, pricing token-only
 /// providers (Codex) through `prices`.
 ///
-/// Only re-reads a file when its mtime has changed; sets `cache.dirty = true`
-/// when any entry was updated.  Finished sessions have stable mtimes and are
-/// permanently served from cache after the first parse.
+/// IO is O(delta), not O(history): an unchanged file (same mtime and length)
+/// is a pure cache hit, a grown file parses only its appended suffix from the
+/// stored [`SpendCursor`], and only a truncated/rotated or rewritten-in-place
+/// file re-parses cold. Sets `cache.dirty = true` when any entry was updated;
+/// finished sessions have stable stats and are permanently served from cache
+/// after the first parse.
 ///
 /// ### Cross-file Claude deduplication
 ///
@@ -211,21 +245,37 @@ pub fn compute_spending(
 ) -> Spending {
     let now_secs = unix_secs_now();
 
-    // First pass: refresh stale cache entries.
+    // First pass: refresh stale cache entries — pure hit, suffix parse, or
+    // cold parse, decided from one stat per file.
     for (adapter, file) in files {
-        let mtime = file_mtime_secs(file);
+        let (mtime, len) = file_stat(file);
         let key = file.to_string_lossy().into_owned();
-        let stale = cache.files.get(&key).is_none_or(|e| e.mtime_secs != mtime);
-        if stale {
-            let parsed = adapter.parse_spend(file, prices);
-            cache.files.insert(
-                key,
-                FileCacheEntry {
-                    mtime_secs: mtime,
-                    entries: parsed,
-                },
-            );
-            cache.dirty = true;
+        match cache.files.get_mut(&key) {
+            // Unchanged: nothing to read.
+            Some(entry) if entry.mtime_secs == mtime && entry.len == len => {}
+            // Grown in place: parse only the appended suffix and extend.
+            Some(entry) if len > entry.len => {
+                let parsed = adapter.parse_spend(file, Some(&entry.cursor), prices);
+                entry.entries.extend(parsed.entries);
+                entry.cursor = parsed.cursor;
+                entry.mtime_secs = mtime;
+                entry.len = len;
+                cache.dirty = true;
+            }
+            // New, truncated/rotated, or rewritten in place: parse cold.
+            _ => {
+                let parsed = adapter.parse_spend(file, None, prices);
+                cache.files.insert(
+                    key,
+                    FileCacheEntry {
+                        mtime_secs: mtime,
+                        len,
+                        cursor: parsed.cursor,
+                        entries: parsed.entries,
+                    },
+                );
+                cache.dirty = true;
+            }
         }
     }
 
@@ -392,13 +442,19 @@ fn session_key(adapter: &dyn AgentAdapter, path: &Path) -> String {
     dir.unwrap_or(path).to_string_lossy().into_owned()
 }
 
-fn file_mtime_secs(path: &Path) -> u64 {
-    fs::metadata(path)
-        .and_then(|m| m.modified())
+/// `(mtime_secs, len)` from one stat. `(0, 0)` on any error — the file then
+/// reads as an empty cold parse rather than failing the pass.
+fn file_stat(path: &Path) -> (u64, u64) {
+    let Ok(meta) = fs::metadata(path) else {
+        return (0, 0);
+    };
+    let mtime = meta
+        .modified()
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .unwrap_or(0);
+    (mtime, meta.len())
 }
 
 // ── Cache I/O ─────────────────────────────────────────────────────────────────
@@ -666,6 +722,8 @@ mod tests {
                 "/old/chat.jsonl".to_string(),
                 FileCacheEntry {
                     mtime_secs: 123,
+                    len: 0,
+                    cursor: SpendCursor::default(),
                     entries: vec![CachedEntry {
                         ts_secs: 1_767_225_600,
                         cost_usd: 9.0,
@@ -700,6 +758,8 @@ mod tests {
             "/new/chat.jsonl".to_string(),
             FileCacheEntry {
                 mtime_secs: 456,
+                len: 0,
+                cursor: SpendCursor::default(),
                 entries: vec![CachedEntry {
                     ts_secs: 1_770_000_000,
                     cost_usd: 1.0,
@@ -850,8 +910,10 @@ mod tests {
         let today = utc_date(now_secs);
         let line = claude_line(&today, 1.0, "msg-a", "req-a");
 
-        // Same (message_id, request_id) in two separate files.
-        let file1 = write_jsonl(dir.path(), "session1.jsonl", &[&line]);
+        // Same (message_id, request_id) twice within one file (the parser
+        // returns raw entries — this pass owns all dedup) and again in a
+        // second file.
+        let file1 = write_jsonl(dir.path(), "session1.jsonl", &[&line, &line]);
         let file2 = write_jsonl(dir.path(), "session2.jsonl", &[&line]);
 
         let mut cache = SpendingDiskCache::default();
@@ -924,6 +986,162 @@ mod tests {
             totals.today.tokens, 50_005,
             "a lone sidechain keeps its tokens: input 50000 + output 5"
         );
+    }
+
+    fn append_line(path: &Path, line: &str) {
+        let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        writeln!(f, "{line}").unwrap();
+    }
+
+    #[test]
+    fn grown_file_parses_only_the_appended_suffix() {
+        let dir = TempDir::new().unwrap();
+        let today = utc_date(unix_secs_now());
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[&claude_line(&today, 1.0, "msg-1", "req-1")],
+        );
+        let mut cache = SpendingDiskCache::default();
+        let first = compute_spending(
+            &[(claude_adapter(), file.clone())],
+            &mut cache,
+            &PriceBook::default(),
+        );
+        assert!((first.total.today.usd - 1.0).abs() < 1e-9);
+
+        // Corrupt the already-parsed prefix in place (length unchanged, the
+        // trailing newline kept), then append a second line. The incremental
+        // pass must read only past its cursor, so the corruption is invisible
+        // and the cached first entry still counts.
+        let prefix_len = std::fs::metadata(&file).unwrap().len() as usize;
+        {
+            use std::io::{Seek as _, SeekFrom};
+            let mut f = std::fs::OpenOptions::new().write(true).open(&file).unwrap();
+            f.seek(SeekFrom::Start(0)).unwrap();
+            f.write_all(&vec![b'x'; prefix_len - 1]).unwrap();
+        }
+        append_line(&file, &claude_line(&today, 0.25, "msg-2", "req-2"));
+
+        let second = compute_spending(
+            &[(claude_adapter(), file)],
+            &mut cache,
+            &PriceBook::default(),
+        );
+        assert!(
+            (second.total.today.usd - 1.25).abs() < 1e-9,
+            "suffix-only read: the cached prefix entry survives its corruption (got {})",
+            second.total.today.usd
+        );
+    }
+
+    #[test]
+    fn truncated_file_reparses_cold() {
+        let dir = TempDir::new().unwrap();
+        let today = utc_date(unix_secs_now());
+        let line_a = claude_line(&today, 1.0, "msg-a", "req-a");
+        let line_b = claude_line(&today, 0.5, "msg-b", "req-b");
+        let file = write_jsonl(dir.path(), "chat.jsonl", &[&line_a, &line_b]);
+        let mut cache = SpendingDiskCache::default();
+        let first = compute_spending(
+            &[(claude_adapter(), file.clone())],
+            &mut cache,
+            &PriceBook::default(),
+        );
+        assert!((first.total.today.usd - 1.5).abs() < 1e-9);
+
+        // Rotation/truncation: the file shrinks. The stale tail entries must
+        // drop with the cold re-parse, never lingering from the old cache.
+        write_jsonl(dir.path(), "chat.jsonl", &[&line_a]);
+        let second = compute_spending(
+            &[(claude_adapter(), file)],
+            &mut cache,
+            &PriceBook::default(),
+        );
+        assert!(
+            (second.total.today.usd - 1.0).abs() < 1e-9,
+            "a shorter file re-parses cold (got {})",
+            second.total.today.usd
+        );
+    }
+
+    #[test]
+    fn same_length_rewrite_with_a_new_mtime_reparses_cold() {
+        let dir = TempDir::new().unwrap();
+        let today = utc_date(unix_secs_now());
+        // `1.0` and `3.0` format to the same byte length, so the rewrite
+        // changes content but not size — only the mtime can reveal it.
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[&claude_line(&today, 1.0, "msg-a", "req-a")],
+        );
+        let mut cache = SpendingDiskCache::default();
+        compute_spending(
+            &[(claude_adapter(), file.clone())],
+            &mut cache,
+            &PriceBook::default(),
+        );
+
+        write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[&claude_line(&today, 3.0, "msg-a", "req-a")],
+        );
+        let f = std::fs::OpenOptions::new().write(true).open(&file).unwrap();
+        f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
+            .unwrap();
+
+        let second = compute_spending(
+            &[(claude_adapter(), file)],
+            &mut cache,
+            &PriceBook::default(),
+        );
+        assert!(
+            (second.total.today.usd - 3.0).abs() < 1e-9,
+            "an in-place rewrite (same length, new mtime) re-parses cold (got {})",
+            second.total.today.usd
+        );
+    }
+
+    #[test]
+    fn codex_resume_state_survives_the_suffix_parse() {
+        let dir = TempDir::new().unwrap();
+        let today = utc_date(unix_secs_now());
+        // Cumulative-only token counts plus a model declared once up front:
+        // both halves of the resume state are exercised — the appended event
+        // must subtract the stored totals AND price under the remembered
+        // model (a fresh fold would record the full cumulative as one
+        // inflated delta; a lost model would drop the entry as unpriced).
+        let file = write_codex(
+            dir.path(),
+            &[
+                r#"{"type":"turn_context","payload":{"model":"gpt-4o"}}"#,
+                &codex_total_line(&today, 1000, 500),
+            ],
+        );
+        let mut cache = SpendingDiskCache::default();
+        let first = compute_spending(
+            &[(codex_adapter(), file.clone())],
+            &mut cache,
+            &gpt4o_book(),
+        );
+        assert_eq!(first.total.today.input, 1000);
+        assert_eq!(first.total.today.output, 500);
+
+        append_line(&file, &codex_total_line(&today, 1600, 800));
+        let second = compute_spending(&[(codex_adapter(), file)], &mut cache, &gpt4o_book());
+        assert_eq!(
+            second.total.today.input, 1600,
+            "the resumed fold subtracts the stored cumulative totals"
+        );
+        assert_eq!(second.total.today.output, 800);
+    }
+
+    fn codex_total_line(date: &str, input: u64, output: u64) -> String {
+        format!(
+            r#"{{"type":"event_msg","timestamp":"{date}T10:00:00.000Z","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"output_tokens":{output}}}}}}}}}"#
+        )
     }
 
     /// A price book with a single non-builtin model so the asserted cost is

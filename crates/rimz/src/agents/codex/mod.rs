@@ -46,7 +46,6 @@ use super::hook_types::SessionSource;
 use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::pricing::PriceBook;
-use super::spending::CachedEntry;
 use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, LifecycleRefreshCtx, RefreshSpawn, Result,
@@ -400,9 +399,15 @@ impl AgentAdapter for CodexAdapter {
     }
 
     /// Codex logs token counts, not dollars — each event is multiplied
-    /// through the price book.
-    fn parse_spend(&self, path: &Path, prices: &PriceBook) -> Vec<CachedEntry> {
-        spend::parse_codex_spend(path, prices)
+    /// through the price book. The resume cursor carries the cumulative-total
+    /// and tracked-model fold state, so a suffix parse subtracts exactly.
+    fn parse_spend(
+        &self,
+        path: &Path,
+        resume: Option<&crate::agents::spending::SpendCursor>,
+        prices: &PriceBook,
+    ) -> crate::agents::spending::SpendParse {
+        spend::parse_codex_spend(path, resume, prices)
     }
 }
 

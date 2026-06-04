@@ -21,19 +21,21 @@
 //!
 //! Fast pre-filter: skip lines without `"usage":{` and lines where certain
 //! fields carry `:null` (rejected by the upstream TypeScript/Zod schema).
-//! Per-file dedup by `(message.id, requestId)` with sidechain preference
-//! mirrors the ccusage `push_deduped_entry` logic.  Cross-file dedup
-//! (btw/subagent replay suppression) is handled by `spending::compute_spending`.
+//! Entries are returned raw — all `(message.id, requestId)` dedup, including
+//! the btw/subagent sidechain-replay suppression, lives in one place,
+//! `spending::compute_spending`, so an incremental suffix parse never has to
+//! see the lines before its resume point.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
 use crate::agents::pricing::PriceBook;
-use crate::agents::spending::CachedEntry;
+use crate::agents::spending::{CachedEntry, SpendParse};
 
-use crate::agents::transcript_fs::{bytes_contains, collect_jsonl, expand_tilde, home_dir};
+use crate::agents::transcript_fs::{
+    bytes_contains, collect_jsonl, expand_tilde, home_dir, read_spend_lines,
+};
 
 // ── Typed structs ─────────────────────────────────────────────────────────────
 
@@ -203,31 +205,35 @@ fn consume_digits(bytes: &[u8], i: &mut usize) -> bool {
 
 // ── Parser ────────────────────────────────────────────────────────────────────
 
-/// Parse a Claude JSONL file into deduplicated `CachedEntry` values.
+/// Parse a Claude JSONL file into raw `CachedEntry` values, resuming from
+/// `from_offset` (0 = the whole file). Lines are independent — no cross-line
+/// state — so the cursor is just the consumed-byte offset.
 ///
 /// ### Fast pre-filter
 /// Lines without `"usage":{` are skipped before deserialization — tool-call,
 /// user-message, and summary lines carry no usage object and no `costUSD`.
 /// Lines with unsupported null fields are also rejected before deserialization.
 ///
-/// ### Per-file dedup by `(message.id, requestId)`
-/// Within a single file, if the same `(id, requestId)` pair appears more than
-/// once (e.g. a retry write), only the first is kept.  When the same
-/// `message.id` appears under a different `requestId` with `isSidechain:true`,
-/// the sidechain entry is replaced by the main-chain one — the btw tool can
-/// replay a parent message into the subagent file with inflated context tokens
-/// and an incorrect cost that would double-count the turn.
-///
-/// Cross-file suppression (same message_id across a session file and its
-/// subagent file) is handled in `spending::compute_spending`.
-pub fn parse_claude_jsonl(path: &Path, prices: &PriceBook) -> Vec<CachedEntry> {
-    let Ok(content) = std::fs::read(path) else {
-        return Vec::new();
+/// ### Dedup lives downstream
+/// Entries are returned raw, duplicates and sidechain replays included: every
+/// `(message.id, requestId)` rule — the retry-write duplicate, the btw tool
+/// replaying a parent message into the subagent file with inflated context
+/// tokens — is applied once, over all files and cache generations, in
+/// `spending::compute_spending`. A suffix parse therefore never needs the
+/// lines before its resume point.
+pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> SpendParse {
+    let Some((content, next_offset)) = read_spend_lines(path, from_offset) else {
+        return SpendParse {
+            entries: Vec::new(),
+            cursor: crate::agents::spending::SpendCursor {
+                offset: from_offset,
+                state: None,
+            },
+        };
     };
     const USAGE_MARKER: &[u8] = br#""usage":{"#;
 
-    let mut by_exact_key: HashMap<(String, Option<String>), CachedEntry> = HashMap::new();
-    let mut no_id: Vec<CachedEntry> = Vec::new();
+    let mut entries: Vec<CachedEntry> = Vec::new();
 
     for line in content.split(|&b| b == b'\n') {
         if line.is_empty() {
@@ -275,11 +281,10 @@ pub fn parse_claude_jsonl(path: &Path, prices: &PriceBook) -> Vec<CachedEntry> {
         if cost <= 0.0 {
             continue;
         }
-        let is_sidechain = entry.is_sidechain == Some(true);
         // Claude reports the four token components separately; `input_tokens` is
         // already the fresh (uncached) slice. The `◇` total is input + output;
         // cache creation/reads ride their own fields, never the total.
-        let cached = CachedEntry {
+        entries.push(CachedEntry {
             ts_secs,
             cost_usd: cost,
             input,
@@ -288,27 +293,17 @@ pub fn parse_claude_jsonl(path: &Path, prices: &PriceBook) -> Vec<CachedEntry> {
             cache_read,
             message_id: entry.message.id.clone(),
             request_id: entry.request_id.clone(),
-            is_sidechain,
-        };
-        if let Some(ref msg_id) = entry.message.id {
-            let exact_key = (msg_id.clone(), entry.request_id);
-            by_exact_key
-                .entry(exact_key)
-                .and_modify(|existing| {
-                    // Prefer main-chain over sidechain within the same file.
-                    if existing.is_sidechain && !is_sidechain {
-                        *existing = cached.clone();
-                    }
-                })
-                .or_insert(cached);
-        } else {
-            no_id.push(cached);
-        }
+            is_sidechain: entry.is_sidechain == Some(true),
+        });
     }
 
-    let mut out: Vec<CachedEntry> = by_exact_key.into_values().collect();
-    out.extend(no_id);
-    out
+    SpendParse {
+        entries,
+        cursor: crate::agents::spending::SpendCursor {
+            offset: next_offset,
+            state: None,
+        },
+    }
 }
 
 /// Price a Claude usage record through the model table, in dollars.
@@ -381,7 +376,7 @@ mod tests {
                 &claude_line("2026-01-01", 0.5, "msg-1", "req-1"),
             ],
         );
-        let entries = parse_claude_jsonl(&file, &no_prices());
+        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.5).abs() < 1e-9);
     }
@@ -394,7 +389,7 @@ mod tests {
             "chat.jsonl",
             &[&claude_line("2026-01-01", 0.5, "msg-1", "req-1")],
         );
-        let entries = parse_claude_jsonl(&file, &no_prices());
+        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
         assert_eq!(entries.len(), 1);
         // The components are kept apart — the `◇` total (input + output) and the
         // cache split are reconstructed downstream, never pre-summed here.
@@ -414,7 +409,7 @@ mod tests {
                 r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.5,"requestId":"req-1","message":{"id":"msg-1","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":800}}}"#,
             ],
         );
-        let entries = parse_claude_jsonl(&file, &no_prices());
+        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].input, 100);
         assert_eq!(entries[0].output, 50);
@@ -439,7 +434,7 @@ mod tests {
                                 "cache_read_input_token_cost": 3e-7,
                                 "cache_creation_input_token_cost": 3.75e-6}}"#,
         );
-        let entries = parse_claude_jsonl(&file, &prices);
+        let entries = parse_claude_spend(&file, 0, &prices).entries;
         assert_eq!(entries.len(), 1);
         // 100*3e-6 + 50*15e-6 + 200*3.75e-6 + 800*3e-7
         //   = 3e-4 + 7.5e-4 + 7.5e-4 + 2.4e-4 = 2.04e-3
@@ -467,7 +462,7 @@ mod tests {
                 r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"<synthetic>","usage":{"input_tokens":100,"output_tokens":50}}}"#,
             ],
         );
-        let entries = parse_claude_jsonl(&file, &no_prices());
+        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
         assert!(
             entries.is_empty(),
             "an unpriced turn is dropped, not zeroed"
@@ -475,12 +470,15 @@ mod tests {
     }
 
     #[test]
-    fn per_file_dedup_drops_exact_duplicate() {
+    fn duplicates_parse_raw_for_the_downstream_dedup() {
+        // All (msg, req) dedup lives in `spending::compute_spending`, so an
+        // incremental suffix parse never has to see earlier lines; the raw
+        // parse keeps both copies.
         let dir = TempDir::new().unwrap();
         let line = claude_line("2026-01-01", 1.0, "msg-a", "req-a");
         let file = write_jsonl(dir.path(), "chat.jsonl", &[&line, &line]);
-        let entries = parse_claude_jsonl(&file, &no_prices());
-        assert_eq!(entries.len(), 1, "same (msg, req) within file must dedup");
+        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
+        assert_eq!(entries.len(), 2, "raw parse; the aggregation pass dedups");
     }
 
     #[test]
@@ -498,7 +496,7 @@ mod tests {
                 &claude_line("2026-01-01", 0.05, "msg-x", "req-main"),
             ],
         );
-        let entries = parse_claude_jsonl(&file, &no_prices());
+        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
         // Two distinct exact-keys: the suppression happens in compute_spending.
         assert_eq!(entries.len(), 2);
         let sc = entries.iter().find(|e| e.is_sidechain).unwrap();
@@ -519,7 +517,7 @@ mod tests {
                 &claude_line("2026-01-01", 0.3, "msg-1", "req-1"),
             ],
         );
-        let entries = parse_claude_jsonl(&file, &no_prices());
+        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.3).abs() < 1e-9);
     }
@@ -535,7 +533,7 @@ mod tests {
                 &claude_line("2026-01-01", 0.5, "msg-1", "req-1"),
             ],
         );
-        let entries = parse_claude_jsonl(&file, &no_prices());
+        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
         assert_eq!(entries.len(), 1, "costUSD:null line must be skipped");
     }
 
@@ -550,7 +548,7 @@ mod tests {
                 &claude_line("2026-01-01", 0.5, "msg-2", "req-2"),
             ],
         );
-        let entries = parse_claude_jsonl(&file, &no_prices());
+        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
         assert_eq!(entries.len(), 1, "model:null line must be skipped");
     }
 
@@ -565,7 +563,7 @@ mod tests {
                 &claude_line("2026-01-01", 0.5, "msg-2", "req-2"),
             ],
         );
-        let entries = parse_claude_jsonl(&file, &no_prices());
+        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
         assert_eq!(entries.len(), 1, "empty requestId must be rejected");
     }
 
@@ -580,7 +578,7 @@ mod tests {
                 r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.2,"version":"1.2.3","message":{"id":"msg-2","usage":{"input_tokens":1}}}"#,
             ],
         );
-        let entries = parse_claude_jsonl(&file, &no_prices());
+        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
         assert_eq!(entries.len(), 1, "non-semver version rejected; semver kept");
         assert!((entries[0].cost_usd - 0.2).abs() < 1e-9);
     }

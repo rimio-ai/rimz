@@ -3,3 +3,4 @@
 
 mod concurrent_writers;
 mod sidebar_diff_stats;
+mod spending_incremental;

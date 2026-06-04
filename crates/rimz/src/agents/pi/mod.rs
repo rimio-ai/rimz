@@ -20,7 +20,6 @@ use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
 };
 use super::pricing::PriceBook;
-use super::spending::CachedEntry;
 use super::{AgentAdapter, AgentErr, ClassifiedHook, Result, classify_agent_hook};
 use crate::feed::{FeedItem, Resolution};
 
@@ -85,9 +84,15 @@ impl AgentAdapter for PiAdapter {
         spend::pi_session_files()
     }
 
-    /// Pi logs `costUSD` directly, so the price book is unused.
-    fn parse_spend(&self, path: &Path, _prices: &PriceBook) -> Vec<CachedEntry> {
-        spend::parse_pi_jsonl(path)
+    /// Pi logs `costUSD` directly, so the price book is unused. Lines are
+    /// independent, so a resume is a plain offset.
+    fn parse_spend(
+        &self,
+        path: &Path,
+        resume: Option<&crate::agents::spending::SpendCursor>,
+        _prices: &PriceBook,
+    ) -> crate::agents::spending::SpendParse {
+        spend::parse_pi_spend(path, resume.map_or(0, |cursor| cursor.offset))
     }
 }
 

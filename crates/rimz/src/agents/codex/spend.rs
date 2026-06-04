@@ -30,15 +30,14 @@
 //! `input`/`output` (compact), `cached_tokens`/`cached_input_tokens` (cache).
 
 use std::borrow::Cow;
-use std::io::{BufRead, BufReader};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::agents::pricing::PriceBook;
-use crate::agents::spending::{CachedEntry, iso_to_unix_secs};
-use crate::agents::transcript_fs::{collect_jsonl, home_dir};
+use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs};
+use crate::agents::transcript_fs::{collect_jsonl, home_dir, read_spend_lines};
 
 // ── Public output type ────────────────────────────────────────────────────────
 
@@ -219,7 +218,7 @@ pub(crate) enum CodexTimestamp<'a> {
 /// - output: `output_tokens` / `completion_tokens` / `output`
 /// - reason: `reasoning_output_tokens` / `reasoning_tokens`
 /// - total:  `total_tokens` (auto-summed if absent)
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct CodexRawUsage {
     pub input_tokens: u64,
     pub cached_input_tokens: u64,
@@ -484,7 +483,20 @@ fn codex_line_kind(line: &[u8]) -> Option<CodexLineKind> {
 
 // ── Parser ────────────────────────────────────────────────────────────────────
 
-/// Parse a Codex session JSONL file into `CodexTokenEvent` values.
+/// The cross-line parse state a resumed Codex parse restores, riding the
+/// spending cache as the cursor's opaque `state`. Without it, a `token_count`
+/// event carrying only the cumulative total would subtract against nothing
+/// and record the whole session as one inflated delta.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct CodexSpendState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    previous_totals: Option<CodexRawUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    current_model: Option<String>,
+}
+
+/// Parse a Codex session JSONL file into `CodexTokenEvent` values from
+/// `from_offset`, folding into (and advancing) `state`.
 ///
 /// Handles both the **session format** (`event_msg` + `token_count` payload,
 /// `turn_context` for model tracking) and the **headless format** (flat usage
@@ -500,42 +512,47 @@ fn codex_line_kind(line: &[u8]) -> Option<CodexLineKind> {
 /// Checked in order: `payload.model` → `payload.model_name` →
 /// `payload.metadata.model` → `info.model` → `info.model_name` →
 /// `info.metadata.model` → remembered `current_model` → fallback `"gpt-5"`.
-pub fn parse_codex_session(path: &Path) -> Vec<CodexTokenEvent> {
-    let Ok(file) = std::fs::File::open(path) else {
-        return Vec::new();
+fn parse_codex_session(
+    path: &Path,
+    from_offset: u64,
+    state: &mut CodexSpendState,
+) -> (Vec<CodexTokenEvent>, u64) {
+    let Some((content, next_offset)) = read_spend_lines(path, from_offset) else {
+        return (Vec::new(), from_offset);
     };
-    let mut reader = BufReader::with_capacity(128 * 1024, file);
-    let mut line = Vec::new();
-    let mut previous_totals: Option<CodexRawUsage> = None;
-    let mut current_model: Option<String> = None;
     let fallback_timestamp = file_mtime_rfc3339(path);
     let mut out = Vec::new();
 
-    loop {
-        line.clear();
-        let Ok(n) = reader.read_until(b'\n', &mut line) else {
-            break;
-        };
-        if n == 0 {
-            break;
+    for line in content.split(|&b| b == b'\n') {
+        if line.is_empty() {
+            continue;
         }
-
-        match codex_line_kind(&line) {
+        match codex_line_kind(line) {
             Some(CodexLineKind::Session) => {
-                let Ok(entry) = serde_json::from_slice::<CodexSessionEntry<'_>>(&line) else {
+                let Ok(entry) = serde_json::from_slice::<CodexSessionEntry<'_>>(line) else {
                     continue;
                 };
-                visit_session_entry(entry, &mut previous_totals, &mut current_model, &mut out);
+                visit_session_entry(
+                    entry,
+                    &mut state.previous_totals,
+                    &mut state.current_model,
+                    &mut out,
+                );
             }
             Some(CodexLineKind::Headless) => {
-                if let Ok(entry) = serde_json::from_slice::<CodexLogEntry<'_>>(&line) {
-                    visit_headless_entry(&entry, &fallback_timestamp, &mut current_model, &mut out);
+                if let Ok(entry) = serde_json::from_slice::<CodexLogEntry<'_>>(line) {
+                    visit_headless_entry(
+                        &entry,
+                        &fallback_timestamp,
+                        &mut state.current_model,
+                        &mut out,
+                    );
                 }
             }
             None => {}
         }
     }
-    out
+    (out, next_offset)
 }
 
 fn visit_session_entry(
@@ -769,7 +786,9 @@ fn file_mtime_rfc3339(path: &Path) -> String {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-/// Turn a Codex session's token events into priced [`CachedEntry`] values.
+/// Turn a Codex session's token events into priced [`CachedEntry`] values,
+/// resuming from `resume` when given (the cursor's `state` restores the
+/// cumulative-total and tracked-model fold exactly where it left off).
 ///
 /// Codex logs token counts, not dollars, so each event is multiplied through
 /// the price book: uncached input at the input rate, the cached slice at the
@@ -778,8 +797,20 @@ fn file_mtime_rfc3339(path: &Path) -> String {
 /// the rest of the sidebar reads. Events whose model has no known price, or that
 /// price to zero, are dropped. Codex entries carry no message/request IDs, so
 /// they bypass the Claude dedup and bucket directly under the `codex` provider.
-pub(crate) fn parse_codex_spend(path: &Path, prices: &PriceBook) -> Vec<CachedEntry> {
-    let events = parse_codex_session(path);
+pub(crate) fn parse_codex_spend(
+    path: &Path,
+    resume: Option<&SpendCursor>,
+    prices: &PriceBook,
+) -> SpendParse {
+    let from_offset = resume.map_or(0, |cursor| cursor.offset);
+    // The state was serialized by this same code under the current
+    // SPENDING_CACHE_VERSION (a shape change bumps it and cold-rebuilds), so a
+    // missing/odd value degrades to a fresh fold rather than failing the pass.
+    let mut state: CodexSpendState = resume
+        .and_then(|cursor| cursor.state.clone())
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
+    let (events, next_offset) = parse_codex_session(path, from_offset, &mut state);
     let mut out = Vec::with_capacity(events.len());
     for event in events {
         let Some(model) = event.model.as_deref() else {
@@ -813,7 +844,13 @@ pub(crate) fn parse_codex_spend(path: &Path, prices: &PriceBook) -> Vec<CachedEn
             is_sidechain: false,
         });
     }
-    out
+    SpendParse {
+        entries: out,
+        cursor: SpendCursor {
+            offset: next_offset,
+            state: serde_json::to_value(&state).ok(),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -936,7 +973,7 @@ mod tests {
             r#"{{"type":"event_msg","timestamp":"2026-01-01T10:00:00.000Z","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":100,"output_tokens":50}}}}}}}}"#
         ).unwrap();
 
-        let events = parse_codex_session(&path);
+        let events = parse_codex_session(&path, 0, &mut CodexSpendState::default()).0;
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].input_tokens, 100);
         assert_eq!(events[0].output_tokens, 50);
@@ -964,7 +1001,7 @@ mod tests {
             r#"{{"type":"event_msg","timestamp":"2026-01-01T10:01:00.000Z","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":300,"output_tokens":120}}}}}}}}"#
         ).unwrap();
 
-        let events = parse_codex_session(&path);
+        let events = parse_codex_session(&path, 0, &mut CodexSpendState::default()).0;
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].input_tokens, 100);
         assert_eq!(events[1].input_tokens, 200);
@@ -986,7 +1023,7 @@ mod tests {
             r#"{{"model":"gpt-5","timestamp":"2026-01-01T10:00:00.000Z","usage":{{"input_tokens":200,"output_tokens":80}}}}"#
         ).unwrap();
 
-        let events = parse_codex_session(&path);
+        let events = parse_codex_session(&path, 0, &mut CodexSpendState::default()).0;
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].input_tokens, 200);
         assert_eq!(events[0].output_tokens, 80);

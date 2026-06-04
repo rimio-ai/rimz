@@ -44,7 +44,6 @@ use super::hook_types::BackgroundTask;
 use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::pricing::PriceBook;
-use super::spending::CachedEntry;
 use super::{
     AgentAdapter, AgentContext, AgentErr, AgentLifecycleObservation, AgentTurnError,
     ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
@@ -518,9 +517,15 @@ impl AgentAdapter for ClaudeAdapter {
 
     /// Current Claude transcripts log no `costUSD`, so each turn is priced
     /// from its `message.usage` through the book; an older transcript's
-    /// positive `costUSD` is used verbatim.
-    fn parse_spend(&self, path: &Path, prices: &PriceBook) -> Vec<CachedEntry> {
-        spend::parse_claude_jsonl(path, prices)
+    /// positive `costUSD` is used verbatim. Lines are independent, so a
+    /// resume is a plain offset.
+    fn parse_spend(
+        &self,
+        path: &Path,
+        resume: Option<&crate::agents::spending::SpendCursor>,
+        prices: &PriceBook,
+    ) -> crate::agents::spending::SpendParse {
+        spend::parse_claude_spend(path, resume.map_or(0, |cursor| cursor.offset), prices)
     }
 }
 

@@ -323,13 +323,21 @@ pub trait AgentAdapter: Send + Sync {
         Vec::new()
     }
 
-    /// Parse one transcript file into cost entries for the spending pass. An
-    /// adapter whose transcripts log dollars reads them verbatim and ignores
-    /// `prices`; a token-only adapter (Codex) multiplies its counts through
-    /// the book. Read-only and sidebar-safe — spend parsing never writes the
-    /// ledger or blocks on a socket (CI grep on the adapter `spend.rs` files).
-    fn parse_spend(&self, _path: &Path, _prices: &PriceBook) -> Vec<spending::CachedEntry> {
-        Vec::new()
+    /// Parse one transcript file into cost entries for the spending pass,
+    /// resuming from `resume` when given: read only past its offset, restore
+    /// any cross-line state it carries, and return entries the cache appends
+    /// to the file's set. `None` parses the whole file cold. An adapter whose
+    /// transcripts log dollars reads them verbatim and ignores `prices`; a
+    /// token-only adapter (Codex) multiplies its counts through the book.
+    /// Read-only and sidebar-safe — spend parsing never writes the ledger or
+    /// blocks on a socket (CI grep on the adapter `spend.rs` files).
+    fn parse_spend(
+        &self,
+        _path: &Path,
+        _resume: Option<&spending::SpendCursor>,
+        _prices: &PriceBook,
+    ) -> spending::SpendParse {
+        spending::SpendParse::default()
     }
 
     /// The argv that resumes a prior session of this agent by `session_id`,
