@@ -806,6 +806,9 @@ fn parse_pane_line(line: &str) -> Option<PaneRef> {
             .get(6)
             .and_then(|value| value.trim().parse::<i64>().ok())
             .and_then(|seconds| Timestamp::from_second(seconds).ok()),
+        rss_kb: None,
+        cpu_pct: None,
+        io_bps: None,
     })
 }
 
@@ -825,6 +828,9 @@ mod tests {
             cwd: None,
             pane_pid: None,
             pane_process_start: None,
+            rss_kb: None,
+            cpu_pct: None,
+            io_bps: None,
         }
     }
 

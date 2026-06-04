@@ -82,6 +82,9 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `▤ 76k`           | filled context — the absolute tokens in the window (the `▣` meter's numerator); leads the card's context line in the meter's severity tone |
 | `◇` `↘` `↗` `◍` `◌` | tokens: total · input · output · cache-write · cache-read. On the card's context line each composition marker wears its bar-segment color (`◌` blue · `◍` yellow · `↘` red · `↗` green), so the line legends the bar; everywhere else they stay dim chrome |
 | `◔ 1m`            | last-activity age — shown only once it crosses a full minute; the clock face fills by the quarter hour (`◔` ≤15m · `◑` ≤30m · `◕` ≤45m · `●` ≤60m · `◉` past it) and its tone steps the same quarters: dim through `◔` (a resume still hits cache), yellow to the half hour, amber beyond it, red past the hour — a red age means resuming likely re-reads the whole context uncached |
+| `C 11%`           | CPU utilisation of the pane's foreground process |
+| `M 512M`          | resident set size (RSS) — `k` / `M` / `G` |
+| `⇅ 3M/s`          | combined VFS I/O rate (rchar + wchar bytes/s) |
 | `+127 -43`        | lines added / removed |
 | `⇡3 ⇣1`           | commits ahead / behind the trunk (worktree header; zero components drop) |
 | `●●●○○ 3/5`       | todo progress |
@@ -206,12 +209,12 @@ A `?` waiting row reads the same with a `?` glyph. The row carries *who* needs y
 
 ### Process rows
 
-A pane no agent has stamped reads in the dim process tone — a hollow `○` (the same idle glyph an agent shows, never the agent's clay) for an idle shell or editor, the `⢿` spinner for a pane doing real work like a build, test, or install. An active pane anchors its primary line on the shell that owns it, so the line stays put as commands come and go, and carries the live command in full on a dim second line:
+A pane no agent has stamped reads in the dim process tone — a hollow `○` (the same idle glyph an agent shows, never the agent's clay) for an idle shell or editor, the `⢿` spinner for a pane doing real work like a build, test, or install. An active pane anchors its primary line on the shell that owns it, so the line stays put as commands come and go, and carries the live command in full on a dim second line. At wide (L2) widths the producer pins `C <n>%  M <n>[k/M/G]  ⇅ <n>[k/M/G]/s` right on line 1 — CPU, RAM, and combined VFS I/O rate — so resource load reads at a glance without leaving the sidebar:
 
 ```
 ○ zsh
-⢿ zsh
-    sudo npm install -g @openai/codex
+⢿ zsh                              C 34%  M 512M  ⇅ 8M/s
+    cargo build --release
 ```
 
 The label is the program the pane runs, read past a `sudo` wrapper and through a `node`/`npx` launcher (`sudo npm install -g @openai/codex` is an `npm` install, not a codex agent; `node …/codex` is codex). No status, no meter, never counted in the cockpit — it is presence, not a cue. It is still a jump target, and the moment an agent's hook stamps that pane it becomes that agent's card.

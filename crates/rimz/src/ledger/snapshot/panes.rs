@@ -252,6 +252,9 @@ fn idle_agent_row(pane: &PaneRef, kind: &str) -> SidebarRow {
         compacting: false,
         parked_on_background: false,
         turn_error_label: None,
+        rss_kb: pane.rss_kb,
+        cpu_pct: pane.cpu_pct,
+        io_bps: pane.io_bps,
     }
 }
 
@@ -277,6 +280,9 @@ pub(super) fn pane_ref_from_id(pane_id: PaneId) -> PaneRef {
         cwd: None,
         pane_pid: None,
         pane_process_start: None,
+        rss_kb: None,
+        cpu_pct: None,
+        io_bps: None,
     }
 }
 
@@ -305,6 +311,9 @@ mod tests {
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
             pane_process_start: None,
+            rss_kb: None,
+            cpu_pct: None,
+            io_bps: None,
         }
     }
 
@@ -382,6 +391,9 @@ mod tests {
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
             pane_process_start: None,
+            rss_kb: None,
+            cpu_pct: None,
+            io_bps: None,
         }
     }
 

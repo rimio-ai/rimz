@@ -287,6 +287,34 @@ pub(super) fn pct_label(precise: Option<f64>, whole: u8) -> String {
     }
 }
 
+/// CPU utilisation as `11%` (integer; a u16 covers multi-core bursts).
+pub(super) fn fmt_cpu(pct: u16) -> String {
+    format!("{pct}%")
+}
+
+/// RSS in a compact form: `45k`, `234M`, `1.1G` (one decimal for ≥1 GiB,
+/// integer otherwise). Input is in kibibytes.
+pub(super) fn fmt_rss(rss_kb: u64) -> String {
+    if rss_kb >= 1_048_576 {
+        format!("{:.1}G", rss_kb as f64 / 1_048_576.0)
+    } else if rss_kb >= 1_024 {
+        format!("{}M", rss_kb / 1_024)
+    } else {
+        format!("{rss_kb}k")
+    }
+}
+
+/// IO rate as `3M/s`, `450k/s`, `12B/s` (bytes/s, integer magnitude).
+pub(super) fn fmt_io(bps: u64) -> String {
+    if bps >= 1_048_576 {
+        format!("{}M/s", bps / 1_048_576)
+    } else if bps >= 1_024 {
+        format!("{}k/s", bps / 1_024)
+    } else {
+        format!("{bps}B/s")
+    }
+}
+
 /// A span as its two highest non-zero units — `3d12h`, `3h12m`, `2m30s`, `45s`.
 /// Skipping zero units keeps it short, so a span with no minutes reads `3h3s`
 /// rather than padding a `0m`; a non-positive span is empty (the caller only
@@ -458,6 +486,30 @@ mod tests {
         assert_eq!(activity_label(23 * 3_600), "23h");
         assert_eq!(activity_label(24 * 3_600), ">1d");
         assert_eq!(activity_label(100 * 3_600), ">1d");
+    }
+
+    #[test]
+    fn fmt_cpu_formats_integer() {
+        assert_eq!(fmt_cpu(11), "11%");
+        assert_eq!(fmt_cpu(0), "0%");
+        assert_eq!(fmt_cpu(100), "100%");
+        assert_eq!(fmt_cpu(400), "400%");
+    }
+
+    #[test]
+    fn fmt_rss_picks_the_right_unit() {
+        assert_eq!(fmt_rss(45), "45k");
+        assert_eq!(fmt_rss(234 * 1024), "234M");
+        // 1.1 GiB: 1024 + 102 = 1126 MiB = 1_153_024 KiB → 1.1G
+        assert_eq!(fmt_rss(1_153_024), "1.1G");
+        assert_eq!(fmt_rss(1_048_576), "1.0G");
+    }
+
+    #[test]
+    fn fmt_io_picks_the_right_unit() {
+        assert_eq!(fmt_io(500), "500B/s");
+        assert_eq!(fmt_io(3 * 1_048_576), "3M/s");
+        assert_eq!(fmt_io(450 * 1_024), "450k/s");
     }
 
     #[test]

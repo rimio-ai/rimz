@@ -156,6 +156,38 @@ pub fn cwd(_pid: u32) -> Option<std::path::PathBuf> {
     None
 }
 
+/// Fields 14 (utime) + 15 (stime) from `/proc/<pid>/stat`. The same
+/// `rsplit_once(')')` anchor as `parse_starttime_ticks`; utime is index 11 and
+/// stime is index 12 after the closing paren.
+#[cfg(target_os = "linux")]
+fn parse_cpu_ticks(stat: &str) -> Option<u64> {
+    let tail = stat.rsplit_once(')')?.1;
+    let mut fields = tail.split_whitespace();
+    let utime: u64 = fields.nth(11)?.parse().ok()?;
+    let stime: u64 = fields.next()?.parse().ok()?;
+    Some(utime.saturating_add(stime))
+}
+
+/// `rchar` and `wchar` lines from `/proc/<pid>/io`, summed. Captures all VFS
+/// I/O (including page-cache reads) so a build reading cached files still shows
+/// I/O activity.
+#[cfg(target_os = "linux")]
+fn parse_io_bytes(io: &str) -> Option<u64> {
+    let mut rchar: Option<u64> = None;
+    let mut wchar: Option<u64> = None;
+    for line in io.lines() {
+        if let Some(rest) = line.strip_prefix("rchar:") {
+            rchar = rest.trim().parse().ok();
+        } else if let Some(rest) = line.strip_prefix("wchar:") {
+            wchar = rest.trim().parse().ok();
+        }
+        if rchar.is_some() && wchar.is_some() {
+            break;
+        }
+    }
+    Some(rchar?.saturating_add(wchar?))
+}
+
 /// Field 22 (`starttime`) of a `/proc/<pid>/stat` line. The second field (`comm`)
 /// is parenthesized and may itself contain spaces and parens, so anchor on the
 /// *last* `)` and count whitespace-separated fields after it: `starttime` is the
@@ -182,18 +214,75 @@ fn parse_btime(stat: &str) -> Option<i64> {
         .ok()
 }
 
+/// Resident set size of `pid` in kibibytes from `VmRSS` in
+/// `/proc/<pid>/status`. A single-sample metric — no prior value needed. `None`
+/// on a non-Linux target, an unreadable file, or a missing field.
+#[cfg(target_os = "linux")]
+pub fn rss_kb(pid: u32) -> Option<u64> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            // "VmRSS:\t  12345 kB"
+            return rest
+                .split_whitespace()
+                .next()
+                .and_then(|v| v.parse::<u64>().ok());
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn rss_kb(_pid: u32) -> Option<u64> {
+    None
+}
+
+/// utime + stime CPU ticks for `pid` from fields 14 and 15 of
+/// `/proc/<pid>/stat`. Two readings diffed over a known interval give CPU%.
+/// `None` on a non-Linux target or an unreadable file.
+#[cfg(target_os = "linux")]
+pub fn cpu_ticks(pid: u32) -> Option<u64> {
+    parse_cpu_ticks(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn cpu_ticks(_pid: u32) -> Option<u64> {
+    None
+}
+
+/// Combined VFS I/O bytes (rchar + wchar) for `pid` from `/proc/<pid>/io`.
+/// Captures all I/O through the filesystem interface, cached reads included.
+/// Two readings diffed over a known interval give bytes/s. `None` on a
+/// non-Linux target, an unreadable file (e.g. another user's process), or a
+/// missing field.
+#[cfg(target_os = "linux")]
+pub fn io_bytes(pid: u32) -> Option<u64> {
+    let io = std::fs::read_to_string(format!("/proc/{pid}/io")).ok()?;
+    parse_io_bytes(&io)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn io_bytes(_pid: u32) -> Option<u64> {
+    None
+}
+
 /// Clock ticks per second for `/proc` `starttime` (`SC_CLK_TCK`). Linux reports
 /// `starttime` in USER_HZ; `sysconf` returns it, and an unavailable or nonsensical
 /// answer falls back to 100 — the USER_HZ every mainstream Linux target fixes it
 /// at, independent of the kernel's `CONFIG_HZ`.
 #[cfg(target_os = "linux")]
-fn clk_tck() -> u64 {
+pub fn clk_tck() -> u64 {
     nix::unistd::sysconf(nix::unistd::SysconfVar::CLK_TCK)
         .ok()
         .flatten()
         .and_then(|ticks| u64::try_from(ticks).ok())
         .filter(|&ticks| ticks > 0)
         .unwrap_or(100)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn clk_tck() -> u64 {
+    100
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -247,6 +336,34 @@ mod tests {
         assert_eq!(parse_starttime_ticks("no parens here"), None);
         // Too few fields after `comm` to reach field 22.
         assert_eq!(parse_starttime_ticks("1 (sh) S 1 2 3"), None);
+    }
+
+    #[test]
+    fn parse_cpu_ticks_sums_utime_and_stime() {
+        // Fields 14 and 15 after `comm`; indices 11 and 12 past the closing `)`.
+        // state ppid pgrp session ttyno tpgid flags minflt cminflt majflt cmajflt utime stime …
+        //   0    1    2    3       4     5     6     7      8       9      10      11    12
+        let stat = "1234 (codex) S 1 1234 1234 0 -1 0 0 0 0 0 42 17 0 0 20 0 1 0 646245020 …";
+        assert_eq!(parse_cpu_ticks(stat), Some(59)); // 42 + 17
+    }
+
+    #[test]
+    fn parse_cpu_ticks_handles_comm_with_spaces() {
+        let stat = "1 (rust (1)) S 1 1 1 0 -1 0 0 0 0 0 10 5 0 0 20 0 1 0 100 0";
+        assert_eq!(parse_cpu_ticks(stat), Some(15)); // 10 + 5
+    }
+
+    #[test]
+    fn parse_io_bytes_sums_rchar_and_wchar() {
+        let io = "rchar: 1000\nwchar: 500\nsyscr: 12\nsyscw: 8\nread_bytes: 0\nwrite_bytes: 512\n";
+        assert_eq!(parse_io_bytes(io), Some(1500));
+    }
+
+    #[test]
+    fn parse_io_bytes_rejects_incomplete() {
+        // Only rchar present: returns None (wchar is missing).
+        let io = "rchar: 1000\n";
+        assert_eq!(parse_io_bytes(io), None);
     }
 
     #[test]

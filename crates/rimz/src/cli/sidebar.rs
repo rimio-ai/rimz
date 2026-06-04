@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -531,6 +532,11 @@ fn cached_panes_or_produce(
             if let Some(prev) = read_snapshot_cache(&cache_path, session) {
                 carry_forward_pane_fields(&mut cache.panes, &prev.panes);
             }
+            // Enrich each pane with per-process resource metrics (best-effort,
+            // Linux-only). Runs inside the produce lock so only one producer
+            // reads `/proc` per tick; the result is in the published pane cache,
+            // so consumer tabs never fork their own reads.
+            enrich_pane_metrics(&mut cache.panes, ledger.runtime_paths());
             if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &cache) {
                 tracing::warn!(path = %cache_path.display(), error = %err, "sidebar snapshot cache write failed");
             }
@@ -932,6 +938,108 @@ fn parse_numstat_cell(cell: Option<&str>) -> u32 {
         .unwrap_or(0)
 }
 
+/// Per-pane CPU and IO tick counters sampled by the producer on the previous
+/// tick. Two consecutive readings plus the elapsed wall time give rates.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct MetricsSampleEntry {
+    /// The PID the metrics were read from (shell or its single foreground child).
+    stats_pid: u32,
+    /// utime + stime ticks from `/proc/<pid>/stat` at sample time.
+    cpu_ticks: u64,
+    /// rchar + wchar bytes from `/proc/<pid>/io` at sample time.
+    io_bytes: u64,
+    /// Unix milliseconds when this sample was taken.
+    sampled_at_ms: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct MetricsSampleCache {
+    entries: HashMap<String, MetricsSampleEntry>,
+}
+
+fn read_metrics_sample_cache(path: &Path) -> MetricsSampleCache {
+    let Ok(bytes) = std::fs::read(path) else {
+        return MetricsSampleCache::default();
+    };
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+/// Enrich each pane with per-process resource metrics from `/proc`. Reads the
+/// prior sample cache to compute two-sample rates (CPU%, IO bytes/s); writes a
+/// fresh sample for the next tick. Linux-only; on other platforms every pane's
+/// metric fields stay `None`.
+fn enrich_pane_metrics(panes: &mut [rimz::feed::PaneRef], runtime: &rimz::RuntimePaths) {
+    // Build a ppid → [child pids] map from the current process list so we can
+    // find the foreground command the shell is running (the interesting process).
+    let all_procs = rimz::proc::list_processes();
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    for p in &all_procs {
+        children.entry(p.ppid).or_default().push(p.pid);
+    }
+
+    let cache_path = runtime.root.join("metrics-sample.json");
+    let prior = read_metrics_sample_cache(&cache_path);
+    let now_ms = unix_now_ms();
+    let clk_tck = rimz::proc::clk_tck() as f64;
+    let mut new_entries: HashMap<String, MetricsSampleEntry> = HashMap::new();
+
+    for pane in panes.iter_mut() {
+        let Some(shell_pid) = pane.pane_pid else {
+            continue;
+        };
+        // If the shell has exactly one child, its stats are more informative
+        // than the shell's own (which idles while the child runs). Fall back to
+        // the shell when there are zero or multiple children.
+        let stats_pid = match children.get(&shell_pid).map(Vec::as_slice) {
+            Some(&[child]) => child,
+            _ => shell_pid,
+        };
+
+        pane.rss_kb = rimz::proc::rss_kb(stats_pid);
+
+        let cpu_now = rimz::proc::cpu_ticks(stats_pid);
+        let io_now = rimz::proc::io_bytes(stats_pid);
+
+        let pane_key = pane.pane_id.to_string();
+        if let Some(prior_entry) = prior.entries.get(&pane_key) {
+            // Only compute a rate when the stats PID hasn't changed across ticks
+            // and the elapsed time is non-trivial (a very short gap yields noise).
+            if prior_entry.stats_pid == stats_pid {
+                let elapsed_ms = now_ms.saturating_sub(prior_entry.sampled_at_ms);
+                let elapsed_secs = elapsed_ms as f64 / 1_000.0;
+                if elapsed_secs >= 0.1 {
+                    if let Some(ticks) = cpu_now {
+                        let delta = ticks.saturating_sub(prior_entry.cpu_ticks);
+                        let pct = (delta as f64 / elapsed_secs / clk_tck * 100.0).round();
+                        pane.cpu_pct = Some(pct.clamp(0.0, u16::MAX as f64) as u16);
+                    }
+                    if let Some(bytes) = io_now {
+                        let delta = bytes.saturating_sub(prior_entry.io_bytes);
+                        pane.io_bps = Some((delta as f64 / elapsed_secs) as u64);
+                    }
+                }
+            }
+        }
+
+        new_entries.insert(
+            pane_key,
+            MetricsSampleEntry {
+                stats_pid,
+                cpu_ticks: cpu_now.unwrap_or(0),
+                io_bytes: io_now.unwrap_or(0),
+                sampled_at_ms: now_ms,
+            },
+        );
+    }
+
+    let new_cache = MetricsSampleCache {
+        entries: new_entries,
+    };
+    if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &new_cache) {
+        tracing::warn!(error = %err, "metrics sample cache write failed");
+    }
+}
+
 pub(crate) fn sidebar_renderer_program() -> PathBuf {
     if let Some(path) = env_path("RIMZ_SIDEBAR_BIN") {
         return path;
@@ -985,6 +1093,9 @@ mod tests {
             cwd: cwd.map(ToOwned::to_owned),
             pane_pid: None,
             pane_process_start: None,
+            rss_kb: None,
+            cpu_pct: None,
+            io_bps: None,
         }
     }
 

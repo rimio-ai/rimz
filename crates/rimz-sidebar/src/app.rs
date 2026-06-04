@@ -2096,6 +2096,9 @@ mod tests {
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
             pane_process_start: None,
+            rss_kb: None,
+            cpu_pct: None,
+            io_bps: None,
         }
     }
 
@@ -2138,6 +2141,9 @@ mod tests {
                     compacting: false,
                     parked_on_background: false,
                     turn_error_label: None,
+                    rss_kb: None,
+                    cpu_pct: None,
+                    io_bps: None,
                 })
                 .collect(),
             hidden_count: 0,
@@ -2181,6 +2187,9 @@ mod tests {
             compacting: false,
             parked_on_background: false,
             turn_error_label: None,
+            rss_kb: None,
+            cpu_pct: None,
+            io_bps: None,
         };
         snapshot.worktree_groups = vec![rimz::SidebarWorktreeGroup {
             key: "/repo/main".to_owned(),
@@ -2237,6 +2246,9 @@ mod tests {
             compacting: false,
             parked_on_background: false,
             turn_error_label: None,
+            rss_kb: None,
+            cpu_pct: None,
+            io_bps: None,
         };
         let process = rimz::SidebarRow {
             row_kind: rimz::SidebarRowKind::Process,
@@ -2268,6 +2280,9 @@ mod tests {
             compacting: false,
             parked_on_background: false,
             turn_error_label: None,
+            rss_kb: None,
+            cpu_pct: None,
+            io_bps: None,
         };
         snapshot.worktree_groups = vec![rimz::SidebarWorktreeGroup {
             key: "/repo/main".to_owned(),
@@ -2650,6 +2665,9 @@ mod tests {
                 compacting: false,
                 parked_on_background: false,
                 turn_error_label: None,
+                rss_kb: None,
+                cpu_pct: None,
+                io_bps: None,
             }],
             hidden_count: 0,
             diff_added: None,

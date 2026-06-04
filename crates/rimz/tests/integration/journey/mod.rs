@@ -484,6 +484,9 @@ fn process_pane(mux: MuxName, index: usize, command: &str, cwd: String) -> PaneR
         cwd: Some(cwd),
         pane_pid: None,
         pane_process_start: None,
+        rss_kb: None,
+        cpu_pct: None,
+        io_bps: None,
     }
 }
 

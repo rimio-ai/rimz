@@ -20,8 +20,9 @@ use rimz::{
 use super::TallyAnim;
 
 use super::fmt::{
-    activity_short, age_secs, age_short, clip, compact_seconds, dollars2, model_label, pct_label,
-    reset_countdown, time_remaining, tokens_int, tokens_short, window_label, window_short,
+    activity_short, age_secs, age_short, clip, compact_seconds, dollars2, fmt_cpu, fmt_io, fmt_rss,
+    model_label, pct_label, reset_countdown, time_remaining, tokens_int, tokens_short,
+    window_label, window_short,
 };
 use super::labels::{
     SEGMENT_CACHE_READ, SEGMENT_CACHE_WRITE, SEGMENT_INPUT, TOKENS_CACHED, TOKENS_IN, TOKENS_OUT,
@@ -1055,7 +1056,6 @@ fn process_row_line(
     animation_phase: u64,
 ) -> Line<'static> {
     let dim = theme.dim();
-    let label = clip(&row.name, width.saturating_sub(2).max(1));
     // An active pane (a build, a test, a script) gets the running braille spinner
     // so live work reads at a glance; an idle shell or a TUI the user just sits in
     // rests on the same hollow `○` an idle agent shows, so the lead column reads
@@ -1066,11 +1066,40 @@ fn process_row_line(
     } else {
         status_glyph(AgentStatus::Idle)
     };
-    Line::from(vec![
+    let left = vec![
         Span::styled(lead, dim),
         Span::raw(" "),
-        Span::styled(label, dim),
-    ])
+        Span::styled(row.name.clone(), dim),
+    ];
+    // At L2 width, resource stats pin right: `C 11%  M 1.1G  ⇅ 3M/s`.
+    // Any token whose data is absent is omitted; all three drop at L0/L1.
+    if Tier::for_width(width) == Tier::L2 {
+        let right = proc_stats_spans(theme, row);
+        if !right.is_empty() {
+            return pin_right(left, right, width);
+        }
+    }
+    Line::from(trim_spans_to_width(left, width))
+}
+
+/// Build the right-pinned resource stats spans for a row. Returns an empty vec
+/// when no metrics are available. Tokens are joined with a two-space gap.
+fn proc_stats_spans(theme: &Theme, row: &SidebarRow) -> Vec<Span<'static>> {
+    let dim = theme.dim();
+    let mut tokens: Vec<String> = Vec::new();
+    if let Some(pct) = row.cpu_pct {
+        tokens.push(format!("C {}", fmt_cpu(pct)));
+    }
+    if let Some(rss) = row.rss_kb {
+        tokens.push(format!("M {}", fmt_rss(rss)));
+    }
+    if let Some(bps) = row.io_bps {
+        tokens.push(format!("⇅ {}", fmt_io(bps)));
+    }
+    if tokens.is_empty() {
+        return Vec::new();
+    }
+    vec![Span::styled(tokens.join("  "), dim)]
 }
 
 /// Line 2 for an *active* process row: the full foreground command, dim and
@@ -1303,6 +1332,23 @@ fn context_tokens_line(
         context_used_tokens(row),
         bands,
     );
+    // At L2, append `C n%  M nG  ⇅ nM/s` between the token breakdown and the
+    // age clock, but only when all three metrics are present — the context line
+    // is already dense and partial stats add noise rather than signal.
+    let right = if Tier::for_width(width) == Tier::L2
+        && row.cpu_pct.is_some()
+        && row.rss_kb.is_some()
+        && row.io_bps.is_some()
+    {
+        let mut spans = proc_stats_spans(theme, row);
+        if !spans.is_empty() && !age.is_empty() {
+            spans.push(Span::raw("  "));
+        }
+        spans.extend(age);
+        spans
+    } else {
+        age
+    };
     if let Some(usage) = ctx(row)
         .and_then(|context| context.tokens.as_ref())
         .and_then(|tokens| tokens.current_usage.as_ref())
@@ -1322,12 +1368,12 @@ fn context_tokens_line(
             output,
             tokens_int,
         ));
-        return Some(pin_right(left, age, width));
+        return Some(pin_right(left, right, width));
     }
     let total = row.total_tokens?;
     let mut left = vec![Span::raw("  ")];
     left.extend(context_total_spans(theme, severity, total, tokens_int));
-    Some(pin_right(left, age, width))
+    Some(pin_right(left, right, width))
 }
 
 /// Total display width of a span run, in terminal cells.

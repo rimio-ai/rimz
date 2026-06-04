@@ -62,6 +62,9 @@ pub(super) fn row_from_process(pane: &PaneRef) -> SidebarRow {
         compacting: false,
         parked_on_background: false,
         turn_error_label: None,
+        rss_kb: pane.rss_kb,
+        cpu_pct: pane.cpu_pct,
+        io_bps: pane.io_bps,
     }
 }
 

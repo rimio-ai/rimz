@@ -193,6 +193,9 @@ impl MuxBackend for FakeBackend {
             cwd: None,
             pane_pid: None,
             pane_process_start: None,
+            rss_kb: None,
+            cpu_pct: None,
+            io_bps: None,
         }])
     }
 

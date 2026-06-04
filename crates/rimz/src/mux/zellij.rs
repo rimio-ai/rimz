@@ -717,6 +717,9 @@ impl MuxBackend for ZellijBackend {
                 // or "session attached" signal, so pane visibility is unknown
                 // here. `None` makes the renderer's visibility gate fall back
                 // to always painting — the deliberate cross-backend floor.
+                rss_kb: None,
+                cpu_pct: None,
+                io_bps: None,
             })
             .collect())
     }
