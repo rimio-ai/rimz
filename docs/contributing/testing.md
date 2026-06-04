@@ -25,12 +25,17 @@ Do not land ignored tests for future product targets. Keep planned behaviour in 
 - default-mode hook path (`native_ui`),
 - resolver-mode bridge path (`bridge`),
 - script-blocking path (`script` via `feed ask`),
-- CAS resolution,
+- CAS resolution, including a concurrent abstain + resolve yielding exactly one terminal outcome,
 - nonce mismatch rejection,
-- timeout and late-answer behaviour,
-- torn event-log recovery,
+- timeout and late-answer behaviour — `TimedOut` accepts a late answer as audit-only, `Abandoned` rejects it outright,
+- torn event-log recovery, both halves: a torn *trailing* frame is skipped, a torn *middle* frame is a hard error end-to-end through the fold (`catch_up_rollup_rejects_a_zeroed_middle_frame`),
+- rotation serialized with concurrent writers — no append vanishes at the rename boundary,
+- the keystone fold invariant `fold(seed, delta) == fold(empty, all)`, property-tested over arbitrary lifecycle sequences and split points,
+- bridge socket-path overflow fails fast with a named precondition error,
 - lock recovery,
 - runtime path fallback (`/tmp/rimz-<uid>/` when `XDG_RUNTIME_DIR` is unset).
+
+Recorded non-gaps, so they are not re-opened as missing coverage: wakeup-datagram loss needs no timer test — recovery is guaranteed by the lock-free delta fold (`a_reader_recovers_a_commit_that_never_published`), the ~2s backstop tick is a renderer concern; GC never touches feed files, so there is no GC-versus-feed-load race to test; a stale rollup-cache extent past the log is unit-covered (`mismatched_rollup_cache_falls_back_to_the_cold_fold`).
 
 **M0b** runs the same matrix under Zellij and adds:
 

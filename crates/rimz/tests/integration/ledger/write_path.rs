@@ -405,3 +405,85 @@ fn torn_inflight_tail_does_not_drop_a_folded_agent() {
         "the previously-folded agent survives the race"
     );
 }
+
+#[test]
+fn rotation_serializes_with_writers_and_drops_no_append() {
+    // Rotation renames the active log into the archive; every appender holds
+    // the same workspace flock, so a writer can never append into a
+    // just-archived file and lose its event at the rename boundary. Counted
+    // across the active log plus every archive: nothing vanishes, whichever
+    // interleaving the flock grants.
+    const WRITERS: usize = 4;
+    const PUSHES_EACH: usize = 3;
+    const ROTATIONS: usize = 3;
+    let h = crate::common::Harness::new();
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(WRITERS + 1));
+    let mut handles: Vec<std::thread::JoinHandle<()>> = (0..WRITERS)
+        .map(|w| {
+            let ledger = h.ledger.clone();
+            let workspace = h.workspace_id.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                for i in 0..PUSHES_EACH {
+                    let item = FeedItem::new(
+                        workspace.clone(),
+                        Surface::Script,
+                        FeedKind::Question,
+                        format!("writer {w} push {i}"),
+                        "rimz",
+                        "cli",
+                    );
+                    ledger.push_feed_item(&item, "rimz-test").expect("push");
+                }
+            })
+        })
+        .collect();
+    handles.push({
+        let ledger = h.ledger.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            for _ in 0..ROTATIONS {
+                ledger.rotate_event_log(1, None).expect("rotate");
+            }
+        })
+    });
+    for handle in handles {
+        handle.join().expect("thread");
+    }
+
+    let mut pushes = h
+        .ledger
+        .read_events()
+        .expect("active log")
+        .iter()
+        .filter(|event| event.method == "feed.push")
+        .count();
+    if let Ok(entries) = std::fs::read_dir(&h.ledger.paths().events_archive_dir) {
+        for entry in entries {
+            let path = entry.expect("archive entry").path();
+            pushes += rimz::ledger::event_log::read_all(&path)
+                .expect("archived log")
+                .iter()
+                .filter(|event| event.method == "feed.push")
+                .count();
+        }
+    }
+    assert_eq!(
+        pushes,
+        WRITERS * PUSHES_EACH,
+        "every push survives the rename boundary, in the active log or an archive"
+    );
+
+    // The post-race read path is coherent: every pushed item is still listed
+    // and a fresh projection serves without error.
+    assert_eq!(
+        h.ledger.list_feed_items().expect("list").len(),
+        WRITERS * PUSHES_EACH
+    );
+    h.ledger
+        .runtime_projection(RuntimeScope::Runtime)
+        .expect("projection after the race");
+}

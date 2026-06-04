@@ -656,3 +656,130 @@ fn runtime_projection_serves_lock_free_while_a_writer_holds_the_lock() {
     assert_eq!(agents, 1, "the committed agent survives the lock-free read");
     reader.join().expect("reader thread");
 }
+
+#[test]
+fn late_resolve_after_abandon_is_rejected_not_audited() {
+    // The two answerless terminal states differ on purpose: `TimedOut` is
+    // the bridge-cap audit window — a late answer is recorded
+    // `effective: false` (timeout_marks_script_item_and_late_answer_is_audit_only)
+    // — while `Abandoned` means the asker is gone, so a late answer has no
+    // one to serve and is rejected outright, before any event append.
+    let h = crate::common::Harness::new();
+    let mut item = FeedItem::new(
+        h.workspace_id.clone(),
+        Surface::Bridge,
+        FeedKind::Permission,
+        "owner left",
+        "claude",
+        "agent-hook",
+    );
+    item.payload = json!({ "session_id": "gone" });
+    let request_id = item.request_id.clone();
+    h.ledger.push_feed_item(&item, "rimz-test").expect("push");
+
+    h.ledger
+        .expire_agent_session("claude", "gone", "rimz-test")
+        .expect("abandon via session end");
+    assert_eq!(
+        h.ledger.load_feed_item(&request_id).expect("load").status,
+        FeedStatus::Abandoned
+    );
+
+    let late = h.ledger.resolve_feed_item(
+        &request_id,
+        Resolution::new(json!({ "choice": "yes" }), ResolutionMethod::Cli),
+        true,
+        "rimz-test",
+    );
+    assert!(
+        matches!(
+            late,
+            Err(rimz::ledger::LedgerErr::FeedStore(
+                rimz::ledger::FeedStoreErr::NotPending { .. }
+            ))
+        ),
+        "an abandoned item rejects a late answer: {late:?}"
+    );
+    let events = h.ledger.read_events().expect("events");
+    assert!(
+        events.iter().all(|event| event.method != "feed.resolve"),
+        "the rejection leaves no audit-only resolve record"
+    );
+}
+
+#[test]
+fn concurrent_abstain_and_resolve_leave_exactly_one_terminal_outcome() {
+    // Whichever order the flock grants, the CAS arms compose to one terminal
+    // truth: abstain-first leaves the item pending for the resolve to win;
+    // resolve-first turns the abstain into `NotPending`. Exactly one
+    // effective feed.resolve lands either way.
+    let h = crate::common::Harness::new();
+    let opus: ResolverId = "opus-policy".parse().unwrap();
+    let mut item = FeedItem::new(
+        h.workspace_id.clone(),
+        Surface::Bridge,
+        FeedKind::Permission,
+        "race me",
+        "claude",
+        "agent-hook",
+    );
+    item.activate_resolver_chain(vec![chain_step(&opus, 10, 30_000)]);
+    let request_id = item.request_id.clone();
+    h.ledger.push_feed_item(&item, "rimz-test").expect("push");
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let resolve = {
+        let ledger = h.ledger.clone();
+        let request_id = request_id.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            ledger.resolve_feed_item(
+                &request_id,
+                Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::Cli),
+                true,
+                "rimz-test",
+            )
+        })
+    };
+    let abstain = {
+        let ledger = h.ledger.clone();
+        let request_id = request_id.clone();
+        let opus = opus.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            ledger.abstain_feed_item(&request_id, &opus, None, "rimz-test")
+        })
+    };
+
+    let resolve = resolve
+        .join()
+        .expect("resolve thread")
+        .expect("the override resolve wins in either interleaving");
+    assert!(resolve.effective && !resolve.late);
+
+    match abstain.join().expect("abstain thread") {
+        // Abstain won the flock: it exhausted the chain and left the item
+        // pending for the resolve that followed.
+        Ok(outcome) => assert!(outcome.next_resolver.is_none()),
+        // Resolve won the flock: the abstain found a terminal item.
+        Err(err) => assert!(
+            matches!(
+                err,
+                rimz::ledger::LedgerErr::FeedStore(rimz::ledger::FeedStoreErr::NotPending { .. })
+            ),
+            "the losing abstain is NotPending, never a second outcome: {err:?}"
+        ),
+    }
+
+    let after = h.ledger.load_feed_item(&request_id).expect("load");
+    assert_eq!(after.status, FeedStatus::Resolved);
+    let events = h.ledger.read_events().expect("events");
+    let resolves: Vec<_> = events
+        .iter()
+        .filter(|event| event.method == "feed.resolve")
+        .collect();
+    assert_eq!(resolves.len(), 1, "exactly one resolve event");
+    assert_eq!(resolves[0].params["effective"], true);
+}

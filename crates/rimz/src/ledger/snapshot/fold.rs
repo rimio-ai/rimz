@@ -481,4 +481,139 @@ mod tests {
         };
         assert_eq!(ids, ["a", "b"], "carryover and fresh-log agents merge");
     }
+
+    #[test]
+    fn merge_carryover_prefers_live_on_a_last_seen_tie() {
+        // The tie rule the strictly-newer guard implies: a base observation
+        // survives only when *strictly* newer, so on an equal `last_seen` the
+        // live in-log entry wins and a rotation boundary can never freeze a
+        // stale carryover field forever.
+        let mut carried = agent("claude", "agent-1", AgentStatus::Idle, 2_000);
+        carried.worktree_branch = Some("main".into());
+        let mut live = agent("claude", "agent-1", AgentStatus::Running, 2_000);
+        live.worktree_branch = Some("feature".into());
+
+        let merged =
+            merge_agent_rollups(std::slice::from_ref(&carried), std::slice::from_ref(&live));
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].status, AgentStatus::Running, "live wins the tie");
+        assert_eq!(merged[0].worktree_branch.as_deref(), Some("feature"));
+    }
+
+    #[test]
+    fn catch_up_rollup_rejects_a_zeroed_middle_frame() {
+        // Crash-sim for writeback reordering: an earlier frame's data pages
+        // zeroed while a later frame survived. Reachable only when the
+        // single-writer flock contract is broken (concurrent `O_APPEND`
+        // appenders), so the fold must fail loudly rather than silently drop
+        // the surviving frames behind the hole — this is the recovery
+        // boundary the `O_APPEND` rejection in
+        // `docs/internals/performance.md` leans on.
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+
+        let mut frame_ends = Vec::new();
+        for agent_id in ["a", "b", "c"] {
+            event_log::append(
+                &paths.events_log,
+                &lifecycle_at(&workspace, "claude", "SessionStart", agent_id, "idle"),
+            )
+            .unwrap();
+            frame_ends.push(std::fs::metadata(&paths.events_log).unwrap().len());
+        }
+
+        // Zero the middle frame's bytes but keep its newline terminator, so
+        // the log still frames three entries with an unreadable second one.
+        use std::io::{Seek, SeekFrom, Write};
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&paths.events_log)
+            .unwrap();
+        file.seek(SeekFrom::Start(frame_ends[0])).unwrap();
+        let hole = usize::try_from(frame_ends[1] - frame_ends[0] - 1).unwrap();
+        file.write_all(&vec![0u8; hole]).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let err = catch_up_rollup(&paths).expect_err("a zeroed middle frame must fail the fold");
+        assert!(
+            matches!(
+                err,
+                SnapshotErr::EventLog(
+                    event_log::EventLogErr::Torn { .. }
+                        | event_log::EventLogErr::FrameLength { .. }
+                )
+            ),
+            "torn middle frame surfaces as a hard event-log error, never a silent drop: {err:?}"
+        );
+    }
+
+    proptest::proptest! {
+        /// The keystone fold invariant, generalized from the hand-built case
+        /// above: over arbitrary lifecycle sequences and an arbitrary
+        /// prefix/delta split, resuming from a persisted base equals folding
+        /// the whole log cold — agents, tombstones, and extent alike.
+        #[test]
+        fn fold_seed_delta_equals_fold_empty_all_over_arbitrary_sequences(
+            seq in proptest::collection::vec((0usize..2, 0usize..4, 0usize..3), 1..12),
+            split in proptest::prelude::any::<proptest::sample::Index>(),
+        ) {
+            use proptest::prelude::prop_assert_eq;
+
+            const KINDS: [&str; 2] = ["claude", "codex"];
+            const EVENTS: [&str; 4] = ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"];
+            const AGENTS: [&str; 3] = ["a", "b", "c"];
+
+            let dir = tempfile::tempdir().unwrap();
+            let workspace = WorkspaceId::from_project_root(dir.path());
+            let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+            paths.ensure_dirs().unwrap();
+
+            let events: Vec<_> = seq
+                .iter()
+                .map(|&(kind, event, agent_id)| {
+                    let status = if event == 1 { "running" } else { "idle" };
+                    lifecycle_at(&workspace, KINDS[kind], EVENTS[event], AGENTS[agent_id], status)
+                })
+                .collect();
+            let at = split.index(events.len() + 1);
+
+            for event in &events[..at] {
+                event_log::append(&paths.events_log, event).unwrap();
+            }
+            let (prefix_cache, _) = catch_up_rollup(&paths).unwrap();
+            write_rollup_cache(&paths.rollup_cache, &prefix_cache).unwrap();
+            for event in &events[at..] {
+                event_log::append(&paths.events_log, event).unwrap();
+            }
+            let (incremental_cache, incremental) = catch_up_rollup(&paths).unwrap();
+
+            std::fs::remove_file(&paths.rollup_cache).unwrap();
+            let (cold_cache, cold) = catch_up_rollup(&paths).unwrap();
+
+            prop_assert_eq!(
+                sorted_value(incremental),
+                sorted_value(cold),
+                "fold(seed, delta) == fold(empty, all)"
+            );
+            prop_assert_eq!(
+                sorted_value(incremental_cache.raw_agents),
+                sorted_value(cold_cache.raw_agents)
+            );
+            prop_assert_eq!(incremental_cache.extent, cold_cache.extent);
+            prop_assert_eq!(
+                incremental_cache
+                    .tombstones
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                cold_cache
+                    .tombstones
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+            );
+        }
+    }
 }

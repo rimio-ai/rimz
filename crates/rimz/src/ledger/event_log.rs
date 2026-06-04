@@ -595,31 +595,6 @@ mod tests {
     }
 
     #[test]
-    fn torn_trailing_record_is_skipped() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("events.log.jsonl");
-        // Write one good record then a torn one (claimed length larger than body).
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/y"));
-        let event = EventEnvelope::new(
-            workspace,
-            "session",
-            "rimz",
-            "cli",
-            "event.emit",
-            json!({ "a": 1 }),
-        );
-        append(&path, &event).unwrap();
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .unwrap()
-            .write_all(b"999 {\"oops\":true}\n")
-            .unwrap();
-        let events = read_all(&path).unwrap();
-        assert_eq!(events.len(), 1, "torn trailing record skipped");
-    }
-
-    #[test]
     fn torn_middle_record_is_an_error() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("events.log.jsonl");
