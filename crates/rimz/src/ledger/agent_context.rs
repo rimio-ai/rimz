@@ -21,6 +21,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::context::AgentContext;
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::ledger::atomic::{self, write_temp_then_rename_cache};
 use crate::ledger::paths::RuntimePaths;
 
@@ -29,8 +30,8 @@ use crate::ledger::paths::RuntimePaths;
 /// shrug off a digest collision — instead of trusting the filename.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentContextRecord {
-    pub kind: String,
-    pub agent_id: String,
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
     pub context: AgentContext,
 }
 
@@ -49,8 +50,8 @@ pub fn write(
     context: &AgentContext,
 ) -> Result<(), atomic::AtomicErr> {
     let record = AgentContextRecord {
-        kind: kind.to_owned(),
-        agent_id: agent_id.to_owned(),
+        kind: AgentKind::new_unchecked(kind),
+        agent_id: agent_id.into(),
         context: context.clone(),
     };
     write_temp_then_rename_cache(&runtime.agent_context_path(kind, agent_id), &record)

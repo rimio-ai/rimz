@@ -54,6 +54,7 @@ use super::{
     sanitize_user_prompt, stop_payload_errored,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
+use crate::ids::AgentSessionId;
 use crate::ledger::atomic;
 
 /// Codex's effective hook cap. Upstream's blocking-hook deadline is shorter
@@ -297,7 +298,8 @@ impl AgentAdapter for CodexAdapter {
                 SubagentIdentity::Quarantined => return None,
             },
             None => (
-                optional_payload_string(payload, &["agent_id", "session_id"]),
+                optional_payload_string(payload, &["agent_id", "session_id"])
+                    .map(AgentSessionId::from),
                 None,
             ),
         };

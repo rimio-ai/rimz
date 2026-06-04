@@ -20,7 +20,7 @@ use crate::agents::{AgentAccount, AgentContext, RateLimitWindow, SpendTally};
 use crate::feed::{
     AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, PaneRef, ResolverStepState, Surface,
 };
-use crate::ids::{PaneId, RequestId, ResolverId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, ResolverId, WorkspaceId};
 use crate::ledger::agent_context::AgentContextRecord;
 use crate::ledger::event_log::{self};
 use crate::ledger::subagent_context::SubagentContextRecord;
@@ -524,7 +524,7 @@ impl SidebarSnapshot {
         if records.is_empty() {
             return self;
         }
-        let mut by_key: BTreeMap<(String, String), _> = records
+        let mut by_key: BTreeMap<(AgentKind, AgentSessionId), _> = records
             .into_iter()
             .map(|record| ((record.kind, record.agent_id), record.context))
             .collect();
@@ -555,7 +555,7 @@ impl SidebarSnapshot {
         if records.is_empty() {
             return self;
         }
-        let mut by_key: BTreeMap<(String, String), _> = records
+        let mut by_key: BTreeMap<(AgentKind, AgentSessionId), _> = records
             .into_iter()
             .map(|record| ((record.kind, record.agent_id), record.context))
             .collect();
@@ -644,8 +644,8 @@ impl SidebarSnapshot {
         }
         let previous_len = self.agents.len();
         self.agents.retain(|agent| {
-            let reapable =
-                is_daemon_mode_codex(agent, daemon_pids) && !loaded.contains(&agent.agent_id);
+            let reapable = is_daemon_mode_codex(agent, daemon_pids)
+                && !loaded.contains(agent.agent_id.as_str());
             !reapable
         });
         if self.agents.len() != previous_len {
@@ -854,8 +854,8 @@ impl SidebarSnapshot {
             if agent.parent_agent_id.is_some() {
                 continue;
             }
-            if !kinds.iter().any(|known| known == &agent.kind) {
-                kinds.push(agent.kind.clone());
+            if !kinds.iter().any(|known| agent.kind == **known) {
+                kinds.push(agent.kind.to_string());
             }
         }
         // A provider that is logged in but has no active session this run still
@@ -1229,7 +1229,7 @@ fn rows_from_panes(
     wired_lazy_kinds: &[String],
 ) -> Vec<SidebarRow> {
     let mut rows = Vec::new();
-    let mut bound_agents: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut bound_agents: BTreeSet<(AgentKind, AgentSessionId)> = BTreeSet::new();
 
     for pane in panes {
         if let Some(agent) = agent_for_pane(pane, agents, &bound_agents) {
@@ -1289,7 +1289,7 @@ fn rows_from_panes(
 /// match and the Codex daemon's cwd fallback — so both render identically.
 fn push_agent_row(
     rows: &mut Vec<SidebarRow>,
-    bound: &mut BTreeSet<(String, String)>,
+    bound: &mut BTreeSet<(AgentKind, AgentSessionId)>,
     agent: &AgentState,
     pane: &PaneRef,
     needs_attention: &[FeedItem],
@@ -1386,7 +1386,10 @@ fn rows_from_ledger(
         // of stacking an identical row. The same set then suppresses the
         // session's calm agent-rollup row below.
         if let Some(agent_id) = agent_id_from_item(item)
-            && !replaced_agents.insert((item.source.clone(), agent_id))
+            && !replaced_agents.insert((
+                AgentKind::new_unchecked(item.source.clone()),
+                AgentSessionId::from(agent_id),
+            ))
         {
             continue;
         }
@@ -1648,7 +1651,7 @@ fn project_display_status(rows: &mut [SidebarRow], agents: &[AgentState], now: T
             AgentStatus::Failed
         } else if crate::feed::is_stalled(status, row.last_activity, now) {
             AgentStatus::Failed
-        } else if crate::feed::is_rate_limited(status, limited_kinds.contains(&row.name)) {
+        } else if crate::feed::is_rate_limited(status, limited_kinds.contains(row.name.as_str())) {
             AgentStatus::RateLimited
         } else {
             status
@@ -1664,7 +1667,7 @@ fn project_display_status(rows: &mut [SidebarRow], agents: &[AgentState], now: T
 /// that launched straight into a spent account. Reads the same window source as
 /// the provider dashboard (`agent.context.rate_limits`), so the cockpit tally and
 /// the dashboard bars never disagree.
-fn rate_limited_kinds(agents: &[AgentState], now: Timestamp) -> BTreeSet<String> {
+fn rate_limited_kinds(agents: &[AgentState], now: Timestamp) -> BTreeSet<AgentKind> {
     let mut limited = BTreeSet::new();
     for agent in agents {
         if agent.parent_agent_id.is_some() || limited.contains(&agent.kind) {
@@ -1727,7 +1730,7 @@ pub(super) fn sub_agent_from_state(child: &AgentState, now: Timestamp) -> Sideba
         until.duration_since(started).as_secs().max(0)
     });
     SidebarSubAgent {
-        id: child.agent_id.clone(),
+        id: child.agent_id.to_string(),
         name,
         status: child.status,
         task: child.task.clone(),
@@ -1758,8 +1761,8 @@ pub(super) fn row_from_agent(agent: &AgentState) -> SidebarRow {
     // The rollup in `snapshot.agents` always keeps the true status.
     SidebarRow {
         row_kind: SidebarRowKind::Agent,
-        id: agent.agent_id.clone(),
-        name: agent.kind.clone(),
+        id: agent.agent_id.to_string(),
+        name: agent.kind.to_string(),
         status: Some(agent.status),
         phase: agent.phase,
         pane: agent.pane.clone(),
@@ -2588,8 +2591,8 @@ mod tests {
             SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![parent, child]);
 
         let record = SubagentContextRecord {
-            kind: "claude".to_owned(),
-            agent_id: "child-1".to_owned(),
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: "child-1".into(),
             context: SubagentContext {
                 agent_type: None,
                 description: Some("locate the render seam".to_owned()),
@@ -2614,8 +2617,8 @@ mod tests {
         // A record whose child is absent from the rollup is dropped — the key it
         // is filed under is authority.
         let absent = SubagentContextRecord {
-            kind: "claude".to_owned(),
-            agent_id: "ghost".to_owned(),
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: "ghost".into(),
             context: SubagentContext {
                 agent_type: None,
                 description: Some("nowhere".to_owned()),
@@ -2640,8 +2643,8 @@ mod tests {
             SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![parent, fork]);
 
         let record = SubagentContextRecord {
-            kind: "claude".to_owned(),
-            agent_id: "fork-1".to_owned(),
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: "fork-1".into(),
             context: SubagentContext {
                 agent_type: Some("Explore".to_owned()),
                 description: Some("search the ledger".to_owned()),
@@ -2679,8 +2682,8 @@ mod tests {
             SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![parent, typed]);
 
         let record = SubagentContextRecord {
-            kind: "claude".to_owned(),
-            agent_id: "child-1".to_owned(),
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: "child-1".into(),
             context: SubagentContext {
                 agent_type: Some("SomethingElse".to_owned()),
                 description: None,
@@ -3170,7 +3173,7 @@ mod tests {
         parent.worktree_path = Some("/repo/main".to_owned());
         parent.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
         let mut child = agent("claude", "child-claude", AgentStatus::Idle, 2_000);
-        child.parent_agent_id = Some("parent-claude".to_owned());
+        child.parent_agent_id = Some("parent-claude".into());
         child.worktree_path = Some("/repo/main".to_owned());
         child.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
 
@@ -3281,8 +3284,8 @@ mod tests {
 
         // A fresh heartbeat lands (the agent's next tool completed).
         let touch = AgentActivity {
-            kind: "claude".to_owned(),
-            agent_id: "live-claude".to_owned(),
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: "live-claude".into(),
             at: Timestamp::now(),
         };
         let snapshot =
@@ -3446,7 +3449,7 @@ mod tests {
         parent.last_activity = Timestamp::now()
             - std::time::Duration::from_secs(crate::feed::STALL_WINDOW_SECS as u64 + 60);
         let mut child = child_state("root", "child-1", AgentStatus::Running, 5);
-        child.kind = "claude".to_owned();
+        child.kind = AgentKind::new_unchecked("claude");
 
         let snapshot = SidebarSnapshot::build_with_carryover(
             workspace,
@@ -3615,7 +3618,7 @@ mod tests {
             "API Error: Overloaded",
         ));
         let mut child = child_state("root", "child-1", AgentStatus::Running, 5);
-        child.kind = "claude".to_owned();
+        child.kind = AgentKind::new_unchecked("claude");
 
         let snapshot = SidebarSnapshot::build_with_carryover(
             workspace,
@@ -4097,7 +4100,11 @@ mod tests {
     }
 
     fn rollup_ids(snapshot: &SidebarSnapshot) -> Vec<String> {
-        let mut ids: Vec<String> = snapshot.agents.iter().map(|a| a.agent_id.clone()).collect();
+        let mut ids: Vec<String> = snapshot
+            .agents
+            .iter()
+            .map(|a| a.agent_id.to_string())
+            .collect();
         ids.sort();
         ids
     }
@@ -4156,9 +4163,9 @@ mod tests {
         let daemon_pids = BTreeSet::from([7]);
         let loaded = BTreeSet::new();
         let mut sub = daemon_codex("sub-1", "/repo/a", 7);
-        sub.parent_agent_id = Some("root-1".to_owned());
+        sub.parent_agent_id = Some("root-1".into());
         let mut claude = daemon_codex("claude-1", "/repo/c", 7);
-        claude.kind = "claude".to_owned();
+        claude.kind = AgentKind::new_unchecked("claude");
         let mut snapshot = daemon_snapshot(vec![sub, claude]);
         snapshot.drop_dead_daemon_sessions(&daemon_pids, Some(&loaded));
         assert_eq!(rollup_ids(&snapshot), vec!["claude-1", "sub-1"]);
@@ -4765,7 +4772,11 @@ mod tests {
             agents,
         );
         snapshot.reap_stale_sessions(now);
-        let mut ids: Vec<String> = snapshot.agents.iter().map(|a| a.agent_id.clone()).collect();
+        let mut ids: Vec<String> = snapshot
+            .agents
+            .iter()
+            .map(|a| a.agent_id.to_string())
+            .collect();
         ids.sort();
         ids
     }

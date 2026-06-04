@@ -37,6 +37,7 @@ use super::{
     optional_payload_string, read_optional_file, sanitize_user_prompt,
 };
 use crate::feed::{FeedItem, Resolution};
+use crate::ids::AgentSessionId;
 use crate::ledger::atomic;
 
 /// Everything `const` about Pi, in one place. See [`AgentDescriptor`] for the
@@ -160,7 +161,7 @@ impl AgentAdapter for PiAdapter {
         };
         // No subagents: every pi event keys on its own session id, no parent
         // link, no quarantine path.
-        let agent_id = optional_payload_string(payload, &["session_id"]);
+        let agent_id = optional_payload_string(payload, &["session_id"]).map(AgentSessionId::from);
         let mut observation =
             AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
         // A pi row labels with the user's *sanitized* prompt, so harness

@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::debug;
 
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::ledger::RuntimePaths;
 use crate::ledger::atomic;
 
@@ -36,8 +37,8 @@ use crate::ledger::atomic;
 /// arbitrary agent session ids.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentActivity {
-    pub kind: String,
-    pub agent_id: String,
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
     pub at: Timestamp,
 }
 
@@ -59,8 +60,8 @@ fn activity_path(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> PathBuf 
 /// degrades the liveness hint, never correctness, so callers log and continue.
 pub fn touch(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> Result<(), atomic::AtomicErr> {
     let record = AgentActivity {
-        kind: kind.to_owned(),
-        agent_id: agent_id.to_owned(),
+        kind: AgentKind::new_unchecked(kind),
+        agent_id: agent_id.into(),
         at: Timestamp::now(),
     };
     atomic::write_temp_then_rename(&activity_path(runtime, kind, agent_id), &record)

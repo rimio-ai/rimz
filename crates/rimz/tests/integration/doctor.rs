@@ -18,7 +18,7 @@ fn inject_lifecycle(
     branch: Option<&str>,
 ) {
     let obs = AgentLifecycleObservation {
-        agent_id: Some(agent_id.to_owned()),
+        agent_id: Some(agent_id.into()),
         signal,
         agent_pid: None,
         agent_process_start: None,

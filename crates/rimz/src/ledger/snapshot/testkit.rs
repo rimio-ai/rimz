@@ -5,7 +5,7 @@ use jiff::Timestamp;
 
 use crate::agents::lifecycle::{self, TurnPhase};
 use crate::feed::{AgentState, AgentStatus, PaneRef};
-use crate::ids::{MuxName, PaneId, WorkspaceId};
+use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
 use crate::schema::event::EventEnvelope;
 
 pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -> AgentState {
@@ -18,7 +18,7 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
     let timestamp = Timestamp::now() - std::time::Duration::from_millis(offset_ms);
     AgentState {
         agent_id: id.into(),
-        kind: kind.into(),
+        kind: AgentKind::new_unchecked(kind),
         status,
         phase: TurnPhase::Idle,
         pane: None,
@@ -113,7 +113,7 @@ pub(super) fn child_state(
 ) -> AgentState {
     let now = Timestamp::now();
     let mut child = agent("claude", id, status, 0);
-    child.parent_agent_id = Some(parent.to_owned());
+    child.parent_agent_id = Some(parent.into());
     child.task = Some("Explore".to_owned());
     let at = Timestamp::from_second(now.as_second() - secs_ago).unwrap();
     child.last_activity = at;

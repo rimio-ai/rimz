@@ -10,7 +10,7 @@ use super::process::{command_agent_kind, program_label};
 use super::view::{SidebarRow, SidebarRowKind};
 use crate::agents::lifecycle::TurnPhase;
 use crate::feed::{AgentState, AgentStatus, PaneRef};
-use crate::ids::PaneId;
+use crate::ids::{AgentKind, AgentSessionId, PaneId};
 
 /// One sidebar's view of the panes sharing its tab/window. `None` on the
 /// snapshot means the count could not be determined (no `--exclude-pane-id`, or
@@ -118,7 +118,7 @@ fn agent_owner_pid(agent: &AgentState) -> Option<u32> {
 pub(super) fn agent_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
-    bound: &BTreeSet<(String, String)>,
+    bound: &BTreeSet<(AgentKind, AgentSessionId)>,
 ) -> Option<&'a AgentState> {
     agents
         .iter()
@@ -177,7 +177,7 @@ pub(super) enum LazyAgentRow<'a> {
 pub(super) fn lazy_agent_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
-    bound: &BTreeSet<(String, String)>,
+    bound: &BTreeSet<(AgentKind, AgentSessionId)>,
     wired_lazy_kinds: &[String],
 ) -> Option<LazyAgentRow<'a>> {
     let kind = command_agent_kind(pane.command.as_deref()?)?;

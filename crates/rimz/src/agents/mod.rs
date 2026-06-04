@@ -35,6 +35,7 @@ use serde_json::Value;
 use tracing::error;
 
 use crate::feed::{FeedItem, FeedKind, Resolution};
+use crate::ids::AgentSessionId;
 
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
@@ -531,8 +532,8 @@ pub(crate) enum SubagentIdentity {
     /// A usable child id distinct from its parent — the only case that yields a
     /// child entity.
     Resolved {
-        agent_id: String,
-        parent_agent_id: String,
+        agent_id: AgentSessionId,
+        parent_agent_id: AgentSessionId,
     },
     /// Unusable identity (missing child or parent id, or child == parent). The
     /// caller emits no observation, so a malformed subagent event can never
@@ -557,8 +558,8 @@ pub(crate) fn resolve_subagent_identity(
     let parent = parent_id.map(str::trim).filter(|value| !value.is_empty());
     match (child, parent) {
         (Some(child), Some(parent)) if child != parent => SubagentIdentity::Resolved {
-            agent_id: child.to_owned(),
-            parent_agent_id: parent.to_owned(),
+            agent_id: AgentSessionId::from(child),
+            parent_agent_id: AgentSessionId::from(parent),
         },
         _ => {
             error!(

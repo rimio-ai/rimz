@@ -580,7 +580,7 @@ fn codex_rate_limit_refreshes(snapshot: &SidebarSnapshot) -> Vec<CodexRateLimitR
         .filter(|agent| agent.kind == "codex" && agent.parent_agent_id.is_none())
         .filter(|agent| !agent.agent_id.is_empty())
         .map(|agent| CodexRateLimitRefresh::Session {
-            session_id: agent.agent_id.clone(),
+            session_id: agent.agent_id.to_string(),
             model_hint: agent
                 .model
                 .clone()
@@ -815,8 +815,8 @@ fn probe_accounts(
 ) -> (BTreeMap<String, crate::agents::AgentAccount>, bool) {
     let mut kinds: Vec<String> = crate::agents::known_kinds().map(str::to_owned).collect();
     for agent in &snapshot.agents {
-        if agent.parent_agent_id.is_none() && !kinds.iter().any(|known| known == &agent.kind) {
-            kinds.push(agent.kind.clone());
+        if agent.parent_agent_id.is_none() && !kinds.iter().any(|known| agent.kind == **known) {
+            kinds.push(agent.kind.to_string());
         }
     }
     let mut accounts: BTreeMap<String, crate::agents::AgentAccount> = BTreeMap::new();
@@ -1407,8 +1407,8 @@ mod tests {
     fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> AgentState {
         let now = Timestamp::now();
         AgentState {
-            agent_id: agent_id.to_owned(),
-            kind: kind.to_owned(),
+            agent_id: agent_id.into(),
+            kind: crate::ids::AgentKind::new_unchecked(kind),
             status: AgentStatus::Running,
             phase: TurnPhase::Idle,
             pane: None,

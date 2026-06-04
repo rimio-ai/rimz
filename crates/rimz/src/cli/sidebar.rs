@@ -759,13 +759,7 @@ fn refresh_entry(path: &str, now_ms: u64, configured_trunk: Option<&str>) -> Dif
         .as_deref()
         .zip(trunk.as_deref())
         .and_then(|(base, trunk)| worktree_commits_behind(worktree, base, trunk));
-    DiffStatsCacheEntry::new(
-        now_ms,
-        stats,
-        commits,
-        behind,
-        worktree_branch(worktree),
-    )
+    DiffStatsCacheEntry::new(now_ms, stats, commits, behind, worktree_branch(worktree))
 }
 
 fn worktree_branch(worktree: &Path) -> Option<String> {

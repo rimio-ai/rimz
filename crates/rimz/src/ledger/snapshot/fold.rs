@@ -12,6 +12,7 @@ use super::project::{reduce_agent_states, reduce_agent_states_seeded};
 use super::{Result, SnapshotErr};
 use crate::agents::lifecycle;
 use crate::feed::AgentState;
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::ledger::atomic::{self, write_temp_then_rename};
 use crate::ledger::event_log::{self};
 use crate::ledger::paths::StatePaths;
@@ -57,9 +58,9 @@ pub(crate) fn agent_rollup_with_carryover(
 pub(super) fn merge_agent_rollups_with_tombstones(
     base: &[AgentState],
     live: &[AgentState],
-    tombstones: &BTreeSet<(String, String)>,
+    tombstones: &BTreeSet<(AgentKind, AgentSessionId)>,
 ) -> Vec<AgentState> {
-    let mut map: BTreeMap<(String, String), AgentState> = BTreeMap::new();
+    let mut map: BTreeMap<(AgentKind, AgentSessionId), AgentState> = BTreeMap::new();
     for entry in base {
         let key = (entry.kind.clone(), entry.agent_id.clone());
         if !tombstones.contains(&key) {
@@ -82,7 +83,9 @@ pub(super) fn merge_agent_rollups_with_tombstones(
 /// lifecycle signal. Exposed so resume-on-rebirth can drop a cleanly-ended
 /// agent from the audit rollup (which, unlike the carryover merge, keeps a
 /// within-log `SessionEnd` row), never re-spawning a session the user closed.
-pub fn agent_tombstones_for_events(events: &[EventEnvelope]) -> BTreeSet<(String, String)> {
+pub fn agent_tombstones_for_events(
+    events: &[EventEnvelope],
+) -> BTreeSet<(AgentKind, AgentSessionId)> {
     let mut tombstones = BTreeSet::new();
     for event in events {
         if event.method != "agent.lifecycle" {
@@ -98,11 +101,11 @@ pub fn agent_tombstones_for_events(events: &[EventEnvelope]) -> BTreeSet<(String
             .params
             .get("agent_id")
             .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
+            .map(AgentSessionId::from)
         else {
             continue;
         };
-        tombstones.insert((event.source.clone(), agent_id));
+        tombstones.insert((AgentKind::new_unchecked(event.source.clone()), agent_id));
     }
     tombstones
 }
@@ -121,7 +124,7 @@ pub(crate) struct RollupCache {
     pub version: u32,
     pub extent: event_log::LogExtent,
     pub raw_agents: Vec<AgentState>,
-    pub tombstones: Vec<(String, String)>,
+    pub tombstones: Vec<(AgentKind, AgentSessionId)>,
 }
 
 fn read_rollup_cache(path: &Path) -> Option<RollupCache> {
@@ -159,11 +162,12 @@ pub(crate) fn catch_up_rollup(paths: &StatePaths) -> Result<(RollupCache, Vec<Ag
             tombstones,
             ..
         }) => {
-            let seed: BTreeMap<(String, String), AgentState> = raw_agents
+            let seed: BTreeMap<(AgentKind, AgentSessionId), AgentState> = raw_agents
                 .into_iter()
                 .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent))
                 .collect();
-            let tombstones: BTreeSet<(String, String)> = tombstones.into_iter().collect();
+            let tombstones: BTreeSet<(AgentKind, AgentSessionId)> =
+                tombstones.into_iter().collect();
             (seed, tombstones, extent.generation, extent.offset)
         }
         None => (BTreeMap::new(), BTreeSet::new(), 0, 0),

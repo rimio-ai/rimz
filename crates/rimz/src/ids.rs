@@ -319,6 +319,152 @@ impl<'de> Deserialize<'de> for ResolverId {
     }
 }
 
+/// Agent adapter kind label (`claude`, `codex`, `pi`).
+///
+/// An open set, deliberately: the registry
+/// ([`registry::ADAPTERS`](crate::agents::registry)) is the source of truth
+/// for *known* kinds — every dispatch resolves through it and an unknown kind
+/// degrades gracefully (skipped probe, title-cased panel) — while ledger
+/// replay and snapshot decode stay open so events from a removed adapter
+/// still fold and render. CLI boundaries validate by registry lookup
+/// (`find_adapter`), which is where a typo dies; internally the kind is a
+/// label, so construction is unchecked.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AgentKind(String);
+
+impl AgentKind {
+    pub fn new_unchecked(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for AgentKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl PartialEq<str> for AgentKind {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for AgentKind {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<String> for AgentKind {
+    fn eq(&self, other: &String) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<AgentKind> for String {
+    fn eq(&self, other: &AgentKind) -> bool {
+        *self == other.0
+    }
+}
+
+impl std::ops::Deref for AgentKind {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+// Sound: `Ord`/`Eq`/`Hash` all delegate to the inner string, so a borrowed
+// `&str` keys sets and maps consistently.
+impl std::borrow::Borrow<str> for AgentKind {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Agent-supplied session identifier — the `agent_id` half of the rollup key
+/// `(kind, agent_id)`.
+///
+/// Opaque by contract: each agent mints its own shape (Claude/Pi UUIDs, Codex
+/// thread ids), so the only structure Rimz can assume is "non-empty string",
+/// and the adapters enforce that at observation time. The newtype exists so a
+/// session id can never transpose with an [`AgentKind`] in a key or a
+/// signature.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AgentSessionId(String);
+
+impl AgentSessionId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for AgentSessionId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for AgentSessionId {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
+impl fmt::Display for AgentSessionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl PartialEq<str> for AgentSessionId {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for AgentSessionId {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<String> for AgentSessionId {
+    fn eq(&self, other: &String) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<AgentSessionId> for String {
+    fn eq(&self, other: &AgentSessionId) -> bool {
+        *self == other.0
+    }
+}
+
+impl std::ops::Deref for AgentSessionId {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+// Sound: `Ord`/`Eq`/`Hash` all delegate to the inner string, so a borrowed
+// `&str` keys sets and maps consistently.
+impl std::borrow::Borrow<str> for AgentSessionId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Normalized pane identifier: `<mux>:<raw_pane_id>` (e.g. `zellij:terminal_3`).
 ///
 /// Raw pane IDs stay inside backend adapters. This type is what travels in
@@ -490,6 +636,28 @@ mod tests {
             b.short(),
             "the random tail disambiguates same-millisecond ids",
         );
+    }
+
+    #[test]
+    fn agent_identity_newtypes_serialize_transparently() {
+        // The rollup cache and snapshot JSON shapes must stay byte-identical
+        // to the plain-string era — the newtypes are compile-time-only.
+        let kind = AgentKind::new_unchecked("claude");
+        assert_eq!(serde_json::to_string(&kind).unwrap(), r#""claude""#);
+        let back: AgentKind = serde_json::from_str(r#""claude""#).unwrap();
+        assert_eq!(back, kind);
+        assert!(kind == "claude");
+
+        let session = AgentSessionId::from("sess-1");
+        assert_eq!(serde_json::to_string(&session).unwrap(), r#""sess-1""#);
+        let back: AgentSessionId = serde_json::from_str(r#""sess-1""#).unwrap();
+        assert_eq!(back, session);
+        assert!(session == "sess-1");
+
+        // Open set: an unknown kind decodes fine — replay of a removed
+        // adapter's events must fold, not fail.
+        let unknown: AgentKind = serde_json::from_str(r#""opencode""#).unwrap();
+        assert_eq!(unknown.as_str(), "opencode");
     }
 
     #[test]

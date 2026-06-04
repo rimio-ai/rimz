@@ -52,6 +52,7 @@ use super::{
     resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
+use crate::ids::AgentSessionId;
 use crate::ledger::atomic;
 
 /// Claude's effective hook cap. The upstream cap is ~125s; we leave a small
@@ -381,7 +382,10 @@ impl AgentAdapter for ClaudeAdapter {
                 } => (Some(agent_id), Some(parent_agent_id)),
                 SubagentIdentity::Quarantined => return None,
             },
-            None => (optional_payload_string(payload, &["session_id"]), None),
+            None => (
+                optional_payload_string(payload, &["session_id"]).map(AgentSessionId::from),
+                None,
+            ),
         };
         // Context budget lives in the transcript, not the payload — read its tail
         // on these low-frequency events. Resolve the model first: only the payload

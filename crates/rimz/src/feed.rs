@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agents::lifecycle::{LifecycleState, TurnPhase};
-use crate::ids::{PaneId, RequestId, ResolverId, ViewKind, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, ResolverId, ViewKind, WorkspaceId};
 
 /// Runtime owner class for records that should appear in live views.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -625,8 +625,8 @@ pub const COMPACTING_WINDOW_SECS: i64 = 90;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentState {
-    pub agent_id: String,
-    pub kind: String,
+    pub agent_id: AgentSessionId,
+    pub kind: AgentKind,
     pub status: AgentStatus,
     /// The running turn's shape (reasoning / acting / parked on background
     /// work), written verbatim from the lifecycle machine's output. Always
@@ -646,7 +646,7 @@ pub struct AgentState {
     /// root agent. The sidebar nests a child under its parent row by
     /// `(kind, parent_agent_id)` and never renders a child as a top-level row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_agent_id: Option<String>,
+    pub parent_agent_id: Option<AgentSessionId>,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
     pub task: Option<String>,

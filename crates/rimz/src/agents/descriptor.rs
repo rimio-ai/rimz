@@ -117,6 +117,12 @@ pub struct Capabilities {
 impl AgentDescriptor {
     /// Whether a tool-use payload names a workspace-mutating tool. The tool
     /// name rides `tool_name` in every provider's payload.
+    /// The kind as a typed identity — the one sanctioned mint of an
+    /// [`AgentKind`](crate::ids::AgentKind) for a known adapter.
+    pub fn kind_id(&self) -> crate::ids::AgentKind {
+        crate::ids::AgentKind::new_unchecked(self.kind)
+    }
+
     pub fn tool_mutates(&self, payload: &Value) -> bool {
         self.tool_in(payload, self.tools.mutating)
     }

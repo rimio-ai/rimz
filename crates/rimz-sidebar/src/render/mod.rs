@@ -802,8 +802,8 @@ mod tests {
     ) -> AgentState {
         let now = fixed_now();
         AgentState {
-            agent_id: id.to_owned(),
-            kind: kind.to_owned(),
+            agent_id: id.into(),
+            kind: rimz::ids::AgentKind::new_unchecked(kind),
             status,
             phase: rimz::agents::TurnPhase::Idle,
             pane: None,
@@ -1160,7 +1160,7 @@ mod tests {
             None,
             Some("Explore"),
         );
-        child.parent_agent_id = Some("claude-1".to_owned());
+        child.parent_agent_id = Some("claude-1".into());
         child.subagent_description = Some("locate the render seam".to_owned());
         child.subagent_started_at = Some(fixed_now() - Duration::from_secs(90));
         child.last_activity = fixed_now() - Duration::from_secs(30);
@@ -1827,7 +1827,7 @@ mod tests {
             None,
             Some("Explore"),
         );
-        kid.parent_agent_id = Some("claude-1".to_owned());
+        kid.parent_agent_id = Some("claude-1".into());
         let snapshot = snapshot_with(Vec::new(), vec![parent, kid]);
         // Phase 2 of the wave is a distinctive backtick, unique to the
         // delegated-wait head (the cockpit's working bucket still shows `⢿`).
@@ -1950,7 +1950,7 @@ mod tests {
             None,
             Some("Explore"),
         );
-        kid.parent_agent_id = Some("claude-1".to_owned());
+        kid.parent_agent_id = Some("claude-1".into());
         let snapshot = snapshot_with(Vec::new(), vec![parent, kid]);
         let theme = Theme::fixed(true);
         let render = |selected_index: usize| {

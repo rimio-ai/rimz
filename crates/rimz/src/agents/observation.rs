@@ -10,7 +10,7 @@
 use serde_json::Value;
 
 use crate::feed::RuntimeOwner;
-use crate::ids::PaneId;
+use crate::ids::{AgentSessionId, PaneId};
 
 use super::lifecycle::LifecycleSignal;
 use super::optional_payload_string;
@@ -26,7 +26,7 @@ pub struct AgentLifecycleObservation {
     /// Agent-supplied session/process identifier (e.g. Claude `session_id`,
     /// Codex root `session_id`, or Codex subagent `agent_id`). The CLI uses
     /// this as the `agent_id`.
-    pub agent_id: Option<String>,
+    pub agent_id: Option<AgentSessionId>,
     /// The agent-agnostic lifecycle intent this event carries. The reducer and
     /// the ingestion path fold it onto the rollup through the one
     /// [`step`](super::lifecycle::step) table; the adapter no longer decides a
@@ -76,11 +76,11 @@ pub struct AgentLifecycleObservation {
     /// adapters report as the parent for a subagent event). `None` for root
     /// agents. Identity lifetime in the reducer, so a child row links to its
     /// parent row by `(kind, parent_agent_id)` for the whole child's life.
-    pub parent_agent_id: Option<String>,
+    pub parent_agent_id: Option<AgentSessionId>,
 }
 
 impl AgentLifecycleObservation {
-    pub(crate) fn new(agent_id: Option<String>, signal: LifecycleSignal) -> Self {
+    pub(crate) fn new(agent_id: Option<AgentSessionId>, signal: LifecycleSignal) -> Self {
         Self {
             agent_id,
             signal,

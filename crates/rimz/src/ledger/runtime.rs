@@ -132,8 +132,8 @@ mod tests {
 
     fn agent(owner: Option<RuntimeOwner>) -> AgentState {
         AgentState {
-            agent_id: "sess-1".to_owned(),
-            kind: "claude".to_owned(),
+            agent_id: "sess-1".into(),
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             pane: None,

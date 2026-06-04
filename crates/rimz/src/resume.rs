@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::find_adapter;
 use crate::feed::AgentState;
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::mux::ResumePane;
 
 /// The default ceiling on agents auto-resumed into one reborn session, so a
@@ -79,7 +80,7 @@ impl ResumePlan {
 pub fn plan_resume(
     agents: &[AgentState],
     session_name: &str,
-    ended: &BTreeSet<(String, String)>,
+    ended: &BTreeSet<(AgentKind, AgentSessionId)>,
     max: usize,
     worktree_exists: impl Fn(&Path) -> bool,
 ) -> ResumePlan {
@@ -114,7 +115,7 @@ pub fn plan_resume(
             .then_with(|| a.agent_id.cmp(&b.agent_id))
     });
 
-    let mut seen: HashSet<(String, String, Option<String>)> = HashSet::new();
+    let mut seen: HashSet<(AgentKind, String, Option<String>)> = HashSet::new();
     let mut plan = ResumePlan::default();
     for agent in candidates {
         // `worktree_path` is `Some(non-empty)` by the filter above.
@@ -217,8 +218,8 @@ mod tests {
     ) -> AgentState {
         let when = Timestamp::now() - std::time::Duration::from_secs(secs_ago.max(0) as u64);
         AgentState {
-            agent_id: id.to_owned(),
-            kind: kind.to_owned(),
+            agent_id: id.into(),
+            kind: AgentKind::new_unchecked(kind),
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             pane: Some(pane_in(SESSION, &format!("terminal_{id}"))),
@@ -247,7 +248,7 @@ mod tests {
         }
     }
 
-    fn no_ended() -> BTreeSet<(String, String)> {
+    fn no_ended() -> BTreeSet<(AgentKind, AgentSessionId)> {
         BTreeSet::new()
     }
 
@@ -277,7 +278,7 @@ mod tests {
     #[test]
     fn skips_subagents() {
         let mut child = agent("claude", "kid", "/code/query-engine", Some("main"), 1);
-        child.parent_agent_id = Some("parent".to_owned());
+        child.parent_agent_id = Some("parent".into());
         let plan = plan_resume(&[child], SESSION, &no_ended(), DEFAULT_RESUME_MAX, |_| true);
         assert!(plan.is_empty());
         assert!(plan.skipped.is_empty());
@@ -308,9 +309,10 @@ mod tests {
     #[test]
     fn skips_cleanly_ended_sessions() {
         let agents = vec![agent("claude", "a1", "/code/query-engine", Some("main"), 1)];
-        let ended: BTreeSet<(String, String)> = [("claude".to_owned(), "a1".to_owned())]
-            .into_iter()
-            .collect();
+        let ended: BTreeSet<(AgentKind, AgentSessionId)> =
+            [(AgentKind::new_unchecked("claude"), "a1".into())]
+                .into_iter()
+                .collect();
         let plan = plan_resume(&agents, SESSION, &ended, DEFAULT_RESUME_MAX, |_| true);
         assert!(plan.is_empty());
     }

@@ -9,7 +9,7 @@ use tracing::{debug, warn};
 use super::panes::pane_ref_from_id;
 use crate::agents::lifecycle::{self, Transition};
 use crate::feed::{AgentState, RuntimeOwner, RuntimeOwnerKind};
-use crate::ids::PaneId;
+use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::schema::event::EventEnvelope;
 
 /// Strip a trailing capability tag (`claude-opus-4-8[1m]` → `claude-opus-4-8`)
@@ -46,15 +46,15 @@ pub(super) fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
 /// property the incremental [`catch_up_rollup`] and the rotation carryover
 /// both stand on.
 pub(super) fn reduce_agent_states_seeded(
-    seed: BTreeMap<(String, String), AgentState>,
+    seed: BTreeMap<(AgentKind, AgentSessionId), AgentState>,
     events: &[EventEnvelope],
-) -> BTreeMap<(String, String), AgentState> {
+) -> BTreeMap<(AgentKind, AgentSessionId), AgentState> {
     let mut map = seed;
     for event in events {
         if event.method != "agent.lifecycle" {
             continue;
         }
-        let kind = event.source.clone();
+        let kind = AgentKind::new_unchecked(event.source.clone());
         // The agent-agnostic lifecycle intent this event carries. The status
         // and the phase/compacting heads are all derived from it through the
         // one shared `lifecycle::step` table — never taken verbatim — so an
@@ -77,7 +77,7 @@ pub(super) fn reduce_agent_states_seeded(
             .params
             .get("agent_id")
             .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
+            .map(AgentSessionId::from)
         else {
             warn!(
                 target: "rimz::agent::lifecycle",
@@ -98,7 +98,8 @@ pub(super) fn reduce_agent_states_seeded(
                 .filter(|v| !v.is_empty())
                 .map(ToOwned::to_owned)
         };
-        let event_parent_agent_id = param_non_empty_string("parent_agent_id");
+        let event_parent_agent_id =
+            param_non_empty_string("parent_agent_id").map(AgentSessionId::from);
         let event_task = param_non_empty_string("task");
         if matches!(signal, lifecycle::LifecycleSignal::Ended) {
             map.remove(&(kind, agent_id));
@@ -213,7 +214,7 @@ pub(super) fn reduce_agent_states_seeded(
                 agent_pid.map(|pid| {
                     RuntimeOwner::new(
                         RuntimeOwnerKind::Agent,
-                        agent_id.clone(),
+                        agent_id.to_string(),
                         pid,
                         agent_process_start.clone(),
                     )
@@ -383,8 +384,8 @@ mod tests {
         let subagent = agent("claude", "sess-1.sub", AgentStatus::Running, 50_000);
 
         let subagent_touch = AgentActivity {
-            kind: "claude".to_owned(),
-            agent_id: "sess-1.sub".to_owned(),
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: "sess-1.sub".into(),
             at: last_seen + std::time::Duration::from_secs(15),
         };
         let snap =
