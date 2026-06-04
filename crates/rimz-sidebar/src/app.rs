@@ -1162,6 +1162,7 @@ fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
         sidebar: rimz::config::SidebarConfig::default(),
         providers: Vec::new(),
         value_tally: None,
+        reflects_log: None,
     }
 }
 

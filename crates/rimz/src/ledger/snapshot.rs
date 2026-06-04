@@ -166,6 +166,13 @@ pub struct SidebarSnapshot {
     /// trailing `week` and `month` rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_tally: Option<SpendTally>,
+    /// The active event-log extent this rollup reflects — the freshness stamp
+    /// `read_fresh_latest` compares against the live log. Stamped by
+    /// `build_from` under the producing fold; `None` on the pure-reducer
+    /// path, the renderer placeholder, and any pre-stamp snapshot, all of
+    /// which read as stale so a fresh fold replaces them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reflects_log: Option<event_log::LogExtent>,
 }
 
 /// One provider's aggregate dashboard block, pinned to the bottom of the
@@ -508,6 +515,7 @@ impl SidebarSnapshot {
             sidebar: crate::config::SidebarConfig::default(),
             providers: Vec::new(),
             value_tally: None,
+            reflects_log: None,
         }
     }
 
@@ -2957,7 +2965,7 @@ pub fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
     // Pending items only: the view folds nothing else, and the pending scan
     // stays O(pending) regardless of feed history.
     let items = feed_store::list_pending(&paths.feed_dir)?;
-    let events = event_log::read_all(&paths.events_log)?;
+    let (events, log_end) = event_log::read_from_offset(&paths.events_log, 0)?;
     let carryover = read_carryover(&paths.agents_carryover)?;
     let agents = agent_rollup_with_carryover(&events, carryover.agents);
     // Apply the same runtime liveness expel the live read does
@@ -2974,7 +2982,14 @@ pub fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
     );
     snapshot.reap_stale_sessions(Timestamp::now());
     snapshot.display_name = display_name_for(paths);
-    let snapshot = snapshot.with_project_root(project_root_for(paths));
+    let mut snapshot = snapshot.with_project_root(project_root_for(paths));
+    // Stamp the extent the fold consumed: bytes [0, log_end) of the active
+    // log. The freshness gate compares it against the live log length, so a
+    // racing append can never pass a stale rollup off as current.
+    snapshot.reflects_log = Some(event_log::LogExtent {
+        generation: 0,
+        offset: log_end,
+    });
     Ok(snapshot)
 }
 
@@ -2999,6 +3014,14 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
     if !reflects_log {
         return None;
     }
+    // Second gate, on the embedded extent stamp: the parsed snapshot must
+    // claim exactly the live log's byte length. Dual-gated with mtime while
+    // the stamp proves itself; the stamp becomes the sole authority when the
+    // publish moves past the lock release (mtime ordering stops meaning
+    // anything there).
+    let log_len = fs::metadata(&paths.events_log)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
     // The freshness-vs-log check ran above on the live mtimes; only the *parse*
     // is cached. A consumer tab folds `latest.json` on every ledger delta, so
     // skipping the 100–500 KB deserialize when the file is byte-identical to this
@@ -3006,6 +3029,11 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
     // delta storm — the read itself is page-cache-hot. Same (path, mtime, len)
     // trade-off the `snapshot.json` parse cache accepts; an atomic-rename republish
     // changes both mtime and len, so a stale parse cannot be served.
+    let stamp_is_current = |snapshot: &SidebarSnapshot| {
+        snapshot
+            .reflects_log
+            .is_some_and(|extent| extent.offset == log_len)
+    };
     let len = meta.len();
     let path = paths.latest_snapshot.as_path();
     let cached = LATEST_PARSE_CACHE.with_borrow(|slot| {
@@ -3015,10 +3043,13 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
         })
     });
     if let Some(snapshot) = cached {
-        return Some(snapshot);
+        return stamp_is_current(&snapshot).then_some(snapshot);
     }
     let bytes = fs::read(&paths.latest_snapshot).ok()?;
     let snapshot: SidebarSnapshot = serde_json::from_slice(&bytes).ok()?;
+    // The parse cache is identity-keyed (path, mtime, len), not a freshness
+    // verdict — a stale-stamped snapshot is still worth caching so the next
+    // delta skips the re-parse.
     LATEST_PARSE_CACHE.with_borrow_mut(|slot| {
         *slot = Some(ParsedLatest {
             path: path.to_path_buf(),
@@ -3027,7 +3058,7 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
             snapshot: snapshot.clone(),
         });
     });
-    Some(snapshot)
+    stamp_is_current(&snapshot).then_some(snapshot)
 }
 
 /// One thread's last parse of `latest.json`, keyed by path + identity (mtime,

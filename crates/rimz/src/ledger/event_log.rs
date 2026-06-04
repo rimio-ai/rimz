@@ -6,12 +6,12 @@
 //! [`crate::ledger::snapshot`].
 
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use serde::Serialize;
-use tracing::warn;
+use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::ledger::atomic::{self, append_framed_record, sync_dir};
@@ -38,6 +38,17 @@ pub enum EventLogErr {
 }
 
 pub type Result<T> = std::result::Result<T, EventLogErr>;
+
+/// The active-log extent a derived rollup reflects: the rotation generation
+/// and the byte offset after the last folded frame. This is the snapshot
+/// freshness stamp — a cached rollup is served exactly when its extent
+/// matches the live log, an O(1) stat with none of mtime's granularity or
+/// write-ordering hazards.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogExtent {
+    pub generation: u64,
+    pub offset: u64,
+}
 
 #[must_use = "durability barrier; check the result"]
 pub fn append<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -195,73 +206,98 @@ pub fn replace_all(path: &Path, events: &[EventEnvelope]) -> Result<()> {
 }
 
 /// Read every parseable record. A torn trailing record (length mismatch or
-/// JSON parse failure) is logged at `warn` and skipped; we never propagate
-/// it as a hard error because that's what a process kill mid-write leaves.
+/// JSON parse failure) is logged and skipped; we never propagate it as a
+/// hard error because that's what a power cut mid-append leaves behind.
 pub fn read_all(path: &Path) -> Result<Vec<EventEnvelope>> {
+    Ok(read_from_offset(path, 0)?.0)
+}
+
+/// Read every parseable record starting at byte `start` — the incremental
+/// twin of [`read_all`] for a reader resuming from a persisted fold base.
+///
+/// Returns the events and the offset after the last complete frame: the
+/// extent a derived rollup may claim to reflect. An unterminated or
+/// undecodable tail frame is not yet committed (an in-flight append, or a
+/// power-cut corpse), so reading stops in front of it and the returned
+/// offset never claims bytes the fold skipped — the append that completes
+/// or follows it moves the live extent past the stamp and triggers the next
+/// fold. A torn record *followed by more frames* is corruption and stays a
+/// hard error.
+pub fn read_from_offset(path: &Path, start: u64) -> Result<(Vec<EventEnvelope>, u64)> {
     if !path.exists() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     }
-    let file = File::open(path).map_err(|e| EventLogErr::Io {
+    let mut file = File::open(path).map_err(|e| EventLogErr::Io {
         path: path.to_path_buf(),
         source: e,
     })?;
-    let reader = BufReader::new(file);
-    let mut rows = Vec::new();
-    let mut offset: u64 = 0;
-    for (line_no, line) in reader.lines().enumerate() {
-        let line = line.map_err(|source| EventLogErr::Io {
+    file.seek(SeekFrom::Start(start))
+        .map_err(|source| EventLogErr::Io {
             path: path.to_path_buf(),
             source,
         })?;
-        let line_len = line.len() as u64 + 1; // include trailing '\n'
-        rows.push((line_no, offset, line));
-        offset += line_len;
+    let mut reader = BufReader::new(file);
+    let mut rows: Vec<(u64, bool, Vec<u8>)> = Vec::new();
+    let mut offset = start;
+    loop {
+        let mut buf = Vec::new();
+        let read = reader
+            .read_until(b'\n', &mut buf)
+            .map_err(|source| EventLogErr::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if read == 0 {
+            break;
+        }
+        let terminated = buf.last() == Some(&b'\n');
+        if terminated {
+            buf.pop();
+        }
+        rows.push((offset, terminated, buf));
+        offset += read as u64;
     }
 
     let mut events = Vec::new();
+    let mut end = start;
     let last_index = rows.len().saturating_sub(1);
-    for (idx, (line_no, offset, line)) in rows.into_iter().enumerate() {
-        match decode_line(&line, offset) {
-            Ok(event) => events.push(event),
-            Err(EventLogErr::Torn { offset: at, reason }) if idx == last_index => {
-                warn!(
-                    offset = at,
-                    line = line_no,
-                    reason = %reason,
-                    "skipping torn trailing event-log record"
-                );
-            }
-            Err(EventLogErr::Torn { offset, reason }) => {
-                return Err(EventLogErr::Torn { offset, reason });
-            }
-            Err(EventLogErr::FrameLength {
+    for (idx, (at, terminated, bytes)) in rows.into_iter().enumerate() {
+        let frame_len = bytes.len() as u64 + u64::from(terminated);
+        let decoded = if !terminated {
+            Err(EventLogErr::Torn {
                 offset: at,
-                claimed,
-                available,
-            }) if idx == last_index => {
-                warn!(
-                    offset = at,
-                    line = line_no,
-                    claimed,
-                    available,
-                    "skipping trailing event-log record with frame length mismatch"
-                );
+                reason: "unterminated frame".into(),
+            })
+        } else {
+            match std::str::from_utf8(&bytes) {
+                Ok(line) => decode_line(line, at),
+                Err(err) => Err(EventLogErr::Torn {
+                    offset: at,
+                    reason: format!("utf8: {err}"),
+                }),
             }
-            Err(EventLogErr::FrameLength {
-                offset,
-                claimed,
-                available,
-            }) => {
-                return Err(EventLogErr::FrameLength {
-                    offset,
-                    claimed,
-                    available,
-                });
+        };
+        match decoded {
+            Ok(event) => {
+                events.push(event);
+                end = at + frame_len;
             }
-            Err(other) => return Err(other),
+            Err(err @ (EventLogErr::Torn { .. } | EventLogErr::FrameLength { .. }))
+                if idx == last_index =>
+            {
+                if terminated {
+                    warn!(offset = at, error = %err, "skipping torn trailing event-log record");
+                } else {
+                    // An in-flight append a lock-free reader raced — folded by
+                    // the wakeup that follows its completion. Routine, not noise.
+                    debug!(offset = at, "stopping before an in-flight tail frame");
+                }
+                break;
+            }
+            Err(err) => return Err(err),
         }
     }
-    Ok(events)
+    Ok((events, end))
 }
 
 fn decode_line(line: &str, offset: u64) -> Result<EventEnvelope> {
