@@ -89,7 +89,7 @@ fn read_all_at(runtime: &RuntimePaths, now: Timestamp) -> Vec<AgentContextRecord
     };
     let mut out = Vec::new();
     CONTEXT_PARSE_CACHE.with_borrow_mut(|cache| {
-        let mut seen: Vec<PathBuf> = Vec::new();
+        let mut seen: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
@@ -98,7 +98,7 @@ fn read_all_at(runtime: &RuntimePaths, now: Timestamp) -> Vec<AgentContextRecord
             let Ok(meta) = entry.metadata() else { continue };
             let Ok(mtime) = meta.modified() else { continue };
             let len = meta.len();
-            seen.push(path.clone());
+            seen.insert(path.clone());
             let record = match cache.get(&path) {
                 Some(parsed) if parsed.mtime == mtime && parsed.len == len => parsed.record.clone(),
                 _ => {

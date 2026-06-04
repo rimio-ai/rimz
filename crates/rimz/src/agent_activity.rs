@@ -86,6 +86,8 @@ thread_local! {
     /// rename of a freshly-written temp file, so `(mtime, len)` validates
     /// content; the long-lived consumer fetch thread re-reads these touches on
     /// every wakeup, and this caps its steady-state cost at one stat per key.
+    /// Pruned to the queried key set on every read, so it stays bounded by
+    /// the live agent set.
     static TOUCH_PARSE_CACHE: RefCell<HashMap<PathBuf, ParsedTouch>> =
         RefCell::new(HashMap::new());
 }
@@ -135,6 +137,11 @@ pub fn read_for_keys<'a>(
                 }
             })
             .collect();
+        // A dead agent's key stops being queried, so without this prune its
+        // entry would outlive it for the thread's lifetime. Retaining to the
+        // keys just served keeps the cache bounded by the live agent set —
+        // the same discipline as the context sidecar cache.
+        cache.retain(|path, _| seen.contains(path));
         touches
     })
 }
@@ -264,6 +271,38 @@ mod tests {
         drop(f);
         let fresh = read_for_keys(&runtime, [("claude", "sess-1")]);
         assert_eq!(fresh[0].agent_id, "sess-9");
+    }
+
+    #[test]
+    fn keyed_read_prunes_cache_entries_for_keys_no_longer_queried() {
+        let (_dir, runtime) = runtime();
+        touch(&runtime, "claude", "sess-dead").expect("touch dead");
+        touch(&runtime, "claude", "sess-live").expect("touch live");
+        // Prime the cache with both keys, then drop the dead one from the
+        // queried set — a dead agent leaving the snapshot.
+        read_for_keys(&runtime, [("claude", "sess-dead"), ("claude", "sess-live")]);
+        read_for_keys(&runtime, [("claude", "sess-live")]);
+
+        // Rewrite the dead touch in place with identical (mtime, len) — the
+        // same gate `keyed_read_serves_an_unchanged_stat_from_cache` proves
+        // would serve a *cached* entry. Seeing the rewrite proves the entry
+        // was pruned when its key left the queried set.
+        let path = activity_path(&runtime, "claude", "sess-dead");
+        let bytes = std::fs::read(&path).unwrap();
+        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let swapped = String::from_utf8(bytes)
+            .unwrap()
+            .replace("sess-dead", "sess-201x");
+        std::fs::write(&path, swapped).unwrap();
+        let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        f.set_modified(mtime).unwrap();
+        drop(f);
+
+        let reread = read_for_keys(&runtime, [("claude", "sess-dead")]);
+        assert_eq!(
+            reread[0].agent_id, "sess-201x",
+            "the pruned key re-parses from disk instead of serving the stale cache"
+        );
     }
 
     #[test]
