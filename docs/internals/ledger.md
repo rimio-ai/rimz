@@ -45,22 +45,26 @@ events.log.jsonl
 events.log.archive/events.<uuidv7>.jsonl
 agents.carryover.json
 snapshots/latest.json
+snapshots/rollup.json
 feed/<request_id>.json
+feed/terminal/<request_id>.json
 locks/workspace.lock
 ```
 
 Rules:
 
 - `workspace.json` records the last known project root and session name for maintenance commands; feed files and the event log remain the request source of truth. Launch reads the prior record before overwriting it: when the derived session name diverges from the recorded one and a session still answers to the recorded name, launch retires that session and rebirths the workspace under the new name, so a changed derivation never strands a live session or its sidebar.
-- Feed files are written temp-file + rename.
+- Feed files are CAS truth for decisions and are written durable: temp-file + fsync + rename.
 - Resolutions take the workspace lock, then CAS on `status = pending`. First valid writer wins.
-- `events.log.jsonl` uses length-prefixed framing with `fsync` per record.
+- A feed item that reaches a terminal status (`resolved`, `timed_out`, `abandoned`) relocates into `feed/terminal/` with an atomic rename under the same lock, so decision-path scans stay O(pending). Audit reads (`feed list --audit`, `feed show`) span both directories.
+- `events.log.jsonl` uses length-prefixed framing with `fsync` per record. The event log and the feed files are the crash-durable truth; everything under `snapshots/` is a reconstructible cache.
 - A torn trailing record at SIGKILL is skipped on rebuild and logged.
-- Rollup reads serialize against writers: `runtime_projection` (behind `rimz sidebar snapshot`, `feed list`, and `doctor`) takes the workspace lock for its read, so a writer's half-written trailing frame is never observed as a torn record and dropped. The torn-trailing skip then fires only for a genuine crash corpse, never a live concurrent append — which would otherwise blink an agent out of the rollup for one tick and flash its live pane as a bare `process` row.
+- Rollup reads are lock-free. The snapshot resumes from the persisted fold base in `snapshots/rollup.json` and folds only the log bytes appended since, so a writer's half-written trailing frame is simply not folded until it completes — it can never drop a previously-folded event. The write that completes the frame posts the wakeup that folds it.
 - `rimz workspace rotate-events` archives the active log into `events.log.archive/events.<uuidv7>.jsonl` once it exceeds the operator-supplied byte threshold (default `64MiB`); UUIDv7 filenames sort chronologically. The same command prunes archives older than `--archive-older-than`.
-- Before rename, the agent rollup of the rotating log is merged into `agents.carryover.json`. The snapshot reducer loads carryover and lets newer in-log observations override; this keeps the sidebar's agent panel correct across rotations without rescanning archives.
+- Before rename, the agent rollup of the rotating log is merged into `agents.carryover.json`. The snapshot reducer loads carryover and lets newer in-log observations override; this keeps the sidebar's agent panel correct across rotations without rescanning archives. Rotation also bumps the rollup generation and reseeds `snapshots/rollup.json` from the carryover, so incremental readers detect the boundary and never fold across it.
 - Every feed file carries `workspace_id`, `request_id`, nonce, resolver id, and timestamps.
-- `snapshots/latest.json` is rebuilt from the active event log, the agent carryover, and the feed dir on every ledger mutation. Cost is O(active-events + items); archives are read only at rotation time.
+- `snapshots/latest.json` is a derived view, published by writers after the workspace lock releases — single-flighted through `snapshots/publish.lock`, atomic rename, no fsync. It is stamped with the log generation and byte offset it reflects; a reader trusts it exactly when the stamp matches the live log, folds the missing tail itself when writes outran it (O(delta bytes)), and rebuilds from scratch on any mismatch or parse failure.
+- `snapshots/rollup.json` is the resumable agent-rollup fold base — the raw pre-projection state plus the `(generation, offset)` stamp — cache-class like `latest.json`. A writer that crashes between releasing the lock and publishing costs nothing: the next reader folds the delta from the durable log itself.
 
 ## Runtime projection
 
@@ -68,7 +72,7 @@ History and runtime are separate views over the same durable ledger.
 
 - **Expel** is read-time filtering. Default runtime views (`rimz sidebar snapshot`, `rimz feed list`, and the default agent summary in `rimz doctor`) include only feed items and agent rollups whose `runtime_owner` points at the same live process that created them. Ownerless legacy records, dead owners, and Linux PID-start mismatches are audit-only.
 - **Audit** is durable history. `rimz feed show <request-id>` is exact, `rimz feed list --audit` lists all feed items, and `rimz doctor --audit` reads the full agent rollup history.
-- **Abandon** is a durable terminal transition. When a ledger writer or `rimz gc` sees a pending item with a recorded but dead owner process, it writes `status = abandoned`, records reason `owner_process_exited`, and appends a `feed.abandon` audit event.
+- **Abandon** is a durable terminal transition. A periodic sweep — the next ledger write past a ~2s debounce, or `rimz gc` — finds a pending item with a recorded but dead owner process, writes `status = abandoned`, records reason `owner_process_exited`, and appends a `feed.abandon` audit event. Expel hides a dead-owner item from runtime views the instant it dies; the sweep makes that durable within the debounce window, and the write path itself stays O(1) — one stamp stat, never a history scan.
 
 `runtime_owner` records `kind = agent | script`, a stable subject id, `pid`, and the Linux process-start token when available. Agent hooks publish the detected agent process and session id; blocking script asks publish the running `rimz feed ask` waiter. Short-lived `feed push` and `feed ask --no-block` records are still written for audit, but once their CLI process exits they leave default runtime views.
 
