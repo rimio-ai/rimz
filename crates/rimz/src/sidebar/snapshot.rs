@@ -269,11 +269,6 @@ pub struct DiffStatsCacheEntry {
     /// <merge-base>..<trunk>`), refreshed on the same git tick.
     #[serde(default)]
     pub behind: Option<u32>,
-    /// The trunk ref the stats compared against, as the ladder resolved it
-    /// (configured `[sidebar] trunk`, else `main`/`master`/remote default).
-    /// Names the header's `≡` landed marker.
-    #[serde(default)]
-    pub trunk: Option<String>,
     /// Live branch resolved from the worktree path, cached under the same TTL
     /// as the diff stats so the group header tracks `git checkout` without a
     /// git call every tick.
@@ -287,7 +282,6 @@ impl DiffStatsCacheEntry {
         stats: Option<DiffStats>,
         commits: Option<u32>,
         behind: Option<u32>,
-        trunk: Option<String>,
         branch: Option<String>,
     ) -> Self {
         Self {
@@ -296,7 +290,6 @@ impl DiffStatsCacheEntry {
             removed: stats.map(|stats| stats.removed),
             commits,
             behind,
-            trunk,
             branch,
         }
     }
@@ -392,12 +385,6 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
         }
         if let Some(behind) = entry.behind {
             group.commits_behind = Some(behind);
-        }
-        // A remote-default trunk resolves as `origin/<name>`; the header's `≡`
-        // marker names the branch, so the remote prefix is display noise.
-        if let Some(trunk) = entry.trunk.filter(|trunk| !trunk.is_empty()) {
-            let display = trunk.strip_prefix("origin/").unwrap_or(&trunk).to_owned();
-            group.trunk = Some(display);
         }
         if let Some(branch) = entry.branch.filter(|branch| !branch.is_empty()) {
             group.label = branch;
@@ -1152,7 +1139,7 @@ mod tests {
         atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
 
         // Publish diff stats for the worktree path: +7 / -2, 3 commits ahead and
-        // 1 behind a remote-default trunk, on branch `feat`.
+        // 1 behind trunk, on branch `feat`.
         let mut diff = DiffStatsCache::default();
         diff.entries.insert(
             wt.clone(),
@@ -1164,7 +1151,6 @@ mod tests {
                 }),
                 Some(3),
                 Some(1),
-                Some("origin/main".to_owned()),
                 Some("feat".to_owned()),
             ),
         );
@@ -1185,11 +1171,6 @@ mod tests {
         assert_eq!(group.diff_removed, Some(2));
         assert_eq!(group.commits_ahead, Some(3));
         assert_eq!(group.commits_behind, Some(1));
-        assert_eq!(
-            group.trunk.as_deref(),
-            Some("main"),
-            "the ≡ marker names the branch, so origin/ strips for display",
-        );
         assert_eq!(group.label, "feat");
         // The own (sidebar) pane is excluded; the sibling renders as a row.
         assert!(
@@ -1362,7 +1343,6 @@ mod tests {
             }),
             Some(4),
             Some(2),
-            Some("main".to_owned()),
             Some("feature-migration".to_owned()),
         );
 
@@ -1377,7 +1357,6 @@ mod tests {
         );
         assert_eq!(entry.commits, Some(4));
         assert_eq!(entry.behind, Some(2));
-        assert_eq!(entry.trunk.as_deref(), Some("main"));
         assert_eq!(entry.branch.as_deref(), Some("feature-migration"));
     }
 

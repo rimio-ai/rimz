@@ -30,7 +30,7 @@ use super::labels::{
     context_severity_color, context_total_spans, diff_spans, elapsed_glyph, gauge_spans,
     infinite_bar_spans, loading_dots, mana_bar_spans, mana_color, resolver_glyph,
     segmented_gauge_spans, status_glyph, status_style, subagent_glyph, subagent_style, todo_spans,
-    token_breakdown_spans, tokens_total_spans, trunk_equal_spans, window_style, working_glyph,
+    token_breakdown_spans, tokens_total_spans, window_style, working_glyph,
 };
 use super::theme::Theme;
 
@@ -476,13 +476,12 @@ fn group_header(
     // here in bold teal — no inline `▌`, the spine carries the lane. The header
     // builds to the content width left after the gutter cell.
     let cw = content_width(width);
-    // The worktree's git story pins right: `≡ <trunk>` when the branch is fully
-    // landed, else the `⇡/⇣` commit delta ahead of the `+/-` churn, zero
-    // components omitted. The per-worktree status tally is gone: the cockpit
-    // owns the fleet make-up and each row carries its own status glyph, so
-    // repeating it here was noise. The label clips to whatever's left after the
-    // stats claim their width, always leaving a cell so the header never
-    // shrinks to zero on extreme narrowness.
+    // The worktree's git story pins right: the `⇡/⇣` commit delta ahead of
+    // the `+/-` churn, zero components omitted. The per-worktree status tally
+    // is gone: the cockpit owns the fleet make-up and each row carries its own
+    // status glyph, so repeating it here was noise. The label clips to
+    // whatever's left after the stats claim their width, always leaving a cell
+    // so the header never shrinks to zero on extreme narrowness.
     let right = group_git_spans(theme, group);
     let right_width: usize = right.iter().map(|span| span.content.chars().count()).sum();
     let label_width = cw.saturating_sub(right_width + 1).max(1);
@@ -512,20 +511,10 @@ fn group_header(
     Line::from(spans)
 }
 
-/// The header's right-pinned git cluster. `≡ <trunk>` when the worktree is
-/// fully landed — zero commits ahead *and* a zero diff against the fork point
-/// (`Some(0)`, a read that found nothing, never an unprobed `None`) — replacing
-/// every other stat: behind deliberately doesn't count against it, since a
-/// landed worktree is safe to remove however far the trunk has moved on.
-/// Otherwise the `⇡/⇣` commit delta leads the `+/-` churn, zero components
-/// omitted. Empty when no git read reached this group.
+/// The header's right-pinned git cluster. The `⇡/⇣` commit delta leads the
+/// `+/-` churn, zero components omitted. Empty when no git read reached this
+/// group.
 fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'static>> {
-    let landed = group.commits_ahead == Some(0)
-        && group.diff_added == Some(0)
-        && group.diff_removed == Some(0);
-    if landed && let Some(trunk) = group.trunk.as_deref() {
-        return trunk_equal_spans(theme, trunk);
-    }
     let mut spans = branch_delta_spans(
         theme,
         group.commits_ahead.unwrap_or(0),

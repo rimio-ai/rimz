@@ -711,18 +711,6 @@ pub(super) fn branch_delta_spans(theme: &Theme, ahead: u32, behind: u32) -> Vec<
     spans
 }
 
-/// `≡ main` — the worktree is fully landed on the trunk: zero commits ahead
-/// and a zero diff against the fork point, so it is safe to remove. Dim green,
-/// the calm-positive tone an idle/done agent wears — quiet enough to stay
-/// chrome yet scannable when hunting removable worktrees; the `≡` shape
-/// carries the verdict under `NO_COLOR`.
-pub(super) fn trunk_equal_spans(theme: &Theme, trunk: &str) -> Vec<Span<'static>> {
-    vec![Span::styled(
-        format!("≡ {trunk}"),
-        theme.style(Color::Green, Modifier::DIM),
-    )]
-}
-
 /// `+127 -43`-style diff stat. Added in green, removed in red, both dim to
 /// stay chrome — the gauge ramp owns the loud color slots.
 pub(super) fn diff_spans(theme: &Theme, added: u32, removed: u32) -> Vec<Span<'static>> {
@@ -758,7 +746,6 @@ mod tests {
         assert_eq!(text(branch_delta_spans(&theme, 3, 0)), "⇡3");
         assert_eq!(text(branch_delta_spans(&theme, 0, 5)), "⇣5");
         assert_eq!(text(branch_delta_spans(&theme, 0, 0)), "");
-        assert_eq!(text(trunk_equal_spans(&theme, "main")), "≡ main");
     }
 
     /// `NO_COLOR` strips the green→amber→red ramp, but the heavy/light weight

@@ -1092,42 +1092,6 @@ mod tests {
     }
 
     #[test]
-    fn render_worktree_equal_to_trunk() {
-        // A fully-landed worktree — zero commits ahead, zero diff against the
-        // fork point — collapses the header's git cluster to `≡ <trunk>`:
-        // nothing left to land, safe to remove. Behind deliberately doesn't
-        // count against it, so the marker holds even as the trunk moves on.
-        let mut codex = agent(
-            "codex-1",
-            "codex",
-            AgentStatus::Idle,
-            Some("/home/me/query-engine"),
-            Some("main"),
-            None,
-        );
-        codex.last_activity = fixed_now() - Duration::from_secs(30);
-        let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
-        snapshot.worktree_groups[0].diff_added = Some(0);
-        snapshot.worktree_groups[0].diff_removed = Some(0);
-        snapshot.worktree_groups[0].commits_ahead = Some(0);
-        snapshot.worktree_groups[0].commits_behind = Some(5);
-        snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-
-        let rendered = snapshot_to_screen(&snapshot, 38, 14);
-
-        assert!(rendered.contains("≡ main"), "header:\n{rendered}");
-        assert!(
-            !rendered.contains("+0 -0"),
-            "the landed marker replaces the zero diff"
-        );
-        assert!(
-            !rendered.contains('⇣'),
-            "behind stays out of the landed header"
-        );
-        assert_snapshot("worktree_equal_to_trunk", rendered);
-    }
-
-    #[test]
     fn render_api_error_dead_turn_card() {
         // A turn that died on a provider API error fires no Stop hook; the
         // projection escalates the row to the attention `!` and line 2 quotes

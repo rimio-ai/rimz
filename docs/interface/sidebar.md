@@ -84,7 +84,6 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `◔ 1m`            | last-activity age — shown only once it crosses a full minute; the clock face fills by the quarter hour (`◔` ≤15m · `◑` ≤30m · `◕` ≤45m · `●` ≤60m · `◉` past it) and its tone steps the same quarters: dim through `◔` (a resume still hits cache), yellow to the half hour, amber beyond it, red past the hour — a red age means resuming likely re-reads the whole context uncached |
 | `+127 -43`        | lines added / removed |
 | `⇡3 ⇣1`           | commits ahead / behind the trunk (worktree header; zero components drop) |
-| `≡ main`          | worktree fully landed on the trunk — zero ahead, zero diff, safe to remove (behind doesn't count against it) |
 | `●●●○○ 3/5`       | todo progress |
 | `$1.27`           | spend — money-green, always two decimals |
 | `▰▱` / `∞`        | provider budget bar (fill = left) / unmetered account |
@@ -221,11 +220,10 @@ The label is the program the pane runs, read past a `sudo` wrapper and through a
 
 Worktrees stack as bounded blocks. The one **holding your selection** reads as a single bracketed lane: a thin `▏` spine down its header and every row, a dotted `┄` seal on its header, and the selected card itself lit with a bold `▌`. Every other worktree carries a blank gutter, so the lane is the only marker on screen and the selection is unmistakable.
 
-The worktree header carries the worktree's git story on the right: the `⇡`/`⇣` commit delta against the trunk, then the worktree's total diff (`⇡3 ⇣1 +230 -23`, zero components dropped). A fully-landed worktree — zero commits ahead and a zero diff against its fork point — collapses the whole cluster to `≡ main`: nothing left to land, safe to remove. Behind sits outside that test, since the trunk moving on makes a landed worktree no less removable. The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../reference/configuration.md#trunk-branch)).
+The worktree header carries the worktree's git story on the right: the `⇡`/`⇣` commit delta against the trunk, then the worktree's total diff (`⇡3 ⇣1 +230 -23`, zero components dropped). The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../reference/configuration.md#trunk-branch)).
 
 ```
 ▏⑂ feature-migration ┄┄┄┄┄┄ ⇡3 ⇣1 +230 -23    ← in flight: commits ahead/behind, then the diff
-▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ≡ main    ← fully landed: nothing to land, safe to remove
 ```
 
 ```
@@ -366,7 +364,6 @@ The renderer's golden tests in [`crates/rimz-sidebar/src/render/`](../../crates/
 | capability + window | `agent_capability` |
 | selected, enriched card | `enriched_selected_agent_card` |
 | worktree grouping + external | `worktree_attention_map` |
-| landed worktree header (`≡`) | `worktree_equal_to_trunk` |
 | per-worktree cap | `group_cap_with_overflow` |
 | provider dashboard | `provider_dashboard` |
 | fleet ledger (week/month) | `fleet_ledger` |
