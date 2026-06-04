@@ -196,8 +196,11 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 
 ## Mapping feasibility
 
-The landed verdict — the native-event → signal table, the turn-death and identity properties, the install shape, and what Pi cannot support — is [hooks.md → Appendix Pi](../hooks.md#appendix--pi). Upstream's own scope statement ([usage.md](https://pi.dev/docs/latest/usage)) frames the gaps: pi intentionally ships **no built-in MCP, sub-agents, permission popups, plan mode, to-dos, or background bash** — those are extension territory. What remains unwired, for the adapter's next increments:
+The landed verdict — the native-event → signal table, the turn-death and identity properties, the install shape, and what Pi cannot support — is [hooks.md → Appendix Pi](../hooks.md#appendix--pi). Upstream's own scope statement ([usage.md](https://pi.dev/docs/latest/usage)) frames the gaps: pi intentionally ships **no built-in MCP, sub-agents, permission popups, plan mode, to-dos, or background bash** — those are extension territory.
+
+The account probe is wired: [`pi/account.rs`](../../../crates/rimz/src/agents/pi/account.rs) reads `auth.json` (oauth → metered subscription, api_key → unmetered), labels the sub the fleet uses — the freshest session's `message.provider` picks among several credentials, else the first OAuth entry — and attaches the `pi -v` version; mapping summary in [account.md](../account.md#per-provider-mapping).
+
+What remains unwired, for the adapter's next increments:
 
 - **Context gauge.** `ctx.getContextUsage()` is a first-class in-process reading, and every assistant message carries the full token split; the transcript-tail floor works with a registry-resolved window divisor. The extension forwards no gauge yet, so pi rows render without one. In-file branching also means the newest record by file position may sit on an abandoned branch right after `/tree` or `/fork`; a bounded-tail gauge would self-correct on the next turn — display-only, acceptable.
 - **Enrichment.** `model` + `contextWindow` on every `model_select`, `thinkingLevel` ↔ the `effort` carry-forward — the wire carries `model`/`total_tokens` on `agent_end` only.
-- **Account probe.** `auth.json` distinguishes oauth vs API-key credentials — enough for logged-in plus metered/unmetered on the dashboard ([account.md](../account.md)); `probe_account` still returns the logged-out default.

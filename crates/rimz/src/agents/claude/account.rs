@@ -64,6 +64,7 @@ fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
     AccountProbe::Found(AgentAccount {
         plan,
         metered: Some(metered),
+        version: None,
     })
 }
 

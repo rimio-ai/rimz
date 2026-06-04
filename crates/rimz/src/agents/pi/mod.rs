@@ -18,6 +18,7 @@
 //! "What Pi cannot support"), so those capabilities are declared off and the
 //! absences render deliberately.
 
+pub(crate) mod account;
 pub(crate) mod payloads;
 pub(crate) mod spend;
 
@@ -230,6 +231,10 @@ impl AgentAdapter for PiAdapter {
 
     fn hooks_installed(&self) -> bool {
         pi_extension_path().is_ok_and(|path| hooks_installed_at(&path))
+    }
+
+    fn probe_account(&self) -> crate::agents::account::AccountProbe {
+        account::probe()
     }
 }
 

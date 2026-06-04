@@ -1,0 +1,290 @@
+//! Pi's out-of-band account probe: the `~/.pi/agent/auth.json` credential map
+//! plus a `pi -v` version read.
+//!
+//! Pi exposes no plan tier and no rate-limit windows (the balance gap in
+//! [docs/internals/adapter/pi-reference.md]); its one account fact is the
+//! credential type per provider — `oauth` (a metered subscription) or
+//! `api_key` (unmetered). The probe labels the subscription the fleet actually
+//! uses: the provider of the freshest session, tail-read from the newest
+//! session JSONL, falling back to the first OAuth credential, else the first
+//! entry. The version is enrichment — a missing `pi` binary leaves the field
+//! empty and never downgrades the probe outcome. Best-effort and
+//! producer-only — see [`crate::agents::account`] for the probe contract.
+//!
+//! [docs/internals/adapter/pi-reference.md]: ../../../../../docs/internals/adapter/pi-reference.md
+
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::process::{Command, Stdio};
+
+use serde::Deserialize;
+
+use super::spend::pi_session_files;
+use crate::agents::account::AccountProbe;
+use crate::agents::context::AgentAccount;
+use crate::agents::read_transcript_tail;
+use crate::agents::transcript_fs::home_dir;
+
+/// Probe Pi's account: parse the auth file, label the used subscription, and
+/// attach the `pi -v` version. The missing-file fast path skips the session
+/// walk and the version fork — the common Pi-less machine pays one `stat`;
+/// `probe_auth` re-handles a racing removal on its own read.
+pub(crate) fn probe() -> AccountProbe {
+    let path = home_dir().join(".pi/agent/auth.json");
+    if !path.exists() {
+        return AccountProbe::LoggedOut;
+    }
+    probe_auth(&path, used_provider(), version())
+}
+
+/// One auth.json credential: `{ "type": "oauth" | "api_key", … }`. The token
+/// and key fields are deliberately not modeled — the probe needs the
+/// credential *type*, never the secret.
+#[derive(Debug, Deserialize)]
+struct PiCredential {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+}
+
+/// Map the auth file onto a probe outcome. A missing file, or one naming no
+/// credential, is an authoritative `LoggedOut`; an unreadable or unparseable
+/// file is `Unavailable` (transient — retry on the short TTL). The `used`
+/// provider picks the labeled credential when it holds one; otherwise the
+/// first OAuth entry leads (a subscription outranks a key for "the sub it
+/// used"), else the first entry by name.
+fn probe_auth(path: &Path, used: Option<String>, version: Option<String>) -> AccountProbe {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return AccountProbe::LoggedOut,
+        Err(_) => return AccountProbe::Unavailable,
+    };
+    let Ok(credentials) = serde_json::from_slice::<BTreeMap<String, PiCredential>>(&bytes) else {
+        return AccountProbe::Unavailable;
+    };
+    let oauth = |kind: &Option<String>| kind.as_deref() == Some("oauth");
+    let Some((provider, credential)) = used
+        .as_deref()
+        .and_then(|used| credentials.get_key_value(used))
+        .or_else(|| credentials.iter().find(|(_, cred)| oauth(&cred.kind)))
+        .or_else(|| credentials.iter().next())
+    else {
+        return AccountProbe::LoggedOut;
+    };
+    AccountProbe::Found(AgentAccount {
+        plan: Some(sub_label(provider, credential.kind.as_deref())),
+        // The reference mapping: an OAuth credential is a metered
+        // subscription (Pi just exposes no window readings for its bars), an
+        // API key is unmetered; an unknown type stays unknown.
+        metered: match credential.kind.as_deref() {
+            Some("oauth") => Some(true),
+            Some("api_key") => Some(false),
+            _ => None,
+        },
+        version,
+    })
+}
+
+/// The raw plan string for a credential: the provider's display name plus the
+/// credential type (`Anthropic OAuth`, `OpenAI API Key`). Emitted with its
+/// casing already in place — the renderer's title-casing only touches word
+/// initials, so `OAuth`, `Key`, and `GitHub` pass through it unchanged and the
+/// cached label equals the rendered one.
+fn sub_label(provider: &str, kind: Option<&str>) -> String {
+    let name = provider_display(provider);
+    match kind {
+        Some("oauth") => format!("{name} OAuth"),
+        Some("api_key") => format!("{name} API Key"),
+        _ => name,
+    }
+}
+
+/// Brand-cased display names for the providers Pi ships OAuth flows for; an
+/// unknown provider id passes through raw and earns the renderer's generic
+/// title-casing.
+fn provider_display(provider: &str) -> String {
+    match provider {
+        "anthropic" => "Anthropic".to_owned(),
+        "openai" | "openai-codex" => "OpenAI".to_owned(),
+        "github-copilot" => "GitHub Copilot".to_owned(),
+        "google" | "gemini" => "Google".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+/// The provider of the freshest Pi session — "the sub it used". The newest
+/// session file by mtime, tail-scanned newest-first for the last message's
+/// `message.provider`. Best-effort: any miss yields `None` and the credential
+/// map decides alone.
+fn used_provider() -> Option<String> {
+    let (_, newest) = pi_session_files()
+        .into_iter()
+        .filter_map(|path| {
+            let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+            Some((modified, path))
+        })
+        .max_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)))?;
+    let tail = read_transcript_tail(&newest)?;
+    tail.lines().rev().find_map(provider_of_line)
+}
+
+#[derive(Deserialize)]
+struct ProviderEntry {
+    message: Option<ProviderMessage>,
+}
+
+#[derive(Deserialize)]
+struct ProviderMessage {
+    provider: Option<String>,
+}
+
+fn provider_of_line(line: &str) -> Option<String> {
+    if !line.contains(r#""provider""#) {
+        return None;
+    }
+    serde_json::from_str::<ProviderEntry>(line)
+        .ok()?
+        .message?
+        .provider
+        .filter(|provider| !provider.is_empty())
+}
+
+/// `pi -v` — the one documented version surface (Pi ships no statusline or
+/// app-server to read it from). Captured stdio, never inherited; any failure
+/// is a `None` version, not a probe failure.
+fn version() -> Option<String> {
+    let output = Command::new("pi")
+        .arg("-v")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!version.is_empty()).then_some(version)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pull the account out of a `Found` outcome, or fail the test with `label`.
+    fn found(probe: AccountProbe, label: &str) -> AgentAccount {
+        match probe {
+            AccountProbe::Found(account) => account,
+            other => panic!("expected {label}, got {other:?}"),
+        }
+    }
+
+    fn write_auth(dir: &Path, json: &str) -> std::path::PathBuf {
+        let path = dir.join("auth.json");
+        std::fs::write(&path, json).unwrap();
+        path
+    }
+
+    #[test]
+    fn oauth_credential_is_a_metered_subscription() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_auth(
+            dir.path(),
+            r#"{ "anthropic": { "type": "oauth", "access": "a", "refresh": "r", "expires": 1 } }"#,
+        );
+        let account = found(probe_auth(&path, None, None), "oauth account");
+        assert_eq!(account.plan.as_deref(), Some("Anthropic OAuth"));
+        assert_eq!(account.metered, Some(true));
+        assert_eq!(account.version, None);
+    }
+
+    #[test]
+    fn api_key_credential_is_unmetered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_auth(
+            dir.path(),
+            r#"{ "openai": { "type": "api_key", "key": "k" } }"#,
+        );
+        let account = found(
+            probe_auth(&path, None, Some("0.78.0".to_owned())),
+            "api-key account",
+        );
+        assert_eq!(account.plan.as_deref(), Some("OpenAI API Key"));
+        assert_eq!(account.metered, Some(false));
+        assert_eq!(account.version.as_deref(), Some("0.78.0"));
+    }
+
+    #[test]
+    fn used_provider_picks_its_credential_over_the_oauth_lead() {
+        // Two credentials; the freshest session ran on the API-key provider,
+        // so the label follows the session, not the OAuth preference.
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_auth(
+            dir.path(),
+            r#"{
+                "anthropic": { "type": "oauth", "access": "a" },
+                "openai": { "type": "api_key", "key": "k" }
+            }"#,
+        );
+        let account = found(
+            probe_auth(&path, Some("openai".to_owned()), None),
+            "used provider",
+        );
+        assert_eq!(account.plan.as_deref(), Some("OpenAI API Key"));
+        assert_eq!(account.metered, Some(false));
+    }
+
+    #[test]
+    fn without_a_session_the_first_oauth_credential_leads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_auth(
+            dir.path(),
+            r#"{
+                "openai": { "type": "api_key", "key": "k" },
+                "openai-codex": { "type": "oauth", "access": "a" }
+            }"#,
+        );
+        let account = found(probe_auth(&path, None, None), "oauth lead");
+        assert_eq!(account.plan.as_deref(), Some("OpenAI OAuth"));
+        assert_eq!(account.metered, Some(true));
+    }
+
+    #[test]
+    fn missing_file_is_logged_out_not_a_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            probe_auth(&dir.path().join("auth.json"), None, None),
+            AccountProbe::LoggedOut
+        ));
+    }
+
+    #[test]
+    fn empty_credential_map_is_logged_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_auth(dir.path(), "{}");
+        assert!(matches!(
+            probe_auth(&path, None, None),
+            AccountProbe::LoggedOut
+        ));
+    }
+
+    #[test]
+    fn garbage_auth_file_is_unavailable_so_it_retries_soon() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_auth(dir.path(), "not json");
+        assert!(matches!(
+            probe_auth(&path, None, None),
+            AccountProbe::Unavailable
+        ));
+    }
+
+    #[test]
+    fn provider_line_reads_the_assistant_message_provider() {
+        let line = r#"{"type":"message","id":"a1","message":{"role":"assistant","provider":"openai-codex","model":"gpt-5.5","usage":{"input":1}}}"#;
+        assert_eq!(provider_of_line(line).as_deref(), Some("openai-codex"));
+        assert_eq!(provider_of_line(r#"{"type":"session","version":3}"#), None);
+        assert_eq!(
+            provider_of_line(r#"{"message":{"role":"user","content":[]}}"#),
+            None
+        );
+    }
+}

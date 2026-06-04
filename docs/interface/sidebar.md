@@ -306,6 +306,8 @@ An **unmetered (API-key) account** has no budget to drain, so it shows an `∞` 
    ▘▘ ▝▝  
 ```
 
+A **Pi block** names its version and the subscription it runs on — `Pi v0.78.0 · Anthropic OAuth` — read out-of-band from `pi -v` and Pi's auth file (the freshest session's provider picks among several credentials; [account.md](../internals/account.md#per-provider-mapping)). Pi exposes no window readings, so an OAuth sub shows no bars and an API key shows the `∞` bar.
+
 Every bar across every block shares one start column and one end column, so the dashboard reads as one aligned grid. A blank line separates blocks. The `⇅ rc` flag pins to a block's top-right when remote control is on for that provider (Claude only — it's host infrastructure, never its own row). Below ~34 columns the emblem is dropped and the bars run full-width. The brand emblem, color, and name are config-driven (`[sidebar.providers.<kind>]`, see [configuration.md](../reference/configuration.md)).
 
 ### The fleet ledger

@@ -60,6 +60,7 @@ fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
         return AccountProbe::Found(AgentAccount {
             plan: None,
             metered: Some(false),
+            version: None,
         });
     }
     if auth
@@ -70,6 +71,7 @@ fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
         return AccountProbe::Found(AgentAccount {
             plan: None,
             metered: Some(true),
+            version: None,
         });
     }
     AccountProbe::LoggedOut

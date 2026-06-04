@@ -502,6 +502,7 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
         let account = (plan.is_some() || windows.is_some()).then_some(AgentAccount {
             metered: Some(true),
             plan,
+            version: None,
         });
         Ok((windows, account))
     }

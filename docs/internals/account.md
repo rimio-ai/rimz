@@ -6,7 +6,7 @@ A coding agent runs against a **provider account** — a login, on a plan, that 
 This doc owns both: the account/balance model, where each provider's facts come from, how they map onto Rimz's internal types, and how the producer folds them into the provider dashboard.
 
 It is the **single home for account/balance semantics**: what the metered/unmetered/plan facts mean, and how the producer folds them onto the internal types [`AgentAccount`](../../crates/rimz/src/agents/context.rs), [`AgentRateLimits`](../../crates/rimz/src/agents/context.rs), and the [`SidebarProviderPanel`](../../crates/rimz/src/ledger/snapshot/view.rs) the renderer paints.
-The raw auth surfaces it reads — `claude auth status`, `~/.codex/auth.json`, the app-server `account/rateLimits/read` response — are in the per-provider reference: [adapter/claude-reference.md](./adapter/claude-reference.md#auth-surface) and [adapter/codex-reference.md](./adapter/codex-reference.md#auth-file); [adapter/pi-reference.md → Auth file](./adapter/pi-reference.md#auth-file) mirrors Pi's auth surface — and its missing balance surface; the Pi probe is an unwired increment.
+The raw auth surfaces it reads — `claude auth status`, `~/.codex/auth.json`, `~/.pi/agent/auth.json`, the app-server `account/rateLimits/read` response — are in the per-provider reference: [adapter/claude-reference.md](./adapter/claude-reference.md#auth-surface), [adapter/codex-reference.md](./adapter/codex-reference.md#auth-file), and [adapter/pi-reference.md → Auth file](./adapter/pi-reference.md#auth-file) (which also records Pi's missing balance surface).
 [adapter/opencode-reference.md → Auth file](./adapter/opencode-reference.md#auth-file) mirrors OpenCode's auth surface ahead of its adapter — credential types only, with the same missing balance surface.
 
 Account and balance are **enrichment, never correctness** — the no-transcript-correctness rule.
@@ -43,7 +43,7 @@ Each provider maps its native account and balance surfaces onto the two internal
 | --- | --- | --- |
 | **Claude** | [`claude auth status`](./adapter/claude-reference.md#auth-surface) → `plan` + `metered`; `apiKey` login is unmetered. | Statusline [`rate_limits`](./adapter/claude-reference.md#statusline-json) 5h/7d windows, parsed by [`observe_context`](../../crates/rimz/src/agents/claude/statusline.rs). |
 | **Codex** | Live: [`account/rateLimits/read`](./adapter/codex-reference.md#app-server-api) `planType` → `plan`, riding `AgentContext.account`. Idle: [`~/.codex/auth.json`](./adapter/codex-reference.md#auth-file) — API key → unmetered, `tokens` → metered ChatGPT (plan tier filled once a session reports it). | [`account/rateLimits/read`](./adapter/codex-reference.md#app-server-api) `primary`/`secondary` windows, each with `windowDurationMins` ([`app_server.rs`](../../crates/rimz/src/agents/codex/app_server.rs)). |
-| **Pi** | None wired yet — `probe_account` returns the logged-out default; [`auth.json`](./adapter/pi-reference.md#auth-file) (oauth vs API key, per provider) is the future probe. The panel earns its place by recorded spend. | None — pi exposes no rate-limit or plan surface, declared off via `rate_limit_windows` so the panel renders no bars. |
+| **Pi** | [`pi/account.rs`](../../crates/rimz/src/agents/pi/account.rs) reads [`auth.json`](./adapter/pi-reference.md#auth-file): oauth → metered subscription, api_key → unmetered. The plan names the sub the fleet uses (`Anthropic OAuth`, `OpenAI API Key`) — the freshest session's `message.provider` picks among several credentials, else the first OAuth entry — and the probe attaches the `pi -v` binary version, the panel header's fallback for a provider whose sessions report none. | None — pi exposes no rate-limit window surface, declared off via `rate_limit_windows`: a metered Pi sub renders no bars, an API key the `∞` bar. |
 
 One asymmetry shapes the producer below: **Claude's balance has no source outside a live statusline**, while **Codex's rides a read-only out-of-band app-server call**, so a logged-in idle Codex account can still refresh its windows but an idle Claude account cannot.
 
@@ -57,6 +57,7 @@ One asymmetry shapes the producer below: **Claude's balance has no source outsid
 
 The probe is a **pure read**; cross-process memoization lives one layer up in the producer (below).
 Claude forks `claude auth status`, capturing stdout with stdin and stderr nulled (never inherited, so it stays quiet in a TUI); Codex reads `~/.codex/auth.json` — a cheap file read, no subprocess, so an absent or corrupt file is an authoritative `LoggedOut`, not a retry-worthy `Unavailable`.
+Pi reads `~/.pi/agent/auth.json` the same way (absent file → `LoggedOut`, unparseable → `Unavailable`) and forks `pi -v` for the version — a failed version read leaves the field empty without downgrading the outcome.
 An unknown kind has no probe arm yet and reads as `LoggedOut`.
 
 ## Producer aggregation
@@ -66,7 +67,7 @@ It is **producer-only**: it needs per-machine config and the out-of-band probe t
 
 Per panel:
 
-- **Aggregate stats** — the per-provider `spending` (trailing 24h / 7d / 30d / 365d, summed fleet-wide across the kind's transcript history by `compute_spending`); `plan` and `version` taken from the freshest `context.observed_at`. A kind with no live session still earns a panel when it has recorded spend or a probed login.
+- **Aggregate stats** — the per-provider `spending` (trailing 24h / 7d / 30d / 365d, summed fleet-wide across the kind's transcript history by `compute_spending`); `plan` and `version` taken from the freshest `context.observed_at`, the version falling back to the probed account's binary read (Pi's `pi -v`) when no session reports one. A kind with no live session still earns a panel when it has recorded spend or a probed login.
 - **Account** — `metered` and the `plan` label come from the kind's account (a live session's, or the probed idle one); a `plan` tier formats into a brand label (`max` → `Claude Max`, `pro` → `ChatGPT Pro`), and a missing account infers `metered` from whether windows were reported.
 - **Brand style** — emblem art, color, and product name resolve from `[sidebar.providers.<kind>]` over the built-in defaults (claude clay, codex blue, pi forest green); an unknown kind gets neutral grey and no emblem. See [configuration.md](../reference/configuration.md#provider-dashboard).
 - **Balance windows** — the per-duration set chosen by `stable_windows` (below).
