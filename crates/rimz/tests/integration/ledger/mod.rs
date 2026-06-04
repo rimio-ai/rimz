@@ -1,5 +1,7 @@
-//! Ledger-tier suites: the synthetic round-trip over `Ledger` and the
-//! per-request blocking decision bridge.
+//! Ledger-tier suites: the synthetic round-trip over `Ledger`, the
+//! per-request blocking decision bridge, and the off-lock write-path
+//! contract (group-commit publish, debounced sweep, lock-free recovery).
 
 mod bridge;
 mod round_trip;
+mod write_path;
