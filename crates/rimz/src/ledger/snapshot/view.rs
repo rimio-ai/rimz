@@ -13,7 +13,7 @@ use super::fold::agent_rollup_with_carryover;
 use super::panes::{
     LazyAgentRow, SidebarOwnView, agent_for_pane, is_daemon_mode_codex, lazy_agent_for_pane,
 };
-use super::process::{program_label, row_from_process};
+use super::process::{pane_command_is_known, program_label, row_from_process};
 use crate::agent_activity::AgentActivity;
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentAccount, AgentContext, RateLimitWindow, SpendTally};
@@ -1286,9 +1286,13 @@ fn rows_from_panes(
                 ),
                 LazyAgentRow::Idle(row) => rows.push(*row),
             }
-        } else {
+        } else if pane_command_is_known(pane) {
             rows.push(row_from_process(pane));
         }
+        // else: a brand-new or raced pane whose command is still unknown after
+        // carry-forward — the third honest-read guard. Presence without identity
+        // folds no row until a read names it; the pane stays in the published
+        // pane list, so the sibling count and selection baseline see it.
     }
 
     // Script/bridge asks raised outside an agent session have no pane to anchor
@@ -2951,6 +2955,101 @@ mod tests {
         assert_eq!(row.name, "zsh");
         assert_eq!(row.status, None);
         assert!(snapshot.worktree_groups[0].status_counts.is_empty());
+    }
+
+    #[test]
+    fn commandless_unbound_pane_folds_no_row() {
+        // A pane whose command is still unknown after carry-forward — mid-birth,
+        // or a raced first read — is presence without identity: it folds no row
+        // rather than an anonymous `process` under `external`.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let raced = PaneRef {
+            command: None,
+            cwd: None,
+            ..pane("%1", "x", "/repo/main")
+        };
+        let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new())
+            .with_live_panes(vec![raced], None);
+
+        let rows: Vec<_> = snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .collect();
+        assert!(
+            rows.is_empty(),
+            "a command-less pane renders no row: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn commandless_pane_with_agent_still_renders_agent_row() {
+        // Agent rows bind by stamped pane id, never by command, so a raced read
+        // that drops the command never demotes or hides the agent's row.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut claude = agent("claude", "sess-a", AgentStatus::Running, 1_000);
+        claude.worktree_path = Some("/repo/main".to_owned());
+        claude.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+        let raced = PaneRef {
+            command: None,
+            ..pane("%1", "claude", "/repo/main")
+        };
+        let snapshot =
+            SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![claude])
+                .with_live_panes(vec![raced], None);
+
+        let rows: Vec<_> = snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .collect();
+        assert_eq!(rows.len(), 1, "the stamped agent row survives: {rows:?}");
+        assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
+    }
+
+    #[test]
+    fn commandless_pane_does_not_form_empty_external_group() {
+        // The raced read that drops a command usually drops the cwd too; the
+        // filtered pane must not mint a stray `external` header on its way out.
+        let root = "/repo/rimz";
+        let workspace = WorkspaceId::from_project_root(Path::new(root));
+        let raced = PaneRef {
+            command: None,
+            cwd: None,
+            ..pane("%2", "x", "")
+        };
+        let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new())
+            .with_project_root(Some(PathBuf::from(root)))
+            .with_live_panes(vec![pane("%1", "zsh", root), raced], None);
+
+        assert_eq!(
+            snapshot.worktree_groups.len(),
+            1,
+            "no external group for the filtered pane: {:?}",
+            snapshot.worktree_groups,
+        );
+        assert_eq!(snapshot.worktree_groups[0].label, "rimz");
+    }
+
+    #[test]
+    fn commandless_pane_keeps_known_process_rows() {
+        // The guard is per-pane: a sibling whose command read succeeded keeps
+        // its named process row.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let raced = PaneRef {
+            command: None,
+            ..pane("%2", "x", "/repo/main")
+        };
+        let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new())
+            .with_live_panes(vec![pane("%1", "zsh", "/repo/main"), raced], None);
+
+        let rows: Vec<_> = snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .collect();
+        assert_eq!(rows.len(), 1, "only the named pane is a row: {rows:?}");
+        assert_eq!(rows[0].name, "zsh");
     }
 
     #[test]

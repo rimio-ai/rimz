@@ -460,6 +460,18 @@ fn carry_forward_pane_fields(fresh: &mut [rimz::feed::PaneRef], prev: &[rimz::fe
     }
 }
 
+/// Backfill any field a fresh read dropped from the last good read of the same
+/// pane id (see [`carry_forward_pane_fields`]). Shared by both produce arms —
+/// the elected producer and a loser falling back to a local produce — so a
+/// raced `list-panes` answer renders no anonymous row on either path. Read-only
+/// on the cache; the winner-only metrics enrich and cache write stay in the
+/// `Produce` arm.
+fn carry_forward_from_cache(panes: &mut [rimz::feed::PaneRef], cache_path: &Path, session: &str) {
+    if let Some(prev) = read_snapshot_cache(cache_path, session) {
+        carry_forward_pane_fields(panes, &prev.panes);
+    }
+}
+
 /// Return the event-fresh ledger rollup + live pane list for `session`.
 ///
 /// The rollup is always read fresh from `latest.json` (`Ledger::snapshot_cached`,
@@ -520,7 +532,14 @@ fn cached_panes_or_produce(
         fresh,
     ) {
         Coalesced::Shared(cache) => Ok(cache),
-        Coalesced::ProduceLocal => produce_local(),
+        // The producer wedged past the wait: produce locally rather than block.
+        // The raced-read repair still applies — without it a dropped command/cwd
+        // on this one path folds the anonymous row the winner path guards against.
+        Coalesced::ProduceLocal => {
+            let mut cache = produce_local()?;
+            carry_forward_from_cache(&mut cache.panes, &cache_path, session);
+            Ok(cache)
+        }
         // We won: fork `list-panes` and publish it. The guard holds the lock
         // until this arm returns.
         Coalesced::Produce(_guard) => {
@@ -529,9 +548,7 @@ fn cached_panes_or_produce(
             // process-start; rather than fold an anonymous `external`/`process`
             // row that blinks out next tick, backfill the missing fields from
             // the last good read of the same pane id.
-            if let Some(prev) = read_snapshot_cache(&cache_path, session) {
-                carry_forward_pane_fields(&mut cache.panes, &prev.panes);
-            }
+            carry_forward_from_cache(&mut cache.panes, &cache_path, session);
             // Enrich each pane with per-process resource metrics (best-effort,
             // Linux-only). Runs inside the produce lock so only one producer
             // reads `/proc` per tick; the result is in the published pane cache,
@@ -1284,6 +1301,37 @@ mod tests {
         carry_forward_pane_fields(&mut fresh, &prev);
         assert_eq!(fresh[0].command.as_deref(), Some("zsh"));
         assert_eq!(fresh[0].cwd.as_deref(), Some("/now"));
+    }
+
+    #[test]
+    fn carry_forward_from_cache_backfills_from_disk() {
+        // The shared repair both produce arms run: a raced read's dropped
+        // fields backfill from the on-disk pane cache, so the wedged-producer
+        // fallback path renders no anonymous row either.
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join("snapshot.json");
+        let prior = SnapshotCache {
+            produced_at_ms: 1,
+            session_name: "s".to_owned(),
+            panes: vec![pane("terminal_1", Some("claude"), Some("/repo"))],
+        };
+        atomic::write_temp_then_rename_cache(&cache_path, &prior).unwrap();
+        let mut panes = vec![pane("terminal_1", None, None)];
+        carry_forward_from_cache(&mut panes, &cache_path, "s");
+        assert_eq!(panes[0].command.as_deref(), Some("claude"));
+        assert_eq!(panes[0].cwd.as_deref(), Some("/repo"));
+    }
+
+    #[test]
+    fn carry_forward_from_cache_is_noop_without_prior() {
+        // No cache on disk (the first tick after session birth): the read
+        // passes through untouched rather than erroring.
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join("snapshot.json");
+        let mut panes = vec![pane("terminal_1", None, None)];
+        carry_forward_from_cache(&mut panes, &cache_path, "s");
+        assert_eq!(panes[0].command, None);
+        assert_eq!(panes[0].cwd, None);
     }
 
     /// A process-table entry for the pid-backfill matcher fixtures; everything

@@ -7,6 +7,16 @@ use super::view::{SidebarRow, SidebarRowKind};
 use crate::agents::lifecycle::TurnPhase;
 use crate::feed::PaneRef;
 
+/// Whether a pane no agent has bound carries enough identity to render a
+/// process row. A live pane always reports a command (mux contract), so a
+/// `None`/empty command after carry-forward is a raced or mid-birth read, not a
+/// real nameless pane — render nothing rather than an anonymous `process` row.
+pub(super) fn pane_command_is_known(pane: &PaneRef) -> bool {
+    pane.command
+        .as_deref()
+        .is_some_and(|command| !command.is_empty())
+}
+
 pub(super) fn row_from_process(pane: &PaneRef) -> SidebarRow {
     let command = pane
         .command
@@ -171,6 +181,23 @@ mod tests {
     use super::*;
 
     use crate::ledger::snapshot::testkit::*;
+
+    #[test]
+    fn pane_command_is_known_requires_a_nonempty_command() {
+        // The fold's third honest-read guard: a `None`/empty command is a raced
+        // or mid-birth read, so the pane folds no row until a read names it.
+        assert!(pane_command_is_known(&pane("%1", "zsh", "/repo/main")));
+        let raced = crate::feed::PaneRef {
+            command: None,
+            ..pane("%1", "zsh", "/repo/main")
+        };
+        assert!(!pane_command_is_known(&raced));
+        let empty = crate::feed::PaneRef {
+            command: Some(String::new()),
+            ..pane("%1", "zsh", "/repo/main")
+        };
+        assert!(!pane_command_is_known(&empty));
+    }
 
     #[test]
     fn classifier_sees_past_sudo_to_the_real_program() {
