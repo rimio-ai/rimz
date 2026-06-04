@@ -3005,8 +3005,8 @@ pub fn catch_up_rollup(paths: &StatePaths) -> Result<(RollupCache, Vec<AgentStat
     let log_len = fs::metadata(&paths.events_log)
         .map(|meta| meta.len())
         .unwrap_or(0);
-    let cache = read_rollup_cache(&paths.rollup_cache)
-        .filter(|cache| cache.extent.offset <= log_len);
+    let cache =
+        read_rollup_cache(&paths.rollup_cache).filter(|cache| cache.extent.offset <= log_len);
     let (seed, mut tombstones, generation, base) = match cache {
         Some(RollupCache {
             extent,
@@ -4070,8 +4070,14 @@ mod tests {
             "the extent claims exactly the folded bytes"
         );
         assert_eq!(
-            incremental_cache.tombstones.iter().collect::<std::collections::BTreeSet<_>>(),
-            cold_cache.tombstones.iter().collect::<std::collections::BTreeSet<_>>(),
+            incremental_cache
+                .tombstones
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            cold_cache
+                .tombstones
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>(),
         );
     }
 
@@ -4118,8 +4124,11 @@ mod tests {
         };
 
         // A shape from a different version reads as absent.
-        write_rollup_cache(&paths.rollup_cache, &ghost_cache(ROLLUP_CACHE_VERSION + 1, 0))
-            .unwrap();
+        write_rollup_cache(
+            &paths.rollup_cache,
+            &ghost_cache(ROLLUP_CACHE_VERSION + 1, 0),
+        )
+        .unwrap();
         assert_cold("version mismatch");
 
         // An extent past the live log is a rotation this cache predates.

@@ -3,7 +3,7 @@
 //! `locks/publish.lock` (group commit); readers are lock-free and recover
 //! any commit the publisher missed by folding the delta themselves.
 
-use rimz::ledger::{snapshot, AskExpiry};
+use rimz::ledger::{AskExpiry, snapshot};
 use rimz::{
     EventEnvelope, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, RuntimeOwner,
     RuntimeOwnerKind, RuntimeScope, Surface,
@@ -338,10 +338,7 @@ fn rotation_bumps_the_generation_and_reseeds_the_fold() {
         .append_event(&lifecycle(&h, "SessionStart", "before-rotation"))
         .expect("append");
 
-    let outcome = h
-        .ledger
-        .rotate_event_log(1, None)
-        .expect("rotate");
+    let outcome = h.ledger.rotate_event_log(1, None).expect("rotate");
     assert!(outcome.rotation.is_rotated());
     assert_eq!(
         outcome.carryover_agents, 1,

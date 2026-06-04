@@ -653,9 +653,6 @@ fn runtime_projection_serves_lock_free_while_a_writer_holds_the_lock() {
         .recv_timeout(Duration::from_secs(5))
         .expect("projection completes while the workspace lock is held")
         .expect("projection succeeds");
-    assert_eq!(
-        agents, 1,
-        "the committed agent survives the lock-free read"
-    );
+    assert_eq!(agents, 1, "the committed agent survives the lock-free read");
     reader.join().expect("reader thread");
 }

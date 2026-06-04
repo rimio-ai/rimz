@@ -516,7 +516,10 @@ mod tests {
             ["event.second", "event.third"],
             "resume folds exactly the frames appended past the start offset"
         );
-        assert_eq!(end, full_len, "extent advances to the end of the last complete frame");
+        assert_eq!(
+            end, full_len,
+            "extent advances to the end of the last complete frame"
+        );
     }
 
     #[test]
@@ -542,7 +545,10 @@ mod tests {
         let path = dir.path().join("events.log.jsonl");
         let (events, end) = read_from_offset(&path, 64).unwrap();
         assert!(events.is_empty());
-        assert_eq!(end, 0, "no log, no extent — a fresh workspace folds nothing");
+        assert_eq!(
+            end, 0,
+            "no log, no extent — a fresh workspace folds nothing"
+        );
     }
 
     #[test]
