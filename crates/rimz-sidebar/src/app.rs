@@ -1765,13 +1765,18 @@ fn apply_input(
         ui.animation_phase = wall_clock_phase(anim_start);
         render::draw_to_terminal_with_ui(terminal, snapshot, health.alert.as_ref(), ui)?;
     }
-    if let Some(index) = outcome.focus_index {
+    if outcome.focus
+        && let Some(pane) = ui.selected_pane.clone()
+    {
         // The handler already stamped the jump echo and repainted; fire the
-        // one-way async focus command. The derived baseline confirms or expires
-        // the stamp when the queried state catches up — there is no sync
-        // protocol behind the jump, only the post-`Ok` nudge back to our own
-        // wakeup socket so a fresh frame confirms in one round-trip.
-        focus_selected_row(snapshot, index, wake_socket);
+        // one-way async focus command at the very pane the echo pinned —
+        // stamped and focused are the same value by construction. The derived
+        // baseline confirms or expires the stamp when the queried state
+        // catches up — there is no sync protocol behind the jump, only the
+        // post-`Ok` nudge back to our own wakeup socket so a fresh frame
+        // confirms in one round-trip. (A pane-less row selects with no pane,
+        // so it stamps nothing and jumps nowhere.)
+        spawn_pane_focus(pane, wake_socket.to_owned());
     }
     Ok(outcome.redraw)
 }
@@ -1796,7 +1801,10 @@ fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct InputOutcome {
     redraw: bool,
-    focus_index: Option<usize>,
+    /// Jump to the pane the handler just selected and stamped
+    /// (`UiState::selected_pane`) — the outcome carries the intent, never a
+    /// row position to re-resolve.
+    focus: bool,
     dismiss: bool,
 }
 
@@ -1804,15 +1812,15 @@ impl InputOutcome {
     fn redraw() -> Self {
         Self {
             redraw: true,
-            focus_index: None,
+            focus: false,
             dismiss: false,
         }
     }
 
-    fn focus(index: usize) -> Self {
+    fn focus() -> Self {
         Self {
             redraw: true,
-            focus_index: Some(index),
+            focus: true,
             dismiss: false,
         }
     }
@@ -1820,7 +1828,7 @@ impl InputOutcome {
     fn dismiss() -> Self {
         Self {
             redraw: true,
-            focus_index: None,
+            focus: false,
             dismiss: true,
         }
     }
@@ -1850,13 +1858,13 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
             // any pre-jump frame still in flight, identical to a click.
             select_row(ui, snapshot, ui.selected_index);
             stamp_jump(ui);
-            InputOutcome::focus(ui.selected_index)
+            InputOutcome::focus()
         }
         KeyAction::Space => {
             if let Some(index) = next_attention_index(snapshot, ui.selected_index) {
                 select_row(ui, snapshot, index);
                 stamp_jump(ui);
-                return InputOutcome::focus(index);
+                return InputOutcome::focus();
             }
             InputOutcome::default()
         }
@@ -1870,7 +1878,7 @@ fn handle_key(action: KeyAction, ui: &mut UiState, snapshot: &SidebarSnapshot) -
             if index < visible_row_count(snapshot) {
                 select_row(ui, snapshot, index);
                 stamp_jump(ui);
-                return InputOutcome::focus(index);
+                return InputOutcome::focus();
             }
             InputOutcome::default()
         }
@@ -1886,7 +1894,7 @@ fn handle_mouse_click(
     if let Some(index) = row_index_at_screen_position(ui, row) {
         select_row(ui, snapshot, index);
         stamp_jump(ui);
-        return InputOutcome::focus(index);
+        return InputOutcome::focus();
     }
     InputOutcome::default()
 }
@@ -2103,25 +2111,12 @@ fn next_attention_index(snapshot: &SidebarSnapshot, selected: usize) -> Option<u
     })
 }
 
-/// Focus the pane backing the selected row. A no-op when the row has no pane.
-fn focus_selected_row(snapshot: &SidebarSnapshot, selected: usize, wake_socket: &Path) {
-    let Some(pane) = visible_rows(snapshot)
-        .nth(selected)
-        .and_then(|row| row.pane.as_ref())
-    else {
-        return;
-    };
-    // Jump off the render thread: `focus_pane` still forks the mux client
-    // (`zellij action focus-pane-id` / the tmux equivalent), which must never
-    // block the loop. The highlight is already redrawn, so the jump is
-    // fire-and-forget. Focus the pane bound in the snapshot directly — no
-    // `rimz pane focus` child, no per-click `list-panes` re-validation. A pane
-    // recycled in the sub-second window since the snapshot self-corrects on the
-    // next refresh.
-    spawn_pane_focus(pane.pane_id.clone(), wake_socket.to_owned());
-}
-
-/// Focus the pane on a detached thread so the keypress/click returns instantly.
+/// Focus the pane on a detached thread so the keypress/click returns instantly:
+/// `focus_pane` forks the mux client (`zellij action focus-pane-id` / the tmux
+/// equivalent), which must never block the loop. The snapshot-bound pane is
+/// focused directly — no `rimz pane focus` child, no per-click `list-panes`
+/// re-validation; a pane recycled in the sub-second window since the snapshot
+/// self-corrects on the next refresh.
 /// Errors are logged, not surfaced — a missed jump is a retriable annoyance,
 /// never a reason to block the UI. Once the focus command lands, the thread
 /// posts the [`JUMP_NUDGE_WAKEUP`] back to this renderer's own wakeup socket so
@@ -3747,12 +3742,14 @@ mod tests {
 
         let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
 
-        assert_eq!(outcome, InputOutcome::focus(1));
+        assert_eq!(outcome, InputOutcome::focus());
         assert_eq!(ui.selected_index, 1);
-        assert!(
-            ui.jump_stamp.is_some(),
-            "a click stamps the optimistic jump echo"
+        assert_eq!(
+            ui.jump_stamp.as_ref().map(|stamp| &stamp.pane),
+            ui.selected_pane.as_ref(),
+            "a click stamps the optimistic jump echo on the selected pane — the one the focus fires at"
         );
+        assert!(ui.selected_pane.is_some());
     }
 
     #[test]
@@ -3818,12 +3815,14 @@ mod tests {
 
         let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
 
-        assert_eq!(outcome, InputOutcome::focus(1));
+        assert_eq!(outcome, InputOutcome::focus());
         assert_eq!(ui.selected_index, 1);
-        assert!(
-            ui.jump_stamp.is_some(),
-            "Enter stamps the optimistic jump echo"
+        assert_eq!(
+            ui.jump_stamp.as_ref().map(|stamp| &stamp.pane),
+            ui.selected_pane.as_ref(),
+            "Enter stamps the optimistic jump echo on the selected pane — the one the focus fires at"
         );
+        assert!(ui.selected_pane.is_some());
     }
 
     // ---- last-known-good commit gate -------------------------------------
