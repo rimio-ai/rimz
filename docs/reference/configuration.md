@@ -113,6 +113,8 @@ ascii_art = """
 
 The dashboard pinned at the bottom of the sidebar carries one block per agent kind. `[sidebar.providers.<kind>]` overrides the built-in style — `<kind>` is `claude`, `codex`, `pi`, …; each field is optional and falls back to the shipped default, so you can recolour without restating the art. `max_provider_blocks` caps how many blocks render, ordered by spend. How each block's account, plan, and usage budgets are sourced is in [internals/account.md](../internals/account.md).
 
+`max_cols` is an optional column cap: when set, the renderer clips the logical width to that value regardless of pane size. Useful when the sidebar pane can grow wider than you want (e.g. after a sibling pane closes). Unset means full pane width.
+
 ## Resolver allowlist — `~/.config/rimz/resolvers.toml`
 
 The per-machine chain of resolvers allowed to answer ahead of you. `rimz resolver add` writes this file; you can also hand-edit it.

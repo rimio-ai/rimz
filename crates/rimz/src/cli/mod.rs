@@ -475,7 +475,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // hosts depend on config and which agents are on PATH. When present, it leads
     // the session — on Zellij that order is fixed at birth (`open_sidebar` renders
     // the daemon tab first), since Zellij can't reorder tabs afterwards.
-    let daemon_view = build_daemon_view(remote_control, &workspace, &mux_config);
+    let daemon_view = build_daemon_view(remote_control, &workspace, &mux_config, machine_config.sidebar.max_cols);
     let daemon = daemon_view.as_ref().map(|view| DaemonView {
         name: view.name.clone(),
         hosts: view.hosts.clone(),
@@ -500,6 +500,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         &workspace.session_name,
         &workspace.worktree_root,
         &mux_config,
+        machine_config.sidebar.max_cols,
         daemon.as_ref(),
         &resume_plan.panes,
     );
@@ -519,6 +520,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         &workspace.session_name,
         &workspace.worktree_root,
         &mux_config,
+        machine_config.sidebar.max_cols,
         daemon.as_ref(),
         &resume_plan.panes,
     )?;
@@ -571,6 +573,7 @@ fn attach_cwd(mode: AttachMode, no_resume: bool, globals: &GlobalFlags) -> Resul
         &workspace.session_name,
         &workspace.worktree_root,
         &mux_config,
+        machine_config.sidebar.max_cols,
         None,
         &resume_plan.panes,
     );
@@ -580,6 +583,7 @@ fn attach_cwd(mode: AttachMode, no_resume: bool, globals: &GlobalFlags) -> Resul
         &workspace.session_name,
         &workspace.worktree_root,
         &mux_config,
+        machine_config.sidebar.max_cols,
         None,
         &resume_plan.panes,
     )?;
@@ -629,6 +633,7 @@ fn attach_named(
                 &record.session_name,
                 &record.project_root,
                 &mux_config,
+                machine_config.sidebar.max_cols,
                 None,
                 &resume_plan.panes,
             );
@@ -640,6 +645,7 @@ fn attach_named(
                 &record.session_name,
                 &record.project_root,
                 &mux_config,
+                machine_config.sidebar.max_cols,
                 None,
                 &resume_plan.panes,
             )?;
@@ -869,6 +875,7 @@ fn build_sidebar_opts(
     session_name: &str,
     cwd: &Path,
     mux_config: &rimz::config::MultiplexerConfig,
+    max_cols: Option<u16>,
     resume_panes: Vec<rimz::mux::ResumePane>,
 ) -> Result<SidebarPaneOptions> {
     let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
@@ -877,6 +884,7 @@ fn build_sidebar_opts(
         workspace_id: workspace_id.clone(),
         cwd: cwd.to_path_buf(),
         width_percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
+        max_cols,
         rimz_bin,
         replace_existing: false,
         config: mux_config.clone(),
@@ -890,6 +898,7 @@ fn launch_sidebar_for_workspace(
     session_name: &str,
     cwd: &Path,
     mux_config: &rimz::config::MultiplexerConfig,
+    max_cols: Option<u16>,
     daemon: Option<&DaemonView>,
     resume_panes: &[rimz::mux::ResumePane],
 ) -> rimz::sidebar::SidebarLaunchOutcome {
@@ -909,6 +918,7 @@ fn launch_sidebar_for_workspace(
         session_name,
         cwd,
         mux_config,
+        max_cols,
         resume_panes.to_vec(),
     ) {
         Ok(opts) => opts,
@@ -937,6 +947,7 @@ fn ensure_clean_room(
     session_name: &str,
     cwd: &Path,
     mux_config: &rimz::config::MultiplexerConfig,
+    max_cols: Option<u16>,
     daemon: Option<&DaemonView>,
     resume_panes: &[rimz::mux::ResumePane],
 ) -> SessionHealth {
@@ -945,6 +956,7 @@ fn ensure_clean_room(
         session_name,
         cwd,
         mux_config,
+        max_cols,
         resume_panes.to_vec(),
     ) {
         Ok(opts) => opts,
@@ -971,6 +983,7 @@ fn gate_room_before_attach(
     session_name: &str,
     cwd: &Path,
     mux_config: &rimz::config::MultiplexerConfig,
+    max_cols: Option<u16>,
     daemon: Option<&DaemonView>,
     resume_panes: &[rimz::mux::ResumePane],
 ) -> Result<()> {
@@ -980,6 +993,7 @@ fn gate_room_before_attach(
         session_name,
         cwd,
         mux_config,
+        max_cols,
         daemon,
         resume_panes,
     ) {
@@ -989,6 +1003,7 @@ fn gate_room_before_attach(
             session_name,
             cwd,
             mux_config,
+            max_cols,
             daemon,
             resume_panes,
         )?;
@@ -1005,6 +1020,7 @@ fn recover_stuck_room(
     session_name: &str,
     cwd: &Path,
     mux_config: &rimz::config::MultiplexerConfig,
+    max_cols: Option<u16>,
     daemon: Option<&DaemonView>,
     resume_panes: &[rimz::mux::ResumePane],
 ) -> Result<()> {
@@ -1026,6 +1042,7 @@ fn recover_stuck_room(
         session_name,
         cwd,
         mux_config,
+        max_cols,
         daemon,
         resume_panes,
     ) {
@@ -1154,6 +1171,7 @@ fn build_daemon_view(
     config: &rimz::config::RemoteControlConfig,
     workspace: &rimz::ResolvedWorkspace,
     mux_config: &rimz::config::MultiplexerConfig,
+    max_cols: Option<u16>,
 ) -> Option<BackgroundViewOptions> {
     let rimz_bin = match std::env::current_exe() {
         Ok(path) => path,
@@ -1189,6 +1207,7 @@ fn build_daemon_view(
             workspace_id: workspace.workspace_id.clone(),
             cwd: workspace.worktree_root.clone(),
             width_percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
+            max_cols,
             rimz_bin,
             replace_existing: false,
             config: mux_config.clone(),

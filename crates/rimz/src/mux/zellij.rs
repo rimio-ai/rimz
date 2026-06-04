@@ -454,7 +454,7 @@ impl ZellijBackend {
                 new_pane.clone(),
             ])
             .run()?;
-        self.resize_sidebar_toward(&opts.session_name, tab_id, &new_pane, opts.width_percent);
+        self.resize_sidebar_toward(&opts.session_name, tab_id, &new_pane, opts.width_percent, opts.max_cols);
         Ok(())
     }
 
@@ -503,7 +503,7 @@ impl ZellijBackend {
     /// best-effort: it stops at the target, when a step makes no progress (hit a
     /// minimum), or after [`RESIZE_MAX_STEPS`] — never a dead loop. Width is
     /// cosmetic, so any failure just leaves the wider pane.
-    fn resize_sidebar_toward(&self, session: &str, tab_id: u64, pane_id: &str, width_percent: u16) {
+    fn resize_sidebar_toward(&self, session: &str, tab_id: u64, pane_id: &str, width_percent: u16, max_cols: Option<u16>) {
         const RESIZE_MAX_STEPS: u32 = 16;
         let Some(target_raw) = parse_terminal_id(pane_id) else {
             return;
@@ -516,7 +516,11 @@ impl ZellijBackend {
             if total == 0 {
                 return;
             }
-            let target = (total * u64::from(width_percent.clamp(10, 90)) / 100).max(1);
+            let pct_target = (total * u64::from(width_percent.clamp(10, 90)) / 100).max(1);
+            let target = match max_cols {
+                Some(cap) => pct_target.min(u64::from(cap)),
+                None => pct_target,
+            };
             if cols <= target {
                 // Reached/overshot the target. If the previous, above-target
                 // width was closer than this one, the last decrease overshot —
@@ -2000,6 +2004,7 @@ mod tests {
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bar")),
             cwd: PathBuf::from("/tmp/rimz-bar"),
             width_percent: 30,
+            max_cols: None,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),
@@ -2021,6 +2026,7 @@ mod tests {
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-focus")),
             cwd: PathBuf::from("/tmp/rimz-focus"),
             width_percent: 30,
+            max_cols: None,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),
@@ -2064,6 +2070,7 @@ mod tests {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/proj/root")),
                 cwd: PathBuf::from("/proj/worktree"),
                 width_percent: 30,
+                max_cols: None,
                 rimz_bin: PathBuf::from("/usr/bin/rimz"),
                 replace_existing: false,
                 config: crate::config::MultiplexerConfig::default(),
@@ -2251,6 +2258,7 @@ mod tests {
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
             cwd: PathBuf::from("/tmp/rimz-run"),
             width_percent: 30,
+            max_cols: None,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),

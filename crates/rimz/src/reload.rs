@@ -151,6 +151,7 @@ fn reconcile_live(
         workspace_id: ws.workspace_id.clone(),
         cwd: ws.project_root.clone(),
         width_percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
+        max_cols: machine_config.sidebar.max_cols,
         rimz_bin: rimz_bin.to_path_buf(),
         replace_existing: false,
         config: MultiplexerConfig::from(machine_config),

@@ -242,6 +242,11 @@ pub struct SidebarPaneOptions {
     pub workspace_id: WorkspaceId,
     pub cwd: PathBuf,
     pub width_percent: u16,
+    /// Hard column cap applied when sizing the sidebar pane. The backend uses
+    /// the minimum of the percentage-derived target and this value, so the
+    /// pane never opens wider than `max_cols` regardless of terminal width.
+    /// `None` means no cap (full percentage-derived width).
+    pub max_cols: Option<u16>,
     pub rimz_bin: PathBuf,
     pub replace_existing: bool,
     pub config: crate::config::MultiplexerConfig,

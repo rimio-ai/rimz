@@ -214,7 +214,11 @@ pub fn draw_with_ui(
     //
     // The composed map is a byproduct of the draw: store it so the mouse
     // hit-test reads the geometry of the frame the user is actually looking at.
-    let (lines, map) = compose_lines(snapshot, alert, ui, area.width, area.height);
+    let render_width = match snapshot.sidebar.max_cols {
+        Some(cap) => area.width.min(cap),
+        None => area.width,
+    };
+    let (lines, map) = compose_lines(snapshot, alert, ui, render_width, area.height);
     ui.line_map = map;
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);

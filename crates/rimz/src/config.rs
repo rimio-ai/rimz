@@ -309,6 +309,12 @@ pub struct SidebarConfig {
     /// reddens — the neglect window past which a blocked agent reads as urgent.
     /// Display-only; it tunes the colour ramp, never the ledger.
     pub attention_redden_secs: u64,
+    /// Hard column cap on the rendered width. When set, the renderer clips the
+    /// logical width to this value regardless of pane size — useful when the
+    /// sidebar pane is wider than desired (e.g. after a sibling pane closes).
+    /// Unset (the default) means full pane width.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_cols: Option<u16>,
 }
 
 impl Default for SidebarConfig {
@@ -317,6 +323,7 @@ impl Default for SidebarConfig {
             providers: BTreeMap::new(),
             max_provider_blocks: default_max_provider_blocks(),
             attention_redden_secs: default_attention_redden_secs(),
+            max_cols: None,
         }
     }
 }

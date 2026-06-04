@@ -115,7 +115,7 @@ impl TmuxBackend {
     }
 
     /// Split a left sidebar into a specific window in place, mirroring the
-    /// initial-window split: `-b` (before/left), `-l <pct>%` (width), `-d`
+    /// initial-window split: `-b` (before/left), `-l <size>` (width), `-d`
     /// (keep the caller's focus). The `-t <window_id>` target leaves every other
     /// window untouched.
     fn add_sidebar_to_window(&self, opts: &SidebarPaneOptions, window_id: &str) -> Result<()> {
@@ -126,7 +126,7 @@ impl TmuxBackend {
                 "-h".to_owned(),
                 "-b".to_owned(),
                 "-l".to_owned(),
-                format!("{}%", opts.width_percent),
+                sidebar_size_arg(opts),
                 "-t".to_owned(),
                 window_id.to_owned(),
             ])
@@ -304,6 +304,16 @@ const SIDEBAR_BIN_NAME: &str = "rimz-sidebar";
 
 /// The `rimz sidebar serve …` argv a tmux sidebar pane runs. Shared by initial
 /// launch and in-place recovery so the two cannot drift.
+/// The `-l` argument for `split-window`: an absolute column count when
+/// `max_cols` is set (tmux clips to the window width automatically), else a
+/// percentage string so the split tracks terminal size.
+fn sidebar_size_arg(opts: &SidebarPaneOptions) -> String {
+    match opts.max_cols {
+        Some(cap) => cap.to_string(),
+        None => format!("{}%", opts.width_percent),
+    }
+}
+
 fn sidebar_serve_command(opts: &SidebarPaneOptions) -> Vec<String> {
     vec![
         opts.rimz_bin.to_string_lossy().into_owned(),
@@ -588,7 +598,7 @@ impl MuxBackend for TmuxBackend {
                 "-d".to_owned(),
                 "-h".to_owned(),
                 "-l".to_owned(),
-                format!("{}%", opts.width_percent),
+                sidebar_size_arg(opts),
                 "-b".to_owned(),
                 "-t".to_owned(),
                 opts.session_name.clone(),
@@ -603,10 +613,8 @@ impl MuxBackend for TmuxBackend {
         // split in each new window. `-b -d` keep the sidebar left and focus on
         // the new window's terminal, exactly as the initial window.
         let serve = command.join(" ");
-        let hook = format!(
-            "split-window -h -b -d -l {pct}% '{serve}'",
-            pct = opts.width_percent,
-        );
+        let size = sidebar_size_arg(opts);
+        let hook = format!("split-window -h -b -d -l {size} '{serve}'");
         self.cmd()
             .args([
                 "set-hook".to_owned(),
