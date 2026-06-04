@@ -255,53 +255,15 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
     }
 }
 
-/// Decode the lifecycle signal an `agent.lifecycle` event carries. A current
-/// (schema v2+) event stores an explicit `signal`; a legacy (v1) event stored a
-/// bare `status` plus a `compacting` flag, which this reconstructs into the
-/// closest signal so an on-disk event log replays without a rewrite. Deletable
-/// once no v1 log can still be active.
-pub(crate) fn signal_from_event_params(params: &Value, event_name: &str) -> LifecycleSignal {
-    if let Some(signal) = params
+/// Decode the explicit lifecycle signal an `agent.lifecycle` event carries.
+/// The event-log schema requires the `signal` object on every lifecycle
+/// params payload (every writer stamps it via
+/// [`EventEnvelope::agent_lifecycle`](crate::schema::event::EventEnvelope::agent_lifecycle));
+/// `None` marks a non-conforming payload the reducer folds nothing from.
+pub(crate) fn signal_from_event_params(params: &Value) -> Option<LifecycleSignal> {
+    params
         .get("signal")
         .and_then(|value| LifecycleSignal::deserialize(value).ok())
-    {
-        return signal;
-    }
-    // Legacy reconstruction.
-    if params
-        .get("compacting")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return LifecycleSignal::Compacting;
-    }
-    let status = params.get("status").and_then(Value::as_str);
-    match (event_name, status) {
-        ("SessionEnd", _) | (_, Some("offline")) => LifecycleSignal::Ended,
-        ("SessionStart", _) => LifecycleSignal::Registered,
-        ("UserPromptSubmit", _) => LifecycleSignal::TurnStarted,
-        ("SubagentStart", _) => LifecycleSignal::SubagentStarted,
-        ("SubagentStop", _) => LifecycleSignal::SubagentStopped,
-        ("Stop", status) => LifecycleSignal::TurnEnded {
-            errored: status == Some("failed"),
-            parked_on_background: status == Some("running"),
-        },
-        (_, Some("idle")) => LifecycleSignal::Registered,
-        (_, Some("success")) => LifecycleSignal::TurnEnded {
-            errored: false,
-            parked_on_background: false,
-        },
-        (_, Some("failed")) => LifecycleSignal::TurnEnded {
-            errored: true,
-            parked_on_background: false,
-        },
-        // A bare legacy `running` (e.g. a recorded tool event) keeps the agent
-        // running without claiming a turn boundary.
-        _ => LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
-        },
-    }
 }
 
 #[cfg(test)]
@@ -643,63 +605,27 @@ mod tests {
     fn decodes_an_explicit_signal_from_params() {
         let params = serde_json::json!({
             "signal": { "signal": "turn_ended", "errored": true, "parked_on_background": false },
-            "status": "running",
         });
         assert_eq!(
-            signal_from_event_params(&params, "Stop"),
-            LifecycleSignal::TurnEnded {
+            signal_from_event_params(&params),
+            Some(LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
-            },
+            }),
         );
     }
 
     #[test]
-    fn reconstructs_signal_from_legacy_status_params() {
-        let cases = [
-            (
-                serde_json::json!({ "status": "idle" }),
-                "SessionStart",
-                LifecycleSignal::Registered,
-            ),
-            (
-                serde_json::json!({ "status": "running" }),
-                "UserPromptSubmit",
-                LifecycleSignal::TurnStarted,
-            ),
-            (
-                serde_json::json!({ "status": "running" }),
-                "SubagentStart",
-                LifecycleSignal::SubagentStarted,
-            ),
-            (
-                serde_json::json!({ "status": "success" }),
-                "Stop",
-                LifecycleSignal::TurnEnded {
-                    errored: false,
-                    parked_on_background: false,
-                },
-            ),
-            (
-                serde_json::json!({ "status": "running" }),
-                "Stop",
-                LifecycleSignal::TurnEnded {
-                    errored: false,
-                    parked_on_background: true,
-                },
-            ),
-            (
-                serde_json::json!({ "status": "running", "compacting": true }),
-                "PreCompact",
-                LifecycleSignal::Compacting,
-            ),
-        ];
-        for (params, event, expected) in cases {
-            assert_eq!(
-                signal_from_event_params(&params, event),
-                expected,
-                "{event}"
-            );
+    fn signal_less_params_decode_to_none() {
+        // The post-v2 contract: an `agent.lifecycle` event without an explicit
+        // `signal` is non-conforming and folds to nothing — never reconstructed
+        // from a bare status.
+        for params in [
+            serde_json::json!({ "status": "running", "event_name": "UserPromptSubmit" }),
+            serde_json::json!({ "signal": "not-an-object" }),
+            serde_json::json!({}),
+        ] {
+            assert_eq!(signal_from_event_params(&params), None, "{params}");
         }
     }
 }

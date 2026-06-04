@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::project::{reduce_agent_states, reduce_agent_states_seeded};
 use super::{Result, SnapshotErr};
+use crate::agents::lifecycle;
 use crate::feed::AgentState;
 use crate::ledger::atomic::{self, write_temp_then_rename};
 use crate::ledger::event_log::{self};
@@ -77,8 +78,8 @@ pub(super) fn merge_agent_rollups_with_tombstones(
     map.into_values().collect()
 }
 
-/// The `(kind, agent_id)` set whose sessions ended in `events` — a `SessionEnd`
-/// or an `offline` status. Exposed so resume-on-rebirth can drop a cleanly-ended
+/// The `(kind, agent_id)` set whose sessions ended in `events` — an `Ended`
+/// lifecycle signal. Exposed so resume-on-rebirth can drop a cleanly-ended
 /// agent from the audit rollup (which, unlike the carryover merge, keeps a
 /// within-log `SessionEnd` row), never re-spawning a session the user closed.
 pub fn agent_tombstones_for_events(events: &[EventEnvelope]) -> BTreeSet<(String, String)> {
@@ -87,9 +88,10 @@ pub fn agent_tombstones_for_events(events: &[EventEnvelope]) -> BTreeSet<(String
         if event.method != "agent.lifecycle" {
             continue;
         }
-        let event_name = event.params.get("event_name").and_then(|v| v.as_str());
-        let status = event.params.get("status").and_then(|v| v.as_str());
-        if event_name != Some("SessionEnd") && status != Some("offline") {
+        if !matches!(
+            lifecycle::signal_from_event_params(&event.params),
+            Some(lifecycle::LifecycleSignal::Ended)
+        ) {
             continue;
         }
         let kind = event.source.clone();
@@ -260,7 +262,7 @@ mod tests {
             serde_json::json!({
                 "event_name": "SessionEnd",
                 "agent_id": "agent-1",
-                "status": "idle",
+                "signal": { "signal": "ended" },
             }),
         );
 
@@ -306,9 +308,27 @@ mod tests {
 
         // Prefix: two agents come up.
         for event in [
-            lifecycle_at(&workspace, "claude", "SessionStart", "a", "idle"),
-            lifecycle_at(&workspace, "claude", "UserPromptSubmit", "a", "running"),
-            lifecycle_at(&workspace, "codex", "SessionStart", "b", "idle"),
+            lifecycle_at(
+                &workspace,
+                "claude",
+                "SessionStart",
+                "a",
+                lifecycle::LifecycleSignal::Registered,
+            ),
+            lifecycle_at(
+                &workspace,
+                "claude",
+                "UserPromptSubmit",
+                "a",
+                lifecycle::LifecycleSignal::TurnStarted,
+            ),
+            lifecycle_at(
+                &workspace,
+                "codex",
+                "SessionStart",
+                "b",
+                lifecycle::LifecycleSignal::Registered,
+            ),
         ] {
             event_log::append(&paths.events_log, &event).unwrap();
         }
@@ -319,9 +339,30 @@ mod tests {
         // Delta: a third agent appears, `a` stops, and `b`'s session ends —
         // a tombstone the incremental fold must carry exactly like the full one.
         for event in [
-            lifecycle_at(&workspace, "claude", "SessionStart", "c", "idle"),
-            lifecycle_at(&workspace, "claude", "Stop", "a", "idle"),
-            lifecycle_at(&workspace, "codex", "SessionEnd", "b", "offline"),
+            lifecycle_at(
+                &workspace,
+                "claude",
+                "SessionStart",
+                "c",
+                lifecycle::LifecycleSignal::Registered,
+            ),
+            lifecycle_at(
+                &workspace,
+                "claude",
+                "Stop",
+                "a",
+                lifecycle::LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: false,
+                },
+            ),
+            lifecycle_at(
+                &workspace,
+                "codex",
+                "SessionEnd",
+                "b",
+                lifecycle::LifecycleSignal::Ended,
+            ),
         ] {
             event_log::append(&paths.events_log, &event).unwrap();
         }
@@ -371,7 +412,13 @@ mod tests {
         paths.ensure_dirs().unwrap();
         event_log::append(
             &paths.events_log,
-            &lifecycle_at(&workspace, "claude", "SessionStart", "real", "idle"),
+            &lifecycle_at(
+                &workspace,
+                "claude",
+                "SessionStart",
+                "real",
+                lifecycle::LifecycleSignal::Registered,
+            ),
         )
         .unwrap();
         let full_len = std::fs::metadata(&paths.events_log).unwrap().len();
@@ -430,7 +477,13 @@ mod tests {
         paths.ensure_dirs().unwrap();
         event_log::append(
             &paths.events_log,
-            &lifecycle_at(&workspace, "claude", "SessionStart", "a", "idle"),
+            &lifecycle_at(
+                &workspace,
+                "claude",
+                "SessionStart",
+                "a",
+                lifecycle::LifecycleSignal::Registered,
+            ),
         )
         .unwrap();
         let (cache, _) = catch_up_rollup(&paths).unwrap();
@@ -468,7 +521,13 @@ mod tests {
         // Appends to the fresh log fold under the bumped generation.
         event_log::append(
             &paths.events_log,
-            &lifecycle_at(&workspace, "codex", "SessionStart", "b", "idle"),
+            &lifecycle_at(
+                &workspace,
+                "codex",
+                "SessionStart",
+                "b",
+                lifecycle::LifecycleSignal::Registered,
+            ),
         )
         .unwrap();
         let (next, agents) = catch_up_rollup(&paths).unwrap();
@@ -519,7 +578,13 @@ mod tests {
         for agent_id in ["a", "b", "c"] {
             event_log::append(
                 &paths.events_log,
-                &lifecycle_at(&workspace, "claude", "SessionStart", agent_id, "idle"),
+                &lifecycle_at(
+                    &workspace,
+                    "claude",
+                    "SessionStart",
+                    agent_id,
+                    lifecycle::LifecycleSignal::Registered,
+                ),
             )
             .unwrap();
             frame_ends.push(std::fs::metadata(&paths.events_log).unwrap().len());
@@ -575,8 +640,17 @@ mod tests {
             let events: Vec<_> = seq
                 .iter()
                 .map(|&(kind, event, agent_id)| {
-                    let status = if event == 1 { "running" } else { "idle" };
-                    lifecycle_at(&workspace, KINDS[kind], EVENTS[event], AGENTS[agent_id], status)
+                    // The explicit signal each event name stamps in production.
+                    let signal = match event {
+                        1 => lifecycle::LifecycleSignal::TurnStarted,
+                        2 => lifecycle::LifecycleSignal::TurnEnded {
+                            errored: false,
+                            parked_on_background: false,
+                        },
+                        3 => lifecycle::LifecycleSignal::Ended,
+                        _ => lifecycle::LifecycleSignal::Registered,
+                    };
+                    lifecycle_at(&workspace, KINDS[kind], EVENTS[event], AGENTS[agent_id], signal)
                 })
                 .collect();
             let at = split.index(events.len() + 1);

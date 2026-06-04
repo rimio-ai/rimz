@@ -204,14 +204,14 @@ mod tests {
         let alive = lifecycle(serde_json::json!({
             "event_name": "SessionStart",
             "agent_id": "sess-live",
-            "status": "idle",
+            "signal": { "signal": "registered" },
         }));
         // A pid that cannot be live (u32::MAX): the rollup derives a dead owner,
         // which the runtime expel must suppress.
         let dead = lifecycle(serde_json::json!({
             "event_name": "SessionStart",
             "agent_id": "sess-dead",
-            "status": "idle",
+            "signal": { "signal": "registered" },
             "agent_pid": u32::MAX,
         }));
         event_log::append(&paths.events_log, &alive).unwrap();
@@ -254,7 +254,7 @@ mod tests {
                 serde_json::json!({
                     "event_name": "SessionStart",
                     "agent_id": agent_id,
-                    "status": "idle",
+                    "signal": { "signal": "registered" },
                 }),
             )
         };

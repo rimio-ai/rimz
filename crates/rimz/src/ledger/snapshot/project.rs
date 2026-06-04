@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::panes::pane_ref_from_id;
 use crate::agents::lifecycle::{self, Transition};
@@ -55,6 +55,20 @@ pub(super) fn reduce_agent_states_seeded(
             continue;
         }
         let kind = event.source.clone();
+        // The agent-agnostic lifecycle intent this event carries. The status
+        // and the phase/compacting heads are all derived from it through the
+        // one shared `lifecycle::step` table — never taken verbatim — so an
+        // illegal jump can't slip through unvalidated. Replay is silent here;
+        // the ingestion path logs anomalies once per fresh event. A payload
+        // without the (required) explicit signal folds to nothing.
+        let Some(signal) = lifecycle::signal_from_event_params(&event.params) else {
+            debug!(
+                target: "rimz::agent::lifecycle",
+                event_id = %event.event_id,
+                "signal-less agent.lifecycle event ignored",
+            );
+            continue;
+        };
         let agent_id = event
             .params
             .get("agent_id")
@@ -73,14 +87,12 @@ pub(super) fn reduce_agent_states_seeded(
         };
         let event_parent_agent_id = param_non_empty_string("parent_agent_id");
         let event_task = param_non_empty_string("task");
-        if event_name == Some("SessionEnd")
-            || event.params.get("status").and_then(|v| v.as_str()) == Some("offline")
-        {
+        if matches!(signal, lifecycle::LifecycleSignal::Ended) {
             map.remove(&(kind, agent_id));
             continue;
         }
         let prior = map.get(&(kind.clone(), agent_id.clone()));
-        if event_name == Some("SubagentStop")
+        if matches!(signal, lifecycle::LifecycleSignal::SubagentStopped)
             && prior.is_none()
             && event_parent_agent_id.is_some()
             && event_task.is_none()
@@ -100,13 +112,6 @@ pub(super) fn reduce_agent_states_seeded(
             );
             continue;
         }
-        // The agent-agnostic lifecycle intent this event carries (a current
-        // `signal`, or one reconstructed from a legacy `status`/`compacting`
-        // pair). The status, the turn phase, and the compacting head are all
-        // derived from it through the one shared `lifecycle::step` table — never taken
-        // verbatim — so an illegal jump can't slip through unvalidated. Replay is
-        // silent here; the ingestion path logs anomalies once per fresh event.
-        let signal = lifecycle::signal_from_event_params(&event.params, event_name.unwrap_or(""));
         let prev_state = prior.map(AgentState::lifecycle);
         let Transition { next, .. } = lifecycle::step(prev_state.as_ref(), &signal);
         let status = next.status;
@@ -144,7 +149,10 @@ pub(super) fn reduce_agent_states_seeded(
         let todo_total = param_number("todo_total")
             .map(|v| v.min(u32::MAX as u64) as u32)
             .or_else(|| prior.and_then(|p| p.todo_total));
-        let establishes_identity = matches!(event_name, Some("SessionStart" | "SubagentStart"));
+        let establishes_identity = matches!(
+            signal,
+            lifecycle::LifecycleSignal::Registered | lifecycle::LifecycleSignal::SubagentStarted
+        );
         // The parent link is pure identity: only ever set, never cleared. Adopt
         // it from any event that carries it, then carry it forward. A typed
         // `SubagentStop` can be the first useful child event Claude reports;
@@ -154,10 +162,11 @@ pub(super) fn reduce_agent_states_seeded(
         // Root agents never carry one.
         let parent_agent_id =
             event_parent_agent_id.or_else(|| prior.and_then(|p| p.parent_agent_id.clone()));
-        // The current turn's start instant — advanced only by `UserPromptSubmit`,
-        // never by `Stop`. It is the "next prompt" boundary the subagent-list
-        // retention reads; carried forward across all other events.
-        let turn_started_at = if event_name == Some("UserPromptSubmit") {
+        // The current turn's start instant — advanced only by a turn start,
+        // never by a turn end. It is the "next prompt" boundary the
+        // subagent-list retention reads; carried forward across all other
+        // events.
+        let turn_started_at = if matches!(signal, lifecycle::LifecycleSignal::TurnStarted) {
             Some(event.timestamp)
         } else {
             prior.and_then(|p| p.turn_started_at)
@@ -302,13 +311,13 @@ mod tests {
         let start = lifecycle(serde_json::json!({
             "event_name": "SessionStart",
             "agent_id": "sess-1",
-            "status": "idle",
+            "signal": { "signal": "registered" },
             "permission_posture": "plan",
         }));
         let prompt = lifecycle(serde_json::json!({
             "event_name": "UserPromptSubmit",
             "agent_id": "sess-1",
-            "status": "running",
+            "signal": { "signal": "turn_started" },
         }));
         let running = reduce_agent_states(&[start.clone(), prompt.clone()]);
         assert_eq!(running[0].status, AgentStatus::Running);
@@ -345,7 +354,7 @@ mod tests {
         let stop = lifecycle(serde_json::json!({
             "event_name": "Stop",
             "agent_id": "sess-1",
-            "status": "success",
+            "signal": { "signal": "turn_ended", "errored": false, "parked_on_background": false },
         }));
         let stopped = reduce_agent_states(&[start, prompt, stop]);
         assert_eq!(stopped[0].status, AgentStatus::Success);
@@ -398,7 +407,7 @@ mod tests {
         let start = lifecycle(serde_json::json!({
             "event_name": "SessionStart",
             "agent_id": "sess-1",
-            "status": "idle",
+            "signal": { "signal": "registered" },
             "model": "GPT-5.5",
             "effort": "high",
             "context_window": 258_400,
@@ -408,7 +417,7 @@ mod tests {
         let prompt = lifecycle(serde_json::json!({
             "event_name": "UserPromptSubmit",
             "agent_id": "sess-1",
-            "status": "running",
+            "signal": { "signal": "turn_started" },
             "task": "fix auth flow",
             "worktree_path": "/tmp/hook-subprocess-cwd",
             "worktree_branch": "wrong-branch",
@@ -454,18 +463,18 @@ mod tests {
         let start = lifecycle(serde_json::json!({
             "event_name": "SessionStart",
             "agent_id": "sess-1",
-            "status": "idle",
+            "signal": { "signal": "registered" },
             "model": "claude-opus-4-8[1m]",
         }));
         let prompt = lifecycle(serde_json::json!({
             "event_name": "UserPromptSubmit",
             "agent_id": "sess-1",
-            "status": "running",
+            "signal": { "signal": "turn_started" },
         }));
         let stop = lifecycle(serde_json::json!({
             "event_name": "Stop",
             "agent_id": "sess-1",
-            "status": "success",
+            "signal": { "signal": "turn_ended", "errored": false, "parked_on_background": false },
             "model": "claude-opus-4-8",
         }));
 
@@ -492,7 +501,7 @@ mod tests {
         let start = lifecycle(serde_json::json!({
             "event_name": "SubagentStart",
             "agent_id": "child-1",
-            "status": "running",
+            "signal": { "signal": "subagent_started" },
             "parent_agent_id": "sess-root",
             "task": "Explore",
         }));
@@ -500,7 +509,7 @@ mod tests {
         let stop = lifecycle(serde_json::json!({
             "event_name": "SubagentStop",
             "agent_id": "child-1",
-            "status": "idle",
+            "signal": { "signal": "subagent_stopped" },
             "task": "Explore",
         }));
         let agents = reduce_agent_states(&[start, stop]);
@@ -532,7 +541,7 @@ mod tests {
         let start = lifecycle(serde_json::json!({
             "event_name": "SubagentStart",
             "agent_id": "child-1",
-            "status": "running",
+            "signal": { "signal": "subagent_started" },
             "parent_agent_id": "sess-root",
             "task": "Explore",
         }));
@@ -541,7 +550,7 @@ mod tests {
         let stop = lifecycle(serde_json::json!({
             "event_name": "SubagentStop",
             "agent_id": "child-1",
-            "status": "idle",
+            "signal": { "signal": "subagent_stopped" },
             "task": "",
         }));
         let agents = reduce_agent_states(&[start, stop]);
@@ -581,7 +590,7 @@ mod tests {
         let root_start = lifecycle(serde_json::json!({
             "event_name": "SessionStart",
             "agent_id": "sess-root",
-            "status": "idle",
+            "signal": { "signal": "registered" },
             "model": "claude-opus-4-8",
             "pane_id": pane,
             "worktree_path": "/repo/wt",
@@ -590,7 +599,7 @@ mod tests {
         let root_prompt = lifecycle(serde_json::json!({
             "event_name": "UserPromptSubmit",
             "agent_id": "sess-root",
-            "status": "running",
+            "signal": { "signal": "turn_started" },
             "pane_id": pane,
             "worktree_path": "/repo/wt",
             "worktree_branch": "feature",
@@ -598,7 +607,7 @@ mod tests {
         let child_stop = lifecycle(serde_json::json!({
             "event_name": "SubagentStop",
             "agent_id": "child-1",
-            "status": "idle",
+            "signal": { "signal": "subagent_stopped" },
             "parent_agent_id": "sess-root",
             "task": "Explore",
             "pane_id": pane,
@@ -642,24 +651,24 @@ mod tests {
         let root_start = lifecycle(serde_json::json!({
             "event_name": "SessionStart",
             "agent_id": "sess-root",
-            "status": "idle",
+            "signal": { "signal": "registered" },
         }));
         let root_prompt = lifecycle(serde_json::json!({
             "event_name": "UserPromptSubmit",
             "agent_id": "sess-root",
-            "status": "running",
+            "signal": { "signal": "turn_started" },
         }));
         let child_start = lifecycle(serde_json::json!({
             "event_name": "SubagentStart",
             "agent_id": "child-real",
-            "status": "running",
+            "signal": { "signal": "subagent_started" },
             "parent_agent_id": "sess-root",
             "task": "Explore",
         }));
         let stray_stop = lifecycle(serde_json::json!({
             "event_name": "SubagentStop",
             "agent_id": "a833a787ad884cee2",
-            "status": "idle",
+            "signal": { "signal": "subagent_stopped" },
             "parent_agent_id": "sess-root",
             "task": "",
             "total_tokens": 36_410,
@@ -696,14 +705,14 @@ mod tests {
             )
         };
         let start = lifecycle(
-            serde_json::json!({ "event_name": "SessionStart", "agent_id": "s1", "status": "idle" }),
+            serde_json::json!({ "event_name": "SessionStart", "agent_id": "s1", "signal": { "signal": "registered" } }),
         );
         let prompt = lifecycle(
-            serde_json::json!({ "event_name": "UserPromptSubmit", "agent_id": "s1", "status": "running" }),
+            serde_json::json!({ "event_name": "UserPromptSubmit", "agent_id": "s1", "signal": { "signal": "turn_started" } }),
         );
         let prompt_ts = prompt.timestamp;
         let stop = lifecycle(
-            serde_json::json!({ "event_name": "Stop", "agent_id": "s1", "status": "success" }),
+            serde_json::json!({ "event_name": "Stop", "agent_id": "s1", "signal": { "signal": "turn_ended", "errored": false, "parked_on_background": false } }),
         );
         let agents = reduce_agent_states(&[start, prompt, stop]);
         // The boundary is the prompt; the later Stop must not advance it (that is
@@ -727,14 +736,14 @@ mod tests {
         let prompt = lifecycle(serde_json::json!({
             "event_name": "UserPromptSubmit",
             "agent_id": "s1",
-            "status": "running",
+            "signal": { "signal": "turn_started" },
             "task": "fix auth flow",
             "prompt": "fix auth flow",
         }));
         // Stop carries neither task nor prompt: task is activity-bound and clears,
         // but the prompt persists to label the unnamed session past its turn.
         let stop = lifecycle(
-            serde_json::json!({ "event_name": "Stop", "agent_id": "s1", "status": "success" }),
+            serde_json::json!({ "event_name": "Stop", "agent_id": "s1", "signal": { "signal": "turn_ended", "errored": false, "parked_on_background": false } }),
         );
         let agents = reduce_agent_states(&[prompt, stop]);
         let agent = agents.iter().find(|a| a.agent_id == "s1").expect("agent");
@@ -762,7 +771,7 @@ mod tests {
         let start = lifecycle(serde_json::json!({
             "event_name": "SessionStart",
             "agent_id": "sess-1",
-            "status": "idle",
+            "signal": { "signal": "registered" },
             "context_pct": 38,
             "total_tokens": 12_400,
             "todo_done": 3,
@@ -771,7 +780,7 @@ mod tests {
         let prompt = lifecycle(serde_json::json!({
             "event_name": "UserPromptSubmit",
             "agent_id": "sess-1",
-            "status": "running",
+            "signal": { "signal": "turn_started" },
             "task": "fix auth flow",
         }));
 
@@ -804,13 +813,13 @@ mod tests {
         let start = lifecycle(serde_json::json!({
             "event_name": "SessionStart",
             "agent_id": "sess-1",
-            "status": "idle",
+            "signal": { "signal": "registered" },
             "pane_id": "tmux:%7",
         }));
         let prompt = lifecycle(serde_json::json!({
             "event_name": "UserPromptSubmit",
             "agent_id": "sess-1",
-            "status": "running",
+            "signal": { "signal": "turn_started" },
         }));
 
         let agents = reduce_agent_states(&[start, prompt]);

@@ -3640,12 +3640,12 @@ mod tests {
         let prompt = lifecycle(serde_json::json!({
             "event_name": "UserPromptSubmit",
             "agent_id": "sess-1",
-            "status": "running",
+            "signal": { "signal": "turn_started" },
         }));
         let compact = lifecycle(serde_json::json!({
             "event_name": "PreCompact",
             "agent_id": "sess-1",
-            "compacting": true,
+            "signal": { "signal": "compacting" },
         }));
         let after_compact = reduce_agent_states(&[prompt.clone(), compact.clone()]);
         assert!(
@@ -3661,7 +3661,7 @@ mod tests {
         let stop = lifecycle(serde_json::json!({
             "event_name": "Stop",
             "agent_id": "sess-1",
-            "status": "success",
+            "signal": { "signal": "turn_ended", "errored": false, "parked_on_background": false },
         }));
         let after_stop = reduce_agent_states(&[prompt, compact, stop]);
         assert!(

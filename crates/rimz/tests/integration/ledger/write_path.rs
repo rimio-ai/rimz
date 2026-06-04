@@ -33,7 +33,7 @@ fn lifecycle(h: &crate::common::Harness, event_name: &str, agent_id: &str) -> Ev
         json!({
             "event_name": event_name,
             "agent_id": agent_id,
-            "status": "idle",
+            "signal": { "signal": "registered" },
         }),
     )
 }

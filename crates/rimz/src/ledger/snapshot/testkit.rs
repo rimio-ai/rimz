@@ -3,7 +3,7 @@
 
 use jiff::Timestamp;
 
-use crate::agents::lifecycle::TurnPhase;
+use crate::agents::lifecycle::{self, TurnPhase};
 use crate::feed::{AgentState, AgentStatus, PaneRef};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::schema::event::EventEnvelope;
@@ -83,7 +83,7 @@ pub(super) fn lifecycle_at(
     source: &str,
     event_name: &str,
     agent_id: &str,
-    status: &str,
+    signal: lifecycle::LifecycleSignal,
 ) -> EventEnvelope {
     EventEnvelope::new(
         workspace.clone(),
@@ -94,7 +94,7 @@ pub(super) fn lifecycle_at(
         serde_json::json!({
             "event_name": event_name,
             "agent_id": agent_id,
-            "status": status,
+            "signal": signal,
         }),
     )
 }
