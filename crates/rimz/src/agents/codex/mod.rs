@@ -49,9 +49,10 @@ use super::pricing::PriceBook;
 use super::spending::CachedEntry;
 use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, Result, SubagentIdentity, agent_config_path,
-    choice_is_allow, classify_agent_hook, optional_payload_string, read_optional_file,
-    read_transcript_tail, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    HookInstallReport, HookUninstallReport, LifecycleRefreshCtx, RefreshSpawn, Result,
+    SubagentIdentity, agent_config_path, choice_is_allow, classify_agent_hook,
+    optional_payload_string, read_optional_file, read_transcript_tail, resolve_subagent_identity,
+    sanitize_user_prompt, stop_payload_errored,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ledger::atomic;
@@ -364,6 +365,34 @@ impl AgentAdapter for CodexAdapter {
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
         account::probe()
+    }
+
+    /// Codex has no statusline, so its rich realtime context (rate-limit
+    /// windows, model display name, version) refreshes out-of-band from the
+    /// app-server on turn boundaries: `SessionStart` populates it early (rate
+    /// limits + model need no thread); `UserPromptSubmit`/`Stop` keep it
+    /// current. Per-tool events are excluded — an app-server spawn per tool
+    /// call is too frequent.
+    fn post_lifecycle_refresh(
+        &self,
+        event_name: &str,
+        ctx: &LifecycleRefreshCtx<'_>,
+    ) -> Option<RefreshSpawn> {
+        if !matches!(event_name, "SessionStart" | "UserPromptSubmit" | "Stop") {
+            return None;
+        }
+        let mut args = vec![
+            "codex".to_owned(),
+            "refresh-context".to_owned(),
+            "--session-id".to_owned(),
+            ctx.agent_id.to_owned(),
+            "--workspace-id".to_owned(),
+            ctx.workspace_id.to_owned(),
+        ];
+        if let Some(model) = ctx.model_hint {
+            args.extend(["--model".to_owned(), model.to_owned()]);
+        }
+        Some(RefreshSpawn { args })
     }
 
     fn transcript_files(&self) -> Vec<PathBuf> {
@@ -1470,6 +1499,47 @@ command = "echo user"
         let report = uninstall_from(&path).unwrap();
         assert!(!report.existed);
         assert!(report.removed_events.is_empty());
+    }
+
+    #[test]
+    fn post_lifecycle_refresh_fires_on_turn_boundaries_only() {
+        let ctx = crate::agents::LifecycleRefreshCtx {
+            agent_id: "sess-1",
+            workspace_id: "ws-1",
+            model_hint: Some("gpt-5"),
+        };
+        let spawn = CodexAdapter
+            .post_lifecycle_refresh("Stop", &ctx)
+            .expect("Stop refreshes");
+        assert_eq!(
+            spawn.args,
+            [
+                "codex",
+                "refresh-context",
+                "--session-id",
+                "sess-1",
+                "--workspace-id",
+                "ws-1",
+                "--model",
+                "gpt-5",
+            ]
+        );
+        // No model hint → no --model flag.
+        let bare = crate::agents::LifecycleRefreshCtx {
+            model_hint: None,
+            ..ctx
+        };
+        let spawn = CodexAdapter
+            .post_lifecycle_refresh("SessionStart", &bare)
+            .expect("SessionStart refreshes");
+        assert!(!spawn.args.iter().any(|arg| arg == "--model"));
+        // Per-tool events stay silent — an app-server spawn per call is too frequent.
+        for event in ["PreToolUse", "PostToolUse", "SubagentStop", "Notification"] {
+            assert!(
+                CodexAdapter.post_lifecycle_refresh(event, &ctx).is_none(),
+                "{event}"
+            );
+        }
     }
 
     #[test]

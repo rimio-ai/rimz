@@ -267,13 +267,18 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                     "lifecycle: failed to touch the agent activity heartbeat",
                 );
             }
-            // Codex has no statusline, so its rich realtime context (rate-limit
-            // windows, model display name, version) is refreshed out-of-band
-            // from the app-server. Spawn the reader detached with fresh stdio on
-            // turn boundaries so it never adds latency to the agent's turn; the
-            // sidebar's next wakeup folds the fresh sidecar in.
-            if agent.descriptor().kind == "codex" && refreshes_codex_context(&event_name) {
-                spawn_codex_context_refresh(&workspace, agent_id, model_hint.as_deref());
+            // An adapter can request a detached `rimz` helper after a
+            // lifecycle event — Codex refreshes its app-server context on turn
+            // boundaries. Spawned with fresh stdio and never awaited, so it
+            // adds no latency to the agent's turn; the sidebar's next wakeup
+            // folds the fresh sidecar in.
+            let refresh_ctx = rimz::agents::LifecycleRefreshCtx {
+                agent_id,
+                workspace_id: workspace.workspace_id.as_str(),
+                model_hint: model_hint.as_deref(),
+            };
+            if let Some(spawn) = agent.post_lifecycle_refresh(&event_name, &refresh_ctx) {
+                spawn_refresh_detached(&spawn);
             }
         }
         return Ok(());
@@ -750,48 +755,26 @@ fn event_records_activity(event_name: &str) -> bool {
     )
 }
 
-/// Codex turn-boundary events that refresh the app-server context sidecar.
-/// `SessionStart` populates it early (rate limits + model need no thread); the
-/// turn boundaries keep it current. Per-tool events (`PreToolUse`/`PostToolUse`)
-/// are excluded — spawning an app-server per tool call is too frequent.
-fn refreshes_codex_context(event_name: &str) -> bool {
-    matches!(event_name, "SessionStart" | "UserPromptSubmit" | "Stop")
-}
-
-/// Spawn `rimz codex refresh-context` detached, with all stdio nulled (the
-/// fresh-stdio invariant for hook helper children). The hook drops the child
-/// without waiting, so it returns before the app-server round-trip runs and
-/// never adds latency to the agent's turn. Best-effort: a spawn failure is
-/// logged and ignored — context enrichment is never correctness.
-fn spawn_codex_context_refresh(
-    workspace: &ResolvedWorkspace,
-    session_id: &str,
-    model_hint: Option<&str>,
-) {
+/// Spawn an adapter-requested `rimz` helper detached, with all stdio nulled
+/// (the fresh-stdio invariant for hook helper children). The hook drops the
+/// child without waiting, so it returns before the helper runs and never adds
+/// latency to the agent's turn. Best-effort: a spawn failure is logged and
+/// ignored — out-of-band enrichment is never correctness.
+fn spawn_refresh_detached(spawn: &rimz::agents::RefreshSpawn) {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(err) => {
-            warn!(error = %err, "lifecycle: cannot locate rimz to refresh codex context");
+            warn!(error = %err, "lifecycle: cannot locate rimz to spawn the refresh helper");
             return;
         }
     };
     let mut cmd = Command::new(exe);
-    cmd.args([
-        "codex",
-        "refresh-context",
-        "--session-id",
-        session_id,
-        "--workspace-id",
-        workspace.workspace_id.as_str(),
-    ]);
-    if let Some(model) = model_hint {
-        cmd.args(["--model", model]);
-    }
-    cmd.stdin(Stdio::null())
+    cmd.args(&spawn.args)
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     if let Err(err) = cmd.spawn() {
-        warn!(error = %err, "lifecycle: failed to spawn codex context refresh");
+        warn!(error = %err, "lifecycle: failed to spawn the adapter refresh helper");
     }
 }
 

@@ -189,6 +189,23 @@ pub struct HookUninstallReport {
     pub existed: bool,
 }
 
+/// Context for [`AgentAdapter::post_lifecycle_refresh`]: the session and
+/// workspace a lifecycle event just landed for, plus the model hint its
+/// observation resolved.
+pub struct LifecycleRefreshCtx<'a> {
+    pub agent_id: &'a str,
+    pub workspace_id: &'a str,
+    pub model_hint: Option<&'a str>,
+}
+
+/// A detached `rimz` helper an adapter requests after a lifecycle event lands
+/// — just the argv. The CLI owns the spawn discipline (fresh, fully-nulled
+/// stdio; fire-and-forget), so adapters stay pure mappers.
+pub struct RefreshSpawn {
+    /// Arguments to the `rimz` binary itself.
+    pub args: Vec<String>,
+}
+
 pub trait AgentAdapter: Send + Sync {
     /// The adapter's static identity, branding, capabilities, and
     /// classification tables. Everything `const` about an agent lives here;
@@ -270,6 +287,20 @@ pub trait AgentAdapter: Send + Sync {
     /// Defaults to `false`; adapters override for their turn-boundary events.
     fn moves_on(&self, _event_name: &str) -> bool {
         false
+    }
+
+    /// A detached `rimz` helper to spawn after this lifecycle event is
+    /// recorded — the out-of-band enrichment lane (Codex refreshes its
+    /// app-server context on turn boundaries). The CLI spawns it with fresh,
+    /// fully-nulled stdio and never waits, so it adds no latency to the
+    /// agent's turn. Display-only enrichment, never correctness. Defaults to
+    /// `None` for an agent with no out-of-band refresh.
+    fn post_lifecycle_refresh(
+        &self,
+        _event_name: &str,
+        _ctx: &LifecycleRefreshCtx<'_>,
+    ) -> Option<RefreshSpawn> {
+        None
     }
 
     /// Probe this provider's account/plan login out-of-band — a `claude auth
