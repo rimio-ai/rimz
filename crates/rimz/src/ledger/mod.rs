@@ -35,7 +35,7 @@ pub mod workspace_record;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use jiff::Timestamp;
 use serde_json::json;
@@ -159,6 +159,48 @@ pub struct EventLogRotationOutcome {
     pub rotation: event_log::RotationOutcome,
     pub pruned: event_log::PruneOutcome,
     pub carryover_agents: usize,
+}
+
+/// How often the write path is willing to pay the dead-owner sweep. Read-side
+/// expel hides a dead-owner item from runtime views the instant it dies, so
+/// the sweep only owes the durable `abandoned` record within this window.
+const ABANDON_SWEEP_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Stamp recording the last dead-owner sweep. Lives beside the workspace lock
+/// so feed-dir scans (item lists, gc's history classification) never see it.
+fn abandon_sweep_stamp(paths: &StatePaths) -> PathBuf {
+    paths.locks_dir.join("abandon-sweep.stamp")
+}
+
+fn abandon_sweep_due(paths: &StatePaths) -> bool {
+    match std::fs::metadata(abandon_sweep_stamp(paths)).and_then(|meta| meta.modified()) {
+        Ok(modified) => match SystemTime::now().duration_since(modified) {
+            Ok(age) => age >= ABANDON_SWEEP_INTERVAL,
+            // Stamp mtime in the future (clock skew): treat the sweep as due.
+            Err(_) => true,
+        },
+        Err(_) => true,
+    }
+}
+
+/// Best-effort: a failed touch only means the next write sweeps again.
+fn touch_abandon_sweep_stamp(paths: &StatePaths) {
+    let _ = std::fs::write(abandon_sweep_stamp(paths), b"");
+}
+
+/// Run the dead-owner sweep at most once per [`ABANDON_SWEEP_INTERVAL`].
+/// Caller holds the workspace lock. The common case is one stamp stat —
+/// the write path itself stays O(1) regardless of feed history.
+fn sweep_dead_owned_items_debounced(
+    paths: &StatePaths,
+    session_name: &str,
+) -> Result<Vec<(WorkspaceId, RequestId)>> {
+    if !abandon_sweep_due(paths) {
+        return Ok(Vec::new());
+    }
+    let abandoned = abandon_dead_owned_items_locked(paths, session_name)?;
+    touch_abandon_sweep_stamp(paths);
+    Ok(abandoned)
 }
 
 fn abandon_dead_owned_items_locked(
@@ -285,7 +327,7 @@ impl Ledger {
         let abandoned = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             let abandoned =
-                abandon_dead_owned_items_locked(&self.inner.paths, &event.session_name)?;
+                sweep_dead_owned_items_debounced(&self.inner.paths, &event.session_name)?;
             event_log::append(&self.inner.paths.events_log, event)?;
             snapshot::rebuild(&self.inner.paths)?;
             abandoned
@@ -304,7 +346,7 @@ impl Ledger {
     pub fn push_feed_item(&self, item: &FeedItem, session_name: &str) -> Result<()> {
         let abandoned = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let abandoned = abandon_dead_owned_items_locked(&self.inner.paths, session_name)?;
+            let abandoned = sweep_dead_owned_items_debounced(&self.inner.paths, session_name)?;
             feed_store::write(&self.inner.paths.feed_dir, item)?;
             event_log::append(
                 &self.inner.paths.events_log,
@@ -333,6 +375,7 @@ impl Ledger {
         let abandoned = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             let abandoned = abandon_dead_owned_items_locked(&self.inner.paths, session_name)?;
+            touch_abandon_sweep_stamp(&self.inner.paths);
             if !abandoned.is_empty() {
                 snapshot::rebuild(&self.inner.paths)?;
             }
