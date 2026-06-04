@@ -5,7 +5,7 @@
 A coding agent runs against a **provider account** — a login, on a plan, that may or may not be metered — and that account has a **balance**: the rate-limit windows the plan draws against.
 This doc owns both: the account/balance model, where each provider's facts come from, how they map onto Rimz's internal types, and how the producer folds them into the provider dashboard.
 
-It is the **single home for account/balance semantics**: what the metered/unmetered/plan facts mean, and how the producer folds them onto the internal types [`AgentAccount`](../../crates/rimz/src/agents/context.rs), [`AgentRateLimits`](../../crates/rimz/src/agents/context.rs), and the [`SidebarProviderPanel`](../../crates/rimz/src/ledger/snapshot.rs) the renderer paints.
+It is the **single home for account/balance semantics**: what the metered/unmetered/plan facts mean, and how the producer folds them onto the internal types [`AgentAccount`](../../crates/rimz/src/agents/context.rs), [`AgentRateLimits`](../../crates/rimz/src/agents/context.rs), and the [`SidebarProviderPanel`](../../crates/rimz/src/ledger/snapshot/view.rs) the renderer paints.
 The raw auth surfaces it reads — `claude auth status`, `~/.codex/auth.json`, the app-server `account/rateLimits/read` response — are in the per-provider reference: [adapter/claude-reference.md](./adapter/claude-reference.md#auth-surface) and [adapter/codex-reference.md](./adapter/codex-reference.md#auth-file); [adapter/pi-reference.md → Auth file](./adapter/pi-reference.md#auth-file) mirrors Pi's auth surface — and its missing balance surface — ahead of its adapter.
 
 Account and balance are **enrichment, never correctness** — the no-transcript-correctness rule.
@@ -59,7 +59,7 @@ An unknown kind has no probe arm yet and reads as `LoggedOut`.
 
 ## Producer aggregation
 
-[`SidebarSnapshot::with_provider_aggregates`](../../crates/rimz/src/ledger/snapshot.rs) folds accounts and balances into the dashboard view-model — one [`SidebarProviderPanel`](../../crates/rimz/src/ledger/snapshot.rs) per kind.
+[`SidebarSnapshot::with_provider_aggregates`](../../crates/rimz/src/ledger/snapshot/view.rs) folds accounts and balances into the dashboard view-model — one [`SidebarProviderPanel`](../../crates/rimz/src/ledger/snapshot/view.rs) per kind.
 It is **producer-only**: it needs per-machine config and the out-of-band probe the pure reducer cannot read, so the reducer leaves `providers` empty and every consumer tab reads the producer's published panel (see [sidebar.md → State access](./sidebar.md#state-access)).
 
 Per panel:
@@ -78,7 +78,7 @@ A panel's today line — the token breakdown `◇ ↘ ↗ ◍ ◌` (integer magn
 ### Stable window selection
 
 Balance is account-scoped, but the *freshest* session is not the truest reading: parallel sessions report the same window at slightly different instants, so "freshest wins" flickers between ticks.
-[`stable_windows`](../../crates/rimz/src/ledger/snapshot.rs) instead groups every session's readings by `duration_mins` and picks each duration deterministically: it drops any reading whose reset has already passed (stale), then keeps the **most-drained survivor** (highest `used_percentage`, so the bar never over-promises remaining budget), and returns the set short→long.
+[`stable_windows`](../../crates/rimz/src/ledger/snapshot/view.rs) instead groups every session's readings by `duration_mins` and picks each duration deterministically: it drops any reading whose reset has already passed (stale), then keeps the **most-drained survivor** (highest `used_percentage`, so the bar never over-promises remaining budget), and returns the set short→long.
 Same inputs, same bars, regardless of which session reported last.
 
 ### Spent-window verdict → the rate-limited head

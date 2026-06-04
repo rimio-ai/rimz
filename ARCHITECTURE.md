@@ -101,10 +101,11 @@ CLI binary, hook entrypoints, and the runtime/domain library. Start here for any
 - `src/ledger/event_log.rs` — length-framed append log, fsync, torn-trailing-record recovery, size-cap rotation, archive pruning.
 - `src/ledger/feed_store.rs` — atomic feed item writes and status CAS.
 - `src/ledger/gc.rs` — runtime garbage collection for stale liveness hints.
-- `src/ledger/snapshot.rs` — reduced workspace snapshot rebuild, latest snapshot write, agent-rollup carryover across event-log rotation, and the pure pane-presence fold-in (the `sidebar` CLI supplies the live pane list; the reducer never calls the mux).
+- `src/ledger/snapshot/` — reduced workspace snapshot, one file per pipeline stage: `fold.rs` (resumable event-log rollup, carryover across rotation), `project.rs` (agent-lifecycle reducer), `panes.rs` (pane binding, own/daemon view), `process.rs` (non-agent process rows, command classification), `view.rs` (sidebar view-model assembly), `assemble.rs` (read entry points, fresh-latest fast path). The pane-presence fold-in stays pure — the `sidebar` CLI supplies the live pane list; the reducer never calls the mux.
 - `src/ledger/workspace_record.rs` — `workspace.json` maintenance index for `workspace migrate` and `gc`.
 - `src/ledger/wakeup.rs` — best-effort per-request and sidebar wakeup datagrams.
-- `src/ledger/mod.rs` — `Ledger` handle (`Arc<LedgerInner>`); public methods take the workspace lock and drive `event_log`, `feed_store`, `snapshot` directly. No actor.
+- `src/ledger/writer.rs` — the write choreography: every mutator's lock → feed-write → event-append critical section and the off-lock wakeup + publish tail.
+- `src/ledger/mod.rs` — `Ledger` handle (`Arc<LedgerInner>`): types, constructor, and the lock-free read methods; mutators live in `writer.rs`. No actor.
 - `src/bridge.rs` — per-request sockets, waiter polling fallback, nonce validation.
 - `src/mux/mod.rs` — `MuxBackend` trait and shared backend errors.
 - `src/sidebar.rs` — sidebar heartbeat freshness check used to avoid duplicate native panes.

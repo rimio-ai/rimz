@@ -419,7 +419,12 @@ fn invariants(root: &Path) -> Result<()> {
         "hook subprocess paths must not inherit stdio",
     )?;
 
-    for needle in ["rimz::ledger::atomic", "crate::ledger::atomic"] {
+    for needle in [
+        "rimz::ledger::atomic",
+        "crate::ledger::atomic",
+        "rimz::ledger::writer",
+        "crate::ledger::writer",
+    ] {
         ensure_no_match(
             &files,
             needle,
