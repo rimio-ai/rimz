@@ -4274,8 +4274,15 @@ mod tests {
             .iter()
             .find(|a| a.agent_id == "fork-1")
             .expect("fork in rollup");
-        assert_eq!(fork.task.as_deref(), Some("Explore"), "agent_type back-fills task");
-        assert_eq!(fork.subagent_description.as_deref(), Some("search the ledger"));
+        assert_eq!(
+            fork.task.as_deref(),
+            Some("Explore"),
+            "agent_type back-fills task"
+        );
+        assert_eq!(
+            fork.subagent_description.as_deref(),
+            Some("search the ledger")
+        );
     }
 
     #[test]

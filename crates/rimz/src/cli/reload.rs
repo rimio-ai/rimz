@@ -73,6 +73,8 @@ fn report(outcome: &ReloadOutcome) {
 fn count(n: usize, noun: &str) -> String {
     if n == 1 {
         format!("1 {noun}")
+    } else if noun.ends_with("process") {
+        format!("{n} {noun}es")
     } else {
         format!("{n} {noun}s")
     }

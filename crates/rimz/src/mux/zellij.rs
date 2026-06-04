@@ -935,14 +935,43 @@ impl MuxBackend for ZellijBackend {
                 ),
             }
         }
+        let mut tabs_with_sidebar = if plan.add.is_empty() {
+            Some(std::collections::HashSet::new())
+        } else {
+            match self.list_panes_with_session(Some(&opts.session_name)) {
+                Ok(panes) => Some(tabs_with_sidebars(&panes)),
+                Err(err) => {
+                    tracing::warn!(
+                        session = %opts.session_name,
+                        error = %err,
+                        "sidebar reconcile: cannot verify sidebar absence before add; skipping adds",
+                    );
+                    None
+                }
+            }
+        };
         for tab in &plan.add {
             let Ok(tab_id) = tab.parse::<u64>() else {
                 report.failed += 1;
                 continue;
             };
+            let Some(occupied_tabs) = tabs_with_sidebar.as_mut() else {
+                report.failed += 1;
+                continue;
+            };
+            if occupied_tabs.contains(tab) {
+                tracing::warn!(
+                    session = %opts.session_name,
+                    tab = tab_id,
+                    "sidebar reconcile: add skipped because the tab still has a sidebar",
+                );
+                report.failed += 1;
+                continue;
+            }
             match self.add_sidebar_to_tab(opts, tab_id) {
                 Ok(()) => {
                     report.recovered += 1;
+                    occupied_tabs.insert(tab.clone());
                     if let Some(work) = focused_in_tab.get(&tab_id) {
                         let _ = self.focus_terminal(&opts.session_name, *work);
                     }
@@ -1128,6 +1157,14 @@ fn views_with_sidebars(panes: &[RawPane]) -> Vec<ViewSidebars> {
         }
     }
     views
+}
+
+fn tabs_with_sidebars(panes: &[RawPane]) -> std::collections::HashSet<String> {
+    views_with_sidebars(panes)
+        .into_iter()
+        .filter(|view| !view.sidebar_panes.is_empty())
+        .map(|view| view.view)
+        .collect()
 }
 
 fn is_daemon_host_pane(pane: &RawPane) -> bool {

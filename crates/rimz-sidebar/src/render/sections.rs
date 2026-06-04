@@ -1679,7 +1679,8 @@ fn metered_bar_row(
         // Codex reports a placeholder usedPercent (≈99) with no resetsAt before the
         // first token and a known duration — normalise to full so the bar matches
         // the empty countdown.
-        if not_started || (window.resets_at.is_none() && window.duration_mins.is_some() && raw > 0) {
+        if not_started || (window.resets_at.is_none() && window.duration_mins.is_some() && raw > 0)
+        {
             100
         } else {
             raw
