@@ -23,10 +23,11 @@ use super::fmt::{
     reset_countdown, time_remaining, tokens_int, tokens_short, window_label,
 };
 use super::labels::{
-    TOKENS_CACHED, TOKENS_IN, TOKENS_OUT, TOKENS_TOTAL, agent_glyph, agent_style,
-    attention_glyph_style, compacting_glyph, compacting_style, context_severity_color,
-    ctx_glyph_color, diff_spans, gauge_spans, infinite_bar_spans, loading_dots, mana_bar_spans,
-    mana_color, resolver_glyph, segmented_gauge_spans, status_glyph, status_style, subagent_glyph,
+    TOKENS_CACHED, TOKENS_IN, TOKENS_OUT, TOKENS_TOTAL, activity_age_style, agent_glyph,
+    agent_style, attention_glyph_style, compacting_glyph, compacting_style,
+    context_breakdown_spans, context_severity_color, context_total_spans, ctx_glyph_color,
+    diff_spans, gauge_spans, infinite_bar_spans, loading_dots, mana_bar_spans, mana_color,
+    resolver_glyph, segmented_gauge_spans, status_glyph, status_style, subagent_glyph,
     subagent_style, todo_spans, token_breakdown_spans, tokens_total_spans, working_glyph,
 };
 use super::theme::Theme;
@@ -615,13 +616,14 @@ fn row_lines(
         inner.push(description_line(theme, row, tier, cw, animation_phase));
         // A just-started idle agent sits on the 0% baseline gauge with nothing
         // behind it, so it rests at identity + description alone. Once an agent
-        // has real context, the bar and the token line — the per-card `◇ ↘ ↗ ◍ ◌`
-        // breakdown with the `◷` last-activity age — join the resting card.
+        // has real context, the bar and the context line — the per-card
+        // `▤ · ◌ ◍ ↘ ↗` breakdown with the `◷` last-activity age — join the
+        // resting card.
         if !idle_unstarted(row) {
             if let Some(line) = gauge_line(theme, row, cw) {
                 inner.push(line);
             }
-            if let Some(line) = token_totals_line(theme, row, cw) {
+            if let Some(line) = context_tokens_line(theme, row, cw) {
                 inner.push(line);
             }
         }
@@ -1242,23 +1244,32 @@ fn gauge_segments(row: &SidebarRow) -> Option<[(u64, Color); 3]> {
     ])
 }
 
-/// The card's token line — the `◇ ↘ ↗ ◍ ◌` breakdown (integer magnitudes) with
-/// the `◷` last-activity age pinned right: the latest API call's fresh input
-/// (`↘`), output generated (`↗`), cache writes (`◍`), and cache reads (`◌`),
-/// with the violet `◇` total carrying `input + output`. The five slots are the
-/// same disjoint split, glyph for glyph, as the cockpit summary and the fleet
-/// ledger — cache rides apart, never folded into `↘` or the total — and
-/// context-window occupancy is the `▣` meter's job, not this line's. The
-/// breakdown glyphs stay dim so only the `◇` total carries a tone. Falls back
-/// to the bare `◇` rollup total for an agent whose context carries no per-call
-/// token split (Codex's app-server exposes none, and Claude reports none before
-/// the first API call and right after `/compact`), so the line shows
-/// *something* for every agent. The `◷` age rides the right edge only once it
-/// crosses a full minute — a just-active agent shows the breakdown alone,
-/// left-aligned, rather than a misleading `1m`.
-fn token_totals_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
+/// The card's context line — `▤` the filled part of the window (integer
+/// magnitudes) with the `◷` last-activity age pinned right. `▤` is
+/// `input + cache_write + cache_read` of the latest API call — exactly the
+/// numerator the `▣` meter scales — so the bar's percent and this absolute
+/// figure read as one measurement. A `·` seam separates the headline from the
+/// latest call's composition, ordered by how the window filled: `◌` read back
+/// from cache, `◍` newly written to it, `↘` fresh input, `↗` output generated
+/// (which joins the window next turn). The `◇` totals stay the cockpit /
+/// fleet-ledger / subagent vocabulary — this line answers "what is in the
+/// window", not "what did today burn". Falls back to the bare `▤` rollup
+/// total for an agent whose context carries no per-call token split (Codex's
+/// app-server exposes none, and Claude reports none before the first API call
+/// and right after `/compact`), so the line shows *something* for every
+/// agent. The `◷` age rides the right edge only once it crosses a full minute
+/// — a just-active agent shows the breakdown alone, left-aligned, rather than
+/// a misleading `1m` — and its tone ramps with prompt-cache cooling
+/// ([`activity_age_style`]): dim warm, amber from 20 minutes idle, red from
+/// the hour, when resuming would likely re-read the whole context uncached.
+fn context_tokens_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     let age = activity_short(row.last_activity)
-        .map(|label| vec![Span::styled(format!("{WORKED_GLYPH} {label}"), theme.dim())])
+        .map(|label| {
+            vec![Span::styled(
+                format!("{WORKED_GLYPH} {label}"),
+                activity_age_style(theme, age_secs(row.last_activity)),
+            )]
+        })
         .unwrap_or_default();
     if let Some(usage) = ctx(row)
         .and_then(|context| context.tokens.as_ref())
@@ -1269,21 +1280,20 @@ fn token_totals_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Li
         let cache_write = usage.cache_creation_input_tokens.unwrap_or(0);
         let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
         let mut left = vec![Span::raw("  ")];
-        left.extend(token_breakdown_spans(
+        left.extend(context_breakdown_spans(
             theme,
-            input + output,
+            input + cache_write + cache_read,
+            cache_read,
+            cache_write,
             input,
             output,
-            cache_write,
-            cache_read,
             tokens_int,
-            true,
         ));
         return Some(pin_right(left, age, width));
     }
     let total = row.total_tokens?;
     let mut left = vec![Span::raw("  ")];
-    left.extend(tokens_total_spans(theme, total, tokens_int));
+    left.extend(context_total_spans(theme, total, tokens_int));
     Some(pin_right(left, age, width))
 }
 

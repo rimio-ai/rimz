@@ -106,6 +106,28 @@ pub(super) fn attention_breath(animation_phase: u64) -> Modifier {
     }
 }
 
+/// The `◷` last-activity age follows the provider prompt-cache lifetime: past
+/// 20 minutes of inactivity the cache is likely cooling, past the hour it is
+/// almost certainly invalidated — resuming a red session re-reads the whole
+/// context at uncached input rates. Pragmatic markers for Claude's and Codex's
+/// cache retention, not exact TTLs.
+pub(super) const ACTIVITY_CACHE_COOLING_SECS: i64 = 20 * 60;
+pub(super) const ACTIVITY_CACHE_COLD_SECS: i64 = 60 * 60;
+
+/// Tone for the card's `◷` age cluster at `age_secs` of inactivity: dim while
+/// a resume would still hit cache, amber once it is cooling, red once it is
+/// gone — the attention ramp's tones, because a red age is a cost warning, not
+/// chrome. The figure itself still carries the magnitude under `NO_COLOR`.
+pub(super) fn activity_age_style(theme: &Theme, age_secs: i64) -> Style {
+    if age_secs >= ACTIVITY_CACHE_COLD_SECS {
+        theme.style(Color::Red, Modifier::empty())
+    } else if age_secs >= ACTIVITY_CACHE_COOLING_SECS {
+        theme.style(Color::Yellow, Modifier::empty())
+    } else {
+        theme.dim()
+    }
+}
+
 pub(super) fn working_glyph(animation_phase: u64) -> &'static str {
     frame(&WORKING_FRAMES, animation_phase)
 }
@@ -213,17 +235,24 @@ pub(super) fn attention_glyph_style(
 /// Token-composition glyphs for the `◇ ↘ ↗ ◍ ◌` breakdown: a diamond for the
 /// cumulative total (input + output), the directional arrows for input read in /
 /// output generated, a half-filled ring for cache writes, and a hollow ring for
-/// cache reads. The breakdown reads the same on the agent card, the cockpit, the
-/// provider dashboard, and the W/M ledger rows — one grammar, built by
-/// [`token_breakdown_spans`].
+/// cache reads. The breakdown reads the same on the cockpit, the provider
+/// dashboard, and the W/M ledger rows — one grammar, built by
+/// [`token_breakdown_spans`]. The agent card's stat line answers a different
+/// question — what is in the window, not what the fleet burned — so it leads
+/// with `▤` and reorders the same four columns by how the window filled
+/// ([`context_breakdown_spans`]).
 pub(super) const TOKENS_TOTAL: &str = "◇";
 pub(super) const TOKENS_IN: &str = "↘";
 pub(super) const TOKENS_OUT: &str = "↗";
 pub(super) const TOKENS_CACHE_WRITE: &str = "◍";
 pub(super) const TOKENS_CACHED: &str = "◌";
+/// The agent card's context-line marker: a filled square for the taken part of
+/// the context window, sibling to the `▣` meter glyph so the two context reads
+/// pair visually while staying distinct from the `◇` fleet totals.
+pub(super) const CONTEXT_FILLED: &str = "▤";
 
-/// The `◇ ↘ ↗ ◍ ◌` token breakdown as styled spans — the one shape every token
-/// line shares (agent card, cockpit today line, provider today line, W/M ledger
+/// The `◇ ↘ ↗ ◍ ◌` token breakdown as styled spans — the one shape every fleet
+/// token line shares (cockpit today line, provider today line, W/M ledger
 /// rows). The `◇` total carries the soft-violet domain color; every other field
 /// stays dim chrome so only the total reads as a colored marker. `fmt` chooses
 /// the magnitude form (`tokens_int` live, `tokens_short` for the precise W/M
@@ -261,6 +290,59 @@ pub(super) fn token_breakdown_spans(
         theme.dim(),
     ));
     spans
+}
+
+/// The agent card's `▤ · ◌ ◍ ↘ ↗` context line as styled spans: the filled part
+/// of the window (`input + cache_write + cache_read` — exactly the `▣` meter's
+/// numerator, so the meter's percent and this absolute figure are one
+/// measurement), a `·` seam, then the latest API call's composition ordered by
+/// how the window filled — `◌` read back from cache, `◍` newly written to it,
+/// `↘` fresh input, `↗` output generated (which joins the window next turn).
+/// Only the `▤` marker carries a tone; the composition stays dim chrome.
+pub(super) fn context_breakdown_spans(
+    theme: &Theme,
+    filled: u64,
+    cache_read: u64,
+    cache_write: u64,
+    input: u64,
+    output: u64,
+    fmt: fn(u64) -> String,
+) -> Vec<Span<'static>> {
+    let mut spans = context_total_spans(theme, filled, fmt);
+    spans.push(Span::styled(
+        format!(" · {TOKENS_CACHED} {}", fmt(cache_read)),
+        theme.dim(),
+    ));
+    spans.push(Span::styled(
+        format!(" {TOKENS_CACHE_WRITE} {}", fmt(cache_write)),
+        theme.dim(),
+    ));
+    spans.push(Span::styled(
+        format!(" {TOKENS_IN} {}", fmt(input)),
+        theme.dim(),
+    ));
+    spans.push(Span::styled(
+        format!(" {TOKENS_OUT} {}", fmt(output)),
+        theme.dim(),
+    ));
+    spans
+}
+
+/// The `▤ {filled}` head of the card's context line: the context-blue square +
+/// the filled-window figure, blue to pair with the calm `▣` meter glyph it
+/// complements (severity stays the bar's job). A card whose context carries no
+/// per-call split (a Codex rollout-only total, or Claude before its first API
+/// call) uses it alone, with the provider's rollup total standing in for the
+/// filled window. Display-only, never a decision driver.
+pub(super) fn context_total_spans(
+    theme: &Theme,
+    filled: u64,
+    fmt: fn(u64) -> String,
+) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(CONTEXT_FILLED, theme.style(Color::Blue, Modifier::empty())),
+        Span::styled(format!(" {}", fmt(filled)), theme.dim()),
+    ]
 }
 
 /// Heavy `━` for the thin context/rule bars' filled run, light `─` for the
@@ -894,6 +976,35 @@ mod tests {
         assert_eq!(attention_breath(24), Modifier::DIM, "wraps to the trough");
     }
 
+    /// The `◷` age tone ramps with prompt-cache cooling: dim under 20 minutes
+    /// of inactivity, amber from 20 minutes, red from the hour — when a resume
+    /// would likely re-read the whole context uncached.
+    #[test]
+    fn activity_age_style_ramps_with_cache_cooling() {
+        let theme = Theme::fixed(false);
+        let amber = theme.style(Color::Yellow, Modifier::empty());
+        let red = theme.style(Color::Red, Modifier::empty());
+        assert_eq!(activity_age_style(&theme, 60), theme.dim());
+        assert_eq!(
+            activity_age_style(&theme, ACTIVITY_CACHE_COOLING_SECS - 1),
+            theme.dim()
+        );
+        assert_eq!(
+            activity_age_style(&theme, ACTIVITY_CACHE_COOLING_SECS),
+            amber,
+            "amber once the cache is cooling"
+        );
+        assert_eq!(
+            activity_age_style(&theme, ACTIVITY_CACHE_COLD_SECS - 1),
+            amber
+        );
+        assert_eq!(
+            activity_age_style(&theme, ACTIVITY_CACHE_COLD_SECS),
+            red,
+            "red once the cache is likely invalidated"
+        );
+    }
+
     /// The token breakdown reads `◇ ↘ ↗ ◍ ◌` with only the `◇` total carrying a
     /// tone; the `◍` cache-write field drops when excluded (the W/M rows). Under
     /// `NO_COLOR` the glyph shapes still spell the split.
@@ -925,6 +1036,26 @@ mod tests {
         );
         let text: String = lean.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "◇ 76k ↘ 12k ↗ 64k ◌ 68k", "no ◍ when excluded");
+    }
+
+    /// The card's context line reads `▤ · ◌ ◍ ↘ ↗` — the filled window, a dot
+    /// seam, then the composition ordered by how the window filled — with only
+    /// the `▤` marker carrying a tone. Under `NO_COLOR` the glyph shapes still
+    /// spell the split.
+    #[test]
+    fn context_breakdown_shape_leads_with_the_filled_window() {
+        let theme = Theme::fixed(true);
+        let spans = context_breakdown_spans(
+            &theme,
+            76_500,
+            68_200,
+            6_600,
+            1_700,
+            2_300,
+            super::super::fmt::tokens_int,
+        );
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k");
     }
 
     /// The rate-limited glyph is the media `pause` mark carrying the

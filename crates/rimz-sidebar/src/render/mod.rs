@@ -1087,16 +1087,18 @@ mod tests {
         // the provider dashboard now.
         assert!(!rendered.contains("5h↻"));
         assert!(!rendered.contains("7d↻"));
-        // The card carries the token line at rest: the latest API call's
-        // disjoint split ◇ total ↘ input ↗ output ◍ cache-write ◌ cache-read,
-        // where ↘ is fresh uncached input and ◇ is input + output — the same
-        // column meanings the cockpit and fleet ledger accumulate. The window
-        // size no longer rides this line.
-        assert!(rendered.contains("◇ 4k"));
-        assert!(rendered.contains("↘ 1k"));
-        assert!(rendered.contains("↗ 2k"));
-        assert!(rendered.contains("◍ 6k"), "cache-write split:\n{rendered}");
-        assert!(rendered.contains("◌ 68k"), "cache-read split:\n{rendered}");
+        // The card carries the context line at rest: ▤ the filled window
+        // (input + cache-write + cache-read — the ▣ meter's numerator, so the
+        // 38.2% above and this 76k are one measurement), a · seam, then the
+        // latest call's composition ordered by how the window filled — ◌
+        // cache read, ◍ cache write, ↘ fresh input, ↗ output. The ◇ totals
+        // stay the cockpit/ledger vocabulary; the window size no longer rides
+        // this line.
+        assert!(
+            rendered.contains("▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k"),
+            "context line:\n{rendered}"
+        );
+        assert!(!rendered.contains('◇'), "no fleet total on the card");
         assert!(
             !rendered.contains("ctx"),
             "window size left the token line:\n{rendered}"
@@ -1216,7 +1218,8 @@ mod tests {
     fn selected_agent_without_context_keeps_bare_token_total() {
         // An agent with no context sidecar yet (a Codex session before its first
         // app-server refresh, or any agent that publishes none) degrades to the
-        // simple selected-row token total — no cost, no usage windows.
+        // bare ▤ rollup total standing in for the filled window — no cost, no
+        // usage windows.
         let mut codex = agent(
             "codex-1",
             "codex",
@@ -1243,9 +1246,49 @@ mod tests {
             14,
         );
 
-        assert!(rendered.contains("◇ 5k"));
+        assert!(rendered.contains("▤ 5k"));
         assert!(!rendered.contains('↻'));
         assert!(!rendered.contains('$'));
+    }
+
+    /// The card's `◷` age tone ramps with prompt-cache cooling: dim while a
+    /// resume would still hit cache, amber from 20 minutes idle, red from the
+    /// hour — the cost warning that resuming will likely re-read the whole
+    /// context uncached.
+    #[test]
+    fn context_line_age_tone_ramps_with_cache_cooling() {
+        let theme = Theme::fixed(false);
+        let age_style = |idle_secs: u64| {
+            let mut codex = agent(
+                "codex-1",
+                "codex",
+                AgentStatus::Idle,
+                Some("/repo/main"),
+                Some("main"),
+                Some("add tests"),
+            );
+            codex.context_pct = Some(21);
+            codex.total_tokens = Some(5_000);
+            codex.last_activity = fixed_now() - Duration::from_secs(idle_secs);
+            let snapshot = snapshot_with(Vec::new(), vec![codex]);
+            group_lines(&snapshot, &theme, usize::MAX)
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .find(|span| span.content.contains('◷'))
+                .map(|span| span.style)
+                .expect("the context line carries the ◷ age")
+        };
+        assert_eq!(age_style(4 * 60), theme.dim(), "warm cache stays chrome");
+        assert_eq!(
+            age_style(25 * 60),
+            theme.style(Color::Yellow, Modifier::empty()),
+            "amber once the cache is cooling"
+        );
+        assert_eq!(
+            age_style(2 * 60 * 60),
+            theme.style(Color::Red, Modifier::empty()),
+            "red once a resume would pay for the context again"
+        );
     }
 
     #[test]
@@ -1294,9 +1337,10 @@ mod tests {
         assert!(!rendered.contains('↻'));
         assert!(!rendered.contains("5h"));
         assert!(!rendered.contains("7d"));
-        // No read-only token usage or cost: the bare rollout total (`◇ 48k`,
-        // integer form) stands in for the token line, and no cost pins to the row.
-        assert!(rendered.contains("◇ 48k"));
+        // No read-only token usage or cost: the bare rollout total (`▤ 48k`,
+        // integer form) stands in for the context line, and no cost pins to the
+        // row.
+        assert!(rendered.contains("▤ 48k"));
         assert!(!rendered.contains('↗'));
         assert!(!rendered.contains('$'));
     }
@@ -1825,16 +1869,16 @@ mod tests {
         let strip = |line: &String| line.chars().skip(1).collect::<String>();
         let fold: Vec<String> = unselected[1..].iter().map(strip).collect();
         let full: Vec<String> = selected[1..].iter().map(strip).collect();
-        // The resting fold is identity + description + ctx bar + the token line.
+        // The resting fold is identity + description + ctx bar + the context line.
         assert_eq!(
             fold.len(),
             4,
-            "the fold is four card lines (incl. the token line): {fold:?}"
+            "the fold is four card lines (incl. the context line): {fold:?}"
         );
-        // The token line rides the resting fold, not a reveal-on-select detail.
+        // The context line rides the resting fold, not a reveal-on-select detail.
         assert!(
-            fold.iter().any(|line| line.contains("◇ ")),
-            "the token line is part of the resting fold: {fold:?}"
+            fold.iter().any(|line| line.contains("▤ ")),
+            "the context line is part of the resting fold: {fold:?}"
         );
         // This card has no subagents, so selection appends nothing — it only
         // lights the gutter (already stripped), never reshaping a fold line.
@@ -1997,7 +2041,7 @@ mod tests {
         assert_eq!(resting.len(), 3, "{resting:?}");
         let joined = expanded.join("\n");
         assert!(
-            !joined.contains('▣') && !joined.contains('◇'),
+            !joined.contains('▣') && !joined.contains('▤'),
             "expanded fresh idle card hides the bar and the zeroed stats:\n{joined}"
         );
         // A fresh idle card has nothing to append on selection — no stats, no age,
