@@ -4,8 +4,12 @@
 //! fed every Pi session fleet-wide by the producer. Pi logs `costUSD` directly,
 //! so each entry carries a cost as parsed — no pricing table needed.
 //!
-//! Pi session files live at `~/.pi/agent/sessions/` (or `PI_AGENT_DIR` env).
-//! JSONL shape (one entry per assistant turn):
+//! Pi session files live under `~/.pi/agent/sessions/--<cwd-with-dashes>--/`
+//! (upstream overrides: `--session-dir` / `PI_CODING_AGENT_SESSION_DIR`); the
+//! `PI_AGENT_DIR` env honored here is Rimz's own comma-separated test
+//! override, not a pi variable. Upstream shapes are mirrored in
+//! `docs/internals/adapter/pi-reference.md`. JSONL shape (one entry per
+//! assistant turn):
 //! ```json
 //! { "type": "message",
 //!   "timestamp": "2026-01-01T10:00:00.000Z",
@@ -64,9 +68,9 @@ struct PiCost {
 
 /// Extract a Pi session ID from a JSONL file path.
 ///
-/// Pi filenames follow the pattern `agent_<session-id>.jsonl`; the `agent_`
-/// prefix is stripped to return the bare session ID.  Files without the prefix
-/// use the full stem as the session ID.
+/// Pi filenames follow the pattern `<timestamp>_<uuid>.jsonl` (the timestamp
+/// contains no underscores), so everything after the first `_` is the session
+/// ID.  Files without an underscore use the full stem as the session ID.
 pub fn pi_session_id_from_path(path: &Path) -> String {
     let stem = path
         .file_stem()
@@ -79,8 +83,9 @@ pub fn pi_session_id_from_path(path: &Path) -> String {
 
 /// Extract the Pi project name from a session file path.
 ///
-/// Pi sessions are organized as `sessions/<project>/agent_<id>.jsonl`; the
-/// component immediately after `sessions/` is the project name.
+/// Pi sessions are organized as `sessions/--<cwd-with-dashes>--/<file>.jsonl`;
+/// the component immediately after `sessions/` is the per-directory project
+/// key.
 pub fn pi_project_from_path(path: &Path) -> String {
     let mut after_sessions = false;
     for component in path.components() {
@@ -247,12 +252,12 @@ mod tests {
     }
 
     #[test]
-    fn pi_session_id_strips_agent_prefix() {
+    fn pi_session_id_takes_suffix_after_first_underscore() {
         assert_eq!(
             pi_session_id_from_path(Path::new(
-                "/home/me/.pi/agent/sessions/project-a/agent_abc123.jsonl"
+                "/home/me/.pi/agent/sessions/--home-me-project-a--/2026-06-04T06-45-56-308Z_019e9161-a5d0-791d-879e-39679acd4ded.jsonl"
             )),
-            "abc123"
+            "019e9161-a5d0-791d-879e-39679acd4ded"
         );
     }
 
@@ -268,9 +273,9 @@ mod tests {
     fn pi_project_from_path_extracts_component() {
         assert_eq!(
             pi_project_from_path(Path::new(
-                "/home/me/.pi/agent/sessions/my-project/agent_abc.jsonl"
+                "/home/me/.pi/agent/sessions/--home-me-my-project--/2026-06-04T06-45-56-308Z_abc.jsonl"
             )),
-            "my-project"
+            "--home-me-my-project--"
         );
     }
 
