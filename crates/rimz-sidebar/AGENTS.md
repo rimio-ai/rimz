@@ -18,4 +18,4 @@ This crate is a **pure projection** over the `SidebarSnapshot` view-model. It ow
 
 ## Tests
 
-Golden the composed frames with `insta` snapshots (the `render_*` tests) and keep `compute_next_state` covered by pure unit tests — health debounce, the regression gate, the self-close latch, and the selection model (the focus mirror plus browse/jump override resolution in `reconcile_selection`). Run through `cargo xtask test`.
+Golden the composed frames with `insta` snapshots (the `render_*` tests) and keep `compute_next_state` covered by pure unit tests — health debounce, the regression gate, the self-close latch, and the selection model (the derived baseline plus browse/jump-stamp resolution in `reconcile_selection`). Run through `cargo xtask test`.

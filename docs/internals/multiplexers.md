@@ -27,7 +27,6 @@ attach_command(name, config) -> CommandSpec
 detach(name)
 list_sessions()
 list_panes(session)               id, view, foreground command, cwd
-client_focused_panes(session)     the pane each attached client focuses
 split_pane(args)
 focus_pane(pane_id)
 capture_pane(pane_id, opts)     normalized output
@@ -52,16 +51,11 @@ Backend-specific fast paths cannot become correctness requirements. If a feature
 
 ### Two kinds of focus
 
-`list_panes` reports `PaneRef.is_focused`: the **per-view active pane**. Both backends mark one such pane per view (Zellij's `list-panes` `is_focused`, tmux's `#{pane_active}`), so a session with N views reports N "focused" panes — the active pane *within* each tab/window, regardless of where the user is looking.
+`list_panes` reports `PaneRef.is_focused`: the **per-view active pane**. Both backends mark one such pane per view (Zellij's `list-panes` `is_focused`, tmux's `#{pane_active}`), so a session with N views reports N "focused" panes — the active pane *within* each tab/window, regardless of where the user is looking. It rides the one `list-panes` round-trip; no second probe.
 
-The pane a user actually looks at is **per-client**, and `client_focused_panes` reports it — one pane per attached client, deduped:
+This per-view mark is the focus signal Rimz consumes: each tab's sidebar derives its selection baseline from its own view's active working pane ([sidebar.md → how the highlight stays on the right pane](./sidebar.md#how-the-highlight-stays-on-the-right-pane)), and the row cap uses it to keep each view's active row visible. It is one deterministic value per tab however many clients attach — when the user is viewing the tab it coincides with their focus, and otherwise it names the pane they would land on. The *per-client* focus (Zellij's `list-clients`, tmux's `list-clients -F "#{pane_id}"`) exists on both backends but is deliberately unread: a sidebar pane is shared content, one buffer for every viewer, so a per-client highlight is unrenderable — under multiplayer Zellij (two clients split-focused in one tab) every viewer's sidebar tracks the tab's single active pane.
 
-| backend | command |
-|---------|---------|
-| Zellij  | `zellij action list-clients` (column 2, `ZELLIJ_PANE_ID`, per client) |
-| tmux    | `tmux list-clients -t <session> -F "#{pane_id}"` (per client) |
-
-The producer overlays this set onto `PaneRef.client_focused` (see [sidebar.md](./sidebar.md)), so the sidebar focus mirror tracks the user, not every view's active pane. It is best-effort enrichment, never a precondition: a backend that cannot answer returns an empty set and the mirror holds. `is_focused` stays the per-view signal the row cap uses to keep each view's active row visible.
+`focus_pane` is the one-way jump primitive (`zellij action focus-pane-id`, `tmux select-pane -t`); both backends implicitly switch to the containing tab/window, so a jump is a single command with no follow-up state.
 
 ## Pane and view IDs
 
