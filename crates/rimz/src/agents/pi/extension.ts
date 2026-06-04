@@ -16,12 +16,33 @@ import { spawn } from "node:child_process";
 const RIMZ = process.env.RIMZ_BIN || "rimz";
 
 export default function rimz(pi) {
-  const envelope = (event, ctx, fields) => ({
-    hook_event_name: event,
-    session_id: ctx?.sessionManager?.getSessionId?.(),
-    cwd: ctx?.sessionManager?.getCwd?.() ?? ctx?.cwd,
-    ...fields,
-  });
+  const thinkingLevel = () => {
+    try {
+      return pi.getThinkingLevel?.();
+    } catch {
+      return undefined; // throwing stub before the runner binds — omit.
+    }
+  };
+
+  // The common payload envelope. Every field is best-effort: a missing value
+  // is omitted (JSON.stringify drops undefined) and the Rust adapter treats
+  // absence as "the agent didn't report it". The context gauge rides every
+  // event so the sidebar's bar stays current without a transcript read; the
+  // counts are rounded because the adapter parses them as integers.
+  const envelope = (event, ctx, fields) => {
+    const usage = ctx?.getContextUsage?.();
+    return {
+      hook_event_name: event,
+      session_id: ctx?.sessionManager?.getSessionId?.(),
+      cwd: ctx?.sessionManager?.getCwd?.() ?? ctx?.cwd,
+      model: ctx?.model?.id,
+      effort: thinkingLevel(),
+      context_pct: usage?.percent == null ? undefined : Math.round(usage.percent),
+      context_window: usage?.contextWindow,
+      total_tokens: usage?.tokens == null ? undefined : Math.round(usage.tokens),
+      ...fields,
+    };
+  };
 
   const spawnRimz = (stdout) => {
     const child = spawn(RIMZ, ["hooks", "feed", "--source", "pi"], {
@@ -52,12 +73,13 @@ export default function rimz(pi) {
     // The prompt's last assistant message carries the turn verdict and usage.
     const messages = Array.isArray(ev?.messages) ? ev.messages : [];
     const last = messages.filter((m) => m?.role === "assistant").at(-1);
-    feed("agent_end", ctx, {
-      stop_reason: last?.stopReason,
-      error_message: last?.errorMessage,
-      model: last?.model,
-      total_tokens: last?.usage?.totalTokens,
-    });
+    const fields = { stop_reason: last?.stopReason, error_message: last?.errorMessage };
+    // Only override the envelope's model/tokens when the message carries
+    // them — an explicit undefined would drop the envelope value from the
+    // JSON.
+    if (last?.model) fields.model = last.model;
+    if (last?.usage?.totalTokens != null) fields.total_tokens = Math.round(last.usage.totalTokens);
+    feed("agent_end", ctx, fields);
   });
   pi.on("tool_execution_end", (ev, ctx) =>
     feed("tool_execution_end", ctx, {

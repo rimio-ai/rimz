@@ -6,7 +6,11 @@
 //! extension forwards pi's lifecycle events to `rimz hooks feed --source pi`
 //! as fire-and-forget children, inverting the Claude/Codex child direction
 //! (pi runs Rimz, not the other way around); the wire it posts is the typed
-//! shape in [`payloads`]. Lifecycle maps per docs/internals/hooks.md →
+//! shape in [`payloads`], with the model, effort, and context gauge
+//! (`context_pct` / `context_window` / `total_tokens`) stamped on every
+//! envelope from the in-process `ctx.getContextUsage()` — payload-first, so
+//! the sidebar's bar stays current with no transcript tail read here.
+//! Lifecycle maps per docs/internals/hooks.md →
 //! Appendix Pi: `session_start` registers, `before_agent_start` starts the
 //! turn with the prompt, `agent_end` ends it carrying the in-band error bit,
 //! `tool_execution_end` is the mutating-tool heartbeat, and
@@ -38,6 +42,7 @@ use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
 };
 use super::lifecycle::LifecycleSignal;
+use super::observation::payload_context_pct;
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
@@ -224,10 +229,14 @@ impl AgentAdapter for PiAdapter {
         observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
         observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
         observation.model = parsed.model;
+        observation.effort = parsed.effort;
+        // The gauge is payload-first and payload-only: the extension stamps
+        // it on every envelope from the in-process `ctx.getContextUsage()`,
+        // so no transcript tail is ever read (the `None` fallback). The one
+        // declared absence left is the todo surface — pi has none.
+        observation.context_pct = payload_context_pct(payload, None);
+        observation.context_window = parsed.context_window;
         observation.total_tokens = parsed.total_tokens;
-        // Declared absences: pi reports no context gauge on this wire (the
-        // in-process `ctx.getContextUsage()` is future enrichment), and no
-        // todo surface exists.
         Some(observation)
     }
 
@@ -466,6 +475,47 @@ mod tests {
         );
         assert_eq!(observation.model.as_deref(), Some("gpt-5"));
         assert_eq!(observation.total_tokens, Some(4200));
+    }
+
+    #[test]
+    fn context_gauge_rides_every_envelope_payload_first() {
+        // The extension stamps the gauge on every event; the adapter reads it
+        // straight off the payload — here a mid-turn registration.
+        let observation = PiAdapter
+            .observe_lifecycle(
+                "session_start",
+                &json!({
+                    "session_id": "sess-1",
+                    "model": "gpt-5.5",
+                    "effort": "medium",
+                    "context_pct": 3,
+                    "context_window": 272_000,
+                    "total_tokens": 8160,
+                }),
+            )
+            .expect("observation");
+        assert_eq!(observation.model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(observation.effort.as_deref(), Some("medium"));
+        assert_eq!(observation.context_pct, Some(3));
+        assert_eq!(observation.context_window, Some(272_000));
+        assert_eq!(observation.total_tokens, Some(8160));
+
+        // No payload gauge means no gauge — there is no transcript fallback.
+        let bare = PiAdapter
+            .observe_lifecycle("session_start", &json!({ "session_id": "sess-1" }))
+            .expect("observation");
+        assert_eq!(bare.context_pct, None);
+        assert_eq!(bare.context_window, None);
+        assert_eq!(bare.total_tokens, None);
+
+        // The shared override helper clamps a wire glitch to a sane percent.
+        let clamped = PiAdapter
+            .observe_lifecycle(
+                "session_start",
+                &json!({ "session_id": "sess-1", "context_pct": 150 }),
+            )
+            .expect("observation");
+        assert_eq!(clamped.context_pct, Some(100));
     }
 
     #[test]
@@ -769,6 +819,10 @@ mod tests {
         // The hook child honours a binary override so tests and unusual
         // PATHs can pin the rimz the extension spawns.
         assert!(EXTENSION_SOURCE.contains("RIMZ_BIN"));
+        // The gauge rides every envelope, rounded to the integers the
+        // adapter parses.
+        assert!(EXTENSION_SOURCE.contains("getContextUsage"));
+        assert!(EXTENSION_SOURCE.contains("Math.round"));
         for event in WIRED_EVENTS {
             assert!(
                 EXTENSION_SOURCE.contains(&format!("pi.on(\"{event}\"")),

@@ -21,9 +21,18 @@ pub(crate) struct PiHookPayload {
     /// `agent_end`: present when the turn died — the in-band death
     /// certificate (no transcript forensics needed, unlike Claude).
     pub error_message: Option<String>,
-    /// `agent_end`: the last assistant message's model id.
+    /// Every event: the session's model id (`ctx.model.id`); `agent_end`
+    /// overrides it with the last assistant message's model when present.
     pub model: Option<String>,
-    /// `agent_end`: the last assistant message's `usage.totalTokens`.
+    /// Every event: pi's thinking level (`off` | `minimal` | … | `highest`),
+    /// the closest pi has to Claude's effort.
+    pub effort: Option<String>,
+    /// Every event: the model's context window in tokens, from
+    /// `ctx.getContextUsage()`.
+    pub context_window: Option<u64>,
+    /// Every event: cumulative session tokens from `ctx.getContextUsage()`
+    /// (rounded on the wire); `agent_end` overrides with the last assistant
+    /// message's `usage.totalTokens` when present.
     pub total_tokens: Option<u64>,
 }
 
