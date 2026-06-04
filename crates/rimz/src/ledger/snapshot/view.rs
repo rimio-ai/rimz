@@ -1652,10 +1652,12 @@ fn project_display_status(rows: &mut [SidebarRow], agents: &[AgentState], now: T
                 .and_then(|context| context.turn_error.as_ref())
                 .and_then(|error| error.label.clone());
             AgentStatus::Failed
+        } else if crate::feed::is_rate_limited(status, limited_kinds.contains(row.name.as_str())) {
+            // Rate-limit check before stall: a running agent in a rate-limit retry loop
+            // is silent by design, so stall must not escalate it to Failed first.
+            AgentStatus::RateLimited
         } else if crate::feed::is_stalled(status, row.last_activity, now) {
             AgentStatus::Failed
-        } else if crate::feed::is_rate_limited(status, limited_kinds.contains(row.name.as_str())) {
-            AgentStatus::RateLimited
         } else {
             status
         };
@@ -3378,8 +3380,8 @@ mod tests {
         // Account-scoped: one claude session reports a spent 5-hour window, so
         // the whole kind is rate-limited — including a *fresh* idle session that
         // carries no context of its own yet (the "launched into a spent account"
-        // case). A working session is left alone; its turn finishes before it can
-        // park.
+        // case). A running session with a spent account also parks: the budget is
+        // gone regardless of whether a turn is nominally in progress.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let mut reporter = agent("claude", "sess-spent", AgentStatus::Success, 1_000);
         reporter.worktree_path = Some("/repo/main".to_owned());
@@ -3411,8 +3413,8 @@ mod tests {
         );
         assert_eq!(
             status_of("sess-busy"),
-            Some(AgentStatus::Running),
-            "a working session is never parked"
+            Some(AgentStatus::RateLimited),
+            "a running session in a spent account parks — the budget is gone regardless"
         );
         // The rollup keeps the true lifecycle status; only the display projects.
         assert_eq!(
@@ -3423,6 +3425,26 @@ mod tests {
                 .unwrap()
                 .status,
             AgentStatus::Idle
+        );
+    }
+
+    #[test]
+    fn running_agent_in_spent_account_parks_not_fails() {
+        // A running agent that went silent past the stall window AND whose account
+        // is spent should surface as RateLimited, not Failed. The rate-limit check
+        // takes priority over the stall check so the user sees the real cause.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut stalled = agent("claude", "stalled-spent", AgentStatus::Running, 0);
+        stalled.worktree_path = Some("/repo/main".to_owned());
+        stalled.context = Some(ctx_with_limits(vec![window(100, 3_600)]));
+        stalled.last_activity = Timestamp::now()
+            - std::time::Duration::from_secs(crate::feed::STALL_WINDOW_SECS as u64 + 60);
+
+        let snapshot = SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![stalled]);
+        assert_eq!(
+            snapshot.worktree_groups[0].rows[0].status,
+            Some(AgentStatus::RateLimited),
+            "rate-limit outranks stall: agent is paused by the account, not wedged"
         );
     }
 

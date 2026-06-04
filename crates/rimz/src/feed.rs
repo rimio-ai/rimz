@@ -604,16 +604,22 @@ pub fn is_turn_dead(
             .is_some_and(|error| error.at > last_activity)
 }
 
-/// Whether a resting agent should project to [`AgentStatus::RateLimited`]: its
-/// account's rate-limit budget is spent (`account_limited`) while it sits in a
-/// calm, non-actionable state — `Idle` or `Success`. A `Running` agent is still
-/// working (the window may have just tipped; its turn finishes first), a
-/// `Waiting` agent needs a human answer, and a `Failed` agent has its own
-/// problem to surface — none of those are overridden. Like [`is_stalled`], this
-/// is a Rimz-derived projection over enrichment, never a status the agent
-/// reports.
+/// Whether an agent should project to [`AgentStatus::RateLimited`]: its
+/// account's rate-limit budget is spent (`account_limited`) while it is in a
+/// calm or rate-limit-retry state — `Idle`, `Success`, or `Running` (without a
+/// live child, which is exempted upstream). A `Running` agent that hit the API
+/// rate limit enters a silent retry loop without a `Stop` hook, so it stays
+/// `Running` indefinitely; projecting it here surfaces the real cause rather
+/// than letting [`is_stalled`] escalate it to `Failed`. `Waiting` (human-
+/// blocked) and `Failed` (explicit error) are never overridden. Like
+/// [`is_stalled`], this is a Rimz-derived projection over enrichment, never a
+/// status the agent reports.
 pub fn is_rate_limited(status: AgentStatus, account_limited: bool) -> bool {
-    account_limited && matches!(status, AgentStatus::Idle | AgentStatus::Success)
+    account_limited
+        && matches!(
+            status,
+            AgentStatus::Idle | AgentStatus::Success | AgentStatus::Running
+        )
 }
 
 /// How long after its last compaction hook an agent still reads as
@@ -807,12 +813,15 @@ mod tests {
 
     #[test]
     fn rate_limited_only_overrides_resting_states() {
-        // A spent account parks a calm agent — nothing to do but wait.
+        // A spent account parks a calm or rate-limit-retry agent.
         assert!(is_rate_limited(AgentStatus::Idle, true));
         assert!(is_rate_limited(AgentStatus::Success, true));
-        // ...but never one that is working, blocked on a human, or already
-        // failed: those are not resting, or carry a more urgent meaning.
-        assert!(!is_rate_limited(AgentStatus::Running, true));
+        // Running is included: a Claude agent that hits a rate-limit API error
+        // enters a silent retry loop without a Stop hook, staying Running
+        // indefinitely. Parking it here surfaces the real cause rather than
+        // letting the stall check escalate it to Failed.
+        assert!(is_rate_limited(AgentStatus::Running, true));
+        // Blocked on a human or already failed: neither is overridden.
         assert!(!is_rate_limited(AgentStatus::Waiting, true));
         assert!(!is_rate_limited(AgentStatus::Failed, true));
         // No spent budget, no projection.
