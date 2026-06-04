@@ -61,7 +61,6 @@ impl Fixture {
             view_kind: None,
             view_name: None,
             is_focused: false,
-            client_focused: false,
             command: Some("bash".to_owned()),
             cwd: Some(worktree.to_string_lossy().into_owned()),
             pane_pid: None,

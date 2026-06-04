@@ -2317,7 +2317,6 @@ fn pane_ref_from_id(pane_id: PaneId) -> PaneRef {
         view_kind: None,
         view_name: None,
         is_focused: false,
-        client_focused: false,
         command: None,
         cwd: None,
         pane_pid: None,
@@ -3124,7 +3123,6 @@ mod tests {
             view_kind: Some(crate::ids::ViewKind::Window),
             view_name: None,
             is_focused: false,
-            client_focused: false,
             command: Some(command.to_owned()),
             cwd: Some(cwd.to_owned()),
             pane_pid: None,
@@ -6284,7 +6282,6 @@ mod tests {
                         view_kind: Some(crate::ids::ViewKind::Window),
                         view_name: None,
                         is_focused: true,
-                        client_focused: false,
                         command: Some("codex".to_owned()),
                         cwd: Some("/repo/main".to_owned()),
                         pane_pid: None,
@@ -6587,7 +6584,6 @@ mod tests {
             view_kind: Some(crate::ids::ViewKind::Tab),
             view_name: None,
             is_focused: focused,
-            client_focused: focused,
             command: Some("zsh".to_owned()),
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
@@ -6644,8 +6640,7 @@ mod tests {
         let own = PaneId::from_parts(MuxName::Zellij, "terminal_52");
         let active = PaneId::from_parts(MuxName::Zellij, "terminal_53");
         let sibling = PaneRef {
-            is_focused: true,      // the active pane of this tab
-            client_focused: false, // no client is looking at it
+            is_focused: true, // the active pane of this tab
             ..view_pane("terminal_53", "tab_11", false)
         };
         let panes = vec![view_pane("terminal_52", "tab_11", false), sibling];
@@ -6666,7 +6661,6 @@ mod tests {
             view_kind: Some(crate::ids::ViewKind::Tab),
             view_name: view_name.map(str::to_owned),
             is_focused: false,
-            client_focused: false,
             command: Some(command.to_owned()),
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,

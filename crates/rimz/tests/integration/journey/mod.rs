@@ -480,7 +480,6 @@ fn process_pane(mux: MuxName, index: usize, command: &str, cwd: String) -> PaneR
         }),
         view_name: None,
         is_focused: false,
-        client_focused: false,
         command: Some(command.to_owned()),
         cwd: Some(cwd),
         pane_pid: None,

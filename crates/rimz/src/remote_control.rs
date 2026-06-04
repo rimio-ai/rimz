@@ -287,7 +287,6 @@ mod tests {
             view_kind: None,
             view_name: view_name.map(ToOwned::to_owned),
             is_focused: false,
-            client_focused: false,
             command: command.map(ToOwned::to_owned),
             cwd: None,
             pane_pid: None,

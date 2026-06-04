@@ -314,18 +314,12 @@ pub struct PaneRef {
     /// remote-control host. Never a correctness signal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view_name: Option<String>,
-    /// Whether the pane is the focused pane in its mux view. This is advisory
-    /// UI routing metadata; ledger correctness never depends on focus.
+    /// Whether the pane is its mux view's active pane — the mux marks exactly
+    /// one per tab/window, defined whether or not a client is viewing it. The
+    /// sidebar derives its selection baseline from it. Advisory UI routing
+    /// metadata; ledger correctness never depends on focus.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_focused: bool,
-    /// Whether an attached client is focused on this pane (per-client focus), as
-    /// opposed to `is_focused`, which is the per-view active pane: the mux marks
-    /// one active pane per tab/window, but only the pane(s) a client is actually
-    /// looking at carry this. The sidebar focus mirror reads this so it tracks
-    /// the user, not every tab's active pane. Advisory UI routing metadata only;
-    /// ledger correctness never depends on focus.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub client_focused: bool,
     /// Foreground command as reported by the multiplexer, if available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
