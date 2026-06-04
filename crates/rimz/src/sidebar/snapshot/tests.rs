@@ -1,0 +1,850 @@
+use super::*;
+use crate::agents::TurnPhase;
+use crate::feed::{AgentState, AgentStatus};
+use crate::ids::{MuxName, WorkspaceId};
+use crate::ledger::atomic;
+
+fn pane(id: &str, command: &str, cwd: &str) -> PaneRef {
+    PaneRef {
+        pane_id: PaneId::from_parts(MuxName::Zellij, id),
+        session_name: "rimz-test".to_owned(),
+        view_id: Some("@0".to_owned()),
+        view_kind: None,
+        view_name: None,
+        is_focused: false,
+        command: Some(command.to_owned()),
+        cwd: Some(cwd.to_owned()),
+        pane_pid: None,
+        pane_process_start: None,
+        rss_kb: None,
+        cpu_pct: None,
+        io_bps: None,
+    }
+}
+
+fn pane_in_tab(id: &str, view_id: &str) -> PaneRef {
+    PaneRef {
+        view_id: Some(view_id.to_owned()),
+        ..pane(id, "zsh", "/tmp")
+    }
+}
+
+#[test]
+fn frame_age_exceeds_is_saturating() {
+    let max = PUBLISHED_FRAME_STALE_AFTER.as_millis() as u64;
+    assert!(!frame_age_exceeds(100, 100), "age 0 is fresh");
+    assert!(
+        !frame_age_exceeds(100, 100 + max),
+        "exactly at the window is fresh"
+    );
+    assert!(
+        frame_age_exceeds(100, 100 + max + 1),
+        "one ms past is stale"
+    );
+    // A clock that ran backwards saturates to age 0 rather than wrapping huge.
+    assert!(!frame_age_exceeds(100, 50));
+}
+
+#[test]
+fn published_frame_is_stale_only_past_the_window_and_for_the_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+
+    let produced_at_ms = 1_700_000_000_000;
+    let cache = SnapshotCache {
+        produced_at_ms,
+        session_name: "rimz-test".to_owned(),
+        panes: Vec::new(),
+    };
+    atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &cache).unwrap();
+    let max = PUBLISHED_FRAME_STALE_AFTER.as_millis() as u64;
+
+    // Fresh within the window, stale just past it.
+    assert!(!published_frame_is_stale(
+        &runtime,
+        "rimz-test",
+        produced_at_ms + max
+    ));
+    assert!(published_frame_is_stale(
+        &runtime,
+        "rimz-test",
+        produced_at_ms + max + 1
+    ));
+    // A frame stamped for another session never matches: the producer
+    // election owns the handoff, so this never forces a spurious local
+    // produce on a session mismatch.
+    assert!(!published_frame_is_stale(
+        &runtime,
+        "other-session",
+        produced_at_ms + max + 1
+    ));
+
+    // No published frame at all → not "stale" (cold start is the election's
+    // job; the renderer's degraded-exit safety covers a never-readable frame).
+    let empty = tempfile::tempdir().unwrap();
+    let empty_rt =
+        RuntimePaths::under(WorkspaceId::from_project_root(empty.path()), empty.path()).unwrap();
+    empty_rt.ensure_dirs().unwrap();
+    assert!(!published_frame_is_stale(
+        &empty_rt,
+        "rimz-test",
+        produced_at_ms + max + 1
+    ));
+}
+
+#[test]
+fn read_published_snapshot_folds_caches_without_forking() {
+    // A real on-disk worktree so the live-dir projection fires.
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let worktree = dir.path().join("wt");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let wt = worktree.to_string_lossy().into_owned();
+
+    // Publish the rollup (project root = the worktree) to `latest.json`, where
+    // the consumer reads it fresh, and the live panes to `snapshot.json`. `own`
+    // is excluded; a sibling pane becomes a row.
+    let mut rollup = SidebarSnapshot::build(workspace.clone(), Vec::new(), Vec::new());
+    rollup = rollup.with_project_root(Some(worktree.clone()));
+    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    state.ensure_dirs().unwrap();
+    atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
+    let panes = vec![
+        pane("terminal_0", "zsh", &wt),
+        pane("terminal_own", "rimz-sidebar", &wt),
+    ];
+    let base = SnapshotCache {
+        produced_at_ms: unix_now_ms(),
+        session_name: "rimz-test".to_owned(),
+        panes,
+    };
+    atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
+
+    // Publish diff stats for the worktree path: +7 / -2, 3 commits ahead and
+    // 1 behind a remote-default trunk, on branch `feat`.
+    let mut diff = DiffStatsCache::default();
+    diff.entries.insert(
+        wt.clone(),
+        DiffStatsCacheEntry::new(
+            unix_now_ms(),
+            Some(DiffStats {
+                added: 7,
+                removed: 2,
+            }),
+            Some(3),
+            Some(1),
+            Some("origin/main".to_owned()),
+            Some("feat".to_owned()),
+        ),
+    );
+    atomic::write_temp_then_rename_cache(&runtime.root.join("diff-stats.json"), &diff).unwrap();
+
+    let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
+    let snapshot =
+        read_published_snapshot(&state, &runtime, "rimz-test", Some(&own)).expect("published base");
+
+    // The worktree group carries the cached +7/-2 and the live branch label,
+    // projected from the cache with no git fork.
+    let group = snapshot
+        .worktree_groups
+        .iter()
+        .find(|group| group.kind == SidebarWorktreeKind::Worktree)
+        .expect("a worktree group");
+    assert_eq!(group.diff_added, Some(7));
+    assert_eq!(group.diff_removed, Some(2));
+    assert_eq!(group.commits_ahead, Some(3));
+    assert_eq!(group.commits_behind, Some(1));
+    assert_eq!(
+        group.trunk.as_deref(),
+        Some("main"),
+        "the ≡ marker names the branch, so origin/ strips for display",
+    );
+    assert_eq!(group.label, "feat");
+    // The own (sidebar) pane is excluded; the sibling renders as a row.
+    assert!(
+        snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .all(|row| {
+                row.pane
+                    .as_ref()
+                    .is_none_or(|pane| pane.pane_id.as_str() != own.as_str())
+            }),
+        "the renderer's own pane is never a row"
+    );
+}
+
+#[test]
+fn read_published_snapshot_folds_subagent_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    state.ensure_dirs().unwrap();
+
+    let worktree = dir.path().join("wt");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let wt = worktree.to_string_lossy().into_owned();
+    let live_pane = pane("terminal_parent", "claude", &wt);
+    let mut parent = root_agent("claude", "parent-1", None);
+    parent.worktree_path = Some(wt.clone());
+    parent.pane = Some(live_pane.clone());
+    let mut child = child_agent("claude", "parent-1", "child-1");
+    child.worktree_path = Some(wt.clone());
+    child.pane = Some(live_pane.clone());
+    child.task = None;
+    let mut rollup =
+        SidebarSnapshot::build_with_agents(workspace.clone(), Vec::new(), vec![parent, child]);
+    rollup = rollup.with_project_root(Some(worktree));
+    rollup.reflects_log = Some(crate::ledger::event_log::LogExtent {
+        generation: 0,
+        offset: 0,
+    });
+    atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
+
+    let base = SnapshotCache {
+        produced_at_ms: unix_now_ms(),
+        session_name: "rimz-test".to_owned(),
+        panes: vec![live_pane],
+    };
+    atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
+    let now = Timestamp::now();
+    crate::ledger::subagent_context::write(
+        &runtime,
+        "claude",
+        "child-1",
+        &crate::agents::context::SubagentContext {
+            agent_type: Some("Explore".to_owned()),
+            description: Some("trace the sidebar rows".to_owned()),
+            token_count: Some(12_400),
+            started_at: Some(now),
+            observed_at: now,
+        },
+    )
+    .unwrap();
+
+    let snapshot =
+        read_published_snapshot(&state, &runtime, "rimz-test", None).expect("published base");
+    let parent = snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .find(|row| row.id == "parent-1")
+        .expect("parent row");
+
+    assert_eq!(parent.sub_agents.len(), 1);
+    assert_eq!(parent.sub_agents[0].id, "child-1");
+    assert_eq!(parent.sub_agents[0].name, "Explore");
+    assert_eq!(
+        parent.sub_agents[0].description.as_deref(),
+        Some("trace the sidebar rows"),
+    );
+    assert_eq!(parent.sub_agents[0].total_tokens, Some(12_400));
+}
+
+#[test]
+fn consumer_own_view_counts_siblings_in_its_own_tab() {
+    // A consumer reads the producer's session-wide pane list (`list-panes
+    // -a`) and folds its own-view from it. An orphan sidebar — alone in its
+    // tab — must see `Some(0)` siblings so self-close can fire, even though
+    // the producer lives in another tab with its own siblings.
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+
+    let main_sb = pane_in_tab("main_sb", "@0");
+    let main_term = pane_in_tab("main_term", "@0");
+    let orphan_sb = pane_in_tab("orphan_sb", "@1");
+    let base = SnapshotCache {
+        produced_at_ms: unix_now_ms(),
+        session_name: "rimz-test".to_owned(),
+        panes: vec![main_sb, main_term, orphan_sb],
+    };
+    atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
+    // The rollup the consumer folds the panes over: an empty room, published
+    // to `latest.json` where the consumer reads it fresh.
+    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    state.ensure_dirs().unwrap();
+    let rollup = SidebarSnapshot::build(workspace, Vec::new(), Vec::new());
+    atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
+
+    let orphan_own = PaneId::from_parts(MuxName::Zellij, "orphan_sb");
+    let snapshot =
+        read_published_snapshot(&state, &runtime, "rimz-test", Some(&orphan_own)).expect("base");
+    assert_eq!(
+        snapshot.own_view.map(|view| view.sibling_count),
+        Some(0),
+        "an orphan sidebar sees zero siblings in its own tab so self-close can fire"
+    );
+}
+
+#[test]
+fn read_published_snapshot_is_none_until_the_producer_publishes() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    // No published pane set yet (the producer hasn't run), so the consumer
+    // read is `None` regardless of the rollup — the caller holds last-good.
+    let state = StatePaths::under(workspace, dir.path()).unwrap();
+    assert!(read_published_snapshot(&state, &runtime, "rimz-test", None).is_none());
+}
+
+#[test]
+fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
+    // The event-fresh split: the consumer reads the rollup from `latest.json`
+    // each call, so a status change shows even when the producer's published
+    // pane cache has not moved. Republishing `latest.json` alone changes the
+    // rendered rollup.
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    state.ensure_dirs().unwrap();
+
+    // A published (and never re-published) pane cache.
+    let panes = SnapshotCache {
+        produced_at_ms: unix_now_ms(),
+        session_name: "rimz-test".to_owned(),
+        panes: Vec::new(),
+    };
+    atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &panes).unwrap();
+
+    // A served publish carries the extent stamp; the workspace has no
+    // events, so the matching extent is the empty log's.
+    let stamp = Some(crate::ledger::event_log::LogExtent {
+        generation: 0,
+        offset: 0,
+    });
+    let mut alpha = SidebarSnapshot::build(workspace.clone(), Vec::new(), Vec::new());
+    alpha.display_name = "alpha".to_owned();
+    alpha.reflects_log = stamp;
+    atomic::write_temp_then_rename(&state.latest_snapshot, &alpha).unwrap();
+    let first = read_published_snapshot(&state, &runtime, "rimz-test", None).expect("base");
+    assert_eq!(first.display_name, "alpha");
+
+    // Republish ONLY `latest.json` (a different length so the parse cache
+    // cannot mask the change); the pane cache is untouched.
+    let mut bravo = SidebarSnapshot::build(workspace, Vec::new(), Vec::new());
+    bravo.display_name = "bravo-the-second-rollup".to_owned();
+    bravo.reflects_log = stamp;
+    atomic::write_temp_then_rename(&state.latest_snapshot, &bravo).unwrap();
+    let second = read_published_snapshot(&state, &runtime, "rimz-test", None).expect("base");
+    assert_eq!(
+        second.display_name, "bravo-the-second-rollup",
+        "the consumer folds the fresh rollup, not a cached one"
+    );
+}
+
+#[test]
+fn read_snapshot_cache_misses_a_different_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("snapshot.json");
+    let cache = SnapshotCache {
+        produced_at_ms: unix_now_ms(),
+        session_name: "rimz-one".to_owned(),
+        panes: Vec::new(),
+    };
+    atomic::write_temp_then_rename(&path, &cache).unwrap();
+    assert!(read_snapshot_cache(&path, "rimz-one").is_some());
+    assert!(read_snapshot_cache(&path, "rimz-other").is_none());
+}
+
+#[test]
+fn read_snapshot_cache_reflects_a_changed_file() {
+    // The thread-local parse cache must invalidate when the file changes, or
+    // a consumer would serve a stale base forever. Keyed on (mtime, len), so
+    // a differently-sized rewrite is caught even if the filesystem's mtime
+    // granularity is too coarse to register two fast writes.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("snapshot.json");
+
+    let first = SnapshotCache {
+        produced_at_ms: unix_now_ms(),
+        session_name: "rimz-one".to_owned(),
+        panes: Vec::new(),
+    };
+    atomic::write_temp_then_rename_cache(&path, &first).unwrap();
+    // Populate this thread's parse cache.
+    assert_eq!(
+        read_snapshot_cache(&path, "rimz-one").map(|c| c.panes.len()),
+        Some(0),
+    );
+
+    // Republish a longer, different-session frame in place.
+    let second = SnapshotCache {
+        produced_at_ms: unix_now_ms() + 1,
+        session_name: "rimz-two".to_owned(),
+        panes: vec![pane("terminal_0", "zsh", "/tmp")],
+    };
+    atomic::write_temp_then_rename_cache(&path, &second).unwrap();
+    // The stale (rimz-one) entry must not be served; the fresh frame wins.
+    assert!(read_snapshot_cache(&path, "rimz-one").is_none());
+    assert_eq!(
+        read_snapshot_cache(&path, "rimz-two").map(|c| c.panes.len()),
+        Some(1),
+    );
+}
+
+#[test]
+fn diff_stats_cache_entry_expires_after_ttl() {
+    let entry = DiffStatsCacheEntry::new(
+        1_000,
+        Some(DiffStats {
+            added: 2,
+            removed: 1,
+        }),
+        Some(4),
+        Some(2),
+        Some("main".to_owned()),
+        Some("feature-migration".to_owned()),
+    );
+
+    assert!(entry.is_fresh(1_000 + DIFF_STATS_TTL.as_millis() as u64));
+    assert!(!entry.is_fresh(1_001 + DIFF_STATS_TTL.as_millis() as u64));
+    assert_eq!(
+        entry.stats(),
+        Some(DiffStats {
+            added: 2,
+            removed: 1,
+        })
+    );
+    assert_eq!(entry.commits, Some(4));
+    assert_eq!(entry.behind, Some(2));
+    assert_eq!(entry.trunk.as_deref(), Some("main"));
+    assert_eq!(entry.branch.as_deref(), Some("feature-migration"));
+}
+
+/// A 5-hour budget window for tests — a known `duration_mins` so the
+/// projection and per-duration reconciliation have something to key on.
+fn rl_window(used: u8, resets_at: Option<Timestamp>) -> RateLimitWindow {
+    RateLimitWindow {
+        used_percentage: Some(used),
+        resets_at,
+        duration_mins: Some(300),
+    }
+}
+
+fn provider_panel(kind: &str, windows: Vec<RateLimitWindow>) -> crate::SidebarProviderPanel {
+    crate::SidebarProviderPanel {
+        kind: kind.to_owned(),
+        product_name: kind.to_owned(),
+        art: Vec::new(),
+        color: 0,
+        version: None,
+        plan: None,
+        metered: true,
+        remote_control: false,
+        spending: None,
+        windows,
+    }
+}
+
+fn snapshot_with_panels(
+    workspace: WorkspaceId,
+    panels: Vec<crate::SidebarProviderPanel>,
+) -> SidebarSnapshot {
+    let mut snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new());
+    snapshot.providers = panels;
+    snapshot
+}
+
+fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> AgentState {
+    let now = Timestamp::now();
+    AgentState {
+        agent_id: agent_id.into(),
+        kind: crate::ids::AgentKind::new_unchecked(kind),
+        status: AgentStatus::Running,
+        phase: TurnPhase::Idle,
+        pane: None,
+        agent_pid: None,
+        agent_process_start: None,
+        runtime_owner: None,
+        parent_agent_id: None,
+        worktree_path: None,
+        worktree_branch: None,
+        task: None,
+        prompt: None,
+        model: model.map(ToOwned::to_owned),
+        effort: None,
+        context_pct: None,
+        context_window: None,
+        total_tokens: None,
+        todo_done: None,
+        todo_total: None,
+        context: None,
+        subagent_description: None,
+        subagent_started_at: None,
+        turn_started_at: None,
+        compacting_since: None,
+        last_seen: now,
+        last_activity: now,
+    }
+}
+
+fn child_agent(kind: &str, parent_id: &str, agent_id: &str) -> AgentState {
+    let mut agent = root_agent(kind, agent_id, None);
+    agent.parent_agent_id = Some(parent_id.into());
+    agent
+}
+
+/// A window whose reset instant is still in the future projects unchanged —
+/// the last-known drained reading stands while the budget is genuinely spent.
+#[test]
+fn idle_window_before_reset_shows_last_known() {
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let future = Timestamp::from_second(2_000_010_000).unwrap();
+    let cached = rl_window(80, Some(future));
+    let projected = project_idle_window(cached.clone(), now);
+    assert_eq!(projected, cached, "before reset the cached reading stands");
+}
+
+/// Once `now` reaches the reset instant with no fresh reading, the window has
+/// refilled: it projects to full (0% used) with its reset rolled its own
+/// duration forward, so the countdown still reads sensibly.
+#[test]
+fn idle_window_past_reset_refills_to_full_and_rolls_forward() {
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let passed = Timestamp::from_second(1_999_990_000).unwrap();
+    let projected = project_idle_window(rl_window(95, Some(passed)), now);
+    assert_eq!(projected.used_percentage, Some(0), "a reset window is full");
+    assert_eq!(
+        projected.resets_at,
+        now.checked_add(SignedDuration::from_secs(300 * 60)).ok(),
+        "the reset rolls one window length (300 min) forward from now"
+    );
+}
+
+/// A cached window that can't be aged — no reset instant, or a passed reset
+/// with no known duration to roll by — projects as-is.
+#[test]
+fn idle_window_unageable_shows_as_is() {
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let passed = Timestamp::from_second(1_999_990_000).unwrap();
+    let undated = rl_window(40, None);
+    assert_eq!(project_idle_window(undated.clone(), now), undated);
+    let no_duration = RateLimitWindow {
+        used_percentage: Some(90),
+        resets_at: Some(passed),
+        duration_mins: None,
+    };
+    assert_eq!(project_idle_window(no_duration.clone(), now), no_duration);
+}
+
+/// The producer persists a live reading as ground truth; once the session is
+/// idle (no live window), a reader projects that reading back onto the panel,
+/// so the dashboard shows last-known budgets instead of an empty bar.
+#[test]
+fn producer_persists_live_windows_for_idle_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let future = Timestamp::from_second(4_000_000_000).unwrap();
+
+    // A live frame reports 60% used on the 5h window; the producer writes it.
+    let mut producing = snapshot_with_panels(
+        workspace.clone(),
+        vec![provider_panel("claude", vec![rl_window(60, Some(future))])],
+    );
+    apply_rate_limit_cache(&mut producing, &runtime, true);
+    let cache = read_rate_limits_cache(&runtime.root.join("rate_limits.json"));
+    assert_eq!(
+        cache
+            .windows
+            .get("claude")
+            .and_then(|limits| limits.windows.first())
+            .and_then(|window| window.used_percentage),
+        Some(60),
+        "the live reading is persisted as ground truth"
+    );
+
+    // The session goes idle (no live window). A reader projects the cached
+    // reading back onto the panel — the dashboard is not empty.
+    let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+    apply_rate_limit_cache(&mut idle, &runtime, false);
+    assert_eq!(
+        idle.providers[0]
+            .windows
+            .first()
+            .and_then(|window| window.used_percentage),
+        Some(60),
+        "an idle frame still shows the last-known budget"
+    );
+}
+
+/// An idle window whose reset has long passed projects to full, but the
+/// producer keeps persisting the real last reading — the synthesized full
+/// window is a read-time projection, never written back.
+#[test]
+fn idle_past_reset_shows_full_without_persisting_the_synthetic_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let passed = Timestamp::from_second(1_000_000_000).unwrap(); // 2001 — always past
+
+    // Seed a drained reading whose reset has long since passed.
+    let path = runtime.root.join("rate_limits.json");
+    write_rate_limits_cache(
+        &path,
+        &RateLimitsCache {
+            refreshed_at_ms: 0,
+            windows: BTreeMap::from([(
+                "claude".to_owned(),
+                AgentRateLimits {
+                    windows: vec![rl_window(90, Some(passed))],
+                },
+            )]),
+        },
+    );
+
+    // An idle producer frame with no live window: the display projects to
+    // full, while the persisted ground truth stays the real 90% reading.
+    let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+    apply_rate_limit_cache(&mut idle, &runtime, true);
+    let shown = idle.providers[0].windows.first().expect("a full window");
+    assert_eq!(shown.used_percentage, Some(0), "a reset window shows full");
+    assert!(shown.resets_at.is_some(), "with a rolled-forward countdown");
+
+    let persisted = read_rate_limits_cache(&path);
+    assert_eq!(
+        persisted
+            .windows
+            .get("claude")
+            .and_then(|limits| limits.windows.first())
+            .and_then(|window| window.used_percentage),
+        Some(90),
+        "the cache retains ground truth, not the synthesized full window"
+    );
+}
+
+/// When one provider logs out while another stays, the logged-out kind loses
+/// its panel, so the producer's next write — rebuilt from the panels alone —
+/// drops its cached windows while the surviving kind's are kept. Cache
+/// presence tracks login, so no stale budget can flash on a later re-login.
+#[test]
+fn producer_drops_windows_for_a_logged_out_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let future = Timestamp::from_second(4_000_000_000).unwrap();
+    let path = runtime.root.join("rate_limits.json");
+    let windows = |used| vec![rl_window(used, Some(future))];
+
+    // Seed windows for both providers through a live frame.
+    let mut seeded = snapshot_with_panels(
+        workspace.clone(),
+        vec![
+            provider_panel("claude", windows(40)),
+            provider_panel("codex", windows(30)),
+        ],
+    );
+    apply_rate_limit_cache(&mut seeded, &runtime, true);
+    let seeded_cache = read_rate_limits_cache(&path);
+    assert!(seeded_cache.windows.contains_key("claude"));
+    assert!(seeded_cache.windows.contains_key("codex"));
+
+    // Codex logs out: only claude has a panel now. The next producer write
+    // rebuilds the cache from the surviving panels, so codex drops out while
+    // claude's windows are kept.
+    let mut codex_gone =
+        snapshot_with_panels(workspace, vec![provider_panel("claude", windows(40))]);
+    apply_rate_limit_cache(&mut codex_gone, &runtime, true);
+    let after = read_rate_limits_cache(&path);
+    assert!(
+        after.windows.contains_key("claude"),
+        "a still-logged-in provider keeps its windows"
+    );
+    assert!(
+        !after.windows.contains_key("codex"),
+        "a logged-out provider's windows drop on the next write"
+    );
+}
+
+/// The out-of-band helper seeds one kind's windows into the shared cache
+/// without disturbing another kind's, so an idle provider's bars paint from
+/// the next producer frame.
+#[test]
+fn merge_account_rate_limits_seeds_a_kind_without_clobbering_others() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let path = runtime.root.join("rate_limits.json");
+
+    // Claude already has cached windows from a live session this run.
+    write_rate_limits_cache(
+        &path,
+        &RateLimitsCache {
+            refreshed_at_ms: 1,
+            windows: BTreeMap::from([(
+                "claude".to_owned(),
+                AgentRateLimits {
+                    windows: vec![rl_window(20, None)],
+                },
+            )]),
+        },
+    );
+
+    merge_account_rate_limits(
+        &runtime,
+        "codex",
+        AgentRateLimits {
+            windows: vec![rl_window(55, None)],
+        },
+    );
+
+    let cache = read_rate_limits_cache(&path);
+    assert_eq!(
+        cache
+            .windows
+            .get("codex")
+            .and_then(|limits| limits.windows.first())
+            .and_then(|w| w.used_percentage),
+        Some(55),
+        "the idle provider's windows are seeded"
+    );
+    assert!(
+        cache.windows.contains_key("claude"),
+        "an existing kind's windows are preserved"
+    );
+}
+
+#[test]
+fn active_codex_session_refreshes_context_even_when_windows_exist() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let mut snapshot = snapshot_with_panels(
+        workspace,
+        vec![provider_panel("codex", vec![rl_window(42, None)])],
+    );
+    snapshot
+        .agents
+        .push(root_agent("codex", "sess-active", Some("gpt-5.5-codex")));
+
+    assert_eq!(
+        codex_rate_limit_refreshes(&snapshot),
+        vec![CodexRateLimitRefresh::Session {
+            session_id: "sess-active".to_owned(),
+            model_hint: Some("gpt-5.5-codex".to_owned()),
+        }],
+        "active Codex sessions refresh their sidecars even when the dashboard already has windows"
+    );
+}
+
+#[test]
+fn idle_metered_codex_refreshes_account_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let snapshot = snapshot_with_panels(
+        workspace,
+        vec![provider_panel("codex", vec![rl_window(25, None)])],
+    );
+
+    assert_eq!(
+        codex_rate_limit_refreshes(&snapshot),
+        vec![CodexRateLimitRefresh::Account],
+        "idle Codex accounts refresh the shared cache even with prior windows"
+    );
+}
+
+#[test]
+fn active_codex_sessions_win_over_account_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let mut snapshot = snapshot_with_panels(workspace, vec![provider_panel("codex", Vec::new())]);
+    snapshot
+        .agents
+        .push(root_agent("codex", "sess-active", None));
+
+    assert_eq!(
+        codex_rate_limit_refreshes(&snapshot),
+        vec![CodexRateLimitRefresh::Session {
+            session_id: "sess-active".to_owned(),
+            model_hint: None,
+        }],
+        "a stale account cache cannot refresh underneath a live Codex sidecar"
+    );
+}
+
+#[test]
+fn unmetered_or_non_codex_providers_do_not_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let mut unmetered_codex = provider_panel("codex", Vec::new());
+    unmetered_codex.metered = false;
+    let snapshot = snapshot_with_panels(
+        workspace,
+        vec![unmetered_codex, provider_panel("claude", Vec::new())],
+    );
+
+    assert!(
+        codex_rate_limit_refreshes(&snapshot).is_empty(),
+        "only metered Codex has an out-of-band budget read"
+    );
+}
+
+/// The per-target throttle marker gates the out-of-band fetch: the first call is
+/// due (and touches the marker), the immediate next is not.
+#[test]
+fn codex_rate_limit_probe_throttles_per_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let account = CodexRateLimitRefresh::Account;
+    let session = CodexRateLimitRefresh::Session {
+        session_id: "sess/one".to_owned(),
+        model_hint: None,
+    };
+    let other_session = CodexRateLimitRefresh::Session {
+        session_id: "sess/two".to_owned(),
+        model_hint: None,
+    };
+
+    assert!(codex_rate_limit_probe_due(&runtime, &account));
+    assert!(
+        !codex_rate_limit_probe_due(&runtime, &account),
+        "a freshly-stamped account backs off"
+    );
+    assert!(codex_rate_limit_probe_due(&runtime, &session));
+    assert!(
+        !codex_rate_limit_probe_due(&runtime, &session),
+        "a freshly-stamped session backs off"
+    );
+    assert!(
+        codex_rate_limit_probe_due(&runtime, &other_session),
+        "a different session has its own marker"
+    );
+
+    let old = SystemTime::now()
+        .checked_sub(CODEX_RATE_LIMIT_REFRESH_INTERVAL + Duration::from_secs(1))
+        .unwrap();
+    std::fs::File::open(codex_rate_limit_probe_marker(&runtime, &session))
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    assert!(
+        codex_rate_limit_probe_due(&runtime, &session),
+        "the session becomes due again after the 60s interval"
+    );
+}
+
+/// Only Codex exposes an account-scoped window read today; Claude's windows
+/// have no source outside a live statusline, so it never triggers a fetch.
+#[test]
+fn only_codex_has_an_out_of_band_window_read() {
+    assert!(provider_has_out_of_band_windows("codex"));
+    assert!(!provider_has_out_of_band_windows("claude"));
+    assert!(!provider_has_out_of_band_windows("pi"));
+}
