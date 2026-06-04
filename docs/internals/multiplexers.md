@@ -138,6 +138,10 @@ The spawned `rimz sidebar serve` wrapper passes its own binary path to the rende
 
 tmux has no plugin surface to dock into, so the native pane is its only renderer. The docked-rail upgrade is Zellij-specific; tmux reaches the same sidebar surface through this managed pane.
 
+### tmux presence fast path
+
+The elected producer holds one read-only control-mode client (`tmux -C attach-session -r -f no-output`, [`mux::tmux::PresenceWatch`](../../crates/rimz/src/mux/tmux.rs)) and forwards each topology notification — a window or split opened/closed — as a `panes_changed` wakeup to its own serve loop, which pulls a fresh pane list immediately. Pane presence lands in tens of milliseconds instead of waiting out the poll. The asymmetry is deliberate and allowed by the parity rule: **fast paths are backend-optional, the poll is presence truth on both backends.** A dead or refused watcher (an old tmux, a restarting server) degrades to exactly the poll, and the producer respawns the client with backoff. Zellij stays poll-only — its CLI `subscribe` stream is pane-content oriented, not a presence source; the plugin rail is its future fast path.
+
 ### tmux backend caveats
 
 - **`wake_sidebar` is a no-op.** tmux has no pipe-broadcast equivalent of `zellij pipe --name`; the sidebar wakeup socket is the only channel. The wakeup walk in `crates/rimz/src/ledger/wakeup.rs` fans out one UDP datagram per fresh heartbeat — that path is identical across both backends now that the dormant Zellij pipe no longer fires. Latency parity rests on the wakeup socket alone.

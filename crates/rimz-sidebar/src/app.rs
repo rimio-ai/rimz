@@ -25,6 +25,7 @@ use tracing::{debug, info, warn};
 use crate::render::{self, Alert, Browse, UiState};
 
 mod input;
+mod tmux_watch;
 use input::{
     KeyAction, SELF_CLOSE_WAKEUP, SNAPSHOT_WAKEUP, Wakeup, encode_key, encode_mouse,
     wait_for_wakeup,
@@ -138,6 +139,20 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     );
     let mut self_close_probe_in_flight = false;
     let mut pending_self_close_probe: Option<Duration> = None;
+
+    // tmux fast path: the elected producer streams control-mode topology
+    // nudges into this loop's socket so a pane open/close repaints in tens of
+    // milliseconds instead of waiting out the poll. Latency only — the poll
+    // stays the presence backstop, and Zellij stays poll-only (its plugin
+    // rail is the future fast path; see docs/internals/multiplexers.md).
+    if config.mux == MuxName::Tmux {
+        let _ = tmux_watch::spawn(
+            runtime.clone(),
+            config.instance_id.clone(),
+            config.session_name.clone(),
+            socket_path.clone(),
+        );
+    }
 
     // Write the heartbeat immediately so the freshness gate never sees a gap.
     // Errors are non-fatal; the gate re-probes after the TTL.
@@ -319,6 +334,19 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     } else {
                         FetchRequest::default()
                     },
+                    true,
+                );
+            }
+            // The tmux presence watcher saw topology change: pull a fresh pane
+            // list now, requiring a cache produced after the signal. A burst
+            // (one split fans out as several control lines) coalesces through
+            // `in_flight`/`pending_refetch` like any wakeup storm.
+            Wakeup::PanesChanged => {
+                request_fetch(
+                    &request_tx,
+                    &mut in_flight,
+                    &mut pending_refetch,
+                    FetchRequest::fresh_panes(),
                     true,
                 );
             }
@@ -1808,11 +1836,12 @@ fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -
         Wakeup::Key(action) => handle_key(action, ui, snapshot),
         Wakeup::MouseClick { column, row } => handle_mouse_click(column, row, ui, snapshot),
         Wakeup::Resize => InputOutcome::redraw(),
-        // The serve loop intercepts these before dispatching here: a tick or a
-        // ledger delta is a re-fetch trigger, worker completions are folded,
-        // and a reload re-execs.
+        // The serve loop intercepts these before dispatching here: a tick, a
+        // ledger delta, or a presence nudge is a re-fetch trigger, worker
+        // completions are folded, and a reload re-execs.
         Wakeup::Tick
         | Wakeup::Ledger { .. }
+        | Wakeup::PanesChanged
         | Wakeup::Reload
         | Wakeup::Snapshot
         | Wakeup::SelfCloseProbe => InputOutcome::default(),

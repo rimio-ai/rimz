@@ -989,3 +989,43 @@ fn window_pane_count(server: &TmuxServer, session: &str, window: u32) -> usize {
         .filter(|line| !line.is_empty())
         .count()
 }
+
+/// The control-mode presence stream surfaces topology changes as nudges — the
+/// tmux fast path the elder sidebar consumes. A new window must produce a
+/// presence event within the budget, and killing the server must end the
+/// stream (`None`) rather than wedging it, so a dead watcher degrades to the
+/// poll instead of a stuck frame.
+#[test]
+fn presence_watch_nudges_on_topology_and_ends_with_the_server() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    server.ensure_with_shell("presence");
+
+    let mut watch = rimz::mux::tmux::PresenceWatch::attach(Some(&server.socket), "presence")
+        .expect("attach control client");
+
+    // Drain on a helper thread so the main thread owns the timeout. A single
+    // topology change fans out as a burst of control lines (`%window-add` plus
+    // `%layout-change`), so report the first nudge, then drain to the end.
+    let (tx, rx) = std::sync::mpsc::channel::<Option<()>>();
+    let drain = thread::spawn(move || {
+        let _ = tx.send(watch.next_presence());
+        while watch.next_presence().is_some() {}
+        let _ = tx.send(None);
+    });
+
+    server.tmux(&["new-window", "-t", "presence", "sh"]);
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5)).expect("nudge"),
+        Some(()),
+        "a new window posts a presence nudge"
+    );
+
+    server.tmux(&["kill-server"]);
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5)).expect("stream end"),
+        None,
+        "a dead server ends the stream instead of wedging it"
+    );
+    drain.join().expect("drain thread");
+}

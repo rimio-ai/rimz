@@ -25,6 +25,11 @@ pub(super) enum Wakeup {
     /// A resize-triggered sibling-count probe finished. This carries only
     /// pane-list metadata for the self-close latch, never a rendered snapshot.
     SelfCloseProbe,
+    /// The tmux control-mode presence watcher saw pane topology change — a
+    /// window or split opened/closed. A latency fast path only: the loop pulls
+    /// a fresh pane list now instead of waiting out the poll, and a dead
+    /// watcher degrades to exactly that poll.
+    PanesChanged,
     Resize,
     /// `rimz reload` asks the renderer to re-exec its own binary in place so a
     /// freshly-installed build takes effect without a session rebirth.
@@ -52,6 +57,8 @@ pub(super) enum KeyAction {
 /// wakeup uses keeps the loop blocking in exactly one place.
 pub(super) const SNAPSHOT_WAKEUP: &[u8] = b"snapshot";
 pub(super) const SELF_CLOSE_WAKEUP: &[u8] = b"self_close_probe";
+/// The control word the tmux presence watcher posts on a topology change.
+pub(super) const PANES_CHANGED_WAKEUP: &[u8] = b"panes_changed";
 
 pub(super) fn encode_key(code: KeyCode) -> Option<String> {
     let wire = match code {
@@ -103,6 +110,7 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
     match raw {
         "snapshot" => Wakeup::Snapshot,
         "self_close_probe" => Wakeup::SelfCloseProbe,
+        "panes_changed" => Wakeup::PanesChanged,
         "resize" => Wakeup::Resize,
         "reload" => Wakeup::Reload,
         "key:up" => Wakeup::Key(KeyAction::Up),
@@ -258,6 +266,11 @@ mod tests {
     }
 
     #[test]
+    fn panes_changed_decodes_to_its_wakeup() {
+        assert_eq!(decode_wakeup(PANES_CHANGED_WAKEUP), Wakeup::PanesChanged);
+    }
+
+    #[test]
     fn control_words_never_start_with_brace() {
         // The leading-brace discriminator (ledger delta vs control/input) holds
         // only while no control or input wire word can begin with `{`.
@@ -266,6 +279,7 @@ mod tests {
             "reload".to_owned(),
             String::from_utf8(SNAPSHOT_WAKEUP.to_vec()).unwrap(),
             String::from_utf8(SELF_CLOSE_WAKEUP.to_vec()).unwrap(),
+            String::from_utf8(PANES_CHANGED_WAKEUP.to_vec()).unwrap(),
             String::from_utf8(rimz::ledger::wakeup::RELOAD_WAKEUP.to_vec()).unwrap(),
         ];
         for code in [
