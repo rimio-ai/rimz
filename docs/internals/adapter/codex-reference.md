@@ -2,7 +2,7 @@
 
 > The mapping onto Rimz's internal types lives beside this doc: [hooks.md](../hooks.md) maps hook events to lifecycle/feed channels, [transcript.md](../transcript.md) maps the rollout transcript and app-server onto `AgentContext`, [account.md](../account.md) maps the auth surface onto account and balance.
 
-This is the single home for the **Codex upstream protocol surface** Rimz binds to — the hook events and their decision schema, the `notify` channel, the app-server JSON-RPC API, the rollout transcript, and the auth file. It is a hand-maintained mirror of OpenAI's published docs and the open-source `codex-rs` types, kept for fast lookup and pinned to the source URLs below. The [`CodexIntegration`](../../../crates/rimz/src/agents/codex/mod.rs) adapter and the [`codex::app_server`](../../../crates/rimz/src/agents/codex/app_server.rs) client are the only code that reads this surface.
+This is the single home for the **Codex upstream protocol surface** Rimz binds to — the hook events and their decision schema, the `notify` channel, the app-server JSON-RPC API, the rollout transcript, and the auth file. It is a hand-maintained mirror of OpenAI's published docs and the open-source `codex-rs` types, kept for fast lookup and pinned to the source URLs below. The [`CodexAdapter`](../../../crates/rimz/src/agents/codex/mod.rs) adapter and the [`codex::app_server`](../../../crates/rimz/src/agents/codex/app_server.rs) client are the only code that reads this surface.
 
 Coverage is **depth on what Rimz wires, breadth as an index**: the events, app-server methods, and rollout fields the code actually parses or emits are documented in full; the rest of the catalog is listed so a contributor wiring a new path knows it exists.
 
@@ -28,7 +28,7 @@ codex app-server generate-json-schema --out DIR  # JSON Schema bundle
 
 ## Hooks
 
-Codex hooks mirror Claude's shape: a command Codex runs at a lifecycle point, fed a JSON payload on **stdin**, returning a decision on **stdout**. They are wired in `~/.codex/config.toml` as `[[hooks.Event]]` tables. Rimz's [`CodexIntegration`](../../../crates/rimz/src/agents/codex/mod.rs) `INSTALLED_EVENTS` constant is the source of truth for the wired set; the native-event → Rimz status mapping is the [hooks.md Codex appendix](../hooks.md#appendix--codex).
+Codex hooks mirror Claude's shape: a command Codex runs at a lifecycle point, fed a JSON payload on **stdin**, returning a decision on **stdout**. They are wired in `~/.codex/config.toml` as `[[hooks.Event]]` tables. Rimz's [`CodexAdapter`](../../../crates/rimz/src/agents/codex/mod.rs) `INSTALLED_EVENTS` constant is the source of truth for the wired set; the native-event → Rimz status mapping is the [hooks.md Codex appendix](../hooks.md#appendix--codex).
 
 ### Config shape
 

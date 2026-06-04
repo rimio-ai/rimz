@@ -53,7 +53,7 @@ pub struct SidebarSnapshot {
     #[serde(default)]
     pub agent_hooks_ready: bool,
     /// The lazy-registering agent kinds whose Rimz hooks are wired
-    /// ([`crate::agents::registers_session_lazily`] ∩ installed). Gates the
+    /// ([`crate::agents::Capabilities::registers_lazily`] ∩ installed). Gates the
     /// idle-instance synthesis in `rows_from_panes`: a launched-but-unbound pane of
     /// such an agent has no ledger session yet (it registers lazily on the first
     /// turn), and only a wired agent can ever report status, so only a wired lazy
@@ -1039,36 +1039,46 @@ fn stable_window(
     live.or(undated)
 }
 
-/// Built-in `(product_name, art lines, color)` for a provider kind, used when
-/// the per-machine config overrides none of them. Ships the brand emblems and
-/// colors: Claude clay (173), Codex blue (32), Pi forest green (28).
+/// Built-in `(product_name, art lines, color)` for a provider kind, read from
+/// the adapter's brand descriptor ([`crate::agents::Brand`]); used when the
+/// per-machine config overrides none of them. An unregistered kind renders
+/// title-cased with no emblem in neutral grey (244).
 fn default_provider_style(kind: &str) -> (String, Vec<String>, u8) {
-    let lines = |art: &str| art.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
-    match kind {
-        "claude" => (
-            "Claude".to_owned(),
-            lines(" ▐▛███▜▌\n▝▜█████▛▘\n  ▘▘ ▝▝"),
-            173,
-        ),
-        "codex" => (
-            "Codex".to_owned(),
-            lines(" ▗▛███▜▖\n ▜▌ ▚ ▐▛\n ▝▀▀▀▀▀▘"),
-            38,
-        ),
-        "pi" => ("Pi".to_owned(), lines(" ▗▛████▜▖\n  ▐▌  ▐▌\n  ▝▘  ▝▘"), 28),
-        other => (provider_title_case(other), Vec::new(), 244),
+    if let Some(descriptor) = crate::agents::descriptor_by_kind(kind) {
+        return (
+            descriptor.display_name.to_owned(),
+            descriptor
+                .brand
+                .emblem
+                .iter()
+                .map(|line| (*line).to_owned())
+                .collect(),
+            descriptor.brand.color,
+        );
     }
+    // Pi's brand ships ahead of its adapter; it moves onto the Pi descriptor
+    // when the adapter lands.
+    if kind == "pi" {
+        return (
+            "Pi".to_owned(),
+            [" ▗▛████▜▖", "  ▐▌  ▐▌", "  ▝▘  ▝▘"]
+                .map(str::to_owned)
+                .to_vec(),
+            28,
+        );
+    }
+    (provider_title_case(kind), Vec::new(), 244)
 }
 
-/// Format a raw provider plan tier into its brand label: Claude's tiers prefix
-/// `Claude` (`max` → `Claude Max`), Codex's prefix `ChatGPT` (`pro` → `ChatGPT
-/// Pro`); any other provider just title-cases the tier.
+/// Format a raw provider plan tier into its brand label, per the adapter's
+/// [`crate::agents::PlanLabel`]: Claude's tiers prefix `Claude` (`max` →
+/// `Claude Max`), Codex's prefix `ChatGPT` (`pro` → `ChatGPT Pro`); any other
+/// provider just title-cases the tier.
 fn format_plan_label(kind: &str, raw: &str) -> String {
     let tier = provider_title_case(raw);
-    match kind {
-        "claude" => format!("Claude {tier}"),
-        "codex" => format!("ChatGPT {tier}"),
-        _ => tier,
+    match crate::agents::descriptor_by_kind(kind).map(|descriptor| &descriptor.plan_label) {
+        Some(crate::agents::PlanLabel::Prefixed { prefix }) => format!("{prefix} {tier}"),
+        Some(crate::agents::PlanLabel::TitleCaseOnly) | None => tier,
     }
 }
 
@@ -4154,12 +4164,12 @@ mod tests {
     #[test]
     fn non_lazy_agent_pane_is_never_idle_synthesized() {
         // The idle-instance synthesis is gated on the agent registering lazily
-        // (`registers_session_lazily`), not merely on being wired. Claude stamps a
-        // pane on every session, so an unbound `claude` pane stays a process row
-        // even when the producer is told claude is a wired lazy kind — the static
-        // trait gate refuses it. This is what keeps the lifecycle agent-agnostic
-        // (a new lazy agent slots in by overriding the trait) without changing how
-        // Claude renders.
+        // (`Capabilities::registers_lazily`), not merely on being wired. Claude
+        // stamps a pane on every session, so an unbound `claude` pane stays a
+        // process row even when the producer is told claude is a wired lazy kind —
+        // the static descriptor gate refuses it. This is what keeps the lifecycle
+        // agent-agnostic (a new lazy agent slots in by declaring the capability)
+        // without changing how Claude renders.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let mut snapshot =
             SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), Vec::new());

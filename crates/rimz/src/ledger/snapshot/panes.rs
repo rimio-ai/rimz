@@ -138,7 +138,7 @@ pub(super) fn agent_for_pane<'a>(
 }
 
 /// What a live pane running a lazy-registering agent resolves to. Such an agent
-/// ([`crate::agents::registers_session_lazily`]) can be present without a stamped
+/// ([`crate::agents::Capabilities::registers_lazily`]) can be present without a stamped
 /// session — it registers lazily and/or routes hooks through a daemon — so it
 /// can't bind through `agent_for_pane` (stamped-id only); this is where its pane
 /// resolves instead. Codex is the only such agent today.
@@ -181,7 +181,9 @@ pub(super) fn lazy_agent_for_pane<'a>(
     wired_lazy_kinds: &[String],
 ) -> Option<LazyAgentRow<'a>> {
     let kind = command_agent_kind(pane.command.as_deref()?)?;
-    if !crate::agents::registers_session_lazily(kind) {
+    let registers_lazily = crate::agents::descriptor_by_kind(kind)
+        .is_some_and(|descriptor| descriptor.capabilities.registers_lazily);
+    if !registers_lazily {
         return None;
     }
     let cwd = pane.cwd.as_deref().filter(|cwd| !cwd.is_empty())?;

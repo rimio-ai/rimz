@@ -5,7 +5,7 @@
 //! today, Codex's JSON-RPC poll later. It is display-only and redactable: it
 //! never drives routing, ranking, or a decision (the no-transcript-correctness
 //! rule). Each agent integration produces it from its own transport via
-//! [`super::AgentIntegration::observe_context`]; storage
+//! [`super::AgentAdapter::observe_context`]; storage
 //! ([`crate::ledger::agent_context`]) and the snapshot fold-in are
 //! transport-agnostic, so a new agent slots in with only a new producer — no
 //! change to this type, the sidecar, or the fold-in.

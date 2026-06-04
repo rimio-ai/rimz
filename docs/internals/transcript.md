@@ -10,7 +10,7 @@ Enrichment is **never correctness**. A missing file, a torn line, an absent agen
 
 ## Two sources
 
-A session's context data has two origins. Both flow through one adapter — the [`AgentIntegration`](../../crates/rimz/src/agents/mod.rs) — and normalize onto the same internal fields, so a new provider implements one or both and the rest of Rimz is unchanged.
+A session's context data has two origins. Both flow through one adapter — the [`AgentAdapter`](../../crates/rimz/src/agents/mod.rs) — and normalize onto the same internal fields, so a new provider implements one or both and the rest of Rimz is unchanged.
 
 **The transcript tail** is the universal floor. Every provider writes a JSONL session log, so every agent gets a context gauge from it. Capture is low-frequency: it runs inside `observe_lifecycle` on the turn-boundary events Rimz already fires (session start, prompt submit, turn end), and only once a payload supplies a session id. It reads a bounded tail, takes the most recent usage record, and never blocks the hook.
 

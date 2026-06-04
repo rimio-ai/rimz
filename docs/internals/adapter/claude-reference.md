@@ -2,7 +2,7 @@
 
 > The mapping onto Rimz's internal types lives beside this doc: [hooks.md](../hooks.md) maps hook events to lifecycle/feed channels, [transcript.md](../transcript.md) maps the statusline and transcript onto `AgentContext`, [account.md](../account.md) maps the auth surface onto account and balance.
 
-This is the single home for the **Claude Code upstream protocol surface** Rimz binds to — the hook events, their stdin payloads and stdout decision schema, the statusline JSON, and the auth surface. It is a hand-maintained mirror of Anthropic's published docs, kept for fast lookup and pinned to the source URLs below so it can be refreshed when upstream moves. The [`ClaudeIntegration`](../../../crates/rimz/src/agents/claude/mod.rs) adapter is the only code that reads this surface; everything downstream of it speaks Rimz's internal types.
+This is the single home for the **Claude Code upstream protocol surface** Rimz binds to — the hook events, their stdin payloads and stdout decision schema, the statusline JSON, and the auth surface. It is a hand-maintained mirror of Anthropic's published docs, kept for fast lookup and pinned to the source URLs below so it can be refreshed when upstream moves. The [`ClaudeAdapter`](../../../crates/rimz/src/agents/claude/mod.rs) adapter is the only code that reads this surface; everything downstream of it speaks Rimz's internal types.
 
 Coverage is **depth on what Rimz wires, breadth as an index**: the events, statusline fields, and decision shapes the adapter actually parses or emits are documented in full; the rest of the upstream catalog is listed so a contributor wiring a new event knows it exists.
 
@@ -75,7 +75,7 @@ Per-event decision control rides `hookSpecificOutput` (or, for the post-* and st
 
 ### Hooks Rimz wires
 
-These are the events the [`ClaudeIntegration`](../../../crates/rimz/src/agents/claude/mod.rs) `INSTALLED_EVENTS` constant installs. The native-event → Rimz status mapping is the [hooks.md Claude appendix](../hooks.md#appendix--claude-code); the columns here are the upstream fire-time and the event-specific stdin fields the adapter reads.
+These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/claude/mod.rs) `INSTALLED_EVENTS` constant installs. The native-event → Rimz status mapping is the [hooks.md Claude appendix](../hooks.md#appendix--claude-code); the columns here are the upstream fire-time and the event-specific stdin fields the adapter reads.
 
 | Event | Fires | Event-specific input | Rimz channel |
 | --- | --- | --- | --- |

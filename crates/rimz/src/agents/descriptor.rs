@@ -1,0 +1,158 @@
+//! Static, allocation-free identity and capability data for one agent.
+//!
+//! One `const` [`AgentDescriptor`] per adapter directory; the registry holds
+//! `&'static` references. Everything here is data a `match kind { … }` used to
+//! encode somewhere in core — folded into the one place an agent is declared,
+//! so adding an agent never edits a shared dispatch site. Anything that parses
+//! a payload, touches the filesystem or network, or spawns a helper is an
+//! [`AgentAdapter`](super::AgentAdapter) trait method, never descriptor data.
+
+use std::time::Duration;
+
+use serde_json::Value;
+
+/// Static identity, branding, capabilities, and classification tables for one
+/// agent. See the module doc for the descriptor-vs-trait split.
+#[derive(Debug)]
+pub struct AgentDescriptor {
+    /// The stable kind string — the `--source` tag, the per-provider bucket
+    /// key, the rollup `kind`.
+    pub kind: &'static str,
+    /// Human display name; the provider dashboard panel title.
+    pub display_name: &'static str,
+    /// Brand emblem + color for the provider dashboard panel.
+    pub brand: Brand,
+    /// How a raw plan tier becomes a brand label (`max` → `Claude Max`).
+    pub plan_label: PlanLabel,
+    /// Tool-name classification tables for the lifecycle `ToolUsed` bits.
+    pub tools: ToolClassification,
+    /// What this agent can and cannot do — consumed by the sidebar and doctor
+    /// so a missing surface renders as a declared absence, never an
+    /// accidental gap.
+    pub capabilities: Capabilities,
+    /// Maximum time a blocking hook may hold the bridge open before falling
+    /// back to the neutral no-op. Set from the upstream's published deadline,
+    /// with margin so the bridge times out before the agent kills the hook.
+    pub hook_cap: Duration,
+    /// Process names this agent's instance can run under — its own `comm`
+    /// plus any launcher (`node` for a JS bundle). Drives the PID-attribution
+    /// `/proc` walk.
+    pub process_names: &'static [&'static str],
+    /// User-facing reason shown by doctor/start when
+    /// [`Capabilities::hook_install`] is false.
+    pub hook_install_unavailable: Option<&'static str>,
+}
+
+/// Brand styling for the provider dashboard panel.
+#[derive(Debug)]
+pub struct Brand {
+    /// ASCII emblem lines, already split.
+    pub emblem: &'static [&'static str],
+    /// 256-color index.
+    pub color: u8,
+}
+
+/// How a raw plan tier string becomes its brand label.
+#[derive(Debug)]
+pub enum PlanLabel {
+    /// `"<prefix> <TitleCase(tier)>"` — Claude → "Claude Max",
+    /// Codex → "ChatGPT Pro".
+    Prefixed { prefix: &'static str },
+    /// Just title-case the tier — for an agent whose sessions span many
+    /// provider accounts, where no single brand prefix is honest.
+    TitleCaseOnly,
+}
+
+/// The agent's tool vocabulary, classified for the lifecycle `ToolUsed` bits.
+#[derive(Debug)]
+pub struct ToolClassification {
+    /// Tools that mutate the workspace — write files or run commands. A
+    /// mutating tool is proof of real work, so its `PostToolUse` is the only
+    /// tool event recorded on the lifecycle channel.
+    pub mutating: &'static [&'static str],
+    /// The file-editing subset of `mutating` — the turn's first edit moves it
+    /// from reasoning to acting. A shell tool mutates but does not edit, so a
+    /// research turn that only runs commands keeps the thinking sparkle.
+    pub editing: &'static [&'static str],
+}
+
+/// Explicit capability declaration. A provider that *cannot* do something
+/// declares it here, so the sidebar/doctor render the absence deliberately
+/// instead of inferring it from an empty `None`.
+#[derive(Clone, Copy, Debug)]
+pub struct Capabilities {
+    /// Can natively hold a turn open for a permission/plan/question decision
+    /// (the blocking-feed channel).
+    pub blocking_feed: bool,
+    /// Surfaces rate-limit windows / plan budgets the dashboard can meter.
+    pub rate_limit_windows: bool,
+    /// Routes child tasks through `Subagent{Start,Stop}` lifecycle signals.
+    pub subagents: bool,
+    /// Has a notion of parking a turn on still-in-flight background work.
+    pub background_tasks: bool,
+    /// Registers its session lazily and/or routes hooks through a daemon, so
+    /// an instance can be present without a stamped session. The sidebar
+    /// binds such a session to its pane by cwd and synthesizes an idle row
+    /// for a wired-but-unbound pane.
+    pub registers_lazily: bool,
+    /// Rimz can install a hook configuration the agent actually executes.
+    pub hook_install: bool,
+}
+
+impl AgentDescriptor {
+    /// Whether a tool-use payload names a workspace-mutating tool. The tool
+    /// name rides `tool_name` in every provider's payload.
+    pub fn tool_mutates(&self, payload: &Value) -> bool {
+        self.tool_in(payload, self.tools.mutating)
+    }
+
+    /// Whether a tool-use payload names a *file-editing* tool.
+    pub fn tool_edits_files(&self, payload: &Value) -> bool {
+        self.tool_in(payload, self.tools.editing)
+    }
+
+    fn tool_in(&self, payload: &Value, set: &[&str]) -> bool {
+        payload
+            .get("tool_name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| set.contains(&name))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::agents::registry::ADAPTERS;
+
+    #[test]
+    fn every_descriptor_keeps_editing_a_subset_of_mutating() {
+        for adapter in ADAPTERS {
+            let descriptor = adapter.descriptor();
+            for tool in descriptor.tools.editing {
+                assert!(
+                    descriptor.tools.mutating.contains(tool),
+                    "{}: editing tool {tool} missing from the mutating set",
+                    descriptor.kind,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tool_classification_reads_the_tool_name() {
+        let claude = crate::agents::registry::descriptor_by_kind("claude").unwrap();
+        assert!(claude.tool_mutates(&json!({ "tool_name": "Edit" })));
+        assert!(claude.tool_mutates(&json!({ "tool_name": "Bash" })));
+        assert!(!claude.tool_mutates(&json!({ "tool_name": "Read" })));
+        assert!(!claude.tool_mutates(&json!({})));
+        // Command runners mutate but do not edit — the reasoning phase survives.
+        assert!(!claude.tool_edits_files(&json!({ "tool_name": "Bash" })));
+        assert!(claude.tool_edits_files(&json!({ "tool_name": "Write" })));
+
+        let codex = crate::agents::registry::descriptor_by_kind("codex").unwrap();
+        assert!(codex.tool_mutates(&json!({ "tool_name": "apply_patch" })));
+        assert!(codex.tool_edits_files(&json!({ "tool_name": "apply_patch" })));
+        assert!(!codex.tool_edits_files(&json!({ "tool_name": "shell" })));
+    }
+}

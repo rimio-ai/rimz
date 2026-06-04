@@ -37,16 +37,16 @@ use self::payloads::{
     parse_session_start, parse_subagent_start, parse_subagent_stop, parse_user_prompt_submit,
 };
 use super::context::{AgentContext, AgentCost};
+use super::descriptor::{AgentDescriptor, Brand, Capabilities, PlanLabel, ToolClassification};
 use super::hook_types::SessionSource;
 use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::pricing::PriceBook;
 use super::{
-    AgentErr, AgentIntegration, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
+    AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, Result, SubagentIdentity, agent_config_path,
     choice_is_allow, classify_agent_hook, optional_payload_string, read_optional_file,
     read_transcript_tail, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
-    tool_edits_files, tool_mutates,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ledger::atomic;
@@ -56,6 +56,42 @@ use crate::ledger::atomic;
 /// the hook past the kill window. Verify against the active Codex hook docs
 /// before tightening.
 const CODEX_HOOK_CAP: Duration = Duration::from_secs(60);
+
+/// Everything `const` about Codex, in one place. See [`AgentDescriptor`] for
+/// the descriptor-vs-trait split.
+static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
+    kind: "codex",
+    display_name: "Codex",
+    brand: Brand {
+        emblem: &[" ▗▛███▜▖", " ▜▌ ▚ ▐▛", " ▝▀▀▀▀▀▘"],
+        color: 38,
+    },
+    plan_label: PlanLabel::Prefixed { prefix: "ChatGPT" },
+    tools: ToolClassification {
+        mutating: &["shell", "apply_patch", "exec_command", "local_shell"],
+        editing: &["apply_patch"],
+    },
+    capabilities: Capabilities {
+        blocking_feed: true,
+        rate_limit_windows: true,
+        subagents: true,
+        // Codex has no background-task parking.
+        background_tasks: false,
+        // Codex fires no `SessionStart` on a plain CLI launch — it rides the
+        // first `UserPromptSubmit` — and its hooks fire from the app-server
+        // with no mux pane env, so a session is unstamped. Both make a Codex
+        // instance present before any session binds: the sidebar binds it to
+        // its pane by cwd and renders a wired-but-unprompted `codex` pane as
+        // an idle agent.
+        registers_lazily: true,
+        hook_install: true,
+    },
+    hook_cap: CODEX_HOOK_CAP,
+    // Codex commonly runs as a `node` bundle, so PID attribution accepts the
+    // launcher process name beside its own.
+    process_names: &["codex", "node"],
+    hook_install_unavailable: None,
+};
 
 /// Installed events. Tuple is `(event_name, optional_matcher)` — the single
 /// source of truth for which Codex events Rimz wires and with which matcher,
@@ -95,11 +131,11 @@ const RIMZ_HOOK_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --sou
 const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source codex";
 
 #[derive(Clone, Debug, Default)]
-pub struct CodexIntegration;
+pub struct CodexAdapter;
 
-impl AgentIntegration for CodexIntegration {
-    fn name(&self) -> &'static str {
-        "codex"
+impl AgentAdapter for CodexAdapter {
+    fn descriptor(&self) -> &'static AgentDescriptor {
+        &CODEX_DESCRIPTOR
     }
 
     /// `codex resume <id>` resolves the UUID to its rollout file and restores
@@ -175,15 +211,6 @@ impl AgentIntegration for CodexIntegration {
         matches!(event_name, "Stop" | "UserPromptSubmit")
     }
 
-    fn registers_session_lazily(&self) -> bool {
-        // Codex fires no `SessionStart` on a plain CLI launch — it rides the first
-        // `UserPromptSubmit` — and its hooks fire from the app-server with no mux
-        // pane env, so a session is unstamped. Both make a Codex instance present
-        // before any session binds: the sidebar binds it to its pane by cwd and
-        // renders a wired-but-unprompted `codex` pane as an idle agent.
-        true
-    }
-
     fn observe_lifecycle(
         &self,
         event_name: &str,
@@ -227,9 +254,9 @@ impl AgentIntegration for CodexIntegration {
             // Only a *mutating* tool rides the lifecycle channel: it is proof of
             // real work (read-only tools stay silent). The `edits` bit marks the
             // file-writing subset, which ends the turn's thinking head.
-            "PostToolUse" if tool_mutates(payload) => LifecycleSignal::ToolUsed {
+            "PostToolUse" if self.descriptor().tool_mutates(payload) => LifecycleSignal::ToolUsed {
                 mutates: true,
-                edits: tool_edits_files(payload),
+                edits: self.descriptor().tool_edits_files(payload),
             },
             _ => return None,
         };
@@ -250,7 +277,7 @@ impl AgentIntegration for CodexIntegration {
         // session id and carry no parent link.
         let (agent_id, parent_agent_id) = match subagent {
             Some((child, _, parent)) => match resolve_subagent_identity(
-                self.name(),
+                self.descriptor().kind,
                 event_name,
                 child.as_deref(),
                 parent.as_deref(),
@@ -322,14 +349,6 @@ impl AgentIntegration for CodexIntegration {
     fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
         let path = codex_config_path()?;
         uninstall_from(&path)
-    }
-
-    fn hook_cap(&self) -> Duration {
-        CODEX_HOOK_CAP
-    }
-
-    fn supports_hook_install(&self) -> bool {
-        true
     }
 
     fn hooks_installed(&self) -> bool {
@@ -919,7 +938,7 @@ mod tests {
 
     #[test]
     fn resume_command_is_codex_resume_with_the_session_id() {
-        let argv = CodexIntegration
+        let argv = CodexAdapter
             .resume_command("sess-abc", Path::new("/code/query-engine"))
             .expect("codex resumes");
         assert_eq!(argv, vec!["codex", "resume", "sess-abc"]);
@@ -941,10 +960,15 @@ mod tests {
     fn codex_registers_its_session_lazily() {
         // Codex's instances can be present before a session binds (lazy
         // `SessionStart`, daemon-routed unstamped hooks), so it opts into the
-        // sidebar's cwd-bind + idle-instance synthesis. Claude keeps the default
-        // `false` (it stamps a pane on every session).
-        assert!(CodexIntegration.registers_session_lazily());
-        assert!(!crate::agents::ClaudeIntegration.registers_session_lazily());
+        // sidebar's cwd-bind + idle-instance synthesis. Claude declares the
+        // opposite (it stamps a pane on every session).
+        assert!(CodexAdapter.descriptor().capabilities.registers_lazily);
+        assert!(
+            !crate::agents::ClaudeAdapter
+                .descriptor()
+                .capabilities
+                .registers_lazily
+        );
     }
 
     #[test]
@@ -952,9 +976,7 @@ mod tests {
         let item = fixture(FeedKind::Permission);
         let resolution =
             Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::HookBridge);
-        let rendered = CodexIntegration
-            .render_decision(&item, &resolution)
-            .unwrap();
+        let rendered = CodexAdapter.render_decision(&item, &resolution).unwrap();
         insta::assert_json_snapshot!(rendered, @r###"
         {
           "hookSpecificOutput": {
@@ -978,9 +1000,7 @@ mod tests {
     fn permission_deny_shape_is_pinned() {
         let item = fixture(FeedKind::Permission);
         let resolution = Resolution::new(json!({ "choice": "deny" }), ResolutionMethod::HookBridge);
-        let rendered = CodexIntegration
-            .render_decision(&item, &resolution)
-            .unwrap();
+        let rendered = CodexAdapter.render_decision(&item, &resolution).unwrap();
 
         insta::assert_json_snapshot!(rendered, @r###"
         {
@@ -996,9 +1016,7 @@ mod tests {
 
     #[test]
     fn neutral_payload_is_empty_stdout() {
-        let rendered = CodexIntegration
-            .render_neutral("PermissionRequest")
-            .unwrap();
+        let rendered = CodexAdapter.render_neutral("PermissionRequest").unwrap();
 
         insta::assert_snapshot!(
             serde_json::to_string(&rendered).unwrap(),
@@ -1008,7 +1026,7 @@ mod tests {
 
     #[test]
     fn session_start_observes_idle() {
-        let obs = CodexIntegration
+        let obs = CodexAdapter
             .observe_lifecycle("SessionStart", &json!({ "session_id": "sess-1" }))
             .unwrap();
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
@@ -1023,7 +1041,7 @@ mod tests {
         // Codex re-fires `SessionStart` with `source = "compact"` once the
         // context has been condensed; that is the one SessionStart that flags the
         // compaction marker, the others (startup/resume/clear) do not.
-        let compact = CodexIntegration
+        let compact = CodexAdapter
             .observe_lifecycle(
                 "SessionStart",
                 &json!({ "session_id": "sess-1", "source": "compact" }),
@@ -1031,7 +1049,7 @@ mod tests {
             .unwrap();
         assert_eq!(compact.signal, LifecycleSignal::Compacting);
         for source in ["startup", "resume", "clear"] {
-            let obs = CodexIntegration
+            let obs = CodexAdapter
                 .observe_lifecycle(
                     "SessionStart",
                     &json!({ "session_id": "sess-1", "source": source }),
@@ -1047,7 +1065,7 @@ mod tests {
 
     #[test]
     fn user_prompt_submit_observes_running_with_prompt_task() {
-        let obs = CodexIntegration
+        let obs = CodexAdapter
             .observe_lifecycle(
                 "UserPromptSubmit",
                 &json!({ "session_id": "sess-1", "prompt": "fix auth flow" }),
@@ -1060,7 +1078,7 @@ mod tests {
 
     #[test]
     fn subagent_start_observes_child_id_and_type() {
-        let obs = CodexIntegration
+        let obs = CodexAdapter
             .observe_lifecycle(
                 "SubagentStart",
                 &json!({
@@ -1081,7 +1099,7 @@ mod tests {
 
     #[test]
     fn subagent_stop_observes_idle_child_id() {
-        let obs = CodexIntegration
+        let obs = CodexAdapter
             .observe_lifecycle(
                 "SubagentStop",
                 &json!({
@@ -1102,7 +1120,7 @@ mod tests {
 
     #[test]
     fn clean_stop_observes_success() {
-        let obs = CodexIntegration
+        let obs = CodexAdapter
             .observe_lifecycle("Stop", &json!({ "session_id": "sess-1" }))
             .unwrap();
         assert_eq!(
@@ -1116,7 +1134,7 @@ mod tests {
 
     #[test]
     fn errored_stop_observes_failed() {
-        let obs = CodexIntegration
+        let obs = CodexAdapter
             .observe_lifecycle(
                 "Stop",
                 &json!({ "session_id": "sess-1", "status": "failed" }),
@@ -1133,7 +1151,7 @@ mod tests {
 
     #[test]
     fn classification_unchanged_for_unknown_event() {
-        let c = CodexIntegration.classify_hook("WatItIs", &Value::Null);
+        let c = CodexAdapter.classify_hook("WatItIs", &Value::Null);
         assert_eq!(c.class, AgentHookClass::Unknown);
         assert!(c.feed_kind.is_none());
     }
@@ -1435,8 +1453,8 @@ command = "echo user"
 
     #[test]
     fn codex_hook_cap_is_shorter_than_claude_default() {
-        use crate::agents::ClaudeIntegration;
-        assert!(CodexIntegration.hook_cap() < ClaudeIntegration.hook_cap());
+        use crate::agents::ClaudeAdapter;
+        assert!(CodexAdapter.descriptor().hook_cap < ClaudeAdapter.descriptor().hook_cap);
     }
 
     #[test]

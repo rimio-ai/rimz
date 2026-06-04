@@ -311,28 +311,23 @@ fn report_zellij_capabilities() {
     reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
 )]
 fn report_agent_hooks() {
-    let statuses: Vec<(&str, AgentHookDoctorStatus)> = rimz::agents::KNOWN_AGENTS
+    let statuses: Vec<(&str, AgentHookDoctorStatus)> = rimz::agents::ADAPTERS
         .iter()
-        .map(|name| {
-            let status = rimz::agents::integration_by_name(name)
-                .map(|agent| {
-                    if !agent.supports_hook_install() {
-                        AgentHookDoctorStatus::Unsupported(
-                            agent
-                                .hook_install_unavailable_reason()
-                                .unwrap_or("hook install is not supported for this adapter")
-                                .to_owned(),
-                        )
-                    } else if agent.hooks_installed() {
-                        AgentHookDoctorStatus::Installed
-                    } else {
-                        AgentHookDoctorStatus::NotInstalled
-                    }
-                })
-                .unwrap_or(AgentHookDoctorStatus::Unsupported(
-                    "unknown adapter".to_owned(),
-                ));
-            (*name, status)
+        .map(|agent| {
+            let descriptor = agent.descriptor();
+            let status = if !descriptor.capabilities.hook_install {
+                AgentHookDoctorStatus::Unsupported(
+                    descriptor
+                        .hook_install_unavailable
+                        .unwrap_or("hook install is not supported for this adapter")
+                        .to_owned(),
+                )
+            } else if agent.hooks_installed() {
+                AgentHookDoctorStatus::Installed
+            } else {
+                AgentHookDoctorStatus::NotInstalled
+            };
+            (descriptor.kind, status)
         })
         .collect();
 

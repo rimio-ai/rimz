@@ -228,18 +228,18 @@ fn parse_mux(value: &str) -> std::result::Result<MuxName, String> {
 fn ensure_detected_agent_hooks() -> Result<()> {
     let mut missing = Vec::new();
 
-    for name in rimz::agents::KNOWN_AGENTS {
-        let agent = rimz::agents::integration_by_name(name)?;
-        if which::which(agent.name()).is_err() {
+    for agent in rimz::agents::ADAPTERS {
+        let descriptor = agent.descriptor();
+        if which::which(descriptor.kind).is_err() {
             continue;
         }
 
-        if !agent.supports_hook_install() {
-            let reason = agent
-                .hook_install_unavailable_reason()
+        if !descriptor.capabilities.hook_install {
+            let reason = descriptor
+                .hook_install_unavailable
                 .unwrap_or("hook install is not supported for this adapter");
             tracing::warn!(
-                agent = agent.name(),
+                agent = descriptor.kind,
                 reason,
                 "detected agent cannot be wired automatically",
             );
@@ -261,7 +261,7 @@ fn ensure_detected_agent_hooks() -> Result<()> {
     }
 
     for name in approve_hook_install(&missing)? {
-        let agent = rimz::agents::integration_by_name(name)?;
+        let agent = rimz::agents::adapter_by_kind(name)?;
         let report = agent.install_hooks()?;
         let mut stderr = std::io::stderr().lock();
         writeln!(

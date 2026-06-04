@@ -35,16 +35,16 @@ use self::payloads::{
     parse_session_start, parse_stop, parse_subagent_start, parse_subagent_stop,
     parse_user_prompt_submit,
 };
+use super::descriptor::{AgentDescriptor, Brand, Capabilities, PlanLabel, ToolClassification};
 use super::hook_types::BackgroundTask;
 use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::{
-    AgentContext, AgentErr, AgentIntegration, AgentLifecycleObservation, AgentTurnError,
+    AgentAdapter, AgentContext, AgentErr, AgentLifecycleObservation, AgentTurnError,
     ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
     StatusLineChange, SubagentIdentity, SubagentObservation, agent_config_path, choice_is_allow,
     classify_agent_hook, optional_payload_string, read_optional_file, read_transcript_tail,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored, tool_edits_files,
-    tool_mutates,
+    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ledger::atomic;
@@ -52,6 +52,35 @@ use crate::ledger::atomic;
 /// Claude's effective hook cap. The upstream cap is ~125s; we leave a small
 /// margin so the bridge never holds the hook past Claude's kill window.
 const CLAUDE_HOOK_CAP: Duration = Duration::from_secs(120);
+
+/// Everything `const` about Claude Code, in one place. See
+/// [`AgentDescriptor`] for the descriptor-vs-trait split.
+static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
+    kind: "claude",
+    display_name: "Claude",
+    brand: Brand {
+        emblem: &[" ▐▛███▜▌", "▝▜█████▛▘", "  ▘▘ ▝▝"],
+        color: 173,
+    },
+    plan_label: PlanLabel::Prefixed { prefix: "Claude" },
+    tools: ToolClassification {
+        mutating: &["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"],
+        editing: &["Edit", "Write", "MultiEdit", "NotebookEdit"],
+    },
+    capabilities: Capabilities {
+        blocking_feed: true,
+        rate_limit_windows: true,
+        subagents: true,
+        background_tasks: true,
+        // Claude stamps a live pane on every session, so a pane with no
+        // session is genuinely gone — never idle-synthesized or cwd-rescued.
+        registers_lazily: false,
+        hook_install: true,
+    },
+    hook_cap: CLAUDE_HOOK_CAP,
+    process_names: &["claude"],
+    hook_install_unavailable: None,
+};
 
 /// Per-hook timeout written into the Claude config (seconds). Matches
 /// [`CLAUDE_HOOK_CAP`] so the agent and bridge agree on the ceiling.
@@ -152,11 +181,11 @@ const SUBAGENT_STATUS_LINE: StatusLineSpec = StatusLineSpec {
 };
 
 #[derive(Clone, Debug, Default)]
-pub struct ClaudeIntegration;
+pub struct ClaudeAdapter;
 
-impl AgentIntegration for ClaudeIntegration {
-    fn name(&self) -> &'static str {
-        "claude"
+impl AgentAdapter for ClaudeAdapter {
+    fn descriptor(&self) -> &'static AgentDescriptor {
+        &CLAUDE_DESCRIPTOR
     }
 
     /// `claude --resume <id>` launches straight into the prior session,
@@ -258,10 +287,6 @@ impl AgentIntegration for ClaudeIntegration {
         Ok(None)
     }
 
-    fn hook_cap(&self) -> Duration {
-        CLAUDE_HOOK_CAP
-    }
-
     fn ends_session(&self, event_name: &str) -> bool {
         event_name == "SessionEnd"
     }
@@ -313,9 +338,9 @@ impl AgentIntegration for ClaudeIntegration {
             // Only a *mutating* tool rides the lifecycle channel: it is proof of
             // real work (read-only tools stay silent). The `edits` bit marks the
             // file-writing subset, which ends the turn's thinking head.
-            "PostToolUse" if tool_mutates(payload) => LifecycleSignal::ToolUsed {
+            "PostToolUse" if self.descriptor().tool_mutates(payload) => LifecycleSignal::ToolUsed {
                 mutates: true,
-                edits: tool_edits_files(payload),
+                edits: self.descriptor().tool_edits_files(payload),
             },
             // Compaction is a transient head, not a transition: `step` keeps the
             // prior status and only stamps the compacting marker.
@@ -336,7 +361,7 @@ impl AgentIntegration for ClaudeIntegration {
         // session id and carry no parent link.
         let (agent_id, parent_agent_id) = match subagent_common {
             Some(c) => match resolve_subagent_identity(
-                self.name(),
+                self.descriptor().kind,
                 event_name,
                 c.agent_id.as_deref(),
                 c.common.session_id.as_deref(),
@@ -468,10 +493,6 @@ impl AgentIntegration for ClaudeIntegration {
     fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
         let path = claude_settings_path()?;
         uninstall_from(&path)
-    }
-
-    fn supports_hook_install(&self) -> bool {
-        true
     }
 
     fn hooks_installed(&self) -> bool {
@@ -1128,7 +1149,7 @@ mod tests {
 
     #[test]
     fn resume_command_is_claude_resume_with_the_session_id() {
-        let argv = ClaudeIntegration
+        let argv = ClaudeAdapter
             .resume_command("sess-123", Path::new("/code/query-engine"))
             .expect("claude resumes");
         assert_eq!(argv, vec!["claude", "--resume", "sess-123"]);
@@ -1151,9 +1172,7 @@ mod tests {
         let item = fixture(FeedKind::Permission);
         let resolution =
             Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::HookBridge);
-        let rendered = ClaudeIntegration
-            .render_decision(&item, &resolution)
-            .unwrap();
+        let rendered = ClaudeAdapter.render_decision(&item, &resolution).unwrap();
         insta::assert_json_snapshot!(rendered, @r###"
         {
           "hookSpecificOutput": {
@@ -1179,7 +1198,7 @@ mod tests {
         let item = fixture(FeedKind::PlanApproval);
         let resolution =
             Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::HookBridge);
-        let err = ClaudeIntegration
+        let err = ClaudeAdapter
             .render_decision(&item, &resolution)
             .unwrap_err();
         assert!(matches!(
@@ -1193,9 +1212,7 @@ mod tests {
 
     #[test]
     fn neutral_payload_is_empty_stdout() {
-        let value = ClaudeIntegration
-            .render_neutral("PermissionRequest")
-            .unwrap();
+        let value = ClaudeAdapter.render_neutral("PermissionRequest").unwrap();
         insta::assert_snapshot!(
             serde_json::to_string(&value).unwrap(),
             @"null"
@@ -1207,9 +1224,7 @@ mod tests {
     fn permission_deny_shape_is_pinned() {
         let item = fixture(FeedKind::Permission);
         let resolution = Resolution::new(json!({ "choice": "deny" }), ResolutionMethod::HookBridge);
-        let rendered = ClaudeIntegration
-            .render_decision(&item, &resolution)
-            .unwrap();
+        let rendered = ClaudeAdapter.render_decision(&item, &resolution).unwrap();
 
         insta::assert_json_snapshot!(rendered, @r###"
         {
@@ -1230,9 +1245,7 @@ mod tests {
             json!({ "choice": "allow", "updatedInput": "ship the plan" }),
             ResolutionMethod::HookBridge,
         );
-        let rendered = ClaudeIntegration
-            .render_decision(&item, &resolution)
-            .unwrap();
+        let rendered = ClaudeAdapter.render_decision(&item, &resolution).unwrap();
 
         insta::assert_json_snapshot!(rendered, @r###"
         {
@@ -1252,9 +1265,7 @@ mod tests {
             json!({ "choice": "allow", "updatedInput": { "question": "ready?" } }),
             ResolutionMethod::HookBridge,
         );
-        let rendered = ClaudeIntegration
-            .render_decision(&item, &resolution)
-            .unwrap();
+        let rendered = ClaudeAdapter.render_decision(&item, &resolution).unwrap();
 
         insta::assert_json_snapshot!(rendered, @r###"
         {
@@ -1271,16 +1282,15 @@ mod tests {
 
     #[test]
     fn classify_pretooluse_exit_plan_mode_is_plan_approval() {
-        let c =
-            ClaudeIntegration.classify_hook("PreToolUse", &json!({ "tool_name": "ExitPlanMode" }));
+        let c = ClaudeAdapter.classify_hook("PreToolUse", &json!({ "tool_name": "ExitPlanMode" }));
         assert_eq!(c.class, AgentHookClass::BlockingFeed);
         assert_eq!(c.feed_kind, Some(FeedKind::PlanApproval));
     }
 
     #[test]
     fn classify_pretooluse_ask_user_question_is_question() {
-        let c = ClaudeIntegration
-            .classify_hook("PreToolUse", &json!({ "tool_name": "AskUserQuestion" }));
+        let c =
+            ClaudeAdapter.classify_hook("PreToolUse", &json!({ "tool_name": "AskUserQuestion" }));
         assert_eq!(c.class, AgentHookClass::BlockingFeed);
         assert_eq!(c.feed_kind, Some(FeedKind::Question));
     }
@@ -1288,7 +1298,7 @@ mod tests {
     #[test]
     fn classify_subagent_events_are_lifecycle() {
         for event in ["SubagentStart", "SubagentStop"] {
-            let c = ClaudeIntegration.classify_hook(event, &json!({}));
+            let c = ClaudeAdapter.classify_hook(event, &json!({}));
             assert_eq!(c.class, AgentHookClass::Lifecycle, "{event}");
             assert_eq!(c.feed_kind, None, "{event}");
         }
@@ -1296,10 +1306,10 @@ mod tests {
 
     #[test]
     fn pre_compact_is_a_lifecycle_compaction_marker() {
-        let c = ClaudeIntegration.classify_hook("PreCompact", &json!({ "session_id": "sess-1" }));
+        let c = ClaudeAdapter.classify_hook("PreCompact", &json!({ "session_id": "sess-1" }));
         assert_eq!(c.class, AgentHookClass::Lifecycle);
         assert_eq!(c.feed_kind, None);
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle("PreCompact", &json!({ "session_id": "sess-1" }))
             .unwrap();
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
@@ -1310,7 +1320,7 @@ mod tests {
 
     #[test]
     fn subagent_start_observes_running_child_keyed_by_agent_id() {
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle(
                 "SubagentStart",
                 &json!({
@@ -1333,7 +1343,7 @@ mod tests {
 
     #[test]
     fn subagent_stop_returns_child_idle_keeping_its_label() {
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle(
                 "SubagentStop",
                 &json!({
@@ -1353,7 +1363,7 @@ mod tests {
 
     #[test]
     fn root_lifecycle_event_carries_no_parent() {
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle("UserPromptSubmit", &json!({ "session_id": "sess-root" }))
             .unwrap();
         assert_eq!(obs.agent_id.as_deref(), Some("sess-root"));
@@ -1366,7 +1376,7 @@ mod tests {
         // child `agent_id`) must produce no observation — it can never fold onto
         // the parent's row and rename it to the subagent type. This is the
         // "main row becomes Explore" regression.
-        let obs = ClaudeIntegration.observe_lifecycle(
+        let obs = ClaudeAdapter.observe_lifecycle(
             "SubagentStart",
             &json!({ "session_id": "sess-parent", "subagent_type": "Explore" }),
         );
@@ -1380,7 +1390,7 @@ mod tests {
     fn harness_control_prompt_is_not_adopted_as_description() {
         // The harness injects synthetic user turns (a completed background task);
         // their raw text must never become the agent's description line.
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle(
                 "UserPromptSubmit",
                 &json!({
@@ -1399,7 +1409,7 @@ mod tests {
         // a read-only tool stays silent so the lifecycle channel isn't flooded.
         // A file edit also sets the `edits` bit (ends the thinking head); a
         // shell command mutates without editing.
-        let edit = ClaudeIntegration
+        let edit = ClaudeAdapter
             .observe_lifecycle(
                 "PostToolUse",
                 &json!({ "session_id": "sess-1", "tool_name": "Edit" }),
@@ -1412,7 +1422,7 @@ mod tests {
                 edits: true,
             }
         );
-        let shell = ClaudeIntegration
+        let shell = ClaudeAdapter
             .observe_lifecycle(
                 "PostToolUse",
                 &json!({ "session_id": "sess-1", "tool_name": "Bash" }),
@@ -1425,7 +1435,7 @@ mod tests {
                 edits: false,
             }
         );
-        let read = ClaudeIntegration.observe_lifecycle(
+        let read = ClaudeAdapter.observe_lifecycle(
             "PostToolUse",
             &json!({ "session_id": "sess-1", "tool_name": "Read" }),
         );
@@ -1434,7 +1444,10 @@ mod tests {
 
     #[test]
     fn hook_cap_is_120_seconds() {
-        assert_eq!(ClaudeIntegration.hook_cap(), Duration::from_secs(120));
+        assert_eq!(
+            ClaudeAdapter.descriptor().hook_cap,
+            Duration::from_secs(120)
+        );
     }
 
     #[test]
@@ -2183,7 +2196,7 @@ mod tests {
 
     #[test]
     fn session_start_observes_idle_status() {
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle("SessionStart", &json!({ "session_id": "sess-1" }))
             .unwrap();
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
@@ -2194,7 +2207,7 @@ mod tests {
 
     #[test]
     fn user_prompt_submit_observes_running_with_prompt_task() {
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle(
                 "UserPromptSubmit",
                 &json!({ "session_id": "sess-1", "prompt": "fix auth flow" }),
@@ -2209,7 +2222,7 @@ mod tests {
     fn todo_write_payload_extracts_progress() {
         // Claude TodoWrite hooks expose the todo list in `tool_input.todos`;
         // the reducer projects the count of completed items onto the row.
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle(
                 "UserPromptSubmit",
                 &json!({
@@ -2231,14 +2244,14 @@ mod tests {
 
     #[test]
     fn notification_event_is_not_a_lifecycle_observation() {
-        let obs = ClaudeIntegration.observe_lifecycle("Notification", &json!({}));
+        let obs = ClaudeAdapter.observe_lifecycle("Notification", &json!({}));
         assert!(obs.is_none());
     }
 
     #[test]
     fn clean_stop_observes_success() {
         // A Stop fires only after a turn ran; a clean end completes it.
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle("Stop", &json!({ "session_id": "sess-1" }))
             .unwrap();
         assert_eq!(
@@ -2254,7 +2267,7 @@ mod tests {
 
     #[test]
     fn errored_stop_observes_failed() {
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle("Stop", &json!({ "session_id": "sess-1", "is_error": true }))
             .unwrap();
         assert_eq!(
@@ -2273,7 +2286,7 @@ mod tests {
         // over, so the signal flags `parked_on_background` (the reducer keeps it
         // running) and the description is left to the real task/prompt, never a
         // synthetic background-task label.
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle(
                 "Stop",
                 &json!({
@@ -2304,7 +2317,7 @@ mod tests {
     fn stop_with_multiple_pending_background_tasks_still_parks() {
         // Several in-flight tasks still just park the turn — there is no
         // synthetic "N background tasks" label overwriting the description.
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle(
                 "Stop",
                 &json!({
@@ -2330,7 +2343,7 @@ mod tests {
     fn stop_with_only_completed_background_tasks_observes_success() {
         // A registry that reports only terminal tasks has nothing in flight —
         // this is a genuine turn end, so the signal is a clean (unparked) end.
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle(
                 "Stop",
                 &json!({
@@ -2355,7 +2368,7 @@ mod tests {
     fn errored_stop_with_pending_background_tasks_still_observes_failed() {
         // The failure is the attention signal: the signal carries `errored`
         // alongside the park flag, and `step` resolves errored over the park.
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle(
                 "Stop",
                 &json!({
@@ -2387,7 +2400,7 @@ mod tests {
             "{\"type\":\"user\",\"message\":{\"role\":\"user\"}}\n{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-7\",\"usage\":{\"input_tokens\":100000,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0,\"output_tokens\":500}}}\n",
         )
         .unwrap();
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle(
                 "Stop",
                 &json!({
@@ -2414,7 +2427,7 @@ mod tests {
             "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":100000,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0,\"output_tokens\":500}}}\n",
         )
         .unwrap();
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle(
                 "Stop",
                 &json!({
@@ -2446,7 +2459,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let error = ClaudeIntegration
+        let error = ClaudeAdapter
             .observe_turn_error(&json!({
                 "session_id": "sess-1",
                 "transcript_path": transcript.to_str().unwrap(),
@@ -2455,13 +2468,13 @@ mod tests {
         assert_eq!(error.label.as_deref(), Some("API Error: Overloaded"));
 
         assert!(
-            ClaudeIntegration
+            ClaudeAdapter
                 .observe_turn_error(&json!({ "session_id": "sess-1" }))
                 .is_none(),
             "no transcript path, no marker"
         );
         assert!(
-            ClaudeIntegration
+            ClaudeAdapter
                 .observe_turn_error(&json!({
                     "session_id": "sess-1",
                     "transcript_path": dir.path().join("gone.jsonl").to_str().unwrap(),
@@ -2483,7 +2496,7 @@ mod tests {
             "{\"type\":\"user\",\"message\":{\"role\":\"user\"}}\n",
         )
         .unwrap();
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle(
                 "SessionStart",
                 &json!({
@@ -2500,7 +2513,7 @@ mod tests {
     fn missing_transcript_leaves_context_unknown() {
         // No readable transcript means unknown, not zero — the gauge stays
         // hidden rather than asserting a false 0%.
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle(
                 "SessionStart",
                 &json!({
@@ -2526,7 +2539,7 @@ mod tests {
              {\"input_tokens\":100000,\"output_tokens\":500}}}\n",
         )
         .unwrap();
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle(
                 "SessionStart",
                 &json!({ "transcript_path": transcript.to_str().unwrap() }),
@@ -2541,22 +2554,22 @@ mod tests {
         // SessionEnd must produce an observation so the reducer drops the agent
         // from the rollup, and must report `ends_session` so the CLI expires
         // the dead session's pending asks.
-        let obs = ClaudeIntegration
+        let obs = ClaudeAdapter
             .observe_lifecycle("SessionEnd", &json!({ "session_id": "sess-1" }))
             .expect("SessionEnd is a recorded lifecycle observation");
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
-        assert!(ClaudeIntegration.ends_session("SessionEnd"));
-        assert!(!ClaudeIntegration.ends_session("Stop"));
+        assert!(ClaudeAdapter.ends_session("SessionEnd"));
+        assert!(!ClaudeAdapter.ends_session("Stop"));
     }
 
     #[test]
     fn turn_boundaries_move_the_session_on() {
         // Stop and a fresh prompt clear the session's mid-turn native_ui asks;
         // SessionStart/SessionEnd and tool events do not.
-        assert!(ClaudeIntegration.moves_on("Stop"));
-        assert!(ClaudeIntegration.moves_on("UserPromptSubmit"));
-        assert!(!ClaudeIntegration.moves_on("SessionStart"));
-        assert!(!ClaudeIntegration.moves_on("SessionEnd"));
-        assert!(!ClaudeIntegration.moves_on("PostToolUse"));
+        assert!(ClaudeAdapter.moves_on("Stop"));
+        assert!(ClaudeAdapter.moves_on("UserPromptSubmit"));
+        assert!(!ClaudeAdapter.moves_on("SessionStart"));
+        assert!(!ClaudeAdapter.moves_on("SessionEnd"));
+        assert!(!ClaudeAdapter.moves_on("PostToolUse"));
     }
 }

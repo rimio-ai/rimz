@@ -600,7 +600,7 @@ fn is_known_agent_process(row: &rimz::SidebarRow) -> bool {
     // tmux can expose Claude/Codex as the shared Node host before hook
     // enrichment claims the pane, so `node` is agent-like for the empty-room cue.
     row.row_kind == SidebarRowKind::Process
-        && (rimz::agents::KNOWN_AGENTS.contains(&row.name.as_str()) || row.name == "node")
+        && (rimz::agents::known_kinds().any(|kind| kind == row.name) || row.name == "node")
 }
 
 fn footer_lines(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> Vec<Line<'static>> {

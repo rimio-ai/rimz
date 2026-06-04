@@ -28,7 +28,7 @@ use tracing::warn;
 
 use super::GlobalFlags;
 use rimz::RuntimePaths;
-use rimz::agents::integration_by_name;
+use rimz::agents::adapter_by_kind;
 use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
@@ -72,7 +72,7 @@ fn run_feed(source: String, subagent: bool, globals: &GlobalFlags) -> Result<()>
     // Resolve the pass-through target before any fallible payload work, so a
     // parse error can't strand the user's statusline. The two render commands
     // wrap independently, so each mode reads its own wrapped target.
-    let wrapped = integration_by_name(&source).ok().and_then(|agent| {
+    let wrapped = adapter_by_kind(&source).ok().and_then(|agent| {
         if subagent {
             agent.wrapped_subagent_status_line_command()
         } else {
@@ -106,7 +106,7 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
     let payload: Value = serde_json::from_slice(stdin).context("parsing statusline payload")?;
     let session_id =
         payload_session_id(&payload).context("statusline payload carries no session id")?;
-    let agent = integration_by_name(source)?;
+    let agent = adapter_by_kind(source)?;
     let Some(mut context) = agent.observe_context(source, &payload) else {
         // The adapter has no rich-context source (e.g. codex): nothing to store.
         return Ok(());
@@ -121,7 +121,7 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
     let runtime =
         RuntimePaths::for_workspace(workspace.workspace_id).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
-    rimz::ledger::agent_context::write(&runtime, agent.name(), session_id, &context)
+    rimz::ledger::agent_context::write(&runtime, agent.descriptor().kind, session_id, &context)
         .context("writing agent-context sidecar")?;
     // Push the update so the `$`/token figure repaints within a wakeup rather
     // than waiting for the sidebar's next poll tick. Best-effort, like every
@@ -140,7 +140,7 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
 fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<()> {
     let payload: Value =
         serde_json::from_slice(stdin).context("parsing subagent statusline payload")?;
-    let agent = integration_by_name(source)?;
+    let agent = adapter_by_kind(source)?;
     let observations = agent.observe_subagent_context(&payload);
     if observations.is_empty() {
         return Ok(());
@@ -153,7 +153,7 @@ fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -
     for observation in &observations {
         rimz::ledger::subagent_context::write(
             &runtime,
-            agent.name(),
+            agent.descriptor().kind,
             &observation.agent_id,
             &observation.context,
         )

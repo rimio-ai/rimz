@@ -162,10 +162,7 @@ const LAUNCHERS: &[&str] = &["node", "nodejs", "npx"];
 /// `codex`, `sudo codex`, and `node /usr/bin/codex` are codex.
 pub fn command_agent_kind(command: &str) -> Option<&'static str> {
     let program = program_label(command);
-    crate::agents::KNOWN_AGENTS
-        .iter()
-        .copied()
-        .find(|agent| program == *agent)
+    crate::agents::known_kinds().find(|agent| program == *agent)
 }
 
 #[cfg(test)]

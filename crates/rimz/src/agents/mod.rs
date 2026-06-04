@@ -1,4 +1,4 @@
-//! Agent integration interface.
+//! Agent adapter interface.
 //!
 //! Each adapter classifies an incoming hook event, observes lifecycle
 //! transitions, renders the agent-native neutral no-op, and
@@ -8,21 +8,26 @@
 //!
 //! Adapters also own hook install and uninstall — translating the trait
 //! defaults into whatever per-agent config file the upstream agent reads.
+//!
+//! Static per-agent data — identity, branding, capabilities, tool tables —
+//! lives in each adapter's [`AgentDescriptor`]; [`registry::ADAPTERS`] is the
+//! single registration table every dispatch site resolves through.
 
 pub mod account;
 pub mod claude;
 pub mod codex;
 pub mod context;
+pub mod descriptor;
 pub(crate) mod hook_types;
 pub mod lifecycle;
 mod observation;
 pub mod pricing;
+pub mod registry;
 pub mod spending;
 pub mod transcript;
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -34,19 +39,15 @@ pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
     AgentTokenUsage, AgentTurnError, RateLimitWindow, SubagentContext, SubagentObservation,
 };
+pub use descriptor::{AgentDescriptor, Brand, Capabilities, PlanLabel, ToolClassification};
 pub use lifecycle::{LifecycleSignal, LifecycleState, Transition, TransitionKind, TurnPhase, step};
 pub use observation::AgentLifecycleObservation;
 pub use pricing::{PriceBook, Pricing};
+pub use registry::{ADAPTERS, adapter_by_kind, descriptor_by_kind, find_adapter, known_kinds};
 pub use spending::{ProviderKind, SpendTally, SpendWindow, Spending};
 
-/// Conservative fallback for adapters that don't override. Claude overrides
-/// to 120s (see `claude::CLAUDE_HOOK_CAP`); Codex overrides to its own cap
-/// (see `codex::CODEX_HOOK_CAP`). New adapters should set their own cap
-/// based on the upstream's published hook deadline.
-pub const DEFAULT_HOOK_CAP: Duration = Duration::from_secs(300);
-
-pub use claude::ClaudeIntegration;
-pub use codex::CodexIntegration;
+pub use claude::ClaudeAdapter;
+pub use codex::CodexAdapter;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentErr {
@@ -93,7 +94,7 @@ pub enum AgentHookClass {
     /// the agent rollup (`SessionStart`, `UserPromptSubmit`, `Stop`, …). Per
     /// `docs/internals/hooks.md` there are two runtime channels — lifecycle
     /// and feed. Whether a lifecycle event records anything is decided by
-    /// [`AgentIntegration::observe_lifecycle`] returning `Some`.
+    /// [`AgentAdapter::observe_lifecycle`] returning `Some`.
     Lifecycle,
     BlockingFeed,
     Unknown,
@@ -184,8 +185,11 @@ pub struct HookUninstallReport {
     pub existed: bool,
 }
 
-pub trait AgentIntegration: Send + Sync {
-    fn name(&self) -> &'static str;
+pub trait AgentAdapter: Send + Sync {
+    /// The adapter's static identity, branding, capabilities, and
+    /// classification tables. Everything `const` about an agent lives here;
+    /// the trait methods own everything behavioral.
+    fn descriptor(&self) -> &'static AgentDescriptor;
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook;
     /// Render the agent-native decision JSON for this resolution. Called
     /// only when the hook is on the bridge and a resolver has answered.
@@ -193,11 +197,6 @@ pub trait AgentIntegration: Send + Sync {
     /// Render the neutral no-op — the "agent's own UI is the answer" fallback
     /// path. `None` means the hook should print nothing on this event.
     fn render_neutral(&self, event_name: &str) -> Result<Option<Value>>;
-    /// Maximum time the hook may block on the bridge before falling back to
-    /// the neutral no-op. Defaults to [`DEFAULT_HOOK_CAP`].
-    fn hook_cap(&self) -> Duration {
-        DEFAULT_HOOK_CAP
-    }
 
     /// Observe a lifecycle event payload and translate it into the
     /// [`LifecycleSignal`](lifecycle::LifecycleSignal) (plus enrichment) the
@@ -269,19 +268,6 @@ pub trait AgentIntegration: Send + Sync {
         false
     }
 
-    /// Whether this agent's instances can be present without a stamped session —
-    /// the agent registers its session lazily (no `SessionStart` at launch) and/or
-    /// routes its hooks through a daemon (so the hook stamps no pane). For such an
-    /// agent an instance exists before any session id binds, so the sidebar binds
-    /// a session to its pane by cwd and renders a wired-but-unbound pane as an idle
-    /// instance. Defaults to `false` — an agent that stamps a live pane on every
-    /// session (Claude) is genuinely gone when its pane has no session, never idle-
-    /// synthesized or cwd-rescued. Codex overrides; see
-    /// [docs/internals/agent.md → The instance lifecycle](../../../docs/internals/agent.md).
-    fn registers_session_lazily(&self) -> bool {
-        false
-    }
-
     /// The argv that resumes a prior session of this agent by `session_id`,
     /// launched fresh in `cwd` (the agent's worktree). The launcher seeds a
     /// reborn pane with it so a rebirth restores the conversation idle rather
@@ -300,7 +286,7 @@ pub trait AgentIntegration: Send + Sync {
     /// adapter owns installation.
     fn install_hooks(&self) -> Result<HookInstallReport> {
         Err(AgentErr::Install {
-            agent: self.name(),
+            agent: self.descriptor().kind,
             reason: "install not implemented for this adapter".to_owned(),
         })
     }
@@ -309,7 +295,7 @@ pub trait AgentIntegration: Send + Sync {
     /// without touching disk. Used by the first-run consent gate.
     fn preview_hook_install(&self) -> Result<HookInstallPreview> {
         Err(AgentErr::Install {
-            agent: self.name(),
+            agent: self.descriptor().kind,
             reason: "install preview not implemented for this adapter".to_owned(),
         })
     }
@@ -318,7 +304,7 @@ pub trait AgentIntegration: Send + Sync {
     /// file. Defaults to an explicit "not implemented" error.
     fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
         Err(AgentErr::Install {
-            agent: self.name(),
+            agent: self.descriptor().kind,
             reason: "uninstall not implemented for this adapter".to_owned(),
         })
     }
@@ -341,19 +327,6 @@ pub trait AgentIntegration: Send + Sync {
         None
     }
 
-    /// Whether Rimz can currently install a hook configuration that the agent
-    /// actually executes. Adapters return `false` when the upstream hook
-    /// contract is known but not implemented here yet.
-    fn supports_hook_install(&self) -> bool {
-        false
-    }
-
-    /// User-facing reason shown by doctor/start when hook install is not
-    /// supported yet.
-    fn hook_install_unavailable_reason(&self) -> Option<&'static str> {
-        None
-    }
-
     /// Whether this agent's per-user config currently carries Rimz-managed
     /// hooks — i.e. the user ran `rimz hooks install`. Best-effort: a missing
     /// file or any read/parse failure reads as "not installed". An agent only
@@ -363,31 +336,6 @@ pub trait AgentIntegration: Send + Sync {
     fn hooks_installed(&self) -> bool {
         false
     }
-}
-
-/// Every agent Rimz can wire, in display order. The single source of truth
-/// for "which agents exist" — `integration_by_name` resolves each entry, and
-/// `rimz doctor` walks this list to report hook-install status.
-pub const KNOWN_AGENTS: &[&str] = &["claude", "codex"];
-
-/// Lookup table for `--source <agent>` on the hook CLI.
-pub fn integration_by_name(name: &str) -> Result<Box<dyn AgentIntegration>> {
-    match name {
-        "claude" => Ok(Box::new(ClaudeIntegration)),
-        "codex" => Ok(Box::new(CodexIntegration)),
-        other => Err(AgentErr::Unknown(other.to_owned())),
-    }
-}
-
-/// Whether `kind` registers its session lazily / routes hooks through a daemon, so
-/// its instances can be present without a stamped session
-/// ([`AgentIntegration::registers_session_lazily`]). The sidebar reducer reads this
-/// to bind an unstamped session to its pane by cwd and to synthesize an idle row
-/// for a wired-but-unbound pane. An unknown kind is not lazy.
-pub(crate) fn registers_session_lazily(kind: &str) -> bool {
-    integration_by_name(kind)
-        .map(|agent| agent.registers_session_lazily())
-        .unwrap_or(false)
 }
 
 /// Resolve an agent's per-user config file path. An explicit `override_env`
@@ -506,46 +454,6 @@ pub(crate) fn sanitize_user_prompt(raw: Option<&str>) -> Option<String> {
     Some(trimmed.to_owned())
 }
 
-/// Whether a tool-use payload names a tool that mutates the workspace — writes
-/// files or runs commands. Drives [`LifecycleSignal::ToolUsed`]'s `mutates`
-/// bit: a mutating tool is proof of real work, so its `PostToolUse` is the only
-/// tool event worth recording on the lifecycle channel (read-only tools stay
-/// silent). The tool name rides `tool_name` in both providers' payloads.
-pub(crate) fn tool_mutates(payload: &Value) -> bool {
-    payload
-        .get("tool_name")
-        .and_then(Value::as_str)
-        .is_some_and(|name| {
-            matches!(
-                name,
-                // Claude
-                "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "Bash"
-                // Codex
-                | "shell" | "apply_patch" | "exec_command" | "local_shell"
-            )
-        })
-}
-
-/// Whether a tool-use payload names a *file-editing* tool — the subset of the
-/// mutating set that writes workspace files rather than running commands.
-/// Drives [`LifecycleSignal::ToolUsed`]'s `edits` bit: a turn's first file edit
-/// ends its thinking head. A shell tool mutates but does not edit, so a
-/// research turn that only runs commands keeps the thinking sparkle.
-pub(crate) fn tool_edits_files(payload: &Value) -> bool {
-    payload
-        .get("tool_name")
-        .and_then(Value::as_str)
-        .is_some_and(|name| {
-            matches!(
-                name,
-                // Claude
-                "Edit" | "Write" | "MultiEdit" | "NotebookEdit"
-                // Codex
-                | "apply_patch"
-            )
-        })
-}
-
 /// The outcome of resolving a subagent event's identity.
 pub(crate) enum SubagentIdentity {
     /// A usable child id distinct from its parent — the only case that yields a
@@ -628,28 +536,6 @@ mod tests {
     fn sanitize_rejects_empty_and_whitespace() {
         assert_eq!(sanitize_user_prompt(None), None);
         assert_eq!(sanitize_user_prompt(Some("   ")), None);
-    }
-
-    #[test]
-    fn tool_mutates_reads_the_tool_name() {
-        assert!(tool_mutates(&json!({ "tool_name": "Edit" })));
-        assert!(tool_mutates(&json!({ "tool_name": "Bash" })));
-        assert!(tool_mutates(&json!({ "tool_name": "apply_patch" })));
-        assert!(!tool_mutates(&json!({ "tool_name": "Read" })));
-        assert!(!tool_mutates(&json!({ "tool_name": "Grep" })));
-        assert!(!tool_mutates(&json!({})));
-    }
-
-    #[test]
-    fn tool_edits_files_is_the_file_writing_subset() {
-        for name in ["Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch"] {
-            assert!(tool_edits_files(&json!({ "tool_name": name })), "{name}");
-        }
-        // Command runners mutate but do not edit — the thinking head survives.
-        for name in ["Bash", "shell", "exec_command", "local_shell", "Read"] {
-            assert!(!tool_edits_files(&json!({ "tool_name": name })), "{name}");
-        }
-        assert!(!tool_edits_files(&json!({})));
     }
 
     #[test]

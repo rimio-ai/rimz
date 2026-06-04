@@ -408,11 +408,9 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
 /// so the reducer can't know it — the renderer's first-run hint points at
 /// `rimz hooks install` until a supported agent is wired.
 pub fn agent_hooks_ready() -> bool {
-    crate::agents::KNOWN_AGENTS.iter().any(|name| {
-        crate::agents::integration_by_name(name)
-            .map(|agent| agent.supports_hook_install() && agent.hooks_installed())
-            .unwrap_or(false)
-    })
+    crate::agents::ADAPTERS
+        .iter()
+        .any(|agent| agent.descriptor().capabilities.hook_install && agent.hooks_installed())
 }
 
 /// The lazy-registering agent kinds whose Rimz hooks are installed — the gate for
@@ -421,18 +419,13 @@ pub fn agent_hooks_ready() -> bool {
 /// never promotes an unwired Codex pane to an idle agent (it would otherwise read
 /// as a forever-idle agent Rimz can report no status for). Environment, not ledger.
 pub fn wired_lazy_kinds() -> Vec<String> {
-    crate::agents::KNOWN_AGENTS
+    crate::agents::ADAPTERS
         .iter()
-        .filter(|name| {
-            crate::agents::integration_by_name(name)
-                .map(|agent| {
-                    agent.registers_session_lazily()
-                        && agent.supports_hook_install()
-                        && agent.hooks_installed()
-                })
-                .unwrap_or(false)
+        .filter(|agent| {
+            let capabilities = agent.descriptor().capabilities;
+            capabilities.registers_lazily && capabilities.hook_install && agent.hooks_installed()
         })
-        .map(|name| (*name).to_owned())
+        .map(|agent| agent.descriptor().kind.to_owned())
         .collect()
 }
 
@@ -820,10 +813,7 @@ fn fold_machine_config_with(
 fn probe_accounts(
     snapshot: &SidebarSnapshot,
 ) -> (BTreeMap<String, crate::agents::AgentAccount>, bool) {
-    let mut kinds: Vec<String> = crate::agents::KNOWN_AGENTS
-        .iter()
-        .map(|kind| (*kind).to_owned())
-        .collect();
+    let mut kinds: Vec<String> = crate::agents::known_kinds().map(str::to_owned).collect();
     for agent in &snapshot.agents {
         if agent.parent_agent_id.is_none() && !kinds.iter().any(|known| known == &agent.kind) {
             kinds.push(agent.kind.clone());

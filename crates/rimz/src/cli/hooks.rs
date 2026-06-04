@@ -6,7 +6,7 @@
 //! heartbeat is fresh under the workspace runtime dir, the hook engages the
 //! bridge — binds a per-request socket, re-stats the resolver (TOCTOU
 //! guard), pushes a `Surface::Bridge` feed item, and blocks on the socket
-//! for up to the agent's [`AgentIntegration::hook_cap`]. On resolver answer
+//! for up to the agent descriptor's `hook_cap`. On resolver answer
 //! the hook prints the agent-native decision JSON; on cap or resolver loss
 //! it downgrades to `native_ui` and returns the agent-native no-op. See
 //! `docs/internals/ledger.md` for the wire-level contract.
@@ -24,9 +24,7 @@ use super::{GlobalFlags, open_ledger};
 use rimz::EventEnvelope;
 use rimz::Ledger;
 use rimz::agents::lifecycle::{self, TransitionKind};
-use rimz::agents::{
-    AgentHookClass, AgentIntegration, AgentLifecycleObservation, integration_by_name,
-};
+use rimz::agents::{AgentAdapter, AgentHookClass, AgentLifecycleObservation, adapter_by_kind};
 use rimz::bridge::{self, BridgeOutcome, ExpectedFrame, SocketGuard};
 use rimz::feed::{
     AbandonReason, FeedItem, FeedKind, FeedStatus, ResolverStep, ResolverStepState,
@@ -152,7 +150,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         })
         .unwrap_or_else(|| "unknown".to_owned());
 
-    let agent = integration_by_name(&source)?;
+    let agent = adapter_by_kind(&source)?;
     let classified = agent.classify_hook(&event_name, &payload);
 
     if classified.class != AgentHookClass::BlockingFeed {
@@ -182,11 +180,11 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         };
         let agent_id = payload_agent_id(&payload);
         let expiry = match (agent_id, expiry_scope) {
-            (Some(agent_id), Some(scope)) => Some((agent.name(), agent_id, scope)),
+            (Some(agent_id), Some(scope)) => Some((agent.descriptor().kind, agent_id, scope)),
             _ => None,
         };
         if let Some(mut observation) = agent.observe_lifecycle(&event_name, &payload) {
-            attach_agent_owner(agent.name(), &mut observation);
+            attach_agent_owner(agent.descriptor().kind, &mut observation);
             attach_agent_pane(&mut observation);
             if observation.worktree_path.is_none() {
                 observation.worktree_path = Some(workspace.worktree_root.display().to_string());
@@ -198,17 +196,17 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             // Validate the transition this event drives against the prior rollup
             // and log any anomaly once, here at ingestion — the reducer
             // re-derives the same state silently on every replay.
-            log_lifecycle_transition(&ledger, agent.name(), &observation);
+            log_lifecycle_transition(&ledger, agent.descriptor().kind, &observation);
             let envelope = EventEnvelope::agent_lifecycle(
                 workspace.workspace_id.clone(),
                 &workspace.session_name,
-                agent.name(),
+                agent.descriptor().kind,
                 &event_name,
                 &observation,
             );
             if let Err(err) = ledger.append_event_and_expire(&envelope, expiry) {
                 warn!(
-                    agent = agent.name(),
+                    agent = agent.descriptor().kind,
                     event = %event_name,
                     error = %err,
                     "lifecycle: failed to record the agent.lifecycle event",
@@ -227,7 +225,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             };
             if let Err(err) = result {
                 warn!(
-                    agent = agent.name(),
+                    agent = agent.descriptor().kind,
                     event = %event_name,
                     error = %err,
                     "lifecycle: failed to expire the session's pending asks",
@@ -240,12 +238,12 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             if agent.ends_session(&event_name)
                 && let Err(err) = rimz::ledger::agent_context::remove(
                     ledger.runtime_paths(),
-                    agent.name(),
+                    agent.descriptor().kind,
                     agent_id,
                 )
             {
                 warn!(
-                    agent = agent.name(),
+                    agent = agent.descriptor().kind,
                     event = %event_name,
                     error = %err,
                     "lifecycle: failed to remove the session's context sidecar",
@@ -256,11 +254,14 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             // per turn. A latency hint, never correctness — log and continue on
             // failure.
             if event_records_activity(&event_name)
-                && let Err(err) =
-                    rimz::agent_activity::touch(ledger.runtime_paths(), agent.name(), agent_id)
+                && let Err(err) = rimz::agent_activity::touch(
+                    ledger.runtime_paths(),
+                    agent.descriptor().kind,
+                    agent_id,
+                )
             {
                 warn!(
-                    agent = agent.name(),
+                    agent = agent.descriptor().kind,
                     event = %event_name,
                     error = %err,
                     "lifecycle: failed to touch the agent activity heartbeat",
@@ -271,7 +272,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             // from the app-server. Spawn the reader detached with fresh stdio on
             // turn boundaries so it never adds latency to the agent's turn; the
             // sidebar's next wakeup folds the fresh sidecar in.
-            if agent.name() == "codex" && refreshes_codex_context(&event_name) {
+            if agent.descriptor().kind == "codex" && refreshes_codex_context(&event_name) {
                 spawn_codex_context_refresh(&workspace, agent_id, model_hint.as_deref());
             }
         }
@@ -279,14 +280,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
     }
 
     let feed_kind = classified.feed_kind.unwrap_or(FeedKind::Generic);
-    handle_blocking_feed(
-        &workspace,
-        &ledger,
-        agent.as_ref(),
-        &event_name,
-        feed_kind,
-        payload,
-    )
+    handle_blocking_feed(&workspace, &ledger, agent, &event_name, feed_kind, payload)
 }
 
 /// Best-effort PID of the agent process that spawned this hook helper. Tests
@@ -395,17 +389,19 @@ fn read_proc_status(pid: u32) -> Option<(String, u32)> {
     Some((name?, ppid?))
 }
 
-/// Codex ships as a JS bundle launched through `node`, so the binary `comm`
-/// reported by the kernel is `node`, not `codex`. The matcher allows either.
+/// Whether the kernel-reported `comm` is one of the agent's declared process
+/// names — its own binary plus any launcher (Codex ships as a JS bundle, so
+/// its `comm` is `node`). The set lives on the descriptor; an unregistered
+/// kind falls back to the exact-name match.
 fn matches_agent_kind(comm: &str, source: &str) -> bool {
-    if comm == source {
-        return true;
+    match rimz::agents::descriptor_by_kind(source) {
+        Some(descriptor) => descriptor.process_names.contains(&comm),
+        None => comm == source,
     }
-    matches!((source, comm), ("codex", "node"))
 }
 
 fn run_install(agent: String) -> Result<()> {
-    let integration = integration_by_name(&agent)?;
+    let integration = adapter_by_kind(&agent)?;
     let report = integration.install_hooks()?;
     // User-facing JSON. Report struct derives Serialize so the shape stays in
     // lockstep with `HookInstallReport`.
@@ -418,7 +414,7 @@ fn run_install(agent: String) -> Result<()> {
 }
 
 fn run_uninstall(agent: String) -> Result<()> {
-    let integration = integration_by_name(&agent)?;
+    let integration = adapter_by_kind(&agent)?;
     let report = integration.uninstall_hooks()?;
     let rendered = serde_json::to_string_pretty(&report)?;
     #[expect(clippy::print_stdout, reason = "user-visible uninstall report")]
@@ -431,7 +427,7 @@ fn run_uninstall(agent: String) -> Result<()> {
 fn handle_blocking_feed(
     workspace: &ResolvedWorkspace,
     ledger: &Ledger,
-    agent: &dyn AgentIntegration,
+    agent: &dyn AgentAdapter,
     event_name: &str,
     feed_kind: FeedKind,
     payload: Value,
@@ -444,7 +440,7 @@ fn handle_blocking_feed(
     let superseded_session: Option<String> = payload_agent_id(&payload).map(ToOwned::to_owned);
     let supersede = superseded_session
         .as_deref()
-        .map(|agent_id| (agent.name(), agent_id));
+        .map(|agent_id| (agent.descriptor().kind, agent_id));
 
     let allowlist = Allowlist::load().context("loading resolver allowlist")?;
     let fresh = fresh_enrolled(ledger.runtime_paths(), &allowlist)
@@ -541,7 +537,7 @@ fn handle_blocking_feed(
     reason = "private helper; the bridge loop borrows every state slice exactly once"
 )]
 async fn run_bridge_poll(
-    agent: &dyn AgentIntegration,
+    agent: &dyn AgentAdapter,
     ledger: &Ledger,
     allowlist: &Allowlist,
     workspace: &ResolvedWorkspace,
@@ -603,7 +599,7 @@ async fn run_bridge_poll(
 /// polling".
 fn handle_terminal_status(
     live: &FeedItem,
-    agent: &dyn AgentIntegration,
+    agent: &dyn AgentAdapter,
     event_name: &str,
 ) -> Result<Option<Result<()>>> {
     match live.status {
@@ -627,7 +623,7 @@ fn handle_terminal_status(
 /// have observed it first (CAS) — render that decision instead of neutral.
 fn finish_on_cap(
     ledger: &Ledger,
-    agent: &dyn AgentIntegration,
+    agent: &dyn AgentAdapter,
     event_name: &str,
     request_id: &rimz::ids::RequestId,
     session_name: &str,
@@ -686,7 +682,7 @@ fn advance_chain_if_step_lapsed(
 }
 
 fn print_decision(
-    agent: &dyn AgentIntegration,
+    agent: &dyn AgentAdapter,
     item: &FeedItem,
     resolution: &rimz::feed::Resolution,
 ) -> Result<()> {
@@ -718,19 +714,19 @@ fn build_item(
     workspace: &ResolvedWorkspace,
     surface: Surface,
     feed_kind: FeedKind,
-    agent: &dyn AgentIntegration,
+    agent: &dyn AgentAdapter,
     payload: Value,
 ) -> FeedItem {
     let mut item = FeedItem::new(
         workspace.workspace_id.clone(),
         surface,
         feed_kind,
-        format!("{} needs attention", agent.name()),
-        agent.name(),
+        format!("{} needs attention", agent.descriptor().kind),
+        agent.descriptor().kind,
         "agent-hook",
     );
     item.payload = payload;
-    item.runtime_owner = agent_runtime_owner(agent.name(), &item.payload);
+    item.runtime_owner = agent_runtime_owner(agent.descriptor().kind, &item.payload);
     item.worktree_path = Some(workspace.worktree_root.display().to_string());
     item.worktree_branch = workspace.worktree_branch.clone();
     item
@@ -833,16 +829,16 @@ fn attach_resolver_chain(item: &mut FeedItem, fresh: &[AllowlistEntry]) {
     item.activate_resolver_chain(chain);
 }
 
-fn hook_cap_for(agent: &dyn AgentIntegration) -> Duration {
+fn hook_cap_for(agent: &dyn AgentAdapter) -> Duration {
     if let Ok(raw) = std::env::var(HOOK_CAP_OVERRIDE_ENV)
         && let Ok(ms) = raw.parse::<u64>()
     {
         return Duration::from_millis(ms);
     }
-    agent.hook_cap()
+    agent.descriptor().hook_cap
 }
 
-fn emit_neutral(agent: &dyn AgentIntegration, event_name: &str) -> Result<()> {
+fn emit_neutral(agent: &dyn AgentAdapter, event_name: &str) -> Result<()> {
     if let Some(payload) = agent.render_neutral(event_name)? {
         let rendered = serde_json::to_string(&payload)?;
         // Hook stdout is the decision channel: legal stdout site.

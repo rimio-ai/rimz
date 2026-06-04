@@ -17,7 +17,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::agents::integration_by_name;
+use crate::agents::find_adapter;
 use crate::feed::AgentState;
 use crate::mux::ResumePane;
 
@@ -30,7 +30,7 @@ pub const DEFAULT_RESUME_MAX: usize = 8;
 /// skipped agent stays visible rather than silently lost.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResumeSkipReason {
-    /// The agent's kind has no resume CLI ([`crate::agents::AgentIntegration::resume_command`]).
+    /// The agent's kind has no resume CLI ([`crate::agents::AgentAdapter::resume_command`]).
     NoResumeSupport,
     /// The agent's worktree no longer exists on disk, so its pane has nowhere to run.
     WorktreeMissing,
@@ -138,8 +138,7 @@ pub fn plan_resume(
             });
             continue;
         }
-        let Some(command) = integration_by_name(&agent.kind)
-            .ok()
+        let Some(command) = find_adapter(&agent.kind)
             .and_then(|adapter| adapter.resume_command(&agent.agent_id, &cwd))
         else {
             plan.skipped.push(ResumeSkip {

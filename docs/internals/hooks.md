@@ -4,20 +4,20 @@
 
 A coding agent reports to Rimz through hooks. This doc owns the agent boundary end to end: the one trait every agent speaks, the two channels a hook can take, how install wires it, and the per-provider mapping that translates a native protocol onto Rimz's internal types.
 
-It is the **single home for the native-to-internal mapping**: which native events are wired, which channel each takes, and how each folds onto Rimz's internal types ([`AgentIntegration`](../../crates/rimz/src/agents/mod.rs), [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs), the lifecycle/blocking-feed channels). The raw upstream protocol — the full event catalog, the stdin payload schemas, and the verbatim decision JSON — lives in the per-provider reference: [adapter/claude-reference.md](./adapter/claude-reference.md) and [adapter/codex-reference.md](./adapter/codex-reference.md) ([adapter/pi-reference.md](./adapter/pi-reference.md) mirrors Pi ahead of its adapter). The seam to the rest of the system is the observation: this doc *produces* it; [agent.md](./agent.md) folds it into the agent rollup; [sidebar.md](./sidebar.md) paints it.
+It is the **single home for the native-to-internal mapping**: which native events are wired, which channel each takes, and how each folds onto Rimz's internal types ([`AgentAdapter`](../../crates/rimz/src/agents/mod.rs), [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs), the lifecycle/blocking-feed channels). The raw upstream protocol — the full event catalog, the stdin payload schemas, and the verbatim decision JSON — lives in the per-provider reference: [adapter/claude-reference.md](./adapter/claude-reference.md) and [adapter/codex-reference.md](./adapter/codex-reference.md) ([adapter/pi-reference.md](./adapter/pi-reference.md) mirrors Pi ahead of its adapter). The seam to the rest of the system is the observation: this doc *produces* it; [agent.md](./agent.md) folds it into the agent rollup; [sidebar.md](./sidebar.md) paints it.
 
 Agents are *sources*, not a privileged path. Anything a hook does, a script can do through the same CLI — a hook is just an adapter that translates a native protocol onto `rimz event`/`rimz feed`.
 
-## The seam — `AgentIntegration`
+## The seam — `AgentAdapter`
 
-Every agent — Claude, Codex, and every future one — speaks to Rimz through one trait, [`AgentIntegration`](../../crates/rimz/src/agents/mod.rs). Adding an agent is implementing the trait; nothing downstream of it is agent-specific. The trait is the single place a native protocol diverges and the single place it is normalized. Its methods, by role (signatures live in the trait):
+Every agent — Claude, Codex, and every future one — speaks to Rimz through one trait, [`AgentAdapter`](../../crates/rimz/src/agents/mod.rs), registered in [`registry::ADAPTERS`](../../crates/rimz/src/agents/registry.rs). Adding an agent is implementing the trait plus a static [`AgentDescriptor`](../../crates/rimz/src/agents/descriptor.rs) (identity, branding, capabilities, tool tables) and one registry line; nothing downstream of it is agent-specific. The trait is the single place a native protocol diverges and the single place it is normalized. Its methods, by role (signatures live in the trait):
 
 - **`classify_hook`** sorts a native event into one of the two channels below (or `Unknown`, dropped) and, for a blocking event, names the [`FeedKind`](../../crates/rimz/src/feed.rs).
 - **`observe_lifecycle`** is the normalizer: it maps a native lifecycle event onto one [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs) — the unified event shape every downstream reducer reads. `None` means "no state transition here", so high-frequency events stay silent.
 - **`render_decision`** / **`render_neutral`** emit the agent-native decision JSON when a resolver answers, and the neutral no-op when no one does.
-- **`hook_cap`** is how long a blocking hook may park on the bridge before falling back to neutral — set from the upstream's published deadline (default [`DEFAULT_HOOK_CAP`](../../crates/rimz/src/agents/mod.rs), 300s).
+- **`hook_cap`** (a descriptor field) is how long a blocking hook may park on the bridge before falling back to neutral — set from the upstream's published deadline.
 - **`observe_context`** normalizes a rich out-of-band payload into [`AgentContext`](../../crates/rimz/src/agents/mod.rs); `ends_session` / `moves_on` mark the events that expire a session's pending asks.
-- **`install_hooks`** / **`preview_hook_install`** / **`uninstall_hooks`** / **`hooks_installed`** / **`supports_hook_install`** own the per-user config write and report it.
+- **`install_hooks`** / **`preview_hook_install`** / **`uninstall_hooks`** / **`hooks_installed`** own the per-user config write and report it (gated by the descriptor's `hook_install` capability).
 
 Two invariants hold the seam shut:
 
@@ -63,7 +63,7 @@ Installing hooks edits the agent's own config, so it is a security surface, neve
 
 ## Adding an agent
 
-OpenCode, Pi, Cursor, Gemini, Copilot, and similar agents land through `AgentIntegration` once their hook surface and decision outputs are verified — Pi's surface is already mirrored and feasibility-checked in [adapter/pi-reference.md](./adapter/pi-reference.md). The work is a new appendix below — the native-event → internal mapping — plus the trait impl. Nothing else changes.
+OpenCode, Pi, Cursor, Gemini, Copilot, and similar agents land through `AgentAdapter` once their hook surface and decision outputs are verified — Pi's surface is already mirrored and feasibility-checked in [adapter/pi-reference.md](./adapter/pi-reference.md). The work is a new appendix below — the native-event → internal mapping — plus the trait impl. Nothing else changes.
 
 The mapping has four jobs: route each native event to a channel; map lifecycle events to observations; render the agent's *own* decision shape (never reuse another agent's JSON — see the divergence below); and set `hook_cap` from the upstream's published deadline, leaving margin so the bridge times out before the agent kills the hook.
 
