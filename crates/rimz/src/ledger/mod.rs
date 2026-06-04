@@ -440,7 +440,6 @@ impl Ledger {
                 item.resolution = Some(resolution.clone());
                 item.updated_at = Timestamp::now();
                 feed_store::write(&self.inner.paths.feed_dir, &item)?;
-                snapshot::rebuild(&self.inner.paths)?;
                 Some(item.clone())
             } else {
                 warn!(
@@ -468,6 +467,10 @@ impl Ledger {
                     }),
                 ),
             )?;
+            // Rebuild after the append so `latest.json` reflects the
+            // `feed.resolve` event — rebuilding first leaves the cache stale
+            // against the log and forces the next reader into a full replay.
+            snapshot::rebuild(&self.inner.paths)?;
 
             item_to_wake
         };
@@ -516,7 +519,6 @@ impl Ledger {
             item.mark_active_resolver_budget_elapsed(reason);
             item.updated_at = Timestamp::now();
             feed_store::write(&self.inner.paths.feed_dir, &item)?;
-            snapshot::rebuild(&self.inner.paths)?;
             event_log::append(
                 &self.inner.paths.events_log,
                 &EventEnvelope::new(
@@ -532,6 +534,7 @@ impl Ledger {
                     }),
                 ),
             )?;
+            snapshot::rebuild(&self.inner.paths)?;
             Some((item.workspace_id.clone(), item.request_id.clone()))
         };
 
@@ -602,7 +605,6 @@ impl Ledger {
             let next = item.advance_resolver_chain_after(resolver_id);
             item.updated_at = Timestamp::now();
             feed_store::write(&self.inner.paths.feed_dir, &item)?;
-            snapshot::rebuild(&self.inner.paths)?;
             event_log::append(
                 &self.inner.paths.events_log,
                 &EventEnvelope::new(
@@ -619,6 +621,7 @@ impl Ledger {
                     }),
                 ),
             )?;
+            snapshot::rebuild(&self.inner.paths)?;
             let outcome = AbstainOutcome {
                 request_id: request_id.clone(),
                 next_resolver: next,
@@ -681,7 +684,6 @@ impl Ledger {
             let next = item.advance_resolver_chain_after(current);
             item.updated_at = Timestamp::now();
             feed_store::write(&self.inner.paths.feed_dir, &item)?;
-            snapshot::rebuild(&self.inner.paths)?;
             event_log::append(
                 &self.inner.paths.events_log,
                 &EventEnvelope::new(
@@ -698,6 +700,7 @@ impl Ledger {
                     }),
                 ),
             )?;
+            snapshot::rebuild(&self.inner.paths)?;
             let outcome = ElapseOutcome {
                 request_id: request_id.clone(),
                 next_resolver: next,
@@ -742,7 +745,6 @@ impl Ledger {
             item.resolution = Some(resolution);
             item.updated_at = Timestamp::now();
             feed_store::write(&self.inner.paths.feed_dir, &item)?;
-            snapshot::rebuild(&self.inner.paths)?;
             event_log::append(
                 &self.inner.paths.events_log,
                 &EventEnvelope::new(
@@ -757,6 +759,7 @@ impl Ledger {
                     }),
                 ),
             )?;
+            snapshot::rebuild(&self.inner.paths)?;
             Some((item.workspace_id.clone(), item.request_id.clone()))
         };
 
