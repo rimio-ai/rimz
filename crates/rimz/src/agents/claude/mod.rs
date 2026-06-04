@@ -533,8 +533,11 @@ impl AgentAdapter for ClaudeAdapter {
     }
 }
 
-/// Whether `path` carries any `_rimz_managed` hook matcher. Best-effort: a
-/// missing file or parse error reads as "not installed".
+/// Whether `path` carries any Rimz-owned hook entry. Best-effort: a missing
+/// file or parse error reads as "not installed". Uses [`entry_is_rimz_owned`]
+/// (the same ownership predicate as install/uninstall) so that entries whose
+/// `_rimz_managed` marker was stripped by an external tool but whose command is
+/// still the rimz feed command are still detected as installed.
 fn hooks_installed_at(path: &Path) -> bool {
     let Ok(root) = read_existing_json(path) else {
         return false;
@@ -545,7 +548,7 @@ fn hooks_installed_at(path: &Path) -> bool {
             hooks.values().any(|entries| {
                 entries.as_array().is_some_and(|arr| {
                     arr.iter()
-                        .any(|entry| entry.as_object().is_some_and(is_rimz_managed_object))
+                        .any(|entry| entry.as_object().is_some_and(entry_is_rimz_owned))
                 })
             })
         })
@@ -2177,6 +2180,30 @@ mod tests {
         assert!(
             !hooks_installed_at(&path),
             "user-managed hooks with no _rimz_managed marker are not installed"
+        );
+    }
+
+    #[test]
+    fn hooks_installed_at_detects_by_command_marker_without_rimz_managed() {
+        // Simulate a settings.json where an external tool (e.g. Claude Code
+        // auto-migration) preserved the hook command but stripped _rimz_managed.
+        // Detection must still succeed so the consent gate does not re-fire.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let command = format!(r#"RIMZ_AGENT_PID=$PPID exec {RIMZ_HOOK_MARKER}"#);
+        let payload = serde_json::json!({
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [{"type": "command", "command": command}]
+                    }
+                ]
+            }
+        });
+        std::fs::write(&path, serde_json::to_string(&payload).unwrap()).unwrap();
+        assert!(
+            hooks_installed_at(&path),
+            "a hook entry whose command contains the rimz marker reads as installed even without _rimz_managed"
         );
     }
 

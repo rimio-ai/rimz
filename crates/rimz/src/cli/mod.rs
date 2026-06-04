@@ -333,7 +333,7 @@ fn print_hook_consent_gate(previews: &[HookInstallPreview], interactive: bool) -
     let mut stderr = std::io::stderr().lock();
     writeln!(
         stderr,
-        "Rimz first run on this machine: detected agent hooks are not installed for {}.",
+        "Rimz: agent hooks are not currently installed for {}.",
         join_agent_names(previews.iter().map(|preview| preview.agent)),
     )?;
     writeln!(
