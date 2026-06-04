@@ -1,0 +1,19 @@
+---
+source: crates/rimz-sidebar/src/render/mod.rs
+assertion_line: 749
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0
+ ¤ 1
+ ────────────────────────────────────
+ ? 0   ! 0   ○ 1   ⏸︎ 0     ⢿ 0   ✓ 0
+
+▏⑂ feature-migration ┄┄┄┄┄┄┄┄┄ ≡ main
+▌○ codex
+▌  .
+
+
+
+              ? for help

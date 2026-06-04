@@ -2252,6 +2252,7 @@ mod tests {
             diff_removed: None,
             commits_ahead: None,
             commits_behind: None,
+            trunk: None,
         }];
         snapshot
     }
@@ -2305,6 +2306,7 @@ mod tests {
             diff_removed: None,
             commits_ahead: None,
             commits_behind: None,
+            trunk: None,
         }];
         snapshot
     }
@@ -2396,6 +2398,7 @@ mod tests {
             diff_removed: None,
             commits_ahead: None,
             commits_behind: None,
+            trunk: None,
         }];
         snapshot
     }
@@ -2799,6 +2802,7 @@ mod tests {
             diff_removed: None,
             commits_ahead: None,
             commits_behind: None,
+            trunk: None,
         }];
 
         assert_eq!(

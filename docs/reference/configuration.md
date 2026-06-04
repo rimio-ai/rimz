@@ -113,7 +113,7 @@ The agent card's context meter — the bar, the `▣` glyph, and the `▤` head 
 trunk = "develop"   # preferred comparison target for the worktree header's git stats (default: auto-detect)
 ```
 
-The worktree header's git stats — the `+/-` diff and the `⇡`/`⇣` commit delta — compare against the repo's trunk. `trunk` names the preferred target, tried first per repo: a repo without that branch falls back to the auto-detection (`main` → `master` → the remote's advertised default), so one machine-wide value never costs another project its stats.
+The worktree header's git stats — the `+/-` diff, the `⇡`/`⇣` commit delta, and the `≡` landed marker — compare against the repo's trunk. `trunk` names the preferred target, tried first per repo: a repo without that branch falls back to the auto-detection (`main` → `master` → the remote's advertised default), so one machine-wide value never costs another project its stats.
 
 #### Provider dashboard
 

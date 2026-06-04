@@ -15,8 +15,8 @@ A real room: one Claude agent working in `main`, its card selected, with the per
 ```
  ⌘ query-engine                                          ← workspace identity
                                                          ← blank line below the name
- ¤ 1                   ◇ 76k ↘ 12k ↗ 64k ◍ 20k ◌ 68k    ← live agents · today's tokens (right)
- ◎ 12                                            $4.20    ← sessions today · today's fleet spend
+ ◎ 12                  ◇ 76k ↘ 12k ↗ 64k ◍ 20k ◌ 68k    ← sessions today · today's tokens (right)
+ ¤ 1                                             $4.20    ← live agents · today's fleet spend
  ────────────────────────────────────────────────────
  ? 0   ! 0   ○ 0   ⏸ 0                      ⢿ 1   ✓ 0    ← make-up: who needs you | who's busy
 
@@ -72,7 +72,7 @@ The two actionable attention glyphs (`?` / `!`) **breathe** — a brightness pul
 
 **Window — the model's context window on the identity line.**
 
-A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the live out-of-band reading (Claude's statusline, Codex's app-server) when one exists, else the hook-derived window, omitted until a source names it. Always dim chrome — a capability label, not a status signal; the context meter's severity ramp owns the color.
+A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the live out-of-band reading (Claude's statusline, Codex's app-server) when one exists, else the hook-derived window, omitted until a source names it. Dim-weight chrome — a capability label, not a status signal — tinted by size class so the magnitude reads at a glance: clay amber for a 1m+ window, gold at 258k, sky blue at 128k, plain gray below; the context meter's severity ramp keeps the loud color slot.
 
 **Meters and stats — one grammar everywhere.**
 
@@ -80,16 +80,17 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 |-------|----------|
 | `▣ ━━━━──── 38.2%` | context meter — how full the window is, bar fills as used; an empty 0% window reads the hollow `▢`. Glyph, bar, and the `▤` head below share one severity ramp — calm blue → yellow → amber → red, bands configurable via `[sidebar.context]` |
 | `▤ 76k`           | filled context — the absolute tokens in the window (the `▣` meter's numerator); leads the card's context line in the meter's severity tone |
-| `◇` `↘` `↗` `◍` `◌` | tokens: total · input · output · cache-write · cache-read. On the card's context line each composition marker wears its bar-segment color (`◌` blue · `◍` yellow · `↘` red · `↗` green), so the line legends the bar; everywhere else they stay dim chrome |
+| `◇` `↘` `↗` `◍` `◌` | tokens: total · input · output · cache-write · cache-read. One color per marker, everywhere: the `◇` total soft-violet, the rest their bar-segment tones (`◌` blue · `◍` yellow · `↘` red · `↗` green) — so the card's context line legends the bar and the cockpit/dashboard/ledger lines speak the same vocabulary; the figures beside them read at full strength on the fleet lines |
 | `◔ 1m`            | last-activity age — shown only once it crosses a full minute; the clock face fills by the quarter hour (`◔` ≤15m · `◑` ≤30m · `◕` ≤45m · `●` ≤60m · `◉` past it) and its tone steps the same quarters: dim through `◔` (a resume still hits cache), yellow to the half hour, amber beyond it, red past the hour — a red age means resuming likely re-reads the whole context uncached |
 | `C 11%`           | CPU utilisation of the pane's foreground process |
 | `M 512M`          | resident set size (RSS) — `k` / `M` / `G` |
 | `⇅ 3M/s`          | combined VFS I/O rate (rchar + wchar bytes/s) |
 | `+127 -43`        | lines added / removed |
 | `⇡3 ⇣1`           | commits ahead / behind the trunk (worktree header; zero components drop) |
+| `≡ main`          | worktree fully landed on the trunk — zero ahead, zero diff, safe to remove (behind doesn't count against it); the trunk worktree itself never wears it |
 | `●●●○○ 3/5`       | todo progress |
-| `$1.27`           | spend — money-green, always two decimals |
-| `▰▱` / `∞`        | provider budget bar (fill = left) / unmetered account |
+| `$1.27`           | spend — money-green, always two decimals; omitted while a session's cost still rounds to zero |
+| `▰▱` / `∞`        | provider budget bar (fill = left) / unmetered account — the `∞` icon and its empty track share the provider's brand color |
 | `↻ 2h06m`         | when that budget resets |
 
 **Structure and chrome.**
@@ -97,9 +98,9 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | mark | meaning |
 |------|---------|
 | `⌘ name`        | the workspace |
-| `¤ N`           | the live agents in the room right now |
-| `◎ N`           | sessions (threads) that have run today (cockpit) / in the window (ledger) |
-| `⧉ N`           | the subagents an agent spawned this turn (expanded card) |
+| `¤ N`           | the live agents in the room right now — the glyph in the agents' working clay |
+| `◎ N`           | sessions (threads) that have run today (cockpit) / in the window (ledger) — teal in both |
+| `⧉ N`           | the subagents an agent spawned this turn (expanded card) — the marker violet, the label dim |
 | `⑂ name`        | a worktree group header — its live branch |
 | `▏`             | the selection lane — the worktree you're in |
 | `▌`             | the selected card |
@@ -114,24 +115,24 @@ The top block. Fixed height, so the rows below it never jump as agents change st
 ```
  ⌘ query-engine                            ~/code/query-engine
 
- ¤ 5                       ◇ 76k ↘ 12k ↗ 64k ◍ 12k ◌ 68k
- ◎ 12                                                 $4.20
+ ◎ 12                      ◇ 76k ↘ 12k ↗ 64k ◍ 12k ◌ 68k
+ ¤ 5                                                  $4.20
  ──────────────────────────────────────────────────────────
  ? 2   ! 1   ○ 1   ⏸ 0                            ⢿ 2   ✓ 0
 ```
 
 - **Identity.** The workspace name behind `⌘`, with the project path dim on the right edge (home-abbreviated to `~/…`; it left-truncates with a leading `…` before it ever crowds the name). A blank line sets it apart from the summary below.
-- **Summary — who's here and what today burned.** Two lines, each a count on the left with today's numbers pinned right. Line 1: `¤` the live agents in the room right now, with today's accumulated token breakdown — `◇` total · `↘` input · `↗` output · `◍` cache-write · `◌` cache-read — pinned to the right edge in the coarse integer form (it drops when today recorded no tokens, leaving `¤ N` alone). Line 2: `◎` the sessions (threads) that have run today, with today's spend pinned right. The counts read from the live fleet and the JSONL `value_tally`'s today window. An empty room reads `¤ 0` over `◎ 0`.
-- **Today's spend.** The fleet's total spend for today, pinned to the right of the sessions line, **counting up** in a smooth eased climb as a turn lands (with a brief brighten as it settles) — the cockpit's one animated number. It joins the line once today records spend.
+- **Summary — who's here and what today burned.** Two lines, each a colored glyph and full-strength count on the left with today's numbers pinned right. Line 1 is the day at a glance: `◎` (teal) the sessions (threads) that have run today, with today's accumulated token breakdown — `◇` total · `↘` input · `↗` output · `◍` cache-write · `◌` cache-read, each marker in its one color — pinned to the right edge in the coarse integer form (it drops when today recorded no tokens, leaving `◎ N` alone). Line 2: `¤` (the agents' working clay) the live agents in the room right now, with today's spend pinned right. The counts read from the live fleet and the JSONL `value_tally`'s today window. An empty room reads `◎ 0` over `¤ 0`.
+- **Today's spend.** The fleet's total spend for today, pinned to the right of the live-agents line, **counting up** in a smooth eased climb as a turn lands (with a brief brighten as it settles) — the cockpit's one animated number. It joins the line once today records spend.
 - **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (breathing, each wearing its oldest row's age heat over a yellow floor), then a free `○` idle agent — calm, but a free agent wants work — and a `⏸` rate-limited count closing the cluster (held amber, parked). The **right cluster** is the busy tail: `⢿` working (every running agent — the thinking sparkle and the compaction pulse are per-row heads, not buckets), then `✓` done. Every bucket always shows, so a zero reads a faint `? 0` and the line is scannable by position.
 
-An **empty room** has no make-up line at all — just identity and the `¤ 0` / `◎ 0` summary:
+An **empty room** has no make-up line at all — just identity and the `◎ 0` / `¤ 0` summary:
 
 ```
  ⌘ query-engine
 
- ¤ 0
  ◎ 0
+ ¤ 0
  ──────────────────────────────────────────────────────────
 
  no agents yet
@@ -156,7 +157,7 @@ An agent is a small stacked card. The resting card is four lines; selecting it a
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                ◔ 1m    context line — filled window · composition · age (≥1m)
 ```
 
-- **Line 1 — identity.** The animated leading cell, then the agent kind in its provider brand color (mid-gray chrome for unknown kinds), then capability: model, effort, and the context-window token (`258k`, `1m`) in dim chrome. Capability degrades by width — a wide card carries model · effort · window, a medium one drops effort, a narrow one keeps just the name. The session `$cost` pins right.
+- **Line 1 — identity.** The animated leading cell, then the agent kind in its provider brand color (mid-gray chrome for unknown kinds), then capability: model, effort, and the context-window token (`258k`, `1m`) in dim-weight chrome tinted by size class (clay amber 1m+ · gold 258k · sky 128k · gray below). Capability degrades by width — a wide card carries model · effort · window, a medium one drops effort, a narrow one keeps just the name. The session `$cost` pins right, joining the line once the session has actually spent — an idle agent at `$0.00` shows nothing.
 - **Line 2 — what it's on.** The session name you gave it (`--name` / `/rename`), else the agent's task, else its latest prompt (which lingers once the turn ends and the task clears, so an unnamed session stays labelled until it earns a name). An idle agent with nothing to show yet animates a `.`→`..`→`...` loading cue here instead of an em dash. A turn that died on a provider API error takes the line over with the upstream error text, dim (`API Error: Overloaded`), for as long as its `!` escalation holds — the card says why without a jump ([internals/agent.md → the state machine](../internals/agent.md#the-state-machine)). On a wide card, todo dots pin right.
 - **The context meter (`▣`/`▢`).** The resting card's one bar — `▢` hollow at an empty 0% window, `▣` once anything fills it. The bar fills as the window is *used*; its value is always the percent used. Glyph and bar wear one severity — calm blue → yellow → amber → red, bands tunable via `[sidebar.context]` ([configuration.md](../reference/configuration.md#context-meter)). While the meter rests calm the fill splits into colored segments showing *where* the tokens went (`◍` cache writes · `◌` cache reads · `↘` fresh input); once it warms the bar goes one solid severity run.
 - **The context line.** Part of the resting card, and the meter's absolute companion: `▤` the filled part of the window — `input + cache-write + cache-read` of the latest API call, exactly the numerator the `▣` percent scales, wearing the meter's severity tone so the bar and this figure read as one measurement — then a `·` seam and the call's composition ordered by how the window filled: `◌` read back from cache, `◍` newly written to cache, `↘` fresh input, `↗` output generated (which joins the window next turn), each marker in its bar-segment color so the line doubles as the bar's legend. The four composition columns keep the same disjoint meanings the cockpit and fleet ledger accumulate; the `◇` totals stay fleet vocabulary, because this line answers what is in the window, not what today burned. A coarse last-activity age pins right once it crosses a full minute — a just-active agent shows the line alone, left-aligned, rather than a misleading `1m` — as the clock-fill glyph (`◔`→`◉`, the legend's quarter-hour face) whose tone steps the same quarters (dim · yellow from 15m · amber from 30m · red past the hour, the legend's age ramp), so a red age warns that resuming pays for the context again. An agent whose context carries no per-call split (Codex, or Claude before its first API call) shows the bare `▤` rollup total alone.
@@ -176,7 +177,7 @@ The `▣`/`▢` and `▤` glyphs share one lead column, so the card reads as an 
                                   ▌    ⢿ Explore
 ```
 
-The expanded card also lists any **subagents** the agent spawned this turn — a dim `⧉ subagents (N)` header then, per child, the status glyph and type with what the parent asked it to do, and a deeper-indented second line carrying its token spend `◇` and elapsed work (the clock-fill glyph, filling with the child's worked span) pinned right under the parent's stats:
+The expanded card also lists any **subagents** the agent spawned this turn — a `⧉ subagents (N)` header (the marker violet, the label dim) then, per child in spawn order (creation time ascending, stable across refreshes), the status glyph and type with what the parent asked it to do, and a deeper-indented second line carrying its token spend `◇` and elapsed work (the clock-fill glyph, filling with the child's worked span) pinned right under the parent's stats:
 
 ```
 ▌  ⧉ subagents (2)
@@ -223,10 +224,11 @@ The label is the program the pane runs, read past a `sudo` wrapper and through a
 
 Worktrees stack as bounded blocks. The one **holding your selection** reads as a single bracketed lane: a thin `▏` spine down its header and every row, a dotted `┄` seal on its header, and the selected card itself lit with a bold `▌`. Every other worktree carries a blank gutter, so the lane is the only marker on screen and the selection is unmistakable.
 
-The worktree header carries the worktree's git story on the right: the `⇡`/`⇣` commit delta against the trunk, then the worktree's total diff (`⇡3 ⇣1 +230 -23`, zero components dropped). The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../reference/configuration.md#trunk-branch)).
+The worktree header carries the worktree's git story on the right: the `⇡`/`⇣` commit delta against the trunk, then the worktree's total diff (`⇡3 ⇣1 +230 -23`, zero components dropped). A fully-landed worktree — zero commits ahead and a zero diff against its fork point — collapses the whole cluster to `≡ main`: nothing left to land, safe to remove. Behind sits outside that test, since the trunk moving on makes a landed worktree no less removable; and the trunk worktree itself never wears the marker — "landed on itself" says nothing, so its header keeps the plain cluster. The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../reference/configuration.md#trunk-branch)).
 
 ```
 ▏⑂ feature-migration ┄┄┄┄┄ ⇡3 ⇣1  +230 -23    ← in flight: commits ahead/behind, then the diff
+▏⑂ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ≡ main    ← fully landed: nothing to land, safe to remove
 ```
 
 ```
@@ -294,7 +296,7 @@ The dashboard isn't pinned to a fixed set of windows. If a provider reports a si
  ▝▜█████▛▘ 30d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱ ↻ 28d04h    a single window, labeled by length
 ```
 
-An **unmetered (API-key) account** has no budget to drain, so it shows an `∞` bar — the icon in the front slot, an empty track, no countdown:
+An **unmetered (API-key) account** has no budget to drain, so it shows an `∞` bar — the icon in the front slot and an empty track, both in the provider's brand color so the row reads as one branded unmetered bar, no countdown:
 
 ```
  Codex v0.135.0 · ChatGPT Pro
@@ -315,7 +317,7 @@ The fleet's running totals seal the bottom of the dashboard, above the footer �
  M: ◎ 212  ◇ 76.5k ↘ 12.3k ↗ 64.2k ◌ 668k      $240.57
 ```
 
-- **The rows.** Each reads `◎ sessions  ◇ total ↘ input ↗ output ◌ cache-read  $spend`: the thread count, the precise one-decimal token figures (the exact record beside the cockpit's coarse live read), and the spend pinned to the right edge in money-green. The `◇` total carries the same soft-violet as the cards. Every numeric field is right-aligned into one shared grid, so the `W:` / `M:` labels stack and each column lines up. The `◍` cache-write field is omitted here — the ledger keeps to the headline figures.
+- **The rows.** Each reads `◎ sessions  ◇ total ↘ input ↗ output ◌ cache-read  $spend`: the thread count, the precise one-decimal token figures (the exact record beside the cockpit's coarse live read) at full strength, and the spend pinned to the right edge in money-green. The `W:`/`M:` window tags wear sky blue, and each marker its one shared color — the teal `◎`, the soft-violet `◇`, the segment-toned `↘ ↗ ◌`. Every numeric field is right-aligned into one shared grid, so the `W:` / `M:` labels stack and each column lines up. The `◍` cache-write field is omitted here — the ledger keeps to the headline figures.
 - **No animation.** The ledger figures are static — only today's headline (the cockpit's `$`) counts up. The windows escalate `today → week → month`.
 
 Every figure is computed from the transcript JSONL — Codex's dollars priced from its token counts, every provider that logs usage counted, all of them fleet-wide. The ledger is dropped until something has been recorded.
@@ -369,6 +371,7 @@ The renderer's golden tests in [`crates/rimz-sidebar/src/render/`](../../crates/
 | card context line + resource stats | `agent_card_resource_stats` |
 | process row + resource stats | `process_row_resource_stats` |
 | worktree grouping + external | `worktree_attention_map` |
+| landed worktree header (`≡`) | `worktree_equal_to_trunk` |
 | per-worktree cap | `group_cap_with_overflow` |
 | provider dashboard | `provider_dashboard` |
 | fleet ledger (week/month) | `fleet_ledger` |

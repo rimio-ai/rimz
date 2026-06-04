@@ -82,6 +82,14 @@ impl Theme {
         self.style(Color::DarkGray, Modifier::DIM)
     }
 
+    /// Full-strength value text — the terminal's default foreground, no
+    /// modifier. The colored marker beside it carries the semantics; the
+    /// figure reads at normal weight (the fleet token lines, the cockpit
+    /// counts, the W/M ledger figures).
+    pub(crate) fn value(&self) -> Style {
+        Style::default()
+    }
+
     /// The faintest chrome — a step below [`dim`] for the pure scaffolding that
     /// should recede furthest: bar tracks, `·` separators, and dividers. Under
     /// `NO_COLOR` it collapses to the same dim modifier as [`dim`]; the shape

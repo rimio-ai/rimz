@@ -317,10 +317,11 @@ pub struct SidebarConfig {
     /// colour ramp, never the ledger.
     pub context: ContextSeverityConfig,
     /// Preferred comparison target for the worktree header's git stats (the
-    /// `+/-` diff and the `⇡`/`⇣` commit delta). Tried first in the trunk
-    /// ladder, per repo: a repo where the branch doesn't resolve falls back to
-    /// the `main` → `master` → remote-default detection, so one machine-wide
-    /// value never breaks other projects. Unset means detection alone.
+    /// `+/-` diff, the `⇡`/`⇣` commit delta, and the `≡` landed marker). Tried
+    /// first in the trunk ladder, per repo: a repo where the branch doesn't
+    /// resolve falls back to the `main` → `master` → remote-default detection,
+    /// so one machine-wide value never breaks other projects. Unset means
+    /// detection alone.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trunk: Option<String>,
 }

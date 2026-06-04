@@ -276,10 +276,11 @@ pub(super) fn attention_glyph_style(
 /// output generated, a half-filled ring for cache writes, and a hollow ring for
 /// cache reads. The breakdown reads the same on the cockpit, the provider
 /// dashboard, and the W/M ledger rows — one grammar, built by
-/// [`token_breakdown_spans`]. The agent card's stat line answers a different
-/// question — what is in the window, not what the fleet burned — so it leads
-/// with `▤` and reorders the same four columns by how the window filled
-/// ([`context_breakdown_spans`]).
+/// [`token_breakdown_spans`], each marker in its one color everywhere (the
+/// `◇` violet, the rest their [`SEGMENT_INPUT`]-family segment tones). The
+/// agent card's stat line answers a different question — what is in the
+/// window, not what the fleet burned — so it leads with `▤` and reorders the
+/// same four columns by how the window filled ([`context_breakdown_spans`]).
 pub(super) const TOKENS_TOTAL: &str = "◇";
 pub(super) const TOKENS_IN: &str = "↘";
 pub(super) const TOKENS_OUT: &str = "↗";
@@ -302,12 +303,16 @@ pub(super) const SEGMENT_OUTPUT: Color = Color::Green;
 
 /// The `◇ ↘ ↗ ◍ ◌` token breakdown as styled spans — the one shape every fleet
 /// token line shares (cockpit today line, provider today line, W/M ledger
-/// rows). The `◇` total carries the soft-violet domain color; every other field
-/// stays dim chrome so only the total reads as a colored marker. `fmt` chooses
-/// the magnitude form (`tokens_int` live, `tokens_short` for the precise W/M
-/// rows); `include_cache_write` drops the `◍` field for the W/M rows, which omit
-/// it. `total` is the caller's `◇` value (input + output), passed in so a row can
-/// read it straight from its accumulated window.
+/// rows). Each marker wears its one color everywhere: the `◇` total its
+/// soft-violet, the rest the same bar-segment tones the card's context line
+/// legends ([`SEGMENT_INPUT`] and siblings, `↗` output in the segment green) —
+/// one glyph, one color, across the whole sidebar. The figures read at full
+/// strength ([`Theme::value`]); under `NO_COLOR` the glyph shapes still spell
+/// the split. `fmt` chooses the magnitude form (`tokens_int` live,
+/// `tokens_short` for the precise W/M rows); `include_cache_write` drops the
+/// `◍` field for the W/M rows, which omit it. `total` is the caller's `◇` value
+/// (input + output), passed in so a row can read it straight from its
+/// accumulated window.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn token_breakdown_spans(
     theme: &Theme,
@@ -319,25 +324,20 @@ pub(super) fn token_breakdown_spans(
     fmt: fn(u64) -> String,
     include_cache_write: bool,
 ) -> Vec<Span<'static>> {
-    let mut spans = tokens_total_spans(theme, total, fmt);
-    spans.push(Span::styled(
-        format!(" {TOKENS_IN} {}", fmt(input)),
-        theme.dim(),
-    ));
-    spans.push(Span::styled(
-        format!(" {TOKENS_OUT} {}", fmt(output)),
-        theme.dim(),
-    ));
-    if include_cache_write {
+    let mut spans = tokens_total_spans(theme, total, fmt, theme.value());
+    let mut field = |glyph: &str, color: Color, value: u64| {
         spans.push(Span::styled(
-            format!(" {TOKENS_CACHE_WRITE} {}", fmt(cache_write)),
-            theme.dim(),
+            format!(" {glyph} "),
+            theme.style(color, Modifier::empty()),
         ));
+        spans.push(Span::styled(fmt(value), theme.value()));
+    };
+    field(TOKENS_IN, SEGMENT_INPUT, input);
+    field(TOKENS_OUT, SEGMENT_OUTPUT, output);
+    if include_cache_write {
+        field(TOKENS_CACHE_WRITE, SEGMENT_CACHE_WRITE, cache_write);
     }
-    spans.push(Span::styled(
-        format!(" {TOKENS_CACHED} {}", fmt(cache_read)),
-        theme.dim(),
-    ));
+    field(TOKENS_CACHED, SEGMENT_CACHE_READ, cache_read);
     spans
 }
 
@@ -488,10 +488,20 @@ fn severity_tier(percent: u8, used_tokens: Option<u64>, bands: &ContextSeverityC
     }
 }
 
-/// Always dim chrome — a capability label, not a status signal; the
-/// context-meter severity ramp owns the loud color slot.
-pub(super) fn window_style(theme: &Theme, _window: u64) -> Style {
-    theme.dim()
+/// The window token's tone: still dim — a capability label, not a status
+/// signal; the context-meter severity ramp owns the loud color slot — but
+/// tinted by size class so the magnitude reads at a glance: clay amber for a
+/// 1m+ window, gold for the 258k tier, sky blue for 128k, and the plain dim
+/// gray below that. The `DIM` modifier rides every band, so the token never
+/// outshines the meter; under `NO_COLOR` all bands collapse to the same dim.
+pub(super) fn window_style(theme: &Theme, window: u64) -> Style {
+    let color = match window {
+        1_000_000.. => ORANGE,
+        258_000.. => Color::Yellow,
+        128_000.. => Color::Blue,
+        _ => Color::DarkGray,
+    };
+    theme.style(color, Modifier::DIM)
 }
 
 /// Context bar: a thin rule whose filled run grows left-to-right as the window
@@ -627,16 +637,16 @@ pub(super) fn mana_color(remaining_pct: u8) -> Color {
     }
 }
 
-/// The unmetered ("infinite") bar: a full-width empty `▱` track in the same faint
-/// tone as a drained mana bar's track, so an API-key account aligns with the
-/// metered `5h`/`7d` bars and reads as "no meter to spend." The brand color and
-/// the meaning ride the `∞` icon in the label slot; the track stays faint so it
-/// never competes with a real draining bar. Under `NO_COLOR` the unbroken `▱`
-/// run reads as an empty track by shape.
-pub(super) fn infinite_bar_spans(theme: &Theme, width: usize) -> Vec<Span<'static>> {
+/// The unmetered ("infinite") bar: a full-width empty `▱` track aligned with
+/// the metered `5h`/`7d` bars, reading as "no meter to spend." The brand
+/// `color` rides the `∞` icon *and* the track, so the two read as one branded
+/// unmetered bar; the empty `▱` shape keeps it from competing with a real
+/// draining fill, and under `NO_COLOR` the unbroken run still reads as an
+/// empty track by shape.
+pub(super) fn infinite_bar_spans(theme: &Theme, color: u8, width: usize) -> Vec<Span<'static>> {
     vec![Span::styled(
         std::iter::repeat_n(MANA_TRACK, width.max(1)).collect::<String>(),
-        theme.faint(),
+        theme.style(Color::Indexed(color), Modifier::empty()),
     )]
 }
 
@@ -668,16 +678,19 @@ pub(super) fn todo_spans(theme: &Theme, done: u32, total: u32) -> Vec<Span<'stat
 /// total. The shared head of every token line — [`token_breakdown_spans`] builds
 /// on it, and a breakdown-less line (a Codex rollup-only total) uses it alone.
 /// `fmt` picks the magnitude form ([`tokens_int`](super::fmt::tokens_int) live,
-/// `tokens_short` for the precise W/M rows). The diamond is a colored marker; the
-/// value stays dim. Display-only, never a decision driver.
+/// `tokens_short` for the precise W/M rows). The diamond is a colored marker;
+/// `value_style` sets the figure's weight — full-strength ([`Theme::value`]) on
+/// the fleet lines, dim on a subordinate card line (a subagent's spend).
+/// Display-only, never a decision driver.
 pub(super) fn tokens_total_spans(
     theme: &Theme,
     total: u64,
     fmt: fn(u64) -> String,
+    value_style: Style,
 ) -> Vec<Span<'static>> {
     vec![
         Span::styled(TOKENS_TOTAL, theme.style(Color::Magenta, Modifier::empty())),
-        Span::styled(format!(" {}", fmt(total)), theme.dim()),
+        Span::styled(format!(" {}", fmt(total)), value_style),
     ]
 }
 
@@ -698,6 +711,19 @@ pub(super) fn branch_delta_spans(theme: &Theme, ahead: u32, behind: u32) -> Vec<
         spans.push(Span::styled(format!("⇣{behind}"), style));
     }
     spans
+}
+
+/// `≡ main` — the worktree is fully landed on the trunk: zero commits ahead
+/// and a zero diff against the fork point, so it is safe to remove. Dim green,
+/// the calm-positive tone an idle/done agent wears — quiet enough to stay
+/// chrome yet scannable when hunting removable worktrees; the `≡` shape
+/// carries the verdict under `NO_COLOR`. The trunk worktree itself never wears
+/// it — the caller gates on the group's live branch.
+pub(super) fn trunk_equal_spans(theme: &Theme, trunk: &str) -> Vec<Span<'static>> {
+    vec![Span::styled(
+        format!("≡ {trunk}"),
+        theme.style(Color::Green, Modifier::DIM),
+    )]
 }
 
 /// `+127 -43`-style diff stat. Added in green, removed in red, both dim to
@@ -735,6 +761,7 @@ mod tests {
         assert_eq!(text(branch_delta_spans(&theme, 3, 0)), "⇡3");
         assert_eq!(text(branch_delta_spans(&theme, 0, 5)), "⇣5");
         assert_eq!(text(branch_delta_spans(&theme, 0, 0)), "");
+        assert_eq!(text(trunk_equal_spans(&theme, "main")), "≡ main");
     }
 
     /// `NO_COLOR` strips the green→amber→red ramp, but the heavy/light weight
@@ -909,15 +936,31 @@ mod tests {
         assert_eq!(elapsed_glyph(48 * 3600), "◉");
     }
 
-    /// The window token is always dim chrome regardless of size class.
+    /// The window token keeps its `DIM` weight at every size class while its
+    /// tint steps by magnitude: gray below 128k, sky at 128k, gold at 258k,
+    /// clay amber at 1m+. `NO_COLOR` collapses every band to the bare dim.
     #[test]
-    fn window_style_is_always_dim() {
+    fn window_style_tints_by_size_class_but_stays_dim() {
         let theme = Theme::fixed(false);
-        for window in [32_000, 128_000, 200_000, 272_000, 1_000_000, 1_050_000] {
-            assert_eq!(window_style(&theme, window), theme.dim(), "window={window}");
-        }
+        let banded = |window| window_style(&theme, window);
+        assert_eq!(banded(32_000), theme.dim());
+        assert_eq!(banded(127_999), theme.dim());
+        assert_eq!(banded(128_000), theme.style(Color::Blue, Modifier::DIM));
+        assert_eq!(banded(200_000), theme.style(Color::Blue, Modifier::DIM));
+        assert_eq!(banded(258_000), theme.style(Color::Yellow, Modifier::DIM));
+        assert_eq!(banded(999_999), theme.style(Color::Yellow, Modifier::DIM));
+        assert_eq!(banded(1_000_000), theme.style(ORANGE, Modifier::DIM));
+        assert_eq!(banded(1_050_000), theme.style(ORANGE, Modifier::DIM));
+
         let plain = Theme::fixed(true);
-        assert!(window_style(&plain, 1_050_000).fg.is_none());
+        for window in [32_000, 128_000, 258_000, 1_050_000] {
+            assert!(window_style(&plain, window).fg.is_none());
+            assert!(
+                window_style(&plain, window)
+                    .add_modifier
+                    .contains(Modifier::DIM)
+            );
+        }
     }
 
     /// Largest-remainder apportionment always sums to the requested total.
@@ -985,24 +1028,24 @@ mod tests {
         assert_eq!(text, "▰▱▱▱▱▱▱▱▱▱");
     }
 
-    /// The infinite bar is a full-width empty `▱` track in the same faint tone as
-    /// a drained mana bar's track — so an unmetered (API-key) account aligns with
-    /// the metered bars and reads as "no meter to spend." Under `NO_COLOR` the
-    /// unbroken `▱` run reads as an empty track by shape.
+    /// The infinite bar is a full-width empty `▱` track wearing the provider's
+    /// brand color — the same tone its `∞` icon carries, so the two read as one
+    /// branded unmetered bar. Under `NO_COLOR` the unbroken `▱` run reads as an
+    /// empty track by shape.
     #[test]
-    fn infinite_bar_is_an_empty_faint_track() {
+    fn infinite_bar_is_an_empty_brand_colored_track() {
         let plain = Theme::fixed(true);
-        let spans = infinite_bar_spans(&plain, 8);
+        let spans = infinite_bar_spans(&plain, 208, 8);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "▱▱▱▱▱▱▱▱");
         for span in &spans {
             assert!(span.style.fg.is_none());
         }
 
-        // With color on it shares the faint track tone, not a brand fill.
+        // With color on the track shares the `∞` icon's brand color.
         let lit = Theme::fixed(false);
-        let spans = infinite_bar_spans(&lit, 8);
-        assert_eq!(spans[0].style.fg, lit.faint().fg);
+        let spans = infinite_bar_spans(&lit, 208, 8);
+        assert_eq!(spans[0].style.fg, Some(Color::Indexed(208)));
     }
 
     /// Todo dots use the same fill/empty grammar as the gauge — the dot
@@ -1207,9 +1250,10 @@ mod tests {
         );
     }
 
-    /// The token breakdown reads `◇ ↘ ↗ ◍ ◌` with only the `◇` total carrying a
-    /// tone; the `◍` cache-write field drops when excluded (the W/M rows). Under
-    /// `NO_COLOR` the glyph shapes still spell the split.
+    /// The token breakdown reads `◇ ↘ ↗ ◍ ◌`, each marker in its one color
+    /// (`◇` violet, the rest their bar-segment tones) with full-strength
+    /// figures; the `◍` cache-write field drops when excluded (the W/M rows).
+    /// Under `NO_COLOR` the glyph shapes still spell the split.
     #[test]
     fn token_breakdown_shape_and_optional_cache_write() {
         let theme = Theme::fixed(true);
@@ -1238,6 +1282,59 @@ mod tests {
         );
         let text: String = lean.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "◇ 76k ↘ 12k ↗ 64k ◌ 68k", "no ◍ when excluded");
+    }
+
+    /// With color on, every breakdown marker wears its one tone — the same
+    /// segment colors the card's context line legends — and the figures read
+    /// at full strength (no `DIM`), so the fleet lines stop being dim chrome.
+    #[test]
+    fn token_breakdown_markers_wear_their_segment_colors() {
+        let lit = Theme::fixed(false);
+        let spans = token_breakdown_spans(
+            &lit,
+            76_000,
+            12_000,
+            64_000,
+            12_000,
+            68_000,
+            super::super::fmt::tokens_int,
+            true,
+        );
+        let marker = |glyph: &str| {
+            spans
+                .iter()
+                .find(|span| span.content.contains(glyph))
+                .unwrap_or_else(|| panic!("missing {glyph}"))
+                .style
+        };
+        assert_eq!(
+            marker(TOKENS_TOTAL).fg,
+            lit.style(Color::Magenta, Modifier::empty()).fg
+        );
+        assert_eq!(
+            marker(TOKENS_IN).fg,
+            lit.style(SEGMENT_INPUT, Modifier::empty()).fg
+        );
+        assert_eq!(
+            marker(TOKENS_OUT).fg,
+            lit.style(SEGMENT_OUTPUT, Modifier::empty()).fg
+        );
+        assert_eq!(
+            marker(TOKENS_CACHE_WRITE).fg,
+            lit.style(SEGMENT_CACHE_WRITE, Modifier::empty()).fg
+        );
+        assert_eq!(
+            marker(TOKENS_CACHED).fg,
+            lit.style(SEGMENT_CACHE_READ, Modifier::empty()).fg
+        );
+        for span in spans.iter().filter(|span| {
+            span.content
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c.is_ascii_whitespace())
+        }) {
+            assert!(span.style.fg.is_none(), "figure spans stay default-fg");
+            assert!(!span.style.add_modifier.contains(Modifier::DIM));
+        }
     }
 
     /// The card's context line reads `▤ · ◌ ◍ ↘ ↗` — the filled window, a dot

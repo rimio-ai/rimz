@@ -759,7 +759,14 @@ fn refresh_entry(path: &str, now_ms: u64, configured_trunk: Option<&str>) -> Dif
         .as_deref()
         .zip(trunk.as_deref())
         .and_then(|(base, trunk)| worktree_commits_behind(worktree, base, trunk));
-    DiffStatsCacheEntry::new(now_ms, stats, commits, behind, worktree_branch(worktree))
+    DiffStatsCacheEntry::new(
+        now_ms,
+        stats,
+        commits,
+        behind,
+        trunk,
+        worktree_branch(worktree),
+    )
 }
 
 fn worktree_branch(worktree: &Path) -> Option<String> {
@@ -799,7 +806,9 @@ fn worktree_commits_ahead(worktree: &Path, base: &str) -> Option<u32> {
 
 /// The commits the trunk has advanced past the worktree's fork point — `git
 /// rev-list --count <base>..<trunk>`, the work a rebase would pick up. The
-/// mirror of [`worktree_commits_ahead`], off the same merge-base.
+/// mirror of [`worktree_commits_ahead`], off the same merge-base. Deliberately
+/// no part of the header's `≡` landed test: a fully-landed worktree is safe to
+/// remove however far the trunk has moved on.
 fn worktree_commits_behind(worktree: &Path, base: &str, trunk: &str) -> Option<u32> {
     rev_list_count(worktree, &format!("{base}..{trunk}"))
 }
@@ -1587,12 +1596,14 @@ mod tests {
             Some(1),
             "the commit count is the branch's commits ahead of the trunk merge-base"
         );
-        // Main's one post-fork commit is the branch's behind count.
+        // Main's one post-fork commit is the branch's behind count, and the
+        // resolved trunk names the header's `≡` marker.
         assert_eq!(
             entry.behind,
             Some(1),
             "the behind count is the trunk's commits past the merge-base"
         );
+        assert_eq!(entry.trunk.as_deref(), Some("main"));
 
         // A non-repository path has nothing to diff or count.
         let plain = tempfile::tempdir().unwrap();
@@ -1600,6 +1611,7 @@ mod tests {
         assert_eq!(plain_entry.stats(), None);
         assert_eq!(plain_entry.commits, None);
         assert_eq!(plain_entry.behind, None);
+        assert_eq!(plain_entry.trunk, None);
     }
 
     #[test]

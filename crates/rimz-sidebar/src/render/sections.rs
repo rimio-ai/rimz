@@ -25,15 +25,16 @@ use super::fmt::{
     window_label, window_short,
 };
 use super::labels::{
-    SEGMENT_CACHE_READ, SEGMENT_CACHE_WRITE, SEGMENT_INPUT, TOKENS_CACHED, TOKENS_IN, TOKENS_OUT,
-    TOKENS_TOTAL, activity_age_style, age_heat, agent_glyph, agent_style, attention_glyph_style,
-    branch_delta_spans, compacting_glyph, compacting_style, context_breakdown_spans,
-    context_severity_color, context_total_spans, diff_spans, elapsed_glyph, gauge_spans,
-    infinite_bar_spans, loading_dots, mana_bar_spans, mana_color, resolver_glyph,
-    segmented_gauge_spans, status_glyph, status_style, subagent_glyph, subagent_style, todo_spans,
-    token_breakdown_spans, tokens_total_spans, window_style, working_glyph,
+    SEGMENT_CACHE_READ, SEGMENT_CACHE_WRITE, SEGMENT_INPUT, SEGMENT_OUTPUT, TOKENS_CACHED,
+    TOKENS_IN, TOKENS_OUT, TOKENS_TOTAL, activity_age_style, age_heat, agent_glyph, agent_style,
+    attention_glyph_style, branch_delta_spans, compacting_glyph, compacting_style,
+    context_breakdown_spans, context_severity_color, context_total_spans, diff_spans,
+    elapsed_glyph, gauge_spans, infinite_bar_spans, loading_dots, mana_bar_spans, mana_color,
+    resolver_glyph, segmented_gauge_spans, status_glyph, status_style, subagent_glyph,
+    subagent_style, todo_spans, token_breakdown_spans, tokens_total_spans, trunk_equal_spans,
+    window_style, working_glyph,
 };
-use super::theme::Theme;
+use super::theme::{ORANGE, Theme};
 
 /// The context-meter label — a framed square reading as "the window", replacing
 /// the `ctx` word now that it is the row's one bar (the account-scoped budget
@@ -269,23 +270,26 @@ fn push_count(
 }
 
 /// The cockpit's first summary line, directly beneath the repo identity:
-/// `¤ {live}` — the agents in the room right now — on the left, with today's
-/// accumulated token breakdown `◇ ↘ ↗ ◍ ◌` (integer magnitudes, the live coarse
-/// form) pinned to the right edge. The count reads from the live fleet; the
-/// breakdown reads the JSONL `value_tally`'s today window and drops when today
-/// recorded no tokens, leaving `¤ {live}` alone. Sessions and spend ride the
-/// second line ([`cockpit_spend_line`]).
+/// `◎ {sessions}` — the threads that have run today, the glyph in the teal it
+/// shares with the W/M ledger rows — on the left, with today's accumulated
+/// token breakdown `◇ ↘ ↗ ◍ ◌` (integer magnitudes, the live coarse form)
+/// pinned to the right edge: both halves read today's window, so the line is
+/// the day at a glance. The breakdown reads the JSONL `value_tally`'s today
+/// window and drops when today recorded no tokens, leaving `◎ {sessions}`
+/// alone. The live-agent count and the spend ride the second line
+/// ([`cockpit_spend_line`]).
 pub(super) fn cockpit_summary_line(
     theme: &Theme,
-    live_agents: usize,
+    sessions: u32,
     today: Option<&SpendWindow>,
     width: usize,
 ) -> Line<'static> {
     let left = metric_spans(
         theme,
-        ACTIVE_AGENTS_GLYPH,
+        SESSIONS_GLYPH,
         Color::Cyan,
-        &live_agents.to_string(),
+        &sessions.to_string(),
+        theme.value(),
     );
     let right = today
         .filter(|w| w.tokens > 0 || w.cache_write > 0 || w.cache_read > 0)
@@ -305,23 +309,29 @@ pub(super) fn cockpit_summary_line(
     pin_right(left, right, width)
 }
 
-/// The cockpit's second summary line: `◎ {sessions}` — the threads that have run
-/// today — on the left, with today's fleet spend pinned to the right edge,
-/// climbing in a smooth count-up as a turn lands. The figure eases toward the
-/// `value_tally` today total via the shared [`TallyAnim`] roll and brightens for a
-/// beat the instant it settles — the cockpit's one animated number (the W/M
-/// ledger rows below stay static). Always present — sessions read `◎ 0` in an
-/// empty room; the bold money-green `$` joins the right edge once today records
-/// spend.
+/// The cockpit's second summary line: `¤ {live}` — the agents in the room right
+/// now, the glyph in the agents' own working clay — on the left, with today's
+/// fleet spend pinned to the right edge, climbing in a smooth count-up as a
+/// turn lands. The figure eases toward the `value_tally` today total via the
+/// shared [`TallyAnim`] roll and brightens for a beat the instant it settles —
+/// the cockpit's one animated number (the W/M ledger rows below stay static).
+/// Always present — an empty room reads `¤ 0`; the bold money-green `$` joins
+/// the right edge once today records spend.
 pub(super) fn cockpit_spend_line(
     theme: &Theme,
-    sessions: u32,
+    live_agents: usize,
     today_usd: f64,
     anim: &TallyAnim,
     phase: u64,
     width: usize,
 ) -> Line<'static> {
-    let left = metric_spans(theme, SESSIONS_GLYPH, Color::Cyan, &sessions.to_string());
+    let left = metric_spans(
+        theme,
+        ACTIVE_AGENTS_GLYPH,
+        ORANGE,
+        &live_agents.to_string(),
+        theme.value(),
+    );
     let right = if today_usd > 0.0 {
         let usd = anim.today_usd.display(today_usd, phase);
         let style = if anim.today_usd.flashing(phase) {
@@ -336,14 +346,22 @@ pub(super) fn cockpit_spend_line(
     pin_right(left, right, width)
 }
 
-/// A stats metric as a colored icon glyph + dim value (`◷ 2h34m`, `¤ 5`): the
-/// glyph carries a semantic accent (time teal, commits green; the `◇` token
-/// total goes violet via [`tokens_label`]) while the number stays neutral, so
-/// the stats read as a tidy icon column instead of a wall of one tone.
-fn metric_spans(theme: &Theme, glyph: &str, color: Color, value: &str) -> Vec<Span<'static>> {
+/// A stats metric as a colored icon glyph + value (`◷ 2h34m`, `¤ 5`): the
+/// glyph carries a semantic accent (time teal, the live-agent `¤` clay; the
+/// `◇` token total goes violet via [`tokens_label`]) while the number stays
+/// neutral in `value_style` — full-strength on the cockpit counts, dim on the
+/// subordinate card lines — so the stats read as a tidy icon column instead of
+/// a wall of one tone.
+fn metric_spans(
+    theme: &Theme,
+    glyph: &str,
+    color: Color,
+    value: &str,
+    value_style: Style,
+) -> Vec<Span<'static>> {
     vec![
         Span::styled(glyph.to_owned(), theme.style(color, Modifier::empty())),
-        Span::styled(format!(" {value}"), theme.dim()),
+        Span::styled(format!(" {value}"), value_style),
     ]
 }
 
@@ -477,12 +495,13 @@ fn group_header(
     // here in bold teal — no inline `▌`, the spine carries the lane. The header
     // builds to the content width left after the gutter cell.
     let cw = content_width(width);
-    // The worktree's git story pins right: the `⇡/⇣` commit delta ahead of
-    // the `+/-` churn, zero components omitted. The per-worktree status tally
-    // is gone: the cockpit owns the fleet make-up and each row carries its own
-    // status glyph, so repeating it here was noise. The label clips to
-    // whatever's left after the stats claim their width, always leaving a cell
-    // so the header never shrinks to zero on extreme narrowness.
+    // The worktree's git story pins right: `≡ <trunk>` when a non-trunk branch
+    // is fully landed, else the `⇡/⇣` commit delta ahead of the `+/-` churn,
+    // zero components omitted. The per-worktree status tally is gone: the
+    // cockpit owns the fleet make-up and each row carries its own status
+    // glyph, so repeating it here was noise. The label clips to whatever's
+    // left after the stats claim their width, always leaving a cell so the
+    // header never shrinks to zero on extreme narrowness.
     let right = group_git_spans(theme, group);
     let right_width: usize = right.iter().map(|span| span.content.chars().count()).sum();
     let label_width = cw.saturating_sub(right_width + 1).max(1);
@@ -512,10 +531,26 @@ fn group_header(
     Line::from(spans)
 }
 
-/// The header's right-pinned git cluster. The `⇡/⇣` commit delta leads the
-/// `+/-` churn, zero components omitted. Empty when no git read reached this
-/// group.
+/// The header's right-pinned git cluster. `≡ <trunk>` when the worktree is
+/// fully landed — zero commits ahead *and* a zero diff against the fork point
+/// (`Some(0)`, a read that found nothing, never an unprobed `None`) — replacing
+/// every other stat: behind deliberately doesn't count against it, since a
+/// landed worktree is safe to remove however far the trunk has moved on. The
+/// trunk worktree itself (live branch == trunk) is exempt — it is trivially
+/// "landed on itself," so the marker would be noise there, and it keeps the
+/// plain delta/churn cluster instead. Otherwise the `⇡/⇣` commit delta leads
+/// the `+/-` churn, zero components omitted. Empty when no git read reached
+/// this group.
 fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'static>> {
+    let landed = group.commits_ahead == Some(0)
+        && group.diff_added == Some(0)
+        && group.diff_removed == Some(0);
+    if landed
+        && let Some(trunk) = group.trunk.as_deref()
+        && group.label != trunk
+    {
+        return trunk_equal_spans(theme, trunk);
+    }
     let mut spans = branch_delta_spans(
         theme,
         group.commits_ahead.unwrap_or(0),
@@ -644,24 +679,30 @@ fn row_lines(
         .collect()
 }
 
-/// The expanded card's subagent list: a dim `⧉ subagents (N)` header, then up to
-/// two indented lines per child. Line 1 is the status glyph, the type, and the
-/// description of what the parent asked it to do; line 2 (deeper indent) is its
-/// token spend `◇` and elapsed work `◷`, pinned right under the parent's own
-/// stats. Children are subordinate to the parent card, so every line is dim and
-/// indented past the parent's stat lines. The enrichment (description, tokens,
-/// elapsed) rides in from Claude's `subagentStatusLine`; a Codex child or one
-/// before its first render degrades to the bare type line, with line 2 dropped.
+/// The expanded card's subagent list: a `⧉ subagents (N)` header — the marker
+/// in the delegation violet, the label dim — then up to two indented lines per
+/// child. Line 1 is the status glyph, the type, and the description of what
+/// the parent asked it to do; line 2 (deeper indent) is its token spend `◇`
+/// and elapsed work `◷`, pinned right under the parent's own stats. Children
+/// are subordinate to the parent card, so their text stays dim and indented
+/// past the parent's stat lines. The enrichment (description, tokens, elapsed)
+/// rides in from Claude's `subagentStatusLine`; a Codex child or one before
+/// its first render degrades to the bare type line, with line 2 dropped.
 fn sub_agent_lines(
     theme: &Theme,
     sub_agents: &[SidebarSubAgent],
     width: usize,
 ) -> Vec<Line<'static>> {
+    // The `⧉` marker wears the violet of the delegation/meta family (the
+    // compacting head, the `⇅ rc` flag); the label text stays dim chrome.
     let mut lines = vec![Line::from(trim_spans_to_width(
-        vec![Span::styled(
-            format!("  {SUBAGENTS_GLYPH} subagents ({})", sub_agents.len()),
-            theme.dim(),
-        )],
+        vec![
+            Span::styled(
+                format!("  {SUBAGENTS_GLYPH}"),
+                theme.style(Color::Magenta, Modifier::empty()),
+            ),
+            Span::styled(format!(" subagents ({})", sub_agents.len()), theme.dim()),
+        ],
         width,
     ))];
     for sub in sub_agents {
@@ -693,7 +734,9 @@ fn sub_agent_lines(
         if tokens.is_some() || elapsed.is_some() {
             let mut left = vec![Span::raw("      ")];
             if let Some(total) = tokens {
-                left.extend(tokens_total_spans(theme, total, tokens_short));
+                // Children stay subordinate to the parent card, so the figure
+                // keeps the dim tone the rest of the subagent list wears.
+                left.extend(tokens_total_spans(theme, total, tokens_short, theme.dim()));
             }
             let right = elapsed
                 .map(|secs| {
@@ -702,6 +745,7 @@ fn sub_agent_lines(
                         elapsed_glyph(secs),
                         Color::Cyan,
                         &compact_seconds(secs),
+                        theme.dim(),
                     )
                 })
                 .unwrap_or_default();
@@ -823,11 +867,13 @@ fn agent_identity_line(
     animation_phase: u64,
 ) -> Line<'static> {
     // Right cluster, built first so the left trims to whatever's left: the
-    // session cost, bold in money-green.
+    // session cost, bold in money-green. A cost that rounds to $0.00 — an idle
+    // agent that has spent nothing yet — is omitted, not printed as zero.
     let mut right: Vec<Span<'static>> = Vec::new();
     if let Some(cost) = ctx(row)
         .and_then(|context| context.cost.as_ref())
         .and_then(|cost| cost.total_cost_usd)
+        .filter(|usd| *usd >= 0.005)
         .map(dollars2)
     {
         right.push(Span::styled(
@@ -859,8 +905,10 @@ fn agent_identity_line(
             left.push(Span::styled(" · ", theme.dim()));
             left.push(Span::styled(effort.to_owned(), theme.dim()));
         }
-        // The window token is always dim chrome — metadata, not a status
-        // signal; the context-meter severity ramp owns the loud color slot.
+        // The window token stays dim-weight chrome — metadata, not a status
+        // signal — but tints by size class (`window_style`) so the magnitude
+        // reads at a glance; the context-meter severity ramp keeps the loud
+        // color slot.
         if let Some(window) = display_context_window(row) {
             left.push(Span::styled(" · ", theme.dim()));
             left.push(Span::styled(
@@ -1437,8 +1485,10 @@ const VALUE_FLASH: Color = Color::Indexed(150);
 /// week (`W:`) and month (`M:`), each reading `◎ sessions  ◇ ↘ ↗ ◌  $spend`
 /// across every provider (today's headline lives in the cockpit, so these climb
 /// `week → month`). The token figures read the precise one-decimal form (`16.5k`)
-/// — the ledger is the exact record next to the cockpit's coarse live read — with
-/// the `◇` total in violet (matching the cards) and the `$` bold money-green; the
+/// at full strength — the ledger is the exact record next to the cockpit's
+/// coarse live read — each marker in its one shared color (the sky-blue window
+/// tag, the teal `◎`, the violet `◇`, the segment-toned arrows and ring) and
+/// the `$` bold money-green; the
 /// spend deliberately does **not** animate (only today's headline does). Both
 /// rows share one set of right-aligned column widths so the labels stack and
 /// every number column lines up. Empty (dropped) until something is recorded.
@@ -1486,10 +1536,13 @@ impl WmColumns {
 }
 
 /// One ledger row — `W: ◎ {sessions}  ◇ {total} ↘ {in} ↗ {out} ◌ {cache_read}`
-/// left-clustered, the `$ {spend}` pinned to the right edge. Every numeric field
-/// is right-aligned to the shared [`WmColumns`] width, so the `W:` and `M:` rows
-/// stack into one tidy grid. The `◍` cache-write field is intentionally omitted
-/// here — the ledger keeps to the four headline figures the all-time read needs.
+/// left-clustered, the `$ {spend}` pinned to the right edge. The `W:`/`M:`
+/// window tag wears sky blue — distinct from the teal `◎` beside it — and each
+/// token marker its one shared color, with the figures at full strength
+/// ([`Theme::value`]). Every numeric field is right-aligned to the shared
+/// [`WmColumns`] width, so the `W:` and `M:` rows stack into one tidy grid. The
+/// `◍` cache-write field is intentionally omitted here — the ledger keeps to
+/// the four headline figures the all-time read needs.
 fn wm_row(
     theme: &Theme,
     label: &str,
@@ -1497,40 +1550,39 @@ fn wm_row(
     cols: &WmColumns,
     width: usize,
 ) -> Line<'static> {
-    let dim = theme.dim();
+    let value = theme.value();
+    let marker = |color: Color| theme.style(color, Modifier::empty());
     let left = vec![
-        Span::styled(format!("{label}: "), theme.faint()),
-        Span::styled(SESSIONS_GLYPH, theme.style(Color::Cyan, Modifier::empty())),
-        Span::styled(format!(" {:>w$}", window.sessions, w = cols.sessions), dim),
+        Span::styled(format!("{label}: "), marker(Color::Blue)),
+        Span::styled(SESSIONS_GLYPH, marker(Color::Cyan)),
+        Span::styled(
+            format!(" {:>w$}", window.sessions, w = cols.sessions),
+            value,
+        ),
         Span::raw("  "),
-        Span::styled(TOKENS_TOTAL, theme.style(Color::Magenta, Modifier::empty())),
+        Span::styled(TOKENS_TOTAL, marker(Color::Magenta)),
         Span::styled(
             format!(" {:>w$}", tokens_short(window.tokens), w = cols.total),
-            dim,
+            value,
         ),
+        Span::styled(format!(" {TOKENS_IN} "), marker(SEGMENT_INPUT)),
+        Span::styled(
+            format!("{:>w$}", tokens_short(window.input), w = cols.input),
+            value,
+        ),
+        Span::styled(format!(" {TOKENS_OUT} "), marker(SEGMENT_OUTPUT)),
+        Span::styled(
+            format!("{:>w$}", tokens_short(window.output), w = cols.output),
+            value,
+        ),
+        Span::styled(format!(" {TOKENS_CACHED} "), marker(SEGMENT_CACHE_READ)),
         Span::styled(
             format!(
-                " {TOKENS_IN} {:>w$}",
-                tokens_short(window.input),
-                w = cols.input
-            ),
-            dim,
-        ),
-        Span::styled(
-            format!(
-                " {TOKENS_OUT} {:>w$}",
-                tokens_short(window.output),
-                w = cols.output
-            ),
-            dim,
-        ),
-        Span::styled(
-            format!(
-                " {TOKENS_CACHED} {:>w$}",
+                "{:>w$}",
                 tokens_short(window.cache_read),
                 w = cols.cache_read
             ),
-            dim,
+            value,
         ),
     ];
     let right = vec![Span::styled(
@@ -1793,9 +1845,10 @@ fn metered_bar_row(
 }
 
 /// The unmetered `∞` bar row: the infinity icon rides the label slot (aligned
-/// with `5h`/`7d`), then the full brand-colored infinite bar. The value column
-/// is reserved but empty — no countdown — so the bar's right edge still aligns
-/// with the metered bars'.
+/// with `5h`/`7d`), then the full infinite bar — icon and track in the one
+/// brand color, so the row reads as a single branded unmetered bar. The value
+/// column is reserved but empty — no countdown — so the bar's right edge still
+/// aligns with the metered bars'.
 fn infinite_bar_row(theme: &Theme, color: u8, region: usize) -> Vec<Span<'static>> {
     let bar_width = provider_bar_width(region);
     let mut spans = vec![
@@ -1805,7 +1858,7 @@ fn infinite_bar_row(theme: &Theme, color: u8, region: usize) -> Vec<Span<'static
         ),
         Span::raw(" "),
     ];
-    spans.extend(infinite_bar_spans(theme, bar_width));
+    spans.extend(infinite_bar_spans(theme, color, bar_width));
     spans.push(Span::raw(" "));
     spans.push(Span::raw(" ".repeat(PROVIDER_VALUE_WIDTH)));
     spans

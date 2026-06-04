@@ -225,6 +225,14 @@ pub struct SidebarWorktreeGroup {
     /// terms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commits_behind: Option<u32>,
+    /// The resolved trunk name the diff and commit delta compare against
+    /// (configured `[sidebar] trunk`, else detected `main`/`master`/remote
+    /// default; `origin/` stripped for display). Names the `≡` landed marker —
+    /// a non-trunk worktree with zero commits ahead and a zero diff renders
+    /// `≡ <trunk>`; the trunk worktree itself (`label == trunk`) never wears
+    /// it, since "landed on itself" carries no information.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trunk: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -382,6 +390,11 @@ pub struct SidebarSubAgent {
     /// start time was reported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elapsed_secs: Option<i64>,
+    /// When the child began (its `subagentStatusLine` `startTime`) — the
+    /// expanded list's sort key, so siblings hold their spawn order across
+    /// refreshes. `None` for a Codex child or before the first status report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<Timestamp>,
     pub last_activity: Timestamp,
 }
 
@@ -1500,6 +1513,7 @@ fn build_worktree_groups_from_rows(
                 diff_removed: None,
                 commits_ahead: None,
                 commits_behind: None,
+                trunk: None,
             }
         })
         .collect::<Vec<_>>();
@@ -1590,14 +1604,13 @@ pub(super) fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState], 
         row.sub_agents
             .sort_by(|a, b| a.id.cmp(&b.id).then(b.last_activity.cmp(&a.last_activity)));
         row.sub_agents.dedup_by(|a, b| a.id == b.id);
-        // Display order: running first, then most-recent work, then a stable id
-        // tiebreak so the list is deterministic.
+        // Display order: creation time ascending — the spawn order the parent
+        // launched them in, stable across refreshes (an activity-keyed sort
+        // reshuffled the list on every tick). A child with no reported start
+        // time sorts after the dated ones; the id tiebreak keeps the whole
+        // order deterministic.
         row.sub_agents.sort_by(|a, b| {
-            let running = |status: AgentStatus| status == AgentStatus::Running;
-            running(b.status)
-                .cmp(&running(a.status))
-                .then(b.last_activity.cmp(&a.last_activity))
-                .then(a.id.cmp(&b.id))
+            cmp_start_asc(a.started_at, b.started_at).then_with(|| a.id.cmp(&b.id))
         });
     }
 }
@@ -1762,6 +1775,7 @@ pub(super) fn sub_agent_from_state(child: &AgentState, now: Timestamp) -> Sideba
         description: child.subagent_description.clone(),
         total_tokens: child.total_tokens,
         elapsed_secs,
+        started_at: child.subagent_started_at,
         last_activity: child.last_activity,
     }
 }
@@ -2818,19 +2832,25 @@ mod tests {
     }
 
     #[test]
-    fn sub_agents_sort_running_before_finished() {
+    fn sub_agents_sort_by_creation_time_ascending() {
+        // Spawn order, not activity, keys the list: the child that started
+        // first leads however fresh its siblings' activity is, so the list
+        // holds still across refreshes. A child with no reported start time
+        // sorts after the dated ones, by id.
+        let now = Timestamp::now();
+        let started = |secs_ago: i64| Timestamp::from_second(now.as_second() - secs_ago).unwrap();
         let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
-        // The idle child is more recent, the running child older — running leads.
-        let idle = child_state("sess-root", "c-idle", AgentStatus::Idle, 2);
-        let running = child_state("sess-root", "c-run", AgentStatus::Running, 30);
+        // The youngest-started child is the most recently active — an
+        // activity-keyed sort would lead with it; creation order must not.
+        let mut first = child_state("sess-root", "c-late-id", AgentStatus::Idle, 40);
+        first.subagent_started_at = Some(started(90));
+        let mut second = child_state("sess-root", "c-early-id", AgentStatus::Running, 2);
+        second.subagent_started_at = Some(started(60));
+        let undated = child_state("sess-root", "c-undated", AgentStatus::Running, 1);
         let mut rows = vec![row_from_agent(&parent)];
-        attach_sub_agents(
-            &mut rows,
-            &[parent.clone(), idle, running],
-            Timestamp::now(),
-        );
+        attach_sub_agents(&mut rows, &[parent.clone(), undated, second, first], now);
         let ids: Vec<&str> = rows[0].sub_agents.iter().map(|s| s.id.as_str()).collect();
-        assert_eq!(ids, vec!["c-run", "c-idle"]);
+        assert_eq!(ids, vec!["c-late-id", "c-early-id", "c-undated"]);
     }
 
     #[test]

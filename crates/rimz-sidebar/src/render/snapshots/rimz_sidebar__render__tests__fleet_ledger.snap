@@ -1,12 +1,12 @@
 ---
 source: crates/rimz-sidebar/src/render/mod.rs
-assertion_line: 767
+assertion_line: 749
 expression: screen
 ---
  ⌘ query-engine
 
- ¤ 1                           ◇ 3M ↘ 300k ↗ 3M ◍ 120k ◌ 6M
- ◎ 12                                                $40.23
+ ◎ 12                          ◇ 3M ↘ 300k ↗ 3M ◍ 120k ◌ 6M
+ ¤ 1                                                 $40.23
  ──────────────────────────────────────────────────────────
  ? 0   ! 0   ○ 0   ⏸︎ 0                           ⢿ 1   ✓ 0
 

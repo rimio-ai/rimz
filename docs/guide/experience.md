@@ -94,7 +94,8 @@ The column is never blank. Their shell pane is itself a row. With nothing needin
 ```
  ⌘ query-engine
 
- ¤ 0   ◎ 0
+ ◎ 0
+ ¤ 0
  ────────────────────────────────────────────
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
@@ -129,7 +130,8 @@ The reader types `claude` in the shell pane and just looks at its input box — 
 ```
  ⌘ query-engine
 
- ¤ 1   ◎ 1
+ ◎ 1
+ ¤ 1
  ────────────────────────────────────────────
  ? 0   ! 0   ○ 1              ✽ 0   ⢿ 0   ✓ 0
 
@@ -159,7 +161,8 @@ The reader gives Claude a task. The prompt then the first tool call move the row
 ```
  ⌘ query-engine
 
- ¤ 1   ◎ 1
+ ◎ 1
+ ¤ 1
  ────────────────────────────────────────────
  ? 0   ! 0   ○ 0              ✽ 0   ⢿ 1   ✓ 0
 
@@ -187,7 +190,8 @@ Claude hits a permission prompt — it wants to run something. A feed item is wr
 ```
  ⌘ query-engine
 
- ¤ 1   ◎ 1
+ ◎ 1
+ ¤ 1
  ────────────────────────────────────────────
  ? 1   ! 0   ○ 0              ✽ 0   ⢿ 0   ✓ 0
 
@@ -234,8 +238,8 @@ The reader does exactly what they said they would: spins up four more agents acr
 ```
  ⌘ query-engine
 
- ¤ 6   ◎ 12   ◇ 76k ↘ 12k ↗ 64k ◍ 12k ◌ 68k
-                                        $4.20
+ ◎ 12           ◇ 76k ↘ 12k ↗ 64k ◍ 12k ◌ 68k
+ ¤ 6                                    $4.20
  ────────────────────────────────────────────
  ? 2   ! 1   ○ 1              ✽ 1   ⢿ 1   ✓ 0
 
@@ -346,7 +350,8 @@ The product's honesty law gets tested when a fetch fails — the binary moved, t
 ```
  ⌘ query-engine
 
- ¤ 1   ◎ 1
+ ◎ 1
+ ¤ 1
  ────────────────────────────────────────────
  ? 0   ! 0   ○ 0              ✽ 0   ⢿ 1   ✓ 0
 

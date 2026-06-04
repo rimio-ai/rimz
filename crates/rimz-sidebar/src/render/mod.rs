@@ -375,21 +375,22 @@ fn snapshot_lines(
     let mut header = repo_header_lines(theme, snapshot, inner);
     // A blank line sets the repo identity apart from the cockpit summary below.
     header.push(Line::from(""));
-    // The cockpit summary, two lines: line 1 is `¤` live agents on the left with
-    // today's accumulated token breakdown pinned right; line 2 is `◎` sessions
-    // today on the left with today's spend pinned right. The counts read from the
-    // live fleet and the JSONL `value_tally`'s today window, so the cockpit
-    // reflects all of today's sessions rather than only the live statusline sum.
+    // The cockpit summary, two lines: line 1 is `◎` sessions today on the left
+    // with today's accumulated token breakdown pinned right — both halves read
+    // today's window; line 2 is `¤` live agents on the left with today's spend
+    // pinned right. The counts read from the live fleet and the JSONL
+    // `value_tally`'s today window, so the cockpit reflects all of today's
+    // sessions rather than only the live statusline sum.
     let today = snapshot.value_tally.as_ref().map(|tally| &tally.today);
-    let live_agents = fleet_size(&snapshot.worktree_groups).0;
-    header.push(cockpit_summary_line(theme, live_agents, today, inner));
-    // Line 2 is always present — sessions read `◎ 0` in an empty room — with the
-    // spend joining the right edge and counting up as a turn lands.
     let sessions = today.map(|window| window.sessions).unwrap_or(0);
+    header.push(cockpit_summary_line(theme, sessions, today, inner));
+    // Line 2 is always present — an empty room reads `¤ 0` — with the spend
+    // joining the right edge and counting up as a turn lands.
+    let live_agents = fleet_size(&snapshot.worktree_groups).0;
     let today_usd = today.map(|window| window.usd).unwrap_or(0.0);
     header.push(cockpit_spend_line(
         theme,
-        sessions,
+        live_agents,
         today_usd,
         &ui.tally,
         ui.animation_phase,
@@ -1154,6 +1155,73 @@ mod tests {
             "the detail line carries the full command:\n{rendered}"
         );
         assert_snapshot("process_row_resource_stats", rendered);
+    }
+
+    #[test]
+    fn render_worktree_equal_to_trunk() {
+        // A fully-landed worktree — zero commits ahead, zero diff against the
+        // fork point — collapses the header's git cluster to `≡ <trunk>`:
+        // nothing left to land, safe to remove. Behind deliberately doesn't
+        // count against it, so the marker holds even as the trunk moves on.
+        let mut codex = agent(
+            "codex-1",
+            "codex",
+            AgentStatus::Idle,
+            Some("/home/me/query-engine-wt/feature-migration"),
+            Some("feature-migration"),
+            None,
+        );
+        codex.last_activity = fixed_now() - Duration::from_secs(30);
+        let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+        snapshot.worktree_groups[0].diff_added = Some(0);
+        snapshot.worktree_groups[0].diff_removed = Some(0);
+        snapshot.worktree_groups[0].commits_ahead = Some(0);
+        snapshot.worktree_groups[0].commits_behind = Some(5);
+        snapshot.worktree_groups[0].trunk = Some("main".to_owned());
+
+        let rendered = snapshot_to_screen(&snapshot, 38, 14);
+
+        assert!(rendered.contains("≡ main"), "header:\n{rendered}");
+        assert!(
+            !rendered.contains("+0 -0"),
+            "the landed marker replaces the zero diff"
+        );
+        assert!(
+            !rendered.contains('⇣'),
+            "behind stays out of the landed header"
+        );
+        assert_snapshot("worktree_equal_to_trunk", rendered);
+    }
+
+    #[test]
+    fn render_trunk_worktree_skips_the_landed_marker() {
+        // The trunk worktree is trivially "landed on itself," so the `≡`
+        // marker would be noise there: a main-branch group with zero stats
+        // keeps a bare header, and the marker stays reserved for a removable
+        // feature worktree.
+        let mut codex = agent(
+            "codex-1",
+            "codex",
+            AgentStatus::Idle,
+            Some("/home/me/query-engine"),
+            Some("main"),
+            None,
+        );
+        codex.last_activity = fixed_now() - Duration::from_secs(30);
+        let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+        snapshot.worktree_groups[0].diff_added = Some(0);
+        snapshot.worktree_groups[0].diff_removed = Some(0);
+        snapshot.worktree_groups[0].commits_ahead = Some(0);
+        snapshot.worktree_groups[0].commits_behind = Some(0);
+        snapshot.worktree_groups[0].trunk = Some("main".to_owned());
+
+        let rendered = snapshot_to_screen(&snapshot, 38, 14);
+
+        assert!(
+            !rendered.contains('≡'),
+            "no landed marker on the trunk worktree:\n{rendered}"
+        );
+        assert!(rendered.contains("⑂ main"), "header:\n{rendered}");
     }
 
     #[test]
@@ -2778,23 +2846,24 @@ mod tests {
         assert_eq!(abbreviate_under("/srv/code", None), "/srv/code");
     }
 
-    /// The cockpit summary carries the fleet count (`¤ N`, under the name); the
-    /// cockpit below it splits the make-up at a fixed height — the left cluster
-    /// (`? ! ○ ⏸`, each glyph spaced from its count, a zero reading `? 0`) and the
-    /// busy/done tail (`✽ ⢿ ✓`) — so the body never shifts as agents change state.
+    /// The cockpit summary leads with today's sessions (`◎ N`, under the name)
+    /// over the live-agent count (`¤ N`); the cockpit below it splits the
+    /// make-up at a fixed height — the left cluster (`? ! ○ ⏸`, each glyph
+    /// spaced from its count, a zero reading `? 0`) and the busy/done tail
+    /// (`✽ ⢿ ✓`) — so the body never shifts as agents change state.
     #[test]
     fn fleet_header_is_fixed_and_splits_the_make_up() {
-        // Borderless layout: row 0 is the name, row 1 a blank line, row 2 the `¤`
-        // summary, row 3 the `◎` summary, row 4 the hairline rule. An empty room
-        // reads `¤ 0` on row 2 with no make-up beneath, so the body never moves.
+        // Borderless layout: row 0 is the name, row 1 a blank line, row 2 the `◎`
+        // summary, row 3 the `¤` summary, row 4 the hairline rule. An empty room
+        // reads `◎ 0` on row 2 with no make-up beneath, so the body never moves.
         let empty = snapshot_with(Vec::new(), Vec::new());
         let empty_screen = snapshot_to_screen(&empty, 40, 12);
         assert!(
-            empty_screen.lines().nth(2).unwrap().contains("¤ 0"),
+            empty_screen.lines().nth(2).unwrap().contains("◎ 0"),
             "{empty_screen}"
         );
         assert!(
-            empty_screen.lines().nth(3).unwrap().contains("◎ 0"),
+            empty_screen.lines().nth(3).unwrap().contains("¤ 0"),
             "{empty_screen}"
         );
 
@@ -2819,9 +2888,9 @@ mod tests {
         reasoning.phase = rimz::agents::TurnPhase::Reasoning;
         let snapshot = snapshot_with(Vec::new(), vec![working, reasoning]);
         let screen = snapshot_to_screen(&snapshot, 40, 12);
-        // Row 2 is the `¤` summary, row 3 the `◎` summary; row 5 is the bucket
+        // Row 2 is the `◎` summary, row 3 the `¤` summary; row 5 is the bucket
         // make-up (row 1 is the blank line, row 4 the hairline rule).
-        assert!(screen.lines().nth(2).unwrap().contains("¤ 2"), "{screen}");
+        assert!(screen.lines().nth(3).unwrap().contains("¤ 2"), "{screen}");
         let buckets = screen.lines().nth(5).unwrap();
         // Left cluster: waiting/failed/idle and the parked rate-limited each show
         // their count (a zero reads `? 0`); both running agents tally into the
