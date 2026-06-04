@@ -16,10 +16,13 @@ A session's context data has two origins. Both flow through one adapter — the 
 
 **The rich-context transport** is the high-frequency upgrade, where a provider offers one. It carries everything the transcript cannot — cost, rate-limit windows, account plan, PR info, model display name — and refreshes far more often than turn boundaries. Each provider's transport differs; both normalize through `observe_context` into one [`AgentContext`](../../crates/rimz/src/agents/context.rs).
 
+A provider whose hook wire Rimz authors has a third option: stamp the gauge **onto the hook payload itself**. Pi's extension does this on every envelope, so its gauge needs neither a tail nor a transport ([Appendix — Pi](#appendix--pi)).
+
 |                     | transcript tail                                  | rich-context transport                         |
 | ------------------- | ------------------------------------------------ | ---------------------------------------------- |
 | Claude Code         | hook payload `transcript_path`                   | statusline pipe (`rimz statusline feed`)       |
 | Codex               | `~/.codex/sessions/…/rollout-*.jsonl` (by id)    | `codex app-server` JSON-RPC (read-only)        |
+| Pi                  | — (the gauge rides the hook payload itself)      | — (none)                                       |
 | frequency           | turn boundaries, after a session id appears      | every render / poll                            |
 | produces            | `context_pct`, `total_tokens`, `model`           | the full `AgentContext` (gauges, cost, limits) |
 | target              | observation gauge fields ([agent.md](./agent.md#the-rollup)) | `AgentContext` ([context.rs](../../crates/rimz/src/agents/context.rs)) |
@@ -52,7 +55,7 @@ The gauge above reads a bounded *tail* for the live row. A second read-path walk
 It is **read-only and sidebar-safe** — no ledger writes — so it sits apart from the integration adapters. Two parsing concerns are provider-specific:
 
 - **Dedup.** Claude replays a parent message into each subagent file with an inflated cost; `compute_spending` dedups by `(message.id, requestId)` across files and suppresses the sidechain replay so a turn is counted once. Pi and Codex sessions are single-file and need no cross-file dedup.
-- **Cost source.** Claude and Codex log token counts, so `compute_spending` multiplies each turn's `message.usage` through the per-model [pricing table](./pricing.md) to dollars — input, output, cache-creation, and cache-read each at their own rate. Current Claude transcripts carry no `costUSD`; an older Claude turn that still logs a positive `costUSD` uses that authoritative figure verbatim instead. Pi logs `costUSD` directly ([adapter/pi-reference.md → Session JSONL](./adapter/pi-reference.md#session-jsonl)).
+- **Cost source.** Claude and Codex log token counts, so `compute_spending` multiplies each turn's `message.usage` through the per-model [pricing table](./pricing.md) to dollars — input, output, cache-creation, and cache-read each at their own rate. Current Claude transcripts carry no `costUSD`; an older Claude turn that still logs a positive `costUSD` uses that authoritative figure verbatim instead. Pi logs dollars directly (`usage.cost.total` — [adapter/pi-reference.md → Session JSONL](./adapter/pi-reference.md#session-jsonl)), used verbatim with no pricing-table multiplication.
 
 The producer ([`cli/sidebar.rs`](../../crates/rimz/src/cli/sidebar.rs)) discovers all three fleet-wide — every Claude project dir, every Codex and Pi session — so each provider counts on the same footing regardless of which project it ran in. `compute_spending` returns one fleet total plus a **per-provider breakdown** — the cockpit shows the total, each dashboard panel its own provider's spend (see [account.md](./account.md#per-provider-spend)). Per [testing.md](../contributing/testing.md), golden each parser from a fixture JSONL, including the dedup and zero/negative-cost cases.
 
@@ -97,3 +100,9 @@ The trigger is never inline: a turn-boundary hook spawns `rimz codex refresh-con
 3. **A fresh cold-spawned `codex app-server`** — the always-present fallback, so headless / no-mux still enriches.
 
 The one datapoint the app-server does **not** expose read-only is token / context-window usage: it rides only the live `thread/tokenUsage/updated` notification behind a subscribing `thread/resume`. So `AgentContext.tokens` stays `None` and Codex's context gauge is sourced from the rollout transcript above.
+
+## Appendix — Pi
+
+Pi needs neither source: Rimz authors pi's hook wire ([adapter/pi-reference.md](./adapter/pi-reference.md)), so the extension stamps the gauge onto every hook envelope — `context_pct` / `context_window` / `total_tokens` from the in-process `ctx.getContextUsage()` (rounded on the wire), plus `model` and the thinking level as `effort` — and `observe_lifecycle` reads it straight off the payload: payload-first with a `None` fallback, never a transcript tail. There is no rich-context transport — pi exposes no rate-limit or plan surface to carry ([account.md](./account.md)).
+
+**Cost history** rides the shared spend pass above: one `<ISO-timestamp>_<uuid>.jsonl` per session under `~/.pi/agent/sessions/--<cwd-with-dashes>--/`, dollars read verbatim by [`pi/spend.rs`](../../crates/rimz/src/agents/pi/spend.rs).

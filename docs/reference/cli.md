@@ -139,11 +139,11 @@ rimz trust [status|grant|revoke] [--json]
 ## Install agent hooks
 
 ```sh
-rimz hooks install <agent>      # claude | codex
+rimz hooks install <agent>      # claude | codex | pi
 rimz hooks uninstall <agent>
 ```
 
-`install` wires Rimz into an agent's own per-user config — the event set plus a statusline — additively and reversibly. This is the real hook mechanism; it is distinct from the project config's `[[hooks]]` table (see [configuration.md](./configuration.md)). What gets wired and how payload content is gated live in [internals/hooks.md](../internals/hooks.md).
+`install` wires Rimz into an agent's own per-user config — the event set plus a statusline (Claude) — additively and reversibly. For pi it writes the Rimz-authored extension whole-file to `~/.pi/agent/extensions/rimz.ts` (the extension needs `rimz` on `PATH`, and takes effect on the next `pi` launch or a `/reload`). This is the real hook mechanism; it is distinct from the project config's `[[hooks]]` table (see [configuration.md](./configuration.md)). What gets wired and how payload content is gated live in [internals/hooks.md](../internals/hooks.md).
 
 ## Commands Rimz calls for you
 

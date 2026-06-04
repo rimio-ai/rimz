@@ -80,7 +80,7 @@ on_rebirth = true   # re-seed prior agents when a session is reborn (default tru
 max = 8             # cap auto-resumed agents per birth (default 8); overflow is reported
 ```
 
-When a session is reborn — reboot, multiplexer crash, or a Rimz-initiated rebirth of a stuck room — Rimz re-seeds the prior agents from the durable rollup, each restored idle in its own pane (`claude --resume`, `codex resume`), so the room comes up where you left off. `on_rebirth = false` (or `--no-resume` per invocation) comes up empty for a deliberately fresh start; `max` bounds how many agents one birth relaunches so a long-lived workspace never fork-bombs a fleet of processes. Mechanics in [internals/sidebar.md](../internals/sidebar.md#resume-on-rebirth).
+When a session is reborn — reboot, multiplexer crash, or a Rimz-initiated rebirth of a stuck room — Rimz re-seeds the prior agents from the durable rollup, each restored idle in its own pane (`claude --resume`, `codex resume`, `pi --session`), so the room comes up where you left off. `on_rebirth = false` (or `--no-resume` per invocation) comes up empty for a deliberately fresh start; `max` bounds how many agents one birth relaunches so a long-lived workspace never fork-bombs a fleet of processes. Mechanics in [internals/sidebar.md](../internals/sidebar.md#resume-on-rebirth).
 
 ### Sidebar appearance
 
