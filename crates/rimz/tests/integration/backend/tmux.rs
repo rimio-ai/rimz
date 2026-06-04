@@ -1003,6 +1003,37 @@ fn presence_watch_nudges_on_topology_and_ends_with_the_server() {
 
     let mut watch = rimz::mux::tmux::PresenceWatch::attach(Some(&server.socket), "presence")
         .expect("attach control client");
+    // `attach` returns once the control client *spawns*; tmux registers it a
+    // beat later, and a topology change firing before registration is invisible
+    // to the stream. Production tolerates that (the poll is truth) — the test
+    // must not race it, so wait until `list-clients` reports the control client
+    // before touching topology.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let out = Command::new("tmux")
+            .args([
+                "-S",
+                server.socket.to_str().expect("utf8 socket"),
+                "list-clients",
+                "-t",
+                "presence",
+                "-F",
+                "#{client_control_mode}",
+            ])
+            .output()
+            .expect("tmux list-clients");
+        if String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .any(|line| line.trim() == "1")
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "control client never registered with the tmux server"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
 
     // Drain on a helper thread so the main thread owns the timeout. A single
     // topology change fans out as a burst of control lines (`%window-add` plus
