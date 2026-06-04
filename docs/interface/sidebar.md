@@ -72,7 +72,7 @@ The two actionable attention glyphs (`?` / `!`) **breathe** — a brightness pul
 
 **Window — the model's context window on the identity line.**
 
-A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the live out-of-band reading (Claude's statusline, Codex's app-server) when one exists, else the hook-derived window, omitted until a source names it. Its tone is the window's size class — amber for the 1M class, yellow past the 200k standard, blue for the 128k–200k mainstream, dim grey below — so an extended window stands out while a small one recedes to chrome.
+A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the live out-of-band reading (Claude's statusline, Codex's app-server) when one exists, else the hook-derived window, omitted until a source names it. Always dim chrome — a capability label, not a status signal; the context meter's severity ramp owns the color.
 
 **Meters and stats — one grammar everywhere.**
 
@@ -153,7 +153,7 @@ An agent is a small stacked card. The resting card is four lines; selecting it a
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                ◔ 1m    context line — filled window · composition · age (≥1m)
 ```
 
-- **Line 1 — identity.** The animated leading cell, then the agent kind (dim — the glyph and its color carry identity), then capability: model, effort, and the context-window token (`258k`, `1m`) in its size-class tone (the legend's window ramp). Capability degrades by width — a wide card carries model · effort · window, a medium one drops effort, a narrow one keeps just the name. The session `$cost` pins right.
+- **Line 1 — identity.** The animated leading cell, then the agent kind in its provider brand color (mid-gray chrome for unknown kinds), then capability: model, effort, and the context-window token (`258k`, `1m`) in dim chrome. Capability degrades by width — a wide card carries model · effort · window, a medium one drops effort, a narrow one keeps just the name. The session `$cost` pins right.
 - **Line 2 — what it's on.** The session name you gave it (`--name` / `/rename`), else the agent's task, else its latest prompt (which lingers once the turn ends and the task clears, so an unnamed session stays labelled until it earns a name). An idle agent with nothing to show yet animates a `.`→`..`→`...` loading cue here instead of an em dash. A turn that died on a provider API error takes the line over with the upstream error text, dim (`API Error: Overloaded`), for as long as its `!` escalation holds — the card says why without a jump ([internals/agent.md → the state machine](../internals/agent.md#the-state-machine)). On a wide card, todo dots pin right.
 - **The context meter (`▣`/`▢`).** The resting card's one bar — `▢` hollow at an empty 0% window, `▣` once anything fills it. The bar fills as the window is *used*; its value is always the percent used. Glyph and bar wear one severity — calm blue → yellow → amber → red, bands tunable via `[sidebar.context]` ([configuration.md](../reference/configuration.md#context-meter)). While the meter rests calm the fill splits into colored segments showing *where* the tokens went (`◍` cache writes · `◌` cache reads · `↘` fresh input); once it warms the bar goes one solid severity run.
 - **The context line.** Part of the resting card, and the meter's absolute companion: `▤` the filled part of the window — `input + cache-write + cache-read` of the latest API call, exactly the numerator the `▣` percent scales, wearing the meter's severity tone so the bar and this figure read as one measurement — then a `·` seam and the call's composition ordered by how the window filled: `◌` read back from cache, `◍` newly written to cache, `↘` fresh input, `↗` output generated (which joins the window next turn), each marker in its bar-segment color so the line doubles as the bar's legend. The four composition columns keep the same disjoint meanings the cockpit and fleet ledger accumulate; the `◇` totals stay fleet vocabulary, because this line answers what is in the window, not what today burned. A coarse last-activity age pins right once it crosses a full minute — a just-active agent shows the line alone, left-aligned, rather than a misleading `1m` — as the clock-fill glyph (`◔`→`◉`, the legend's quarter-hour face) whose tone steps the same quarters (dim · yellow from 15m · amber from 30m · red past the hour, the legend's age ramp), so a red age warns that resuming pays for the context again. An agent whose context carries no per-call split (Codex, or Claude before its first API call) shows the bare `▤` rollup total alone.
@@ -223,7 +223,7 @@ Worktrees stack as bounded blocks. The one **holding your selection** reads as a
 The worktree header carries the worktree's git story on the right: the `⇡`/`⇣` commit delta against the trunk, then the worktree's total diff (`⇡3 ⇣1 +230 -23`, zero components dropped). The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../reference/configuration.md#trunk-branch)).
 
 ```
-▏⑂ feature-migration ┄┄┄┄┄┄ ⇡3 ⇣1 +230 -23    ← in flight: commits ahead/behind, then the diff
+▏⑂ feature-migration ┄┄┄┄┄ ⇡3 ⇣1  +230 -23    ← in flight: commits ahead/behind, then the diff
 ```
 
 ```

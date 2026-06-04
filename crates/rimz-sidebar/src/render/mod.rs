@@ -1018,8 +1018,10 @@ mod tests {
             Some("feature-migration"),
             Some("db migrate"),
         );
-        // Transcript scalars are the coarse fallback; the statusline context
-        // below supersedes them (`Opus` → `Opus 4.8`, `xhigh` → `high`).
+        // Transcript scalars are the coarse fallback; the statusline enriches the
+        // display name (`Opus` → `Opus 4.8`). Effort stays with the hook-derived
+        // configured value (`xhigh`) even when the statusline reports a capped
+        // model-effective level (`high`).
         claude.model = Some("Opus".to_owned());
         claude.effort = Some("xhigh".to_owned());
         claude.context_pct = Some(38);
@@ -1049,7 +1051,7 @@ mod tests {
 
         // The worktree's git story sits on the group header: the ⇡/⇣ commit
         // delta leads the worktree-total diff.
-        assert!(rendered.contains("⇡3 ⇣1 +127 -43"), "header:\n{rendered}");
+        assert!(rendered.contains("⇡3 ⇣1  +127 -43"), "header:\n{rendered}");
         // Line 1 carries identity + capability + cost; line 2 is the session
         // name; the model display name sheds its window qualifier (`Opus 4.8
         // (1M context)` → `Opus 4.8`) — the dedicated window token (the
@@ -1057,7 +1059,7 @@ mod tests {
         assert!(rendered.contains("Opus 4.8"));
         assert!(!rendered.contains("(1M"));
         assert!(!rendered.contains("context"));
-        assert!(rendered.contains("high"));
+        assert!(rendered.contains("xhigh"), "effort:\n{rendered}");
         assert!(rendered.contains("· 200k"), "window token:\n{rendered}");
         // Per-row cost now reads at full cent resolution, like every other spend.
         assert!(rendered.contains("$1.27"));

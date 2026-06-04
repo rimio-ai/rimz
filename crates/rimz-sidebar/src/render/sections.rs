@@ -526,7 +526,7 @@ fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'sta
         .filter(|(added, removed)| *added + *removed > 0);
     if let Some((added, removed)) = diff {
         if !spans.is_empty() {
-            spans.push(Span::raw(" "));
+            spans.push(Span::raw("  "));
         }
         spans.extend(diff_spans(theme, added, removed));
     }
@@ -716,15 +716,15 @@ fn sub_agent_lines(
 const NAME_MAX: usize = 12;
 
 /// The agent name's style: its provider's brand color (Claude clay, Codex blue,
-/// …) kept at the dim weight the name already carries, so the card ties to its
-/// provider dashboard without shouting. Falls back to plain dim chrome when no
+/// Provider match: the brand color at full weight so the name ties to the
+/// provider dashboard. Falls back to mid-gray chrome (no DIM modifier) when no
 /// provider matches the kind.
 fn agent_name_style(theme: &Theme, providers: &[SidebarProviderPanel], kind: &str) -> Style {
     providers
         .iter()
         .find(|panel| panel.kind == kind)
-        .map(|panel| theme.style(Color::Indexed(panel.color), Modifier::DIM))
-        .unwrap_or_else(|| theme.dim())
+        .map(|panel| theme.style(Color::Indexed(panel.color), Modifier::empty()))
+        .unwrap_or_else(|| theme.style(Color::DarkGray, Modifier::empty()))
 }
 
 fn identity_line(
@@ -837,9 +837,8 @@ fn agent_identity_line(
 
     // Left cluster: glyph + name + dim capability tokens. The glyph heats with
     // the age clock once a `waiting`/`failed` row sits unanswered. The kind name
-    // is repeated and low-information, so it dims to chrome; the leading glyph
-    // and its color carry identity, and the bright slot is saved for the task
-    // below.
+    // reads at normal weight in the provider's brand color (or mid-gray chrome
+    // for unknown kinds); the bright slot is saved for the task below.
     let mut left: Vec<Span<'static>> = vec![
         agent_lead_cell(theme, row, status, animation_phase),
         Span::raw(" "),
@@ -859,9 +858,8 @@ fn agent_identity_line(
             left.push(Span::styled(" · ", theme.dim()));
             left.push(Span::styled(effort.to_owned(), theme.dim()));
         }
-        // The window token wears its size-class tone (`window_style`: amber 1m,
-        // yellow past 200k, blue mainstream, grey small) in the lowercase
-        // window form, so the capability cluster ends on a color-keyed class.
+        // The window token is always dim chrome — metadata, not a status
+        // signal; the context-meter severity ramp owns the loud color slot.
         if let Some(window) = display_context_window(row) {
             left.push(Span::styled(" · ", theme.dim()));
             left.push(Span::styled(
@@ -1008,11 +1006,14 @@ fn display_model(row: &SidebarRow) -> Option<String> {
         .map(model_label)
 }
 
-/// Reasoning effort preferred from the statusline over the transcript scalar.
+/// Reasoning effort: the hook/ledger value (what the user configured) is
+/// preferred; the statusline falls back for sessions that haven't seen a
+/// hook-Stop yet. This means a configured `xhigh` shows even when the model
+/// caps its effective level to `high` in the statusline.
 fn display_effort(row: &SidebarRow) -> Option<&str> {
-    ctx(row)
-        .and_then(|context| context.effort.as_deref())
-        .or(row.effort.as_deref())
+    row.effort
+        .as_deref()
+        .or_else(|| ctx(row).and_then(|context| context.effort.as_deref()))
         .filter(|effort| !effort.is_empty())
 }
 

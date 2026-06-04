@@ -487,22 +487,10 @@ fn severity_tier(percent: u8, used_tokens: Option<u64>, bands: &ContextSeverityC
     }
 }
 
-/// The identity line's window-token tone, keyed on the model's window *size* —
-/// a capability read, not a usage one: amber for the 1M class, yellow above the
-/// 200k standard, blue for the 128k–200k mainstream, and dim grey below, so a
-/// small-window model recedes to chrome while an extended window stands out.
-/// Fixed tiers (model classes move slowly); only the usage bands are
-/// config-driven.
-pub(super) fn window_style(theme: &Theme, window: u64) -> Style {
-    if window >= 1_000_000 {
-        theme.style(ORANGE, Modifier::empty())
-    } else if window > 200_000 {
-        theme.style(Color::Yellow, Modifier::empty())
-    } else if window >= 128_000 {
-        theme.style(Color::Blue, Modifier::empty())
-    } else {
-        theme.dim()
-    }
+/// Always dim chrome — a capability label, not a status signal; the
+/// context-meter severity ramp owns the loud color slot.
+pub(super) fn window_style(theme: &Theme, _window: u64) -> Style {
+    theme.dim()
 }
 
 /// Context bar: a thin rule whose filled run grows left-to-right as the window
@@ -920,20 +908,13 @@ mod tests {
         assert_eq!(elapsed_glyph(48 * 3600), "◉");
     }
 
-    /// The identity line's window token is a capability read keyed on size:
-    /// amber for the 1M class, yellow above the 200k standard, blue for the
-    /// mainstream 128k–200k, dim grey below — and `NO_COLOR` strips all of it.
+    /// The window token is always dim chrome regardless of size class.
     #[test]
-    fn window_style_keys_on_the_window_class() {
+    fn window_style_is_always_dim() {
         let theme = Theme::fixed(false);
-        let fg = |window| window_style(&theme, window).fg;
-        assert_eq!(fg(1_050_000), Some(Color::Indexed(173)), "1M class: amber");
-        assert_eq!(fg(1_000_000), Some(Color::Indexed(173)));
-        assert_eq!(fg(272_000), Some(Color::Indexed(179)), "extended: yellow");
-        assert_eq!(fg(200_000), Some(Color::Indexed(75)), "mainstream: blue");
-        assert_eq!(fg(128_000), Some(Color::Indexed(75)));
-        assert_eq!(window_style(&theme, 32_000), theme.dim(), "small: chrome");
-
+        for window in [32_000, 128_000, 200_000, 272_000, 1_000_000, 1_050_000] {
+            assert_eq!(window_style(&theme, window), theme.dim(), "window={window}");
+        }
         let plain = Theme::fixed(true);
         assert!(window_style(&plain, 1_050_000).fg.is_none());
     }
