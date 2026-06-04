@@ -1240,6 +1240,8 @@ struct RawPane {
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
+    terminal_command: Option<String>,
+    #[serde(default)]
     pane_command: Option<String>,
     #[serde(default)]
     command: Option<String>,
@@ -1275,12 +1277,19 @@ impl RawPane {
     }
 
     /// Move the command out of the owned `RawPane` (consumed once, during
-    /// `list_panes`) rather than cloning it — `pane_command` wins, falling back
-    /// to `command`.
+    /// `list_panes`) rather than cloning it. A title-identified sidebar wins:
+    /// Zellij can omit command fields for the layout pane, and it must still be
+    /// filtered as chrome rather than rendered as an anonymous process row.
+    /// Otherwise `pane_command` wins, falling back through the older command
+    /// field and the newer full `terminal_command`.
     fn take_command(&mut self) -> Option<String> {
+        if is_sidebar_pane(self) {
+            return Some(SIDEBAR_PANE_NAME.to_owned());
+        }
         self.pane_command
             .take()
             .or_else(|| self.command.take())
+            .or_else(|| self.terminal_command.take())
             .filter(|value| !value.is_empty())
     }
 
@@ -1759,6 +1768,51 @@ mod tests {
         assert!(parsed[0].is_focused);
         assert!(parsed[1].is_plugin);
         assert!(!parsed[1].is_focused);
+    }
+
+    #[test]
+    fn raw_pane_command_uses_terminal_command_and_sidebar_title() {
+        let json = r#"[
+          {
+            "id": 0,
+            "is_plugin": false,
+            "tab_id": 0,
+            "title": "rimz-sidebar",
+            "terminal_command": "/home/me/.cargo/bin/rimz sidebar serve --mux zellij"
+          },
+          {
+            "id": 1,
+            "is_plugin": false,
+            "tab_id": 0,
+            "title": "claude remote-control --spawn worktree",
+            "terminal_command": "claude remote-control --spawn worktree"
+          },
+          {
+            "id": 2,
+            "is_plugin": false,
+            "tab_id": 0,
+            "title": "shell",
+            "pane_command": "zsh",
+            "terminal_command": "ignored"
+          }
+        ]"#;
+        let mut parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
+
+        assert_eq!(
+            parsed[0].take_command().as_deref(),
+            Some("rimz-sidebar"),
+            "a title-identified sidebar stays chrome even when command fields are missing or point at the launcher",
+        );
+        assert_eq!(
+            parsed[1].take_command().as_deref(),
+            Some("claude remote-control --spawn worktree"),
+            "Zellij's full terminal command is the host-process signal",
+        );
+        assert_eq!(
+            parsed[2].take_command().as_deref(),
+            Some("zsh"),
+            "pane_command remains the foreground-command source when present",
+        );
     }
 
     #[test]

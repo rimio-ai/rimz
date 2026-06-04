@@ -3869,6 +3869,56 @@ mod tests {
         assert_eq!(agents, 2, "the two stamped panes bound their agents");
     }
 
+    #[test]
+    fn live_agent_and_process_rows_are_pane_backed() {
+        // In a live-pane fold, every visible top-level row is jumpable: agent
+        // rows and process rows both carry a pane. A subagent that shares its
+        // parent's pane nests in the parent card instead of becoming a second
+        // top-level row with the same pane.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut parent = agent("claude", "sess-root", AgentStatus::Running, 1_000);
+        parent.worktree_path = Some("/repo/main".to_owned());
+        parent.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+        let mut child = child_state("sess-root", "child-1", AgentStatus::Running, 2_000);
+        child.worktree_path = Some("/repo/main".to_owned());
+        child.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
+
+        let snapshot = SidebarSnapshot::build_with_carryover(
+            workspace,
+            Vec::new(),
+            Vec::new(),
+            vec![parent, child],
+        )
+        .with_live_panes(
+            vec![
+                pane("%1", "claude", "/repo/main"),
+                pane("%2", "zsh", "/repo/main"),
+            ],
+            None,
+        );
+
+        let rows: Vec<_> = snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .collect();
+        assert_eq!(rows.len(), 2, "root agent + process pane render two rows");
+        assert!(
+            rows.iter().all(|row| row.pane.is_some()),
+            "every visible live-pane row has a pane: {rows:?}",
+        );
+        assert!(
+            rows.iter().all(|row| row.id != "child-1"),
+            "the subagent is not a top-level row",
+        );
+        let parent = rows
+            .iter()
+            .find(|row| row.id == "sess-root")
+            .expect("parent row present");
+        assert_eq!(parent.sub_agents.len(), 1);
+        assert_eq!(parent.sub_agents[0].id, "child-1");
+    }
+
     fn paneless_codex(id: &str, worktree: &str, rank: i64) -> AgentState {
         let mut codex = agent("codex", id, AgentStatus::Running, rank);
         // The app-server daemon fires the hook with no mux pane env, so the

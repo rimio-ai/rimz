@@ -432,9 +432,9 @@ pub fn wired_lazy_kinds() -> Vec<String> {
 /// Render the published snapshot for a consumer renderer, entirely from runtime
 /// caches and sidecars — no `list-panes`, no git. Reads the producer's coalesced
 /// pane list from `snapshot.json`, pairs it with the **event-fresh** rollup read
-/// in process from `latest.json` ([`consumer_rollup`]), folds the session's
-/// statusline context and per-tool activity, overlays the panes with this
-/// renderer's own-pane exclusion, and projects the cached diff stats. `None`
+/// in process from `latest.json` ([`consumer_rollup`]), folds the session and
+/// subagent statusline context plus per-tool activity, overlays the panes with
+/// this renderer's own-pane exclusion, and projects the cached diff stats. `None`
 /// until the producer has published a pane set (or if the ledger is unreadable),
 /// so the caller holds its last good frame.
 ///
@@ -458,9 +458,9 @@ pub fn read_published_snapshot(
 }
 
 /// Fold the read-only enrichments onto a consumer's base snapshot: the cached
-/// worktree roots, each session's statusline context and per-tool activity, the
-/// live-pane overlay with this renderer's own-pane exclusion, and the cached
-/// diff-stats projection. Every input is a runtime cache or sidecar read — no
+/// worktree roots, each session/subagent statusline context and per-tool
+/// activity, the live-pane overlay with this renderer's own-pane exclusion, and
+/// the cached diff-stats projection. Every input is a runtime cache or sidecar read — no
 /// `list-panes`, no git, no ledger lock. `frame` is the producer's published
 /// pane frame (panes plus their `produced_at_ms` read stamp); `None` only on a
 /// cold start (no base published yet), where the bare rollup's groups stand
@@ -477,6 +477,8 @@ pub fn enrich_consumer(
     }
     if !snapshot.agents.is_empty() {
         snapshot = snapshot.with_agent_context(crate::ledger::agent_context::read_all(runtime));
+        snapshot =
+            snapshot.with_subagent_context(crate::ledger::subagent_context::read_all(runtime));
         let activity = crate::agent_activity::read_for_keys(
             runtime,
             snapshot
@@ -1198,6 +1200,75 @@ mod tests {
     }
 
     #[test]
+    fn read_published_snapshot_folds_subagent_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        state.ensure_dirs().unwrap();
+
+        let worktree = dir.path().join("wt");
+        std::fs::create_dir_all(&worktree).unwrap();
+        let wt = worktree.to_string_lossy().into_owned();
+        let live_pane = pane("terminal_parent", "claude", &wt);
+        let mut parent = root_agent("claude", "parent-1", None);
+        parent.worktree_path = Some(wt.clone());
+        parent.pane = Some(live_pane.clone());
+        let mut child = child_agent("claude", "parent-1", "child-1");
+        child.worktree_path = Some(wt.clone());
+        child.pane = Some(live_pane.clone());
+        child.task = None;
+        let mut rollup =
+            SidebarSnapshot::build_with_agents(workspace.clone(), Vec::new(), vec![parent, child]);
+        rollup = rollup.with_project_root(Some(worktree));
+        rollup.reflects_log = Some(crate::ledger::event_log::LogExtent {
+            generation: 0,
+            offset: 0,
+        });
+        atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
+
+        let base = SnapshotCache {
+            produced_at_ms: unix_now_ms(),
+            session_name: "rimz-test".to_owned(),
+            panes: vec![live_pane],
+        };
+        atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
+        let now = Timestamp::now();
+        crate::ledger::subagent_context::write(
+            &runtime,
+            "claude",
+            "child-1",
+            &crate::agents::context::SubagentContext {
+                agent_type: Some("Explore".to_owned()),
+                description: Some("trace the sidebar rows".to_owned()),
+                token_count: Some(12_400),
+                started_at: Some(now),
+                observed_at: now,
+            },
+        )
+        .unwrap();
+
+        let snapshot =
+            read_published_snapshot(&state, &runtime, "rimz-test", None).expect("published base");
+        let parent = snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .find(|row| row.id == "parent-1")
+            .expect("parent row");
+
+        assert_eq!(parent.sub_agents.len(), 1);
+        assert_eq!(parent.sub_agents[0].id, "child-1");
+        assert_eq!(parent.sub_agents[0].name, "Explore");
+        assert_eq!(
+            parent.sub_agents[0].description.as_deref(),
+            Some("trace the sidebar rows"),
+        );
+        assert_eq!(parent.sub_agents[0].total_tokens, Some(12_400));
+    }
+
+    #[test]
     fn consumer_own_view_counts_siblings_in_its_own_tab() {
         // A consumer reads the producer's session-wide pane list (`list-panes
         // -a`) and folds its own-view from it. An orphan sidebar — alone in its
@@ -1435,6 +1506,12 @@ mod tests {
             last_seen: now,
             last_activity: now,
         }
+    }
+
+    fn child_agent(kind: &str, parent_id: &str, agent_id: &str) -> AgentState {
+        let mut agent = root_agent(kind, agent_id, None);
+        agent.parent_agent_id = Some(parent_id.into());
+        agent
     }
 
     /// A window whose reset instant is still in the future projects unchanged —
