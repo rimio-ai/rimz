@@ -243,11 +243,12 @@ pub struct SessionOptions {
 const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
 
 /// Sidebar pane width: a percentage of the view, capped at `max_cols` columns
-/// (`sidebar.max_cols`). The cap lands at layout-generation time: the launch
-/// paths probe the invoking terminal once ([`detect_terminal_size`]) and
-/// [`SidebarWidth::birth_size`] decides whether the cap bites — [`BirthSize`]
-/// carries the spellings each backend births with. Birth-time only: a manual
-/// resize afterwards sticks.
+/// (`sidebar.max_cols`). The width is resolved once per launch command: the
+/// launch paths probe the invoking terminal ([`detect_terminal_size`]) and
+/// [`SidebarWidth::birth_size`] turns the probe into the one [`BirthSize`]
+/// verdict every pane of the session is born with — constant for the
+/// session's life. Birth-time only: a manual resize afterwards sticks, and a
+/// `max_cols` edit applies at the next launch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SidebarWidth {
     /// Percentage of the view width — tracks terminal size below the cap.
@@ -278,45 +279,59 @@ impl SidebarWidth {
         u64::from(self.max_cols.get())
     }
 
-    /// The size a pane is born with on a terminal `detected_cols` wide:
-    /// capped when the percentage split would exceed `max_cols`, else the
-    /// percentage. An unknown width (`None` — launch outside a tty) births at
-    /// the percentage, which tracks whatever size the view turns out to have.
+    /// The width verdict a launch resolves on a terminal `detected_cols`
+    /// wide: [`Self::target_cols`] of the probe — the percentage capped at
+    /// `max_cols` — as fixed columns, plus its percentage spelling for panes
+    /// that materialize at unknown geometry. An unknown width (`None` —
+    /// launch outside a tty) resolves to the bare cap with the raw
+    /// percentage.
     pub fn birth_size(self, detected_cols: Option<u16>) -> BirthSize {
         let percent = self.percent.clamp(10, 90);
         match detected_cols {
-            Some(total) if u64::from(total) * u64::from(percent) / 100 > self.cap_cols() => {
-                // Floor keeps the derived percentage at or under the cap on
-                // the detected terminal; at least 1% so the spelling is valid.
-                let derived = (self.cap_cols() * 100 / u64::from(total)).max(1);
-                BirthSize::Capped {
-                    cols: self.max_cols,
+            Some(total) if total > 0 => {
+                let target = self.target_cols(u64::from(total));
+                // target_cols is ≥ 1 and ≤ max_cols, so the fallback chain is
+                // unreachable; spelled without panicking per the error rules.
+                let cols = u16::try_from(target)
+                    .ok()
+                    .and_then(NonZeroU16::new)
+                    .unwrap_or(self.max_cols);
+                // Floor keeps the percentage spelling at or under the verdict
+                // on the probed terminal; at least 1% so the spelling stays
+                // valid. `target ≤ total` bounds it at 100, so the conversion
+                // holds.
+                let derived = (target * 100 / u64::from(total)).max(1);
+                BirthSize {
+                    cols,
                     percent: u16::try_from(derived).unwrap_or(percent),
                 }
             }
-            _ => BirthSize::Percent(percent),
+            _ => BirthSize {
+                cols: self.max_cols,
+                percent,
+            },
         }
     }
 }
 
-/// How a sidebar pane is born sized, decided once at layout-generation time by
-/// [`SidebarWidth::birth_size`].
-///
-/// When the percentage would exceed `sidebar.max_cols` on the launching
-/// terminal, the decision is `Capped` and carries two spellings of the same
-/// width: fixed columns for panes instantiated at live geometry (tmux splits
-/// and hooks on a `-x`/`-y`-sized session, the Zellij `new_tab_template` a
-/// user opens tabs from), and the equivalent percentage of the detected width
-/// for panes a detached Zellij birth instantiates — a fixed size larger than
-/// the background session's default geometry kills the session, while a
-/// percentage fits any geometry and lands at the cap when the client attaches.
+/// The one width verdict every sidebar pane of a launch is born with —
+/// resolved once per command by [`SidebarWidth::birth_size`] from the
+/// invoking terminal, then constant for the session's life. Two spellings of
+/// the same verdict: `cols` pins panes that instantiate at known geometry
+/// (the Zellij `new_tab_template` an attached client opens tabs from, the
+/// tmux `after-new-window` hook), and `percent` covers panes that materialize
+/// at unknown geometry — the detached Zellij birth, where a fixed size wider
+/// than the background session's default geometry kills the session — and
+/// rescales to `cols` when the launching client attaches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BirthSize {
-    /// The `sidebar.max_cols` cap bites: `cols` is the cap, `percent` its
-    /// equivalent share of the detected terminal width.
-    Capped { cols: NonZeroU16, percent: u16 },
-    /// Born at a percentage of the view — tracks terminal size.
-    Percent(u16),
+pub struct BirthSize {
+    /// The verdict in columns: `min(percent × probed width, max_cols)`, the
+    /// bare cap when no terminal was probed.
+    pub cols: NonZeroU16,
+    /// The verdict as a share of the probed width (floor, ≥ 1%) — the
+    /// unknown-geometry spelling; the configured percentage when no terminal
+    /// was probed.
+    pub percent: u16,
 }
 
 /// The invoking terminal's `(cols, rows)`, when stdout is attached to one.
@@ -362,8 +377,9 @@ pub struct SidebarPaneOptions {
     /// The configured width — the reconcile heal path still steps a recovered
     /// pane toward [`SidebarWidth::target_cols`] from live geometry.
     pub width: SidebarWidth,
-    /// The size freshly-born panes are spelled with in layouts, splits, and
-    /// hooks — resolved once per command by [`SidebarWidth::birth_size`].
+    /// The width verdict freshly-born panes are spelled with in layouts,
+    /// splits, and hooks — resolved once per command by
+    /// [`SidebarWidth::birth_size`].
     pub birth_size: BirthSize,
     pub rimz_bin: PathBuf,
     pub replace_existing: bool,
@@ -753,31 +769,27 @@ mod tests {
     }
 
     #[test]
-    fn birth_size_is_capped_only_when_the_percent_would_exceed_the_cap() {
+    fn birth_size_resolves_one_fixed_verdict_per_launch() {
         let width = SidebarWidth::default();
-        // Below the threshold the percentage rules: 30% of 120 is 36 ≤ 72.
-        assert_eq!(width.birth_size(Some(120)), BirthSize::Percent(30));
-        // Exactly at the cap stays the percentage: 30% of 240 is 72, not above.
-        assert_eq!(width.birth_size(Some(240)), BirthSize::Percent(30));
-        // Past it the cap bites: 30% of 340 is 102 > 72, and the derived
-        // percentage floors to the cap's share of the detected width.
-        assert_eq!(
-            width.birth_size(Some(340)),
-            BirthSize::Capped {
-                cols: NonZeroU16::new(72).expect("nonzero"),
-                percent: 21, // ⌊72·100/340⌋
-            },
-        );
-        // The derived percentage never floors below 1%, however wide the view.
-        assert_eq!(
-            width.birth_size(Some(7300)),
-            BirthSize::Capped {
-                cols: NonZeroU16::new(72).expect("nonzero"),
-                percent: 1,
-            },
-        );
-        // Unknown width (no tty) births at the percentage, the status quo.
-        assert_eq!(width.birth_size(None), BirthSize::Percent(30));
+        let birth = |cols: u16, percent: u16| BirthSize {
+            cols: NonZeroU16::new(cols).expect("nonzero"),
+            percent,
+        };
+        // Below the cap the verdict is the percentage share, as fixed columns:
+        // 30% of 120 is 36 ≤ 72 — never a raw percentage that re-evaluates
+        // against whatever geometry instantiates a later tab.
+        assert_eq!(width.birth_size(Some(120)), birth(36, 30));
+        // Exactly at the cap: 30% of 240 is 72.
+        assert_eq!(width.birth_size(Some(240)), birth(72, 30));
+        // Past it the cap bites, and the percentage spelling floors to the
+        // cap's share of the probed width: ⌊72·100/340⌋ = 21.
+        assert_eq!(width.birth_size(Some(340)), birth(72, 21));
+        // The percentage spelling never floors below 1%, however wide the view.
+        assert_eq!(width.birth_size(Some(7300)), birth(72, 1));
+        // Unknown width (no tty, or a zero-width probe) resolves to the bare
+        // cap with the raw percentage for unknown-geometry panes.
+        assert_eq!(width.birth_size(None), birth(72, 30));
+        assert_eq!(width.birth_size(Some(0)), birth(72, 30));
     }
 
     #[test]

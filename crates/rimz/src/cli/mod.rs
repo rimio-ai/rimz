@@ -866,8 +866,9 @@ struct RoomTarget<'a> {
 }
 
 impl RoomTarget<'_> {
-    /// The size this command's sidebar panes are born with — fixed at the cap
-    /// when the launching terminal makes the percentage exceed it.
+    /// The width verdict this command's sidebar panes are born with —
+    /// `min(percent × launching terminal, max_cols)`, resolved once here and
+    /// constant for the session's life.
     fn birth_size(&self) -> rimz::mux::BirthSize {
         self.width
             .birth_size(self.detected_size.map(|(cols, _)| cols))

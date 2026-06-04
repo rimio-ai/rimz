@@ -21,8 +21,8 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, WorkspaceId};
 use rimz::mux::{
-    BirthSize, DaemonView, HostPane, MuxBackend, PaneListOptions, SessionHealth,
-    SidebarPaneOptions, SidebarWidth, ZellijBackend, zellij,
+    DaemonView, HostPane, MuxBackend, PaneListOptions, SessionHealth, SidebarPaneOptions,
+    SidebarWidth, ZellijBackend, zellij,
 };
 use tempfile::TempDir;
 
@@ -265,9 +265,16 @@ fn unique_session_name(prefix: &str) -> String {
 }
 
 fn sidebar_command_stub() -> (TempDir, PathBuf) {
+    sidebar_stub_alive_for(30)
+}
+
+/// A renderer stand-in that sleeps for `seconds` then exits. The width tests
+/// wait through an attach and a tab open, which can outlive the shared 30s
+/// stub, so they ask for a longer life.
+fn sidebar_stub_alive_for(seconds: u32) -> (TempDir, PathBuf) {
     let dir = TempDir::new().expect("stub dir");
     let path = dir.path().join("rimz-stub");
-    std::fs::write(&path, "#!/bin/sh\nsleep 30\n").expect("write stub");
+    std::fs::write(&path, format!("#!/bin/sh\nsleep {seconds}\n")).expect("write stub");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -355,7 +362,7 @@ fn open_sidebar_births_native_layout_and_template() {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-test")),
                 cwd: cwd.path().to_path_buf(),
                 width: SidebarWidth::default(),
-                birth_size: BirthSize::Percent(30),
+                birth_size: SidebarWidth::default().birth_size(Some(120)),
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
@@ -427,7 +434,7 @@ fn open_sidebar_on_live_session_is_idempotent() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-idem")),
         cwd: cwd.path().to_path_buf(),
         width: SidebarWidth::default(),
-        birth_size: BirthSize::Percent(30),
+        birth_size: SidebarWidth::default().birth_size(Some(120)),
         rimz_bin: stub,
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
@@ -478,7 +485,7 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-cleanroom")),
         cwd: cwd.path().to_path_buf(),
         width: SidebarWidth::default(),
-        birth_size: BirthSize::Percent(30),
+        birth_size: SidebarWidth::default().birth_size(Some(120)),
         rimz_bin: stub,
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
@@ -576,7 +583,7 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-nosb")),
                 cwd: cwd.path().to_path_buf(),
                 width: SidebarWidth::default(),
-                birth_size: BirthSize::Percent(30),
+                birth_size: SidebarWidth::default().birth_size(Some(120)),
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
@@ -1091,18 +1098,7 @@ fn capped_birth_size_lands_the_cap_in_every_tab() {
     };
     let cwd = TempDir::new().expect("cwd tempdir");
 
-    // A long-lived stand-in for the renderer: this test waits through an
-    // attach and a tab open, which can outlive the shared 30s stub.
-    let stub_dir = TempDir::new().expect("stub dir");
-    let stub = stub_dir.path().join("rimz-stub");
-    std::fs::write(&stub, "#!/bin/sh\nsleep 600\n").expect("write stub");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&stub).expect("metadata").permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&stub, perms).expect("chmod");
-    }
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
     let width = SidebarWidth::default();
     ZellijBackend::with_runtime_dir(xdg.path())
         .open_sidebar(
@@ -1148,6 +1144,69 @@ fn capped_birth_size_lands_the_cap_in_every_tab() {
     );
 }
 
+/// An under-cap verdict is pinned exactly like a capped one: the launch
+/// resolves `min(30%, max_cols)` against the start terminal once, and every
+/// tab opened later is born from the `new_tab_template` at that fixed width —
+/// even after the client grows. A raw percentage in the template would
+/// re-evaluate against the live geometry, which is exactly how the cap used
+/// to vanish from a session. The birth tab spells the verdict's percentage
+/// share (detached-safe), so it tracks the attaching client instead — the
+/// accepted trade of the resolve-once model.
+#[test]
+fn under_cap_birth_pins_the_start_verdict_in_new_tabs() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("verdictw");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+    let width = SidebarWidth::default();
+    ZellijBackend::with_runtime_dir(xdg.path())
+        .open_sidebar(
+            &SidebarPaneOptions {
+                session_name: name.clone(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-under-cap")),
+                cwd: cwd.path().to_path_buf(),
+                width,
+                // The verdict on a 200-column terminal: 30% is 60 ≤ the 72
+                // cap — the under-cap case the old percentage spelling leaked.
+                birth_size: width.birth_size(Some(200)),
+                rimz_bin: stub,
+                replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
+                resume_panes: Vec::new(),
+            },
+            None,
+        )
+        .expect("open_sidebar");
+    wait_for_pane_count(xdg.path(), &name, 2);
+
+    // The client attaches wider than the start probe: the birth tab's
+    // percentage spelling tracks it (30% of 340 ≈ 102) — the accepted trade.
+    let _client = AttachedClient::attach(xdg.path(), &name, 340, 80);
+    assert!(
+        wait_for_sidebar_columns(xdg.path(), &name, &[100..=103]),
+        "the detached-percentage birth tab tracks the attaching client, got {:?}",
+        sidebar_columns_by_tab(xdg.path(), &name),
+    );
+
+    // A tab opened from the grown client pins the start verdict exactly:
+    // 60 columns, not 30% of the live 340.
+    open_new_tab(xdg.path(), &name);
+    wait_for_tab_count(xdg.path(), &name, 2);
+    assert!(
+        wait_for_sidebar_columns(xdg.path(), &name, &[100..=103, 60..=60]),
+        "a tab opened after the terminal grew must be born at the start \
+         verdict (60 columns), got {:?}",
+        sidebar_columns_by_tab(xdg.path(), &name),
+    );
+}
+
 /// A `BackgroundViewOptions` for a session whose host is a long-lived `sleep`
 /// and whose sidebar runs the alive-keeping `stub`, so the launched tab is a
 /// faithful `sidebar | host`.
@@ -1163,7 +1222,7 @@ fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundView
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgview")),
             cwd: std::env::temp_dir(),
             width: SidebarWidth::default(),
-            birth_size: BirthSize::Percent(30),
+            birth_size: SidebarWidth::default().birth_size(Some(120)),
             rimz_bin: stub.to_path_buf(),
             replace_existing: false,
             config: rimz::config::MultiplexerConfig::default(),
@@ -1262,7 +1321,7 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgfirst")),
                 cwd: cwd.path().to_path_buf(),
                 width: SidebarWidth::default(),
-                birth_size: BirthSize::Percent(30),
+                birth_size: SidebarWidth::default().birth_size(Some(120)),
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),

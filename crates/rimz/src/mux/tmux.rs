@@ -15,9 +15,9 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    BackgroundViewLaunch, BackgroundViewOptions, BirthSize, CommandSpec, DaemonView, MuxBackend,
-    MuxErr, PaneCapture, PaneListOptions, Result, SessionOptions, SidebarLiveness,
-    SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, ViewSidebars, ensure_pane_backend,
+    BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, DaemonView, MuxBackend, MuxErr,
+    PaneCapture, PaneListOptions, Result, SessionOptions, SidebarLiveness, SidebarPaneOptions,
+    SidebarRecovery, SplitPaneOptions, ViewSidebars, ensure_pane_backend,
 };
 use crate::config::TmuxConfig;
 use crate::feed::PaneRef;
@@ -319,17 +319,6 @@ impl TmuxBackend {
 /// what `pane_current_command` reports.
 const SIDEBAR_BIN_NAME: &str = "rimz-sidebar";
 
-/// The `-l` argument for `split-window`, spelling the launch path's birth-size
-/// decision: an absolute column count when the `sidebar.max_cols` cap bites
-/// (correct even before attach — `ensure_session` sizes a detached birth with
-/// `-x`/`-y`), else a percentage string so the split tracks terminal size.
-fn sidebar_size_arg(birth_size: BirthSize) -> String {
-    match birth_size {
-        BirthSize::Capped { cols, .. } => cols.to_string(),
-        BirthSize::Percent(percent) => format!("{percent}%"),
-    }
-}
-
 /// The `rimz sidebar serve …` argv a tmux sidebar pane runs. Shared by initial
 /// launch and in-place recovery so the two cannot drift.
 fn sidebar_serve_command(opts: &SidebarPaneOptions) -> Vec<String> {
@@ -600,11 +589,20 @@ impl MuxBackend for TmuxBackend {
         // `open_background_view` (`swap-window`) rather than a birth layout; the
         // `daemon` hint is Zellij's concern and ignored here.
         // Managed sidebar pane per docs/internals/multiplexers.md:
-        //   tmux split-window -d -h -l <width>% -b -t <session> 'rimz sidebar serve ...'
+        //   tmux split-window -d -h -l <cols> -b -t <session> 'rimz sidebar serve ...'
         // `-d` keeps the spawning client focused on its existing pane;
         // `-b` places the new pane before the target so the sidebar sits
         // on the left. Workspace identity is passed directly to the spawned
         // renderer command.
+        // The split sizes from the just-born window: `ensure_session` birthed
+        // it at the probed `-x`/`-y` geometry (or an existing room sits at its
+        // clients' real geometry), so `target_cols` of the live width is the
+        // start verdict in columns. The verdict's percentage spelling is the
+        // safe fallback when the width is unreadable.
+        let size = match self.window_width(&opts.session_name) {
+            Some(total) => opts.width.target_cols(total).to_string(),
+            None => format!("{}%", opts.birth_size.percent),
+        };
         let command = sidebar_serve_command(opts);
         self.cmd()
             .args([
@@ -612,7 +610,7 @@ impl MuxBackend for TmuxBackend {
                 "-d".to_owned(),
                 "-h".to_owned(),
                 "-l".to_owned(),
-                sidebar_size_arg(opts.birth_size),
+                size,
                 "-b".to_owned(),
                 "-t".to_owned(),
                 opts.session_name.clone(),
@@ -625,10 +623,13 @@ impl MuxBackend for TmuxBackend {
         // sidebar+terminal split. tmux has no tab template, so we install a
         // session-scoped `after-new-window` hook that re-runs the same left
         // split in each new window. `-b -d` keep the sidebar left and focus on
-        // the new window's terminal, exactly as the initial window.
+        // the new window's terminal, exactly as the initial window. The hook
+        // pins the verdict's fixed columns: a new window instantiates at the
+        // attached client's real geometry, and a raw percentage there would
+        // re-evaluate against it — exactly how the cap used to vanish.
         let serve = command.join(" ");
-        let size = sidebar_size_arg(opts.birth_size);
-        let hook = format!("split-window -h -b -d -l {size} '{serve}'");
+        let cols = opts.birth_size.cols;
+        let hook = format!("split-window -h -b -d -l {cols} '{serve}'");
         self.cmd()
             .args([
                 "set-hook".to_owned(),
@@ -874,22 +875,6 @@ mod tests {
             "a daemon host marks the view so reload never collapses it as an orphan",
         );
         assert!(views[0].sidebar_panes.is_empty());
-    }
-
-    #[test]
-    fn sidebar_size_arg_spells_the_birth_size() {
-        // A percent birth tracks terminal size; a capped birth lands the
-        // `max_cols` cap exactly, the instant the split exists — tmux always
-        // splits at live geometry, so the fixed spelling is the one used.
-        assert_eq!(sidebar_size_arg(BirthSize::Percent(30)), "30%");
-        let cap = std::num::NonZeroU16::new(72).expect("nonzero");
-        assert_eq!(
-            sidebar_size_arg(BirthSize::Capped {
-                cols: cap,
-                percent: 21,
-            }),
-            "72",
-        );
     }
 
     #[test]

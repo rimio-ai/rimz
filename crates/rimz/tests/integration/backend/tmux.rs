@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::tmux::{self, MIN_TMUX_VERSION};
 use rimz::mux::{
-    BirthSize, MuxBackend, PaneListOptions, SessionOptions, SidebarPaneOptions, SidebarWidth,
+    MuxBackend, PaneListOptions, SessionOptions, SidebarPaneOptions, SidebarWidth,
     SplitPaneOptions, TmuxBackend,
 };
 use tempfile::TempDir;
@@ -216,18 +216,18 @@ fn ensure_and_list_sessions_round_trip() {
     );
 }
 
-/// The launch path's width decision lands at birth, with no post-birth resize:
+/// The launch path's width verdict lands at birth, with no post-birth resize:
 /// `ensure_session` sizes the detached session from the probed terminal
-/// (`-x`/`-y`), and `open_sidebar` spells the split's `-l` from the birth size
-/// — fixed at `max_cols` when the percentage would exceed it (300 columns →
-/// exactly 72), the percentage otherwise (100 columns → ~30).
+/// (`-x`/`-y`), and `open_sidebar` sizes the split's `-l` from the just-born
+/// window — `min(30%, max_cols)` in columns, exact on both sides of the cap
+/// (300 columns → 72, 100 columns → 30).
 #[test]
 fn sidebar_split_is_born_at_the_birth_size() {
     require_tmux!();
 
     let server = TmuxServer::new();
     let width = SidebarWidth::default();
-    for (session, cols, expected) in [("rimz-cap", 300u16, 72..=72u64), ("rimz-pct", 100, 28..=32)]
+    for (session, cols, expected) in [("rimz-cap", 300u16, 72..=72u64), ("rimz-pct", 100, 30..=30)]
     {
         server
             .backend
@@ -292,6 +292,98 @@ fn sidebar_split_is_born_at_the_birth_size() {
             expected.contains(&born),
             "a {cols}-column birth must land the sidebar at {expected:?} columns, got {born}",
         );
+    }
+}
+
+/// The `after-new-window` hook pins the start verdict's fixed columns, so a
+/// window opened after the terminal grows is still born at the width resolved
+/// at launch — a raw percentage in the hook would re-evaluate against the new
+/// geometry, which is exactly how the cap used to vanish from a session.
+#[test]
+fn new_window_pins_the_start_verdict_after_a_resize() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    let width = SidebarWidth::default();
+    server
+        .backend
+        .ensure_session(&SessionOptions {
+            session_name: "verdict".to_owned(),
+            cwd: std::env::temp_dir(),
+            config: rimz::config::MultiplexerConfig::default(),
+            detected_size: Some((200, 50)),
+        })
+        .expect("ensure_session");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    server
+        .backend
+        .open_sidebar(
+            &SidebarPaneOptions {
+                session_name: "verdict".to_owned(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-verdict")),
+                cwd: std::env::temp_dir(),
+                width,
+                // The verdict on a 200-column terminal: 30% is 60 ≤ the 72
+                // cap — the under-cap case the old percentage spelling leaked.
+                birth_size: width.birth_size(Some(200)),
+                rimz_bin: stub,
+                replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
+                resume_panes: Vec::new(),
+            },
+            None,
+        )
+        .expect("open_sidebar");
+
+    // The terminal "grows": windows born from now on adopt 340 columns.
+    server.tmux(&["set-option", "-t", "verdict", "default-size", "340x50"]);
+    server.tmux(&["new-window", "-t", "verdict"]);
+    assert_eq!(
+        server.display("verdict:1", "#{window_width}"),
+        "340",
+        "the new window adopts the grown geometry",
+    );
+
+    assert_eq!(
+        left_pane_width(&server, "verdict:1"),
+        Some(60),
+        "a window opened after the terminal grew must be born at the start \
+         verdict (60 columns), not a re-evaluated percentage of 340",
+    );
+}
+
+/// The width of the left (`pane_left == 0`) pane in `target`, polling until
+/// the window holds a second, hook-docked pane or the budget elapses.
+fn left_pane_width(server: &TmuxServer, target: &str) -> Option<u64> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let out = Command::new("tmux")
+            .args([
+                "-S",
+                server.socket.to_str().expect("utf8 socket"),
+                "list-panes",
+                "-t",
+                target,
+                "-F",
+                "#{pane_left}:#{pane_width}",
+            ])
+            .output()
+            .expect("tmux list-panes");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let panes: Vec<&str> = stdout.lines().filter(|line| !line.is_empty()).collect();
+        if out.status.success()
+            && panes.len() >= 2
+            && let Some(width) = panes.iter().find_map(|line| {
+                let (left, width) = line.split_once(':')?;
+                (left == "0").then(|| width.parse().ok()).flatten()
+            })
+        {
+            return Some(width);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -372,7 +464,7 @@ fn open_background_view_creates_named_window_idempotently() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgview")),
         cwd: std::env::temp_dir(),
         width: SidebarWidth::default(),
-        birth_size: BirthSize::Percent(30),
+        birth_size: SidebarWidth::default().birth_size(Some(80)),
         rimz_bin: stub,
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
@@ -457,7 +549,7 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-resume")),
         cwd: std::env::temp_dir(),
         width: SidebarWidth::default(),
-        birth_size: BirthSize::Percent(30),
+        birth_size: SidebarWidth::default().birth_size(Some(80)),
         rimz_bin: stub,
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
@@ -622,7 +714,7 @@ fn open_sidebar_split_window_succeeds() {
                 workspace_id,
                 cwd: std::env::current_dir().expect("cwd"),
                 width: SidebarWidth::default(),
-                birth_size: BirthSize::Percent(30),
+                birth_size: SidebarWidth::default().birth_size(Some(80)),
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
@@ -677,7 +769,7 @@ fn reconcile_sidebars_adds_one_to_a_sidebarless_window() {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-recover")),
                 cwd: std::env::current_dir().expect("cwd"),
                 width: SidebarWidth::default(),
-                birth_size: BirthSize::Percent(30),
+                birth_size: SidebarWidth::default().birth_size(Some(80)),
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
@@ -745,7 +837,7 @@ fn reconcile_sidebars_collapses_an_orphan_sidebar_only_window() {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-orphan")),
                 cwd: std::env::current_dir().expect("cwd"),
                 width: SidebarWidth::default(),
-                birth_size: BirthSize::Percent(30),
+                birth_size: SidebarWidth::default().birth_size(Some(80)),
                 rimz_bin,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
@@ -846,7 +938,7 @@ fn new_window_is_born_with_a_sidebar_and_focused_terminal() {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-newwindow")),
                 cwd: std::env::current_dir().expect("cwd"),
                 width: SidebarWidth::default(),
-                birth_size: BirthSize::Percent(30),
+                birth_size: SidebarWidth::default().birth_size(Some(80)),
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
