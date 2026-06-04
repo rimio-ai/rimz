@@ -90,6 +90,14 @@ pub fn run(args: HooksArgs, globals: &GlobalFlags) -> Result<()> {
 /// in hand to attribute it.
 fn log_lifecycle_transition(ledger: &Ledger, kind: &str, observation: &AgentLifecycleObservation) {
     let Some(agent_id) = observation.agent_id.as_deref() else {
+        // The reducer quarantines a session-less event (no rollup entry) and
+        // stays quiet on replay — this is the once-per-fresh-event warning.
+        warn!(
+            target: "rimz::agent::lifecycle",
+            kind,
+            signal = ?observation.signal,
+            "session-less agent.lifecycle event — the reducer will quarantine it",
+        );
         return;
     };
     // The prior state for this one agent, from the lock-free cached snapshot —

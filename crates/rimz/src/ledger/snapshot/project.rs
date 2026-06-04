@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use tracing::{debug, warn};
+use tracing::debug;
 
 use super::panes::pane_ref_from_id;
 use crate::agents::lifecycle::{self, Transition};
@@ -69,17 +69,19 @@ pub(super) fn reduce_agent_states_seeded(
             );
             continue;
         };
-        // Identity is required: a session-less event is quarantined (logged,
-        // folded to nothing), mirroring the malformed-subagent-identity rule —
+        // Identity is required: a session-less event is quarantined (folded
+        // to nothing), mirroring the malformed-subagent-identity rule —
         // never silently merged into a shared per-kind bucket where two
-        // distinct instances would collapse into one row.
+        // distinct instances would collapse into one row. The ingestion path
+        // warns once with the event in hand; here a `debug!` keeps every
+        // cold rebuild's re-fold quiet.
         let Some(agent_id) = event
             .params
             .get("agent_id")
             .and_then(|v| v.as_str())
             .map(AgentSessionId::from)
         else {
-            warn!(
+            debug!(
                 target: "rimz::agent::lifecycle",
                 event_id = %event.event_id,
                 workspace = %event.workspace_id,
@@ -111,7 +113,7 @@ pub(super) fn reduce_agent_states_seeded(
             && event_parent_agent_id.is_some()
             && event_task.is_none()
         {
-            warn!(
+            debug!(
                 target: "rimz::agent::lifecycle",
                 event_id = %event.event_id,
                 workspace = %event.workspace_id,
