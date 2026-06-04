@@ -50,7 +50,7 @@ One vocabulary runs through the whole sidebar: a shape carries the meaning, colo
 |-------|-------|---------|-----------|
 | `?`   | waiting    | the agent asked something; answer in its pane | yes — yellow, heating amber then red with the age clock; the breath quickens with it, blinking at red |
 | `!`   | attention  | a failed turn, a turn dead on a provider API error, or a working agent gone silent past the stall window | yes — yellow, heating amber then red with the age clock; the breath quickens with it, blinking at red |
-| `⏸`   | rate-limited | resting on an account whose rate-limit window is spent — parked until it resets, resumes with a `continue` | waiting on the reset — held amber, never heats |
+| `⏸`   | rate-limited | on an account whose rate-limit window is spent — parked mid-task or at rest until it resets, resumes with a `continue` | waiting on the reset — held amber, never heats |
 | `⢿`   | working    | running and editing — animates `⣾⣽⣻⢿⡿⣟⣯⣷` in clay | no |
 | `✽`   | thinking   | running, before the turn's first file edit — sparkles `· ✢ ✳ ✶ ✻ ✽` in clay | no |
 | `⠙`   | resolving  | a resolver is answering on the bridge — braille spin | pending, being handled |

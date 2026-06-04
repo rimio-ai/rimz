@@ -220,7 +220,7 @@ impl RateLimitWindow {
     /// Whether this window's budget is spent — the provider reports the cap as
     /// `used_percentage == 100` once it starts refusing requests, so any agent
     /// on the account can only wait for [`resets_at`](Self::resets_at). The
-    /// sidebar projects every resting agent of the kind to
+    /// sidebar parks every agent of the kind outside `waiting`/`failed` to
     /// [`AgentStatus::RateLimited`](crate::feed::AgentStatus::RateLimited) when
     /// this is true.
     pub fn is_spent(&self) -> bool {
@@ -231,7 +231,7 @@ impl RateLimitWindow {
 impl AgentRateLimits {
     /// Whether any reported window is [`spent`](RateLimitWindow::is_spent) — the
     /// account-level "nothing to do but wait" verdict the sidebar projects onto
-    /// every resting agent of the kind.
+    /// every agent of the kind outside `waiting`/`failed`.
     pub fn any_spent(&self) -> bool {
         self.windows.iter().any(RateLimitWindow::is_spent)
     }

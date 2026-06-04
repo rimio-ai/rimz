@@ -533,7 +533,7 @@ impl FeedItem {
 /// Agent status as the sidebar reads it. The first five are the lifecycle
 /// rollup the agent owns and Rimz observes; [`RateLimited`](AgentStatus::RateLimited)
 /// is the one Rimz-*derived* projection — never emitted by a hook, only
-/// projected at snapshot time when a resting agent's account budget is spent
+/// projected at snapshot time when an agent's account budget is spent
 /// (see [`is_rate_limited`]), the same way a stalled `Running` agent is
 /// projected to `Failed`. It lives in the one status enum so it shares the
 /// cockpit tally, ranking, and glyph machinery the lifecycle states flow
@@ -546,10 +546,11 @@ pub enum AgentStatus {
     Idle,
     Success,
     Failed,
-    /// Resting while the account's rate-limit window is spent — parked until the
+    /// Parked while the account's rate-limit window is spent — until the
     /// window resets, auto-resumable with a single `continue`. Attention-class
-    /// but non-actionable: there is nothing to do but wait. Projected from a
-    /// resting status by [`is_rate_limited`], never reported by the agent.
+    /// but non-actionable: there is nothing to do but wait. Projected from an
+    /// `Idle`, `Success`, or `Running` status by [`is_rate_limited`], never
+    /// reported by the agent.
     RateLimited,
 }
 
@@ -606,12 +607,12 @@ pub fn is_turn_dead(
 
 /// Whether an agent should project to [`AgentStatus::RateLimited`]: its
 /// account's rate-limit budget is spent (`account_limited`) while it is in a
-/// calm or rate-limit-retry state — `Idle`, `Success`, or `Running` (without a
-/// live child, which is exempted upstream). A `Running` agent that hit the API
-/// rate limit enters a silent retry loop without a `Stop` hook, so it stays
-/// `Running` indefinitely; projecting it here surfaces the real cause rather
-/// than letting [`is_stalled`] escalate it to `Failed`. `Waiting` (human-
-/// blocked) and `Failed` (explicit error) are never overridden. Like
+/// calm or rate-limit-retry state — `Idle`, `Success`, or `Running`. A
+/// `Running` agent that hit the API rate limit dies or retries without a
+/// `Stop` hook, so it stays `Running` indefinitely; the projection checks this
+/// first so the park surfaces the real cause rather than letting
+/// [`is_turn_dead`] or [`is_stalled`] escalate it to `Failed`. `Waiting`
+/// (human-blocked) and `Failed` (explicit error) are never overridden. Like
 /// [`is_stalled`], this is a Rimz-derived projection over enrichment, never a
 /// status the agent reports.
 pub fn is_rate_limited(status: AgentStatus, account_limited: bool) -> bool {
@@ -812,14 +813,14 @@ mod tests {
     }
 
     #[test]
-    fn rate_limited_only_overrides_resting_states() {
+    fn rate_limited_overrides_all_but_waiting_and_failed() {
         // A spent account parks a calm or rate-limit-retry agent.
         assert!(is_rate_limited(AgentStatus::Idle, true));
         assert!(is_rate_limited(AgentStatus::Success, true));
         // Running is included: a Claude agent that hits a rate-limit API error
-        // enters a silent retry loop without a Stop hook, staying Running
-        // indefinitely. Parking it here surfaces the real cause rather than
-        // letting the stall check escalate it to Failed.
+        // dies or retries without a Stop hook, staying Running indefinitely.
+        // Parking it here surfaces the real cause rather than letting the
+        // turn-death or stall checks escalate it to Failed.
         assert!(is_rate_limited(AgentStatus::Running, true));
         // Blocked on a human or already failed: neither is overridden.
         assert!(!is_rate_limited(AgentStatus::Waiting, true));

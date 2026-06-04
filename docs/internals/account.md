@@ -84,7 +84,7 @@ Same inputs, same bars, regardless of which session reported last.
 
 ### Spent-window verdict → the rate-limited head
 
-A window is **spent** at `used_percentage == 100` with its reset still ahead ([`RateLimitWindow::is_spent`](../../crates/rimz/src/agents/context.rs)). When any window of a kind is spent, the sidebar parks every *resting* (`idle`/`success`) agent of that kind to the derived `rate_limited` status — account-scoped, so a session that just launched into a spent account is parked too. This is display, not correctness: the rollup keeps each agent's true lifecycle status, and the projection and its glyph live in [agent.md → The state machine](./agent.md#the-state-machine) and [the interface legend](../interface/sidebar.md#reading-the-glyphs).
+A window is **spent** at `used_percentage == 100` with its reset still ahead ([`RateLimitWindow::is_spent`](../../crates/rimz/src/agents/context.rs)). When any window of a kind is spent, the sidebar parks every `idle`, `success`, and `running` agent of that kind to the derived `rate_limited` status — account-scoped, so a session that just launched into a spent account is parked too, and a `running` session whose turn died on the limit parks rather than reading as wedged. This is display, not correctness: the rollup keeps each agent's true lifecycle status, and the projection and its glyph live in [agent.md → The state machine](./agent.md#the-state-machine) and [the interface legend](../interface/sidebar.md#reading-the-glyphs).
 
 ### Not-started windows
 

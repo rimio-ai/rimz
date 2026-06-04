@@ -1608,6 +1608,14 @@ pub(super) fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState], 
 /// `snapshot.agents`; a pending ask already folded `waiting` onto the row
 /// upstream and always wins.
 ///
+/// - An agent on an account whose rate-limit budget is spent is projected to
+///   `rate_limited` — parked until the window resets, auto-resumable. The park
+///   leads the derived states because the spent account explains them all: a
+///   rate-limited turn dies on the same transcript marker the turn-death check
+///   reads, its retry loop is silent enough to stall, and its delegated
+///   children share the spent budget. Once the window resets, the kind leaves
+///   the limited set and the checks below escalate an agent that failed to
+///   resume.
 /// - A `running` agent with a live subagent is *waiting on its children*, not
 ///   wedged — its own heartbeat is silent because the work is theirs — so it
 ///   keeps `running` (the renderer paints the delegated-wait head) and is exempt
@@ -1619,8 +1627,6 @@ pub(super) fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState], 
 ///   `turn_error_label`.
 /// - A `running` agent silent past the stall window is projected to `failed`, so
 ///   a wedge becomes actionable instead of a frozen spinner.
-/// - A resting (`idle`/`success`) agent on a rate-limited account is projected
-///   to `rate_limited` — parked until the window resets, auto-resumable.
 fn project_display_status(rows: &mut [SidebarRow], agents: &[AgentState], now: Timestamp) {
     let limited_kinds = rate_limited_kinds(agents, now);
     for row in rows.iter_mut() {
@@ -1640,27 +1646,34 @@ fn project_display_status(rows: &mut [SidebarRow], agents: &[AgentState], now: T
             .any(|child| child.status == AgentStatus::Running);
         // `row.name` is the agent kind for an agent row (see `row_from_agent`),
         // and the rate-limit verdict is account- (kind-) scoped.
-        let projected = if status == AgentStatus::Running && has_live_child {
-            AgentStatus::Running
-        } else if crate::feed::is_turn_dead(status, row.context.as_ref(), row.last_activity) {
-            // The turn died on a provider API error with no `Stop` hook — the
-            // transcript marker is explicit, so escalate now rather than
-            // waiting out the stall window, and surface the upstream text.
-            row.turn_error_label = row
-                .context
-                .as_ref()
-                .and_then(|context| context.turn_error.as_ref())
-                .and_then(|error| error.label.clone());
-            AgentStatus::Failed
-        } else if crate::feed::is_rate_limited(status, limited_kinds.contains(row.name.as_str())) {
-            // Rate-limit check before stall: a running agent in a rate-limit retry loop
-            // is silent by design, so stall must not escalate it to Failed first.
-            AgentStatus::RateLimited
-        } else if crate::feed::is_stalled(status, row.last_activity, now) {
-            AgentStatus::Failed
-        } else {
-            status
-        };
+        let projected =
+            if crate::feed::is_rate_limited(status, limited_kinds.contains(row.name.as_str())) {
+                // The spent-account park leads the chain: a rate-limited turn dies
+                // with the same `isApiErrorMessage` marker the turn-death check
+                // reads (which would mislabel the park as a failure), its retry
+                // loop is silent by design (the stall window would escalate it),
+                // and a delegated child shares the spent account (the delegated
+                // wait would spin forever). Self-healing: once the window resets,
+                // the kind leaves the limited set and the checks below escalate an
+                // agent that failed to resume.
+                AgentStatus::RateLimited
+            } else if status == AgentStatus::Running && has_live_child {
+                AgentStatus::Running
+            } else if crate::feed::is_turn_dead(status, row.context.as_ref(), row.last_activity) {
+                // The turn died on a provider API error with no `Stop` hook — the
+                // transcript marker is explicit, so escalate now rather than
+                // waiting out the stall window, and surface the upstream text.
+                row.turn_error_label = row
+                    .context
+                    .as_ref()
+                    .and_then(|context| context.turn_error.as_ref())
+                    .and_then(|error| error.label.clone());
+                AgentStatus::Failed
+            } else if crate::feed::is_stalled(status, row.last_activity, now) {
+                AgentStatus::Failed
+            } else {
+                status
+            };
         row.status = Some(projected);
         if projected != AgentStatus::Running {
             // Phase is a head on Running — the reduced state's invariant —
@@ -1674,10 +1687,11 @@ fn project_display_status(rows: &mut [SidebarRow], agents: &[AgentState], now: T
 /// The set of provider kinds whose account rate-limit budget is spent: a live
 /// session of the kind reports any window used to the cap whose reset has not yet
 /// passed. Account-scoped — every session of a kind shares the
-/// budget — so the verdict flips *every* resting agent of the kind, including one
-/// that launched straight into a spent account. Reads the same window source as
-/// the provider dashboard (`agent.context.rate_limits`), so the cockpit tally and
-/// the dashboard bars never disagree.
+/// budget — so the verdict parks *every* agent of the kind (idle, success, or
+/// still `running`), including one that launched straight into a spent account.
+/// Reads the same window source as the provider dashboard
+/// (`agent.context.rate_limits`), so the cockpit tally and the dashboard bars
+/// never disagree.
 fn rate_limited_kinds(agents: &[AgentState], now: Timestamp) -> BTreeSet<AgentKind> {
     let mut limited = BTreeSet::new();
     for agent in agents {
@@ -3445,6 +3459,60 @@ mod tests {
             snapshot.worktree_groups[0].rows[0].status,
             Some(AgentStatus::RateLimited),
             "rate-limit outranks stall: agent is paused by the account, not wedged"
+        );
+    }
+
+    #[test]
+    fn rate_limit_outranks_the_turn_death_marker() {
+        // A rate-limited turn dies on a provider API error (`isApiErrorMessage`)
+        // with no `Stop` hook, so the next statusline push delivers the
+        // turn-death marker and the spent window *together*. The park wins
+        // while the window is spent — the agent is paused by the account, not
+        // dead — and the row carries no failure label. Once the window resets,
+        // the still-standing marker escalates an agent that failed to resume.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut session = agent("claude", "limited-dead", AgentStatus::Running, 0);
+        session.worktree_path = Some("/repo/main".to_owned());
+        session.last_activity = Timestamp::now() - std::time::Duration::from_secs(60);
+        let mut context = ctx_with_limits(vec![window(100, 3_600)]);
+        context.turn_error = Some(crate::agents::AgentTurnError {
+            at: Timestamp::now() - std::time::Duration::from_secs(10),
+            label: Some("You've hit your usage limit".to_owned()),
+        });
+        session.context = Some(context);
+
+        let snapshot = SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![session]);
+        let row = &snapshot.worktree_groups[0].rows[0];
+        assert_eq!(
+            row.status,
+            Some(AgentStatus::RateLimited),
+            "rate-limit outranks turn-death: the marker is the limit's own corpse"
+        );
+        assert!(
+            row.turn_error_label.is_none(),
+            "a parked row carries no failure label"
+        );
+    }
+
+    #[test]
+    fn running_parent_with_live_child_in_spent_account_parks() {
+        // Children share the parent's spent account: a window that tips
+        // mid-delegation freezes the child with no `SubagentStop` to come, so
+        // the delegated-wait exemption must not hold the parent at `running`
+        // forever. The park outranks the exemption.
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let mut parent = agent("claude", "root", AgentStatus::Running, 1_000);
+        parent.worktree_path = Some("/repo/main".to_owned());
+        parent.context = Some(ctx_with_limits(vec![window(100, 3_600)]));
+        let mut child = child_state("root", "child-1", AgentStatus::Running, 5);
+        child.kind = AgentKind::new_unchecked("claude");
+
+        let snapshot =
+            SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![parent, child]);
+        assert_eq!(
+            snapshot.worktree_groups[0].rows[0].status,
+            Some(AgentStatus::RateLimited),
+            "a spent account parks the delegating parent — its children share the budget"
         );
     }
 
