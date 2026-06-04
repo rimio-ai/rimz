@@ -95,14 +95,22 @@ pub struct ToolClassification {
 /// declares it here instead of leaving an inferable absence. Three flags
 /// gate behavior today: `rate_limit_windows` (the provider dashboard's
 /// budget bars), `registers_lazily` (cwd pane binding and synthesized idle
-/// rows), and `hook_install` (the install and doctor surfaces). The rest
-/// state the adapter contract up front — pinned by each adapter's tests,
-/// consumed as shared sites grow capability-aware.
+/// rows), `hook_install` (the install and doctor surfaces), and
+/// `native_ask_ui` (whether an unresolved blocking ask becomes a `native_ui`
+/// feed item). The rest state the adapter contract up front — pinned by each
+/// adapter's tests, consumed as shared sites grow capability-aware.
 #[derive(Clone, Copy, Debug)]
 pub struct Capabilities {
     /// Can natively hold a turn open for a permission/plan/question decision
     /// (the blocking-feed channel).
     pub blocking_feed: bool,
+    /// Renders its own ask UI in the pane — permission prompts, plan
+    /// approvals, questions — so a blocking ask no resolver answers can hand
+    /// off to the agent's surface as a `native_ui` feed item. An agent
+    /// without one (pi gates tools only through the extension) resolves the
+    /// same ask neutrally with no feed item: there is no surface the item
+    /// could route the human to, so pushing one would strand it waiting.
+    pub native_ask_ui: bool,
     /// Surfaces rate-limit windows / plan budgets the dashboard can meter.
     pub rate_limit_windows: bool,
     /// Routes child tasks through `Subagent{Start,Stop}` lifecycle signals.

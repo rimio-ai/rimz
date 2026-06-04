@@ -63,12 +63,12 @@ enum HooksSubcmd {
     /// Visible top-level command (not hidden) — the help text doubles as the
     /// install instruction.
     Install {
-        /// Agent name (`claude`, `codex`).
+        /// Agent name (`claude`, `codex`, `pi`).
         agent: String,
     },
     /// Remove the adapter's Rimz-managed hook block.
     Uninstall {
-        /// Agent name (`claude`, `codex`).
+        /// Agent name (`claude`, `codex`, `pi`).
         agent: String,
     },
 }
@@ -462,9 +462,14 @@ fn handle_blocking_feed(
     if fresh.is_empty() {
         // No fresh enrolled resolver: native_ui path. The hook writes the feed
         // item, wakes sidebars, returns the neutral no-op, and exits — the
-        // agent's own UI is the answer surface.
-        let item = build_item(workspace, Surface::NativeUi, feed_kind, agent, payload);
-        ledger.push_feed_item_superseding(&item, supersede, &workspace.session_name)?;
+        // agent's own UI is the answer surface. An agent with no native ask
+        // UI (pi) skips the item: neutral already lets the tool run, and a
+        // `native_ui` row would strand waiting on a surface that doesn't
+        // exist.
+        if agent.descriptor().capabilities.native_ask_ui {
+            let item = build_item(workspace, Surface::NativeUi, feed_kind, agent, payload);
+            ledger.push_feed_item_superseding(&item, supersede, &workspace.session_name)?;
+        }
         emit_neutral(agent, event_name)?;
         return Ok(());
     }
@@ -495,13 +500,17 @@ fn handle_blocking_feed(
             "bridge: downgrading to native_ui — resolver heartbeat stale"
         );
         drop(guard);
-        let mut downgraded = item;
-        downgraded.surface = Surface::NativeUi;
-        downgraded.hook_wait_timeout_seconds = 0;
-        downgraded.chain.clear();
-        downgraded.chain_active_resolver = None;
-        downgraded.chain_active_until = None;
-        ledger.push_feed_item_superseding(&downgraded, supersede, &workspace.session_name)?;
+        // Same native-ask gate as the no-resolver branch: with no surface to
+        // hand off to, the downgrade is the neutral answer alone.
+        if agent.descriptor().capabilities.native_ask_ui {
+            let mut downgraded = item;
+            downgraded.surface = Surface::NativeUi;
+            downgraded.hook_wait_timeout_seconds = 0;
+            downgraded.chain.clear();
+            downgraded.chain_active_resolver = None;
+            downgraded.chain_active_until = None;
+            ledger.push_feed_item_superseding(&downgraded, supersede, &workspace.session_name)?;
+        }
         emit_neutral(agent, event_name)?;
         return Ok(());
     }

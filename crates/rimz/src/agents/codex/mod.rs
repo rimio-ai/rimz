@@ -79,6 +79,7 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     },
     capabilities: Capabilities {
         blocking_feed: true,
+        native_ask_ui: true,
         rate_limit_windows: true,
         subagents: true,
         // Codex has no background-task parking.

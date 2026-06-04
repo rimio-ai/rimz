@@ -13,10 +13,17 @@
 //! `session_before_compact`/`session_shutdown` are the compaction and exit
 //! signals. Spend stays in [`spend`].
 //!
-//! Pi exposes no blocking hook channel, no subagents, no background tasks,
-//! and no rate-limit surface (`docs/internals/adapter/pi-reference.md` →
-//! "What Pi cannot support"), so those capabilities are declared off and the
-//! absences render deliberately.
+//! One wired event blocks: `tool_call`, pi's pre-tool gate, whose extension
+//! handler pi awaits. It classifies as a permission ask so a fresh enrolled
+//! resolver can allow or deny the tool; the decision is pi's own
+//! `ToolCallEventResult` — deny renders `{"block": true, "reason": …}`,
+//! allow renders `{}`. Pi draws no permission prompt of its own
+//! (`native_ask_ui: false`), so an ask nothing answers resolves neutrally —
+//! empty stdout lets the tool run, and no `native_ui` feed item is pushed:
+//! gating is opt-in via a resolver, never Rimz posing questions pi would not
+//! have asked. Subagents, background tasks, and rate-limit windows stay
+//! declared off (`docs/internals/adapter/pi-reference.md` → "What Pi cannot
+//! support") and the absences render deliberately.
 
 pub(crate) mod account;
 pub(crate) mod payloads;
@@ -25,7 +32,7 @@ pub(crate) mod spend;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
@@ -34,10 +41,10 @@ use super::lifecycle::LifecycleSignal;
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, Result, agent_config_path, classify_agent_hook,
-    optional_payload_string, read_optional_file, sanitize_user_prompt,
+    HookInstallReport, HookUninstallReport, Result, agent_config_path, choice_is_allow,
+    classify_agent_hook, optional_payload_string, read_optional_file, sanitize_user_prompt,
 };
-use crate::feed::{FeedItem, Resolution};
+use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ids::AgentSessionId;
 use crate::ledger::atomic;
 
@@ -60,27 +67,35 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         editing: &["edit", "write"],
     },
     capabilities: Capabilities {
+        // `tool_call` is pi's awaited pre-tool gate: the extension handler
+        // holds the tool until the bridge answers, so an enrolled resolver
+        // can allow or deny it.
+        blocking_feed: true,
         // Pi never asks natively — no permission prompts, plan approvals, or
-        // questions — so there is nothing to route. An invented gate would be
-        // Rimz posing the question, never the default install.
-        blocking_feed: false,
+        // questions — so an ask no resolver answers has no pi surface to
+        // route the human to. It resolves neutrally (the tool runs) with no
+        // `native_ui` feed item: gating is opt-in via a resolver, never Rimz
+        // posing a question pi would not have asked.
+        native_ask_ui: false,
         rate_limit_windows: false,
         subagents: false,
         background_tasks: false,
         registers_lazily: false,
         hook_install: true,
     },
-    // Pi imposes no handler deadline, so any cap is Rimz-chosen — moot while
-    // `blocking_feed` is off, since nothing ever blocks on the bridge.
-    hook_cap: Duration::from_secs(60),
+    // Pi awaits the `tool_call` handler with no kill window of its own, so
+    // the cap is purely Rimz's bridge ceiling — matched to Claude's so a
+    // resolver chain budgets identically across agents.
+    hook_cap: Duration::from_secs(120),
     process_names: &["pi"],
     hook_install_unavailable: None,
     thread_key: ThreadKey::PerFile,
 };
 
-/// The lifecycle events the embedded extension forwards — the single source of
-/// truth for classification and the install report. Mirrors the `pi.on(...)`
-/// registrations in [`extension.ts`](./extension.ts) (asserted by test).
+/// The non-blocking events the embedded extension forwards — the lifecycle
+/// channel, the single source of truth for classification. Mirrors the
+/// `pi.on(...)` registrations in [`extension.ts`](./extension.ts) (asserted
+/// by test).
 const LIFECYCLE_EVENTS: &[&str] = &[
     "session_start",
     "before_agent_start",
@@ -88,6 +103,18 @@ const LIFECYCLE_EVENTS: &[&str] = &[
     "tool_execution_end",
     "session_before_compact",
     "session_shutdown",
+];
+
+/// Everything the extension wires, for the install/uninstall reports: the
+/// lifecycle set plus the blocking `tool_call` gate.
+const WIRED_EVENTS: &[&str] = &[
+    "session_start",
+    "before_agent_start",
+    "agent_end",
+    "tool_execution_end",
+    "session_before_compact",
+    "session_shutdown",
+    "tool_call",
 ];
 
 /// The Rimz pi extension, embedded at compile time and written whole-file on
@@ -103,21 +130,48 @@ impl AgentAdapter for PiAdapter {
     }
 
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
-        // No blocking events: pi has no native ask to route, so every wired
-        // event rides the lifecycle channel.
-        classify_agent_hook(event_name, None, LIFECYCLE_EVENTS)
+        // `tool_call` is pi's only blocking gate — every tool routes through
+        // it, so it classifies as a permission ask. Everything else rides the
+        // lifecycle channel.
+        let feed_kind = (event_name == "tool_call").then_some(FeedKind::Permission);
+        classify_agent_hook(event_name, feed_kind, LIFECYCLE_EVENTS)
     }
 
-    fn render_decision(&self, _item: &FeedItem, _resolution: &Resolution) -> Result<Value> {
-        Err(AgentErr::Render {
-            agent: "pi",
-            reason: "pi exposes no blocking hook channel".to_owned(),
-        })
+    fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
+        match item.kind {
+            FeedKind::Permission => {
+                if choice_is_allow(resolution) {
+                    // Pi mutates tool arguments only in-process (the extension
+                    // handler edits `event.input`); the bridge cannot reach
+                    // that, so an `updatedInput` riding the resolution is
+                    // ignored and a plain allow renders.
+                    Ok(json!({}))
+                } else {
+                    let reason = resolution
+                        .reason
+                        .clone()
+                        .or_else(|| {
+                            resolution
+                                .decision
+                                .get("reason")
+                                .and_then(Value::as_str)
+                                .map(ToOwned::to_owned)
+                        })
+                        .unwrap_or_else(|| "denied by resolver".to_owned());
+                    Ok(json!({ "block": true, "reason": reason }))
+                }
+            }
+            other => Err(AgentErr::Render {
+                agent: "pi",
+                reason: format!("unsupported feed kind {other:?}"),
+            }),
+        }
     }
 
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
-        // The extension's child is fire-and-forget — nothing reads its
-        // stdout, so the neutral path prints nothing.
+        // Empty stdout is the extension's allow: pi has no native prompt to
+        // fall back to, so "no answer" must let the tool run. This is the
+        // neutral the no-resolver and bridge-timeout paths print.
         Ok(None)
     }
 
@@ -308,7 +362,7 @@ fn hooks_installed_at(path: &Path) -> bool {
 }
 
 fn installed_event_names() -> Vec<String> {
-    LIFECYCLE_EVENTS.iter().map(|&e| e.to_owned()).collect()
+    WIRED_EVENTS.iter().map(|&e| e.to_owned()).collect()
 }
 
 #[cfg(test)]
@@ -321,22 +375,26 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn pi_classifies_lifecycle_events_and_unknowns() {
+    fn pi_classifies_the_blocking_gate_lifecycle_events_and_unknowns() {
+        let tool_call = PiAdapter.classify_hook("tool_call", &Value::Null);
+        assert_eq!(tool_call.class, AgentHookClass::BlockingFeed);
+        assert_eq!(tool_call.feed_kind, Some(FeedKind::Permission));
         for event in LIFECYCLE_EVENTS {
             let classified = PiAdapter.classify_hook(event, &Value::Null);
             assert_eq!(classified.class, AgentHookClass::Lifecycle, "event {event}");
             assert_eq!(classified.feed_kind, None, "event {event} never blocks");
         }
-        for event in ["PermissionRequest", "SessionStart", "tool_call", "bogus"] {
+        for event in ["PermissionRequest", "SessionStart", "bogus"] {
             let classified = PiAdapter.classify_hook(event, &Value::Null);
             assert_eq!(classified.class, AgentHookClass::Unknown, "event {event}");
         }
     }
 
     #[test]
-    fn pi_declares_its_absent_surfaces() {
+    fn pi_declares_its_surfaces() {
         let capabilities = PiAdapter.descriptor().capabilities;
-        assert!(!capabilities.blocking_feed);
+        assert!(capabilities.blocking_feed);
+        assert!(!capabilities.native_ask_ui);
         assert!(!capabilities.rate_limit_windows);
         assert!(!capabilities.subagents);
         assert!(!capabilities.background_tasks);
@@ -542,14 +600,94 @@ mod tests {
         insta::assert_snapshot!(format!("{rendered:?}"), @"None");
     }
 
-    #[test]
-    fn render_decision_is_an_explicit_error() {
+    fn permission_item() -> FeedItem {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/rimz-test"));
-        let item = FeedItem::new(
+        FeedItem::new(
             workspace,
             Surface::Bridge,
             FeedKind::Permission,
             "allow?",
+            "pi",
+            "agent-hook",
+        )
+    }
+
+    #[test]
+    fn permission_allow_shape_is_pinned() {
+        let resolution =
+            Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::HookBridge);
+        let rendered = PiAdapter
+            .render_decision(&permission_item(), &resolution)
+            .unwrap();
+        insta::assert_json_snapshot!(rendered, @"{}");
+    }
+
+    #[test]
+    fn permission_allow_ignores_updated_input() {
+        // Pi mutates tool args only in-process; the bridge can't, so an
+        // updatedInput riding the resolution renders as a plain allow.
+        let resolution = Resolution::new(
+            json!({ "choice": "allow", "updatedInput": { "command": "ls -la" } }),
+            ResolutionMethod::HookBridge,
+        );
+        let rendered = PiAdapter
+            .render_decision(&permission_item(), &resolution)
+            .unwrap();
+        insta::assert_json_snapshot!(rendered, @"{}");
+    }
+
+    #[test]
+    fn permission_deny_with_reason_shape_is_pinned() {
+        let mut resolution =
+            Resolution::new(json!({ "choice": "deny" }), ResolutionMethod::HookBridge);
+        resolution.reason = Some("rm -rf is not on the allowlist".to_owned());
+        let rendered = PiAdapter
+            .render_decision(&permission_item(), &resolution)
+            .unwrap();
+        insta::assert_json_snapshot!(rendered, @r###"
+        {
+          "block": true,
+          "reason": "rm -rf is not on the allowlist"
+        }
+        "###);
+    }
+
+    #[test]
+    fn permission_deny_reads_decision_reason_then_defaults() {
+        let resolution = Resolution::new(
+            json!({ "choice": "deny", "reason": "policy says no" }),
+            ResolutionMethod::HookBridge,
+        );
+        let rendered = PiAdapter
+            .render_decision(&permission_item(), &resolution)
+            .unwrap();
+        insta::assert_json_snapshot!(rendered, @r###"
+        {
+          "block": true,
+          "reason": "policy says no"
+        }
+        "###);
+
+        let bare = Resolution::new(json!({ "choice": "deny" }), ResolutionMethod::HookBridge);
+        let rendered = PiAdapter
+            .render_decision(&permission_item(), &bare)
+            .unwrap();
+        insta::assert_json_snapshot!(rendered, @r###"
+        {
+          "block": true,
+          "reason": "denied by resolver"
+        }
+        "###);
+    }
+
+    #[test]
+    fn non_permission_kinds_refuse_to_render() {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/rimz-test"));
+        let item = FeedItem::new(
+            workspace,
+            Surface::Bridge,
+            FeedKind::PlanApproval,
+            "approve?",
             "pi",
             "agent-hook",
         );
@@ -624,15 +762,20 @@ mod tests {
     /// The embedded extension and this adapter agree: the marker, the feed
     /// command, and every wired event registration are present in the source.
     #[test]
-    fn extension_source_wires_every_lifecycle_event() {
+    fn extension_source_wires_every_event() {
         assert!(EXTENSION_SOURCE.contains("_rimz_managed"));
         assert!(EXTENSION_SOURCE.contains(r#"["hooks", "feed", "--source", "pi"]"#));
         assert!(EXTENSION_SOURCE.contains("RIMZ_AGENT_PID"));
-        for event in LIFECYCLE_EVENTS {
+        // The hook child honours a binary override so tests and unusual
+        // PATHs can pin the rimz the extension spawns.
+        assert!(EXTENSION_SOURCE.contains("RIMZ_BIN"));
+        for event in WIRED_EVENTS {
             assert!(
                 EXTENSION_SOURCE.contains(&format!("pi.on(\"{event}\"")),
                 "extension registers {event}",
             );
         }
+        // The blocking gate renders pi's ToolCallEventResult deny shape.
+        assert!(EXTENSION_SOURCE.contains("block: true"));
     }
 }
