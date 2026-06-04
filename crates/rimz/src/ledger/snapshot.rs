@@ -2713,7 +2713,21 @@ fn canonical_model(model: &str) -> String {
 /// the event omits them. A `UserPromptSubmit` therefore moves the agent to
 /// running without erasing its model line.
 fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
-    let mut map: BTreeMap<(String, String), AgentState> = BTreeMap::new();
+    reduce_agent_states_seeded(BTreeMap::new(), events)
+        .into_values()
+        .collect()
+}
+
+/// [`reduce_agent_states`] resuming from a prior fold map. Each event reads
+/// only its own key's prior state, so folding a delta onto the map the
+/// earlier prefix produced equals folding the whole log from scratch — the
+/// property the incremental [`catch_up_rollup`] and the rotation carryover
+/// both stand on.
+fn reduce_agent_states_seeded(
+    seed: BTreeMap<(String, String), AgentState>,
+    events: &[EventEnvelope],
+) -> BTreeMap<(String, String), AgentState> {
+    let mut map = seed;
     for event in events {
         if event.method != "agent.lifecycle" {
             continue;
@@ -2945,36 +2959,153 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
         };
         map.insert((kind, agent_id), state);
     }
-    map.into_values().collect()
+    map
 }
 
-/// Rebuild the snapshot from the active event log, the agent carryover, and
-/// the feed dir, then persist it atomically. The resulting JSON is what
-/// `rimz sidebar snapshot --json` reads on attach.
+/// Bump when [`RollupCache`]'s shape changes — a mismatched cache reads as
+/// absent and cold-rebuilds.
+const ROLLUP_CACHE_VERSION: u32 = 1;
+
+/// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
+/// the raw pre-projection fold map and this generation's tombstones, stamped
+/// with the log extent folded so far. Cache-class — reconstructible from the
+/// event log and the carryover at any time, so it renames atomically without
+/// fsync and any read failure falls back to the full fold.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RollupCache {
+    pub version: u32,
+    pub extent: event_log::LogExtent,
+    pub raw_agents: Vec<AgentState>,
+    pub tombstones: Vec<(String, String)>,
+}
+
+fn read_rollup_cache(path: &Path) -> Option<RollupCache> {
+    let bytes = fs::read(path).ok()?;
+    let cache: RollupCache = serde_json::from_slice(&bytes).ok()?;
+    (cache.version == ROLLUP_CACHE_VERSION).then_some(cache)
+}
+
+#[must_use = "atomicity barrier; check the result"]
+pub(crate) fn write_rollup_cache(path: &Path, cache: &RollupCache) -> Result<()> {
+    atomic::write_temp_then_rename_cache(path, cache)?;
+    Ok(())
+}
+
+/// Catch the rollup up to the live log: resume the fold from
+/// `snapshots/rollup.json`, fold only the frames appended since its extent,
+/// and return the refreshed cache beside the carryover-merged rollup.
 ///
-/// Cost is O(active-events + items) per call. Archived event logs are never
-/// rescanned; rotation pre-projects the agent rollup into
-/// `agents.carryover.json` so the reducer stays bounded.
+/// O(delta bytes) on the common path. Any miss — an absent or
+/// shape-mismatched cache, or an extent past the live log (a rotation this
+/// cache predates) — falls back to the full fold from offset zero, the
+/// universal recovery path. Read-only: the caller that owns a write
+/// serialization point (a locked rebuild, the single-flighted publisher)
+/// persists the returned cache; a plain reader just uses it.
+pub fn catch_up_rollup(paths: &StatePaths) -> Result<(RollupCache, Vec<AgentState>)> {
+    let log_len = fs::metadata(&paths.events_log)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    let cache = read_rollup_cache(&paths.rollup_cache)
+        .filter(|cache| cache.extent.offset <= log_len);
+    let (seed, mut tombstones, generation, base) = match cache {
+        Some(RollupCache {
+            extent,
+            raw_agents,
+            tombstones,
+            ..
+        }) => {
+            let seed: BTreeMap<(String, String), AgentState> = raw_agents
+                .into_iter()
+                .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent))
+                .collect();
+            let tombstones: BTreeSet<(String, String)> = tombstones.into_iter().collect();
+            (seed, tombstones, extent.generation, extent.offset)
+        }
+        None => (BTreeMap::new(), BTreeSet::new(), 0, 0),
+    };
+    let (delta, end) = event_log::read_from_offset(&paths.events_log, base)?;
+    let map = reduce_agent_states_seeded(seed, &delta);
+    tombstones.extend(agent_tombstones_for_events(&delta));
+    let raw_agents: Vec<AgentState> = map.into_values().collect();
+    let carryover = read_carryover(&paths.agents_carryover)?;
+    let merged = merge_agent_rollups_with_tombstones(&carryover.agents, &raw_agents, &tombstones);
+    let refreshed = RollupCache {
+        version: ROLLUP_CACHE_VERSION,
+        extent: event_log::LogExtent {
+            generation,
+            offset: end,
+        },
+        raw_agents,
+        tombstones: tombstones.into_iter().collect(),
+    };
+    Ok((refreshed, merged))
+}
+
+/// Reseed `snapshots/rollup.json` for the next log generation. Called by
+/// rotation under the workspace lock, right after the old log's rollup is
+/// merged into the carryover: the new generation starts with an empty fold
+/// at offset zero, and the bumped generation keeps any in-flight reader's
+/// pre-rotation extent from aliasing the fresh log.
+#[must_use = "atomicity barrier; check the result"]
+pub fn reseed_rollup_cache_for_rotation(paths: &StatePaths) -> Result<()> {
+    let generation = read_rollup_cache(&paths.rollup_cache)
+        .map(|cache| cache.extent.generation)
+        .unwrap_or(0);
+    write_rollup_cache(
+        &paths.rollup_cache,
+        &RollupCache {
+            version: ROLLUP_CACHE_VERSION,
+            extent: event_log::LogExtent {
+                generation: generation + 1,
+                offset: 0,
+            },
+            raw_agents: Vec::new(),
+            tombstones: Vec::new(),
+        },
+    )
+}
+
+/// Rebuild the snapshot caches from the live ledger and persist both: the
+/// rollup fold base (`rollup.json`) and the derived view (`latest.json`).
+/// The resulting JSON is what `rimz sidebar snapshot --json` reads on
+/// attach. Caller owns a write serialization point (the workspace lock, or
+/// the publish single-flight).
+///
+/// Cost is O(delta bytes + pending items) per call: the fold resumes from
+/// the persisted base. Archived event logs are never rescanned; rotation
+/// pre-projects the agent rollup into `agents.carryover.json` and reseeds
+/// the fold base, so the reducer stays bounded.
 pub fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
-    let snapshot = build_from(paths)?;
+    let (rollup, agents) = catch_up_rollup(paths)?;
+    let snapshot = assemble_snapshot(paths, rollup.extent, agents)?;
+    // The fold base lands first: its extent always runs at or past
+    // `latest.json`'s stamp, so a crash between the two leaves a stale view
+    // that the next catch-up refreshes from the newer base.
+    write_rollup_cache(&paths.rollup_cache, &rollup)?;
     write_temp_then_rename(&paths.latest_snapshot, &snapshot)?;
     Ok(snapshot)
 }
 
+/// Build the snapshot view from the live ledger without persisting anything —
+/// the read-only twin of [`rebuild`], safe from a lock-free reader.
 pub fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
+    let (rollup, agents) = catch_up_rollup(paths)?;
+    assemble_snapshot(paths, rollup.extent, agents)
+}
+
+fn assemble_snapshot(
+    paths: &StatePaths,
+    extent: event_log::LogExtent,
+    agents: Vec<AgentState>,
+) -> Result<SidebarSnapshot> {
     // Pending items only: the view folds nothing else, and the pending scan
     // stays O(pending) regardless of feed history.
     let items = feed_store::list_pending(&paths.feed_dir)?;
-    let (events, log_end) = event_log::read_from_offset(&paths.events_log, 0)?;
-    let carryover = read_carryover(&paths.agents_carryover)?;
-    let agents = agent_rollup_with_carryover(&events, carryover.agents);
-    // Apply the same runtime liveness expel the live read does
-    // (`Ledger::snapshot` → `runtime_projection(Runtime)`), so the persisted
-    // `latest.json` matches what a reader would have projected — never
-    // resurrecting a dead-pid agent or an ownerless-script ask. Pure here: the
-    // write paths that call `rebuild` already hold the workspace lock, so this
-    // re-filters in memory rather than re-locking.
-    let projection = RuntimeProjection::from_parts(items, events, agents, RuntimeScope::Runtime);
+    // Apply the same runtime liveness expel the live read does, so the
+    // persisted `latest.json` matches what a reader would have projected —
+    // never resurrecting a dead-pid agent or an ownerless-script ask.
+    let projection =
+        RuntimeProjection::from_parts(items, Vec::new(), agents, RuntimeScope::Runtime);
     let mut snapshot = SidebarSnapshot::build_with_agents(
         paths.workspace_id.clone(),
         projection.items,
@@ -2983,13 +3114,10 @@ pub fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
     snapshot.reap_stale_sessions(Timestamp::now());
     snapshot.display_name = display_name_for(paths);
     let mut snapshot = snapshot.with_project_root(project_root_for(paths));
-    // Stamp the extent the fold consumed: bytes [0, log_end) of the active
-    // log. The freshness gate compares it against the live log length, so a
-    // racing append can never pass a stale rollup off as current.
-    snapshot.reflects_log = Some(event_log::LogExtent {
-        generation: 0,
-        offset: log_end,
-    });
+    // Stamp the extent the fold consumed. The freshness gate compares it
+    // against the live log length, so a racing append can never pass a
+    // stale rollup off as current.
+    snapshot.reflects_log = Some(extent);
     Ok(snapshot)
 }
 

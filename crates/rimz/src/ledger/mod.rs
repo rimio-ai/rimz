@@ -360,6 +360,9 @@ impl Ledger {
 
             let record = workspace_record::WorkspaceRecord::from_resolved(workspace);
             workspace_record::write(&self.inner.paths, &record)?;
+            // The log was wholesale-replaced: every byte offset in the fold
+            // base is void. Reseed it as a new generation before rebuilding.
+            snapshot::reseed_rollup_cache_for_rotation(&self.inner.paths)?;
             snapshot::rebuild(&self.inner.paths)?;
 
             (feed_items_rewritten, events_rewritten)
@@ -1042,6 +1045,10 @@ impl Ledger {
             if rotation.is_rotated() {
                 let carryover = snapshot::EventCarryover { agents: merged };
                 snapshot::write_carryover(&self.inner.paths.agents_carryover, &carryover)?;
+                // The fresh log is a new generation: reseed the fold base at
+                // offset zero with the generation bumped, so a reader's
+                // pre-rotation extent can never alias into the new log.
+                snapshot::reseed_rollup_cache_for_rotation(&self.inner.paths)?;
                 snapshot::rebuild(&self.inner.paths)?;
             }
 

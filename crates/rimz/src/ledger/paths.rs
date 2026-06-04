@@ -34,6 +34,7 @@ pub struct StatePaths {
     pub agents_carryover: PathBuf,
     pub snapshots_dir: PathBuf,
     pub latest_snapshot: PathBuf,
+    pub rollup_cache: PathBuf,
     pub feed_dir: PathBuf,
     pub locks_dir: PathBuf,
     pub workspace_lock: PathBuf,
@@ -62,6 +63,7 @@ impl StatePaths {
             events_archive_dir: root.join("events.log.archive"),
             agents_carryover: root.join("agents.carryover.json"),
             latest_snapshot: snapshots_dir.join("latest.json"),
+            rollup_cache: snapshots_dir.join("rollup.json"),
             snapshots_dir,
             feed_dir,
             workspace_lock: locks_dir.join("workspace.lock"),
@@ -283,6 +285,8 @@ mod tests {
         assert!(paths.root.ends_with(Path::new(id.as_str())));
         assert_eq!(paths.events_log.file_name().unwrap(), "events.log.jsonl");
         assert_eq!(paths.latest_snapshot.file_name().unwrap(), "latest.json");
+        assert_eq!(paths.rollup_cache.file_name().unwrap(), "rollup.json");
+        assert!(paths.rollup_cache.starts_with(&paths.snapshots_dir));
         assert_eq!(
             paths.workspace_record.file_name().unwrap(),
             "workspace.json"
