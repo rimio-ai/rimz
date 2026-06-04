@@ -251,6 +251,10 @@ impl AgentAdapter for PiAdapter {
     }
 
     fn ends_session(&self, event_name: &str) -> bool {
+        // The extension skips the `/reload` shutdown (the same session id
+        // re-registers in place, and a fire-and-forget tombstone would race
+        // it), so every shutdown that arrives here is a real end: quit, or a
+        // new/resume/fork replacing this session.
         event_name == "session_shutdown"
     }
 
@@ -859,5 +863,8 @@ mod tests {
         }
         // The blocking gate renders pi's ToolCallEventResult deny shape.
         assert!(EXTENSION_SOURCE.contains("block: true"));
+        // The /reload shutdown is skipped — its tombstone would race the
+        // same-id re-register.
+        assert!(EXTENSION_SOURCE.contains(r#"ev?.reason === "reload""#));
     }
 }

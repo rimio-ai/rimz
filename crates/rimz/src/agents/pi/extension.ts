@@ -88,7 +88,15 @@ export default function rimz(pi) {
     }),
   );
   pi.on("session_before_compact", (_ev, ctx) => feed("session_before_compact", ctx, {}));
-  pi.on("session_shutdown", (ev, ctx) => feed("session_shutdown", ctx, { reason: ev?.reason }));
+  pi.on("session_shutdown", (ev, ctx) => {
+    // A /reload tears down and re-registers the SAME session id; both
+    // children are fire-and-forget, so a tombstone racing the re-register
+    // could drop the fresh row. Skip the tombstone — the reloaded
+    // extension's session_start re-registers in place. quit/new/resume/fork
+    // genuinely end this session.
+    if (ev?.reason === "reload") return;
+    feed("session_shutdown", ctx, { reason: ev?.reason });
+  });
 
   // The blocking pre-tool gate. Pi awaits this handler, so the bridge wait
   // happens here: spawn rimz, await its exit, read the decision from stdout.
