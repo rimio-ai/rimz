@@ -22,6 +22,7 @@ mod list;
 mod performance;
 mod property;
 mod reload;
+mod remote_attach;
 mod reset;
 mod resolver;
 mod sidebar_launch;

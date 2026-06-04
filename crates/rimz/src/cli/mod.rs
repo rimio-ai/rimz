@@ -195,8 +195,16 @@ pub struct AttachArgs {
     #[command(flatten)]
     attach: AttachFlags,
     /// Workspace session name (omit to use the cwd's workspace).
-    #[arg(value_name = "SESSION")]
+    #[arg(value_name = "SESSION", conflicts_with = "remote")]
     workspace: Option<String>,
+    /// SSH remote attach: `[user@]host:<session-or-path>`. The host's own
+    /// rimz starts or reattaches the room; it renders here over `ssh -t`.
+    #[arg(long, value_name = "TARGET")]
+    remote: Option<String>,
+    /// Hand the link to a single ssh run instead of supervising it and
+    /// reconnecting when it drops.
+    #[arg(long, requires = "remote")]
+    no_reconnect: bool,
     /// Come up empty: skip re-seeding prior agents when the session is reborn.
     #[arg(long)]
     pub no_resume: bool,
@@ -530,9 +538,123 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
 
 fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
     let mode = args.attach.mode();
+    if let Some(target) = args.remote.as_deref() {
+        return attach_remote(target, mode, args.no_resume, args.no_reconnect, globals);
+    }
     match args.workspace {
         Some(session) => attach_named(&session, mode, args.no_resume, globals),
         None => attach_cwd(mode, args.no_resume, globals),
+    }
+}
+
+/// SSH remote attach: the local rimz is a launcher and link supervisor only.
+/// Workspace resolution, session birth, the sidebar, and the health gate all
+/// run on the remote host's own `rimz`; the room renders here over `ssh -t`.
+fn attach_remote(
+    target: &str,
+    mode: AttachMode,
+    no_resume: bool,
+    no_reconnect: bool,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    let target = rimz::remote::RemoteTarget::parse(target)?;
+    let spec = rimz::remote::ssh_attach_spec(&target, no_resume, globals.mux);
+
+    // The local nesting block does not apply: a remote room inside a local
+    // pane is a legitimate shape (the remote rimz checks its own env).
+    match attach_action(
+        mode,
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+        false,
+    ) {
+        AttachAction::Print => {
+            print_remote_command(&spec);
+            Ok(())
+        }
+        AttachAction::Exec => {
+            let program = rimz::remote::ssh_program();
+            which::which(&program).map_err(|_| {
+                anyhow::anyhow!(
+                    "`{program}` is not on PATH; install an OpenSSH client to attach \
+                     remotely, or run with --print to emit the command"
+                )
+            })?;
+            if no_reconnect {
+                report_remote_connect(target.host_display(), false);
+                exec_attach_command(&spec)
+            } else {
+                supervise_remote(&spec, &target)
+            }
+        }
+    }
+}
+
+/// Run ssh and keep the link alive, autossh-style: a clean detach exits, a
+/// dropped link on an established session reconnects with capped backoff, and
+/// anything else fails with the remote's own error. The remote mux session
+/// survives the drop by design, so reattaching is idempotent.
+fn supervise_remote(
+    spec: &rimz::mux::CommandSpec,
+    target: &rimz::remote::RemoteTarget,
+) -> Result<()> {
+    use rimz::remote::{ReconnectPolicy, Verdict};
+
+    let policy = ReconnectPolicy::from_env();
+    let host = target.host_display();
+    let mut established = false;
+    let mut consecutive_failures: u32 = 0;
+    report_remote_connect(host, true);
+    loop {
+        let started = std::time::Instant::now();
+        let status = spec
+            .to_command()
+            .status()
+            .with_context(|| format!("running `{}`", rimz::remote::display_ssh_command(spec)))?;
+        if started.elapsed() >= policy.gatetime {
+            established = true;
+            consecutive_failures = 0;
+        }
+        match rimz::remote::verdict(status.code(), established, consecutive_failures, &policy) {
+            Verdict::CleanExit => return Ok(()),
+            Verdict::Fatal { code } => anyhow::bail!(
+                "ssh to {host} exited with status {code}; not reconnecting \
+                 (only a dropped link on an established session is retried)"
+            ),
+            Verdict::Retry { delay } => {
+                // Numbered per outage: failures reset once a session lives
+                // past the gatetime, so this never reads "attempt 47" after a
+                // week of clean reconnects.
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                let mut stderr = std::io::stderr().lock();
+                let _ = writeln!(
+                    stderr,
+                    "rimz: link to {host} lost — reconnecting in {}s (attempt {consecutive_failures}); Ctrl-C stops",
+                    delay.as_secs(),
+                );
+                drop(stderr);
+                std::thread::sleep(delay);
+            }
+        }
+    }
+}
+
+/// One stderr line before the terminal belongs to ssh, so the user knows the
+/// room they are about to see is remote.
+fn report_remote_connect(host: &str, reconnect: bool) {
+    let mut stderr = std::io::stderr().lock();
+    let tail = if reconnect {
+        " (auto-reconnect on; Ctrl-C stops)"
+    } else {
+        ""
+    };
+    let _ = writeln!(stderr, "rimz: attaching to {host} over ssh…{tail}");
+}
+
+fn print_remote_command(spec: &rimz::mux::CommandSpec) {
+    #[expect(clippy::print_stdout, reason = "user-facing command suggestion")]
+    {
+        println!("{}", rimz::remote::display_ssh_command(spec));
     }
 }
 

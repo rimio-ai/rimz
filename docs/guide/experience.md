@@ -322,6 +322,8 @@ $ ssh dev-box rimz attach query-engine
    reconstructing query-engine from ledger…
 ```
 
+The same reattach has a first-class form: `rimz attach --remote dev-box:query-engine` builds the guarded ssh for them and reattaches itself when the train wifi drops the link — and `rimz attach --remote dev-box:~/code/query-engine` starts the room if it isn't up yet.
+
 The sidebar comes back exactly as they left it — every agent where it was, every question still waiting, ranked identically — plus whatever finished while they were gone, already triaged by the same ranking.
 
 **Feels:** Relief, then trust. The thing they were promised — *"survives detach,

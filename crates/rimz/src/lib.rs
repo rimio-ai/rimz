@@ -18,6 +18,7 @@ pub mod ledger;
 pub mod mux;
 pub mod proc;
 pub mod reload;
+pub mod remote;
 pub mod remote_control;
 pub mod resolver;
 pub mod resume;

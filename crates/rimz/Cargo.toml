@@ -46,6 +46,18 @@ required-features = []
 test = false
 bench = false
 
+# Test-only fixture: an `ssh`-shaped shim that logs argv to
+# `$RIMZ_TEST_SSH_LOG` and exits per the scripted `$RIMZ_TEST_SSH_PLAN`. Used
+# by `tests/integration/remote_attach.rs` to assert the exec'd ssh argv and
+# drive the reconnect supervisor without a real ssh or host (pointed at via
+# `RIMZ_SSH_BIN`).
+[[bin]]
+name = "ssh-trace"
+path = "tests/fixtures/ssh-trace/main.rs"
+required-features = []
+test = false
+bench = false
+
 [[test]]
 name = "integration"
 path = "tests/integration/main.rs"

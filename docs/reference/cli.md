@@ -18,7 +18,7 @@ rimz event emit --kind build.started --title web   # any script can post
 rimz feed ask --title "Promote staging → prod?" \
               --options yes,no --timeout 1h         # blocks until answered
 
-ssh dev-box rimz attach query-engine               # reattach from anywhere
+rimz attach --remote dev-box:query-engine          # reattach from anywhere over ssh
 rimz pane split && claude                           # run an agent in a new pane
 ```
 
@@ -30,6 +30,7 @@ That is the whole loop. For the five-minute tour and the why, see [the product g
 rimz [--attach|--no-attach|--print] [--no-resume] [PATH]
 rimz start [--attach|--no-attach|--print] [--no-resume] [PATH]
 rimz attach [--attach|--no-attach|--print] [--no-resume] [SESSION]
+rimz attach --remote [user@]host:<session-or-path> [--no-reconnect]
 rimz list [--all] [--json]        # running + recently-active workspaces; --all adds dormant ones
 rimz doctor [--audit]             # diagnose backend, hooks, trust, resolvers
 ```
@@ -39,6 +40,10 @@ rimz doctor [--audit]             # diagnose backend, hooks, trust, resolvers
 When a session is reborn — after a reboot, a multiplexer crash, or a reset — Rimz re-seeds the prior agents it remembers, each restored idle in its own pane (`claude --resume`, `codex resume`); the conversation is back, no tokens spent until you type. `--no-resume` comes up empty for a deliberately fresh start (`resume.on_rebirth` in [configuration.md](./configuration.md) is the persistent switch). Details: [resume-on-rebirth](../internals/sidebar.md#resume-on-rebirth).
 
 `rimz attach <session>` reattaches by exact session name; `rimz attach` with no name uses the cwd's workspace. `rimz list` joins each known workspace against the live Zellij and tmux sessions so you see which mux currently hosts it, running first.
+
+`rimz attach --remote [user@]host:<target>` attaches a room on another machine: rimz builds the guarded `ssh -t` invocation, the host's own `rimz` starts or reattaches the room, and it renders in your terminal — sidebar, feed, and all. A `<target>` containing `/` (or starting with `~`) is a path the host starts a room for (`dev-box:~/code/query-engine`); a bare word is a session name to reattach (`dev-box:query-engine`); IPv6 hosts keep their brackets (`user@[::1]:…`). The same attach rule applies — an interactive TTY connects, anything else prints the full ssh command (`--print` needs no local ssh) — and `~/.ssh/config` aliases, ports, keys, and jump hosts apply as-is because rimz runs your `ssh`. The remote snippet repairs a non-login shell's PATH and, when the host has no `rimz`, fails with the install command instead of a bare `command not found`.
+
+A dropped link reconnects by itself. Keepalives (`ServerAliveInterval=5`, three strikes) detect a dead link in about fifteen seconds, and rimz reattaches with capped exponential backoff — the remote room survives the drop by design, so pickup is where you left it. A clean detach ends the session, a first connection that fails (auth, unknown host) surfaces immediately rather than looping a password prompt, and a remote failure that isn't a link drop reports the remote's own error. `--no-reconnect` hands the link to a single ssh run. `--no-resume` and `--mux` ride into the remote `rimz`.
 
 `rimz doctor` reports the backend, installed hooks, trust state, and enrolled resolvers, and names the fix for anything misconfigured. Run it first when something looks wrong.
 
