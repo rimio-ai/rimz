@@ -133,8 +133,13 @@ const WIRED_EVENTS: &[&str] = &[
 ];
 
 /// The Rimz pi extension, embedded at compile time and written whole-file on
-/// install. Carries the `_rimz_managed` marker [`hooks_installed_at`] checks.
+/// install. Carries [`RIMZ_MANAGED_MARKER`] on its first line.
 const EXTENSION_SOURCE: &str = include_str!("extension.ts");
+
+/// Ownership marker on the extension's first line. Install reclaims a marked
+/// file (Rimz wrote it) and refuses an unmarked one (the user wrote it);
+/// uninstall removes only a marked file.
+const RIMZ_MANAGED_MARKER: &str = "_rimz_managed";
 
 #[derive(Clone, Debug, Default)]
 pub struct PiAdapter;
@@ -317,7 +322,10 @@ impl AgentAdapter for PiAdapter {
 
 fn pi_extension_path() -> Result<PathBuf> {
     // Honour an explicit override (`RIMZ_PI_EXTENSION`) so tests and tooling
-    // can point the installer at a tempdir without touching real config.
+    // can point the installer at a tempdir without touching real config. Pi
+    // auto-discovers `*.ts`/`*.js` under this directory; install is
+    // deliberately user-global (never the project-local `.pi/extensions/`)
+    // so the project trust hash is untouched.
     agent_config_path(
         "pi",
         "RIMZ_PI_EXTENSION",
@@ -325,63 +333,90 @@ fn pi_extension_path() -> Result<PathBuf> {
     )
 }
 
+/// Whether the on-disk extension is Rimz-owned: the ownership marker rides
+/// the first line of every build of [`EXTENSION_SOURCE`].
+fn file_is_rimz_managed(content: &str) -> bool {
+    content
+        .lines()
+        .next()
+        .is_some_and(|line| line.contains(RIMZ_MANAGED_MARKER))
+}
+
+/// Refuse to clobber a user-authored `rimz.ts`. One shared guard so install
+/// and preview agree on what is reclaimable.
+fn refuse_unmarked(path: &Path, original: Option<&str>) -> Result<()> {
+    match original {
+        Some(existing) if !file_is_rimz_managed(existing) => Err(AgentErr::Install {
+            agent: "pi",
+            reason: format!(
+                "refusing to overwrite an unmarked user extension at {}; move it aside or remove it to let Rimz manage this file",
+                path.display()
+            ),
+        }),
+        _ => Ok(()),
+    }
+}
+
 /// Install is whole-file ownership: pi has no config to merge into, so the
-/// embedded source overwrites the path verbatim — idempotent by construction,
-/// and a user edit is reclaimed on re-install (stated in the file header).
+/// embedded source overwrites the path verbatim — idempotent by construction.
+/// A marked file (Rimz wrote it, however edited since) is reclaimed
+/// byte-for-byte; an unmarked file is the user's own extension and refuses.
 fn install_into(path: &Path) -> Result<HookInstallReport> {
-    let existed = path.exists();
+    let original = read_optional_file("pi", path)?;
+    refuse_unmarked(path, original.as_deref())?;
     atomic::write_bytes_atomically(path, EXTENSION_SOURCE.as_bytes())?;
     Ok(HookInstallReport {
         agent: "pi",
         config_path: path.to_path_buf(),
         installed_events: installed_event_names(),
-        merged: existed,
+        merged: original.is_some(),
     })
 }
 
 fn preview_install_at(path: &Path) -> Result<HookInstallPreview> {
+    let original = read_optional_file("pi", path)?;
+    // Mirror install's refusal so the consent gate surfaces the conflict
+    // before a doomed install, not after.
+    refuse_unmarked(path, original.as_deref())?;
     Ok(HookInstallPreview {
         agent: "pi",
         config_path: path.to_path_buf(),
         planned_events: installed_event_names(),
-        original_config: read_optional_file("pi", path)?,
+        merged: original.is_some(),
+        original_config: original,
         candidate_config: EXTENSION_SOURCE.to_owned(),
-        merged: path.exists(),
-        // Pi manages no statusline.
+        // Pi manages no statusline; the gauge rides the hook envelope.
         status_line_change: None,
         subagent_status_line_change: None,
     })
 }
 
 fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
-    let existed = match std::fs::remove_file(path) {
-        Ok(()) => true,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
-        Err(source) => {
-            return Err(AgentErr::InstallIo {
-                agent: "pi",
-                path: path.to_path_buf(),
-                source,
-            });
-        }
-    };
+    let original = read_optional_file("pi", path)?;
+    let existed = original.is_some();
+    let mut removed_events = Vec::new();
+    if original.as_deref().is_some_and(file_is_rimz_managed) {
+        std::fs::remove_file(path).map_err(|source| AgentErr::InstallIo {
+            agent: "pi",
+            path: path.to_path_buf(),
+            source,
+        })?;
+        removed_events = installed_event_names();
+    }
+    // An unmarked `rimz.ts` is user-owned: left in place, nothing removed.
     Ok(HookUninstallReport {
         agent: "pi",
         config_path: path.to_path_buf(),
-        removed_events: if existed {
-            installed_event_names()
-        } else {
-            Vec::new()
-        },
+        removed_events,
         existed,
     })
 }
 
 /// Best-effort like the other adapters: a missing or unreadable file reads as
-/// "not installed". The `_rimz_managed` marker distinguishes the Rimz-owned
+/// "not installed". The first-line marker distinguishes the Rimz-owned
 /// extension from a user's own file at the same path.
 fn hooks_installed_at(path: &Path) -> bool {
-    std::fs::read_to_string(path).is_ok_and(|text| text.contains("_rimz_managed"))
+    std::fs::read_to_string(path).is_ok_and(|content| file_is_rimz_managed(&content))
 }
 
 fn installed_event_names() -> Vec<String> {
@@ -780,7 +815,7 @@ mod tests {
     }
 
     #[test]
-    fn install_round_trip_owns_the_whole_file() {
+    fn install_round_trip_owns_the_marked_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("extensions").join("rimz.ts");
 
@@ -791,10 +826,11 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), EXTENSION_SOURCE);
         assert!(hooks_installed_at(&path));
 
-        // Re-install over an edited file reclaims it verbatim.
-        std::fs::write(&path, "// user edit\n").unwrap();
+        // Re-install over a *marked* file — however edited since — reclaims
+        // it verbatim. The marker on line one is what says "Rimz wrote this".
+        std::fs::write(&path, "// still _rimz_managed\n// user tweak\n").unwrap();
         let again = install_into(&path).unwrap();
-        assert!(again.merged, "overwrote an existing file");
+        assert!(again.merged, "reclaimed an existing managed file");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), EXTENSION_SOURCE);
 
         let removed = uninstall_from(&path).unwrap();
@@ -807,6 +843,30 @@ mod tests {
         let missing = uninstall_from(&path).unwrap();
         assert!(!missing.existed);
         assert!(missing.removed_events.is_empty());
+    }
+
+    #[test]
+    fn unmarked_user_extension_is_never_clobbered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rimz.ts");
+        std::fs::write(&path, "// the user's own extension\n").unwrap();
+
+        // Install and preview both refuse, and the file is untouched.
+        let install_err = install_into(&path).unwrap_err();
+        assert!(matches!(install_err, AgentErr::Install { agent: "pi", .. }));
+        let preview_err = preview_install_at(&path).unwrap_err();
+        assert!(matches!(preview_err, AgentErr::Install { agent: "pi", .. }));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "// the user's own extension\n",
+        );
+
+        // Uninstall leaves the user's file in place and reports it removed
+        // nothing.
+        let report = uninstall_from(&path).unwrap();
+        assert!(report.existed);
+        assert!(report.removed_events.is_empty());
+        assert!(path.exists());
     }
 
     #[test]
@@ -823,10 +883,16 @@ mod tests {
         assert_eq!(preview.subagent_status_line_change, None);
         assert!(!path.exists(), "preview never writes");
 
-        std::fs::write(&path, "// user file\n").unwrap();
+        std::fs::write(&path, "// _rimz_managed (an older build)\n").unwrap();
         let over = preview_install_at(&path).unwrap();
-        assert!(over.merged, "an existing file is reported as overwritten");
-        assert_eq!(over.original_config.as_deref(), Some("// user file\n"));
+        assert!(
+            over.merged,
+            "an existing managed file is reported reclaimed"
+        );
+        assert_eq!(
+            over.original_config.as_deref(),
+            Some("// _rimz_managed (an older build)\n"),
+        );
     }
 
     #[test]
