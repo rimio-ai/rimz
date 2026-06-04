@@ -39,7 +39,7 @@ fn seed_history(dir: &std::path::Path) -> PathBuf {
 }
 
 #[test]
-fn spending_recompute_is_history_independent() {
+fn spending_walk_io_is_history_independent() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file = seed_history(dir.path());
     let files = [(claude_adapter(), file.clone())];
