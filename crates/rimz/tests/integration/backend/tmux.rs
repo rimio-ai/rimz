@@ -16,7 +16,8 @@ use std::time::{Duration, Instant};
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::tmux::{self, MIN_TMUX_VERSION};
 use rimz::mux::{
-    MuxBackend, PaneListOptions, SessionOptions, SidebarPaneOptions, SplitPaneOptions, TmuxBackend,
+    MuxBackend, PaneListOptions, SessionOptions, SidebarPaneOptions, SidebarWidth,
+    SplitPaneOptions, TmuxBackend,
 };
 use tempfile::TempDir;
 
@@ -209,6 +210,75 @@ fn ensure_and_list_sessions_round_trip() {
     );
 }
 
+/// `resize_sidebar_pane` lands the capped width exactly: a left split born at
+/// ~50% of a 300-column window resizes to `min(30% of 300, max_cols)` = 72.
+#[test]
+fn resize_sidebar_pane_caps_the_split_width() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    // A fixed-size detached session so the width math is deterministic.
+    server.tmux(&[
+        "new-session",
+        "-d",
+        "-x",
+        "300",
+        "-y",
+        "80",
+        "-s",
+        "rimz-cap",
+        "sh",
+    ]);
+    // A left split born at ~50% — well above the cap.
+    let output = Command::new("tmux")
+        .args([
+            "-S",
+            server.socket.to_str().expect("utf8 socket"),
+            "split-window",
+            "-d",
+            "-h",
+            "-b",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            "rimz-cap",
+            "sh",
+        ])
+        .output()
+        .expect("spawn tmux split-window");
+    assert!(
+        output.status.success(),
+        "split-window failed: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let pane = PaneId::from_parts(MuxName::Tmux, &raw);
+
+    server
+        .backend
+        .resize_sidebar_pane("rimz-cap", &pane, SidebarWidth::default())
+        .expect("resize_sidebar_pane");
+
+    let width = Command::new("tmux")
+        .args([
+            "-S",
+            server.socket.to_str().expect("utf8 socket"),
+            "display-message",
+            "-p",
+            "-t",
+            &raw,
+            "#{pane_width}",
+        ])
+        .output()
+        .expect("spawn tmux display-message");
+    assert_eq!(
+        String::from_utf8_lossy(&width.stdout).trim(),
+        "72",
+        "the resize lands min(30% of 300, 72) exactly",
+    );
+}
+
 /// A fresh server-less socket has no sessions. `list_sessions` translates
 /// the `no server running` stderr into an empty Vec rather than erroring.
 #[test]
@@ -285,7 +355,7 @@ fn open_background_view_creates_named_window_idempotently() {
         session_name: "rimz-bgview".to_owned(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgview")),
         cwd: std::env::temp_dir(),
-        width_percent: 30,
+        width: SidebarWidth::default(),
         rimz_bin: stub,
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
@@ -369,7 +439,7 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
         session_name: "rimz-resume".to_owned(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-resume")),
         cwd: std::env::temp_dir(),
-        width_percent: 30,
+        width: SidebarWidth::default(),
         rimz_bin: stub,
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
@@ -533,7 +603,7 @@ fn open_sidebar_split_window_succeeds() {
                 session_name: "sidebar".to_owned(),
                 workspace_id,
                 cwd: std::env::current_dir().expect("cwd"),
-                width_percent: 30,
+                width: SidebarWidth::default(),
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
@@ -587,7 +657,7 @@ fn reconcile_sidebars_adds_one_to_a_sidebarless_window() {
                 session_name: "room".to_owned(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-recover")),
                 cwd: std::env::current_dir().expect("cwd"),
-                width_percent: 30,
+                width: SidebarWidth::default(),
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
@@ -654,7 +724,7 @@ fn reconcile_sidebars_collapses_an_orphan_sidebar_only_window() {
                 session_name: "multi".to_owned(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-orphan")),
                 cwd: std::env::current_dir().expect("cwd"),
-                width_percent: 30,
+                width: SidebarWidth::default(),
                 rimz_bin,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
@@ -754,7 +824,7 @@ fn new_window_is_born_with_a_sidebar_and_focused_terminal() {
                 session_name: "room".to_owned(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-newwindow")),
                 cwd: std::env::current_dir().expect("cwd"),
-                width_percent: 30,
+                width: SidebarWidth::default(),
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),

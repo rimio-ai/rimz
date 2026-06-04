@@ -7,7 +7,7 @@ use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::mux::{
     CommandSpec, DaemonView, MuxBackend, MuxErr, PaneCapture, PaneListOptions, SessionOptions,
-    SidebarPaneOptions, SplitPaneOptions,
+    SidebarPaneOptions, SidebarWidth, SplitPaneOptions,
 };
 use rimz::schema::SIDEBAR_PROTOCOL_VERSION;
 use rimz::schema::heartbeat::SidebarHeartbeat;
@@ -95,7 +95,7 @@ impl SidebarHarness {
             session_name: "session".to_owned(),
             workspace_id: self.workspace_id.clone(),
             cwd: self.cwd.clone(),
-            width_percent: 30,
+            width: SidebarWidth::default(),
             rimz_bin: PathBuf::from("rimz"),
             replace_existing: false,
             config: rimz::config::MultiplexerConfig::default(),
@@ -200,6 +200,15 @@ impl MuxBackend for FakeBackend {
     }
 
     fn focus_pane(&self, _pane: &PaneId) -> rimz::mux::Result<()> {
+        Ok(())
+    }
+
+    fn resize_sidebar_pane(
+        &self,
+        _session_name: &str,
+        _pane: &PaneId,
+        _width: SidebarWidth,
+    ) -> rimz::mux::Result<()> {
         Ok(())
     }
 

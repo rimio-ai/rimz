@@ -22,7 +22,7 @@ use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, WorkspaceId};
 use rimz::mux::{
     DaemonView, HostPane, MuxBackend, PaneListOptions, SessionHealth, SidebarPaneOptions,
-    ZellijBackend, zellij,
+    SidebarWidth, ZellijBackend, zellij,
 };
 use tempfile::TempDir;
 
@@ -299,7 +299,7 @@ fn open_sidebar_births_native_layout_and_template() {
                 session_name: name.clone(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-test")),
                 cwd: cwd.path().to_path_buf(),
-                width_percent: 30,
+                width: SidebarWidth::default(),
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
@@ -370,7 +370,7 @@ fn open_sidebar_on_live_session_is_idempotent() {
         session_name: name.clone(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-idem")),
         cwd: cwd.path().to_path_buf(),
-        width_percent: 30,
+        width: SidebarWidth::default(),
         rimz_bin: stub,
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
@@ -420,7 +420,7 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
         session_name: name.clone(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-cleanroom")),
         cwd: cwd.path().to_path_buf(),
-        width_percent: 30,
+        width: SidebarWidth::default(),
         rimz_bin: stub,
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
@@ -517,7 +517,7 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
                 session_name: name.clone(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-nosb")),
                 cwd: cwd.path().to_path_buf(),
-                width_percent: 30,
+                width: SidebarWidth::default(),
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
@@ -972,7 +972,7 @@ fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundView
             session_name: session.to_owned(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgview")),
             cwd: std::env::temp_dir(),
-            width_percent: 30,
+            width: SidebarWidth::default(),
             rimz_bin: stub.to_path_buf(),
             replace_existing: false,
             config: rimz::config::MultiplexerConfig::default(),
@@ -1070,7 +1070,7 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
                 session_name: name.clone(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgfirst")),
                 cwd: cwd.path().to_path_buf(),
-                width_percent: 30,
+                width: SidebarWidth::default(),
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),

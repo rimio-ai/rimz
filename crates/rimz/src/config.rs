@@ -10,6 +10,7 @@
 //! and unknown keys are ignored so an older binary tolerates a newer file.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -309,12 +310,12 @@ pub struct SidebarConfig {
     /// reddens — the neglect window past which a blocked agent reads as urgent.
     /// Display-only; it tunes the colour ramp, never the ledger.
     pub attention_redden_secs: u64,
-    /// Hard column cap on the rendered width. When set, the renderer clips the
-    /// logical width to this value regardless of pane size — useful when the
-    /// sidebar pane is wider than desired (e.g. after a sibling pane closes).
-    /// Unset (the default) means full pane width.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_cols: Option<u16>,
+    /// Cap on the sidebar pane width in columns. Every sidebar pane targets the
+    /// standard percentage of the view at this cap; on an ultra-wide terminal
+    /// the percentage alone grows absurd, so a pane born above the cap is
+    /// shrunk to it once, when it is created. Creation-time only: a manual
+    /// resize afterwards sticks.
+    pub max_cols: NonZeroU16,
 }
 
 impl Default for SidebarConfig {
@@ -323,9 +324,16 @@ impl Default for SidebarConfig {
             providers: BTreeMap::new(),
             max_provider_blocks: default_max_provider_blocks(),
             attention_redden_secs: default_attention_redden_secs(),
-            max_cols: None,
+            max_cols: default_sidebar_max_cols(),
         }
     }
+}
+
+/// Default column cap on the sidebar pane width: comfortably past the widest
+/// card tier while keeping a 30% split from swallowing an ultra-wide terminal.
+fn default_sidebar_max_cols() -> NonZeroU16 {
+    // Provably non-zero literal.
+    NonZeroU16::new(72).expect("non-zero literal")
 }
 
 /// Default cap on provider blocks in the bottom dashboard.
@@ -458,6 +466,25 @@ mod tests {
         let config = MachineConfig::load_from(&write(&dir, text)).expect("load");
         assert!(config.remote_control.codex);
         assert!(!config.remote_control.claude);
+    }
+
+    #[test]
+    fn sidebar_max_cols_defaults_parses_and_rejects_zero() {
+        let dir = tempdir().expect("tempdir");
+        let config =
+            MachineConfig::load_from(&write(&dir, "[sidebar]\nmax_cols = 100\n")).expect("load");
+        assert_eq!(
+            config.sidebar.max_cols,
+            NonZeroU16::new(100).expect("nonzero")
+        );
+        assert_eq!(
+            MachineConfig::default().sidebar.max_cols.get(),
+            72,
+            "unset caps the percentage split at the 72-column default",
+        );
+        // A zero-width sidebar can never work: fail at config load, with the
+        // parse error naming the field, rather than launching a broken pane.
+        assert!(MachineConfig::load_from(&write(&dir, "[sidebar]\nmax_cols = 0\n")).is_err());
     }
 
     #[test]

@@ -21,8 +21,8 @@ use serde_json::Value;
 use super::{
     BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, DaemonView, HostPane, MuxBackend,
     MuxErr, PaneCapture, PaneListOptions, Result, ResumePane, SessionHealth, SessionOptions,
-    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, ViewSidebars,
-    ensure_pane_backend,
+    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions,
+    ViewSidebars, ensure_pane_backend,
 };
 use crate::config::ZellijConfig;
 use crate::feed::PaneRef;
@@ -454,7 +454,7 @@ impl ZellijBackend {
                 new_pane.clone(),
             ])
             .run()?;
-        self.resize_sidebar_toward(&opts.session_name, tab_id, &new_pane, opts.width_percent, opts.max_cols);
+        self.resize_sidebar_toward(&opts.session_name, tab_id, &new_pane, opts.width);
         Ok(())
     }
 
@@ -495,15 +495,25 @@ impl ZellijBackend {
         Ok(pane_id)
     }
 
-    /// Shrink a freshly-split sidebar (born at ~50%) toward the layout's width
-    /// percentage, landing on the width *closest* to the target. The resize step
-    /// is coarse, so the target usually falls between two reachable widths;
-    /// stopping at the first width at or below it can overshoot, so when the
-    /// prior (above-target) width was closer we step back up one. Bounded and
-    /// best-effort: it stops at the target, when a step makes no progress (hit a
-    /// minimum), or after [`RESIZE_MAX_STEPS`] — never a dead loop. Width is
-    /// cosmetic, so any failure just leaves the wider pane.
-    fn resize_sidebar_toward(&self, session: &str, tab_id: u64, pane_id: &str, width_percent: u16, max_cols: Option<u16>) {
+    /// Shrink a freshly-born sidebar toward the configured width — the
+    /// percentage of the tab at the `max_cols` cap — landing on the width
+    /// *closest* to the target without ever finishing above the cap. The
+    /// resize step is coarse, so the target usually falls between two
+    /// reachable widths; stopping at the first width at or below it can
+    /// overshoot, so when the prior width was closer we step back up one —
+    /// but only when that prior width respects the cap, so a cap-bound
+    /// target always lands at or below it (a final width one step over the
+    /// cap reads as the cap never applying). Bounded and best-effort: it
+    /// stops at the target, when a step makes no progress (hit a minimum), or
+    /// after [`RESIZE_MAX_STEPS`] — never a dead loop. Width is cosmetic, so
+    /// any failure just leaves the wider pane.
+    fn resize_sidebar_toward(
+        &self,
+        session: &str,
+        tab_id: u64,
+        pane_id: &str,
+        width: SidebarWidth,
+    ) {
         const RESIZE_MAX_STEPS: u32 = 16;
         let Some(target_raw) = parse_terminal_id(pane_id) else {
             return;
@@ -516,16 +526,13 @@ impl ZellijBackend {
             if total == 0 {
                 return;
             }
-            let pct_target = (total * u64::from(width_percent.clamp(10, 90)) / 100).max(1);
-            let target = match max_cols {
-                Some(cap) => pct_target.min(u64::from(cap)),
-                None => pct_target,
-            };
+            let target = width.target_cols(total);
             if cols <= target {
                 // Reached/overshot the target. If the previous, above-target
                 // width was closer than this one, the last decrease overshot —
-                // step back.
+                // step back, but never to a width above the cap.
                 if last_cols != u64::MAX
+                    && last_cols <= width.cap_cols()
                     && last_cols.saturating_sub(target) < target.saturating_sub(cols)
                 {
                     let _ = self.resize_sidebar_step(session, pane_id, "increase");
@@ -755,6 +762,33 @@ impl MuxBackend for ZellijBackend {
             .args(["action", "focus-pane-id", pane.raw()])
             .run()
             .map(|_| ())
+    }
+
+    fn resize_sidebar_pane(
+        &self,
+        session_name: &str,
+        pane: &PaneId,
+        width: SidebarWidth,
+    ) -> Result<()> {
+        ensure_pane_backend(pane, MuxName::Zellij)?;
+        let raw = parse_terminal_id(pane.raw()).ok_or_else(|| MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: format!("sidebar pane id is not a terminal pane: {}", pane.raw()),
+        })?;
+        let tab_id = self
+            .list_panes_with_session(Some(session_name))?
+            .into_iter()
+            .find(|listed| listed.id == raw && listed.is_terminal())
+            .map(|listed| listed.tab_id)
+            .ok_or_else(|| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!(
+                    "sidebar pane {} not found in session {session_name}",
+                    pane.raw()
+                ),
+            })?;
+        self.resize_sidebar_toward(session_name, tab_id, pane.raw(), width);
+        Ok(())
     }
 
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture> {
@@ -1362,7 +1396,11 @@ fn sidebar_pane_kdl(opts: &SidebarPaneOptions, cwd: Option<&Path>) -> Result<Str
     let rimz_bin = kdl_string(&opts.rimz_bin.to_string_lossy())?;
     let workspace_id = kdl_string(opts.workspace_id.as_str())?;
     let session_name = kdl_string(&opts.session_name)?;
-    let size = kdl_string(&format!("{}%", opts.width_percent.clamp(10, 90)))?;
+    // The layout grammar spells a fixed size or a percentage, never
+    // `min(percent, columns)`, so the template is born at the percentage and
+    // the `sidebar.max_cols` cap lands as the renderer's one creation-time
+    // `resize_sidebar_pane`.
+    let size = kdl_string(&format!("{}%", opts.width.percent.clamp(10, 90)))?;
     let pane_name = kdl_string(SIDEBAR_PANE_NAME)?;
     let cwd_attr = match cwd {
         Some(cwd) => format!(" cwd={}", kdl_string(&cwd.to_string_lossy())?),
@@ -2003,8 +2041,7 @@ mod tests {
             session_name: "rimz-bar".to_owned(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bar")),
             cwd: PathBuf::from("/tmp/rimz-bar"),
-            width_percent: 30,
-            max_cols: None,
+            width: SidebarWidth::default(),
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),
@@ -2025,8 +2062,7 @@ mod tests {
             session_name: "rimz-focus".to_owned(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-focus")),
             cwd: PathBuf::from("/tmp/rimz-focus"),
-            width_percent: 30,
-            max_cols: None,
+            width: SidebarWidth::default(),
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),
@@ -2053,6 +2089,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sidebar_layout_is_born_at_the_percent_never_the_cap() {
+        use crate::ids::WorkspaceId;
+        let opts = SidebarPaneOptions {
+            session_name: "rimz-width".to_owned(),
+            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-width")),
+            cwd: PathBuf::from("/tmp/rimz-width"),
+            width: SidebarWidth::default(),
+            rimz_bin: PathBuf::from("/usr/bin/rimz"),
+            replace_existing: false,
+            config: crate::config::MultiplexerConfig::default(),
+            resume_panes: Vec::new(),
+        };
+        let layout = render_sidebar_layout(&opts).expect("render layout");
+        assert!(
+            layout.contains(r#"pane size="30%" name="rimz-sidebar""#),
+            "the template is born at the percentage (a KDL string, so it tracks \
+             terminal size); the renderer's one creation-time resize enforces \
+             `max_cols`:\n{layout}",
+        );
+        assert!(
+            !layout.contains("size=72"),
+            "max_cols must not become a fixed-width birth template:\n{layout}",
+        );
+    }
+
     fn host(argv: &[&str], cwd: &str) -> HostPane {
         HostPane {
             argv: argv.iter().map(|arg| arg.to_string()).collect(),
@@ -2069,8 +2131,7 @@ mod tests {
                 session_name: "rimz-bg".to_owned(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/proj/root")),
                 cwd: PathBuf::from("/proj/worktree"),
-                width_percent: 30,
-                max_cols: None,
+                width: SidebarWidth::default(),
                 rimz_bin: PathBuf::from("/usr/bin/rimz"),
                 replace_existing: false,
                 config: crate::config::MultiplexerConfig::default(),
@@ -2257,8 +2318,7 @@ mod tests {
             session_name: "rimz-run".to_owned(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
             cwd: PathBuf::from("/tmp/rimz-run"),
-            width_percent: 30,
-            max_cols: None,
+            width: SidebarWidth::default(),
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),

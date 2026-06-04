@@ -32,7 +32,7 @@ split_pane(args)
 focus_pane(pane_id)
 capture_pane(pane_id, opts)     normalized output
 send_keys(pane_id, text)
-open_sidebar(session_name, workspace_id, cwd, rimz_bin, width_percent)
+open_sidebar(session_name, workspace_id, cwd, rimz_bin, width)
 wake_sidebar(session, bytes)
 version()
 ```
@@ -83,7 +83,7 @@ zellij attach --create-background <session> options <room-options> --default-cwd
 
 **Serialization off.** Rimz passes `--session-serialization false` on every birth and attach, so a dead Zellij server leaves nothing to resurrect. Resurrection is worse than useless here: agents and scripts cannot restore their running state, and Zellij brings the room back with every command pane re-suspended at a `Waiting to run` prompt and a dead mouse. With serialization off, a crashed server's session simply vanishes and the next start births a clean, running room. Disabling it costs nothing legitimate — serialization only matters on server death; detach/reattach keeps the server alive in memory and never consults the cache. tmux has no resurrection, so the flag is Zellij-only.
 
-The default birth layout is the `default_tab_template`: a vertical split — a left `rimz-sidebar` pane at the configured width percentage and a focused terminal on the right — above a one-row `zellij:compact-bar` plugin pane. Because supplying a `default_tab_template` replaces Zellij's built-in one, which is what carries the tab/status bar, the layout re-adds the compact bar itself or every tab is born bare. The template — not a separate `tab` node — defines every tab, so the first tab and any the user opens later are born identically. The sidebar pane is `close_on_exit`, so it disappears when its own process exits (the self-close loop in [sidebar.md](./sidebar.md)). A Zellij layout applies only at session birth, so the branch is:
+The default birth layout is the `default_tab_template`: a vertical split — a left `rimz-sidebar` pane at the default width percentage and a focused terminal on the right — above a one-row `zellij:compact-bar` plugin pane. The `sidebar.max_cols` cap never enters the template — a Zellij layout spells a fixed size or a percentage, not `min(percent, columns)` — so a pane born above the cap is shrunk to it by the freshly-born renderer's one creation-time `resize_sidebar_pane` (the step loop in `resize_sidebar_toward`, which never finishes above the cap). Because supplying a `default_tab_template` replaces Zellij's built-in one, which is what carries the tab/status bar, the layout re-adds the compact bar itself or every tab is born bare. The template — not a separate `tab` node — defines every tab, so the first tab and any the user opens later are born identically. The sidebar pane is `close_on_exit`, so it disappears when its own process exits (the self-close loop in [sidebar.md](./sidebar.md)). A Zellij layout applies only at session birth, so the branch is:
 
 - **Live** — the session already carries its sidebar and owns every resize and split the user has made since. When the pane listing is clean and the sidebar heartbeat is trusted, `open_sidebar` is a no-op and the sidebar survives detach/reattach server-side. When a stale heartbeat requires replacement, Rimz only rebuilds an inspected live room; an uninspectable live room is left untouched and handled by the reset path.
 - **Exited** (Zellij's `EXITED - attach to resurrect`) — a plain attach would resurrect the *serialized* layout, with the last geometry and every command pane re-suspended at a `Waiting to run` prompt. Rimz prefers a clean rebirth: `zellij delete-session <session> --force`, then create from the layout. (Distinct from a host reboot, where the session is fully absent.) With serialization off this state stops being minted, but the branch stays as defence for sessions serialized before the flag landed.
@@ -122,11 +122,13 @@ Zellij users can opt in (`[layout.zellij]` in [configuration.md](../reference/co
 The sidebar runs as a managed pane:
 
 ```text
-tmux split-window -d -h -l <width>% -b -t <session> \
+tmux split-window -d -h -l <width> -b -t <session> \
   <rimz-bin> sidebar serve --mux tmux --workspace-id <id> --session-name <session>
 tmux set-hook -t <session> after-new-window \
-  "split-window -h -b -d -l <width>% '<rimz-bin> sidebar serve ...'"
+  "split-window -h -b -d -l <width> '<rimz-bin> sidebar serve ...'"
 ```
+
+`<width>` is always the default percentage (`30%`) — a detached session births at default geometry (80×24 until a client attaches), where an absolute size would be wrong. The `sidebar.max_cols` cap lands afterwards as the freshly-born renderer's one creation-time `resize_sidebar_pane`, an exact `resize-pane -x min(percent, max_cols)` against the live window width.
 
 `ensure_session` also applies per-machine `[tmux]` room options. Session and window options stay scoped to the Rimz session (`mouse`, `history-limit`, `renumber-windows`, `allow-passthrough`, `aggressive-resize`, and pane border shape). Server-scoped options (`focus-events`, `set-clipboard`, `extended-keys`, `extended-keys-format`, `escape-time`) are runtime-global inside the tmux server because tmux has no per-session equivalent for clipboard and rich-key handling.
 

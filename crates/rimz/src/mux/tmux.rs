@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, DaemonView, MuxBackend, MuxErr,
     PaneCapture, PaneListOptions, Result, SessionOptions, SidebarLiveness, SidebarPaneOptions,
-    SidebarRecovery, SplitPaneOptions, ViewSidebars, ensure_pane_backend,
+    SidebarRecovery, SidebarWidth, SplitPaneOptions, ViewSidebars, ensure_pane_backend,
 };
 use crate::config::TmuxConfig;
 use crate::feed::PaneRef;
@@ -126,7 +126,7 @@ impl TmuxBackend {
                 "-h".to_owned(),
                 "-b".to_owned(),
                 "-l".to_owned(),
-                sidebar_size_arg(opts),
+                sidebar_size_arg(opts.width),
                 "-t".to_owned(),
                 window_id.to_owned(),
             ])
@@ -302,18 +302,17 @@ impl TmuxBackend {
 /// what `pane_current_command` reports.
 const SIDEBAR_BIN_NAME: &str = "rimz-sidebar";
 
-/// The `rimz sidebar serve …` argv a tmux sidebar pane runs. Shared by initial
-/// launch and in-place recovery so the two cannot drift.
-/// The `-l` argument for `split-window`: an absolute column count when
-/// `max_cols` is set (tmux clips to the window width automatically), else a
-/// percentage string so the split tracks terminal size.
-fn sidebar_size_arg(opts: &SidebarPaneOptions) -> String {
-    match opts.max_cols {
-        Some(cap) => cap.to_string(),
-        None => format!("{}%", opts.width_percent),
-    }
+/// The `-l` argument for `split-window`: a percentage string so the split
+/// tracks terminal size. Always the percentage, never an absolute size — a
+/// detached session births at default geometry (80×24 until a client
+/// attaches), where an absolute `-l` would be wrong; the `sidebar.max_cols`
+/// cap lands as the renderer's one creation-time [`MuxBackend::resize_sidebar_pane`].
+fn sidebar_size_arg(width: SidebarWidth) -> String {
+    format!("{}%", width.percent)
 }
 
+/// The `rimz sidebar serve …` argv a tmux sidebar pane runs. Shared by initial
+/// launch and in-place recovery so the two cannot drift.
 fn sidebar_serve_command(opts: &SidebarPaneOptions) -> Vec<String> {
     vec![
         opts.rimz_bin.to_string_lossy().into_owned(),
@@ -554,6 +553,42 @@ impl MuxBackend for TmuxBackend {
             .map(|_| ())
     }
 
+    fn resize_sidebar_pane(
+        &self,
+        _session_name: &str,
+        pane: &PaneId,
+        width: SidebarWidth,
+    ) -> Result<()> {
+        ensure_pane_backend(pane, MuxName::Tmux)?;
+        // Read the live window width through the pane, then set the capped
+        // target exactly — `resize-pane -x` is absolute, so no step loop.
+        let output = self
+            .cmd()
+            .args(["display-message", "-p", "-t", pane.raw(), "#{window_width}"])
+            .run()?;
+        let total: u64 = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .map_err(|_| MuxErr::Output {
+                program: "tmux".to_owned(),
+                reason: format!(
+                    "display-message returned a non-numeric window_width for {}",
+                    pane.raw()
+                ),
+            })?;
+        let target = width.target_cols(total);
+        self.cmd()
+            .args([
+                "resize-pane".to_owned(),
+                "-t".to_owned(),
+                pane.raw().to_owned(),
+                "-x".to_owned(),
+                target.to_string(),
+            ])
+            .run()
+            .map(|_| ())
+    }
+
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture> {
         ensure_pane_backend(pane, MuxName::Tmux)?;
         let mut spec = self.cmd().args(["capture-pane", "-p", "-t", pane.raw()]);
@@ -598,7 +633,7 @@ impl MuxBackend for TmuxBackend {
                 "-d".to_owned(),
                 "-h".to_owned(),
                 "-l".to_owned(),
-                sidebar_size_arg(opts),
+                sidebar_size_arg(opts.width),
                 "-b".to_owned(),
                 "-t".to_owned(),
                 opts.session_name.clone(),
@@ -613,7 +648,7 @@ impl MuxBackend for TmuxBackend {
         // split in each new window. `-b -d` keep the sidebar left and focus on
         // the new window's terminal, exactly as the initial window.
         let serve = command.join(" ");
-        let size = sidebar_size_arg(opts);
+        let size = sidebar_size_arg(opts.width);
         let hook = format!("split-window -h -b -d -l {size} '{serve}'");
         self.cmd()
             .args([
@@ -876,6 +911,14 @@ mod tests {
             "a daemon host marks the view so reload never collapses it as an orphan",
         );
         assert!(views[0].sidebar_panes.is_empty());
+    }
+
+    #[test]
+    fn sidebar_size_arg_is_always_the_percent() {
+        // Splits are born at the percentage — a detached session births at
+        // default geometry where an absolute size would be wrong; the
+        // `max_cols` cap lands as the renderer's one creation-time resize.
+        assert_eq!(sidebar_size_arg(SidebarWidth::default()), "30%");
     }
 
     #[test]

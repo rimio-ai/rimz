@@ -17,9 +17,7 @@ use crate::ids::{MuxName, PaneId};
 use crate::ledger::RuntimePaths;
 use crate::ledger::wakeup;
 use crate::mux::recovery;
-use crate::mux::{
-    DEFAULT_SIDEBAR_WIDTH_PERCENT, MuxBackend, PaneListOptions, SidebarPaneOptions, backend_for,
-};
+use crate::mux::{MuxBackend, PaneListOptions, SidebarPaneOptions, SidebarWidth, backend_for};
 use crate::workspace::{self, KnownWorkspace};
 
 /// What a user-wide reload did, aggregated across workspaces, for the CLI report.
@@ -150,8 +148,7 @@ fn reconcile_live(
         session_name: ws.session_name.clone(),
         workspace_id: ws.workspace_id.clone(),
         cwd: ws.project_root.clone(),
-        width_percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
-        max_cols: machine_config.sidebar.max_cols,
+        width: SidebarWidth::from_config(&machine_config.sidebar),
         rimz_bin: rimz_bin.to_path_buf(),
         replace_existing: false,
         config: MultiplexerConfig::from(machine_config),

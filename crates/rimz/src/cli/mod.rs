@@ -30,12 +30,10 @@ use rimz::ledger::paths::workspaces_dir;
 use rimz::ledger::workspace_record;
 use rimz::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, DaemonView, HostPane, MuxBackend, SessionHealth,
-    SessionOptions, SidebarPaneOptions,
+    SessionOptions, SidebarPaneOptions, SidebarWidth,
 };
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, RuntimePaths, StatePaths, WorkspaceRecord};
-
-pub(crate) use rimz::mux::DEFAULT_SIDEBAR_WIDTH_PERCENT;
 
 /// Entry point used by `main.rs`.
 pub fn dispatch() -> Result<()> {
@@ -453,6 +451,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     }
     let machine_config = machine_config();
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
+    let sidebar_width = SidebarWidth::from_config(&machine_config.sidebar);
     let remote_control = &machine_config.remote_control;
     // Fail-fast precondition: an enabled host that cannot start aborts the
     // launch here, with the fix, before any hook-install or session side
@@ -475,7 +474,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // hosts depend on config and which agents are on PATH. When present, it leads
     // the session — on Zellij that order is fixed at birth (`open_sidebar` renders
     // the daemon tab first), since Zellij can't reorder tabs afterwards.
-    let daemon_view = build_daemon_view(remote_control, &workspace, &mux_config, machine_config.sidebar.max_cols);
+    let daemon_view = build_daemon_view(remote_control, &workspace, &mux_config, sidebar_width);
     let daemon = daemon_view.as_ref().map(|view| DaemonView {
         name: view.name.clone(),
         hosts: view.hosts.clone(),
@@ -494,16 +493,14 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
             args.no_resume,
         )
     };
-    launch_sidebar_for_workspace(
-        backend.as_ref(),
-        &workspace.workspace_id,
-        &workspace.session_name,
-        &workspace.worktree_root,
-        &mux_config,
-        machine_config.sidebar.max_cols,
-        daemon.as_ref(),
-        &resume_plan.panes,
-    );
+    let room = RoomTarget {
+        workspace_id: &workspace.workspace_id,
+        session_name: &workspace.session_name,
+        cwd: &workspace.worktree_root,
+        mux_config: &mux_config,
+        width: sidebar_width,
+    };
+    launch_sidebar_for_workspace(backend.as_ref(), &room, daemon.as_ref(), &resume_plan.panes);
     maybe_launch_remote_control(
         backend.as_ref(),
         &workspace,
@@ -514,16 +511,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // inspected stale/serialized room, and on one that cannot self-heal or
     // cannot be inspected, offer a reset (interactive) or fail fast with the fix
     // (non-interactive). The reborn room is seeded with the resume panes.
-    gate_room_before_attach(
-        backend.as_ref(),
-        &workspace.workspace_id,
-        &workspace.session_name,
-        &workspace.worktree_root,
-        &mux_config,
-        machine_config.sidebar.max_cols,
-        daemon.as_ref(),
-        &resume_plan.panes,
-    )?;
+    gate_room_before_attach(backend.as_ref(), &room, daemon.as_ref(), &resume_plan.panes)?;
     report_resume(&resume_plan);
     let spec = backend.attach_command(&workspace.session_name, &mux_config);
     tracing::info!(
@@ -547,6 +535,7 @@ fn attach_cwd(mode: AttachMode, no_resume: bool, globals: &GlobalFlags) -> Resul
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
     let machine_config = machine_config();
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
+    let sidebar_width = SidebarWidth::from_config(&machine_config.sidebar);
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
     retire_renamed_session(backend.as_ref(), &workspace);
@@ -567,26 +556,15 @@ fn attach_cwd(mode: AttachMode, no_resume: bool, globals: &GlobalFlags) -> Resul
             no_resume,
         )
     };
-    launch_sidebar_for_workspace(
-        backend.as_ref(),
-        &workspace.workspace_id,
-        &workspace.session_name,
-        &workspace.worktree_root,
-        &mux_config,
-        machine_config.sidebar.max_cols,
-        None,
-        &resume_plan.panes,
-    );
-    gate_room_before_attach(
-        backend.as_ref(),
-        &workspace.workspace_id,
-        &workspace.session_name,
-        &workspace.worktree_root,
-        &mux_config,
-        machine_config.sidebar.max_cols,
-        None,
-        &resume_plan.panes,
-    )?;
+    let room = RoomTarget {
+        workspace_id: &workspace.workspace_id,
+        session_name: &workspace.session_name,
+        cwd: &workspace.worktree_root,
+        mux_config: &mux_config,
+        width: sidebar_width,
+    };
+    launch_sidebar_for_workspace(backend.as_ref(), &room, None, &resume_plan.panes);
+    gate_room_before_attach(backend.as_ref(), &room, None, &resume_plan.panes)?;
     report_resume(&resume_plan);
     let spec = backend.attach_command(&workspace.session_name, &mux_config);
     run_attach_action(&spec, mode, mux)
@@ -606,6 +584,7 @@ fn attach_named(
     };
     let machine_config = machine_config();
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
+    let sidebar_width = SidebarWidth::from_config(&machine_config.sidebar);
     let mux = pick_mux_for_session(session, globals.mux, missing_report)?;
     let backend = rimz::mux::backend_for(mux);
     // Captured before `ensure_session` so a tmux create never masks a reattach.
@@ -627,28 +606,17 @@ fn attach_named(
                     no_resume,
                 )
             };
-            launch_sidebar_for_workspace(
-                backend.as_ref(),
-                &record.workspace_id,
-                &record.session_name,
-                &record.project_root,
-                &mux_config,
-                machine_config.sidebar.max_cols,
-                None,
-                &resume_plan.panes,
-            );
+            let room = RoomTarget {
+                workspace_id: &record.workspace_id,
+                session_name: &record.session_name,
+                cwd: &record.project_root,
+                mux_config: &mux_config,
+                width: sidebar_width,
+            };
+            launch_sidebar_for_workspace(backend.as_ref(), &room, None, &resume_plan.panes);
             // Only a session Rimz owns (a matching record) is force-reset; a bare
             // external session by this name is never torn down.
-            gate_room_before_attach(
-                backend.as_ref(),
-                &record.workspace_id,
-                &record.session_name,
-                &record.project_root,
-                &mux_config,
-                machine_config.sidebar.max_cols,
-                None,
-                &resume_plan.panes,
-            )?;
+            gate_room_before_attach(backend.as_ref(), &room, None, &resume_plan.panes)?;
             report_resume(&resume_plan);
         }
         Ok(None) => {
@@ -870,61 +838,57 @@ fn resume_skip_reason(reason: rimz::resume::ResumeSkipReason) -> &'static str {
     }
 }
 
+/// The room a sidebar launch or pre-attach gate targets: workspace identity
+/// plus the per-machine knobs every [`SidebarPaneOptions`] build shares. One
+/// value per command flow, threaded by reference through the launch and gate
+/// helpers.
+struct RoomTarget<'a> {
+    workspace_id: &'a rimz::WorkspaceId,
+    session_name: &'a str,
+    cwd: &'a Path,
+    mux_config: &'a rimz::config::MultiplexerConfig,
+    width: SidebarWidth,
+}
+
 fn build_sidebar_opts(
-    workspace_id: &rimz::WorkspaceId,
-    session_name: &str,
-    cwd: &Path,
-    mux_config: &rimz::config::MultiplexerConfig,
-    max_cols: Option<u16>,
+    target: &RoomTarget<'_>,
     resume_panes: Vec<rimz::mux::ResumePane>,
 ) -> Result<SidebarPaneOptions> {
     let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
     Ok(SidebarPaneOptions {
-        session_name: session_name.to_owned(),
-        workspace_id: workspace_id.clone(),
-        cwd: cwd.to_path_buf(),
-        width_percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
-        max_cols,
+        session_name: target.session_name.to_owned(),
+        workspace_id: target.workspace_id.clone(),
+        cwd: target.cwd.to_path_buf(),
+        width: target.width,
         rimz_bin,
         replace_existing: false,
-        config: mux_config.clone(),
+        config: target.mux_config.clone(),
         resume_panes,
     })
 }
 
 fn launch_sidebar_for_workspace(
     backend: &dyn MuxBackend,
-    workspace_id: &rimz::WorkspaceId,
-    session_name: &str,
-    cwd: &Path,
-    mux_config: &rimz::config::MultiplexerConfig,
-    max_cols: Option<u16>,
+    target: &RoomTarget<'_>,
     daemon: Option<&DaemonView>,
     resume_panes: &[rimz::mux::ResumePane],
 ) -> rimz::sidebar::SidebarLaunchOutcome {
-    let runtime = match RuntimePaths::for_workspace(workspace_id.clone()) {
+    let runtime = match RuntimePaths::for_workspace(target.workspace_id.clone()) {
         Ok(runtime) => runtime,
         Err(err) => {
             tracing::warn!(
-                workspace = %workspace_id,
+                workspace = %target.workspace_id,
                 error = %err,
                 "sidebar launch skipped because runtime paths are unavailable",
             );
             return rimz::sidebar::SidebarLaunchOutcome::Failed;
         }
     };
-    let opts = match build_sidebar_opts(
-        workspace_id,
-        session_name,
-        cwd,
-        mux_config,
-        max_cols,
-        resume_panes.to_vec(),
-    ) {
+    let opts = match build_sidebar_opts(target, resume_panes.to_vec()) {
         Ok(opts) => opts,
         Err(err) => {
             tracing::warn!(
-                workspace = %workspace_id,
+                workspace = %target.workspace_id,
                 error = %err,
                 "sidebar launch skipped because room options are unavailable",
             );
@@ -943,22 +907,11 @@ fn launch_sidebar_for_workspace(
 /// the reset path can preserve an uninspectable live room.
 fn ensure_clean_room(
     backend: &dyn MuxBackend,
-    workspace_id: &rimz::WorkspaceId,
-    session_name: &str,
-    cwd: &Path,
-    mux_config: &rimz::config::MultiplexerConfig,
-    max_cols: Option<u16>,
+    target: &RoomTarget<'_>,
     daemon: Option<&DaemonView>,
     resume_panes: &[rimz::mux::ResumePane],
 ) -> SessionHealth {
-    let opts = match build_sidebar_opts(
-        workspace_id,
-        session_name,
-        cwd,
-        mux_config,
-        max_cols,
-        resume_panes.to_vec(),
-    ) {
+    let opts = match build_sidebar_opts(target, resume_panes.to_vec()) {
         Ok(opts) => opts,
         Err(err) => {
             tracing::warn!(error = %err, "session health gate skipped; attaching as-is");
@@ -979,34 +932,12 @@ fn ensure_clean_room(
 /// call before building the attach command.
 fn gate_room_before_attach(
     backend: &dyn MuxBackend,
-    workspace_id: &rimz::WorkspaceId,
-    session_name: &str,
-    cwd: &Path,
-    mux_config: &rimz::config::MultiplexerConfig,
-    max_cols: Option<u16>,
+    target: &RoomTarget<'_>,
     daemon: Option<&DaemonView>,
     resume_panes: &[rimz::mux::ResumePane],
 ) -> Result<()> {
-    if let SessionHealth::Stuck = ensure_clean_room(
-        backend,
-        workspace_id,
-        session_name,
-        cwd,
-        mux_config,
-        max_cols,
-        daemon,
-        resume_panes,
-    ) {
-        recover_stuck_room(
-            backend,
-            workspace_id,
-            session_name,
-            cwd,
-            mux_config,
-            max_cols,
-            daemon,
-            resume_panes,
-        )?;
+    if let SessionHealth::Stuck = ensure_clean_room(backend, target, daemon, resume_panes) {
+        recover_stuck_room(backend, target, daemon, resume_panes)?;
     }
     Ok(())
 }
@@ -1016,36 +947,28 @@ fn gate_room_before_attach(
 /// terminal to confirm, fail fast with the fix — never destroy a room unattended.
 fn recover_stuck_room(
     backend: &dyn MuxBackend,
-    workspace_id: &rimz::WorkspaceId,
-    session_name: &str,
-    cwd: &Path,
-    mux_config: &rimz::config::MultiplexerConfig,
-    max_cols: Option<u16>,
+    target: &RoomTarget<'_>,
     daemon: Option<&DaemonView>,
     resume_panes: &[rimz::mux::ResumePane],
 ) -> Result<()> {
     if !std::io::stdin().is_terminal() {
         return Err(ResetRequired {
-            session: session_name.to_owned(),
+            session: target.session_name.to_owned(),
         }
         .into());
     }
-    if !confirm_reset(session_name)? {
+    if !confirm_reset(target.session_name)? {
         anyhow::bail!("room left untouched; run `rimz reset` when ready");
     }
-    let runtime = RuntimePaths::for_workspace(workspace_id.clone())?;
-    let report = rimz::mux::recovery::teardown_room(backend, workspace_id, session_name, &runtime);
-    print_reset_report(&report)?;
-    match ensure_clean_room(
+    let runtime = RuntimePaths::for_workspace(target.workspace_id.clone())?;
+    let report = rimz::mux::recovery::teardown_room(
         backend,
-        workspace_id,
-        session_name,
-        cwd,
-        mux_config,
-        max_cols,
-        daemon,
-        resume_panes,
-    ) {
+        target.workspace_id,
+        target.session_name,
+        &runtime,
+    );
+    print_reset_report(&report)?;
+    match ensure_clean_room(backend, target, daemon, resume_panes) {
         SessionHealth::Stuck => {
             anyhow::bail!("the room is still stuck after a reset; inspect with `rimz doctor`")
         }
@@ -1171,7 +1094,7 @@ fn build_daemon_view(
     config: &rimz::config::RemoteControlConfig,
     workspace: &rimz::ResolvedWorkspace,
     mux_config: &rimz::config::MultiplexerConfig,
-    max_cols: Option<u16>,
+    width: SidebarWidth,
 ) -> Option<BackgroundViewOptions> {
     let rimz_bin = match std::env::current_exe() {
         Ok(path) => path,
@@ -1206,8 +1129,7 @@ fn build_daemon_view(
             session_name: workspace.session_name.clone(),
             workspace_id: workspace.workspace_id.clone(),
             cwd: workspace.worktree_root.clone(),
-            width_percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
-            max_cols,
+            width,
             rimz_bin,
             replace_existing: false,
             config: mux_config.clone(),

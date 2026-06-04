@@ -95,6 +95,15 @@ attention_redden_secs = 1800   # seconds before an unanswered ?/! reddens (defau
 
 A `waiting` `?` or `failed` `!` glyph rests bold yellow and reddens once the row has gone unanswered past this window. Lower it for a tighter SLA, raise it for long unattended work.
 
+#### Pane width
+
+```toml
+[sidebar]
+max_cols = 72     # column cap on the 30% sidebar split (default 72)
+```
+
+Every sidebar pane targets 30% of the view at the `max_cols` cap, on both backends — on an ultra-wide terminal 30% alone is a hundred-column sidebar, so a pane born above the cap is shrunk to it once, when it is created: session birth, every new tab or window, recovery. Creation-time only: resize the pane afterwards and your width sticks, and the sidebar always renders at the pane's full width.
+
 #### Provider dashboard
 
 ```toml
@@ -112,8 +121,6 @@ ascii_art = """
 ```
 
 The dashboard pinned at the bottom of the sidebar carries one block per agent kind. `[sidebar.providers.<kind>]` overrides the built-in style — `<kind>` is `claude`, `codex`, `pi`, …; each field is optional and falls back to the shipped default, so you can recolour without restating the art. `max_provider_blocks` caps how many blocks render, ordered by spend. How each block's account, plan, and usage budgets are sourced is in [internals/account.md](../internals/account.md).
-
-`max_cols` is an optional column cap: when set, the renderer clips the logical width to that value regardless of pane size. Useful when the sidebar pane can grow wider than you want (e.g. after a sibling pane closes). Unset means full pane width.
 
 ## Resolver allowlist — `~/.config/rimz/resolvers.toml`
 

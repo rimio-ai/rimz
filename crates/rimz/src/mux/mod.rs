@@ -17,6 +17,7 @@ pub use zellij::ZellijBackend;
 use std::collections::{BTreeMap, HashSet};
 use std::io;
 use std::io::Read as _;
+use std::num::NonZeroU16;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
@@ -231,22 +232,61 @@ pub struct SessionOptions {
     pub config: crate::config::MultiplexerConfig,
 }
 
-/// Default sidebar width as a percentage of the view, used when launching or
-/// recovering a sidebar pane. The single source of truth for both the CLI launch
-/// paths and the user-wide reload reconcile.
-pub const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
+/// Default sidebar width as a percentage of the view. The single source of
+/// truth for both the CLI launch paths and the user-wide reload reconcile.
+const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
+
+/// Sidebar pane width: a percentage of the view, capped at `max_cols` columns
+/// (`sidebar.max_cols`). Panes are born at the percentage — a Zellij layout
+/// spells fixed sizes or percentages but never `min(percent, columns)`, and a
+/// detached tmux session births at default geometry where an absolute size
+/// would be wrong — so the cap lands as one creation-time
+/// [`MuxBackend::resize_sidebar_pane`] fired by the freshly-born renderer.
+/// Creation-time only: a manual resize afterwards sticks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SidebarWidth {
+    /// Percentage of the view width — tracks terminal size below the cap.
+    pub percent: u16,
+    /// Column cap the percentage never exceeds (`sidebar.max_cols`).
+    pub max_cols: NonZeroU16,
+}
+
+impl SidebarWidth {
+    /// The width a machine config asks for: the default percentage at the
+    /// configured column cap.
+    pub fn from_config(sidebar: &crate::config::SidebarConfig) -> Self {
+        Self {
+            percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
+            max_cols: sidebar.max_cols,
+        }
+    }
+
+    /// The capped target in columns for a view `total_cols` wide:
+    /// `min(percent, max_cols)`.
+    pub fn target_cols(self, total_cols: u64) -> u64 {
+        let percent = (total_cols * u64::from(self.percent.clamp(10, 90)) / 100).max(1);
+        percent.min(self.cap_cols())
+    }
+
+    /// The column cap alone — the threshold above which a freshly-born pane is
+    /// shrunk once.
+    pub fn cap_cols(self) -> u64 {
+        u64::from(self.max_cols.get())
+    }
+}
+
+impl Default for SidebarWidth {
+    fn default() -> Self {
+        Self::from_config(&crate::config::SidebarConfig::default())
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct SidebarPaneOptions {
     pub session_name: String,
     pub workspace_id: WorkspaceId,
     pub cwd: PathBuf,
-    pub width_percent: u16,
-    /// Hard column cap applied when sizing the sidebar pane. The backend uses
-    /// the minimum of the percentage-derived target and this value, so the
-    /// pane never opens wider than `max_cols` regardless of terminal width.
-    /// `None` means no cap (full percentage-derived width).
-    pub max_cols: Option<u16>,
+    pub width: SidebarWidth,
     pub rimz_bin: PathBuf,
     pub replace_existing: bool,
     pub config: crate::config::MultiplexerConfig,
@@ -495,6 +535,18 @@ pub trait MuxBackend: Send + Sync {
     }
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()>;
     fn focus_pane(&self, pane: &PaneId) -> Result<()>;
+    /// Best-effort resize of a live sidebar pane toward its configured width.
+    /// This is how `sidebar.max_cols` lands: panes are born at the percentage
+    /// (neither backend can spell `min(percent, columns)` at creation), and the
+    /// freshly-born renderer fires this once when its pane exceeds the cap —
+    /// session birth, every new tab/window, recovery. Creation-time only: the
+    /// renderer never fires it again, so a manual resize sticks.
+    fn resize_sidebar_pane(
+        &self,
+        session_name: &str,
+        pane: &PaneId,
+        width: SidebarWidth,
+    ) -> Result<()>;
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture>;
     fn send_keys(&self, pane: &PaneId, text: &str) -> Result<()>;
     /// Birth (or heal) the session's working view with its sidebar. When `daemon`
@@ -607,6 +659,30 @@ mod tests {
             claimed_panes: claimed.iter().map(|raw| pane(raw)).collect(),
             has_unlocated: false,
         }
+    }
+
+    #[test]
+    fn sidebar_width_is_the_default_percent_at_the_configured_cap() {
+        let mut sidebar = crate::config::SidebarConfig::default();
+        assert_eq!(
+            SidebarWidth::from_config(&sidebar),
+            SidebarWidth {
+                percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
+                max_cols: NonZeroU16::new(72).expect("nonzero"),
+            },
+        );
+        assert_eq!(SidebarWidth::from_config(&sidebar), SidebarWidth::default());
+        let max = NonZeroU16::new(100).expect("nonzero");
+        sidebar.max_cols = max;
+        assert_eq!(SidebarWidth::from_config(&sidebar).max_cols, max);
+    }
+
+    #[test]
+    fn width_targets_the_percent_below_the_cap_and_the_cap_above_it() {
+        let width = SidebarWidth::default();
+        assert_eq!(width.target_cols(120), 36);
+        assert_eq!(width.target_cols(300), 72);
+        assert_eq!(width.cap_cols(), 72);
     }
 
     #[test]
