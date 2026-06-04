@@ -1249,8 +1249,15 @@ mod tests {
         };
         atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &panes).unwrap();
 
+        // A served publish carries the extent stamp; the workspace has no
+        // events, so the matching extent is the empty log's.
+        let stamp = Some(crate::ledger::event_log::LogExtent {
+            generation: 0,
+            offset: 0,
+        });
         let mut alpha = SidebarSnapshot::build(workspace.clone(), Vec::new(), Vec::new());
         alpha.display_name = "alpha".to_owned();
+        alpha.reflects_log = stamp;
         atomic::write_temp_then_rename(&state.latest_snapshot, &alpha).unwrap();
         let first = read_published_snapshot(&state, &runtime, "rimz-test", None).expect("base");
         assert_eq!(first.display_name, "alpha");
@@ -1259,6 +1266,7 @@ mod tests {
         // cannot mask the change); the pane cache is untouched.
         let mut bravo = SidebarSnapshot::build(workspace, Vec::new(), Vec::new());
         bravo.display_name = "bravo-the-second-rollup".to_owned();
+        bravo.reflects_log = stamp;
         atomic::write_temp_then_rename(&state.latest_snapshot, &bravo).unwrap();
         let second = read_published_snapshot(&state, &runtime, "rimz-test", None).expect("base");
         assert_eq!(

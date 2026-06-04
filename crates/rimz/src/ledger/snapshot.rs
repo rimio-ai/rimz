@@ -3933,8 +3933,6 @@ mod tests {
 
     #[test]
     fn read_fresh_latest_serves_only_when_it_reflects_the_log() {
-        use std::time::Duration;
-
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
         let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
@@ -3944,45 +3942,253 @@ mod tests {
         assert!(read_fresh_latest(&paths).is_none());
 
         // Seed an event log and a rebuilt `latest.json`.
-        let event = EventEnvelope::new(
+        let lifecycle = |agent_id: &str| {
+            EventEnvelope::new(
+                workspace.clone(),
+                "session",
+                "claude",
+                "agent-hook",
+                "agent.lifecycle",
+                serde_json::json!({
+                    "event_name": "SessionStart",
+                    "agent_id": agent_id,
+                    "status": "idle",
+                }),
+            )
+        };
+        event_log::append(&paths.events_log, &lifecycle("a")).unwrap();
+        rebuild(&paths).unwrap();
+
+        // The published stamp claims exactly the live log's length → served O(1).
+        assert!(
+            read_fresh_latest(&paths).is_some(),
+            "stamp matches the live log → serve the published view"
+        );
+
+        // A write raced the read: the log moved past the stamp → stale, so the
+        // guard declines and the caller folds the delta itself. Backdating the
+        // log's mtime proves mtime carries no authority — only the stamp does.
+        event_log::append(&paths.events_log, &lifecycle("b")).unwrap();
+        std::fs::File::open(&paths.events_log)
+            .unwrap()
+            .set_modified(SystemTime::now() - std::time::Duration::from_secs(60))
+            .unwrap();
+        assert!(
+            read_fresh_latest(&paths).is_none(),
+            "log outran the stamp → a just-appended event is unreflected; re-project"
+        );
+
+        // Republishing catches the stamp up; the guard serves again.
+        rebuild(&paths).unwrap();
+        assert!(
+            read_fresh_latest(&paths).is_some(),
+            "republish reflects the appended event → served again"
+        );
+    }
+
+    fn lifecycle_at(
+        workspace: &WorkspaceId,
+        source: &str,
+        event_name: &str,
+        agent_id: &str,
+        status: &str,
+    ) -> EventEnvelope {
+        EventEnvelope::new(
             workspace.clone(),
             "session",
-            "claude",
+            source,
             "agent-hook",
             "agent.lifecycle",
             serde_json::json!({
-                "event_name": "SessionStart",
-                "agent_id": "a",
-                "status": "idle",
+                "event_name": event_name,
+                "agent_id": agent_id,
+                "status": status,
             }),
-        );
-        event_log::append(&paths.events_log, &event).unwrap();
-        rebuild(&paths).unwrap();
+        )
+    }
 
-        let set_mtime = |path: &Path, time: SystemTime| {
-            std::fs::File::open(path)
-                .unwrap()
-                .set_modified(time)
-                .unwrap();
+    fn sorted_value(mut agents: Vec<AgentState>) -> serde_json::Value {
+        agents.sort_by_key(|a| (a.kind.clone(), a.agent_id.clone()));
+        serde_json::to_value(agents).unwrap()
+    }
+
+    #[test]
+    fn catch_up_rollup_equals_the_full_fold() {
+        // The correctness keystone for incremental folding: resuming from a
+        // persisted prefix base and folding only the delta must equal folding
+        // the whole log from scratch — including a tombstone inside the delta.
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+
+        // Prefix: two agents come up.
+        for event in [
+            lifecycle_at(&workspace, "claude", "SessionStart", "a", "idle"),
+            lifecycle_at(&workspace, "claude", "UserPromptSubmit", "a", "running"),
+            lifecycle_at(&workspace, "codex", "SessionStart", "b", "idle"),
+        ] {
+            event_log::append(&paths.events_log, &event).unwrap();
+        }
+        // Persist the fold base at the prefix — the seed the delta resumes from.
+        let (prefix_cache, _) = catch_up_rollup(&paths).unwrap();
+        write_rollup_cache(&paths.rollup_cache, &prefix_cache).unwrap();
+
+        // Delta: a third agent appears, `a` stops, and `b`'s session ends —
+        // a tombstone the incremental fold must carry exactly like the full one.
+        for event in [
+            lifecycle_at(&workspace, "claude", "SessionStart", "c", "idle"),
+            lifecycle_at(&workspace, "claude", "Stop", "a", "idle"),
+            lifecycle_at(&workspace, "codex", "SessionEnd", "b", "offline"),
+        ] {
+            event_log::append(&paths.events_log, &event).unwrap();
+        }
+        let (incremental_cache, incremental) = catch_up_rollup(&paths).unwrap();
+
+        // Cold path: drop the base; the same call folds the whole log from zero.
+        std::fs::remove_file(&paths.rollup_cache).unwrap();
+        let (cold_cache, cold) = catch_up_rollup(&paths).unwrap();
+
+        assert_eq!(
+            sorted_value(incremental),
+            sorted_value(cold),
+            "fold(seed, delta) == fold(empty, all)"
+        );
+        assert_eq!(
+            sorted_value(incremental_cache.raw_agents),
+            sorted_value(cold_cache.raw_agents),
+            "the refreshed fold bases agree too"
+        );
+        assert_eq!(incremental_cache.extent, cold_cache.extent);
+        let full_len = std::fs::metadata(&paths.events_log).unwrap().len();
+        assert_eq!(
+            incremental_cache.extent,
+            event_log::LogExtent {
+                generation: 0,
+                offset: full_len,
+            },
+            "the extent claims exactly the folded bytes"
+        );
+        assert_eq!(
+            incremental_cache.tombstones.iter().collect::<std::collections::BTreeSet<_>>(),
+            cold_cache.tombstones.iter().collect::<std::collections::BTreeSet<_>>(),
+        );
+    }
+
+    #[test]
+    fn mismatched_rollup_cache_falls_back_to_the_cold_fold() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        event_log::append(
+            &paths.events_log,
+            &lifecycle_at(&workspace, "claude", "SessionStart", "real", "idle"),
+        )
+        .unwrap();
+        let full_len = std::fs::metadata(&paths.events_log).unwrap().len();
+
+        let ghost_cache = |version: u32, offset: u64| RollupCache {
+            version,
+            extent: event_log::LogExtent {
+                generation: 7,
+                offset,
+            },
+            raw_agents: vec![agent("claude", "ghost", AgentStatus::Running, 0)],
+            tombstones: Vec::new(),
         };
-        let now = SystemTime::now();
+        let assert_cold = |label: &str| {
+            let (cache, agents) = catch_up_rollup(&paths).unwrap();
+            assert!(
+                agents.iter().any(|a| a.agent_id == "real"),
+                "{label}: the cold fold reads the log"
+            );
+            assert!(
+                agents.iter().all(|a| a.agent_id != "ghost"),
+                "{label}: the unusable cache contributes nothing"
+            );
+            assert_eq!(
+                cache.extent,
+                event_log::LogExtent {
+                    generation: 0,
+                    offset: full_len,
+                },
+                "{label}: the refreshed base restarts at generation zero"
+            );
+        };
 
-        // `latest.json` rebuilt at/after the log's last append → fresh, served.
-        set_mtime(&paths.events_log, now - Duration::from_secs(2));
-        set_mtime(&paths.latest_snapshot, now);
+        // A shape from a different version reads as absent.
+        write_rollup_cache(&paths.rollup_cache, &ghost_cache(ROLLUP_CACHE_VERSION + 1, 0))
+            .unwrap();
+        assert_cold("version mismatch");
+
+        // An extent past the live log is a rotation this cache predates.
+        write_rollup_cache(
+            &paths.rollup_cache,
+            &ghost_cache(ROLLUP_CACHE_VERSION, full_len + 999),
+        )
+        .unwrap();
+        assert_cold("extent past the log");
+    }
+
+    #[test]
+    fn reseed_for_rotation_bumps_generation_and_starts_an_empty_fold() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        event_log::append(
+            &paths.events_log,
+            &lifecycle_at(&workspace, "claude", "SessionStart", "a", "idle"),
+        )
+        .unwrap();
+        let (cache, _) = catch_up_rollup(&paths).unwrap();
+        write_rollup_cache(&paths.rollup_cache, &cache).unwrap();
+        assert_eq!(cache.extent.generation, 0);
+        assert!(cache.extent.offset > 0);
+
+        // Rotation: the old log's rollup moves into the carryover, the active
+        // log is renamed away, and the fold base reseeds for the new generation.
+        write_carryover(
+            &paths.agents_carryover,
+            &EventCarryover {
+                agents: cache.raw_agents.clone(),
+            },
+        )
+        .unwrap();
+        std::fs::remove_file(&paths.events_log).unwrap();
+        reseed_rollup_cache_for_rotation(&paths).unwrap();
+
+        let (fresh, agents) = catch_up_rollup(&paths).unwrap();
+        assert_eq!(
+            fresh.extent,
+            event_log::LogExtent {
+                generation: 1,
+                offset: 0,
+            },
+            "the new generation starts with an empty fold at offset zero"
+        );
+        assert!(fresh.raw_agents.is_empty());
         assert!(
-            read_fresh_latest(&paths).is_some(),
-            "latest.json newer than the log reflects every append → serve it O(1)"
+            agents.iter().any(|a| a.agent_id == "a"),
+            "the pre-rotation agent survives via the carryover merge"
         );
 
-        // A write raced the read: the log is newer than `latest.json` → stale,
-        // so the guard declines and the caller re-projects.
-        set_mtime(&paths.latest_snapshot, now - Duration::from_secs(2));
-        set_mtime(&paths.events_log, now);
-        assert!(
-            read_fresh_latest(&paths).is_none(),
-            "log newer than latest.json → a just-appended event is unreflected; re-project"
-        );
+        // Appends to the fresh log fold under the bumped generation.
+        event_log::append(
+            &paths.events_log,
+            &lifecycle_at(&workspace, "codex", "SessionStart", "b", "idle"),
+        )
+        .unwrap();
+        let (next, agents) = catch_up_rollup(&paths).unwrap();
+        assert_eq!(next.extent.generation, 1);
+        assert!(next.extent.offset > 0);
+        let ids: Vec<&str> = {
+            let mut ids: Vec<&str> = agents.iter().map(|a| a.agent_id.as_str()).collect();
+            ids.sort_unstable();
+            ids
+        };
+        assert_eq!(ids, ["a", "b"], "carryover and fresh-log agents merge");
     }
 
     #[test]
