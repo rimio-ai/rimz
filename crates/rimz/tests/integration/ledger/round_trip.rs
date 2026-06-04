@@ -595,13 +595,14 @@ fn moved_on_expiry_clears_native_ui_asks_but_spares_bridge() {
 }
 
 #[test]
-fn runtime_projection_reads_under_the_workspace_lock() {
-    // The sidebar's read projection must take the workspace lock for its read,
-    // so a concurrent writer's half-written trailing event-log record is never
-    // observed as a torn record and silently dropped — the race that flashed a
-    // live agent as a bare `process` row that vanished next tick. Proven by
-    // holding the lock and confirming the projection blocks until it frees: a
-    // second flock acquire conflicts even within one process.
+fn runtime_projection_serves_lock_free_while_a_writer_holds_the_lock() {
+    // Reads resume from the persisted rollup fold base, so they never take
+    // the workspace lock: a projection completes — and still sees every
+    // committed agent — while a writer holds the lock. The old hazard this
+    // lock-held read guarded against (a torn in-flight tail silently
+    // dropping an agent's only lifecycle event) is now structural: the fold
+    // base already holds prior events, and an unfolded tail frame is folded
+    // by the wakeup that completes it.
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -637,36 +638,24 @@ fn runtime_projection_reads_under_the_workspace_lock() {
     );
     h.ledger.append_event(&envelope).expect("append agent");
 
-    // Hold the lock; the projection cannot acquire it until we release.
-    let guard = rimz::ledger::lock::WorkspaceLock::acquire(h.ledger.workspace_lock_path())
+    // Hold the workspace lock as a writer would mid-mutation.
+    let _guard = rimz::ledger::lock::WorkspaceLock::acquire(h.ledger.workspace_lock_path())
         .expect("hold workspace lock");
 
     let ledger = h.ledger.clone();
-    let (started_tx, started_rx) = mpsc::channel();
     let (result_tx, result_rx) = mpsc::channel();
     let reader = std::thread::spawn(move || {
-        started_tx.send(()).expect("signal start");
         let projection = ledger.runtime_projection(rimz::RuntimeScope::Runtime);
         let _ = result_tx.send(projection.map(|p| p.agents.len()));
     });
 
-    // Once the reader is running, the projection must stay blocked behind the
-    // held lock; a lock-free regression would deliver a (possibly torn) result.
-    started_rx.recv().expect("reader started");
-    assert!(
-        result_rx.recv_timeout(Duration::from_millis(300)).is_err(),
-        "runtime_projection returned while the workspace lock was held — it is reading lock-free",
-    );
-
-    // Release; the projection completes and still sees the committed agent.
-    drop(guard);
     let agents = result_rx
         .recv_timeout(Duration::from_secs(5))
-        .expect("projection completes once the lock frees")
+        .expect("projection completes while the workspace lock is held")
         .expect("projection succeeds");
     assert_eq!(
         agents, 1,
-        "the committed agent survives the serialized read"
+        "the committed agent survives the lock-free read"
     );
     reader.join().expect("reader thread");
 }

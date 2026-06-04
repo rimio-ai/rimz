@@ -496,30 +496,21 @@ impl Ledger {
         Ok(abandoned.len())
     }
 
-    /// Project the live runtime state (feed items + event-log agent rollup).
+    /// Project the live runtime state (feed items + event-log agent rollup)
+    /// for the CLI read entry points (`cli::doctor`, `cli::feed list`,
+    /// resume planning).
     ///
-    /// Reads under the workspace lock. Every writer appends a framed event-log
-    /// record while holding this lock, and a record is one `write_all` of
-    /// `len ' ' json '\n'`. A lock-free reader could observe the length prefix
-    /// before the body and newline land, so `event_log::read_all` would treat
-    /// the in-flight record as a torn trailing record and silently skip it —
-    /// momentarily dropping an agent's only/latest lifecycle event from the
-    /// rollup, which un-links its live pane and flashes it as a bare `process`
-    /// row until the next read. Holding the lock serializes against writers, so
-    /// the reader only ever sees committed records and the torn-trailing skip
-    /// fires solely for genuine crash corpses (a SIGKILLed writer's flock
-    /// auto-releases). Callers are top-level read entry points (`snapshot`,
-    /// `cli::doctor`, `cli::feed list`) that hold no lock, so this never
-    /// re-enters the non-reentrant flock.
+    /// Lock-free. The agent rollup resumes from the persisted fold base, so
+    /// an in-flight tail frame a reader races is simply not folded yet — it
+    /// can never drop a previously-folded event, and the write that
+    /// completes the frame posts the wakeup that folds it.
     pub fn runtime_projection(
         &self,
         scope: runtime::RuntimeScope,
     ) -> Result<runtime::RuntimeProjection> {
-        let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
         let items = feed_store::list(&self.inner.paths.feed_dir)?;
         let events = event_log::read_all(&self.inner.paths.events_log)?;
-        let carryover = snapshot::read_carryover(&self.inner.paths.agents_carryover)?;
-        let agents = snapshot::agent_rollup_with_carryover(&events, carryover.agents);
+        let (_, agents) = snapshot::catch_up_rollup(&self.inner.paths)?;
         Ok(runtime::RuntimeProjection::from_parts(
             items, events, agents, scope,
         ))
@@ -975,18 +966,10 @@ impl Ledger {
         Ok(expired.len())
     }
 
-    /// Build a fresh snapshot in memory (no disk write).
+    /// Build a fresh snapshot in memory (no disk write). Lock-free and
+    /// O(delta): the rollup resumes from the persisted fold base.
     pub fn snapshot(&self) -> Result<SidebarSnapshot> {
-        let projection = self.runtime_projection(runtime::RuntimeScope::Runtime)?;
-        let mut snapshot = snapshot::SidebarSnapshot::build_with_agents(
-            self.inner.paths.workspace_id.clone(),
-            projection.items,
-            projection.agents,
-        );
-        snapshot.reap_stale_sessions(Timestamp::now());
-        snapshot.display_name = snapshot::display_name_for(&self.inner.paths);
-        let snapshot = snapshot.with_project_root(snapshot::project_root_for(&self.inner.paths));
-        Ok(snapshot)
+        Ok(snapshot::build_from(&self.inner.paths)?)
     }
 
     /// Like [`Self::snapshot`] but O(1) in the common case: serve the pre-built
