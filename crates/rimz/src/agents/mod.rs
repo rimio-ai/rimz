@@ -272,6 +272,16 @@ pub trait AgentAdapter: Send + Sync {
         false
     }
 
+    /// Probe this provider's account/plan login out-of-band — a `claude auth
+    /// status` fork, an auth-file read. Producer-only and best-effort: the
+    /// elected sidebar producer single-flights it behind a TTL'd cache, so it
+    /// never runs on the per-tick hot path (see [`account`]). Defaults to
+    /// [`account::AccountProbe::LoggedOut`] for an agent with no out-of-band
+    /// login surface.
+    fn probe_account(&self) -> account::AccountProbe {
+        account::AccountProbe::LoggedOut
+    }
+
     /// Every transcript/rollout JSONL this agent has on disk, fleet-wide — the
     /// discovery walk for the full-history spending pass
     /// ([`spending::compute_spending`]). Distinct from the bounded tail read in

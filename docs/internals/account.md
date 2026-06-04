@@ -30,7 +30,7 @@ An API-key login is *unmetered*: it has no budget to drain, drawn as the `∞` b
 A kind's account and balance reach the dashboard two ways, mirroring the [transcript two-source split](./transcript.md#two-sources):
 
 1. **A live session's rich context.** The statusline / app-server transport already carries account and balance, so any live session of a kind fills both at no extra cost. The transport plumbing is [transcript.md](./transcript.md)'s concern; this doc owns only what its fields *mean*.
-2. **An out-of-band probe** ([`account.rs`](../../crates/rimz/src/agents/account.rs)). For a provider that is logged in but has no live session this run, the producer probes the login directly, so the dashboard shows your accounts and budgets between turns — not only mid-turn.
+2. **An out-of-band probe** ([`AgentAdapter::probe_account`](../../crates/rimz/src/agents/mod.rs), one `account.rs` per adapter behind the shared [`AccountProbe`](../../crates/rimz/src/agents/account.rs) contract). For a provider that is logged in but has no live session this run, the producer probes the login directly, so the dashboard shows your accounts and budgets between turns — not only mid-turn.
 
 A live session always wins where both exist: its reading is richer and current.
 
@@ -47,7 +47,7 @@ One asymmetry shapes the producer below: **Claude's balance has no source outsid
 
 ## The out-of-band probe
 
-[`account::probe(kind)`](../../crates/rimz/src/agents/account.rs) returns an `AccountProbe` with three arms, and the arm — not just the value — drives the producer's cache TTL:
+[`AgentAdapter::probe_account`](../../crates/rimz/src/agents/mod.rs) returns an [`AccountProbe`](../../crates/rimz/src/agents/account.rs) with three arms, and the arm — not just the value — drives the producer's cache TTL:
 
 - **`Found(AgentAccount)`** — a resolved login. Authoritative; rides the long success TTL.
 - **`LoggedOut`** — the probe ran and confidently found no login. Also authoritative (it changes about never), so it caches like a success.
@@ -108,12 +108,12 @@ Claude's windows have no source outside a live statusline, so Claude never quali
 A new agent earns an account block and balance bars by filling the two internal types from its own surfaces; everything downstream — aggregation, `stable_windows`, caching, the dashboard — is provider-agnostic and comes free.
 The work mirrors [transcript.md → Adding a provider](./transcript.md#adding-a-provider) and [hooks.md → Adding an agent](./hooks.md#adding-an-agent):
 
-1. **Fill `AgentAccount`** (plan + metered) on the session's `AgentContext` from its rich-context transport, and/or add an out-of-band arm to [`account::probe`](../../crates/rimz/src/agents/account.rs) for the logged-in-but-idle case.
+1. **Fill `AgentAccount`** (plan + metered) on the session's `AgentContext` from its rich-context transport, and/or override [`AgentAdapter::probe_account`](../../crates/rimz/src/agents/mod.rs) for the logged-in-but-idle case.
 2. **Fill `AgentRateLimits`** (the windows, each with a `used_percentage`, reset instant, and `duration_mins`) on `AgentContext` from the transport.
 3. **Optionally** register `[sidebar.providers.<kind>]` defaults (emblem, color, name).
 4. **Stay best-effort** throughout: a missing fact is an omitted label or a blank bar, never an error.
 
-Per [testing.md](../contributing/testing.md), golden the account mapping from a fixture probe payload and a fixture transport payload, including the logged-out and unparseable cases (the inline goldens in [`account.rs`](../../crates/rimz/src/agents/account.rs) are the model).
+Per [testing.md](../contributing/testing.md), golden the account mapping from a fixture probe payload and a fixture transport payload, including the logged-out and unparseable cases (the inline goldens in each adapter's `account.rs` are the model).
 
 ## What lives elsewhere
 

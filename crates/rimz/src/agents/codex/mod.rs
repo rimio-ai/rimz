@@ -18,6 +18,7 @@
 //! from the app-server read-only methods via [`refresh_context`], spawned
 //! out-of-band by `rimz codex refresh-context`.
 
+pub(crate) mod account;
 pub(crate) mod app_server;
 pub mod broker;
 pub(crate) mod payloads;
@@ -359,6 +360,10 @@ impl AgentAdapter for CodexAdapter {
 
     fn hooks_installed(&self) -> bool {
         codex_config_path().is_ok_and(|path| hooks_installed_at(&path))
+    }
+
+    fn probe_account(&self) -> crate::agents::account::AccountProbe {
+        account::probe()
     }
 
     fn transcript_files(&self) -> Vec<PathBuf> {

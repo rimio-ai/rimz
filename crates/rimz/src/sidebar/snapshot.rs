@@ -822,7 +822,11 @@ fn probe_accounts(
     let mut accounts: BTreeMap<String, crate::agents::AgentAccount> = BTreeMap::new();
     let mut ok = true;
     for kind in kinds {
-        match crate::agents::account::probe(&kind) {
+        // An unregistered kind has no out-of-band login probe — nothing to retry.
+        let Some(adapter) = crate::agents::find_adapter(&kind) else {
+            continue;
+        };
+        match adapter.probe_account() {
             crate::agents::account::AccountProbe::Found(account) => {
                 accounts.insert(kind, account);
             }

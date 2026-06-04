@@ -17,6 +17,7 @@
 //! `docs/internals/hooks.md`). The `PreToolUse` blocking sub-events ride the
 //! broad `PreToolUse` hook and self-classify from `tool_name`.
 
+pub(crate) mod account;
 pub(crate) mod payloads;
 pub(crate) mod spend;
 mod statusline;
@@ -505,6 +506,10 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn hooks_installed(&self) -> bool {
         claude_settings_path().is_ok_and(|path| hooks_installed_at(&path))
+    }
+
+    fn probe_account(&self) -> crate::agents::account::AccountProbe {
+        account::probe()
     }
 
     fn transcript_files(&self) -> Vec<PathBuf> {
