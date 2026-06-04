@@ -10,7 +10,7 @@ Agents are *sources*, not a privileged path. Anything a hook does, a script can 
 
 ## The seam — `AgentAdapter`
 
-Every agent — Claude, Codex, and every future one — speaks to Rimz through one trait, [`AgentAdapter`](../../crates/rimz/src/agents/mod.rs), registered in [`registry::ADAPTERS`](../../crates/rimz/src/agents/registry.rs). Adding an agent is implementing the trait plus a static [`AgentDescriptor`](../../crates/rimz/src/agents/descriptor.rs) (identity, branding, capabilities, tool tables) and one registry line; nothing downstream of it is agent-specific. The trait is the single place a native protocol diverges and the single place it is normalized. Its methods, by role (signatures live in the trait):
+Every agent — Claude, Codex, Pi, and every future one — speaks to Rimz through one trait, [`AgentAdapter`](../../crates/rimz/src/agents/mod.rs), registered in [`registry::ADAPTERS`](../../crates/rimz/src/agents/registry.rs). Adding an agent is implementing the trait plus a static [`AgentDescriptor`](../../crates/rimz/src/agents/descriptor.rs) (identity, branding, capabilities, tool tables) and one registry line; nothing downstream of it is agent-specific. The trait is the single place a native protocol diverges and the single place it is normalized. Its methods, by role (signatures live in the trait):
 
 - **`classify_hook`** sorts a native event into one of the two channels below (or `Unknown`, dropped) and, for a blocking event, names the [`FeedKind`](../../crates/rimz/src/feed.rs).
 - **`observe_lifecycle`** is the normalizer: it maps a native lifecycle event onto one [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs) — the unified event shape every downstream reducer reads. `None` means "no state transition here", so high-frequency events stay silent.
@@ -52,9 +52,9 @@ A blocking hook fires → `classify_hook` returns `BlockingFeed` with a `FeedKin
 
 Installing hooks edits the agent's own config, so it is a security surface, never silent. `rimz start` detects installed, supported agents each run, previews the additive per-user change, installs on approval, and continues if the user skips. `rimz hooks install <agent>` / `uninstall <agent>` are the manual entry points. `hooks_installed()` makes the state observable: `rimz doctor` reports it per agent and the sidebar's first-run hint points at install until an agent is wired. An agent run before its hooks are installed fires nothing and is invisible — never silently broken.
 
-**What install wires.** Every event the state machine needs (the turn-boundary signals) plus the high-frequency per-tool events that keep enrichment and audit depth current. The single source of truth for the wired set is each adapter's `INSTALLED_EVENTS` constant — not restated here. Per-tool payload *content* is gated by `[privacy] payload_mode` (`metadata` / `redacted` / `full`; see [configuration.md](../reference/configuration.md#privacy)); the gate strips content, never whether a transition is observed.
+**What install wires.** Every event the state machine needs (the turn-boundary signals) plus the high-frequency per-tool events that keep enrichment and audit depth current. The single source of truth for the wired set is each adapter's `INSTALLED_EVENTS`-style constant — not restated here. Per-tool payload *content* is gated by `[privacy] payload_mode` (`metadata` / `redacted` / `full`; see [configuration.md](../reference/configuration.md#privacy)); the gate strips content, never whether a transition is observed.
 
-**The installed config shape.** Neither agent has a wildcard event key, so install writes one block per wired event. Inside that constraint it stays minimal:
+**The installed config shape.** Claude and Codex have no wildcard event key, so install writes one block per wired event into their config files; Pi instead owns one whole extension file (see [Appendix Pi](#appendix--pi)). Inside the config-merge shape it stays minimal:
 
 - **One command for every event** — `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source <agent>`, with no `--event`. The helper reads the event from the payload's `hook_event_name`; `--event` survives only as a manual debugging override.
 - **Idempotent, self-healing reclaim.** Install reclaims every rimz-owned entry by the stable command substring `rimz hooks feed --source <agent>` — marked or not, with or without a legacy `--event` — then rewrites the canonical set, so duplicate or stale blocks never accumulate. User-authored hooks (no rimz command) are untouched.
@@ -63,7 +63,7 @@ Installing hooks edits the agent's own config, so it is a security surface, neve
 
 ## Adding an agent
 
-OpenCode, Pi, Cursor, Gemini, Copilot, and similar agents land through `AgentAdapter` once their hook surface and decision outputs are verified — Pi's surface is already mirrored and feasibility-checked in [adapter/pi-reference.md](./adapter/pi-reference.md). The work is a new appendix below — the native-event → internal mapping — plus the trait impl. Nothing else changes.
+OpenCode, Cursor, Gemini, Copilot, and similar agents land through `AgentAdapter` once their hook surface and decision outputs are verified. The work is one new directory under [`crates/rimz/src/agents/`](../../crates/rimz/src/agents/AGENTS.md) — the trait impl, its `AgentDescriptor`, typed payloads, and `spend.rs` — plus one line in `registry::ADAPTERS` and a new appendix below (the native-event → internal mapping). Nothing else changes: spending, doctor, install, branding, and classification all resolve through the registry. The Pi adapter is the worked example — its entire surface, including the upstream-protocol divergences, landed inside `agents/pi/` with zero edits at shared dispatch sites.
 
 The mapping has four jobs: route each native event to a channel; map lifecycle events to observations; render the agent's *own* decision shape (never reuse another agent's JSON — see the divergence below); and set `hook_cap` from the upstream's published deadline, leaving margin so the bridge times out before the agent kills the hook.
 
@@ -139,3 +139,28 @@ Under `codex remote-control start` the hooks are daemon-routed: they fire from t
 ### Context enrichment
 
 Codex has no statusline: its `AgentContext` is read out of band from `codex app-server`, and its context gauge from the rollout transcript tail. The read-only client, the detached refresh trigger, the broker → daemon → cold-spawn connection preference, and the one gap (usage rides only a live notification, so the gauge stays transcript-sourced) all live in [transcript.md → Appendix Codex](./transcript.md#appendix--codex).
+
+## Appendix — Pi
+
+Native event → internal mapping; the upstream extension API, payloads, and session JSONL are in [adapter/pi-reference.md](./adapter/pi-reference.md). Pi's integration surface is in-process TypeScript extensions, so the adapter ships one — [`extension.ts`](../../crates/rimz/src/agents/pi/extension.ts), embedded at compile time — that forwards each event below to `rimz hooks feed --source pi` as a fire-and-forget child. The child direction inverts: Claude and Codex run Rimz as a hook child and read its stdout; pi's extension runs Rimz as *its* child. Nothing reads the child's stdout today (no blocking channel), so the neutral path is empty by construction.
+
+| Native event             | Channel   | `observe_lifecycle` → [`LifecycleSignal`](../../crates/rimz/src/agents/lifecycle.rs) | Normalized fields                          |
+| ------------------------ | --------- | ------------------------------------------------ | ------------------------------------------ |
+| `session_start`          | lifecycle | `Registered`                                     | worktree from `cwd`                        |
+| `before_agent_start`     | lifecycle | `TurnStarted`                                    | sanitized `prompt` (labels the row)        |
+| `agent_end`              | lifecycle | `TurnEnded { errored, parked_on_background: false }` | `model`, `total_tokens`                |
+| `tool_execution_end` (mutating) | lifecycle | `ToolUsed { mutates: true, edits }`       | `edits` for `edit`/`write`; `bash` mutates only; read-only tools stay silent |
+| `session_before_compact` | lifecycle | `Compacting`                                     | a leading signal, like Claude's `PreCompact` |
+| `session_shutdown`       | lifecycle | `Ended` → removed (`ends_session`)               | fires on quit incl. Ctrl+C/SIGHUP/SIGTERM and on `/new`/`/resume` replacement |
+
+Pi's vocabulary maps onto Rimz's turn cleanly: a pi *turn* is one LLM call, and its `agent_*` pair brackets one user prompt — pi's `agent_*` is what Rimz calls a turn. The `agent_end` error bit is in band: a failed or aborted LLM call still ends with an assistant message carrying `stopReason: "error" | "aborted"` plus `errorMessage` — an explicit death certificate at the turn boundary, with no transcript forensics needed (unlike Claude's recovered `StopFailure` gap). Identity is direct: the extension runs in-process in the pane, the session id exists from launch (no lazy-registration window), and there is no daemon or remote mode, so every pi session is standalone and stamped.
+
+**What Pi cannot support.** Pi intentionally ships no permission prompts, plan approvals, or questions — there is nothing for Rimz to observe and route, so `blocking_feed` is declared off and the three operating paths never engage natively. (An extension *could* gate `tool_call` and invent a prompt, but that has Rimz posing the question rather than routing it — never the default install.) Likewise no subagents, todos, background tasks, or rate-limit/plan surface: those capabilities are declared off in the descriptor and the absences render deliberately. A single pi session can also switch provider accounts mid-session, so the dashboard models *pi* as the provider kind and its panel aggregates whatever accounts pi used.
+
+**Decision shape.** None — `render_decision` is an explicit error and `render_neutral` prints nothing; there is no blocking channel to answer on.
+
+**Cap & install.** Pi imposes no handler deadline, so `hook_cap` (60s) is Rimz-chosen and moot while `blocking_feed` is off. Install is whole-file ownership: the embedded extension is written verbatim to `~/.pi/agent/extensions/rimz.ts` — idempotent by path, reclaiming any edit on re-install (stated in the file header), removed whole on uninstall, hot-reloadable via `/reload`. `hooks_installed` checks the `_rimz_managed` marker, so a user's own extension at the same path never reads as Rimz's.
+
+**Resume.** `pi --session <session_id>` restores a rollup-recorded session (a partial UUID suffices); the extension re-fires `session_start` with `reason: "resume"`.
+
+**Integration-blind modes.** `--no-extensions` runs with no events at all, and `-p` / `--mode json` run extensions without a UI — same posture as an agent run before `rimz hooks install`: invisible, never silently broken.

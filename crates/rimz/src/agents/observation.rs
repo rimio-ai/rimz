@@ -1,4 +1,4 @@
-//! The normalized lifecycle observation and the scaffolding both adapters share.
+//! The normalized lifecycle observation and the scaffolding the adapters share.
 //!
 //! [`AgentLifecycleObservation`] is the single event shape every downstream
 //! reducer reads (see [agent.md](../../../../docs/internals/agent.md)); each
