@@ -11,7 +11,11 @@
 //! sidebar renderer reads this data only through the snapshot JSON, never this
 //! module, so "sidebar is read-only on the ledger" holds.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs;
+use std::path::PathBuf;
+use std::time::SystemTime;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -52,8 +56,28 @@ pub fn write(
     write_temp_then_rename_cache(&runtime.agent_context_path(kind, agent_id), &record)
 }
 
+/// One parsed sidecar, gated by the stat that validated it. `record` is `None`
+/// for a file that read or parsed as garbage, so a corrupt sidecar costs one
+/// parse attempt, not one per tick.
+struct ParsedSidecar {
+    mtime: SystemTime,
+    len: u64,
+    record: Option<AgentContextRecord>,
+}
+
+thread_local! {
+    /// Per-thread parse cache. Every update lands via atomic rename of a
+    /// freshly-written temp file, so `(mtime, len)` validates content; the
+    /// long-lived consumer fetch thread re-reads these sidecars on every
+    /// wakeup, and this caps its steady-state cost at one stat per file.
+    static CONTEXT_PARSE_CACHE: RefCell<HashMap<PathBuf, ParsedSidecar>> =
+        RefCell::new(HashMap::new());
+}
+
 /// Read every live session's context. Tolerant: an unreadable, malformed, or
 /// past-TTL file is skipped, never fatal — enrichment, not correctness.
+/// Steady-state cost on a long-lived thread is one stat per file; only a
+/// changed file re-reads and re-parses (see [`CONTEXT_PARSE_CACHE`]).
 pub fn read_all(runtime: &RuntimePaths) -> Vec<AgentContextRecord> {
     read_all_at(runtime, Timestamp::now())
 }
@@ -63,20 +87,45 @@ fn read_all_at(runtime: &RuntimePaths, now: Timestamp) -> Vec<AgentContextRecord
         return Vec::new();
     };
     let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
+    CONTEXT_PARSE_CACHE.with_borrow_mut(|cache| {
+        let mut seen: Vec<PathBuf> = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(mtime) = meta.modified() else { continue };
+            let len = meta.len();
+            seen.push(path.clone());
+            let record = match cache.get(&path) {
+                Some(parsed) if parsed.mtime == mtime && parsed.len == len => parsed.record.clone(),
+                _ => {
+                    let record = fs::read(&path)
+                        .ok()
+                        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+                    cache.insert(
+                        path,
+                        ParsedSidecar {
+                            mtime,
+                            len,
+                            record: record.clone(),
+                        },
+                    );
+                    record
+                }
+            };
+            let Some(record) = record else { continue };
+            // The TTL is evaluated fresh per read — a cached record still ages out.
+            if now.as_second() - record.context.observed_at.as_second() > CONTEXT_TTL_SECS {
+                continue;
+            }
+            out.push(record);
         }
-        let Ok(bytes) = fs::read(&path) else { continue };
-        let Ok(record) = serde_json::from_slice::<AgentContextRecord>(&bytes) else {
-            continue;
-        };
-        if now.as_second() - record.context.observed_at.as_second() > CONTEXT_TTL_SECS {
-            continue;
-        }
-        out.push(record);
-    }
+        // Drop cache keys whose files vanished (SessionEnd tombstone, gc), so
+        // the cache stays bounded by the live sidecar set.
+        cache.retain(|path, _| seen.contains(path));
+    });
     out
 }
 
@@ -166,6 +215,43 @@ mod tests {
         let stale = Timestamp::from_second(1_700_000_000 - CONTEXT_TTL_SECS - 60).unwrap();
         write(&runtime, "claude", "sess-1", &ctx(stale)).unwrap();
         assert!(read_all_at(&runtime, now).is_empty());
+    }
+
+    #[test]
+    fn unchanged_stat_skips_the_reparse() {
+        let (_dir, runtime) = runtime();
+        let now = Timestamp::now();
+        write(&runtime, "claude", "sess-1", &ctx(now)).unwrap();
+        let first = read_all(&runtime);
+        assert_eq!(first[0].agent_id, "sess-1");
+
+        // Rewrite the file in place with a different identity but identical
+        // length, restoring the original mtime: the stat gate cannot tell it
+        // changed, so the cached parse is served — which is exactly the
+        // contract (every real update is an atomic rename of a fresh temp
+        // file, so a same-stat file is byte-identical in production).
+        let path = runtime.agent_context_path("claude", "sess-1");
+        let original = std::fs::read(&path).unwrap();
+        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let swapped = String::from_utf8(original)
+            .unwrap()
+            .replace("sess-1", "sess-9");
+        std::fs::write(&path, swapped).unwrap();
+        let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        f.set_modified(mtime).unwrap();
+        drop(f);
+        assert_eq!(
+            read_all(&runtime)[0].agent_id,
+            "sess-1",
+            "same (mtime, len) serves the cached parse — one stat, no read"
+        );
+
+        // A moved mtime invalidates: the rewrite is now visible.
+        let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        f.set_modified(mtime + std::time::Duration::from_secs(3))
+            .unwrap();
+        drop(f);
+        assert_eq!(read_all(&runtime)[0].agent_id, "sess-9");
     }
 
     #[test]

@@ -16,9 +16,11 @@
 //! is nothing to fold it onto. `rimz gc` reaps the files ended sessions leave
 //! behind, like the other runtime liveness files.
 
-use std::collections::BTreeSet;
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -69,21 +71,71 @@ fn read_one(path: PathBuf) -> Option<AgentActivity> {
     serde_json::from_slice::<AgentActivity>(&bytes).ok()
 }
 
+/// One parsed touch, gated by the stat that validated it. `record` is `None`
+/// for a file that read or parsed as garbage, so a corrupt touch costs one
+/// parse attempt, not one per tick.
+struct ParsedTouch {
+    mtime: SystemTime,
+    len: u64,
+    record: Option<AgentActivity>,
+}
+
+thread_local! {
+    /// Per-thread parse cache for the keyed read. Every touch lands via atomic
+    /// rename of a freshly-written temp file, so `(mtime, len)` validates
+    /// content; the long-lived consumer fetch thread re-reads these touches on
+    /// every wakeup, and this caps its steady-state cost at one stat per key.
+    static TOUCH_PARSE_CACHE: RefCell<HashMap<PathBuf, ParsedTouch>> =
+        RefCell::new(HashMap::new());
+}
+
 /// Read activity touches for the live agent identities the caller already has.
 /// This is the sidebar hot path: runtime activity files are disposable and may
 /// outlive their sessions until `rimz gc`, so a keyed read avoids parsing a
-/// directory full of stale sidecars on every renderer tick.
+/// directory full of stale sidecars on every renderer tick — and the per-key
+/// stat gate ([`TOUCH_PARSE_CACHE`]) caps the steady-state cost at one stat
+/// per key, re-parsing only a file whose stat moved.
 pub fn read_for_keys<'a>(
     runtime: &RuntimePaths,
     keys: impl IntoIterator<Item = (&'a str, &'a str)>,
 ) -> Vec<AgentActivity> {
     let mut seen = BTreeSet::new();
-    keys.into_iter()
-        .filter_map(|(kind, agent_id)| {
-            let path = activity_path(runtime, kind, agent_id);
-            seen.insert(path.clone()).then(|| read_one(path)).flatten()
-        })
-        .collect()
+    TOUCH_PARSE_CACHE.with_borrow_mut(|cache| {
+        let touches: Vec<AgentActivity> = keys
+            .into_iter()
+            .filter_map(|(kind, agent_id)| {
+                let path = activity_path(runtime, kind, agent_id);
+                if !seen.insert(path.clone()) {
+                    return None;
+                }
+                let Ok(meta) = fs::metadata(&path) else {
+                    // A vanished touch drops out of the cache with its file.
+                    cache.remove(&path);
+                    return None;
+                };
+                let mtime = meta.modified().ok()?;
+                let len = meta.len();
+                match cache.get(&path) {
+                    Some(parsed) if parsed.mtime == mtime && parsed.len == len => {
+                        parsed.record.clone()
+                    }
+                    _ => {
+                        let record = read_one(path.clone());
+                        cache.insert(
+                            path,
+                            ParsedTouch {
+                                mtime,
+                                len,
+                                record: record.clone(),
+                            },
+                        );
+                        record
+                    }
+                }
+            })
+            .collect();
+        touches
+    })
 }
 
 /// Read every recorded activity touch. A missing dir, an unreadable file, or
@@ -173,6 +225,44 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].kind, "claude");
         assert_eq!(all[0].agent_id, "sess-live");
+    }
+
+    #[test]
+    fn keyed_read_serves_an_unchanged_stat_from_cache() {
+        let (_dir, runtime) = runtime();
+        touch(&runtime, "claude", "sess-1").expect("touch");
+        let first = read_for_keys(&runtime, [("claude", "sess-1")]);
+        assert_eq!(first.len(), 1);
+        let original_at = first[0].at;
+
+        // Rewrite the touch in place with a different identity but identical
+        // length, restoring the original mtime: the stat gate serves the
+        // cached parse — the contract, since every real touch is an atomic
+        // rename of a fresh temp file.
+        let path = activity_path(&runtime, "claude", "sess-1");
+        let bytes = std::fs::read(&path).unwrap();
+        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let swapped = String::from_utf8(bytes)
+            .unwrap()
+            .replace("sess-1", "sess-9");
+        std::fs::write(&path, swapped).unwrap();
+        let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        f.set_modified(mtime).unwrap();
+        drop(f);
+        let cached = read_for_keys(&runtime, [("claude", "sess-1")]);
+        assert_eq!(cached[0].at, original_at);
+        assert_eq!(
+            cached[0].agent_id, "sess-1",
+            "same (mtime, len) serves the cached parse — one stat, no read"
+        );
+
+        // A moved mtime invalidates: the rewrite is now visible.
+        let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        f.set_modified(mtime + std::time::Duration::from_secs(3))
+            .unwrap();
+        drop(f);
+        let fresh = read_for_keys(&runtime, [("claude", "sess-1")]);
+        assert_eq!(fresh[0].agent_id, "sess-9");
     }
 
     #[test]
