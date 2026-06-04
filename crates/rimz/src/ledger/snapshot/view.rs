@@ -905,15 +905,24 @@ impl SidebarSnapshot {
             // across every session, grouped by duration — drop readings whose reset
             // already passed (stale), then keep the most-drained survivor (most
             // conservative). Same inputs always yield the same bars, regardless of
-            // which session reported last.
+            // which session reported last. A provider whose descriptor declares no
+            // rate-limit windows renders the absence deliberately — its panel
+            // never grows budget bars even if a stray reading lands in a session
+            // context; an unregistered kind keeps whatever it reports.
             let now = Timestamp::now();
-            let windows = stable_windows(
-                sessions
-                    .iter()
-                    .filter_map(|agent| agent.context.as_ref()?.rate_limits.as_ref())
-                    .flat_map(|limits| limits.windows.iter().cloned()),
-                now,
-            );
+            let declares_windows = crate::agents::descriptor_by_kind(&kind)
+                .is_none_or(|descriptor| descriptor.capabilities.rate_limit_windows);
+            let windows = if declares_windows {
+                stable_windows(
+                    sessions
+                        .iter()
+                        .filter_map(|agent| agent.context.as_ref()?.rate_limits.as_ref())
+                        .flat_map(|limits| limits.windows.iter().cloned()),
+                    now,
+                )
+            } else {
+                Vec::new()
+            };
             let has_windows = !windows.is_empty();
 
             let account = freshest
@@ -2325,6 +2334,39 @@ mod tests {
             .find(|panel| panel.kind == "claude")
             .expect("claude panel from recorded spend alone");
         assert_eq!(claude.spending.as_ref().unwrap().year.usd, 9.0);
+    }
+
+    #[test]
+    fn provider_without_the_rate_limit_capability_drops_stray_windows() {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let reading = RateLimitWindow {
+            used_percentage: Some(40),
+            resets_at: Some(Timestamp::now() + std::time::Duration::from_secs(3_600)),
+            duration_mins: Some(300),
+        };
+        // Pi declares `rate_limit_windows: false`; Claude declares it true. The
+        // same stray session reading must paint a budget bar only where the
+        // descriptor declares the surface.
+        let mut pi = agent("pi", "p1", AgentStatus::Idle, 10);
+        pi.context = Some(ctx_with_limits(vec![reading.clone()]));
+        let mut claude = agent("claude", "c1", AgentStatus::Idle, 10);
+        claude.context = Some(ctx_with_limits(vec![reading]));
+
+        let snapshot = SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![pi, claude])
+            .with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+
+        let panel = |kind: &str| {
+            snapshot
+                .providers
+                .iter()
+                .find(|panel| panel.kind == kind)
+                .unwrap_or_else(|| panic!("{kind} panel present"))
+        };
+        assert!(
+            panel("pi").windows.is_empty(),
+            "pi's declared absence drops the stray reading"
+        );
+        assert_eq!(panel("claude").windows.len(), 1);
     }
 
     #[test]
