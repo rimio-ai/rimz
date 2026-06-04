@@ -372,6 +372,29 @@ fn rotation_bumps_the_generation_and_reseeds_the_fold() {
 }
 
 #[test]
+fn rotation_retracts_the_published_snapshot_and_republishes_fresh() {
+    // The published stamp describes the renamed-away log, so rotation
+    // retracts `latest.json` before reseeding (a crash mid-rotation leaves
+    // readers folding for themselves, never trusting an aliasable stamp) and
+    // the rebuild republishes it under the new generation. A workspace that
+    // never published — no `latest.json` at all — rotates the same way.
+    let h = crate::common::Harness::new();
+    h.ledger
+        .append_event(&lifecycle(&h, "SessionStart", "pre-rotation"))
+        .expect("append");
+    std::fs::remove_file(&h.ledger.paths().latest_snapshot).expect("retract published snapshot");
+
+    let outcome = h.ledger.rotate_event_log(1, None).expect("rotate");
+    assert!(outcome.rotation.is_rotated());
+
+    let latest = snapshot::read_fresh_latest(h.ledger.paths())
+        .expect("the rebuild republished a fresh snapshot");
+    let extent = latest.reflects_log.expect("stamped");
+    assert_eq!(extent.generation, 1, "stamped for the new generation");
+    assert_eq!(extent.offset, 0, "the fresh log starts empty");
+}
+
+#[test]
 fn torn_inflight_tail_does_not_drop_a_folded_agent() {
     // The structural guarantee that let reads go lock-free: the fold base
     // already holds every committed event, so racing a writer's half-written

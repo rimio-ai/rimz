@@ -101,6 +101,10 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
     // delta storm — the read itself is page-cache-hot. Same (path, mtime, len)
     // trade-off the `snapshot.json` parse cache accepts; an atomic-rename republish
     // changes both mtime and len, so a stale parse cannot be served.
+    // Offset-only comparison is sound across rotations because the writer
+    // retracts `latest.json` before reseeding the new generation (see
+    // `rotate_event_log`), and every publish re-stamps it — so a readable
+    // stamp always describes the live log, never a renamed-away one.
     let stamp_is_current = |snapshot: &SidebarSnapshot| {
         snapshot
             .reflects_log

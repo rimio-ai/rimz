@@ -790,10 +790,14 @@ impl Ledger {
     ///    crash leaves both files coherent.
     /// 2. Rename the active log into `events.log.archive/`. UUIDv7 filenames
     ///    keep archives sorted chronologically without an external index.
-    /// 3. Reseed the rollup fold base as a new generation and rebuild the
+    /// 3. Retract the published `latest.json` — its extent stamp describes
+    ///    the renamed-away log, so a crash before the rebuild below leaves
+    ///    readers folding for themselves rather than trusting a stamp that
+    ///    could alias into the fresh log.
+    /// 4. Reseed the rollup fold base as a new generation and rebuild the
     ///    persisted snapshot (`latest.json`) from the merged rollup so
     ///    neither depends on the rotated log.
-    /// 4. Prune archives older than `archive_older_than` when set.
+    /// 5. Prune archives older than `archive_older_than` when set.
     #[must_use = "durability barrier; check the result"]
     pub fn rotate_event_log(
         &self,
@@ -817,6 +821,23 @@ impl Ledger {
             )?;
 
             if rotation.is_rotated() {
+                // Retract the published snapshot before anything else: its
+                // extent stamp describes the renamed-away log, and the
+                // freshness check compares offsets only. A crash anywhere
+                // between here and the rebuild below must leave readers on
+                // the fold-it-yourself path — never a stale stamp that could
+                // alias once the fresh log regrows to the stamped length.
+                match std::fs::remove_file(&self.inner.paths.latest_snapshot) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(source) => {
+                        return Err(event_log::EventLogErr::Io {
+                            path: self.inner.paths.latest_snapshot.clone(),
+                            source,
+                        }
+                        .into());
+                    }
+                }
                 let carryover = snapshot::EventCarryover { agents: merged };
                 snapshot::write_carryover(&self.inner.paths.agents_carryover, &carryover)?;
                 // The fresh log is a new generation: reseed the fold base at
