@@ -26,8 +26,8 @@ use crate::render::{self, Alert, Browse, JumpStamp, UiState};
 
 mod input;
 use input::{
-    KeyAction, SELF_CLOSE_WAKEUP, SNAPSHOT_WAKEUP, Wakeup, encode_key, encode_mouse,
-    wait_for_wakeup,
+    JUMP_NUDGE_WAKEUP, KeyAction, SELF_CLOSE_WAKEUP, SNAPSHOT_WAKEUP, Wakeup, encode_key,
+    encode_mouse, wait_for_wakeup,
 };
 
 #[derive(Clone, Debug)]
@@ -312,6 +312,20 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     true,
                 );
             }
+            // The detached jump thread reports its focus command landed: pull a
+            // fresh pane list now and require a cache produced after this
+            // signal — a frame predating the jump cannot confirm the stamp —
+            // so the derived baseline converges in one mux round-trip instead
+            // of waiting out the backstop tick.
+            Wakeup::JumpNudge => {
+                request_fetch(
+                    &request_tx,
+                    &mut in_flight,
+                    &mut pending_refetch,
+                    FetchRequest::fresh_panes(),
+                    true,
+                );
+            }
             Wakeup::Resize => {
                 // A grow is the mux handing the sidebar a freed sibling's space —
                 // the precondition for the self-close full-width flash. Hold the
@@ -340,6 +354,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                         &mut terminal,
                         &current,
                         anim_start,
+                        &socket_path,
                     )? {
                         dirty = false;
                     }
@@ -422,6 +437,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     &mut terminal,
                     &current,
                     anim_start,
+                    &socket_path,
                 )? {
                     dirty = false;
                 }
@@ -1737,6 +1753,7 @@ fn apply_input(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     snapshot: &SidebarSnapshot,
     anim_start: Instant,
+    wake_socket: &Path,
 ) -> Result<bool> {
     let outcome = handle_wakeup(wakeup, ui, snapshot);
     if outcome.dismiss {
@@ -1752,8 +1769,9 @@ fn apply_input(
         // The handler already stamped the jump echo and repainted; fire the
         // one-way async focus command. The derived baseline confirms or expires
         // the stamp when the queried state catches up — there is no sync
-        // protocol behind the jump.
-        focus_selected_row(snapshot, index);
+        // protocol behind the jump, only the post-`Ok` nudge back to our own
+        // wakeup socket so a fresh frame confirms in one round-trip.
+        focus_selected_row(snapshot, index, wake_socket);
     }
     Ok(outcome.redraw)
 }
@@ -1763,11 +1781,12 @@ fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -
         Wakeup::Key(action) => handle_key(action, ui, snapshot),
         Wakeup::MouseClick { column, row } => handle_mouse_click(column, row, ui, snapshot),
         Wakeup::Resize => InputOutcome::redraw(),
-        // The serve loop intercepts these before dispatching here: a tick or a
-        // ledger delta is the re-fetch trigger, worker completions are folded,
-        // and a reload re-execs.
+        // The serve loop intercepts these before dispatching here: a tick, a
+        // ledger delta, or a jump nudge is a re-fetch trigger, worker
+        // completions are folded, and a reload re-execs.
         Wakeup::Tick
         | Wakeup::Ledger { .. }
+        | Wakeup::JumpNudge
         | Wakeup::Reload
         | Wakeup::Snapshot
         | Wakeup::SelfCloseProbe => InputOutcome::default(),
@@ -2085,7 +2104,7 @@ fn next_attention_index(snapshot: &SidebarSnapshot, selected: usize) -> Option<u
 }
 
 /// Focus the pane backing the selected row. A no-op when the row has no pane.
-fn focus_selected_row(snapshot: &SidebarSnapshot, selected: usize) {
+fn focus_selected_row(snapshot: &SidebarSnapshot, selected: usize, wake_socket: &Path) {
     let Some(pane) = visible_rows(snapshot)
         .nth(selected)
         .and_then(|row| row.pane.as_ref())
@@ -2099,17 +2118,32 @@ fn focus_selected_row(snapshot: &SidebarSnapshot, selected: usize) {
     // `rimz pane focus` child, no per-click `list-panes` re-validation. A pane
     // recycled in the sub-second window since the snapshot self-corrects on the
     // next refresh.
-    spawn_pane_focus(pane.pane_id.clone());
+    spawn_pane_focus(pane.pane_id.clone(), wake_socket.to_owned());
 }
 
 /// Focus the pane on a detached thread so the keypress/click returns instantly.
 /// Errors are logged, not surfaced — a missed jump is a retriable annoyance,
-/// never a reason to block the UI.
-fn spawn_pane_focus(pane_id: PaneId) {
+/// never a reason to block the UI. Once the focus command lands, the thread
+/// posts the [`JUMP_NUDGE_WAKEUP`] back to this renderer's own wakeup socket so
+/// the loop pulls a fresh pane frame and the derived baseline confirms the
+/// stamp in one mux round-trip. The nudge is best-effort latency: a failed send
+/// degrades to the backstop tick, never to a wrong highlight.
+fn spawn_pane_focus(pane_id: PaneId, wake_socket: PathBuf) {
     std::thread::spawn(move || {
         let backend = rimz::mux::backend_for(pane_id.mux());
         if let Err(err) = backend.focus_pane(&pane_id) {
             warn!(pane = %pane_id, error = %err, "sidebar pane focus failed");
+            return;
+        }
+        match UnixDatagram::unbound() {
+            Ok(socket) => {
+                if let Err(err) = socket.send_to(JUMP_NUDGE_WAKEUP, &wake_socket) {
+                    debug!(error = %err, "post-jump nudge send failed; backstop tick converges");
+                }
+            }
+            Err(err) => {
+                debug!(error = %err, "post-jump nudge socket failed; backstop tick converges");
+            }
         }
     });
 }
