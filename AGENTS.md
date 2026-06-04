@@ -93,6 +93,7 @@ Every other document is a leaf from here. The `docs/` tree groups by audience: *
 - [account.md](./docs/internals/account.md) — agent accounts and balances: the plan/metered model, the per-provider auth and rate-limit mapping, the out-of-band account probe, and the provider-dashboard aggregation.
 - [adapter/claude-reference.md](./docs/internals/adapter/claude-reference.md) — Claude Code upstream protocol reference: hook events and decision schema, the full statusline JSON schema, and the auth surface, each pinned to its source URL for refresh.
 - [adapter/codex-reference.md](./docs/internals/adapter/codex-reference.md) — Codex upstream protocol reference: hooks, the `notify` channel, the app-server JSON-RPC API, the rollout JSONL, and the auth file, each pinned to its source URL for refresh.
+- [adapter/pi-reference.md](./docs/internals/adapter/pi-reference.md) — Pi upstream protocol reference, mirrored ahead of its adapter: the in-process extension API (events, payloads, blocking returns, install surface), the session JSONL, the headless RPC/JSON modes, the auth file, and the adapter feasibility analysis, each pinned to its source URL for refresh.
 - [web.md](./docs/internals/web.md) — Zellij-only browser access and session-route design.
 - [performance.md](./docs/internals/performance.md) — render-thread hot path, the cost map, and the rules a performance change follows.
 

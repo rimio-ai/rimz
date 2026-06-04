@@ -4,7 +4,7 @@
 
 A coding agent reports to Rimz through hooks. This doc owns the agent boundary end to end: the one trait every agent speaks, the two channels a hook can take, how install wires it, and the per-provider mapping that translates a native protocol onto Rimz's internal types.
 
-It is the **single home for the native-to-internal mapping**: which native events are wired, which channel each takes, and how each folds onto Rimz's internal types ([`AgentIntegration`](../../crates/rimz/src/agents/mod.rs), [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs), the lifecycle/blocking-feed channels). The raw upstream protocol — the full event catalog, the stdin payload schemas, and the verbatim decision JSON — lives in the per-provider reference: [adapter/claude-reference.md](./adapter/claude-reference.md) and [adapter/codex-reference.md](./adapter/codex-reference.md). The seam to the rest of the system is the observation: this doc *produces* it; [agent.md](./agent.md) folds it into the agent rollup; [sidebar.md](./sidebar.md) paints it.
+It is the **single home for the native-to-internal mapping**: which native events are wired, which channel each takes, and how each folds onto Rimz's internal types ([`AgentIntegration`](../../crates/rimz/src/agents/mod.rs), [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs), the lifecycle/blocking-feed channels). The raw upstream protocol — the full event catalog, the stdin payload schemas, and the verbatim decision JSON — lives in the per-provider reference: [adapter/claude-reference.md](./adapter/claude-reference.md) and [adapter/codex-reference.md](./adapter/codex-reference.md) ([adapter/pi-reference.md](./adapter/pi-reference.md) mirrors Pi ahead of its adapter). The seam to the rest of the system is the observation: this doc *produces* it; [agent.md](./agent.md) folds it into the agent rollup; [sidebar.md](./sidebar.md) paints it.
 
 Agents are *sources*, not a privileged path. Anything a hook does, a script can do through the same CLI — a hook is just an adapter that translates a native protocol onto `rimz event`/`rimz feed`.
 
@@ -63,7 +63,7 @@ Installing hooks edits the agent's own config, so it is a security surface, neve
 
 ## Adding an agent
 
-OpenCode, Pi, Cursor, Gemini, Copilot, and similar agents land through `AgentIntegration` once their hook surface and decision outputs are verified. The work is a new appendix below — the native-event → internal mapping — plus the trait impl. Nothing else changes.
+OpenCode, Pi, Cursor, Gemini, Copilot, and similar agents land through `AgentIntegration` once their hook surface and decision outputs are verified — Pi's surface is already mirrored and feasibility-checked in [adapter/pi-reference.md](./adapter/pi-reference.md). The work is a new appendix below — the native-event → internal mapping — plus the trait impl. Nothing else changes.
 
 The mapping has four jobs: route each native event to a channel; map lifecycle events to observations; render the agent's *own* decision shape (never reuse another agent's JSON — see the divergence below); and set `hook_cap` from the upstream's published deadline, leaving margin so the bridge times out before the agent kills the hook.
 

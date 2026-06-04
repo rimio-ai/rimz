@@ -59,7 +59,7 @@ Remaining: gated auto-open of a subagent surface only when preconditions are met
 
 ## M7 — Additional agents
 
-OpenCode, Pi, and other agents when their extension APIs and decision contracts are stable enough to test.
+OpenCode, Pi, and other agents when their extension APIs and decision contracts are stable enough to test. Pi's upstream surface and adapter feasibility are mirrored in [adapter/pi-reference.md](../internals/adapter/pi-reference.md).
 
 ## Optional — Zellij docked plugin rail
 
