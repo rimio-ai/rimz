@@ -112,6 +112,9 @@ export default function rimz(pi) {
       try {
         const child = spawnRimz("pipe");
         let out = "";
+        // Decode as a stream, not per-chunk: a multi-byte character in the
+        // deny reason must never split across chunk boundaries.
+        child.stdout.setEncoding("utf8");
         child.stdout.on("data", (chunk) => {
           out += chunk;
         });

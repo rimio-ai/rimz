@@ -41,7 +41,7 @@ Discovery, in load order:
 
 Install for Rimz means **one Rimz-owned file** written to `~/.pi/agent/extensions/` — auto-discovered, hot-reloaded by `/reload`, removed by deleting the file, idempotent by path. The file executes arbitrary code with the user's permissions (upstream states this explicitly), so it belongs in the executable-surface trust hash like every hook config. `--no-extensions`, `-p` (print), and `--mode json` run pi without UI-capable extensions — see [Mapping feasibility](#mapping-feasibility).
 
-An extension default-exports a (sync or async) factory receiving `ExtensionAPI` — `pi.on(event, handler)`, `pi.registerCommand`, `pi.registerTool`, `pi.exec`, `pi.appendEntry` (persist extension state in the session), `pi.setSessionName`, `pi.events` (inter-extension bus). Every handler receives `ExtensionContext`:
+An extension default-exports a (sync or async) factory receiving `ExtensionAPI` — `pi.on(event, handler)`, `pi.registerCommand`, `pi.registerTool`, `pi.exec`, `pi.appendEntry` (persist extension state in the session), `pi.setSessionName`, `pi.getThinkingLevel` (the Rimz wire's `effort`), `pi.events` (inter-extension bus). Every handler receives `ExtensionContext`:
 
 | Field | Carries |
 | --- | --- |

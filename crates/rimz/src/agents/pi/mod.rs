@@ -324,8 +324,9 @@ fn pi_extension_path() -> Result<PathBuf> {
     // Honour an explicit override (`RIMZ_PI_EXTENSION`) so tests and tooling
     // can point the installer at a tempdir without touching real config. Pi
     // auto-discovers `*.ts`/`*.js` under this directory; install is
-    // deliberately user-global (never the project-local `.pi/extensions/`)
-    // so the project trust hash is untouched.
+    // deliberately user-global — never pi's *project-local* discovery dir
+    // (`<project>/.pi/extensions/`, a different path) — so the project trust
+    // hash is untouched.
     agent_config_path(
         "pi",
         "RIMZ_PI_EXTENSION",
