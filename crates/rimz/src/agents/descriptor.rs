@@ -92,8 +92,12 @@ pub struct ToolClassification {
 }
 
 /// Explicit capability declaration. A provider that *cannot* do something
-/// declares it here, so the sidebar/doctor render the absence deliberately
-/// instead of inferring it from an empty `None`.
+/// declares it here instead of leaving an inferable absence. Three flags
+/// gate behavior today: `rate_limit_windows` (the provider dashboard's
+/// budget bars), `registers_lazily` (cwd pane binding and synthesized idle
+/// rows), and `hook_install` (the install and doctor surfaces). The rest
+/// state the adapter contract up front — pinned by each adapter's tests,
+/// consumed as shared sites grow capability-aware.
 #[derive(Clone, Copy, Debug)]
 pub struct Capabilities {
     /// Can natively hold a turn open for a permission/plan/question decision
