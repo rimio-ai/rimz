@@ -366,6 +366,8 @@ The renderer's golden tests in [`crates/rimz-sidebar/src/render/`](../../crates/
 | narrow card | `l0_density_minimal_row` |
 | capability + window | `agent_capability` |
 | selected, enriched card | `enriched_selected_agent_card` |
+| card context line + resource stats | `agent_card_resource_stats` |
+| process row + resource stats | `process_row_resource_stats` |
 | worktree grouping + external | `worktree_attention_map` |
 | per-worktree cap | `group_cap_with_overflow` |
 | provider dashboard | `provider_dashboard` |

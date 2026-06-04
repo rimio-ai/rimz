@@ -1096,6 +1096,67 @@ mod tests {
     }
 
     #[test]
+    fn render_agent_card_context_line_carries_resource_stats() {
+        // At L2 the card's context line appends the pane's resource stats —
+        // `C n%  M nG  ⇅ nM/s` — between the token breakdown and the age clock.
+        // The stats ride the live pane (producer-sampled from `/proc` into the
+        // published pane cache) and reach the row through the stamped-pane bind,
+        // so the test stamps the agent on the pane that carries them.
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            Some("/repo/main"),
+            Some("main"),
+            Some("db migrate"),
+        );
+        claude.context = Some(claude_context(fixed_now()));
+        let stamped = pane("%1", "claude", "/repo/main");
+        claude.pane = Some(stamped.clone());
+        let mut live = stamped;
+        live.cpu_pct = Some(11);
+        live.rss_kb = Some(1_153_024); // 1.1 GiB
+        live.io_bps = Some(3 * 1_048_576);
+        let snapshot = snapshot_with(Vec::new(), vec![claude]).with_live_panes(vec![live], None);
+
+        let rendered = snapshot_to_screen(&snapshot, 56, 14);
+
+        assert!(
+            rendered.contains("▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k"),
+            "the token breakdown keeps the line's left side:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("C 11%  M 1.1G  ⇅ 3M/s"),
+            "the stats pin right on the context line:\n{rendered}"
+        );
+        assert_snapshot("agent_card_resource_stats", rendered);
+    }
+
+    #[test]
+    fn render_process_row_pins_resource_stats_at_l2() {
+        // An active process pane at L2 width pins `C n%  M nM  ⇅ nM/s` right on
+        // line 1 while the full command rides the dim detail line below — so a
+        // build's resource load reads at a glance without leaving the sidebar.
+        let mut busy = pane("%1", "cargo build --release", "/repo/main");
+        busy.cpu_pct = Some(34);
+        busy.rss_kb = Some(512 * 1_024);
+        busy.io_bps = Some(8 * 1_048_576);
+        let snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(vec![busy], None);
+
+        let rendered = snapshot_to_screen(&snapshot, 56, 14);
+
+        assert!(
+            rendered.contains("C 34%  M 512M  ⇅ 8M/s"),
+            "the stats pin right on the primary line:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("cargo build --release"),
+            "the detail line carries the full command:\n{rendered}"
+        );
+        assert_snapshot("process_row_resource_stats", rendered);
+    }
+
+    #[test]
     fn render_api_error_dead_turn_card() {
         // A turn that died on a provider API error fires no Stop hook; the
         // projection escalates the row to the attention `!` and line 2 quotes

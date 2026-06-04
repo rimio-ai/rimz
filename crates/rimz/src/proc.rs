@@ -151,6 +151,20 @@ pub fn cwd(pid: u32) -> Option<std::path::PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
 }
 
+/// The real uid this process runs as, read from its own `/proc` status. The
+/// sidebar's pane-pid backfill matches a session's Zellij server by uid so a
+/// same-named session of another user is never walked. `None` on a non-Linux
+/// target, so callers skip rather than guess.
+#[cfg(target_os = "linux")]
+pub fn own_uid() -> Option<u32> {
+    read_proc(std::process::id()).map(|info| info.real_uid)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn own_uid() -> Option<u32> {
+    None
+}
+
 #[cfg(not(target_os = "linux"))]
 pub fn cwd(_pid: u32) -> Option<std::path::PathBuf> {
     None

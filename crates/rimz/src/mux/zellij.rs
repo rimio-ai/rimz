@@ -39,8 +39,10 @@ const MIN_MOUSE_CLICK_THROUGH_VERSION: (u32, u32, u32) = (0, 44, 0);
 
 /// Pane name the sidebar layout assigns, and the title Zellij reports back for
 /// it. The sole source of truth for both rendering the layout and detecting
-/// whether a live session still carries its sidebar.
-const SIDEBAR_PANE_NAME: &str = "rimz-sidebar";
+/// whether a live session still carries its sidebar — also the chrome label the
+/// producer's pane-pid backfill skips, since sidebar panes share one cmdline and
+/// are excluded from rows anyway.
+pub const SIDEBAR_PANE_NAME: &str = "rimz-sidebar";
 
 /// Zellij's action client occasionally answers `list-panes` with an empty
 /// stdout and a success status when the session server is mid-tick — a known

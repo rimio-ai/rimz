@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -536,7 +536,7 @@ fn cached_panes_or_produce(
             // Linux-only). Runs inside the produce lock so only one producer
             // reads `/proc` per tick; the result is in the published pane cache,
             // so consumer tabs never fork their own reads.
-            enrich_pane_metrics(&mut cache.panes, ledger.runtime_paths());
+            enrich_pane_metrics(&mut cache.panes, session, ledger.runtime_paths());
             if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &cache) {
                 tracing::warn!(path = %cache_path.display(), error = %err, "sidebar snapshot cache write failed");
             }
@@ -955,7 +955,11 @@ fn read_metrics_sample_cache(path: &Path) -> MetricsSampleCache {
 /// prior sample cache to compute two-sample rates (CPU%, IO bytes/s); writes a
 /// fresh sample for the next tick. Linux-only; on other platforms every pane's
 /// metric fields stay `None`.
-fn enrich_pane_metrics(panes: &mut [rimz::feed::PaneRef], runtime: &rimz::RuntimePaths) {
+fn enrich_pane_metrics(
+    panes: &mut [rimz::feed::PaneRef],
+    session_name: &str,
+    runtime: &rimz::RuntimePaths,
+) {
     // Build a ppid → [child pids] map from the current process list so we can
     // find the foreground command the shell is running (the interesting process).
     let all_procs = rimz::proc::list_processes();
@@ -963,6 +967,19 @@ fn enrich_pane_metrics(panes: &mut [rimz::feed::PaneRef], runtime: &rimz::Runtim
     for p in &all_procs {
         children.entry(p.ppid).or_default().push(p.pid);
     }
+
+    // Zellij's `list-panes` reports no per-pane pid, so on that backend every
+    // pane arrives pidless and the loop below would skip the whole room.
+    // Backfill the root pid from the session server's process forest first,
+    // so the metrics (and the process row's shell anchor) work on both backends.
+    backfill_zellij_pane_pids(
+        panes,
+        &all_procs,
+        &children,
+        session_name,
+        rimz::proc::own_uid(),
+        &|pid| rimz::proc::cwd(pid),
+    );
 
     let cache_path = runtime.root.join("metrics-sample.json");
     let prior = read_metrics_sample_cache(&cache_path);
@@ -1024,6 +1041,146 @@ fn enrich_pane_metrics(panes: &mut [rimz::feed::PaneRef], runtime: &rimz::Runtim
     };
     if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &new_cache) {
         tracing::warn!(error = %err, "metrics sample cache write failed");
+    }
+}
+
+/// Backfill `pane_pid` for panes whose backend reported none (Zellij emits no
+/// pid field; tmux fills `#{pane_pid}` natively), resolving each pane to its
+/// root process — the direct child of the session's `zellij --server <socket>`
+/// process — so the field carries tmux's semantics on both backends and the
+/// shell→single-child descent above behaves identically.
+///
+/// Zellij reports a pane's *foreground* command as that process's `/proc`
+/// cmdline (argv joined by spaces — the same form as
+/// [`ProcInfo`](rimz::proc::ProcInfo)`::cmdline`), so a pane matches the forest
+/// process with that exact cmdline, then walks up to the direct server child.
+/// The cwd narrow only breaks ties between same-cmdline candidates: a unique
+/// match is taken as-is, since a foreground process may legitimately sit in
+/// another directory than the pane reports (an agent that chdir'd into its
+/// worktree). Pure over its inputs — the caller injects the process table and
+/// the `/proc` cwd lookup — so the matcher unit-tests over fixtures.
+///
+/// Abstention is the failure mode: a pane stays pidless (no stats beats a
+/// stranger's stats) when its command matches nothing or stays ambiguous after
+/// the narrow — e.g. two idle `zsh` panes in one cwd. An *active* pane's
+/// foreground cmdline is almost always unique, so real work still reads.
+/// Sidebar chrome panes are skipped outright: every sidebar shares one
+/// cmdline, and they are excluded from rows anyway.
+fn backfill_zellij_pane_pids(
+    panes: &mut [rimz::feed::PaneRef],
+    procs: &[rimz::proc::ProcInfo],
+    children: &HashMap<u32, Vec<u32>>,
+    session_name: &str,
+    own_uid: Option<u32>,
+    proc_cwd: &dyn Fn(u32) -> Option<PathBuf>,
+) {
+    // Nothing to backfill (tmux, or an empty room): skip the server scan.
+    if panes.iter().all(|pane| pane.pane_pid.is_some()) {
+        return;
+    }
+    let Some(server_pid) = zellij_server_pid(procs, session_name, own_uid) else {
+        return;
+    };
+    let forest = descendants(children, server_pid);
+    let parent_of: HashMap<u32, u32> = procs.iter().map(|p| (p.pid, p.ppid)).collect();
+    for pane in panes.iter_mut() {
+        if pane.pane_pid.is_some() {
+            continue;
+        }
+        let Some(command) = pane.command.as_deref() else {
+            continue;
+        };
+        if command == rimz::mux::zellij::SIDEBAR_PANE_NAME {
+            continue;
+        }
+        let candidates: Vec<u32> = procs
+            .iter()
+            .filter(|p| forest.contains(&p.pid) && p.cmdline == command)
+            .map(|p| p.pid)
+            .collect();
+        let matched = match candidates.as_slice() {
+            &[only] => Some(only),
+            &[] => None,
+            many => {
+                let narrowed: Vec<u32> = match pane.cwd.as_deref() {
+                    Some(cwd) => many
+                        .iter()
+                        .copied()
+                        .filter(|&pid| proc_cwd(pid).as_deref() == Some(Path::new(cwd)))
+                        .collect(),
+                    None => Vec::new(),
+                };
+                match narrowed.as_slice() {
+                    &[only] => Some(only),
+                    _ => None,
+                }
+            }
+        };
+        pane.pane_pid = matched.and_then(|pid| walk_to_server_child(&parent_of, server_pid, pid));
+    }
+}
+
+/// The pid of the session's Zellij server: the same-uid process whose cmdline
+/// is `zellij --server <socket>` with the socket's file name equal to the
+/// session name (Zellij names the server socket after the session). The uid
+/// gate keeps a same-named session of another user from being walked.
+fn zellij_server_pid(
+    procs: &[rimz::proc::ProcInfo],
+    session_name: &str,
+    own_uid: Option<u32>,
+) -> Option<u32> {
+    let own_uid = own_uid?;
+    procs
+        .iter()
+        .find(|p| p.real_uid == own_uid && cmdline_is_session_server(&p.cmdline, session_name))
+        .map(|p| p.pid)
+}
+
+/// Whether a cmdline runs the Zellij server for `session_name` — exactly
+/// `<path>/zellij --server <socket>` with `basename(socket) == session_name`.
+fn cmdline_is_session_server(cmdline: &str, session_name: &str) -> bool {
+    let mut tokens = cmdline.split_whitespace();
+    let file_name = |token: Option<&str>, name: &str| {
+        token
+            .map(Path::new)
+            .and_then(Path::file_name)
+            .is_some_and(|file| file == name)
+    };
+    file_name(tokens.next(), "zellij")
+        && tokens.next() == Some("--server")
+        && file_name(tokens.next(), session_name)
+}
+
+/// Every descendant of `root` in the ppid→children map — the session server's
+/// process forest, one tree per pane.
+fn descendants(children: &HashMap<u32, Vec<u32>>, root: u32) -> HashSet<u32> {
+    let mut out = HashSet::new();
+    let mut stack = vec![root];
+    while let Some(pid) = stack.pop() {
+        for &child in children.get(&pid).map(Vec::as_slice).unwrap_or_default() {
+            if out.insert(child) {
+                stack.push(child);
+            }
+        }
+    }
+    out
+}
+
+/// Walk `pid` up its parent chain to the direct child of `server_pid` — the
+/// pane root. Terminates by construction for a forest member (its membership
+/// proves a parent chain to the server); the `None` arm covers a chain that
+/// leaves the table mid-walk, e.g. a process that exited between reads.
+fn walk_to_server_child(
+    parent_of: &HashMap<u32, u32>,
+    server_pid: u32,
+    mut pid: u32,
+) -> Option<u32> {
+    loop {
+        match parent_of.get(&pid) {
+            Some(&ppid) if ppid == server_pid => return Some(pid),
+            Some(&ppid) => pid = ppid,
+            None => return None,
+        }
     }
 }
 
@@ -1118,6 +1275,203 @@ mod tests {
         carry_forward_pane_fields(&mut fresh, &prev);
         assert_eq!(fresh[0].command.as_deref(), Some("zsh"));
         assert_eq!(fresh[0].cwd.as_deref(), Some("/now"));
+    }
+
+    /// A process-table entry for the pid-backfill matcher fixtures; everything
+    /// runs as one uid (1000) unless a test says otherwise.
+    fn proc_info(pid: u32, ppid: u32, cmdline: &str) -> rimz::proc::ProcInfo {
+        rimz::proc::ProcInfo {
+            pid,
+            ppid,
+            real_uid: 1000,
+            cmdline: cmdline.to_owned(),
+        }
+    }
+
+    /// The ppid→children map `enrich_pane_metrics` builds, over a fixture table.
+    fn children_of(procs: &[rimz::proc::ProcInfo]) -> HashMap<u32, Vec<u32>> {
+        let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+        for p in procs {
+            children.entry(p.ppid).or_default().push(p.pid);
+        }
+        children
+    }
+
+    /// The session's Zellij server process, socket named after the session.
+    fn server(pid: u32, session: &str) -> rimz::proc::ProcInfo {
+        proc_info(
+            pid,
+            1,
+            &format!("/usr/bin/zellij --server /run/user/1000/zellij/contract_version_1/{session}"),
+        )
+    }
+
+    const SESSION: &str = "rimz-query-engine";
+
+    fn backfill(
+        panes: &mut [rimz::feed::PaneRef],
+        procs: &[rimz::proc::ProcInfo],
+        cwds: &[(u32, &str)],
+    ) {
+        let cwds: HashMap<u32, PathBuf> = cwds
+            .iter()
+            .map(|(pid, cwd)| (*pid, PathBuf::from(cwd)))
+            .collect();
+        backfill_zellij_pane_pids(
+            panes,
+            procs,
+            &children_of(procs),
+            SESSION,
+            Some(1000),
+            &|pid| cwds.get(&pid).cloned(),
+        );
+    }
+
+    #[test]
+    fn unique_foreground_match_backfills_the_pane_root() {
+        // The htop pane: Zellij reports the foreground cmdline; the matcher
+        // finds the one forest process with it and binds the pane to its root
+        // (the direct server child, the zsh) — tmux's `#{pane_pid}` semantics,
+        // so the shell→single-child descent then reads htop's stats.
+        let procs = vec![
+            server(100, SESSION),
+            proc_info(200, 100, "zsh"),
+            proc_info(300, 200, "htop"),
+        ];
+        let mut panes = vec![pane("terminal_4", Some("htop"), Some("/repo"))];
+        backfill(&mut panes, &procs, &[]);
+        assert_eq!(panes[0].pane_pid, Some(200));
+    }
+
+    #[test]
+    fn unique_match_skips_the_cwd_check() {
+        // An agent that chdir'd into its worktree sits in another directory
+        // than its pane reports (`claude --worktree`), so a unique cmdline
+        // match must bind without a cwd comparison.
+        let procs = vec![
+            server(100, SESSION),
+            proc_info(200, 100, "zsh"),
+            proc_info(300, 200, "claude --worktree feature"),
+        ];
+        let mut panes = vec![pane(
+            "terminal_8",
+            Some("claude --worktree feature"),
+            Some("/repo"),
+        )];
+        backfill(&mut panes, &procs, &[(300, "/repo/worktrees/feature")]);
+        assert_eq!(panes[0].pane_pid, Some(200));
+    }
+
+    #[test]
+    fn cwd_narrows_same_command_candidates() {
+        // Two panes both run `htop`, one per worktree: the cmdline ties, the
+        // foreground's `/proc` cwd breaks it, and each pane binds its own root.
+        let procs = vec![
+            server(100, SESSION),
+            proc_info(200, 100, "zsh"),
+            proc_info(300, 200, "htop"),
+            proc_info(210, 100, "zsh"),
+            proc_info(310, 210, "htop"),
+        ];
+        let mut panes = vec![
+            pane("terminal_1", Some("htop"), Some("/wt1")),
+            pane("terminal_2", Some("htop"), Some("/wt2")),
+        ];
+        backfill(&mut panes, &procs, &[(300, "/wt1"), (310, "/wt2")]);
+        assert_eq!(panes[0].pane_pid, Some(200));
+        assert_eq!(panes[1].pane_pid, Some(210));
+    }
+
+    #[test]
+    fn ambiguous_candidates_abstain() {
+        // Two idle `zsh` panes in one cwd are indistinguishable — by cmdline
+        // and by cwd — so both stay pidless: no stats beats a stranger's stats.
+        let procs = vec![
+            server(100, SESSION),
+            proc_info(200, 100, "zsh"),
+            proc_info(210, 100, "zsh"),
+        ];
+        let mut panes = vec![
+            pane("terminal_6", Some("zsh"), Some("/repo")),
+            pane("terminal_14", Some("zsh"), Some("/repo")),
+        ];
+        backfill(&mut panes, &procs, &[(200, "/repo"), (210, "/repo")]);
+        assert_eq!(panes[0].pane_pid, None);
+        assert_eq!(panes[1].pane_pid, None);
+    }
+
+    #[test]
+    fn deep_foreground_walks_up_to_the_server_child() {
+        // A launcher chain (zsh → npm → node script): the foreground match is
+        // levels deep, and the walk still lands on the direct server child. A
+        // foreground that *is* the server child binds itself.
+        let procs = vec![
+            server(100, SESSION),
+            proc_info(200, 100, "zsh"),
+            proc_info(300, 200, "npm run build"),
+            proc_info(400, 300, "node /repo/build.js"),
+            proc_info(500, 100, "claude remote-control --spawn worktree"),
+        ];
+        let mut panes = vec![
+            pane("terminal_3", Some("node /repo/build.js"), Some("/repo")),
+            pane(
+                "terminal_1",
+                Some("claude remote-control --spawn worktree"),
+                Some("/repo"),
+            ),
+        ];
+        backfill(&mut panes, &procs, &[]);
+        assert_eq!(panes[0].pane_pid, Some(200));
+        assert_eq!(panes[1].pane_pid, Some(500));
+    }
+
+    #[test]
+    fn no_matching_server_is_a_no_op() {
+        // Another session's server, another uid's same-named server, or no uid
+        // at all (non-Linux): the backfill leaves every pane untouched rather
+        // than walking a stranger's forest.
+        let mut other_uid = server(100, SESSION);
+        other_uid.real_uid = 1001;
+        let procs = vec![
+            server(110, "rimz-other"),
+            other_uid,
+            proc_info(200, 100, "zsh"),
+            proc_info(300, 200, "htop"),
+        ];
+        let mut panes = vec![pane("terminal_4", Some("htop"), Some("/repo"))];
+        backfill(&mut panes, &procs, &[]);
+        assert_eq!(panes[0].pane_pid, None);
+
+        let procs_ok = vec![server(100, SESSION), proc_info(300, 100, "htop")];
+        backfill_zellij_pane_pids(
+            &mut panes,
+            &procs_ok,
+            &children_of(&procs_ok),
+            SESSION,
+            None, // unknown own uid: skip rather than guess
+            &|_| None,
+        );
+        assert_eq!(panes[0].pane_pid, None);
+    }
+
+    #[test]
+    fn chrome_and_already_pidded_panes_are_left_alone() {
+        // Sidebar chrome shares one cmdline across panes and is excluded from
+        // rows, so it is skipped outright; a pane the backend already pidded
+        // (tmux) is never re-derived.
+        let procs = vec![
+            server(100, SESSION),
+            proc_info(200, 100, "rimz-sidebar"),
+            proc_info(210, 100, "zsh"),
+            proc_info(300, 210, "htop"),
+        ];
+        let chrome = pane("terminal_0", Some("rimz-sidebar"), Some("/repo"));
+        let mut pidded = pane("terminal_4", Some("htop"), Some("/repo"));
+        pidded.pane_pid = Some(42);
+        let mut panes = vec![chrome, pidded];
+        backfill(&mut panes, &procs, &[]);
+        assert_eq!(panes[0].pane_pid, None);
+        assert_eq!(panes[1].pane_pid, Some(42));
     }
 
     #[test]
