@@ -82,9 +82,9 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `▤ 76k`           | filled context — the absolute tokens in the window (the `▣` meter's numerator); leads the card's context line in the meter's severity tone |
 | `◇` `↘` `↗` `◍` `◌` | tokens: total · input · output · cache-write · cache-read. One color per marker, everywhere: the `◇` total soft-violet, the rest their bar-segment tones (`◌` blue · `◍` yellow · `↘` red · `↗` green) — so the card's context line legends the bar and the cockpit/dashboard/ledger lines speak the same vocabulary; the figures beside them read at full strength on the fleet lines |
 | `◔ 1m`            | last-activity age — shown only once it crosses a full minute; the clock face fills by the quarter hour (`◔` ≤15m · `◑` ≤30m · `◕` ≤45m · `●` ≤60m · `◉` past it) and its tone steps the same quarters: dim through `◔` (a resume still hits cache), yellow to the half hour, amber beyond it, red past the hour — a red age means resuming likely re-reads the whole context uncached |
-| `C 11%`           | CPU utilisation of the pane's foreground process |
-| `M 512M`          | resident set size (RSS) — `k` / `M` / `G` |
-| `⇅ 3M/s`          | combined VFS I/O rate (rchar + wchar bytes/s) |
+| `C 11%`           | CPU utilisation of the pane's foreground process — the marker in work clay; the three resource stats ride process rows only |
+| `M 512M`          | resident set size (RSS) — `k` / `M` / `G`; the marker violet |
+| `⇅ 3M/s`          | combined VFS I/O rate (rchar + wchar bytes/s); the marker teal |
 | `+127 -43`        | lines added / removed |
 | `⇡3 ⇣1`           | commits ahead / behind the trunk (worktree header; zero components drop) |
 | `≡ main`          | worktree fully landed on the trunk — zero ahead, zero diff, safe to remove (behind doesn't count against it); the trunk worktree itself never wears it |
@@ -210,7 +210,7 @@ A `?` waiting row reads the same with a `?` glyph. The row carries *who* needs y
 
 ### Process rows
 
-A pane no agent has stamped reads in the dim process tone — a hollow `○` (the same idle glyph an agent shows, never the agent's clay) for an idle shell or editor, the `⢿` spinner for a pane doing real work like a build, test, or install. An active pane anchors its primary line on the shell that owns it, so the line stays put as commands come and go, and carries the live command in full on a dim second line. At wide (L2) widths the producer pins `C <n>%  M <n>[k/M/G]  ⇅ <n>[k/M/G]/s` right on line 1 — CPU, RAM, and combined VFS I/O rate — so resource load reads at a glance without leaving the sidebar:
+A pane no agent has stamped reads in the dim process tone — a hollow `○` (the same idle glyph an agent shows, never the agent's clay) for an idle shell or editor, the `⢿` spinner for a pane doing real work like a build, test, or install. An active pane anchors its primary line on the shell that owns it, so the line stays put as commands come and go, and carries the live command in full on a dim second line. At wide (L2) widths the row pins `C <n>%  M <n>[k/M/G]  ⇅ <n>[k/M/G]/s` right on line 1 — CPU, RAM, and combined VFS I/O rate, each marker in its own tone (`C` work clay · `M` violet · `⇅` teal) over dim figures, in the same right slot an agent card gives its `$cost` — so resource load reads at a glance without leaving the sidebar. The stats are process-row vocabulary; an agent card keeps that line for its identity and cost:
 
 ```
 ○ zsh
@@ -370,7 +370,7 @@ The renderer's golden tests in [`crates/rimz-sidebar/src/render/`](../../crates/
 | narrow card | `l0_density_minimal_row` |
 | capability + window | `agent_capability` |
 | selected, enriched card | `enriched_selected_agent_card` |
-| card context line + resource stats | `agent_card_resource_stats` |
+| card context line + age pin | `agent_card_context_age` |
 | process row + resource stats | `process_row_resource_stats` |
 | worktree grouping + external | `worktree_attention_map` |
 | landed worktree header (`≡`) | `worktree_equal_to_trunk` |

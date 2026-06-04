@@ -431,12 +431,10 @@ fn render_enriched_selected_agent_card() {
 }
 
 #[test]
-fn render_agent_card_context_line_carries_resource_stats() {
-    // At L2 the card's context line appends the pane's resource stats —
-    // `C n%  M nG  ⇅ nM/s` — between the token breakdown and the age clock.
-    // The stats ride the live pane (producer-sampled from `/proc` into the
-    // published pane cache) and reach the row through the stamped-pane bind,
-    // so the test stamps the agent on the pane that carries them.
+fn render_agent_card_context_line_pins_age_not_resource_stats() {
+    // Resource stats are process-row vocabulary: even when the agent's
+    // stamped pane carries a full `/proc` sample, none of it reaches the
+    // card — the context line keeps the age clock as its one right pin.
     let mut claude = agent(
         "claude-1",
         "claude",
@@ -446,6 +444,7 @@ fn render_agent_card_context_line_carries_resource_stats() {
         Some("db migrate"),
     );
     claude.context = Some(claude_context(fixed_now()));
+    claude.last_activity = fixed_now() - Duration::from_secs(90);
     let stamped = pane("%1", "claude", "/repo/main");
     claude.pane = Some(stamped.clone());
     let mut live = stamped;
@@ -461,17 +460,23 @@ fn render_agent_card_context_line_carries_resource_stats() {
         "the token breakdown keeps the line's left side:\n{rendered}"
     );
     assert!(
-        rendered.contains("C 11%  M 1.1G  ⇅ 3M/s"),
-        "the stats pin right on the context line:\n{rendered}"
+        !rendered.contains("C 11%"),
+        "the pane's resource stats stay off the card:\n{rendered}"
     );
-    assert_snapshot("agent_card_resource_stats", rendered);
+    assert!(
+        rendered.contains("◔ 1m"),
+        "the age clock keeps the right pin:\n{rendered}"
+    );
+    assert_snapshot("agent_card_context_age", rendered);
 }
 
 #[test]
 fn render_process_row_pins_resource_stats_at_l2() {
     // An active process pane at L2 width pins `C n%  M nM  ⇅ nM/s` right on
-    // line 1 while the full command rides the dim detail line below — so a
-    // build's resource load reads at a glance without leaving the sidebar.
+    // line 1 — the slot an agent card gives its `$cost` — while the full
+    // command rides the dim detail line below, so a build's resource load
+    // reads at a glance without leaving the sidebar. The marker tones are
+    // asserted separately in `proc_stats_markers_wear_their_tones`.
     let mut busy = pane("%1", "cargo build --release", "/repo/main");
     busy.cpu_pct = Some(34);
     busy.rss_kb = Some(512 * 1_024);
@@ -489,6 +494,47 @@ fn render_process_row_pins_resource_stats_at_l2() {
         "the detail line carries the full command:\n{rendered}"
     );
     assert_snapshot("process_row_resource_stats", rendered);
+}
+
+#[test]
+fn proc_stats_markers_wear_their_tones() {
+    // The stat markers carry one tone each — `C` the live-work clay, `M`
+    // the capacity violet, `⇅` the flow teal — while every figure stays in
+    // the dim process tone; `NO_COLOR` strips the tones and keeps the text.
+    let mut busy = pane("%1", "cargo build --release", "/repo/main");
+    busy.cpu_pct = Some(34);
+    busy.rss_kb = Some(512 * 1_024);
+    busy.io_bps = Some(8 * 1_048_576);
+    let snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(vec![busy], None);
+    let row = &snapshot.worktree_groups[0].rows[0];
+
+    let theme = Theme::fixed(false);
+    let spans = sections::proc_stats_spans(&theme, row);
+    let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(text, "C 34%  M 512M  ⇅ 8M/s");
+    let fg_of = |glyph: &str| {
+        spans
+            .iter()
+            .find(|span| span.content == glyph)
+            .unwrap_or_else(|| panic!("marker {glyph} missing"))
+            .style
+            .fg
+    };
+    assert_eq!(fg_of("C"), Some(theme::ORANGE), "CPU wears the work clay");
+    assert_eq!(fg_of("M"), Some(Color::Indexed(141)), "RSS wears violet");
+    assert_eq!(fg_of("⇅"), Some(Color::Indexed(73)), "I/O wears teal");
+    let dim = theme.dim();
+    assert!(
+        spans
+            .iter()
+            .filter(|span| span.content.starts_with(' '))
+            .all(|span| span.style == dim),
+        "figures and gaps stay in the dim process tone"
+    );
+
+    // NO_COLOR keeps the shape and sheds every tone.
+    let plain = sections::proc_stats_spans(&Theme::fixed(true), row);
+    assert!(plain.iter().all(|span| span.style.fg.is_none()));
 }
 
 #[test]

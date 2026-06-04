@@ -1130,24 +1130,35 @@ fn process_row_line(
     Line::from(trim_spans_to_width(left, width))
 }
 
-/// Build the right-pinned resource stats spans for a row. Returns an empty vec
-/// when no metrics are available. Tokens are joined with a two-space gap.
-fn proc_stats_spans(theme: &Theme, row: &SidebarRow) -> Vec<Span<'static>> {
+/// Build the right-pinned resource stats spans for a process row. Returns an
+/// empty vec when no metrics are available. Tokens are joined with a two-space
+/// gap. Each marker wears its own tone — `C` in the live-work clay (CPU is how
+/// hard the pane works), `M` in the capacity violet, `⇅` in the flow teal —
+/// while the figures stay dim so the row keeps its secondary process tone.
+pub(super) fn proc_stats_spans(theme: &Theme, row: &SidebarRow) -> Vec<Span<'static>> {
     let dim = theme.dim();
-    let mut tokens: Vec<String> = Vec::new();
+    let mut tokens: Vec<(&str, Color, String)> = Vec::new();
     if let Some(pct) = row.cpu_pct {
-        tokens.push(format!("C {}", fmt_cpu(pct)));
+        tokens.push(("C", ORANGE, fmt_cpu(pct)));
     }
     if let Some(rss) = row.rss_kb {
-        tokens.push(format!("M {}", fmt_rss(rss)));
+        tokens.push(("M", Color::Magenta, fmt_rss(rss)));
     }
     if let Some(bps) = row.io_bps {
-        tokens.push(format!("⇅ {}", fmt_io(bps)));
+        tokens.push(("⇅", Color::Cyan, fmt_io(bps)));
     }
-    if tokens.is_empty() {
-        return Vec::new();
+    let mut spans = Vec::with_capacity(tokens.len() * 3);
+    for (i, (glyph, color, figure)) in tokens.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled("  ".to_owned(), dim));
+        }
+        spans.push(Span::styled(
+            glyph.to_owned(),
+            theme.style(color, Modifier::empty()),
+        ));
+        spans.push(Span::styled(format!(" {figure}"), dim));
     }
-    vec![Span::styled(tokens.join("  "), dim)]
+    spans
 }
 
 /// Line 2 for an *active* process row: the full foreground command, dim and
@@ -1363,6 +1374,8 @@ fn context_tokens_line(
     bands: &ContextSeverityConfig,
     width: usize,
 ) -> Option<Line<'static>> {
+    // The age clock is the line's one right pin — resource stats are
+    // process-row vocabulary and never ride an agent card.
     let age = activity_short(row.last_activity)
         .map(|label| {
             let secs = age_secs(row.last_activity);
@@ -1380,23 +1393,6 @@ fn context_tokens_line(
         context_used_tokens(row),
         bands,
     );
-    // At L2, append `C n%  M nG  ⇅ nM/s` between the token breakdown and the
-    // age clock, but only when all three metrics are present — the context line
-    // is already dense and partial stats add noise rather than signal.
-    let right = if Tier::for_width(width) == Tier::L2
-        && row.cpu_pct.is_some()
-        && row.rss_kb.is_some()
-        && row.io_bps.is_some()
-    {
-        let mut spans = proc_stats_spans(theme, row);
-        if !spans.is_empty() && !age.is_empty() {
-            spans.push(Span::raw("  "));
-        }
-        spans.extend(age);
-        spans
-    } else {
-        age
-    };
     if let Some(usage) = ctx(row)
         .and_then(|context| context.tokens.as_ref())
         .and_then(|tokens| tokens.current_usage.as_ref())
@@ -1416,12 +1412,12 @@ fn context_tokens_line(
             output,
             tokens_int,
         ));
-        return Some(pin_right(left, right, width));
+        return Some(pin_right(left, age, width));
     }
     let total = row.total_tokens?;
     let mut left = vec![Span::raw("  ")];
     left.extend(context_total_spans(theme, severity, total, tokens_int));
-    Some(pin_right(left, right, width))
+    Some(pin_right(left, age, width))
 }
 
 /// Total display width of a span run, in terminal cells.

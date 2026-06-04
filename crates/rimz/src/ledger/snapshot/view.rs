@@ -340,18 +340,21 @@ pub struct SidebarRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_error_label: Option<String>,
     /// Resident set size of the row's pane process in kibibytes, from the
-    /// producer's per-tick `/proc` read. Display-only; `None` on non-Linux or
-    /// when the process was unreadable.
+    /// producer's per-tick `/proc` read. Display-only; set for process rows
+    /// only — an agent card spends its right slots on cost and age instead.
+    /// `None` on non-Linux or when the process was unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rss_kb: Option<u64>,
     /// CPU utilisation of the row's pane process in integer percent, from two
-    /// consecutive `/proc/<pid>/stat` readings. `None` on the first tick (no
-    /// prior sample), on non-Linux, or when the process was unreadable.
+    /// consecutive `/proc/<pid>/stat` readings. Set for process rows only.
+    /// `None` on the first tick (no prior sample), on non-Linux, or when the
+    /// process was unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_pct: Option<u16>,
     /// Combined VFS I/O rate (rchar + wchar bytes/s) of the row's pane
-    /// process, from two consecutive `/proc/<pid>/io` readings. `None` on the
-    /// first tick, on non-Linux, or when the file was unreadable.
+    /// process, from two consecutive `/proc/<pid>/io` readings. Set for
+    /// process rows only. `None` on the first tick, on non-Linux, or when the
+    /// file was unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub io_bps: Option<u64>,
 }
@@ -1324,9 +1327,6 @@ fn push_agent_row(
     bound.insert((agent.kind.clone(), agent.agent_id.clone()));
     let mut row = row_from_agent(agent);
     row.worktree_path = row.worktree_path.or_else(|| pane.cwd.clone());
-    row.rss_kb = pane.rss_kb;
-    row.cpu_pct = pane.cpu_pct;
-    row.io_bps = pane.io_bps;
     row.pane = Some(pane.clone());
     if let Some(ask) = most_relevant_ask(agent, needs_attention, resolver_working) {
         fold_ask_onto_row(&mut row, ask);
