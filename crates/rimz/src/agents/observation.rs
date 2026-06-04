@@ -9,14 +9,14 @@
 
 use serde_json::Value;
 
-use crate::feed::{PermissionPosture, RuntimeOwner};
+use crate::feed::RuntimeOwner;
 use crate::ids::PaneId;
 
 use super::lifecycle::LifecycleSignal;
 use super::optional_payload_string;
 
 /// One lifecycle observation: the agent-agnostic [`LifecycleSignal`] a native
-/// event carries plus the posture sample and enrichment it reports. Returned by
+/// event carries plus the enrichment it reports. Returned by
 /// [`AgentIntegration::observe_lifecycle`](super::AgentIntegration::observe_lifecycle)
 /// so the CLI layer can record an `agent.lifecycle` event without each adapter
 /// touching the ledger. The status is *derived* from the signal through
@@ -38,12 +38,6 @@ pub struct AgentLifecycleObservation {
     pub agent_pid: Option<u32>,
     pub agent_process_start: Option<String>,
     pub runtime_owner: Option<RuntimeOwner>,
-    /// Permission posture pill the event establishes. `None` means "this
-    /// event does not report a posture" — the snapshot reducer carries the
-    /// prior posture forward rather than resetting it, so a `UserPromptSubmit`
-    /// can never demote a `yolo` agent to default (a security surface must
-    /// stay visible).
-    pub permission_posture: Option<PermissionPosture>,
     /// Optional absolute worktree path observed from the agent payload or
     /// filled by the CLI from the current Rimz workspace.
     pub worktree_path: Option<String>,
@@ -62,6 +56,11 @@ pub struct AgentLifecycleObservation {
     /// Context-window utilization in percent reported by the agent (0..=100).
     /// Enrich-only / privacy-gated — the no-transcript-correctness rule.
     pub context_pct: Option<u8>,
+    /// The model's context window in tokens, as the adapter resolves it at hook
+    /// time (Claude from the `[1m]`-marked payload model, Codex from the
+    /// rollout's `model_context_window`). Carry-forward enrichment like
+    /// `context_pct`; the sidebar's identity line renders it (`258k`, `1M`).
+    pub context_window: Option<u64>,
     /// Cumulative token usage for this agent session.
     pub total_tokens: Option<u64>,
     /// Completed / total todos for the agent's current plan or task list.
@@ -88,7 +87,6 @@ impl AgentLifecycleObservation {
             agent_pid: None,
             agent_process_start: None,
             runtime_owner: None,
-            permission_posture: None,
             worktree_path: None,
             worktree_branch: None,
             task: None,
@@ -96,6 +94,7 @@ impl AgentLifecycleObservation {
             model: None,
             effort: None,
             context_pct: None,
+            context_window: None,
             total_tokens: None,
             todo_done: None,
             todo_total: None,

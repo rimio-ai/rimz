@@ -611,7 +611,6 @@ fn runtime_projection_reads_under_the_workspace_lock() {
     let obs = rimz::agents::AgentLifecycleObservation {
         agent_id: Some("agent-1".to_owned()),
         signal: rimz::agents::lifecycle::LifecycleSignal::Registered,
-        permission_posture: Some(rimz::feed::PermissionPosture::Default),
         agent_pid: None,
         agent_process_start: None,
         runtime_owner: None,
@@ -622,6 +621,7 @@ fn runtime_projection_reads_under_the_workspace_lock() {
         model: None,
         effort: None,
         context_pct: None,
+        context_window: None,
         total_tokens: None,
         todo_done: None,
         todo_total: None,

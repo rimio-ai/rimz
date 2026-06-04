@@ -62,6 +62,8 @@ Every hook receives:
 }
 ```
 
+Rimz parses around `permission_mode` without consuming it — the upstream still sends it; the agent model derives the turn phase from tool events instead.
+
 ### Events and per-event input
 
 | Event | Fires | Event-specific input | Wired |

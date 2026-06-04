@@ -1,11 +1,9 @@
 //! `rimz doctor` agent rollup integration tests. Inject an `agent.lifecycle`
-//! event directly into the ledger, then run the binary and assert the
-//! rendered permission posture matches the closure of the unattended-runs audit story
-//! in `docs/guide/product.md`.
+//! event directly into the ledger, then run the binary and assert the rendered
+//! per-agent rows.
 
 use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
-use rimz::feed::PermissionPosture;
 use rimz::ids::{MuxName, ResolverId, SidebarInstanceId};
 use rimz::schema::event::EventEnvelope;
 use rimz::schema::heartbeat::{ResolverHeartbeat, SidebarHeartbeat};
@@ -17,13 +15,11 @@ fn inject_lifecycle(
     agent_kind: &str,
     agent_id: &str,
     signal: LifecycleSignal,
-    posture: PermissionPosture,
     branch: Option<&str>,
 ) {
     let obs = AgentLifecycleObservation {
         agent_id: Some(agent_id.to_owned()),
         signal,
-        permission_posture: Some(posture),
         agent_pid: None,
         agent_process_start: None,
         runtime_owner: None,
@@ -34,6 +30,7 @@ fn inject_lifecycle(
         model: None,
         effort: None,
         context_pct: None,
+        context_window: None,
         total_tokens: None,
         todo_done: None,
         todo_total: None,
@@ -71,7 +68,7 @@ fn doctor_reports_no_agents_when_none_observed() {
 }
 
 #[test]
-fn doctor_renders_mode_pill_per_agent() {
+fn doctor_renders_status_row_per_agent() {
     let env = Env::new();
     inject_lifecycle(
         &env,
@@ -81,7 +78,6 @@ fn doctor_renders_mode_pill_per_agent() {
             errored: true,
             parked_on_background: false,
         },
-        PermissionPosture::Yolo,
         Some("main"),
     );
     inject_lifecycle(
@@ -89,7 +85,6 @@ fn doctor_renders_mode_pill_per_agent() {
         "codex",
         "codex-session-xyz",
         LifecycleSignal::TurnStarted,
-        PermissionPosture::Auto,
         Some("feature-migration"),
     );
 
@@ -115,27 +110,24 @@ fn doctor_renders_mode_pill_per_agent() {
         "missing codex group header in:\n{stdout}"
     );
 
-    // Per-agent row: agent id + worktree + status + posture pill.
+    // Per-agent row: agent id + worktree + status.
     assert!(stdout.contains("claude-session-abc"));
     assert!(stdout.contains("main"));
     assert!(stdout.contains("failed"));
-    assert!(stdout.contains("yolo"));
 
     assert!(stdout.contains("codex-session-xyz"));
     assert!(stdout.contains("feature-migration"));
     assert!(stdout.contains("running"));
-    assert!(stdout.contains("auto"));
 }
 
 #[test]
-fn doctor_keeps_latest_posture_per_agent_id() {
+fn doctor_keeps_latest_status_per_agent_id() {
     let env = Env::new();
     inject_lifecycle(
         &env,
         "claude",
         "claude-session-abc",
         LifecycleSignal::Registered,
-        PermissionPosture::Default,
         Some("main"),
     );
     inject_lifecycle(
@@ -143,7 +135,6 @@ fn doctor_keeps_latest_posture_per_agent_id() {
         "claude",
         "claude-session-abc",
         LifecycleSignal::TurnStarted,
-        PermissionPosture::Yolo,
         Some("main"),
     );
 
@@ -155,13 +146,14 @@ fn doctor_keeps_latest_posture_per_agent_id() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("utf8");
 
-    assert!(
-        stdout.contains("running") && stdout.contains("yolo"),
-        "rollup should reflect the latest observation, got:\n{stdout}"
+    assert_eq!(
+        stdout.matches("claude-session-abc").count(),
+        1,
+        "the rollup folds both events into one row, got:\n{stdout}"
     );
     assert!(
-        !stdout.contains("default"),
-        "old posture should be replaced, got:\n{stdout}"
+        stdout.contains("running"),
+        "rollup should reflect the latest observation, got:\n{stdout}"
     );
 }
 

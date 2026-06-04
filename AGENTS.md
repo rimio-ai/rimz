@@ -87,7 +87,7 @@ Every other document is a leaf from here. The `docs/` tree groups by audience: *
 - [resolvers.md](./docs/internals/resolvers.md) — resolver protocol, chain, pane primitives.
 - [trust.md](./docs/internals/trust.md) — executable-surface hash, trust states, auto-revoke.
 - [hooks.md](./docs/internals/hooks.md) — the agent boundary: the integration trait, the two hook channels, install, and the Claude/Codex native-event mappings.
-- [agent.md](./docs/internals/agent.md) — agent state model: the rollup, state machine, posture, and liveness.
+- [agent.md](./docs/internals/agent.md) — agent state model: the rollup, state machine, turn phase, and liveness.
 - [transcript.md](./docs/internals/transcript.md) — agent context read-path: transcript discovery, tail parsing, the Claude/Codex JSONL→internal mapping, the statusline / app-server rich-context transports, and the full-history cost/spending read-path.
 - [pricing.md](./docs/internals/pricing.md) — per-model token pricing: the three-layer table (embedded snapshot, remote refresh, builtins), model resolution, and how Codex token counts become dollars.
 - [account.md](./docs/internals/account.md) — agent accounts and balances: the plan/metered model, the per-provider auth and rate-limit mapping, the out-of-band account probe, and the provider-dashboard aggregation.

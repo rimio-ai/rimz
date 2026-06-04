@@ -183,7 +183,7 @@ fn build_label(kind: &str, branch: Option<&str>, worktree: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::feed::{AgentStatus, PaneRef, PermissionPosture};
+    use crate::feed::{AgentStatus, PaneRef};
     use crate::ids::{MuxName, PaneId};
     use jiff::Timestamp;
 
@@ -218,7 +218,7 @@ mod tests {
             agent_id: id.to_owned(),
             kind: kind.to_owned(),
             status: AgentStatus::Idle,
-            permission_posture: PermissionPosture::Default,
+            thinking: false,
             pane: Some(pane_in(SESSION, &format!("terminal_{id}"))),
             agent_pid: None,
             agent_process_start: None,
@@ -231,6 +231,7 @@ mod tests {
             model: None,
             effort: None,
             context_pct: None,
+            context_window: None,
             total_tokens: None,
             todo_done: None,
             todo_total: None,

@@ -5,8 +5,7 @@
 //! to running, `SubagentStop` returns the child to idle, `Stop` completes the
 //! root turn — success, or failed on an error signal); renders the Codex-shaped
 //! `PermissionRequest` `hookSpecificOutput` decision payload (neutral is empty
-//! stdout). `permission_mode` from the agent payload drives the permission
-//! posture.
+//! stdout).
 //!
 //! Owns hook install / uninstall through a non-destructive merge into
 //! `~/.codex/config.toml` using Codex's inline `[[hooks.Event]]` tables.
@@ -35,8 +34,7 @@ use jiff::Timestamp;
 use self::app_server::CodexAppServer;
 use self::payloads::{
     CodexPermissionBehavior, CodexPermissionDecisionOutput, CodexPermissionHookOutput,
-    parse_post_tool_use, parse_session_start, parse_stop, parse_subagent_start,
-    parse_subagent_stop, parse_user_prompt_submit,
+    parse_session_start, parse_subagent_start, parse_subagent_stop, parse_user_prompt_submit,
 };
 use super::context::{AgentContext, AgentCost};
 use super::hook_types::SessionSource;
@@ -46,9 +44,9 @@ use super::pricing::PriceBook;
 use super::{
     AgentErr, AgentIntegration, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, Result, SubagentIdentity, agent_config_path,
-    choice_is_allow, classify_agent_hook, optional_payload_string, posture_from_mode,
-    read_optional_file, read_transcript_tail, resolve_subagent_identity, sanitize_user_prompt,
-    stop_payload_errored, tool_mutates,
+    choice_is_allow, classify_agent_hook, optional_payload_string, read_optional_file,
+    read_transcript_tail, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    tool_edits_files, tool_mutates,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ledger::atomic;
@@ -200,71 +198,39 @@ impl AgentIntegration for CodexIntegration {
             (event_name == "UserPromptSubmit").then(|| parse_user_prompt_submit(payload));
         let subagent_start = (event_name == "SubagentStart").then(|| parse_subagent_start(payload));
         let subagent_stop = (event_name == "SubagentStop").then(|| parse_subagent_stop(payload));
-        let stop = (event_name == "Stop").then(|| parse_stop(payload));
-        // The permission slider rides every event's flattened common; `None` (no
-        // slider) makes the reducer carry the prior posture forward. The status
-        // decision lives in the shared `lifecycle::step` table — here the adapter
-        // only names the intent.
-        let posture_sample = |mode| posture_from_mode(mode, payload, &["approval_policy", "mode"]);
-        let (signal, posture) = match event_name {
+        // The status decision lives in the shared `lifecycle::step` table —
+        // here the adapter only names the intent.
+        let signal = match event_name {
             "SessionStart" => {
                 let p = session_start.as_ref().unwrap();
                 // Codex has no pre-compaction hook; it re-fires `SessionStart`
                 // with `source = "compact"` once condensed — the only source that
                 // flags the transient compacting head, the rest register fresh.
-                let signal = if p.source == SessionSource::Compact {
+                if p.source == SessionSource::Compact {
                     LifecycleSignal::Compacting
                 } else {
                     LifecycleSignal::Registered
-                };
-                (signal, posture_sample(p.common.permission_mode.as_ref()))
+                }
             }
             // A subagent fires before the child model request, so it registers
             // running under the child `agent_id`.
-            "SubagentStart" => {
-                let p = subagent_start.as_ref().unwrap();
-                (
-                    LifecycleSignal::SubagentStarted,
-                    posture_sample(p.common.permission_mode.as_ref()),
-                )
-            }
-            "UserPromptSubmit" => {
-                let p = user_prompt.as_ref().unwrap();
-                (
-                    LifecycleSignal::TurnStarted,
-                    posture_sample(p.common.permission_mode.as_ref()),
-                )
-            }
+            "SubagentStart" => LifecycleSignal::SubagentStarted,
+            "UserPromptSubmit" => LifecycleSignal::TurnStarted,
             // A child finishing returns its row to idle; the root Stop completes
             // the turn (success), or fails it on an error signal. Codex has no
             // background-task parking.
-            "SubagentStop" => {
-                let p = subagent_stop.as_ref().unwrap();
-                (
-                    LifecycleSignal::SubagentStopped,
-                    posture_sample(p.common.permission_mode.as_ref()),
-                )
-            }
-            "Stop" => {
-                let p = stop.as_ref().unwrap();
-                (
-                    LifecycleSignal::TurnEnded {
-                        errored: stop_payload_errored(payload),
-                        parked_on_background: false,
-                    },
-                    posture_sample(p.common.permission_mode.as_ref()),
-                )
-            }
+            "SubagentStop" => LifecycleSignal::SubagentStopped,
+            "Stop" => LifecycleSignal::TurnEnded {
+                errored: stop_payload_errored(payload),
+                parked_on_background: false,
+            },
             // Only a *mutating* tool rides the lifecycle channel: it is proof of
-            // real work and reconciles a stale `plan` posture. Read-only tools
-            // stay silent.
-            "PostToolUse" if tool_mutates(payload) => {
-                let p = parse_post_tool_use(payload);
-                (
-                    LifecycleSignal::ToolUsed { mutates: true },
-                    posture_sample(p.common.permission_mode.as_ref()),
-                )
-            }
+            // real work (read-only tools stay silent). The `edits` bit marks the
+            // file-writing subset, which ends the turn's thinking head.
+            "PostToolUse" if tool_mutates(payload) => LifecycleSignal::ToolUsed {
+                mutates: true,
+                edits: tool_edits_files(payload),
+            },
             _ => return None,
         };
         // Both subagent events carry the same (child id, type, parent session);
@@ -310,7 +276,6 @@ impl AgentIntegration for CodexIntegration {
             .unwrap_or_default();
         let mut observation =
             AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
-        observation.permission_posture = posture;
         observation.parent_agent_id = parent_agent_id;
         // A subagent labels its row with its `agent_type` (trusted agent
         // metadata), kept across stop so a finished child stays labelled while it
@@ -334,6 +299,9 @@ impl AgentIntegration for CodexIntegration {
             &["model_reasoning_effort", "reasoning_effort", "effort"],
         );
         observation.context_pct = payload_context_pct(payload, usage.context_pct);
+        // The rollout's `model_context_window` (e.g. 258k for GPT-5.5) doubles
+        // as the card's window label.
+        observation.context_window = usage.context_window;
         observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
         // Codex exposes no stable todo-state hook field; the dots stay None.
         observation.todo_done = None;
@@ -439,6 +407,9 @@ pub fn loaded_daemon_threads() -> Option<std::collections::BTreeSet<String>> {
 #[derive(Default)]
 struct TranscriptUsage {
     context_pct: Option<u8>,
+    /// The model's context window from the rollout's `model_context_window`
+    /// (e.g. 258k for GPT-5.5) — the card's window label.
+    context_window: Option<u64>,
     total_tokens: Option<u64>,
     model: Option<String>,
     /// Cumulative session input tokens from the most-recent `total_token_usage`
@@ -459,6 +430,7 @@ impl TranscriptUsage {
     fn fresh() -> Self {
         Self {
             context_pct: Some(0),
+            context_window: None,
             total_tokens: Some(0),
             model: None,
             cumulative_input_tokens: None,
@@ -626,6 +598,7 @@ fn usage_from_transcript(path: &Path) -> TranscriptUsage {
                 .map(|pct| pct.min(100) as u8);
             TranscriptUsage {
                 context_pct,
+                context_window: (window > 0).then_some(window),
                 total_tokens: total,
                 model: latest_model,
                 cumulative_input_tokens,
@@ -940,7 +913,7 @@ mod tests {
 
     use super::*;
     use crate::agents::AgentHookClass;
-    use crate::feed::{PermissionPosture, ResolutionMethod, Surface};
+    use crate::feed::{ResolutionMethod, Surface};
     use crate::ids::WorkspaceId;
     use std::path::Path;
 
@@ -1034,19 +1007,15 @@ mod tests {
     }
 
     #[test]
-    fn session_start_observes_idle_in_default_posture_by_default() {
+    fn session_start_observes_idle() {
         let obs = CodexIntegration
-            .observe_lifecycle(
-                "SessionStart",
-                &json!({ "session_id": "sess-1", "approval_policy": "ask" }),
-            )
+            .observe_lifecycle("SessionStart", &json!({ "session_id": "sess-1" }))
             .unwrap();
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
         // Wired in, nothing asked yet — a plain startup registers fresh (not a
         // compaction), no task.
         assert_eq!(obs.signal, LifecycleSignal::Registered);
         assert_eq!(obs.task, None);
-        assert_eq!(obs.permission_posture, Some(PermissionPosture::Default));
     }
 
     #[test]
@@ -1087,68 +1056,6 @@ mod tests {
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
         assert_eq!(obs.signal, LifecycleSignal::TurnStarted);
         assert_eq!(obs.task.as_deref(), Some("fix auth flow"));
-        // The prompt carries no policy field, so it reports no posture: the
-        // reducer keeps the posture SessionStart established.
-        assert_eq!(obs.permission_posture, None);
-    }
-
-    #[test]
-    fn posture_sampled_from_permission_mode() {
-        // `plan` is a first-class sticky posture (rendered as "thinking" while
-        // running), `acceptEdits` is `Auto`, and an absent mode reports `None`
-        // for carry-forward.
-        let plan = CodexIntegration
-            .observe_lifecycle(
-                "SessionStart",
-                &json!({ "session_id": "sess-1", "permission_mode": "plan" }),
-            )
-            .unwrap();
-        assert_eq!(plan.permission_posture, Some(PermissionPosture::Plan));
-
-        let acting = CodexIntegration
-            .observe_lifecycle(
-                "SessionStart",
-                &json!({ "session_id": "sess-1", "permission_mode": "acceptEdits" }),
-            )
-            .unwrap();
-        assert_eq!(acting.permission_posture, Some(PermissionPosture::Auto));
-
-        let silent = CodexIntegration
-            .observe_lifecycle(
-                "UserPromptSubmit",
-                &json!({ "session_id": "sess-1", "prompt": "go" }),
-            )
-            .unwrap();
-        assert_eq!(silent.permission_posture, None);
-    }
-
-    #[test]
-    fn turn_end_samples_slider_last_sample_wins() {
-        // A mode-less `Stop`/`SubagentStop` reports `None` so the reducer
-        // carries the prior posture forward. A `SubagentStop` needs a distinct
-        // child id (else it is quarantined), so give it one.
-        for event in ["Stop", "SubagentStop"] {
-            let obs = CodexIntegration
-                .observe_lifecycle(
-                    event,
-                    &json!({ "session_id": "sess-1", "agent_id": "child-1" }),
-                )
-                .unwrap();
-            assert_eq!(obs.permission_posture, None, "{event} carries forward");
-        }
-
-        // A `Stop` still carrying `plan` reports the slider position — the
-        // session is still in plan mode — so it stays `Plan`.
-        let slider_still_plan = CodexIntegration
-            .observe_lifecycle(
-                "Stop",
-                &json!({ "session_id": "sess-1", "permission_mode": "plan" }),
-            )
-            .unwrap();
-        assert_eq!(
-            slider_still_plan.permission_posture,
-            Some(PermissionPosture::Plan)
-        );
     }
 
     #[test]
@@ -1160,7 +1067,6 @@ mod tests {
                     "session_id": "sess-parent",
                     "agent_id": "child-thread-1",
                     "agent_type": "review",
-                    "permission_mode": "acceptEdits",
                 }),
             )
             .unwrap();
@@ -1168,7 +1074,6 @@ mod tests {
         assert_eq!(obs.agent_id.as_deref(), Some("child-thread-1"));
         assert_eq!(obs.signal, LifecycleSignal::SubagentStarted);
         assert_eq!(obs.task.as_deref(), Some("review"));
-        assert_eq!(obs.permission_posture, Some(PermissionPosture::Auto));
         // The child keys off `agent_id`; the payload's `session_id` is its parent
         // root, captured so the sidebar can nest it.
         assert_eq!(obs.parent_agent_id.as_deref(), Some("sess-parent"));
@@ -1193,28 +1098,6 @@ mod tests {
         // while it lingers in the parent's list.
         assert_eq!(obs.task.as_deref(), Some("review"));
         assert_eq!(obs.parent_agent_id.as_deref(), Some("sess-parent"));
-        assert_eq!(obs.permission_posture, None);
-    }
-
-    #[test]
-    fn approval_policy_never_observes_yolo_posture() {
-        let obs = CodexIntegration
-            .observe_lifecycle("SessionStart", &json!({ "approval_policy": "never" }))
-            .unwrap();
-        assert_eq!(obs.permission_posture, Some(PermissionPosture::Yolo));
-        assert_eq!(obs.context_pct, None);
-        assert_eq!(obs.total_tokens, None);
-    }
-
-    #[test]
-    fn permission_mode_bypass_permissions_observes_yolo_posture() {
-        let obs = CodexIntegration
-            .observe_lifecycle(
-                "SessionStart",
-                &json!({ "permission_mode": "bypassPermissions" }),
-            )
-            .unwrap();
-        assert_eq!(obs.permission_posture, Some(PermissionPosture::Yolo));
     }
 
     #[test]

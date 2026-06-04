@@ -106,14 +106,10 @@ fn log_lifecycle_transition(ledger: &Ledger, kind: &str, observation: &AgentLife
         })
         .map(|agent| LifecycleState {
             status: agent.status,
-            posture: agent.permission_posture,
+            thinking: agent.thinking,
             compacting: agent.compacting_since.is_some(),
         });
-    let transition = lifecycle::step(
-        prev.as_ref(),
-        &observation.signal,
-        observation.permission_posture,
-    );
+    let transition = lifecycle::step(prev.as_ref(), &observation.signal);
     match transition.kind {
         TransitionKind::Reconciled { from, reason } => warn!(
             target: "rimz::agent::lifecycle",

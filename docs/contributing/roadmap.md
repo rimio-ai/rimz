@@ -22,7 +22,7 @@ At M1, scripts and remote workflows work without any agent integrations.
 
 ## M2 — Codex adapter
 
-Internal proof of the agent integration interface. Lifecycle hooks, the blocking-feed permission path (default and bridge), neutral and decision goldens, permission-posture observation, both backends. Mapping in [hooks.md → Appendix Codex](../internals/hooks.md#appendix--codex).
+Internal proof of the agent integration interface. Lifecycle hooks, the blocking-feed permission path (default and bridge), neutral and decision goldens, both backends. Mapping in [hooks.md → Appendix Codex](../internals/hooks.md#appendix--codex).
 
 Codex alone is not the public agent-coding launch bar.
 

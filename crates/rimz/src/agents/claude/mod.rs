@@ -31,9 +31,9 @@ use serde_json::{Map, Value};
 
 use self::payloads::{
     ClaudePermissionBehavior, ClaudePermissionDecisionOutput, ClaudePermissionHookOutput,
-    ClaudePreToolUseDecisionOutput, ClaudePreToolUseHookOutput, parse_post_tool_use,
-    parse_pre_compact, parse_pre_tool_use, parse_session_start, parse_stop, parse_subagent_start,
-    parse_subagent_stop, parse_user_prompt_submit,
+    ClaudePreToolUseDecisionOutput, ClaudePreToolUseHookOutput, parse_pre_tool_use,
+    parse_session_start, parse_stop, parse_subagent_start, parse_subagent_stop,
+    parse_user_prompt_submit,
 };
 use super::hook_types::BackgroundTask;
 use super::lifecycle::LifecycleSignal;
@@ -42,8 +42,8 @@ use super::{
     AgentContext, AgentErr, AgentIntegration, AgentLifecycleObservation, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, Result, StatusLineChange,
     SubagentIdentity, SubagentObservation, agent_config_path, choice_is_allow, classify_agent_hook,
-    optional_payload_string, posture_from_mode, read_optional_file, read_transcript_tail,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored, tool_mutates,
+    optional_payload_string, read_optional_file, read_transcript_tail, resolve_subagent_identity,
+    sanitize_user_prompt, stop_payload_errored, tool_edits_files, tool_mutates,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ledger::atomic;
@@ -292,76 +292,35 @@ impl AgentIntegration for ClaudeIntegration {
             .as_ref()
             .map(|p| pending_background_tasks(&p.background_tasks))
             .unwrap_or_default();
-        // The permission slider rides every event's flattened common; `None` (no
-        // slider) makes the reducer carry the prior posture forward, so a prompt
-        // or stop can never demote a yolo agent. The status decision lives in the
-        // shared `lifecycle::step` table — here the adapter only names the intent.
-        let (signal, posture) = match event_name {
-            "SessionStart" => {
-                let p = session_start.as_ref().unwrap();
-                (
-                    LifecycleSignal::Registered,
-                    posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
-                )
-            }
-            "UserPromptSubmit" => {
-                let p = user_prompt.as_ref().unwrap();
-                (
-                    LifecycleSignal::TurnStarted,
-                    posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
-                )
-            }
+        // The status decision lives in the shared `lifecycle::step` table —
+        // here the adapter only names the intent.
+        let signal = match event_name {
+            "SessionStart" => LifecycleSignal::Registered,
+            "UserPromptSubmit" => LifecycleSignal::TurnStarted,
             // A subagent fires before the child model request, so it registers
             // running under the child `agent_id`; a finished child returns to idle.
-            "SubagentStart" => {
-                let p = subagent_start.as_ref().unwrap();
-                (
-                    LifecycleSignal::SubagentStarted,
-                    posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
-                )
-            }
-            "SubagentStop" => {
-                let p = subagent_stop.as_ref().unwrap();
-                (
-                    LifecycleSignal::SubagentStopped,
-                    posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
-                )
-            }
+            "SubagentStart" => LifecycleSignal::SubagentStarted,
+            "SubagentStop" => LifecycleSignal::SubagentStopped,
             // A clean Stop completes the turn; in-flight `background_tasks`
             // (Claude Code v2.1.145+) mean the main thread only parked, so `step`
             // keeps it running and the row paints a secondary background marker
             // rather than a false success.
-            "Stop" => {
-                let p = stop.as_ref().unwrap();
-                (
-                    LifecycleSignal::TurnEnded {
-                        errored: stop_payload_errored(payload),
-                        parked_on_background: !pending_background.is_empty(),
-                    },
-                    posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
-                )
-            }
+            "Stop" => LifecycleSignal::TurnEnded {
+                errored: stop_payload_errored(payload),
+                parked_on_background: !pending_background.is_empty(),
+            },
             // Only a *mutating* tool rides the lifecycle channel: it is proof of
-            // real work and reconciles a stale `plan` posture (plan mode is
-            // read-only). Read-only tools stay silent.
-            "PostToolUse" if tool_mutates(payload) => {
-                let p = parse_post_tool_use(payload);
-                (
-                    LifecycleSignal::ToolUsed { mutates: true },
-                    posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
-                )
-            }
+            // real work (read-only tools stay silent). The `edits` bit marks the
+            // file-writing subset, which ends the turn's thinking head.
+            "PostToolUse" if tool_mutates(payload) => LifecycleSignal::ToolUsed {
+                mutates: true,
+                edits: tool_edits_files(payload),
+            },
             // Compaction is a transient head, not a transition: `step` keeps the
             // prior status and only stamps the compacting marker.
-            "PreCompact" => {
-                let p = parse_pre_compact(payload);
-                (
-                    LifecycleSignal::Compacting,
-                    posture_from_mode(p.common.permission_mode.as_ref(), payload, &["mode"]),
-                )
-            }
+            "PreCompact" => LifecycleSignal::Compacting,
             // SessionEnd drops the row; `ends_session` then expires its pending asks.
-            "SessionEnd" => (LifecycleSignal::Ended, None),
+            "SessionEnd" => LifecycleSignal::Ended,
             _ => return None,
         };
         // Both subagent events flatten the same `ClaudeCommon`; unify on it so the
@@ -398,11 +357,11 @@ impl AgentIntegration for ClaudeIntegration {
             .and_then(|_| optional_payload_string(payload, &["transcript_path"]))
             .map(|path| usage_from_transcript(&path))
             .unwrap_or_default();
-        let model = session_start
+        let payload_model = session_start
             .as_ref()
             .and_then(|p| p.common.model.clone())
-            .or_else(|| optional_payload_string(payload, &["model"]))
-            .or(usage.model);
+            .or_else(|| optional_payload_string(payload, &["model"]));
+        let model = payload_model.clone().or(usage.model);
         let window = context_window_for(model.as_deref()).max(1);
         let context_pct = payload_context_pct(
             payload,
@@ -413,7 +372,6 @@ impl AgentIntegration for ClaudeIntegration {
         let (todo_done, todo_total) = todos_from_payload(payload);
         let mut observation =
             AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
-        observation.permission_posture = posture;
         observation.parent_agent_id = parent_agent_id;
         // A subagent labels its row with what it is (`agent_type`) or what it was
         // asked (`description`) — trusted agent metadata, kept across stop so a
@@ -445,6 +403,11 @@ impl AgentIntegration for ClaudeIntegration {
             .and_then(|e| e.level.clone())
             .or_else(|| optional_payload_string(payload, &["thinking_level"]));
         observation.context_pct = context_pct;
+        // The resolved window doubles as the card's window label — published
+        // only when the payload named the model, since only the payload id can
+        // carry the `[1m]` marker: a transcript-resolved bare id would read as
+        // the standard window and clobber a wider carry-forward.
+        observation.context_window = payload_model.is_some().then_some(window);
         observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
         observation.todo_done = todo_done;
         observation.todo_total = todo_total;
@@ -1148,7 +1111,7 @@ fn is_rimz_status_line_command(command: &str) -> bool {
 mod tests {
     use super::*;
     use crate::agents::AgentHookClass;
-    use crate::feed::{PermissionPosture, ResolutionMethod, Surface};
+    use crate::feed::{ResolutionMethod, Surface};
     use crate::ids::WorkspaceId;
     use std::path::Path;
 
@@ -1355,7 +1318,6 @@ mod tests {
         // The type labels the child row; `session_id` is captured as the parent.
         assert_eq!(obs.task.as_deref(), Some("Explore"));
         assert_eq!(obs.parent_agent_id.as_deref(), Some("sess-parent"));
-        assert_eq!(obs.permission_posture, Some(PermissionPosture::Auto));
     }
 
     #[test]
@@ -1422,16 +1384,36 @@ mod tests {
 
     #[test]
     fn post_tool_use_rides_lifecycle_only_for_mutating_tools() {
-        // A mutating tool proves real work and reconciles a stale plan posture,
-        // so it records a `ToolUsed` signal; a read-only tool stays silent so the
-        // lifecycle channel isn't flooded.
+        // A mutating tool proves real work, so it records a `ToolUsed` signal;
+        // a read-only tool stays silent so the lifecycle channel isn't flooded.
+        // A file edit also sets the `edits` bit (ends the thinking head); a
+        // shell command mutates without editing.
         let edit = ClaudeIntegration
             .observe_lifecycle(
                 "PostToolUse",
                 &json!({ "session_id": "sess-1", "tool_name": "Edit" }),
             )
             .unwrap();
-        assert_eq!(edit.signal, LifecycleSignal::ToolUsed { mutates: true });
+        assert_eq!(
+            edit.signal,
+            LifecycleSignal::ToolUsed {
+                mutates: true,
+                edits: true,
+            }
+        );
+        let shell = ClaudeIntegration
+            .observe_lifecycle(
+                "PostToolUse",
+                &json!({ "session_id": "sess-1", "tool_name": "Bash" }),
+            )
+            .unwrap();
+        assert_eq!(
+            shell.signal,
+            LifecycleSignal::ToolUsed {
+                mutates: true,
+                edits: false,
+            }
+        );
         let read = ClaudeIntegration.observe_lifecycle(
             "PostToolUse",
             &json!({ "session_id": "sess-1", "tool_name": "Read" }),
@@ -2191,16 +2173,12 @@ mod tests {
     #[test]
     fn session_start_observes_idle_status() {
         let obs = ClaudeIntegration
-            .observe_lifecycle(
-                "SessionStart",
-                &json!({ "session_id": "sess-1", "permission_mode": "default" }),
-            )
+            .observe_lifecycle("SessionStart", &json!({ "session_id": "sess-1" }))
             .unwrap();
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
         // Wired in, nothing asked yet — registered, no task.
         assert_eq!(obs.signal, LifecycleSignal::Registered);
         assert_eq!(obs.task, None);
-        assert_eq!(obs.permission_posture, Some(PermissionPosture::Default));
     }
 
     #[test]
@@ -2214,63 +2192,6 @@ mod tests {
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
         assert_eq!(obs.signal, LifecycleSignal::TurnStarted);
         assert_eq!(obs.task.as_deref(), Some("fix auth flow"));
-        // The prompt reports no posture, so the reducer keeps the posture
-        // SessionStart established (a yolo agent stays yolo).
-        assert_eq!(obs.permission_posture, None);
-    }
-
-    #[test]
-    fn bypass_permissions_observes_yolo_posture() {
-        let obs = ClaudeIntegration
-            .observe_lifecycle(
-                "SessionStart",
-                &json!({ "permission_mode": "bypassPermissions" }),
-            )
-            .unwrap();
-        assert_eq!(obs.permission_posture, Some(PermissionPosture::Yolo));
-    }
-
-    #[test]
-    fn posture_sampled_from_permission_mode() {
-        // The slider maps onto the posture enum: `plan` is a first-class sticky
-        // posture (the read-only "thinking" signal), `acceptEdits` is `Auto`, and
-        // an absent mode reports `None` so the reducer carries the prior posture
-        // forward.
-        let plan = ClaudeIntegration
-            .observe_lifecycle("SessionStart", &json!({ "permission_mode": "plan" }))
-            .unwrap();
-        assert_eq!(plan.permission_posture, Some(PermissionPosture::Plan));
-
-        let acting = ClaudeIntegration
-            .observe_lifecycle("SessionStart", &json!({ "permission_mode": "acceptEdits" }))
-            .unwrap();
-        assert_eq!(acting.permission_posture, Some(PermissionPosture::Auto));
-
-        let silent = ClaudeIntegration
-            .observe_lifecycle("UserPromptSubmit", &json!({ "session_id": "sess-1" }))
-            .unwrap();
-        assert_eq!(silent.permission_posture, None);
-    }
-
-    #[test]
-    fn stop_samples_slider_last_sample_wins() {
-        // A `Stop` still carrying `plan` reports `Plan`; a mode-less `Stop`
-        // reports `None` so the reducer carries the prior posture forward.
-        let mode_less = ClaudeIntegration
-            .observe_lifecycle("Stop", &json!({ "session_id": "sess-1" }))
-            .unwrap();
-        assert_eq!(mode_less.permission_posture, None);
-
-        let slider_still_plan = ClaudeIntegration
-            .observe_lifecycle(
-                "Stop",
-                &json!({ "session_id": "sess-1", "permission_mode": "plan" }),
-            )
-            .unwrap();
-        assert_eq!(
-            slider_still_plan.permission_posture,
-            Some(PermissionPosture::Plan)
-        );
     }
 
     #[test]

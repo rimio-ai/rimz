@@ -11,7 +11,8 @@ use rimz::ids::MuxName;
 use rimz::ledger::runtime::current_process_owner;
 
 use super::{
-    RoomHarness, SETTLE, permission_request, session_start, session_start_at, user_prompt_submit,
+    RoomHarness, SETTLE, permission_request, post_tool_use, session_start, session_start_at,
+    user_prompt_submit,
 };
 use crate::common::Env;
 
@@ -116,8 +117,8 @@ fn phase1_to_3_agent_moves_from_idle_to_running_to_waiting() {
 
     let screen = room.wait_for(|s| s.contains("fix auth flow"), SETTLE);
     assert!(
-        running_row(&screen, "codex"),
-        "a prompted agent is running:\n{screen}"
+        thinking_row(&screen, "codex"),
+        "a prompted agent opens its turn in the thinking phase:\n{screen}"
     );
     assert!(
         screen.contains("fix auth flow"),
@@ -149,6 +150,42 @@ fn phase1_to_3_agent_moves_from_idle_to_running_to_waiting() {
     assert!(
         !screen.contains("DO_NOT_RENDER_ME"),
         "the sidebar notifies and navigates; it never reproduces the question:\n{screen}"
+    );
+}
+
+/// The turn phase on a rendered frame: a prompted agent opens with the thinking
+/// sparkle, a shell command keeps it (work, but no file written), and the turn's
+/// first file edit flips the leading cell to the working fill.
+#[test]
+fn turn_phase_flips_thinking_to_working_on_first_edit() {
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    let room = RoomHarness::launch(&env, MuxName::Tmux);
+    room.onboard(&["codex"]);
+    room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
+    room.agent_hook("codex", &user_prompt_submit("sess-1", "fix auth flow"));
+
+    let screen = room.wait_for(|s| thinking_row(s, "codex"), SETTLE);
+    assert!(
+        thinking_row(&screen, "codex"),
+        "a prompted agent opens its turn thinking:\n{screen}"
+    );
+
+    // A shell command mutates but edits nothing — the sparkle stays.
+    room.agent_hook("codex", &post_tool_use("sess-1", "shell"));
+    let screen = room.wait_for(|s| thinking_row(s, "codex"), SETTLE);
+    assert!(
+        thinking_row(&screen, "codex"),
+        "a command-only turn is still thinking:\n{screen}"
+    );
+
+    room.agent_hook("codex", &post_tool_use("sess-1", "apply_patch"));
+    let screen = room.wait_for(|s| running_row(s, "codex"), SETTLE);
+    assert!(
+        running_row(&screen, "codex"),
+        "the first file edit flips the turn to working:\n{screen}"
     );
 }
 
@@ -355,6 +392,15 @@ fn phase9_degraded_loop_shows_banner_not_first_run_hint() {
 /// static fallback `⢿` is one of these frames).
 fn running_row(screen: &str, name: &str) -> bool {
     ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
+        .iter()
+        .any(|frame| screen.contains(&format!("{frame} {name}")))
+}
+
+/// A running row still in its pre-edit thinking phase leads with an animated
+/// sparkle, so a live capture may show any frame — confirm the leading cell is
+/// one of them.
+fn thinking_row(screen: &str, name: &str) -> bool {
+    ['·', '✢', '✳', '✶', '✻', '✽']
         .iter()
         .any(|frame| screen.contains(&format!("{frame} {name}")))
 }

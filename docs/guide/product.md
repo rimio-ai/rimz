@@ -28,7 +28,7 @@ Rimz gives every project one room — a Zellij or tmux session with a sidebar �
 ▏  ▣ ━━━━━━━━━━━━━━━──────────── 63%
 
  feature-migration                     +230 -23
- ! claude · Opus · yolo
+ ! claude · Opus · 1M
    db migrate
 
  ○ codex · GPT-5.5 · low
@@ -140,11 +140,11 @@ Both are starting points you copy and edit. The chain mechanics, the heartbeat p
 
 Inside a sandboxed CI runner there's no human to ask. Two patterns work:
 
-**Agent-native bypass.** Launch each agent with its own bypass flag — `claude --dangerously-skip-permissions`, `codex --ask-for-approval never --sandbox danger-full-access`. The agent never blocks. Rimz still observes everything the agent reports through lifecycle hooks (sessions, completions, failures); the sidebar's permission posture renders `yolo` so the audit record is clear. The tradeoff: the agent skips permission events at the source, so the ledger records only what other hooks report — not a complete per-decision audit trail.
+**Agent-native bypass.** Launch each agent with its own bypass flag — `claude --dangerously-skip-permissions`, `codex --ask-for-approval never --sandbox danger-full-access`. The agent never blocks. Rimz still observes everything the agent reports through lifecycle hooks (sessions, completions, failures). The tradeoff: the agent skips permission events at the source, so the ledger records only what other hooks report — not a complete per-decision audit trail.
 
 **Permissive resolver.** Enrol a resolver that answers `allow` to anything (or anything matching a policy) — the bundled **auto-approve** resolver is exactly this. Every permission request still flows through Rimz, gets a decision attributed to that resolver, and lands in the ledger as a real audit record. Prefer this when you need full audit fidelity.
 
-The two patterns compose: a permissive resolver for routine cases with the agent's bypass flag as the ultimate fallback for anything the resolver doesn't catch in time. `rimz doctor` reports the permission posture it sees per agent so the audit story stays unambiguous.
+The two patterns compose: a permissive resolver for routine cases with the agent's bypass flag as the ultimate fallback for anything the resolver doesn't catch in time. Prefer the resolver when the per-decision ledger record matters.
 
 ## The design behind it
 

@@ -1,5 +1,5 @@
-//! Semantic sidebar vocabulary: the canonical status glyphs, posture pills,
-//! and the gauge / spinner / pulse glyph helpers.
+//! Semantic sidebar vocabulary: the canonical status glyphs and the
+//! gauge / spinner / pulse glyph helpers.
 //!
 //! Every meter in the sidebar — context-window %, todo progress, diff stats —
 //! renders through the same vocabulary so they read as siblings, not as
@@ -7,7 +7,7 @@
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
-use rimz::feed::{AgentStatus, PermissionPosture};
+use rimz::feed::AgentStatus;
 
 use super::theme::{ORANGE, Theme};
 
@@ -46,9 +46,10 @@ const RATE_LIMITED_GLYPH: &str = "⏸\u{FE0E}";
 /// changes. No frame matches idle `○`, so a frozen frame still reads as "working".
 const WORKING_FRAMES: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 
-/// Thinking: a sparkle that grows and fades. Reserved for read-only plan mode —
-/// the agent is reasoning, not writing — so its motion reads as lighter than the
-/// working fill.
+/// Thinking: a sparkle that grows and fades. The opening phase of every turn —
+/// the agent is reasoning and reading, not yet writing — so its motion reads as
+/// lighter than the working fill. The turn's first file edit flips the cell to
+/// the working spinner.
 const THINKING_FRAMES: [&str; 8] = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶"];
 
 /// Resolver answering: a braille spinner while a resolver composes the answer on
@@ -72,17 +73,18 @@ const SUBAGENT_FRAMES: [&str; 8] = ["_", "-", "`", "´", "'", "´", "`", "-"];
 
 /// Idle, waiting-for-a-prompt: a quiet `.` → `..` → `...` loading cue that stands
 /// in for the em-dash on a just-started agent with nothing to describe yet. Held
-/// a few ticks per step so it breathes rather than flickers.
+/// several ticks per step so it breathes rather than flickers.
 const LOADING_FRAMES: [&str; 3] = [".", "..", "..."];
 
 fn frame(frames: &[&'static str], animation_phase: u64) -> &'static str {
     frames[(animation_phase as usize) % frames.len()]
 }
 
-/// The idle loading-dots cue (`.` / `..` / `...`), each step held three ticks
-/// (~300ms) so the cycle reads as a gentle breath, not a strobe.
+/// The idle loading-dots cue (`.` / `..` / `...`), each step held eight ticks
+/// (~800ms) — a 2.4s full cycle, the same lazy cadence as the attention breath —
+/// so an idle row drifts rather than strobes.
 pub(super) fn loading_dots(animation_phase: u64) -> &'static str {
-    LOADING_FRAMES[((animation_phase / 3) as usize) % LOADING_FRAMES.len()]
+    LOADING_FRAMES[((animation_phase / 8) as usize) % LOADING_FRAMES.len()]
 }
 
 /// The brightness modifier for a breathing attention glyph (`?` / `!`) on this
@@ -124,27 +126,18 @@ pub(super) fn subagent_glyph(animation_phase: u64) -> &'static str {
     frame(&SUBAGENT_FRAMES, animation_phase)
 }
 
-/// The still sparkle representing the thinking (plan-mode) bucket in the fleet
-/// header — the fullest thinking frame, so a count reads as a thinking cell at
-/// rest. The working bucket reuses the static [`status_glyph`] for `Running`.
-pub(super) fn thinking_still() -> &'static str {
-    THINKING_FRAMES[5]
-}
-
 /// The leading cell for an agent row, animated when the agent is actively doing
-/// something. A `running` agent fills (working) or sparkles (thinking, when the
-/// slider is in `plan`); every other state is the static [`status_glyph`]. Stall
-/// is already folded into `Failed` upstream, so it falls through to the static
-/// `!`.
+/// something. A `running` agent sparkles (thinking, before the turn's first
+/// file edit) or fills (working); every other state is the static
+/// [`status_glyph`]. Stall is already folded into `Failed` upstream, so it
+/// falls through to the static `!`.
 pub(super) fn agent_glyph(
     status: AgentStatus,
-    posture: Option<PermissionPosture>,
+    thinking: bool,
     animation_phase: u64,
 ) -> &'static str {
     match status {
-        AgentStatus::Running if posture == Some(PermissionPosture::Plan) => {
-            thinking_glyph(animation_phase)
-        }
+        AgentStatus::Running if thinking => thinking_glyph(animation_phase),
         AgentStatus::Running => working_glyph(animation_phase),
         other => status_glyph(other),
     }
@@ -183,8 +176,8 @@ pub(super) fn subagent_style(theme: &Theme) -> Style {
 }
 
 /// Style for an agent row's leading cell. A running agent's working spinner and
-/// its plan-mode thinking sparkle both paint in Claude clay, so the live head
-/// aligns with the agent's own UI; every other state takes its [`status_style`].
+/// its thinking sparkle both paint in Claude clay, so the live head aligns with
+/// the agent's own UI; every other state takes its [`status_style`].
 pub(super) fn agent_style(theme: &Theme, status: AgentStatus) -> Style {
     if status == AgentStatus::Running {
         return theme.style(ORANGE, Modifier::empty());
@@ -214,35 +207,6 @@ pub(super) fn attention_glyph_style(
         theme.style(color, attention_breath(animation_phase))
     } else {
         agent_style(theme, status)
-    }
-}
-
-/// Human label for the permission posture. `Default` is the omitted baseline,
-/// so it returns `None` and disappears from the row. `Unknown` is also
-/// suppressed — an unparseable mode word is not a warning surface. `plan` shows
-/// in every state (like `auto`/`yolo`): the thinking sparkle only fires while
-/// `running`, so the pill is what keeps a plan-slider tab legible when it is
-/// idle or waiting.
-pub(super) fn posture_pill(posture: PermissionPosture) -> Option<&'static str> {
-    match posture {
-        PermissionPosture::Default | PermissionPosture::Unknown => None,
-        PermissionPosture::Plan => Some("plan"),
-        PermissionPosture::Auto => Some("auto"),
-        PermissionPosture::Yolo => Some("yolo"),
-    }
-}
-
-/// Posture pills carry a permission-heat gradient, so a row's blast radius
-/// reads at a glance: `plan` is the cautious read-only posture (calm blue),
-/// `auto` edits within the sandbox (amber), `yolo` bypasses every gate (bold
-/// red — the security surface, loud even when every other capability token
-/// dims). `Default`/`Unknown` carry no pill, so they never reach here.
-pub(super) fn posture_style(theme: &Theme, posture: PermissionPosture) -> Style {
-    match posture {
-        PermissionPosture::Plan => theme.style(Color::Blue, Modifier::empty()),
-        PermissionPosture::Auto => theme.style(Color::Yellow, Modifier::empty()),
-        PermissionPosture::Yolo => theme.style(Color::Red, Modifier::BOLD),
-        PermissionPosture::Default | PermissionPosture::Unknown => theme.dim(),
     }
 }
 
@@ -817,25 +781,6 @@ mod tests {
         }
     }
 
-    /// Posture pills ramp by permission heat: `plan` calm blue, `auto` amber,
-    /// `yolo` bold red. `Default`/`Unknown` carry no pill but still resolve to a
-    /// dim baseline.
-    #[test]
-    fn posture_style_ramps_by_permission_heat() {
-        let theme = Theme::fixed(false);
-        assert_eq!(
-            posture_style(&theme, PermissionPosture::Plan).fg,
-            Some(Color::Indexed(75))
-        );
-        assert_eq!(
-            posture_style(&theme, PermissionPosture::Auto).fg,
-            Some(Color::Indexed(179))
-        );
-        let yolo = posture_style(&theme, PermissionPosture::Yolo);
-        assert_eq!(yolo.fg, Some(Color::Indexed(167)));
-        assert!(yolo.add_modifier.contains(Modifier::BOLD));
-    }
-
     /// Diff stats fall back to the numbers when color is stripped; the
     /// `+`/`-` prefixes still distinguish the two counts.
     #[test]
@@ -925,16 +870,17 @@ mod tests {
         );
     }
 
-    /// The loading dots cycle `.` → `..` → `...`, holding each step a few ticks,
-    /// and the attention glyph breathes a slow brightness pulse — `DIM` at the
-    /// troughs, `BOLD` at the peak — that wraps with the phase, never strobing.
+    /// The loading dots cycle `.` → `..` → `...`, holding each step eight ticks
+    /// (a 2.4s full cycle, matching the attention breath), and the attention
+    /// glyph breathes a slow brightness pulse — `DIM` at the troughs, `BOLD` at
+    /// the peak — that wraps with the phase, never strobing.
     #[test]
     fn loading_dots_and_attention_breath_cadence() {
         assert_eq!(loading_dots(0), ".");
-        assert_eq!(loading_dots(2), "."); // held across ticks
-        assert_eq!(loading_dots(3), "..");
-        assert_eq!(loading_dots(6), "...");
-        assert_eq!(loading_dots(9), ".", "wraps back to one dot");
+        assert_eq!(loading_dots(7), "."); // held across ticks
+        assert_eq!(loading_dots(8), "..");
+        assert_eq!(loading_dots(16), "...");
+        assert_eq!(loading_dots(24), ".", "wraps back to one dot");
 
         // DIM at the troughs, normal between, BOLD at the half-cycle peak.
         assert_eq!(attention_breath(0), Modifier::DIM);
@@ -1014,27 +960,26 @@ mod tests {
         assert!(!long_parked.add_modifier.contains(Modifier::BOLD));
     }
 
-    /// A running agent animates the working fill; with a `plan` posture it
-    /// sparkles; a stalled agent (folded to `Failed` upstream) and every other
-    /// state takes the static glyph, regardless of phase.
+    /// A running agent animates the working fill; while its turn is still in
+    /// the pre-edit thinking phase it sparkles; a stalled agent (folded to
+    /// `Failed` upstream) and every other state takes the static glyph,
+    /// regardless of phase.
     #[test]
     fn agent_glyph_animates_only_active_states() {
-        let acting = Some(PermissionPosture::Default);
-        let planning = Some(PermissionPosture::Plan);
         assert_eq!(
-            agent_glyph(AgentStatus::Running, acting, 2),
+            agent_glyph(AgentStatus::Running, false, 2),
             WORKING_FRAMES[2]
         );
         assert_eq!(
-            agent_glyph(AgentStatus::Running, planning, 2),
+            agent_glyph(AgentStatus::Running, true, 2),
             THINKING_FRAMES[2]
         );
-        // A plan posture on a non-running agent never sparkles — the slider is
-        // sticky, but the sparkle is the running-state indicator.
-        assert_eq!(agent_glyph(AgentStatus::Idle, planning, 2), "○");
-        assert_eq!(agent_glyph(AgentStatus::Waiting, acting, 2), "?");
-        assert_eq!(agent_glyph(AgentStatus::Failed, acting, 2), "!");
-        assert_eq!(agent_glyph(AgentStatus::Idle, acting, 2), "○");
-        assert_eq!(agent_glyph(AgentStatus::Success, acting, 2), "✓");
+        // The sparkle is the running-state indicator — a stale thinking bit on
+        // a non-running agent never sparkles.
+        assert_eq!(agent_glyph(AgentStatus::Idle, true, 2), "○");
+        assert_eq!(agent_glyph(AgentStatus::Waiting, false, 2), "?");
+        assert_eq!(agent_glyph(AgentStatus::Failed, false, 2), "!");
+        assert_eq!(agent_glyph(AgentStatus::Idle, false, 2), "○");
+        assert_eq!(agent_glyph(AgentStatus::Success, false, 2), "✓");
     }
 }

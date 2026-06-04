@@ -25,7 +25,7 @@ Rimz pins every repo to one durable room — a Zellij or tmux session with a sid
 ▏  ▣ ━━━━━━━━━━━━━━━──────────── 63%
 
  feature-migration                     +230 -23
- ! claude · Opus · yolo
+ ! claude · Opus · 1M
    db migrate
 
  ○ codex · GPT-5.5 · low

@@ -581,37 +581,17 @@ pub fn is_rate_limited(status: AgentStatus, account_limited: bool) -> bool {
 /// window. Generous: a large context can take a while to condense.
 pub const COMPACTING_WINDOW_SECS: i64 = 90;
 
-/// Permission posture pill: which position the agent's permission slider sits
-/// in. The agent owns this; Rimz observes and surfaces it. It is the single
-/// sticky reading of the slider — last sample wins, carried forward across
-/// events — so the security surface (`Yolo`) and the read-only `Plan` mode both
-/// stay visible without a separate flag.
-///
-/// `Default` is the omitted baseline (the human approves each tool call —
-/// Claude's `default`, Codex's `on-request`/`ask`); `Plan` is read-only plan
-/// mode (Claude/Codex `plan`), where the agent reasons without writing — with
-/// `status == Running` the sidebar renders it as the "thinking" state; `Auto`
-/// is auto-accept (Claude `acceptEdits`, Codex `auto`/`on-failure`); `Yolo` is
-/// the full bypass (Claude `bypassPermissions`, Codex `--ask-for-approval
-/// never`). `Unknown` is any value the agent reports that fits no bucket.
-///
-/// Wire format: snake_case (`default`/`plan`/`auto`/`yolo`/`unknown`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionPosture {
-    Default,
-    Plan,
-    Auto,
-    Yolo,
-    Unknown,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentState {
     pub agent_id: String,
     pub kind: String,
     pub status: AgentStatus,
-    pub permission_posture: PermissionPosture,
+    /// Whether the running turn is still in its pre-edit reasoning phase — the
+    /// transient head the sidebar paints as the thinking sparkle. Set by the
+    /// turn start, cleared by its first file-editing tool or the turn end;
+    /// meaningful only while `status == Running`.
+    #[serde(default)]
+    pub thinking: bool,
     pub pane: Option<PaneRef>,
     #[serde(default)]
     pub agent_pid: Option<u32>,
@@ -642,6 +622,11 @@ pub struct AgentState {
     /// 0% baseline, but the reduced agent state keeps the distinction.
     #[serde(default)]
     pub context_pct: Option<u8>,
+    /// The model's context window in tokens (`258_400`, `1_000_000`), resolved
+    /// by the adapter at hook time. Same enrich-only, carry-forward discipline
+    /// as `context_pct`; the card's identity line renders it (`258k`, `1M`).
+    #[serde(default)]
+    pub context_window: Option<u64>,
     /// Cumulative token usage for this agent session. Same enrich-only
     /// discipline as `context_pct`.
     #[serde(default)]

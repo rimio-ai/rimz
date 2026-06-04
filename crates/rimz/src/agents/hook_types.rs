@@ -6,25 +6,6 @@
 
 use serde::Deserialize;
 
-/// Permission slider value as reported on hook payloads. Claude uses all six
-/// variants; Codex omits `Auto`. `#[serde(rename_all = "camelCase")]` covers
-/// the mixed-case wire values (`acceptEdits`, `dontAsk`, `bypassPermissions`).
-/// Unknown future values map to `Unknown` via `#[serde(other)]`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum PermissionMode {
-    #[default]
-    Default,
-    Plan,
-    AcceptEdits,
-    /// Claude-only; Codex does not emit this value on the wire.
-    Auto,
-    DontAsk,
-    BypassPermissions,
-    #[serde(other)]
-    Unknown,
-}
-
 /// `source` field on `SessionStart` events, shared by both adapters.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -77,22 +58,6 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-
-    #[test]
-    fn permission_mode_camel_case_variants() {
-        let accept: PermissionMode = serde_json::from_str(r#""acceptEdits""#).unwrap();
-        assert_eq!(accept, PermissionMode::AcceptEdits);
-        let dont: PermissionMode = serde_json::from_str(r#""dontAsk""#).unwrap();
-        assert_eq!(dont, PermissionMode::DontAsk);
-        let bypass: PermissionMode = serde_json::from_str(r#""bypassPermissions""#).unwrap();
-        assert_eq!(bypass, PermissionMode::BypassPermissions);
-    }
-
-    #[test]
-    fn permission_mode_unknown_variant() {
-        let unknown: PermissionMode = serde_json::from_str(r#""someNewMode""#).unwrap();
-        assert_eq!(unknown, PermissionMode::Unknown);
-    }
 
     #[test]
     fn session_source_lowercase_variants() {

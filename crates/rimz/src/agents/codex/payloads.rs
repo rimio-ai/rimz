@@ -23,20 +23,18 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::agents::hook_types::{CompactTrigger, HookEventCommon, PermissionMode, SessionSource};
+use crate::agents::hook_types::{CompactTrigger, HookEventCommon, SessionSource};
 
 // ── Common ─────────────────────────────────────────────────────────────────
 
 /// Codex-specific common fields. Wraps the universal [`HookEventCommon`] and
-/// adds the model id, permission slider, and `turn_id` (present on turn-scoped
-/// events only).
+/// adds the model id and `turn_id` (present on turn-scoped events only).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct CodexCommon {
     #[serde(flatten)]
     pub common: HookEventCommon,
     pub model: Option<String>,
-    pub permission_mode: Option<PermissionMode>,
     /// Present only on turn-scoped events (`UserPromptSubmit`, `PreToolUse`,
     /// `PostToolUse`, `Stop`, `SubagentStart`, `SubagentStop`, `PermissionRequest`).
     pub turn_id: Option<String>,
@@ -213,7 +211,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::agents::hook_types::{CompactTrigger, PermissionMode, SessionSource};
+    use crate::agents::hook_types::{CompactTrigger, SessionSource};
 
     #[test]
     fn session_start_compact_source() {
@@ -243,12 +241,6 @@ mod tests {
             "future_openai_field": true
         }));
         assert_eq!(p.common.common.session_id.as_deref(), Some("s1"));
-    }
-
-    #[test]
-    fn unknown_permission_mode_maps_to_unknown() {
-        let p = parse_session_start(&json!({"permission_mode": "someNewMode"}));
-        assert_eq!(p.common.permission_mode, Some(PermissionMode::Unknown));
     }
 
     #[test]

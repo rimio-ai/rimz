@@ -17,8 +17,8 @@ use crate::agent_activity::AgentActivity;
 use crate::agents::lifecycle::{self, LifecycleState, Transition};
 use crate::agents::{AgentAccount, AgentContext, RateLimitWindow, SpendTally};
 use crate::feed::{
-    AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, PaneRef, PermissionPosture,
-    ResolverStepState, RuntimeOwner, RuntimeOwnerKind, Surface,
+    AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, PaneRef, ResolverStepState,
+    RuntimeOwner, RuntimeOwnerKind, Surface,
 };
 use crate::ids::{PaneId, RequestId, ResolverId, WorkspaceId};
 use crate::ledger::agent_context::AgentContextRecord;
@@ -288,10 +288,12 @@ pub struct SidebarRow {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<AgentStatus>,
-    /// Permission posture pill (`plan`/`auto`/`yolo`; `default` and `unknown`
-    /// omit). The single sticky slider reading: with `status == Running` a `plan`
-    /// posture paints the "thinking" state instead of the working spinner.
-    pub permission_posture: Option<PermissionPosture>,
+    /// The running turn is still in its pre-edit reasoning phase: the renderer
+    /// paints the thinking sparkle instead of the working spinner. A transient
+    /// head like `compacting`, never a status bucket of its own. Always `false`
+    /// for process rows and outside `Running`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub thinking: bool,
     pub pane: Option<PaneRef>,
     pub request_id: Option<RequestId>,
     pub surface: Option<Surface>,
@@ -307,6 +309,12 @@ pub struct SidebarRow {
     /// usage only upgrades the meter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_pct: Option<u8>,
+    /// The model's context window in tokens, the identity line's `258k`/`1M`
+    /// token. Hook-derived fallback; the renderer prefers the fresher
+    /// `context.tokens.context_window_size` when an out-of-band source reports
+    /// it. `None` for process rows and before any source has named it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -349,9 +357,7 @@ pub struct SidebarRow {
     /// The agent is condensing its context window right now (Claude `PreCompact`,
     /// Codex `SessionStart:compact`). A short-lived transient the renderer paints
     /// as a pulsing head over the base status; never a status bucket of its own.
-    /// Counted as **working** (`⢿`) in the cockpit tally regardless of plan
-    /// posture — compaction is active context work, not planning. Always `false`
-    /// for process rows.
+    /// Always `false` for process rows.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compacting: bool,
     /// The agent parked its last turn on still-in-flight background work
@@ -1495,7 +1501,7 @@ fn idle_agent_row(pane: &PaneRef, kind: &str) -> SidebarRow {
         id: pane.pane_id.to_string(),
         name: kind.to_owned(),
         status: Some(AgentStatus::Idle),
-        permission_posture: None,
+        thinking: false,
         pane: Some(pane.clone()),
         request_id: None,
         surface: None,
@@ -1506,6 +1512,7 @@ fn idle_agent_row(pane: &PaneRef, kind: &str) -> SidebarRow {
         // Agent rows draw the started-session gauge at `Some(0)` (see the
         // `SidebarRow.context_pct` doc) — matching a freshly-bound session.
         context_pct: Some(0),
+        context_window: None,
         total_tokens: None,
         todo_done: None,
         todo_total: None,
@@ -1960,7 +1967,7 @@ fn row_from_agent(agent: &AgentState) -> SidebarRow {
         id: agent.agent_id.clone(),
         name: agent.kind.clone(),
         status: Some(agent.status),
-        permission_posture: Some(agent.permission_posture),
+        thinking: agent.thinking,
         pane: agent.pane.clone(),
         request_id: None,
         surface: None,
@@ -1969,6 +1976,7 @@ fn row_from_agent(agent: &AgentState) -> SidebarRow {
         model: agent.model.clone(),
         effort: agent.effort.clone(),
         context_pct: Some(agent.context_pct.unwrap_or(0)),
+        context_window: agent.context_window,
         total_tokens: agent.total_tokens,
         todo_done: agent.todo_done,
         todo_total: agent.todo_total,
@@ -2026,7 +2034,7 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
         id: pane.pane_id.to_string(),
         name,
         status: None,
-        permission_posture: None,
+        thinking: false,
         pane: Some(pane.clone()),
         request_id: None,
         surface: None,
@@ -2035,6 +2043,7 @@ fn row_from_process(pane: &PaneRef) -> SidebarRow {
         model: None,
         effort: None,
         context_pct: None,
+        context_window: None,
         total_tokens: None,
         todo_done: None,
         todo_total: None,
@@ -2179,7 +2188,8 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         id,
         name: item.source.clone(),
         status: Some(AgentStatus::Waiting),
-        permission_posture: matched.map(|agent| agent.permission_posture),
+        // A waiting row is blocked on the human, not reasoning — no thinking head.
+        thinking: false,
         pane: item
             .pane
             .clone()
@@ -2195,6 +2205,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         } else {
             None
         },
+        context_window: matched.and_then(|agent| agent.context_window),
         total_tokens: matched.and_then(|agent| agent.total_tokens),
         todo_done: matched.and_then(|agent| agent.todo_done),
         todo_total: matched.and_then(|agent| agent.todo_total),
@@ -2649,10 +2660,10 @@ fn canonical_model(model: &str) -> String {
 /// are walked in log order, so the newest observation wins.
 ///
 /// Each event is a *partial* update: `status` always comes from the event,
-/// but the stable capability/identity fields (`permission_posture`, `model`,
-/// `effort`, worktree, pane) carry forward from the prior state when the event
-/// omits them. A `UserPromptSubmit` therefore moves the agent to running
-/// without erasing its model line or demoting a `yolo` posture.
+/// but the stable capability/identity fields (`model`, `effort`,
+/// `context_window`, worktree, pane) carry forward from the prior state when
+/// the event omits them. A `UserPromptSubmit` therefore moves the agent to
+/// running without erasing its model line.
 fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
     let mut map: BTreeMap<(String, String), AgentState> = BTreeMap::new();
     for event in events {
@@ -2676,39 +2687,19 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
         let prior = map.get(&(kind.clone(), agent_id.clone()));
         // The agent-agnostic lifecycle intent this event carries (a current
         // `signal`, or one reconstructed from a legacy `status`/`compacting`
-        // pair). The status, posture, and compacting head are all derived from
-        // it through the one shared `lifecycle::step` table — never taken
+        // pair). The status and the thinking/compacting heads are all derived
+        // from it through the one shared `lifecycle::step` table — never taken
         // verbatim — so an illegal jump can't slip through unvalidated. Replay is
         // silent here; the ingestion path logs anomalies once per fresh event.
         let signal = lifecycle::signal_from_event_params(&event.params, event_name.unwrap_or(""));
-        // The posture sample this event reported, if any. Back-compat: an event
-        // an older binary wrote encoded plan as a separate `plan_mode: true` flag
-        // riding a `default` posture, so fold that legacy pair back into a `Plan`
-        // sample; new events carry `plan` in the posture directly. A `None`
-        // sample makes `step` carry the prior posture forward.
-        let parsed_posture = event
-            .params
-            .get("permission_posture")
-            .and_then(|v| PermissionPosture::deserialize(v).ok());
-        let legacy_plan = event
-            .params
-            .get("plan_mode")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let posture_sample =
-            if legacy_plan && matches!(parsed_posture, None | Some(PermissionPosture::Default)) {
-                Some(PermissionPosture::Plan)
-            } else {
-                parsed_posture
-            };
         let prev_state = prior.map(|p| LifecycleState {
             status: p.status,
-            posture: p.permission_posture,
+            thinking: p.thinking,
             compacting: p.compacting_since.is_some(),
         });
-        let Transition { next, .. } = lifecycle::step(prev_state.as_ref(), &signal, posture_sample);
+        let Transition { next, .. } = lifecycle::step(prev_state.as_ref(), &signal);
         let status = next.status;
-        let permission_posture = next.posture;
+        let thinking = next.thinking;
         // Compaction stamps the moment it began and preserves it across the
         // multi-event head; any other signal clears the marker. A crashed
         // mid-compact can't stick — the projection also expires it past
@@ -2732,6 +2723,8 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
         let context_pct = param_number("context_pct")
             .map(|v| v.min(100) as u8)
             .or_else(|| prior.and_then(|p| p.context_pct));
+        let context_window =
+            param_number("context_window").or_else(|| prior.and_then(|p| p.context_window));
         let total_tokens =
             param_number("total_tokens").or_else(|| prior.and_then(|p| p.total_tokens));
         let todo_done = param_number("todo_done")
@@ -2840,7 +2833,7 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             agent_id: agent_id.clone(),
             kind: kind.clone(),
             status,
-            permission_posture,
+            thinking,
             pane,
             agent_pid,
             agent_process_start,
@@ -2853,6 +2846,7 @@ fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
             model,
             effort,
             context_pct,
+            context_window,
             total_tokens,
             todo_done,
             todo_total,
@@ -3008,13 +3002,7 @@ mod tests {
     use crate::ids::{MuxName, PaneId, WorkspaceId};
     use std::path::{Path, PathBuf};
 
-    fn agent(
-        kind: &str,
-        id: &str,
-        status: AgentStatus,
-        posture: PermissionPosture,
-        last_seen: i64,
-    ) -> AgentState {
+    fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -> AgentState {
         // The `last_seen` arg is a recency rank, not an absolute epoch: anchor it
         // to recent wall-clock (larger rank = more recent, all within ~100s of
         // now) so a `running` test agent is never falsely flagged stalled by the
@@ -3026,7 +3014,7 @@ mod tests {
             agent_id: id.into(),
             kind: kind.into(),
             status,
-            permission_posture: posture,
+            thinking: false,
             pane: None,
             agent_pid: None,
             agent_process_start: None,
@@ -3039,6 +3027,7 @@ mod tests {
             model: None,
             effort: None,
             context_pct: None,
+            context_window: None,
             total_tokens: None,
             todo_done: None,
             todo_total: None,
@@ -3077,7 +3066,7 @@ mod tests {
     }
 
     fn agent_in(id: &str, path: &str, status: AgentStatus, rank: i64) -> AgentState {
-        let mut agent = agent("claude", id, status, PermissionPosture::Default, rank);
+        let mut agent = agent("claude", id, status, rank);
         agent.worktree_path = Some(path.to_owned());
         agent
     }
@@ -3214,15 +3203,10 @@ mod tests {
     }
 
     #[test]
-    fn activity_heartbeat_updates_last_activity_not_posture() {
+    fn activity_heartbeat_updates_last_activity_not_thinking() {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let agent = agent(
-            "claude",
-            "sess-1",
-            AgentStatus::Running,
-            PermissionPosture::Plan,
-            50_000,
-        );
+        let mut agent = agent("claude", "sess-1", AgentStatus::Running, 50_000);
+        agent.thinking = true;
         let original_seen = agent.last_seen;
         let at = original_seen + std::time::Duration::from_secs(10);
         let touch = AgentActivity {
@@ -3233,7 +3217,9 @@ mod tests {
         let snap = SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![agent])
             .with_agent_activity(&[touch]);
 
-        assert_eq!(snap.agents[0].permission_posture, PermissionPosture::Plan);
+        // The heartbeat is latency, not a lifecycle signal — it advances
+        // `last_activity` only, never the turn-phase head.
+        assert!(snap.agents[0].thinking);
         assert_eq!(snap.agents[0].last_activity, at);
         assert_eq!(snap.agents[0].last_seen, original_seen);
     }
@@ -3241,20 +3227,8 @@ mod tests {
     #[test]
     fn provider_panel_spending_is_attached_and_ranks_panels() {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let claude = agent(
-            "claude",
-            "c1",
-            AgentStatus::Idle,
-            PermissionPosture::Default,
-            10,
-        );
-        let codex = agent(
-            "codex",
-            "x1",
-            AgentStatus::Idle,
-            PermissionPosture::Default,
-            20,
-        );
+        let claude = agent("claude", "c1", AgentStatus::Idle, 10);
+        let codex = agent("codex", "x1", AgentStatus::Idle, 20);
         let snapshot =
             SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![claude, codex]);
 
@@ -3325,7 +3299,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_posture_changes_only_on_lifecycle_sample() {
+    fn thinking_phase_follows_the_turn_through_the_reducer() {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let lifecycle = |params: serde_json::Value| {
             EventEnvelope::new(
@@ -3337,6 +3311,8 @@ mod tests {
                 params,
             )
         };
+        // A legacy `permission_posture` param rides along unread — replay of an
+        // old log never errors on it.
         let start = lifecycle(serde_json::json!({
             "event_name": "SessionStart",
             "agent_id": "sess-1",
@@ -3347,39 +3323,48 @@ mod tests {
             "event_name": "UserPromptSubmit",
             "agent_id": "sess-1",
             "status": "running",
-            "permission_posture": serde_json::Value::Null,
         }));
-        let running = reduce_agent_states(&[start.clone(), prompt]);
-        assert_eq!(running[0].permission_posture, PermissionPosture::Plan);
+        let running = reduce_agent_states(&[start.clone(), prompt.clone()]);
+        assert_eq!(running[0].status, AgentStatus::Running);
+        assert!(running[0].thinking, "a fresh turn opens thinking");
 
+        // A mutating-but-not-editing tool (a shell command) keeps the head.
+        let shell = lifecycle(serde_json::json!({
+            "event_name": "PostToolUse",
+            "agent_id": "sess-1",
+            "signal": { "signal": "tool_used", "mutates": true, "edits": false },
+        }));
+        let still = reduce_agent_states(&[start.clone(), prompt.clone(), shell.clone()]);
+        assert!(still[0].thinking, "a shell command is not a file edit");
+
+        // The turn's first file edit flips it to working.
+        let edit = lifecycle(serde_json::json!({
+            "event_name": "PostToolUse",
+            "agent_id": "sess-1",
+            "signal": { "signal": "tool_used", "mutates": true, "edits": true },
+        }));
+        let working = reduce_agent_states(&[start.clone(), prompt.clone(), shell, edit]);
+        assert_eq!(working[0].status, AgentStatus::Running);
+        assert!(!working[0].thinking);
+
+        // The turn end clears the head regardless.
         let stop = lifecycle(serde_json::json!({
             "event_name": "Stop",
             "agent_id": "sess-1",
             "status": "success",
-            "permission_posture": "default",
         }));
-        let stopped = reduce_agent_states(&[start, stop]);
-        assert_eq!(stopped[0].permission_posture, PermissionPosture::Default);
+        let stopped = reduce_agent_states(&[start, prompt, stop]);
+        assert_eq!(stopped[0].status, AgentStatus::Success);
+        assert!(!stopped[0].thinking);
     }
 
     #[test]
-    fn subagent_activity_does_not_change_parent_posture() {
+    fn subagent_activity_does_not_change_parent_thinking() {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let last_seen = Timestamp::now() - std::time::Duration::from_secs(50);
-        let parent = agent(
-            "claude",
-            "sess-1",
-            AgentStatus::Running,
-            PermissionPosture::Plan,
-            50_000,
-        );
-        let subagent = agent(
-            "claude",
-            "sess-1.sub",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            50_000,
-        );
+        let mut parent = agent("claude", "sess-1", AgentStatus::Running, 50_000);
+        parent.thinking = true;
+        let subagent = agent("claude", "sess-1.sub", AgentStatus::Running, 50_000);
 
         let subagent_touch = AgentActivity {
             kind: "claude".to_owned(),
@@ -3389,16 +3374,15 @@ mod tests {
         let snap =
             SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![parent, subagent])
                 .with_agent_activity(&[subagent_touch]);
-        let parent_posture = snap
+        let parent_thinking = snap
             .agents
             .iter()
             .find(|a| a.agent_id == "sess-1")
             .unwrap()
-            .permission_posture;
-        assert_eq!(
-            parent_posture,
-            PermissionPosture::Plan,
-            "a subagent heartbeat must not clobber the parent's plan posture"
+            .thinking;
+        assert!(
+            parent_thinking,
+            "a subagent heartbeat must not clobber the parent's turn phase"
         );
     }
 
@@ -3450,13 +3434,7 @@ mod tests {
         // the no-panes rollup emitted one row each. Read-time dedup collapses
         // them to a single row keyed by `(source, agent_id)`.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut session = agent(
-            "claude",
-            "sess-1",
-            AgentStatus::Idle,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut session = agent("claude", "sess-1", AgentStatus::Idle, 1_000);
         session.worktree_path = Some("/repo/main".to_owned());
 
         let mk = |kind: FeedKind| {
@@ -3496,22 +3474,10 @@ mod tests {
         // into a single mislabeled section. Keying on branch splits them into
         // two correctly-labeled groups.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut feature = agent(
-            "claude",
-            "sess-a",
-            AgentStatus::Idle,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut feature = agent("claude", "sess-a", AgentStatus::Idle, 1_000);
         feature.worktree_path = Some("/repo/shared".to_owned());
         feature.worktree_branch = Some("feature".to_owned());
-        let mut main = agent(
-            "claude",
-            "sess-b",
-            AgentStatus::Idle,
-            PermissionPosture::Default,
-            1_100,
-        );
+        let mut main = agent("claude", "sess-b", AgentStatus::Idle, 1_100);
         main.worktree_path = Some("/repo/shared".to_owned());
         main.worktree_branch = Some("main".to_owned());
 
@@ -3542,13 +3508,7 @@ mod tests {
         // The common case must not fragment: a process/shell row carries no
         // branch, so it stays with the single-branch agent in its worktree.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut claude = agent(
-            "claude",
-            "sess-a",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut claude = agent("claude", "sess-a", AgentStatus::Running, 1_000);
         claude.worktree_path = Some("/repo/main".to_owned());
         claude.worktree_branch = Some("main".to_owned());
         claude.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
@@ -3626,21 +3586,9 @@ mod tests {
 
     #[test]
     fn merge_carryover_prefers_newer_observation() {
-        let mut older = agent(
-            "claude",
-            "agent-1",
-            AgentStatus::Idle,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut older = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
         older.worktree_branch = Some("main".into());
-        let mut newer = agent(
-            "claude",
-            "agent-1",
-            AgentStatus::Running,
-            PermissionPosture::Auto,
-            2_000,
-        );
+        let mut newer = agent("claude", "agent-1", AgentStatus::Running, 2_000);
         newer.worktree_branch = Some("feature".into());
         let merged =
             merge_agent_rollups(std::slice::from_ref(&older), std::slice::from_ref(&newer));
@@ -3651,20 +3599,8 @@ mod tests {
 
     #[test]
     fn merge_carryover_preserves_orphaned_entries() {
-        let only_in_carryover = agent(
-            "claude",
-            "agent-1",
-            AgentStatus::Idle,
-            PermissionPosture::Default,
-            1_000,
-        );
-        let only_live = agent(
-            "codex",
-            "agent-2",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            2_000,
-        );
+        let only_in_carryover = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
+        let only_live = agent("codex", "agent-2", AgentStatus::Running, 2_000);
         let merged = merge_agent_rollups(
             std::slice::from_ref(&only_in_carryover),
             std::slice::from_ref(&only_live),
@@ -3675,13 +3611,7 @@ mod tests {
     #[test]
     fn carryover_session_end_tombstones_older_agent_state() {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let carried = agent(
-            "claude",
-            "agent-1",
-            AgentStatus::Idle,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let carried = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
         let ended = EventEnvelope::new(
             workspace,
             "session",
@@ -3715,13 +3645,7 @@ mod tests {
 
         let carryover = EventCarryover {
             agents: vec![{
-                let mut agent = agent(
-                    "claude",
-                    "agent-1",
-                    AgentStatus::Success,
-                    PermissionPosture::Default,
-                    3_000,
-                );
+                let mut agent = agent("claude", "agent-1", AgentStatus::Success, 3_000);
                 agent.worktree_branch = Some("main".into());
                 agent
             }],
@@ -3854,22 +3778,21 @@ mod tests {
                 params,
             )
         };
-        // SessionStart establishes the capability line and a yolo posture pill.
+        // SessionStart establishes the capability line.
         let start = lifecycle(serde_json::json!({
             "event_name": "SessionStart",
             "agent_id": "sess-1",
             "status": "idle",
-            "permission_posture": "yolo",
             "model": "GPT-5.5",
             "effort": "high",
+            "context_window": 258_400,
             "worktree_branch": "main",
         }));
-        // A prompt-submit moves the agent to running but reports no posture/model.
+        // A prompt-submit moves the agent to running but reports no model.
         let prompt = lifecycle(serde_json::json!({
             "event_name": "UserPromptSubmit",
             "agent_id": "sess-1",
             "status": "running",
-            "permission_posture": serde_json::Value::Null,
             "task": "fix auth flow",
             "worktree_path": "/tmp/hook-subprocess-cwd",
             "worktree_branch": "wrong-branch",
@@ -3880,10 +3803,10 @@ mod tests {
         let agent = &agents[0];
         assert_eq!(agent.status, AgentStatus::Running);
         assert_eq!(agent.task.as_deref(), Some("fix auth flow"));
-        // Capability and the security-relevant yolo posture survive the prompt.
-        assert_eq!(agent.permission_posture, PermissionPosture::Yolo);
+        // Capability survives the prompt.
         assert_eq!(agent.model.as_deref(), Some("GPT-5.5"));
         assert_eq!(agent.effort.as_deref(), Some("high"));
+        assert_eq!(agent.context_window, Some(258_400));
         assert_eq!(agent.worktree_branch.as_deref(), Some("main"));
     }
 
@@ -3940,7 +3863,7 @@ mod tests {
     /// A paneless child `AgentState` of `parent`, stamped `secs_ago` before now.
     fn child_state(parent: &str, id: &str, status: AgentStatus, secs_ago: i64) -> AgentState {
         let now = Timestamp::now();
-        let mut child = agent("claude", id, status, PermissionPosture::Default, 0);
+        let mut child = agent("claude", id, status, 0);
         child.parent_agent_id = Some(parent.to_owned());
         child.task = Some("Explore".to_owned());
         let at = Timestamp::from_second(now.as_second() - secs_ago).unwrap();
@@ -4158,13 +4081,7 @@ mod tests {
 
     #[test]
     fn sub_agent_nests_under_parent_and_never_top_level() {
-        let parent = agent(
-            "claude",
-            "sess-root",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            100,
-        );
+        let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
         let child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
         // Only the parent built a row; the paneless child attaches onto it.
         let mut rows = vec![row_from_agent(&parent)];
@@ -4187,13 +4104,7 @@ mod tests {
     fn with_subagent_context_folds_onto_child_by_key() {
         use crate::agents::context::SubagentContext;
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let parent = agent(
-            "claude",
-            "sess-root",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            100,
-        );
+        let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
         let child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
         let started = Timestamp::from_second(1_700_000_000).unwrap();
         let snapshot =
@@ -4244,13 +4155,7 @@ mod tests {
     fn with_subagent_context_back_fills_task_from_agent_type() {
         use crate::agents::context::SubagentContext;
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let parent = agent(
-            "claude",
-            "sess-root",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            100,
-        );
+        let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
         // A fork child: parent_agent_id set, task None (no agent_type in SubagentStart).
         let mut fork = child_state("sess-root", "fork-1", AgentStatus::Running, 5);
         fork.task = None;
@@ -4289,13 +4194,7 @@ mod tests {
     fn with_subagent_context_does_not_overwrite_existing_task() {
         use crate::agents::context::SubagentContext;
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let parent = agent(
-            "claude",
-            "sess-root",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            100,
-        );
+        let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
         // Typed child: task already set by SubagentStart.
         let mut typed = child_state("sess-root", "child-1", AgentStatus::Running, 5);
         typed.task = Some("review".to_owned());
@@ -4359,13 +4258,7 @@ mod tests {
     #[test]
     fn finished_sub_agent_drops_once_parent_starts_next_turn() {
         let now = Timestamp::now();
-        let mut parent = agent(
-            "claude",
-            "sess-root",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            100,
-        );
+        let mut parent = agent("claude", "sess-root", AgentStatus::Running, 100);
         // The current turn began AFTER the child finished — a past-turn child.
         parent.turn_started_at = Some(Timestamp::from_second(now.as_second() - 30).unwrap());
         let child = child_state("sess-root", "child-1", AgentStatus::Idle, 60);
@@ -4377,13 +4270,7 @@ mod tests {
     #[test]
     fn running_sub_agent_of_current_turn_is_kept() {
         let now = Timestamp::now();
-        let mut parent = agent(
-            "claude",
-            "sess-root",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            100,
-        );
+        let mut parent = agent("claude", "sess-root", AgentStatus::Running, 100);
         // The turn began BEFORE the child's activity — live work of this turn.
         parent.turn_started_at = Some(Timestamp::from_second(now.as_second() - 90).unwrap());
         let child = child_state("sess-root", "child-1", AgentStatus::Running, 30);
@@ -4399,13 +4286,7 @@ mod tests {
     #[test]
     fn superseded_running_sub_agent_is_reaped_as_ghost() {
         let now = Timestamp::now();
-        let mut parent = agent(
-            "claude",
-            "sess-root",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            100,
-        );
+        let mut parent = agent("claude", "sess-root", AgentStatus::Running, 100);
         // The parent moved to a newer turn than the child's last activity: the
         // child never sent `SubagentStop` and is a leftover ghost — reaped so it
         // can't freeze the parent's delegated-wait head.
@@ -4422,13 +4303,7 @@ mod tests {
     #[test]
     fn finished_sub_agent_of_current_turn_is_kept() {
         let now = Timestamp::now();
-        let mut parent = agent(
-            "claude",
-            "sess-root",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            100,
-        );
+        let mut parent = agent("claude", "sess-root", AgentStatus::Running, 100);
         // The turn began BEFORE the child finished — same-turn, so it stays.
         parent.turn_started_at = Some(Timestamp::from_second(now.as_second() - 90).unwrap());
         let child = child_state("sess-root", "child-1", AgentStatus::Idle, 30);
@@ -4439,13 +4314,7 @@ mod tests {
 
     #[test]
     fn sub_agents_sort_running_before_finished() {
-        let parent = agent(
-            "claude",
-            "sess-root",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            100,
-        );
+        let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
         // The idle child is more recent, the running child older — running leads.
         let idle = child_state("sess-root", "c-idle", AgentStatus::Idle, 2);
         let running = child_state("sess-root", "c-run", AgentStatus::Running, 30);
@@ -4463,13 +4332,7 @@ mod tests {
     fn duplicate_children_collapse_to_one_row() {
         // Two reduced states aliasing the same child id must render as one row,
         // so `subagents (N)` never double-counts. Freshest activity wins.
-        let parent = agent(
-            "claude",
-            "sess-root",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            100,
-        );
+        let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
         let stale = child_state("sess-root", "child-dup", AgentStatus::Running, 50);
         let fresh = child_state("sess-root", "child-dup", AgentStatus::Running, 5);
         let mut rows = vec![row_from_agent(&parent)];
@@ -4487,13 +4350,7 @@ mod tests {
         // A child with no type label must not borrow the provider kind, which
         // would render as a phantom `claude` row. This is the "3 Explore + 3
         // claude" regression.
-        let parent = agent(
-            "claude",
-            "sess-root",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            100,
-        );
+        let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
         let mut child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
         child.task = None;
         let mut rows = vec![row_from_agent(&parent)];
@@ -4508,13 +4365,7 @@ mod tests {
         // The parent never took a fresh turn (`turn_started_at` stays None), so
         // only the TTL backstop can clear a long-finished child — without it the
         // ghost would linger forever.
-        let parent = agent(
-            "claude",
-            "sess-root",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            100,
-        );
+        let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
         assert!(parent.turn_started_at.is_none());
         let child = child_state(
             "sess-root",
@@ -4533,13 +4384,7 @@ mod tests {
     #[test]
     fn reaper_never_drops_a_subagent() {
         let now = Timestamp::now();
-        let parent = agent(
-            "claude",
-            "sess-root",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            0,
-        );
+        let parent = agent("claude", "sess-root", AgentStatus::Running, 0);
         // A pidless idle child well past the ghost TTL, plus a same-type sibling
         // that would "supersede" it under the root rule — both survive, because
         // children are exempt and leave only when the parent does.
@@ -4577,7 +4422,6 @@ mod tests {
             "event_name": "SessionStart",
             "agent_id": "sess-1",
             "status": "idle",
-            "permission_posture": "default",
             "context_pct": 38,
             "total_tokens": 12_400,
             "todo_done": 3,
@@ -4789,13 +4633,7 @@ mod tests {
     #[test]
     fn live_panes_overlay_matching_agent_rows() {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut codex = agent(
-            "codex",
-            "sess-1",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut codex = agent("codex", "sess-1", AgentStatus::Running, 1_000);
         codex.worktree_path = Some("/repo/main".to_owned());
         codex.worktree_branch = Some("main".to_owned());
         codex.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
@@ -4813,13 +4651,7 @@ mod tests {
     #[test]
     fn live_panes_do_not_render_unmatched_ledger_agents() {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut codex = agent(
-            "codex",
-            "sess-1",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut codex = agent("codex", "sess-1", AgentStatus::Running, 1_000);
         codex.worktree_path = Some("/repo/main".to_owned());
 
         let snapshot =
@@ -4896,13 +4728,7 @@ mod tests {
         item.payload = serde_json::json!({ "session_id": "live-claude" });
         // The ask's session is live in the rollup, so it binds to that
         // session's pane and renders as attention.
-        let mut session = agent(
-            "claude",
-            "live-claude",
-            AgentStatus::Idle,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut session = agent("claude", "live-claude", AgentStatus::Idle, 1_000);
         session.worktree_path = Some("/repo/main".to_owned());
         session.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
 
@@ -4936,22 +4762,10 @@ mod tests {
         item.worktree_path = Some("/repo/main".to_owned());
         item.payload = serde_json::json!({ "session_id": "parent-claude" });
 
-        let mut parent = agent(
-            "claude",
-            "parent-claude",
-            AgentStatus::Running,
-            PermissionPosture::Plan,
-            1_000,
-        );
+        let mut parent = agent("claude", "parent-claude", AgentStatus::Running, 1_000);
         parent.worktree_path = Some("/repo/main".to_owned());
         parent.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
-        let mut child = agent(
-            "claude",
-            "child-claude",
-            AgentStatus::Idle,
-            PermissionPosture::Plan,
-            2_000,
-        );
+        let mut child = agent("claude", "child-claude", AgentStatus::Idle, 2_000);
         child.parent_agent_id = Some("parent-claude".to_owned());
         child.worktree_path = Some("/repo/main".to_owned());
         child.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
@@ -4996,13 +4810,7 @@ mod tests {
 
         // The agent recorded progress at t=2000 — after the ask — so it has
         // un-blocked and moved on.
-        let mut session = agent(
-            "claude",
-            "live-claude",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            2_000,
-        );
+        let mut session = agent("claude", "live-claude", AgentStatus::Running, 2_000);
         session.worktree_path = Some("/repo/main".to_owned());
         session.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
 
@@ -5038,13 +4846,7 @@ mod tests {
         // Ask raised long ago; the agent recorded progress since (recent
         // `last_activity` via the `agent` helper), so it has moved past it.
         item.updated_at = Timestamp::from_second(1_000).unwrap();
-        let mut session = agent(
-            "claude",
-            "live-claude",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            2_000,
-        );
+        let mut session = agent("claude", "live-claude", AgentStatus::Running, 2_000);
         session.worktree_path = Some("/repo/main".to_owned());
 
         // No `with_live_panes`: the snapshot stays on the ledger-rollup path.
@@ -5066,13 +4868,7 @@ mod tests {
         // `last_activity`, `is_stalled` goes false, and the row drops back out
         // of attention with no human action.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut session = agent(
-            "claude",
-            "live-claude",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            0,
-        );
+        let mut session = agent("claude", "live-claude", AgentStatus::Running, 0);
         session.worktree_path = Some("/repo/main".to_owned());
         session.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
         // Silent past the stall window.
@@ -5104,13 +4900,7 @@ mod tests {
         // likely wedged; the displayed row escalates to the attention bucket
         // (`!`) and the rollup keeps the true `running` status.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut session = agent(
-            "claude",
-            "live-claude",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            0,
-        );
+        let mut session = agent("claude", "live-claude", AgentStatus::Running, 0);
         session.worktree_path = Some("/repo/main".to_owned());
         session.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
         session.last_activity = Timestamp::now()
@@ -5174,30 +4964,12 @@ mod tests {
         // case). A working session is left alone; its turn finishes before it can
         // park.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut reporter = agent(
-            "claude",
-            "sess-spent",
-            AgentStatus::Success,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut reporter = agent("claude", "sess-spent", AgentStatus::Success, 1_000);
         reporter.worktree_path = Some("/repo/main".to_owned());
         reporter.context = Some(ctx_with_limits(vec![window(100, 3_600)]));
-        let mut fresh = agent(
-            "claude",
-            "sess-fresh",
-            AgentStatus::Idle,
-            PermissionPosture::Default,
-            1_100,
-        );
+        let mut fresh = agent("claude", "sess-fresh", AgentStatus::Idle, 1_100);
         fresh.worktree_path = Some("/repo/main".to_owned());
-        let mut working = agent(
-            "claude",
-            "sess-busy",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            1_200,
-        );
+        let mut working = agent("claude", "sess-busy", AgentStatus::Running, 1_200);
         working.worktree_path = Some("/repo/main".to_owned());
 
         let snapshot = SidebarSnapshot::build_with_agents(
@@ -5242,13 +5014,7 @@ mod tests {
         // A spent reading whose reset has passed is stale, not limiting — the
         // budget has refilled, so a resting agent reads idle, not parked.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut idle = agent(
-            "claude",
-            "sess-1",
-            AgentStatus::Idle,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut idle = agent("claude", "sess-1", AgentStatus::Idle, 1_000);
         idle.worktree_path = Some("/repo/main".to_owned());
         idle.context = Some(ctx_with_limits(vec![window(100, -60)]));
 
@@ -5267,13 +5033,7 @@ mod tests {
         // delegated-wait exemption keeps it `running` while a child runs; the
         // renderer paints the waiting-on-subagents head from `sub_agents`.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut parent = agent(
-            "claude",
-            "root",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut parent = agent("claude", "root", AgentStatus::Running, 1_000);
         parent.worktree_path = Some("/repo/main".to_owned());
         parent.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
         // Silent past the stall window — its heartbeat is quiet because the work
@@ -5310,22 +5070,10 @@ mod tests {
         // A fresh compaction marker pulses the head; one older than the window
         // has expired (the crash backstop), so the head returns to its base.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut fresh = agent(
-            "claude",
-            "compacting-now",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut fresh = agent("claude", "compacting-now", AgentStatus::Running, 1_000);
         fresh.worktree_path = Some("/repo/main".to_owned());
         fresh.compacting_since = Some(Timestamp::now());
-        let mut stale = agent(
-            "claude",
-            "compacted-long-ago",
-            AgentStatus::Idle,
-            PermissionPosture::Default,
-            1_100,
-        );
+        let mut stale = agent("claude", "compacted-long-ago", AgentStatus::Idle, 1_100);
         stale.worktree_path = Some("/repo/main".to_owned());
         stale.compacting_since = Some(
             Timestamp::now()
@@ -5405,22 +5153,10 @@ mod tests {
         // cwd alone; binding is by the hook-stamped pane id, so each session
         // lands on exactly its own pane instead of cross-wiring the rows.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut older = agent(
-            "claude",
-            "sess-a",
-            AgentStatus::Idle,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut older = agent("claude", "sess-a", AgentStatus::Idle, 1_000);
         older.worktree_path = Some("/repo/main".to_owned());
         older.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
-        let mut newer = agent(
-            "claude",
-            "sess-b",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            2_000,
-        );
+        let mut newer = agent("claude", "sess-b", AgentStatus::Running, 2_000);
         newer.worktree_path = Some("/repo/main".to_owned());
         newer.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%2")));
 
@@ -5456,13 +5192,7 @@ mod tests {
         // command/cwd fallback it would have bound. Stamped-id binding refuses
         // it, so `%1` stays a process row and the agent simply does not render.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut claude = agent(
-            "claude",
-            "sess-1",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut claude = agent("claude", "sess-1", AgentStatus::Running, 1_000);
         claude.worktree_path = Some("/repo/main".to_owned());
         claude.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%2")));
 
@@ -5484,13 +5214,7 @@ mod tests {
         // `max_by_key(last_activity)` bind the pane to the child. Panes bind root
         // agents only: `%1` stays the parent's row and the child nests under it.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut parent = agent(
-            "claude",
-            "sess-root",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut parent = agent("claude", "sess-root", AgentStatus::Running, 1_000);
         parent.worktree_path = Some("/repo/main".to_owned());
         parent.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
         // Newer activity than the parent (5s ago vs ~99s ago) — the flip trigger.
@@ -5528,13 +5252,7 @@ mod tests {
         // one row — agent or process — and no pane id is ever duplicated.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let stamped = |id, raw| {
-            let mut a = agent(
-                "claude",
-                id,
-                AgentStatus::Running,
-                PermissionPosture::Default,
-                1_000,
-            );
+            let mut a = agent("claude", id, AgentStatus::Running, 1_000);
             a.worktree_path = Some("/repo/main".to_owned());
             a.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, raw)));
             a
@@ -5575,13 +5293,7 @@ mod tests {
     }
 
     fn paneless_codex(id: &str, worktree: &str, rank: i64) -> AgentState {
-        let mut codex = agent(
-            "codex",
-            id,
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            rank,
-        );
+        let mut codex = agent("codex", id, AgentStatus::Running, rank);
         // The app-server daemon fires the hook with no mux pane env, so the
         // agent carries its worktree but never stamps a pane.
         codex.worktree_path = Some(worktree.to_owned());
@@ -5673,13 +5385,7 @@ mod tests {
         // Claude agent is genuinely gone (Claude always stamps a live pane), so
         // the fallback must leave a matching `claude` pane a process row.
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut claude = agent(
-            "claude",
-            "sess-1",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut claude = agent("claude", "sess-1", AgentStatus::Running, 1_000);
         claude.worktree_path = Some("/repo/main".to_owned());
         let snapshot =
             SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), vec![claude])
@@ -6056,13 +5762,7 @@ mod tests {
         stale.payload = serde_json::json!({ "session_id": "ended-claude" });
 
         // Only a live codex session remains in the rollup.
-        let mut codex = agent(
-            "codex",
-            "sess-codex",
-            AgentStatus::Idle,
-            PermissionPosture::Yolo,
-            2_000,
-        );
+        let mut codex = agent("codex", "sess-codex", AgentStatus::Idle, 2_000);
         codex.worktree_path = Some("/repo/main".to_owned());
         codex.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
 
@@ -6101,21 +5801,9 @@ mod tests {
         stale.worktree_path = Some("/repo/main".to_owned());
         stale.payload = serde_json::json!({ "session_id": "zombie-claude" });
 
-        let mut zombie = agent(
-            "claude",
-            "zombie-claude",
-            AgentStatus::Idle,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut zombie = agent("claude", "zombie-claude", AgentStatus::Idle, 1_000);
         zombie.worktree_path = Some("/repo/main".to_owned());
-        let mut fresh = agent(
-            "claude",
-            "fresh-claude",
-            AgentStatus::Idle,
-            PermissionPosture::Default,
-            2_000,
-        );
+        let mut fresh = agent("claude", "fresh-claude", AgentStatus::Idle, 2_000);
         fresh.worktree_path = Some("/repo/main".to_owned());
         // Only the fresh session stamped the live pane; the zombie holds none.
         fresh.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
@@ -6158,13 +5846,7 @@ mod tests {
         stale.worktree_path = Some("/repo/main".to_owned());
         stale.payload = serde_json::json!({ "session_id": "stale-claude" });
 
-        let mut claude = agent(
-            "claude",
-            "stale-claude",
-            AgentStatus::Idle,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut claude = agent("claude", "stale-claude", AgentStatus::Idle, 1_000);
         claude.worktree_path = Some("/repo/main".to_owned());
         claude.model = Some("claude-opus-4-7".to_owned());
 
@@ -6189,46 +5871,22 @@ mod tests {
     fn live_claude_pane_binds_despite_pile_of_stale_ledger_ghosts() {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let stale_a = {
-            let mut a = agent(
-                "claude",
-                "stale-a",
-                AgentStatus::Idle,
-                PermissionPosture::Default,
-                1_000,
-            );
+            let mut a = agent("claude", "stale-a", AgentStatus::Idle, 1_000);
             a.worktree_path = Some("/repo/main".to_owned());
             a
         };
         let stale_b = {
-            let mut a = agent(
-                "claude",
-                "stale-b",
-                AgentStatus::Idle,
-                PermissionPosture::Default,
-                1_001,
-            );
+            let mut a = agent("claude", "stale-b", AgentStatus::Idle, 1_001);
             a.worktree_path = Some("/repo/main".to_owned());
             a
         };
         let stale_c = {
-            let mut a = agent(
-                "claude",
-                "stale-c",
-                AgentStatus::Idle,
-                PermissionPosture::Default,
-                1_002,
-            );
+            let mut a = agent("claude", "stale-c", AgentStatus::Idle, 1_002);
             a.worktree_path = Some("/repo/main".to_owned());
             a
         };
         let live = {
-            let mut a = agent(
-                "claude",
-                "live",
-                AgentStatus::Running,
-                PermissionPosture::Auto,
-                i64::from(u32::MAX),
-            );
+            let mut a = agent("claude", "live", AgentStatus::Running, i64::from(u32::MAX));
             a.worktree_path = Some("/repo/main".to_owned());
             a.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
             a
@@ -6249,10 +5907,6 @@ mod tests {
             .collect();
         assert_eq!(agent_rows.len(), 1, "only the live claude renders");
         assert_eq!(agent_rows[0].id, "live");
-        assert_eq!(
-            agent_rows[0].permission_posture,
-            Some(PermissionPosture::Auto)
-        );
     }
 
     #[test]
@@ -6289,20 +5943,13 @@ mod tests {
                     "codex",
                     &format!("sess-{i}"),
                     AgentStatus::Running,
-                    PermissionPosture::Default,
                     1_000 + i,
                 );
                 agent.worktree_path = Some("/repo/main".to_owned());
                 agent
             })
             .collect::<Vec<_>>();
-        let mut failed = agent(
-            "claude",
-            "failed",
-            AgentStatus::Failed,
-            PermissionPosture::Default,
-            2_000,
-        );
+        let mut failed = agent("claude", "failed", AgentStatus::Failed, 2_000);
         failed.worktree_path = Some("/repo/main".to_owned());
         agents.push(failed);
 
@@ -6328,7 +5975,6 @@ mod tests {
                     "codex",
                     &format!("sess-{i}"),
                     AgentStatus::Running,
-                    PermissionPosture::Default,
                     1_000 + i,
                 );
                 agent.worktree_path = Some("/repo/main".to_owned());
@@ -6489,9 +6135,7 @@ mod tests {
             .map(|group| group.label.clone())
             .collect::<Vec<_>>()
         };
-        let external = |id: &str, status: AgentStatus| {
-            agent("claude", id, status, PermissionPosture::Default, 1_000)
-        };
+        let external = |id: &str, status: AgentStatus| agent("claude", id, status, 1_000);
 
         // A calm external sinks below calm project worktrees; an attention
         // worktree leads regardless of its name.
@@ -6521,13 +6165,7 @@ mod tests {
     #[test]
     fn liveness_drops_dead_agent_pid_and_rebuilds_groups() {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut codex = agent(
-            "codex",
-            "sess-1",
-            AgentStatus::Running,
-            PermissionPosture::Default,
-            1_000,
-        );
+        let mut codex = agent("codex", "sess-1", AgentStatus::Running, 1_000);
         codex.agent_pid = Some(424_242);
         codex.agent_process_start = Some("12345".to_owned());
         codex.worktree_branch = Some("main".to_owned());
@@ -6576,38 +6214,16 @@ mod tests {
     fn reap_drops_pidless_session_past_ttl_but_keeps_recent_and_pidful() {
         let now = Timestamp::now();
         let mut stale = aged(
-            agent(
-                "claude",
-                "stale",
-                AgentStatus::Idle,
-                PermissionPosture::Default,
-                0,
-            ),
+            agent("claude", "stale", AgentStatus::Idle, 0),
             now,
             GHOST_SESSION_TTL_SECS + 60,
         );
         stale.worktree_path = Some("/repo/stale".to_owned());
-        let mut recent = aged(
-            agent(
-                "claude",
-                "recent",
-                AgentStatus::Idle,
-                PermissionPosture::Default,
-                0,
-            ),
-            now,
-            60,
-        );
+        let mut recent = aged(agent("claude", "recent", AgentStatus::Idle, 0), now, 60);
         recent.worktree_path = Some("/repo/recent".to_owned());
         // Old but pid-bearing: TTL reaping is for pidless ghosts only.
         let mut pidful = aged(
-            agent(
-                "codex",
-                "pidful",
-                AgentStatus::Idle,
-                PermissionPosture::Default,
-                0,
-            ),
+            agent("codex", "pidful", AgentStatus::Idle, 0),
             now,
             GHOST_SESSION_TTL_SECS * 10,
         );
@@ -6624,30 +6240,10 @@ mod tests {
     #[test]
     fn reap_collapses_superseded_paneless_session_to_the_newest() {
         let now = Timestamp::now();
-        let mut older = aged(
-            agent(
-                "codex",
-                "older",
-                AgentStatus::Idle,
-                PermissionPosture::Default,
-                0,
-            ),
-            now,
-            120,
-        );
+        let mut older = aged(agent("codex", "older", AgentStatus::Idle, 0), now, 120);
         older.worktree_path = Some("/repo/a".to_owned());
         older.worktree_branch = Some("main".to_owned());
-        let mut newer = aged(
-            agent(
-                "codex",
-                "newer",
-                AgentStatus::Idle,
-                PermissionPosture::Default,
-                0,
-            ),
-            now,
-            60,
-        );
+        let mut newer = aged(agent("codex", "newer", AgentStatus::Idle, 0), now, 60);
         newer.worktree_path = Some("/repo/a".to_owned());
         newer.worktree_branch = Some("main".to_owned());
 
@@ -6663,32 +6259,12 @@ mod tests {
         // The one-pane-one-row safety property: two same-branch agents in
         // distinct panes are both live and must both survive supersession.
         let now = Timestamp::now();
-        let mut older = aged(
-            agent(
-                "claude",
-                "older",
-                AgentStatus::Running,
-                PermissionPosture::Default,
-                0,
-            ),
-            now,
-            120,
-        );
+        let mut older = aged(agent("claude", "older", AgentStatus::Running, 0), now, 120);
         older.worktree_path = Some("/repo/a".to_owned());
         older.worktree_branch = Some("main".to_owned());
         older.agent_pid = Some(111);
         older.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, "%1")));
-        let mut newer = aged(
-            agent(
-                "claude",
-                "newer",
-                AgentStatus::Running,
-                PermissionPosture::Default,
-                0,
-            ),
-            now,
-            60,
-        );
+        let mut newer = aged(agent("claude", "newer", AgentStatus::Running, 0), now, 60);
         newer.worktree_path = Some("/repo/a".to_owned());
         newer.worktree_branch = Some("main".to_owned());
         newer.agent_pid = Some(222);

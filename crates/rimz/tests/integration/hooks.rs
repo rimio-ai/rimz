@@ -295,7 +295,6 @@ fn codex_session_start_writes_agent_lifecycle_event() {
     assert_eq!(agents[0]["agent_id"], "sess-codex-01");
     // SessionStart registers the agent idle (wired in, nothing asked yet).
     assert_eq!(agents[0]["status"], "idle");
-    assert_eq!(agents[0]["permission_posture"], "default");
     assert_eq!(agents[0]["worktree_branch"], "feature-x");
 }
 
@@ -384,7 +383,6 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
     );
     assert_eq!(agents[0]["agent_id"], "child-thread-1");
     assert_eq!(agents[0]["status"], "running");
-    assert_eq!(agents[0]["permission_posture"], "auto");
     assert_eq!(agents[0]["task"], "review");
     // The child keys off `agent_id`; the payload's `session_id` is captured as
     // the parent root so the sidebar can nest the child under it.
@@ -480,20 +478,48 @@ fn codex_uninstall_cli_removes_legacy_config_block() {
 }
 
 #[test]
-fn codex_session_start_with_never_policy_observes_yolo_posture() {
+fn codex_turn_opens_thinking_until_the_first_file_edit() {
     let env = Env::new();
-    let payload = serde_json::to_string(&json!({
-        "hook_event_name": "SessionStart",
-        "session_id": "sess-codex-bypass",
-        "approval_policy": "never",
-    }))
-    .expect("payload");
+    let run = |payload: &serde_json::Value| {
+        let payload = serde_json::to_string(payload).expect("payload");
+        let output = env.run_hook("codex", &payload);
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
 
-    let output = env.run_hook("codex", &payload);
-    assert!(output.status.success());
-
+    run(&json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "sess-codex-phase",
+        "prompt": "refactor the parser",
+    }));
     let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["permission_posture"], "yolo");
+    assert_eq!(parsed["agents"][0]["status"], "running");
+    assert_eq!(
+        parsed["agents"][0]["thinking"], true,
+        "a fresh turn opens in its reasoning phase"
+    );
+
+    // A shell command mutates but edits nothing — still thinking.
+    run(&json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "sess-codex-phase",
+        "tool_name": "shell",
+    }));
+    let parsed = env.snapshot_json();
+    assert_eq!(parsed["agents"][0]["thinking"], true);
+
+    // The first file edit flips the turn to working.
+    run(&json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "sess-codex-phase",
+        "tool_name": "apply_patch",
+    }));
+    let parsed = env.snapshot_json();
+    assert_eq!(parsed["agents"][0]["status"], "running");
+    assert_eq!(parsed["agents"][0]["thinking"], false);
 }
 
 // --- Claude PreToolUse blocking events ---
@@ -658,7 +684,6 @@ fn claude_session_start_writes_agent_lifecycle_event() {
     assert_eq!(agents[0]["agent_id"], "sess-claude-01");
     // SessionStart registers the agent idle (wired in, nothing asked yet).
     assert_eq!(agents[0]["status"], "idle");
-    assert_eq!(agents[0]["permission_posture"], "default");
     assert_eq!(agents[0]["worktree_branch"], "feature-x");
 }
 
@@ -695,20 +720,48 @@ fn claude_context_and_tool_lifecycle_hooks_are_silent() {
 }
 
 #[test]
-fn claude_session_start_with_bypass_permissions_observes_yolo_posture() {
+fn claude_turn_opens_thinking_until_the_first_file_edit() {
     let env = Env::new();
-    let payload = serde_json::to_string(&json!({
-        "hook_event_name": "SessionStart",
-        "session_id": "sess-claude-bypass",
-        "permission_mode": "bypassPermissions",
-    }))
-    .expect("payload");
+    let run = |payload: &serde_json::Value| {
+        let payload = serde_json::to_string(payload).expect("payload");
+        let output = env.run_hook("claude", &payload);
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
 
-    let output = env.run_hook("claude", &payload);
-    assert!(output.status.success());
-
+    run(&json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "sess-claude-phase",
+        "prompt": "refactor the parser",
+    }));
     let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["permission_posture"], "yolo");
+    assert_eq!(parsed["agents"][0]["status"], "running");
+    assert_eq!(
+        parsed["agents"][0]["thinking"], true,
+        "a fresh turn opens in its reasoning phase"
+    );
+
+    // Bash mutates but edits nothing — still thinking.
+    run(&json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "sess-claude-phase",
+        "tool_name": "Bash",
+    }));
+    let parsed = env.snapshot_json();
+    assert_eq!(parsed["agents"][0]["thinking"], true);
+
+    // The first file edit flips the turn to working.
+    run(&json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "sess-claude-phase",
+        "tool_name": "Edit",
+    }));
+    let parsed = env.snapshot_json();
+    assert_eq!(parsed["agents"][0]["status"], "running");
+    assert_eq!(parsed["agents"][0]["thinking"], false);
 }
 
 #[test]

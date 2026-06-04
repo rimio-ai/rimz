@@ -1007,7 +1007,7 @@ pub fn unix_now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::feed::{AgentState, AgentStatus, PermissionPosture};
+    use crate::feed::{AgentState, AgentStatus};
     use crate::ids::{MuxName, WorkspaceId};
     use crate::ledger::atomic;
 
@@ -1379,7 +1379,7 @@ mod tests {
             agent_id: agent_id.to_owned(),
             kind: kind.to_owned(),
             status: AgentStatus::Running,
-            permission_posture: PermissionPosture::Default,
+            thinking: false,
             pane: None,
             agent_pid: None,
             agent_process_start: None,
@@ -1392,6 +1392,7 @@ mod tests {
             model: model.map(ToOwned::to_owned),
             effort: None,
             context_pct: None,
+            context_window: None,
             total_tokens: None,
             todo_done: None,
             todo_total: None,

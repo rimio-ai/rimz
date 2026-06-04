@@ -201,9 +201,7 @@ fn heartbeat_protocol_version(path: &Path) -> std::result::Result<String, String
 }
 
 /// Walk the snapshot's agent rollup and print one row per `(kind, agent_id)`
-/// observed by `agent.lifecycle` events. Permission posture reflects the
-/// agent's own most recent observation — the per-agent unattended-runs audit
-/// story from `docs/guide/product.md` is the user-facing context.
+/// observed by `agent.lifecycle` events.
 #[expect(
     clippy::print_stdout,
     reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
@@ -242,12 +240,11 @@ fn report_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) {
         agents.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
         println!("  agent ({kind})  : {} observed", agents.len());
         for agent in agents {
-            let posture = format!("{:?}", agent.permission_posture).to_lowercase();
             let status = format!("{:?}", agent.status).to_lowercase();
             let branch = agent.worktree_branch.as_deref().unwrap_or("-");
             let age = age_short(now, agent.last_seen);
             println!(
-                "    {id:<24} {branch:<20} {status:<8} · {posture:<7} · {age}",
+                "    {id:<24} {branch:<20} {status:<8} · {age}",
                 id = agent.agent_id,
             );
         }

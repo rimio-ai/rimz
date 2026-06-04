@@ -2,7 +2,7 @@
 
 > See [DESIGN.md](../../DESIGN.md) for the commitments this doc operationalizes, [hooks.md](./hooks.md) for the agent boundary — the trait, the channels, install, and the per-provider native mappings — and [transcript.md](./transcript.md) for how context enrichment is read from each provider.
 
-This doc owns how a running agent is *modeled*: the rollup that folds lifecycle observations into one state per agent, the state machine, posture, liveness, and enrichment. The seam — [hooks.md](./hooks.md) *produces* an [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs); this doc folds it into one [`AgentState`](../../crates/rimz/src/feed.rs); [sidebar.md](./sidebar.md) projects that state into a row.
+This doc owns how a running agent is *modeled*: the rollup that folds lifecycle observations into one state per agent, the state machine, the turn phase, liveness, and enrichment. The seam — [hooks.md](./hooks.md) *produces* an [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs); this doc folds it into one [`AgentState`](../../crates/rimz/src/feed.rs); [sidebar.md](./sidebar.md) projects that state into a row.
 
 The observation is agent-agnostic by construction, so everything below is too: a new agent that emits well-formed observations gets the state machine, ranking, liveness, and jump for free.
 
@@ -31,12 +31,14 @@ So the binding test is one question: does a live local pane bind the session? A 
 
 - **identity** — set once when the session registers, stable thereafter (`agent_id`, `kind`, `parent_agent_id`, `agent_pid`).
 - **activity** — replaced by the latest event, and *clearing* it is meaningful — an idle agent has no `task` (`status`, `task`, `last_activity`). A subagent is the one exception: its `task` is its type (`Explore`, …) and carries forward as identity, so a finished child stays labeled when its `SubagentStop` omits the type.
-- **carry-forward** — capability/enrichment that persists until a newer value arrives; a missing value never resets it (`permission_posture`, `model`, `effort`, `context_pct`, `prompt`).
+- **carry-forward** — capability/enrichment that persists until a newer value arrives; a missing value never resets it (`model`, `effort`, `context_pct`, `context_window`, `prompt`).
 - **live-derived** — never stored in the ledger, computed at snapshot time from the live pane or git (`pane`, `worktree_path`, `worktree_branch`). The pane knows its current cwd every tick, so these follow a `git checkout`; pinning them at registration is the branch-tracking bug (see [Liveness and presence](#liveness-and-presence)).
 
 [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs) and [`AgentState`](../../crates/rimz/src/feed.rs) are the field catalog; the lifetimes above are the rule those types do not state.
 
 A compaction hook (`compacting: true`) is a fifth, transient lifetime: it stamps `compacting_since` and keeps the prior status (compaction is a head the sidebar paints, not a transition), and the next lifecycle event clears it. The projection also expires the marker past a short window, so a crash mid-compact can never pulse the head forever.
+
+The **thinking head** is the second transient: a turn (or subagent) start sets `thinking`, the turn's first *file-editing* tool (`ToolUsed { edits: true }`) or any turn boundary clears it, and compaction carries it forward like it carries the status. While `running` with the head set, the sidebar paints the thinking sparkle instead of the working spinner — the turn is reasoning and reading, not yet writing. A shell command is work (it keeps the row live) but writes no file, so it leaves the head in place. No expiry window is needed: a turn that goes silent escalates through the stall projection regardless of its phase.
 
 `model` is stored **canonicalized** — a trailing capability tag is stripped (`claude-opus-4-8[1m]` → `claude-opus-4-8`). The tag rides only the fresh-launch payload; later events carry the bare id, so without canonicalization the `model` carry-forward would flip `…[1m]` → `…` the first time a suffix-less event arrived. Canonicalizing at reduce time pins one stable label while the event log stays faithful to the raw payload.
 
@@ -73,30 +75,30 @@ A `TurnEnded` signal resolves the turn to `success`, or `failed` on its error bi
 
 `waiting` is **not** a lifecycle transition — it is a pending blocking feed item joined to the agent (the feed channel; see [hooks.md → Two hook channels](./hooks.md#two-hook-channels)). The lifecycle channel drives the other four.
 
-**Fail-soft, never silent.** `step` is total: an unexpected `(state, signal)` pair never panics and never freezes. It takes the signal's natural edge — the agent is authoritative about its own activity — and tags the result [`TransitionKind::Reconciled`](../../crates/rimz/src/agents/lifecycle.rs) with the state it overrode and why. The reducer discards the tag (it only wants the next state); the ingestion path ([`cli/hooks.rs`](../../crates/rimz/src/cli/hooks.rs)) logs it once per fresh event under the `rimz::agent::lifecycle` tracing target (`warn!` on a reconciled edge, `debug!` on an ignored no-op, `error!` on a quarantined identity), to stderr — never the hook stdout. So a drift between the model and reality leaves a structured, traceable breadcrumb instead of a wrong-but-quiet row. The headline reconciliation: a **mutating tool observed while the slider still reads `plan`** is impossible (plan mode is read-only), so `step` moves the posture off `plan` and logs it — the structural fix for an agent stuck reading "thinking" while it edits in auto mode.
+**Fail-soft, never silent.** `step` is total: an unexpected `(state, signal)` pair never panics and never freezes. It takes the signal's natural edge — the agent is authoritative about its own activity — and tags the result [`TransitionKind::Reconciled`](../../crates/rimz/src/agents/lifecycle.rs) with the state it overrode and why. The reducer discards the tag (it only wants the next state); the ingestion path ([`cli/hooks.rs`](../../crates/rimz/src/cli/hooks.rs)) logs it once per fresh event under the `rimz::agent::lifecycle` tracing target (`warn!` on a reconciled edge, `debug!` on an ignored no-op, `error!` on a quarantined identity), to stderr — never the hook stdout. So a drift between the model and reality leaves a structured, traceable breadcrumb instead of a wrong-but-quiet row. The headline reconciliation: a **tool observed on a resting row** proves the rollup is stale — the agent is working — so `step` moves it to `running` and logs the edge.
 
 The **displayed** status refines the rollup without changing it — `snapshot.agents` keeps the agent-owned truth; the projection ([sidebar.md](./sidebar.md)) decides what the row shows:
 
-- a `running` agent whose permission slider is `plan` renders as **thinking**;
+- a `running` agent still in its pre-edit turn phase renders as **thinking** (the sparkle; see [Thinking is the turn's opening phase](#thinking-is-the-turns-opening-phase));
 - a `running` agent silent past the stall window escalates to the attention `!` (see [Liveness and presence](#liveness-and-presence)) — *unless* it has a live subagent, in which case it is **waiting on its children** (a quiet wave, exempt from the stall escalation) rather than wedged;
 - a resting (`idle`/`success`) agent on an account whose rate-limit window is spent projects to **`rate_limited`** — a sixth, Rimz-*derived* status ([`is_rate_limited`](../../crates/rimz/src/feed.rs)), never emitted by a hook, that joins the cockpit tally and ranks just under the actionable attention states (account-spread: every resting agent of a spent kind is parked, including one that just launched into it);
 - a `compacting` head pulses over any base status while the agent condenses its context window.
 
 `rate_limited` is the rate-limit analogue of the stall projection: both read enrichment plus liveness to refine the displayed cell, and both leave `snapshot.agents` holding the true lifecycle status.
 
-### Plan mode as a sticky posture
+### Thinking is the turn's opening phase
 
-`plan` is one position of the permission slider, not a separate flag: thinking is `running` joined to `permission_posture == plan`. Rimz samples posture from lifecycle observations only (`posture_from_mode`); an observation that names no slider carries the prior value forward. It never infers plan mode from prompt text or transcript content.
+Thinking is a phase of the running turn, not a status of its own: every `TurnStarted` (and `SubagentStarted`) opens with the thinking head set, and the turn's first **file-editing** tool clears it — `ToolUsed { edits: true }`, the Claude `Edit`/`Write`/`MultiEdit`/`NotebookEdit` and Codex `apply_patch` subset of the mutating set (`tool_edits_files` in [`agents/mod.rs`](../../crates/rimz/src/agents/mod.rs)). The trigger is always a hook event, never prompt or transcript content.
 
-- **Approving a plan** moves the slider off `plan`; the next observation that reports the new posture drops the thinking state.
-- **Shift-tabbing out of `plan`** mid-turn may report no new posture, but the first *mutating* tool that follows proves the agent has left read-only plan mode — `step` reconciles the posture off `plan` and logs it (see [Fail-soft, never silent](#the-state-machine)). This closes the "shows thinking while editing in auto mode" lag without inferring posture from prompt or transcript text; the trigger is a hook event (`PostToolUse` for a mutating tool), not content.
-- **Subagents** own separate `agent_id`s, so a child observation never mutates its parent's posture.
+- **A research turn stays thinking** — searches, reads, and shell commands write no file, so a turn that answers without editing sparkles end to end.
+- **Any turn boundary clears the head** — `TurnEnded` (including a park on background work) and `SubagentStopped` drop it; the next prompt re-arms it.
+- **Subagents** own separate `agent_id`s, so a child observation never mutates its parent's phase.
 
-The agent owns status and posture; Rimz observes and renders. `yolo` is read from the agent's own bypass flag; `interactive` folds into `default`. The vocabulary is defined once in [the interface legend](../interface/sidebar.md#reading-the-glyphs).
+The agent owns its status; Rimz derives the phase from the turn's own events. The vocabulary is defined once in [the interface legend](../interface/sidebar.md#reading-the-glyphs).
 
 ## Enrichment is display-only
 
-`task`, `context_pct`, `total_tokens`, and the todo counts are **enrichment**: display-only, redactable, and they never drive routing, ranking, or a decision (the no-transcript-correctness rule). A missing value means "the agent didn't report it," never zero — the sidebar projects it to a visible 0% baseline so every observed agent paints a context bar.
+`task`, `context_pct`, `context_window`, `total_tokens`, and the todo counts are **enrichment**: display-only, redactable, and they never drive routing, ranking, or a decision (the no-transcript-correctness rule). A missing value means "the agent didn't report it," never zero — the sidebar projects it to a visible 0% baseline so every observed agent paints a context bar. `context_window` is the model's window in tokens (Claude resolves it from the payload model id, where the `[1m]` marker widens it; Codex reads the rollout's `model_context_window`) — the card's identity line renders it (`258k`, `1M`), preferring the fresher out-of-band reading from `AgentContext` when one exists.
 
 Context budget is the one field no agent puts in its hook JSON — usage lives in the transcript, captured from the **transcript tail** on the turn-boundary events Rimz already fires (discovery and the per-provider mapping are [transcript.md](./transcript.md)'s concern). These are bare token counts; `payload_mode` gates the *content* of high-frequency payloads, never these gauges.
 

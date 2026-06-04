@@ -18,10 +18,10 @@ A real room: one Claude agent working in `main`, its card selected, with the per
  ¤ 1                   ◇ 76k ↘ 12k ↗ 64k ◍ 20k ◌ 68k    ← live agents · today's tokens (right)
  ◎ 12                                            $4.20    ← sessions today · today's fleet spend
  ────────────────────────────────────────────────────
- ? 0   ! 0   ○ 0   ⏸ 0                ✽ 0   ⢿ 1   ✓ 0    ← make-up: who needs you | who's busy
+ ? 0   ! 0   ○ 0   ⏸ 0                      ⢿ 1   ✓ 0    ← make-up: who needs you | who's busy
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← the worktree you're in (lane spine ▏)
-▌⣾ claude · Opus 4.8 (1M) · high · auto         $1.27    ← line 1: identity · capability · $cost
+▌⣾ claude · Opus 4.8 · high · 1M                $1.27    ← line 1: identity · capability · $cost
 ▌  ledger refactor                                       ← line 2: what it's on
 ▌  ▣ ━━━━━━━━━━━━━━━━────────────────────────── 38.2%    ← context meter: how full the window is
 ▌  ◇ 4k ↘ 1k ↗ 2k ◍ 6k ◌ 68k                    ◷ 1m    ← per-card tokens · last-activity age (≥1m)
@@ -52,29 +52,27 @@ One vocabulary runs through the whole sidebar: a shape carries the meaning, colo
 | `!`   | attention  | a failed turn, or a working agent gone silent past the stall window | yes — yellow, reddens when ignored |
 | `⏸`   | rate-limited | resting on an account whose rate-limit window is spent — parked until it resets, resumes with a `continue` | waiting on the reset — held amber, never reddens |
 | `⢿`   | working    | running and editing — animates `⣾⣽⣻⢿⡿⣟⣯⣷` in clay | no |
-| `✽`   | thinking   | running in read-only plan mode — sparkles `· ✢ ✳ ✶ ✻ ✽` in clay | no |
+| `✽`   | thinking   | running, before the turn's first file edit — sparkles `· ✢ ✳ ✶ ✻ ✽` in clay | no |
 | `⠙`   | resolving  | a resolver is answering on the bridge — braille spin | pending, being handled |
 | `○`   | idle       | alive, nothing to do | no |
 | `✓`   | done       | finished cleanly | no |
 | `○`/`⢿` dim | process | a pane with no agent (shell, editor); idle shows the hollow `○`, real work the `⢿` spinner — both in the dim process tone | no |
 
-Two short-lived heads ride over the base status on the leading cell, so they never earn a cockpit bucket of their own:
+Three short-lived heads ride over the base status on the leading cell, so they never earn a cockpit bucket of their own:
 
 | head | meaning |
 |------|---------|
-| `▇` compacting | condensing its context window — pulses `▁▃▄▅▆▇▆▅▄▃` in violet, then returns to its resting head; counted as **working** (`⢿`) in the cockpit make-up regardless of plan posture |
-| `´` waiting on subagents | the main agent delegated to its children; the work is in the rows below — a low clay wave (`_` bobbing up to `´` and back); counted as **thinking** (`✽`) or **working** (`⢿`) based on the parent's posture |
+| `✽` thinking | the running turn before its first file edit — the agent is reasoning and reading, not yet writing; a research turn that never edits sparkles end to end |
+| `▇` compacting | condensing its context window — pulses `▁▃▄▅▆▇▆▅▄▃` in violet, then returns to its resting head |
+| `´` waiting on subagents | the main agent delegated to its children; the work is in the rows below — a low clay wave (`_` bobbing up to `´` and back) |
 
-The two actionable attention glyphs (`?` / `!`) **breathe** — a slow brightness pulse that swells from dim to bold and fades back over ~2.4s, never blanking — to pull the eye back to an unanswered row, and they **redden from yellow to red** once a row sits unanswered past the neglect window (`[sidebar] attention_redden_secs`), so a fresh ask reads calm-urgent and a long-ignored one heats up. A working agent that goes silent past the stall window escalates to a breathing `!` instead of spinning on. The `⏸` rate-limited head is attention-class but parked: it holds still in a held amber and never reddens or breathes, since waiting for the reset is the only move. A parent waiting on subagents is exempt from the stall escalation — its quiet wave is the children's work, not a wedge. An idle agent with no prompt yet shows a gentle `.`→`..`→`...` loading cue on line 2 in place of the em dash.
+Every running agent — whichever head rides its cell — counts as **working** (`⢿`) in the cockpit make-up.
 
-**Posture — the permission pill, sized by blast radius.**
+The two actionable attention glyphs (`?` / `!`) **breathe** — a slow brightness pulse that swells from dim to bold and fades back over ~2.4s, never blanking — to pull the eye back to an unanswered row, and they **redden from yellow to red** once a row sits unanswered past the neglect window (`[sidebar] attention_redden_secs`), so a fresh ask reads calm-urgent and a long-ignored one heats up. A working agent that goes silent past the stall window escalates to a breathing `!` instead of spinning on. The `⏸` rate-limited head is attention-class but parked: it holds still in a held amber and never reddens or breathes, since waiting for the reset is the only move. A parent waiting on subagents is exempt from the stall escalation — its quiet wave is the children's work, not a wedge. An idle agent with no prompt yet shows a gentle `.`→`..`→`...` loading cue on line 2 in place of the em dash, drifting on the same lazy ~2.4s cycle as the breath.
 
-| pill | meaning |
-|------|---------|
-| *(none)* | `default` — the baseline, omitted |
-| `plan`   | read-only — calm blue |
-| `auto`   | edits inside the sandbox — amber |
-| `yolo`   | bypasses every gate — bold red (loud even when the rest dims) |
+**Window — the model's context window on the identity line.**
+
+A dim magnitude token (`258k`, `1M`) closing the capability cluster: the live out-of-band reading (Claude's statusline, Codex's app-server) when one exists, else the hook-derived window, omitted until a source names it.
 
 **Meters and stats — one grammar everywhere.**
 
@@ -113,13 +111,13 @@ The top block. Fixed height, so the rows below it never jump as agents change st
  ¤ 5                       ◇ 76k ↘ 12k ↗ 64k ◍ 12k ◌ 68k
  ◎ 12                                                 $4.20
  ──────────────────────────────────────────────────────────
- ? 2   ! 1   ○ 1   ⏸ 0                      ✽ 1   ⢿ 1   ✓ 0
+ ? 2   ! 1   ○ 1   ⏸ 0                            ⢿ 2   ✓ 0
 ```
 
 - **Identity.** The workspace name behind `⌘`, with the project path dim on the right edge (home-abbreviated to `~/…`; it left-truncates with a leading `…` before it ever crowds the name). A blank line sets it apart from the summary below.
 - **Summary — who's here and what today burned.** Two lines, each a count on the left with today's numbers pinned right. Line 1: `¤` the live agents in the room right now, with today's accumulated token breakdown — `◇` total · `↘` input · `↗` output · `◍` cache-write · `◌` cache-read — pinned to the right edge in the coarse integer form (it drops when today recorded no tokens, leaving `¤ N` alone). Line 2: `◎` the sessions (threads) that have run today, with today's spend pinned right. The counts read from the live fleet and the JSONL `value_tally`'s today window. An empty room reads `¤ 0` over `◎ 0`.
 - **Today's spend.** The fleet's total spend for today, pinned to the right of the sessions line, **counting up** in a smooth eased climb as a turn lands (with a brief brighten as it settles) — the cockpit's one animated number. It joins the line once today records spend.
-- **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (yellow, reddening when any of their rows goes stale, and breathing), then a free `○` idle agent — calm, but a free agent wants work — and a `⏸` rate-limited count closing the cluster (held amber, parked). The **right cluster** is the busy tail: `✽` thinking before `⢿` working (you read a plan before it acts), then `✓` done. Every bucket always shows, so a zero reads a faint `? 0` and the line is scannable by position.
+- **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (yellow, reddening when any of their rows goes stale, and breathing), then a free `○` idle agent — calm, but a free agent wants work — and a `⏸` rate-limited count closing the cluster (held amber, parked). The **right cluster** is the busy tail: `⢿` working (every running agent — the thinking sparkle and the compaction pulse are per-row heads, not buckets), then `✓` done. Every bucket always shows, so a zero reads a faint `? 0` and the line is scannable by position.
 
 An **empty room** has no make-up line at all — just identity and the `¤ 0` / `◎ 0` summary:
 
@@ -146,13 +144,13 @@ The body: one card per pane, grouped under the worktree it lives in. A worktree 
 An agent is a small stacked card. The resting card is four lines; selecting it appends any subagents. Selection never reshapes a line already on screen — it only *appends* and lights the spine — so the card never reflows as it expands.
 
 ```
-▌⣾ claude · Opus 4.8 (1M) · high · auto         $1.27    line 1 — glyph · name · model · effort · posture, $cost right
+▌⣾ claude · Opus 4.8 · high · 1M                $1.27    line 1 — glyph · name · model · effort · window, $cost right
 ▌  ledger refactor                          ●●●○○ 3/5    line 2 — what it's on; todo pins right when wide
 ▌  ▣ ━━━━━━━━━━━━━━━━────────────────────────── 38.2%    context meter — the resting card's one bar
 ▌  ◇ 4k ↘ 1k ↗ 2k ◍ 6k ◌ 68k                   ◷ 1m    token breakdown · last-activity age (◷, ≥1m)
 ```
 
-- **Line 1 — identity.** The animated leading cell, then the agent kind (dim — the glyph and its color carry identity), then capability: model, effort, and the posture pill. Capability degrades by width — a wide card carries model · effort · posture, a medium one drops effort, a narrow one keeps just the name. The session `$cost` pins right.
+- **Line 1 — identity.** The animated leading cell, then the agent kind (dim — the glyph and its color carry identity), then capability: model, effort, and the context-window token (`258k`, `1M`). Capability degrades by width — a wide card carries model · effort · window, a medium one drops effort, a narrow one keeps just the name. The session `$cost` pins right.
 - **Line 2 — what it's on.** The session name you gave it (`--name` / `/rename`), else the agent's task, else its latest prompt (which lingers once the turn ends and the task clears, so an unnamed session stays labelled until it earns a name). An idle agent with nothing to show yet animates a `.`→`..`→`...` loading cue here instead of an em dash. On a wide card, todo dots pin right.
 - **The context meter (`▣`/`▢`).** The resting card's one bar — `▢` hollow at an empty 0% window, `▣` once anything fills it. The bar fills as the window is *used*; its value is always the percent used. While the window is calm it splits into colored segments showing *where* the tokens went (cache writes / cache reads / fresh input); once it warns it goes a solid amber/red. The `▣` glyph reads *how full* the window is on its own ramp — blue while cold, warming as it fills.
 - **The token line.** Part of the resting card: the latest API call's integer breakdown `◇` total · `↘` input · `↗` output · `◍` cache-write · `◌` cache-read — the same disjoint split the cockpit and fleet ledger accumulate, so a column means one thing everywhere: `↘` is fresh uncached input, cache rides apart, and `◇` is `input + output`. How full the window is stays the context meter's job. A coarse `◷` last-activity age pins right once it crosses a full minute — a just-active agent shows the breakdown alone, left-aligned, rather than a misleading `1m` (the line shows the bare `◇` total alone for an agent whose context carries no per-call split, like Codex).
@@ -164,7 +162,7 @@ The `▣`/`▢`, `◇`, and `◷` glyphs share one lead column, so the card read
 ```
    resting                        selected — only appends, never reshapes
    ─────────────────              ────────────────────────────────────────
-    ⣾ claude · Opus · auto        ▌⣾ claude · Opus · auto            $1.27
+    ⣾ claude · Opus · 1M          ▌⣾ claude · Opus · 1M              $1.27
       ledger refactor             ▌  ledger refactor
       ▣ ━━━━━━━──── 38.2%         ▌  ▣ ━━━━━━━──── 38.2%
       ◇ 4k ↘ 1k ↗ 2k ◌ 68k       ▌  ◇ 4k ↘ 1k ↗ 2k ◍ 6k ◌ 68k       ◷ 1m
@@ -190,7 +188,7 @@ A waiting or failed agent is the whole point. Its glyph leads, bold, and the car
 
 ```
 ▏feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-▌! claude · Opus · yolo
+▌! claude · Opus · 1M
 ▌  db migrate
 ▌  ▢ ──────────────────────    0%
 ```
@@ -329,7 +327,6 @@ Pinned to the bottom edge, below all three zones. The body is truncated before t
  ␣ next ?!   x dismiss   r reload   ? close
  ⢿ working   ✽ thinking   ? waiting
  ! attention   ○ idle   ✓ done   dim = process
- posture: plan · auto · yolo
 ```
 
 **Health alert.** When the refresh loop can't read the room, a sticky line takes over the bottom and the footer steps aside — an empty body under a failed fetch is a missing snapshot, not an empty room:
@@ -355,7 +352,7 @@ The renderer's golden tests in [`crates/rimz-sidebar/src/render/`](../../crates/
 | empty room, un-wired | `first_run_nudge` |
 | empty room, wired | `first_run_nudge_wired` |
 | narrow card | `l0_density_minimal_row` |
-| capability + posture | `agent_capability` |
+| capability + window | `agent_capability` |
 | selected, enriched card | `enriched_selected_agent_card` |
 | worktree grouping + external | `worktree_attention_map` |
 | per-worktree cap | `group_cap_with_overflow` |

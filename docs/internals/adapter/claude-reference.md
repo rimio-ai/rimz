@@ -39,7 +39,7 @@ Every hook receives these fields on stdin (some are event- or context-gated):
 }
 ```
 
-`permission_mode` and `effort` are not present on every event; `effort` rides events with a tool-use context (`PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`) when the model supports the parameter. `agent_id` / `agent_type` appear only with `--agent` or inside a subagent.
+`permission_mode` and `effort` are not present on every event; `effort` rides events with a tool-use context (`PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`) when the model supports the parameter. Rimz parses around `permission_mode` without consuming it — the upstream still sends it; the agent model derives the turn phase from tool events instead. `agent_id` / `agent_type` appear only with `--agent` or inside a subagent.
 
 ### Decision and output schema
 

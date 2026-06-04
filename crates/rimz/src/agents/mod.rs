@@ -1,7 +1,7 @@
 //! Agent integration interface.
 //!
 //! Each adapter classifies an incoming hook event, observes lifecycle
-//! transitions (status + mode), renders the agent-native neutral no-op, and
+//! transitions, renders the agent-native neutral no-op, and
 //! (when a resolver answer is available) renders the agent-native decision
 //! JSON. Adapters never touch the ledger directly;
 //! they're called by `rimz hooks <agent>` which owns the ledger writes.
@@ -28,8 +28,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tracing::error;
 
-use crate::feed::{FeedItem, FeedKind, PermissionPosture, Resolution};
-use hook_types::PermissionMode;
+use crate::feed::{FeedItem, FeedKind, Resolution};
 
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
@@ -126,58 +125,6 @@ pub(crate) fn classify_agent_hook(
     }
 }
 
-/// Sample an agent's permission mode field onto the unified posture enum. The
-/// input is agent-reported mode only; Rimz never infers plan/thinking from
-/// prompt text or transcripts.
-pub(crate) fn permission_posture_from_payload(
-    payload: &Value,
-    keys: &[&str],
-) -> Option<PermissionPosture> {
-    let raw = keys
-        .iter()
-        .find_map(|key| payload.get(*key).and_then(Value::as_str));
-    raw.map(permission_posture_from_str)
-}
-
-fn permission_posture_from_str(raw: &str) -> PermissionPosture {
-    match raw {
-        "never" | "bypass" | "bypassPermissions" | "dontAsk" => PermissionPosture::Yolo,
-        "acceptEdits" | "auto" | "auto-edit" | "on-failure" => PermissionPosture::Auto,
-        "plan" => PermissionPosture::Plan,
-        "default" | "interactive" | "untrusted" | "on-request" | "ask" => {
-            PermissionPosture::Default
-        }
-        _ => PermissionPosture::Unknown,
-    }
-}
-
-/// Map a typed permission slider onto the unified posture enum, falling back to
-/// raw string parsing for an absent or unknown value. The typed path canonicalizes
-/// every documented `permission_mode` value; the fallback covers an absent slider
-/// and the per-agent alternate keys (`mode`, Codex's `approval_policy`) that the
-/// typed `permission_mode` field never captures. Shared by both adapters so the
-/// enum→posture mapping lives in one place.
-pub(crate) fn posture_from_mode(
-    mode: Option<&PermissionMode>,
-    payload: &Value,
-    fallback_keys: &[&str],
-) -> Option<PermissionPosture> {
-    mode.and_then(permission_mode_posture)
-        .or_else(|| permission_posture_from_payload(payload, fallback_keys))
-}
-
-fn permission_mode_posture(mode: &PermissionMode) -> Option<PermissionPosture> {
-    match mode {
-        PermissionMode::DontAsk | PermissionMode::BypassPermissions => {
-            Some(PermissionPosture::Yolo)
-        }
-        PermissionMode::Auto | PermissionMode::AcceptEdits => Some(PermissionPosture::Auto),
-        PermissionMode::Plan => Some(PermissionPosture::Plan),
-        PermissionMode::Default => Some(PermissionPosture::Default),
-        PermissionMode::Unknown => None,
-    }
-}
-
 /// Result of installing hooks. Surfaced to the CLI so the user sees which
 /// files were touched. Serialized verbatim as the `rimz hooks install` JSON
 /// output — fields are part of the user-visible report contract.
@@ -253,8 +200,8 @@ pub trait AgentIntegration: Send + Sync {
     }
 
     /// Observe a lifecycle event payload and translate it into the
-    /// [`LifecycleSignal`](lifecycle::LifecycleSignal) (plus posture sample and
-    /// enrichment) the ledger should record. The adapter names the intent; the
+    /// [`LifecycleSignal`](lifecycle::LifecycleSignal) (plus enrichment) the
+    /// ledger should record. The adapter names the intent; the
     /// shared [`step`](lifecycle::step) table derives the status. Returns `None`
     /// when the event carries no transition the adapter recognises (a read-only
     /// tool, a quarantined subagent with no distinct child id).
@@ -548,8 +495,7 @@ pub(crate) fn sanitize_user_prompt(raw: Option<&str>) -> Option<String> {
 /// files or runs commands. Drives [`LifecycleSignal::ToolUsed`]'s `mutates`
 /// bit: a mutating tool is proof of real work, so its `PostToolUse` is the only
 /// tool event worth recording on the lifecycle channel (read-only tools stay
-/// silent), and it is what reconciles a stale `plan` posture. The tool name
-/// rides `tool_name` in both providers' payloads.
+/// silent). The tool name rides `tool_name` in both providers' payloads.
 pub(crate) fn tool_mutates(payload: &Value) -> bool {
     payload
         .get("tool_name")
@@ -561,6 +507,26 @@ pub(crate) fn tool_mutates(payload: &Value) -> bool {
                 "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "Bash"
                 // Codex
                 | "shell" | "apply_patch" | "exec_command" | "local_shell"
+            )
+        })
+}
+
+/// Whether a tool-use payload names a *file-editing* tool — the subset of the
+/// mutating set that writes workspace files rather than running commands.
+/// Drives [`LifecycleSignal::ToolUsed`]'s `edits` bit: a turn's first file edit
+/// ends its thinking head. A shell tool mutates but does not edit, so a
+/// research turn that only runs commands keeps the thinking sparkle.
+pub(crate) fn tool_edits_files(payload: &Value) -> bool {
+    payload
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .is_some_and(|name| {
+            matches!(
+                name,
+                // Claude
+                "Edit" | "Write" | "MultiEdit" | "NotebookEdit"
+                // Codex
+                | "apply_patch"
             )
         })
 }
@@ -657,6 +623,18 @@ mod tests {
         assert!(!tool_mutates(&json!({ "tool_name": "Read" })));
         assert!(!tool_mutates(&json!({ "tool_name": "Grep" })));
         assert!(!tool_mutates(&json!({})));
+    }
+
+    #[test]
+    fn tool_edits_files_is_the_file_writing_subset() {
+        for name in ["Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch"] {
+            assert!(tool_edits_files(&json!({ "tool_name": name })), "{name}");
+        }
+        // Command runners mutate but do not edit — the thinking head survives.
+        for name in ["Bash", "shell", "exec_command", "local_shell", "Read"] {
+            assert!(!tool_edits_files(&json!({ "tool_name": name })), "{name}");
+        }
+        assert!(!tool_edits_files(&json!({})));
     }
 
     #[test]

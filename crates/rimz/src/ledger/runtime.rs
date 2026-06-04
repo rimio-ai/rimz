@@ -124,7 +124,7 @@ fn linux_process_start_from_stat(stat: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::feed::{AgentStatus, FeedKind, PermissionPosture, Surface};
+    use crate::feed::{AgentStatus, FeedKind, Surface};
     use crate::ids::WorkspaceId;
     use jiff::Timestamp;
     use std::path::Path;
@@ -134,7 +134,7 @@ mod tests {
             agent_id: "sess-1".to_owned(),
             kind: "claude".to_owned(),
             status: AgentStatus::Idle,
-            permission_posture: PermissionPosture::Default,
+            thinking: false,
             pane: None,
             agent_pid: owner.as_ref().map(|owner| owner.pid),
             agent_process_start: owner.as_ref().and_then(|owner| owner.process_start.clone()),
@@ -147,6 +147,7 @@ mod tests {
             model: None,
             effort: None,
             context_pct: None,
+            context_window: None,
             total_tokens: None,
             todo_done: None,
             todo_total: None,

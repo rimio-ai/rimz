@@ -23,9 +23,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::agents::hook_types::{
-    BackgroundTask, CompactTrigger, HookEventCommon, PermissionMode, SessionSource,
-};
+use crate::agents::hook_types::{BackgroundTask, CompactTrigger, HookEventCommon, SessionSource};
 
 // ── Common ─────────────────────────────────────────────────────────────────
 
@@ -39,15 +37,14 @@ pub struct HookEffort {
 }
 
 /// Claude-specific common fields. Wraps the universal [`HookEventCommon`] and
-/// adds the permission slider, model id (with optional `[1m]` marker), the
-/// reasoning-effort object, and subagent identity (`agent_id` / `agent_type` are
-/// present only inside a subagent or under `--agent`).
+/// adds the model id (with optional `[1m]` marker), the reasoning-effort
+/// object, and subagent identity (`agent_id` / `agent_type` are present only
+/// inside a subagent or under `--agent`).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ClaudeCommon {
     #[serde(flatten)]
     pub common: HookEventCommon,
-    pub permission_mode: Option<PermissionMode>,
     pub model: Option<String>,
     pub agent_id: Option<String>,
     pub agent_type: Option<String>,
@@ -265,7 +262,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::agents::hook_types::{CompactTrigger, PermissionMode, SessionSource};
+    use crate::agents::hook_types::{CompactTrigger, SessionSource};
 
     #[test]
     fn session_start_parses_full_payload() {
@@ -274,7 +271,6 @@ mod tests {
             "transcript_path": "/tmp/t.jsonl",
             "cwd": "/home/user",
             "hook_event_name": "SessionStart",
-            "permission_mode": "acceptEdits",
             "model": "claude-opus-4-8",
             "agent_id": "agent-1",
             "agent_type": "security-reviewer",
@@ -284,7 +280,6 @@ mod tests {
         .unwrap();
         assert_eq!(p.common.common.session_id.as_deref(), Some("sess-1"));
         assert_eq!(p.common.model.as_deref(), Some("claude-opus-4-8"));
-        assert_eq!(p.common.permission_mode, Some(PermissionMode::AcceptEdits));
         assert_eq!(p.source, SessionSource::Startup);
         assert_eq!(p.session_title.as_deref(), Some("My session"));
     }
@@ -310,12 +305,6 @@ mod tests {
             "future_field_from_anthropic": {"nested": 1}
         }));
         assert_eq!(p.common.common.session_id.as_deref(), Some("s"));
-    }
-
-    #[test]
-    fn unknown_permission_mode_maps_to_unknown() {
-        let p = parse_session_start(&json!({"permission_mode": "someNewMode"}));
-        assert_eq!(p.common.permission_mode, Some(PermissionMode::Unknown));
     }
 
     #[test]
@@ -397,7 +386,6 @@ mod tests {
     fn permission_request_tool_name() {
         let p = parse_permission_request(&json!({"tool_name": "Bash", "permission_mode": "auto"}));
         assert_eq!(p.tool_name.as_deref(), Some("Bash"));
-        assert_eq!(p.common.permission_mode, Some(PermissionMode::Auto));
     }
 
     #[test]

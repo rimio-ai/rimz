@@ -19,8 +19,6 @@ Every agent — Claude, Codex, and every future one — speaks to Rimz through o
 - **`observe_context`** normalizes a rich out-of-band payload into [`AgentContext`](../../crates/rimz/src/agents/mod.rs); `ends_session` / `moves_on` mark the events that expire a session's pending asks.
 - **`install_hooks`** / **`preview_hook_install`** / **`uninstall_hooks`** / **`hooks_installed`** / **`supports_hook_install`** own the per-user config write and report it.
 
-Permission posture is not a trait method: it is a shared helper (`posture_from_mode` in [`mod.rs`](../../crates/rimz/src/agents/mod.rs)) that each adapter calls inside `observe_lifecycle` to map the payload's permission slider onto the unified posture. A lifecycle event that names no slider reports `None`, so the reducer carries the prior posture forward (how it is folded and rendered is [agent.md → Plan mode](./agent.md#plan-mode-as-a-sticky-posture)).
-
 Two invariants hold the seam shut:
 
 - **Adapters never touch the ledger.** The adapter is a pure mapper. The [`rimz hooks feed`](../../crates/rimz/src/cli/hooks.rs) CLI owns every ledger write and all bridge I/O; it calls the adapter for classification and rendering only.
@@ -30,7 +28,7 @@ Two invariants hold the seam shut:
 
 `classify_hook` sorts every native event into one of two wired channels. The distinction is whether the hook can hold the agent open while Rimz waits for an answer.
 
-**Lifecycle — fast, non-blocking.** Drives agent status, permission posture, task, enrichment, and `rimz feed list --audit` depth. Each flows through `observe_lifecycle`; an event that carries no transition returns `None` and records nothing.
+**Lifecycle — fast, non-blocking.** Drives agent status, the turn phase, task, enrichment, and `rimz feed list --audit` depth. Each flows through `observe_lifecycle`; an event that carries no transition returns `None` and records nothing.
 
 **Blocking-feed — holds the agent open.** A permission request, plan approval, or user question. It becomes a [`FeedItem`](../../crates/rimz/src/feed.rs), not an observation, and engages the three operating paths in [ledger.md](./ledger.md#the-three-paths-at-a-glance): bind a per-request socket and wait for a resolver (`bridge`), or write the item and return neutral so the agent's own UI asks (`native_ui`).
 
@@ -81,7 +79,7 @@ Native event → internal mapping. The appendix says *which native events are wi
 
 | Native event                  | Channel       | `observe_lifecycle` → [`LifecycleSignal`](../../crates/rimz/src/agents/lifecycle.rs)                                          |
 | ----------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `SessionStart`                | lifecycle     | `Registered` - posture, model, context/tokens (transcript)                                                                   |
+| `SessionStart`                | lifecycle     | `Registered` - model, context window/tokens (transcript)                                                                     |
 | `UserPromptSubmit`            | lifecycle     | `TurnStarted` - sanitized `task`/`prompt`; refresh context/tokens                                                            |
 | `SubagentStart`               | lifecycle     | `SubagentStarted` - keyed by child `agent_id`; `parent_agent_id` = `session_id`; `task` = `subagent_type`/`description`      |
 | `SubagentStop`                | lifecycle     | `SubagentStopped` - child row; keeps the type label and parent link                                                          |
@@ -89,13 +87,13 @@ Native event → internal mapping. The appendix says *which native events are wi
 | `SessionEnd`                  | lifecycle     | `Ended` → removed (`ends_session`)                                                                                           |
 | `Notification`                | lifecycle     | none (silent)                                                                                                                |
 | `PreToolUse` (broad)          | lifecycle     | none - audit depth                                                                                                           |
-| `PostToolUse`                 | lifecycle     | `ToolUsed { mutates: true }` for a mutating tool (else none) - `TodoWrite` todos; context/tokens; posture sample            |
+| `PostToolUse`                 | lifecycle     | `ToolUsed { mutates: true, edits }` for a mutating tool (else none) - `edits` for a file-writing tool; `TodoWrite` todos; context/tokens |
 | `PreCompact`                  | lifecycle     | `Compacting` - stamps the head, keeps the prior status (see [agent.md](./agent.md#the-state-machine))                        |
 | `PermissionRequest`           | blocking-feed | `waiting` - sync                                                                                                             |
 | `PreToolUse: ExitPlanMode`    | blocking-feed | `waiting` - plan approval                                                                                                    |
 | `PreToolUse: AskUserQuestion` | blocking-feed | `waiting` - user question                                                                                                    |
 
-**Classification.** `ExitPlanMode` and `AskUserQuestion` ride the broad `PreToolUse` hook and self-classify from `tool_name`, so they need no dedicated matcher (Claude runs every matching matcher group, and the broad entry already covers them). A `Stop` carries the raw `errored` bit (`stop_payload_errored`) and whether in-flight `background_tasks` (Claude Code v2.1.145+) remain; the [`step`](./agent.md#the-state-machine) table turns those into the final status (a clean parked stop stays `running`, an error always wins). Only a *mutating* `PostToolUse` (`tool_mutates`) records a signal — it is proof of real work and reconciles a stale `plan` posture; read-only tools stay silent so the lifecycle channel isn't flooded.
+**Classification.** `ExitPlanMode` and `AskUserQuestion` ride the broad `PreToolUse` hook and self-classify from `tool_name`, so they need no dedicated matcher (Claude runs every matching matcher group, and the broad entry already covers them). A `Stop` carries the raw `errored` bit (`stop_payload_errored`) and whether in-flight `background_tasks` (Claude Code v2.1.145+) remain; the [`step`](./agent.md#the-state-machine) table turns those into the final status (a clean parked stop stays `running`, an error always wins). Only a *mutating* `PostToolUse` (`tool_mutates`) records a signal — it is proof of real work; read-only tools stay silent so the lifecycle channel isn't flooded. The `edits` bit marks the file-writing subset (`tool_edits_files`), which ends the turn's thinking head ([agent.md → Thinking](./agent.md#thinking-is-the-turns-opening-phase)).
 
 **Decision shapes.** Claude wraps a permission answer in `hookSpecificOutput.decision`; `ExitPlanMode` / `AskUserQuestion` answer on the `PreToolUse` event and **require** `updatedInput` (a missing field is a hard render error). The neutral path is empty stdout. The verbatim shapes are in [adapter/claude-reference.md](./adapter/claude-reference.md#hooks-rimz-wires); exact bytes are the inline goldens in [`claude/mod.rs`](../../crates/rimz/src/agents/claude/mod.rs).
 
@@ -111,14 +109,14 @@ Native event → internal mapping; the upstream events, payloads, and decision s
 
 | Native event                         | Channel       | `observe_lifecycle` → [`LifecycleSignal`](../../crates/rimz/src/agents/lifecycle.rs) | Normalized fields                                |
 | ------------------------------------ | ------------- | ----------------------------------- | ------------------------------------------------ |
-| `SessionStart`                       | lifecycle     | `Registered`, or `Compacting` when `source = "compact"` | posture, model, effort         |
+| `SessionStart`                       | lifecycle     | `Registered`, or `Compacting` when `source = "compact"` | model, effort                  |
 | `UserPromptSubmit`                   | lifecycle     | `TurnStarted`                       | sanitized `task`/`prompt`                        |
 | `SubagentStart`                      | lifecycle     | `SubagentStarted`                   | keyed by child `agent_id`; `task` = `agent_type` |
 | `SubagentStop`                       | lifecycle     | `SubagentStopped`                   | child row; keeps the type label                  |
 | `Stop`                               | lifecycle     | `TurnEnded { errored, parked_on_background: false }` | clear task                      |
 | `PermissionRequest`                  | blocking-feed | `waiting`                           | —                                                |
-| `PostToolUse` (mutating)             | lifecycle     | `ToolUsed { mutates: true }`        | reconciles a stale `plan` posture; read-only tools stay silent |
-| `PreToolUse` (broad)                 | lifecycle     | none                                | audit depth; posture sample                      |
+| `PostToolUse` (mutating)             | lifecycle     | `ToolUsed { mutates: true, edits }` | `edits` for `apply_patch`; read-only tools stay silent |
+| `PreToolUse` (broad)                 | lifecycle     | none                                | audit depth                                      |
 
 Codex shares the same keyed subagent identity as Claude (`resolve_subagent_identity`): a `SubagentStart`/`SubagentStop` with no distinct child id is quarantined, never folded onto the parent. Codex has no `SessionEnd` or `Notification` hook, so `ends_session` is never true — a Codex session leaves the rollup by liveness alone (see [agent.md](./agent.md#liveness-and-presence)). It has no background-task parking, so `parked_on_background` is always `false`.
 

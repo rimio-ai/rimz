@@ -1,6 +1,6 @@
 # Sidebar renderer
 
-Local contract for `crates/rimz-sidebar/` — the renderer. Extends the root [AGENTS.md](../../AGENTS.md); it never restates parent rules. The mechanics — presence, ranking, the runtime loop, recovery — are [docs/internals/sidebar.md](../../docs/internals/sidebar.md); the on-screen look is [docs/interface/sidebar.md](../../docs/interface/sidebar.md); the glyph/status/posture table is [docs/interface/sidebar.md → reading the glyphs](../../docs/interface/sidebar.md#reading-the-glyphs); the agent-state rollup it projects is [docs/internals/agent.md](../../docs/internals/agent.md).
+Local contract for `crates/rimz-sidebar/` — the renderer. Extends the root [AGENTS.md](../../AGENTS.md); it never restates parent rules. The mechanics — presence, ranking, the runtime loop, recovery — are [docs/internals/sidebar.md](../../docs/internals/sidebar.md); the on-screen look is [docs/interface/sidebar.md](../../docs/interface/sidebar.md); the glyph/status table is [docs/interface/sidebar.md → reading the glyphs](../../docs/interface/sidebar.md#reading-the-glyphs); the agent-state rollup it projects is [docs/internals/agent.md](../../docs/internals/agent.md).
 
 ## The boundary
 

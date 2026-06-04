@@ -10,7 +10,7 @@ use jiff::{SignedDuration, Timestamp};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use rimz::agents::{AgentContext, RateLimitWindow};
-use rimz::feed::{AgentStatus, PermissionPosture};
+use rimz::feed::AgentStatus;
 use rimz::{
     SidebarProviderPanel, SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarSubAgent,
     SidebarWorktreeGroup, SidebarWorktreeKind, SpendTally, SpendWindow,
@@ -26,9 +26,8 @@ use super::labels::{
     TOKENS_CACHED, TOKENS_IN, TOKENS_OUT, TOKENS_TOTAL, agent_glyph, agent_style,
     attention_glyph_style, compacting_glyph, compacting_style, context_severity_color,
     ctx_glyph_color, diff_spans, gauge_spans, infinite_bar_spans, loading_dots, mana_bar_spans,
-    mana_color, posture_pill, posture_style, resolver_glyph, segmented_gauge_spans, status_glyph,
-    status_style, subagent_glyph, subagent_style, thinking_still, todo_spans,
-    token_breakdown_spans, tokens_total_spans, working_glyph,
+    mana_color, resolver_glyph, segmented_gauge_spans, status_glyph, status_style, subagent_glyph,
+    subagent_style, todo_spans, token_breakdown_spans, tokens_total_spans, working_glyph,
 };
 use super::theme::Theme;
 
@@ -105,7 +104,7 @@ impl Tier {
 /// so the body below never shifts vertically as agents change *state*:
 ///
 /// ```text
-/// ? 2   ! 1   ○ 2   ⏸ 0                  ✽ 1   ⢿ 3   ✓ 4   make-up: left · right
+/// ? 2   ! 1   ○ 2   ⏸ 0                        ⢿ 3   ✓ 4   make-up: left · right
 /// ```
 ///
 /// The line splits the make-up by who might want you. The left cluster is the
@@ -113,34 +112,25 @@ impl Tier {
 /// once any of its rows is past the neglect window), a free `idle` `○` (calm
 /// green, but grouped left because a free agent wants work), then a parked
 /// `rate-limited` `⏸` (held amber, never reddening) closing the cluster. The right
-/// cluster is the busy/done tail — thinking `✽` (plan-mode reasoning, read before
-/// acting), working `⢿`, then `success` `✓`. Every bucket renders, so a zero reads
-/// a faint `? 0`. Counts span the capped agents (`status_counts`). The fleet's
-/// live time / token / commit totals are gone — the summary line's
-/// today-accumulated breakdown carries the fleet's resource read.
+/// cluster is the busy/done tail — working `⢿` (every running agent; the
+/// thinking sparkle is a per-row animation head, not a bucket), then `success`
+/// `✓`. Every bucket renders, so a zero reads a faint `? 0`. Counts span the
+/// capped agents (`status_counts`). The fleet's live time / token / commit
+/// totals are gone — the summary line's today-accumulated breakdown carries the
+/// fleet's resource read.
 pub(super) fn fleet_header_lines(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
     width: usize,
     redden_secs: i64,
 ) -> Vec<Line<'static>> {
-    let running = status_total(groups, AgentStatus::Running);
-    let thinking = groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .filter(|row| {
-            row.status == Some(AgentStatus::Running)
-                && row.permission_posture == Some(PermissionPosture::Plan)
-                && !row.compacting
-        })
-        .count();
-    let working = running.saturating_sub(thinking);
+    let working = status_total(groups, AgentStatus::Running);
     let waiting = status_total(groups, AgentStatus::Waiting);
     let failed = status_total(groups, AgentStatus::Failed);
     let rate_limited = status_total(groups, AgentStatus::RateLimited);
     let idle = status_total(groups, AgentStatus::Idle);
     let success = status_total(groups, AgentStatus::Success);
-    let total = working + thinking + waiting + failed + rate_limited + idle + success;
+    let total = working + waiting + failed + rate_limited + idle + success;
 
     // An empty (or process-only) room has no make-up line — the `¤ 0  ◎ 0` summary
     // lives on the dashboard above. The make-up line is reserved for a room that
@@ -153,8 +143,8 @@ pub(super) fn fleet_header_lines(
     // the rows worth a glance: `waiting` `?` and `failed` `!` (yellow, reddening
     // once any of their rows is stale), a free `idle` `○` — calm green, but grouped
     // left because a free agent wants work — then a parked `rate-limited` `⏸`
-    // closing the cluster. The right cluster is the busy/done tail: thinking before
-    // working, then success. Every bucket shows its count.
+    // closing the cluster. The right cluster is the busy/done tail: working,
+    // then success. Every bucket shows its count.
     let mut left: Vec<Span<'static>> = Vec::new();
     push_count(
         theme,
@@ -197,13 +187,6 @@ pub(super) fn fleet_header_lines(
         status_style(theme, AgentStatus::RateLimited),
     );
     let mut right: Vec<Span<'static>> = Vec::new();
-    push_count(
-        theme,
-        &mut right,
-        thinking_still(),
-        thinking,
-        agent_style(theme, AgentStatus::Running),
-    );
     push_count(
         theme,
         &mut right,
@@ -812,7 +795,7 @@ fn agent_lead_cell(
     // `attention_glyph_style` — to pull the eye back to an unanswered row. It
     // never blanks, so the one-cell column never shifts as it swells and fades.
     Span::styled(
-        agent_glyph(status, row.permission_posture, animation_phase),
+        agent_glyph(status, row.thinking, animation_phase),
         attention_glyph_style(
             theme,
             status,
@@ -823,14 +806,16 @@ fn agent_lead_cell(
     )
 }
 
-/// Line 1 for an agent: the leading cell (the working fill or plan-mode thinking
-/// sparkle while active; a blocked `?`/`!` breathes a slow brightness pulse), the
-/// agent name, then the dim capability tokens (`· model · effort`) and the
-/// permission posture pill, with the bold `$cost` (money-green) pinned right.
-/// Capability tokens degrade by width tier: L2 carries model + effort + posture,
-/// L1 drops effort, L0 keeps just the name — cost always pins right. A blocked
-/// `?`/`!` glyph reddens once the row has gone unanswered past the 30-minute
-/// neglect window, so a long-ignored ask escalates without a timestamp.
+/// Line 1 for an agent: the leading cell (the working fill or thinking sparkle
+/// while active; a blocked `?`/`!` breathes a slow brightness pulse), the agent
+/// name, then the dim capability tokens (`· model · effort · window`) with the
+/// bold `$cost` (money-green) pinned right. The window token is the model's
+/// context window (`258k`, `1M`) — the statusline/app-server reading first, the
+/// hook-derived fallback second, omitted when neither has named it. Capability
+/// tokens degrade by width tier: L2 carries model + effort + window, L1 drops
+/// effort, L0 keeps just the name — cost always pins right. A blocked `?`/`!`
+/// glyph reddens once the row has gone unanswered past the 30-minute neglect
+/// window, so a long-ignored ask escalates without a timestamp.
 #[allow(clippy::too_many_arguments)]
 fn agent_identity_line(
     theme: &Theme,
@@ -879,18 +864,24 @@ fn agent_identity_line(
             left.push(Span::styled(" · ", theme.dim()));
             left.push(Span::styled(effort.to_owned(), theme.dim()));
         }
-        if let Some(posture_label) = row.permission_posture.and_then(posture_pill) {
-            let posture = row
-                .permission_posture
-                .expect("posture is Some when its label is Some");
+        if let Some(window) = display_context_window(row) {
             left.push(Span::styled(" · ", theme.dim()));
-            left.push(Span::styled(
-                posture_label.to_owned(),
-                posture_style(theme, posture),
-            ));
+            left.push(Span::styled(tokens_int(window), theme.dim()));
         }
     }
     pin_right(left, right, width)
+}
+
+/// The model's context window for the identity line (`258k`, `1M`). Prefers the
+/// out-of-band runtime reading (Claude's statusline / Codex's app-server — the
+/// live truth), falls back to the hook-derived scalar, and omits when neither
+/// source has named it.
+fn display_context_window(row: &SidebarRow) -> Option<u64> {
+    ctx(row)
+        .and_then(|context| context.tokens.as_ref())
+        .and_then(|tokens| tokens.context_window_size)
+        .or(row.context_window)
+        .filter(|window| *window > 0)
 }
 
 /// Line 2 for an agent: the description (the user's session name, else the task,

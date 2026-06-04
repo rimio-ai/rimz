@@ -79,10 +79,7 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
 
     // Append two lifecycle events for the same agent so the rollup carries a
     // worktree branch we can assert on after rotation. Older first; newer wins.
-    for (status, permission_posture, branch) in [
-        ("idle", "default", "main"),
-        ("running", "auto", "feature-migration"),
-    ] {
+    for (status, branch) in [("idle", "main"), ("running", "feature-migration")] {
         let event = EventEnvelope::new(
             workspace_id.clone(),
             "session",
@@ -92,7 +89,6 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
             json!({
                 "agent_id": "claude-1",
                 "status": status,
-                "permission_posture": permission_posture,
                 "worktree_branch": branch,
             }),
         );

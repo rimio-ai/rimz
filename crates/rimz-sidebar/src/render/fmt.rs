@@ -135,18 +135,39 @@ fn group_thousands(n: u64) -> String {
     out
 }
 
-/// Shorten a model's display name for the capability line. First drops the
-/// `context` qualifier from an extended-window suffix (`Opus 4.8 (1M context)`
-/// → `Opus 4.8 (1M)`). Then, when the name is still a bare vendor *slug* (all
-/// lowercase, hyphenated, no spaces — the pre-enrichment fallback), prettifies
-/// it (`claude-opus-4-8` → `Opus 4.8`). A friendly name passes through.
+/// Shorten a model's display name for the capability line. First drops a
+/// trailing context-window parenthetical (`Opus 4.8 (1M context)` / `Opus 4.8
+/// (1M)` → `Opus 4.8`) — the identity line's dedicated window token carries
+/// that figure now, so the name never repeats it. Then, when the name is still
+/// a bare vendor *slug* (all lowercase, hyphenated, no spaces — the
+/// pre-enrichment fallback), prettifies it (`claude-opus-4-8` → `Opus 4.8`). A
+/// friendly name passes through.
 pub(super) fn model_label(display: &str) -> String {
-    let cleaned = display.replace(" context)", ")");
+    let cleaned = strip_window_qualifier(display);
     if looks_like_slug(&cleaned) {
         prettify_model_slug(&cleaned)
     } else {
         cleaned
     }
+}
+
+/// Drop a trailing `(…)` suffix when it reads as a context-window size — a
+/// magnitude like `1M` or `200K`, optionally followed by ` context`. Any other
+/// parenthetical (a genuine name qualifier) passes through untouched.
+fn strip_window_qualifier(display: &str) -> String {
+    let trimmed = display.trim_end();
+    let stripped = trimmed
+        .strip_suffix(')')
+        .and_then(|head| head.rsplit_once(" ("))
+        .and_then(|(name, qualifier)| {
+            let magnitude = qualifier.strip_suffix(" context").unwrap_or(qualifier);
+            let (digits, unit) = magnitude.split_at(magnitude.len().saturating_sub(1));
+            let is_window = !digits.is_empty()
+                && digits.chars().all(|c| c.is_ascii_digit())
+                && matches!(unit, "k" | "K" | "m" | "M");
+            is_window.then(|| name.trim_end().to_owned())
+        });
+    stripped.unwrap_or_else(|| trimmed.to_owned())
 }
 
 /// A name still reads as a raw model slug when it is hyphenated, carries no
@@ -319,10 +340,16 @@ mod tests {
     }
 
     #[test]
-    fn model_label_drops_context_qualifier() {
-        assert_eq!(model_label("Opus 4.8 (1M context)"), "Opus 4.8 (1M)");
+    fn model_label_drops_window_qualifier() {
+        // The dedicated window token on the identity line carries the figure,
+        // so the name sheds both qualifier forms entirely.
+        assert_eq!(model_label("Opus 4.8 (1M context)"), "Opus 4.8");
+        assert_eq!(model_label("Opus 4.8 (1M)"), "Opus 4.8");
+        assert_eq!(model_label("Sonnet 4.6 (200K context)"), "Sonnet 4.6");
         assert_eq!(model_label("Opus 4.8"), "Opus 4.8");
         assert_eq!(model_label("GPT-5.5"), "GPT-5.5");
+        // A non-window parenthetical is a real name qualifier — kept.
+        assert_eq!(model_label("Sonnet 3.5 (New)"), "Sonnet 3.5 (New)");
     }
 
     #[test]
@@ -334,7 +361,7 @@ mod tests {
         assert_eq!(model_label("gpt-5.5-codex"), "GPT 5.5 Codex");
         // A friendly name (space or uppercase) is never mistaken for a slug.
         assert_eq!(model_label("GPT-5.5"), "GPT-5.5");
-        assert_eq!(model_label("Opus 4.8 (1M)"), "Opus 4.8 (1M)");
+        assert_eq!(model_label("Opus 4.8 Fast"), "Opus 4.8 Fast");
     }
 
     #[test]

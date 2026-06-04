@@ -26,7 +26,7 @@ The sidebar is a worktree-keyed presence and attention map: one row per live pan
 
 The full glyph vocabulary and every rendered frame live in [the interface reference](./docs/interface/sidebar.md); how presence, ranking, and recovery are computed lives in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
 
-One law sits under all of it: **presence is live, the ledger is truth.** A row exists because a pane is running right now — read live from the multiplexer's pane list — while an agent's durable facts (status, task, posture, enrichments) come from the ledger. An agent that exits is gone the moment its pane reverts to a shell; liveness is the live process, never a status the ledger has to retract.
+One law sits under all of it: **presence is live, the ledger is truth.** A row exists because a pane is running right now — read live from the multiplexer's pane list — while an agent's durable facts (status, task, enrichments) come from the ledger. An agent that exits is gone the moment its pane reverts to a shell; liveness is the live process, never a status the ledger has to retract.
 
 ### Stay light
 

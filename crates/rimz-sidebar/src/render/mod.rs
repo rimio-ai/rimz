@@ -152,7 +152,7 @@ pub enum AnimationCadence {
 }
 
 /// Whether any visible row is in an animated state — a running agent (working
-/// or plan-mode thinking), a resolver mid-flight, an active process spinning on
+/// or pre-edit thinking), a resolver mid-flight, an active process spinning on
 /// real work (a build, a test, a `sudo` install), an attention row whose `?`/`!`
 /// glyph breathes, or an idle agent showing the loading-dots cue. The serve
 /// loop uses this as the broad "does anything move?" gate; [`animation_cadence`]
@@ -681,7 +681,6 @@ fn help_lines() -> Vec<Line<'static>> {
         Line::styled("␣ next ?!   x dismiss   r reload   ? close", dim),
         Line::styled("⢿ working   ✽ thinking   ? waiting", dim),
         Line::styled("! attention   ○ idle   ✓ done   dim = process", dim),
-        Line::styled("posture: plan · auto · yolo", dim),
     ]
 }
 
@@ -692,7 +691,7 @@ mod tests {
         AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage,
         RateLimitWindow,
     };
-    use rimz::feed::{AgentState, AgentStatus, FeedKind, PaneRef, PermissionPosture};
+    use rimz::feed::{AgentState, AgentStatus, FeedKind, PaneRef};
     use rimz::ids::{MuxName, PaneId, ViewKind};
     use rimz::{EventEnvelope, FeedItem, FeedStatus, SidebarSnapshot, Surface, WorkspaceId};
     use serde_json::json;
@@ -816,7 +815,6 @@ mod tests {
         id: &str,
         kind: &str,
         status: AgentStatus,
-        permission_posture: PermissionPosture,
         worktree_path: Option<&str>,
         branch: Option<&str>,
         task: Option<&str>,
@@ -826,7 +824,7 @@ mod tests {
             agent_id: id.to_owned(),
             kind: kind.to_owned(),
             status,
-            permission_posture,
+            thinking: false,
             pane: None,
             agent_pid: None,
             agent_process_start: None,
@@ -839,6 +837,7 @@ mod tests {
             model: None,
             effort: None,
             context_pct: None,
+            context_window: None,
             total_tokens: None,
             todo_done: None,
             todo_total: None,
@@ -991,7 +990,6 @@ mod tests {
             "codex-1",
             "codex",
             AgentStatus::Running,
-            PermissionPosture::Default,
             Some("/home/me/query-engine"),
             Some("main"),
             Some("add tests"),
@@ -1009,18 +1007,19 @@ mod tests {
     }
 
     #[test]
-    fn render_agent_capability_and_posture() {
+    fn render_agent_capability_and_window() {
         let mut claude = agent(
             "claude-1",
             "claude",
             AgentStatus::Failed,
-            PermissionPosture::Yolo,
             Some("/repo/feature-migration"),
             Some("feature-migration"),
             Some("db migrate"),
         );
         claude.model = Some("Opus".to_owned());
         claude.effort = Some("xhigh".to_owned());
+        // The hook-derived window renders as the identity line's `1M` token.
+        claude.context_window = Some(1_000_000);
         claude.last_activity = fixed_now() - Duration::from_secs(4 * 60);
         let snapshot = snapshot_with(Vec::new(), vec![claude]);
 
@@ -1033,13 +1032,12 @@ mod tests {
             "claude-1",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Auto,
             Some("/repo/feature-migration"),
             Some("feature-migration"),
             Some("db migrate"),
         );
         // Transcript scalars are the coarse fallback; the statusline context
-        // below supersedes them (`Opus` → `Opus 4.8 (1M)`, `xhigh` → `high`).
+        // below supersedes them (`Opus` → `Opus 4.8`, `xhigh` → `high`).
         claude.model = Some("Opus".to_owned());
         claude.effort = Some("xhigh".to_owned());
         claude.context_pct = Some(38);
@@ -1068,11 +1066,14 @@ mod tests {
         // The worktree-total diff sits on the group header.
         assert!(rendered.contains("+127 -43"));
         // Line 1 carries identity + capability + cost; line 2 is the session
-        // name; the model display name is shortened (`(1M context)` → `(1M)`).
-        assert!(rendered.contains("Opus 4.8 (1M)"));
+        // name; the model display name sheds its window qualifier (`Opus 4.8
+        // (1M context)` → `Opus 4.8`) — the dedicated window token (the
+        // statusline's 200k reading) carries the figure.
+        assert!(rendered.contains("Opus 4.8"));
+        assert!(!rendered.contains("(1M"));
         assert!(!rendered.contains("context"));
         assert!(rendered.contains("high"));
-        assert!(rendered.contains("auto"));
+        assert!(rendered.contains("· 200k"), "window token:\n{rendered}");
         // Per-row cost now reads at full cent resolution, like every other spend.
         assert!(rendered.contains("$1.27"));
         // Line 2 is the full-width description; todo dots inline at L2.
@@ -1114,7 +1115,6 @@ mod tests {
             "claude-1",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Default,
             Some("/repo/main"),
             Some("main"),
             Some("db migrate"),
@@ -1125,7 +1125,6 @@ mod tests {
             "child-1",
             "claude",
             AgentStatus::Success,
-            PermissionPosture::Default,
             None,
             None,
             Some("Explore"),
@@ -1177,7 +1176,6 @@ mod tests {
             "claude-1",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Default,
             Some("/repo/main"),
             Some("main"),
             Some("db migrate"),
@@ -1199,7 +1197,6 @@ mod tests {
             "claude-1",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Default,
             Some("/repo/main"),
             Some("main"),
             None, // idle cleared the task; no session name (no context)
@@ -1224,7 +1221,6 @@ mod tests {
             "codex-1",
             "codex",
             AgentStatus::Running,
-            PermissionPosture::Default,
             Some("/repo/main"),
             Some("main"),
             Some("add tests"),
@@ -1264,7 +1260,6 @@ mod tests {
             "codex-1",
             "codex",
             AgentStatus::Running,
-            PermissionPosture::Default,
             Some("/repo/main"),
             Some("main"),
             Some("add tests"),
@@ -1444,7 +1439,6 @@ mod tests {
                 "claude-1",
                 "claude",
                 AgentStatus::Running,
-                PermissionPosture::Default,
                 Some("/repo/main"),
                 Some("main"),
                 Some("db migrate"),
@@ -1458,7 +1452,6 @@ mod tests {
                 "claude-1",
                 "claude",
                 AgentStatus::Waiting,
-                PermissionPosture::Default,
                 Some("/repo/main"),
                 Some("main"),
                 Some("allow cargo fmt"),
@@ -1472,7 +1465,6 @@ mod tests {
                 "claude-1",
                 "claude",
                 AgentStatus::Success,
-                PermissionPosture::Default,
                 Some("/repo/main"),
                 Some("main"),
                 Some("done"),
@@ -1517,7 +1509,7 @@ mod tests {
         assert!(help.contains("? waiting"));
         assert!(help.contains("○ idle"));
         assert!(help.contains("dim = process"));
-        assert!(help.contains("posture: plan · auto · yolo"));
+        assert!(!help.contains("posture"), "the posture legend is gone");
     }
 
     #[test]
@@ -1553,7 +1545,6 @@ mod tests {
                     &format!("codex-{i}"),
                     "codex",
                     AgentStatus::Running,
-                    PermissionPosture::Default,
                     Some("/repo/main"),
                     Some("main"),
                     Some(&format!("task-{i}")),
@@ -1581,7 +1572,6 @@ mod tests {
             "codex-1",
             "codex",
             AgentStatus::Running,
-            PermissionPosture::Default,
             Some("/repo/main"),
             Some("main"),
             Some("compile"),
@@ -1603,8 +1593,8 @@ mod tests {
             "L0 keeps the worktree label:\n{rendered}"
         );
         assert!(
-            !rendered.contains("auto") && !rendered.contains("yolo"),
-            "default posture stays the omitted baseline:\n{rendered}"
+            !rendered.contains(" · "),
+            "L0 drops the capability tokens entirely:\n{rendered}"
         );
         assert_snapshot("l0_density_minimal_row", rendered);
     }
@@ -1630,7 +1620,6 @@ mod tests {
             "claude-1",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Default,
             Some("/repo/main"),
             Some("main"),
             Some("waiting on tools"),
@@ -1657,7 +1646,6 @@ mod tests {
             "claude-1",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Default,
             Some("/repo/main"),
             Some("main"),
             Some("compiling"),
@@ -1683,7 +1671,6 @@ mod tests {
             "claude-1",
             "claude",
             AgentStatus::Idle,
-            PermissionPosture::Default,
             Some("/repo/main"),
             Some("main"),
             None,
@@ -1718,7 +1705,6 @@ mod tests {
             "claude-1",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Default,
             Some("/repo/main"),
             Some("main"),
             Some("condensing context"),
@@ -1746,7 +1732,6 @@ mod tests {
             "claude-1",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Default,
             Some("/repo/main"),
             Some("main"),
             Some("orchestrating"),
@@ -1755,7 +1740,6 @@ mod tests {
             "kid-1",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Default,
             None,
             None,
             Some("Explore"),
@@ -1781,7 +1765,6 @@ mod tests {
             "claude-1",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Auto,
             Some("/repo/main"),
             Some("main"),
             Some("db migrate"),
@@ -1870,7 +1853,6 @@ mod tests {
             "claude-1",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Auto,
             Some("/repo/main"),
             Some("main"),
             Some("db migrate"),
@@ -1881,7 +1863,6 @@ mod tests {
             "kid-1",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Default,
             None,
             None,
             Some("Explore"),
@@ -1994,7 +1975,6 @@ mod tests {
                 "claude-1",
                 "claude",
                 status,
-                PermissionPosture::Default,
                 Some("/repo/main"),
                 Some("main"),
                 Some("warm up"),
@@ -2042,7 +2022,6 @@ mod tests {
             "claude-1",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Auto,
             Some("/repo/main"),
             Some("main"),
             Some("task one"),
@@ -2051,7 +2030,6 @@ mod tests {
             "claude-2",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Auto,
             Some("/repo/main"),
             Some("main"),
             Some("task two"),
@@ -2095,7 +2073,6 @@ mod tests {
             "claude-1",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Auto,
             Some("/repo/main"),
             Some("main"),
             Some("db migrate"),
@@ -2472,7 +2449,6 @@ mod tests {
             "claude-1",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Auto,
             Some("/repo/main"),
             Some("main"),
             Some("db migrate"),
@@ -2539,7 +2515,6 @@ mod tests {
             "claude-1",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Auto,
             Some("/repo/main"),
             Some("main"),
             Some("db migrate"),
@@ -2683,36 +2658,37 @@ mod tests {
             "w",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Default,
             Some("/repo/main"),
             Some("main"),
             Some("a"),
         );
-        let thinking = agent(
+        let mut reasoning = agent(
             "t",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Plan,
             Some("/repo/main"),
             Some("main"),
             Some("b"),
         );
-        let snapshot = snapshot_with(Vec::new(), vec![working, thinking]);
+        // The thinking head is a per-row animation, never a cockpit bucket: a
+        // pre-edit turn still tallies as working.
+        reasoning.thinking = true;
+        let snapshot = snapshot_with(Vec::new(), vec![working, reasoning]);
         let screen = snapshot_to_screen(&snapshot, 40, 12);
         // Row 2 is the `¤` summary, row 3 the `◎` summary; row 5 is the bucket
         // make-up (row 1 is the blank line, row 4 the hairline rule).
         assert!(screen.lines().nth(2).unwrap().contains("¤ 2"), "{screen}");
         let buckets = screen.lines().nth(5).unwrap();
         // Left cluster: waiting/failed/idle and the parked rate-limited each show
-        // their count (a zero reads `? 0`); the running pair splits one working
-        // (⢿) one thinking (✽) into the right cluster.
+        // their count (a zero reads `? 0`); both running agents tally into the
+        // one working (⢿) bucket.
         assert!(buckets.contains("? 0"), "{buckets}");
         assert!(buckets.contains("! 0"), "{buckets}");
         assert!(buckets.contains("○ 0"), "{buckets}");
         // The rate-limited glyph carries the U+FE0E text-presentation selector.
         assert!(buckets.contains("⏸\u{FE0E} 0"), "{buckets}");
-        assert!(buckets.contains("⢿ 1"), "{buckets}");
-        assert!(buckets.contains("✽ 1"), "{buckets}");
+        assert!(buckets.contains("⢿ 2"), "{buckets}");
+        assert!(!buckets.contains('✽'), "no thinking bucket: {buckets}");
         // The default selection lands on the first row, so its worktree reads as
         // one lane: the header gains the dotted seal and a `▏` lane spine.
         assert!(
@@ -2725,20 +2701,21 @@ mod tests {
         );
     }
 
-    /// A compacting agent in plan posture counts as **working** (`⢿`), not
-    /// thinking (`✽`). Compaction is active context work regardless of posture.
+    /// A compacting agent counts as **working** (`⢿`) in the cockpit — the
+    /// compaction pulse, like the thinking sparkle, is a per-row head and never
+    /// a bucket.
     #[test]
-    fn compacting_agent_in_plan_mode_counts_as_working() {
+    fn compacting_agent_counts_as_working() {
         let mut compacting = agent(
             "c",
             "claude",
             AgentStatus::Running,
-            PermissionPosture::Plan,
             Some("/repo/main"),
             Some("main"),
             Some("t"),
         );
         compacting.compacting_since = Some(fixed_now());
+        compacting.thinking = true;
         let snapshot = snapshot_with(Vec::new(), vec![compacting]);
         let screen = snapshot_to_screen(&snapshot, 40, 12);
         // Row 5 is the make-up: name(0), blank(1), `¤`(2), `◎`(3), hairline(4).
@@ -2747,9 +2724,6 @@ mod tests {
             buckets.contains("⢿ 1"),
             "compacting counts as working: {buckets}"
         );
-        assert!(
-            buckets.contains("✽ 0"),
-            "compacting does not count as thinking: {buckets}"
-        );
+        assert!(!buckets.contains('✽'), "no thinking bucket: {buckets}");
     }
 }

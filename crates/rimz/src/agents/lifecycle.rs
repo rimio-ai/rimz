@@ -19,11 +19,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::feed::{AgentStatus, PermissionPosture};
+use crate::feed::AgentStatus;
 
 /// The agent-agnostic intent each native lifecycle event carries. An adapter's
 /// `observe_lifecycle` maps a native event onto exactly one of these (plus the
-/// posture sample and enrichment); it no longer decides an [`AgentStatus`].
+/// enrichment); it no longer decides an [`AgentStatus`].
 ///
 /// Wire format is internally tagged on `signal` (snake_case), e.g.
 /// `{"signal":"turn_ended","errored":false,"parked_on_background":false}`. It
@@ -50,9 +50,16 @@ pub enum LifecycleSignal {
     SubagentStopped,
     /// A tool completed (`PostToolUse`). Adapters emit this only for a
     /// *mutating* tool, so it doubles as proof the agent is doing real work —
-    /// which is why it can reconcile a stale `plan` posture (plan mode is
-    /// read-only) or a rollup that wrongly thinks the agent is resting.
-    ToolUsed { mutates: bool },
+    /// which is why it can reconcile a rollup that wrongly thinks the agent is
+    /// resting. `edits` marks the file-editing subset (Claude `Edit`/`Write`/…,
+    /// Codex `apply_patch`): the first edit of a turn ends the thinking head.
+    /// Defaulted so a `tool_used` event written before the bit existed still
+    /// replays.
+    ToolUsed {
+        mutates: bool,
+        #[serde(default)]
+        edits: bool,
+    },
     /// The agent began compacting its context window (Claude `PreCompact`,
     /// Codex `SessionStart:compact`). A transient head, not a status change.
     Compacting,
@@ -69,9 +76,11 @@ pub enum LifecycleSignal {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LifecycleState {
     pub status: AgentStatus,
-    /// The permission slider, sticky: the latest sample wins and a signal that
-    /// carries none keeps the prior value.
-    pub posture: PermissionPosture,
+    /// Whether the running turn is still in its pre-edit reasoning phase — a
+    /// transient head the sidebar paints as the thinking sparkle. Set by a turn
+    /// (or subagent) start, cleared by the turn's first file-editing tool or
+    /// its end; only ever rendered while `status == Running`.
+    pub thinking: bool,
     /// Whether the agent is mid-compaction — a transient head the sidebar
     /// paints, cleared by the next non-compaction signal.
     pub compacting: bool,
@@ -103,25 +112,10 @@ pub struct Transition {
 
 /// Fold one [`LifecycleSignal`] onto the prior [`LifecycleState`]. Pure and
 /// total: any `(prev, signal)` pair returns a `Transition` and never panics.
-///
-/// `posture_sample` is the slider the originating event reported, if any
-/// (`None` means the event named no slider, so the prior posture carries
-/// forward). Posture is resolved once, up front, and a reconciliation edge may
-/// still override it (a mutating tool proves the agent left read-only plan
-/// mode).
-pub fn step(
-    prev: Option<&LifecycleState>,
-    signal: &LifecycleSignal,
-    posture_sample: Option<PermissionPosture>,
-) -> Transition {
+pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transition {
     let prior_status = prev.map(|p| p.status);
     let was_compacting = prev.is_some_and(|p| p.compacting);
-
-    // The slider is sticky: latest sample wins, else carry forward, else the
-    // omitted baseline.
-    let mut posture = posture_sample
-        .or_else(|| prev.map(|p| p.posture))
-        .unwrap_or(PermissionPosture::Default);
+    let was_thinking = prev.is_some_and(|p| p.thinking);
     let mut kind = TransitionKind::Normal;
 
     // `Ended` is handled as removal upstream and should never be stepped; if it
@@ -130,7 +124,7 @@ pub fn step(
         return Transition {
             next: LifecycleState {
                 status: prior_status.unwrap_or(AgentStatus::Idle),
-                posture,
+                thinking: was_thinking,
                 compacting: was_compacting,
             },
             kind: TransitionKind::Ignored {
@@ -142,6 +136,22 @@ pub fn step(
     // Compaction is the one signal that preserves the prior status; it is a
     // transient head, not a transition. Every other signal clears the head.
     let compacting = matches!(signal, LifecycleSignal::Compacting);
+
+    // The thinking head: a fresh turn (or child task) opens in its reasoning
+    // phase; the turn's first file-editing tool ends it; any turn boundary
+    // clears it. A non-editing mutating tool (a shell command) is work, but the
+    // turn has still written nothing — the head carries forward. Compaction
+    // preserves it like it preserves the status.
+    let thinking = match signal {
+        LifecycleSignal::TurnStarted | LifecycleSignal::SubagentStarted => true,
+        LifecycleSignal::ToolUsed { edits, .. } => was_thinking && !edits,
+        LifecycleSignal::Compacting => was_thinking,
+        LifecycleSignal::Registered
+        | LifecycleSignal::TurnEnded { .. }
+        | LifecycleSignal::SubagentStopped => false,
+        // Handled above.
+        LifecycleSignal::Ended => unreachable!("Ended returns early"),
+    };
 
     let status = match signal {
         LifecycleSignal::Registered => AgentStatus::Idle,
@@ -161,40 +171,25 @@ pub fn step(
                 AgentStatus::Success
             }
         }
-        LifecycleSignal::ToolUsed { mutates } => {
-            // A mutating tool while the slider still reads `plan` is impossible —
-            // plan mode is read-only — so the agent left it without reporting a
-            // new posture. Reconcile off plan and let the caller log it. This is
-            // the "shows thinking while editing in auto mode" fix.
-            if *mutates && posture == PermissionPosture::Plan {
-                posture = PermissionPosture::Auto;
-                kind = TransitionKind::Reconciled {
-                    from: prior_status.unwrap_or(AgentStatus::Running),
-                    reason: "mutating tool while plan posture",
-                };
-            }
+        LifecycleSignal::ToolUsed { .. } => {
             // A completed tool proves the agent is working; if the rollup thinks
             // it is resting (or it is unknown), reconcile to running. Attention
             // states (anything not resting) are left alone.
             match prior_status {
                 Some(AgentStatus::Running) => AgentStatus::Running,
                 Some(resting @ (AgentStatus::Idle | AgentStatus::Success)) => {
-                    if matches!(kind, TransitionKind::Normal) {
-                        kind = TransitionKind::Reconciled {
-                            from: resting,
-                            reason: "tool used outside a running turn",
-                        };
-                    }
+                    kind = TransitionKind::Reconciled {
+                        from: resting,
+                        reason: "tool used outside a running turn",
+                    };
                     AgentStatus::Running
                 }
                 Some(other) => other,
                 None => {
-                    if matches!(kind, TransitionKind::Normal) {
-                        kind = TransitionKind::Reconciled {
-                            from: AgentStatus::Idle,
-                            reason: "tool used before session registered",
-                        };
-                    }
+                    kind = TransitionKind::Reconciled {
+                        from: AgentStatus::Idle,
+                        reason: "tool used before session registered",
+                    };
                     AgentStatus::Running
                 }
             }
@@ -208,7 +203,7 @@ pub fn step(
     Transition {
         next: LifecycleState {
             status,
-            posture,
+            thinking,
             compacting,
         },
         kind,
@@ -257,7 +252,10 @@ pub(crate) fn signal_from_event_params(params: &Value, event_name: &str) -> Life
         },
         // A bare legacy `running` (e.g. a recorded tool event) keeps the agent
         // running without claiming a turn boundary.
-        _ => LifecycleSignal::ToolUsed { mutates: false },
+        _ => LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+        },
     }
 }
 
@@ -265,153 +263,157 @@ pub(crate) fn signal_from_event_params(params: &Value, event_name: &str) -> Life
 mod tests {
     use super::*;
 
-    fn state(status: AgentStatus, posture: PermissionPosture, compacting: bool) -> LifecycleState {
+    fn state(status: AgentStatus, thinking: bool, compacting: bool) -> LifecycleState {
         LifecycleState {
             status,
-            posture,
+            thinking,
             compacting,
+        }
+    }
+
+    fn tool(edits: bool) -> LifecycleSignal {
+        LifecycleSignal::ToolUsed {
+            mutates: true,
+            edits,
         }
     }
 
     #[test]
     fn registered_is_idle() {
-        let t = step(None, &LifecycleSignal::Registered, None);
+        let t = step(None, &LifecycleSignal::Registered);
         assert_eq!(t.next.status, AgentStatus::Idle);
+        assert!(!t.next.thinking);
         assert_eq!(t.kind, TransitionKind::Normal);
     }
 
     #[test]
-    fn turn_started_is_running() {
-        let prev = state(AgentStatus::Idle, PermissionPosture::Default, false);
-        let t = step(Some(&prev), &LifecycleSignal::TurnStarted, None);
+    fn turn_started_is_running_and_thinking() {
+        let prev = state(AgentStatus::Idle, false, false);
+        let t = step(Some(&prev), &LifecycleSignal::TurnStarted);
         assert_eq!(t.next.status, AgentStatus::Running);
+        assert!(t.next.thinking, "a fresh turn opens in its reasoning phase");
         assert_eq!(t.kind, TransitionKind::Normal);
     }
 
     #[test]
-    fn clean_turn_end_is_success() {
-        let prev = state(AgentStatus::Running, PermissionPosture::Default, false);
+    fn first_file_edit_ends_thinking() {
+        let prev = state(AgentStatus::Running, true, false);
+        let t = step(Some(&prev), &tool(true));
+        assert_eq!(t.next.status, AgentStatus::Running);
+        assert!(
+            !t.next.thinking,
+            "the turn's first edit flips it to working"
+        );
+        assert_eq!(t.kind, TransitionKind::Normal);
+    }
+
+    #[test]
+    fn non_editing_tool_keeps_thinking() {
+        // A shell command is work, but the turn has written nothing yet — the
+        // thinking head carries forward until a real file edit.
+        let prev = state(AgentStatus::Running, true, false);
+        let t = step(Some(&prev), &tool(false));
+        assert_eq!(t.next.status, AgentStatus::Running);
+        assert!(t.next.thinking);
+        assert_eq!(t.kind, TransitionKind::Normal);
+    }
+
+    #[test]
+    fn thinking_stays_cleared_for_the_rest_of_the_turn() {
+        let prev = state(AgentStatus::Running, false, false);
+        let t = step(Some(&prev), &tool(false));
+        assert!(!t.next.thinking, "a cleared head never re-arms mid-turn");
+    }
+
+    #[test]
+    fn clean_turn_end_is_success_and_clears_thinking() {
+        let prev = state(AgentStatus::Running, true, false);
         let t = step(
             Some(&prev),
             &LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
             },
-            None,
         );
         assert_eq!(t.next.status, AgentStatus::Success);
+        assert!(!t.next.thinking);
         assert_eq!(t.kind, TransitionKind::Normal);
     }
 
     #[test]
     fn errored_turn_end_is_failed() {
-        let prev = state(AgentStatus::Running, PermissionPosture::Default, false);
+        let prev = state(AgentStatus::Running, false, false);
         let t = step(
             Some(&prev),
             &LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
             },
-            None,
         );
         assert_eq!(t.next.status, AgentStatus::Failed);
     }
 
     #[test]
-    fn background_park_stays_running_normal() {
-        let prev = state(AgentStatus::Running, PermissionPosture::Default, false);
+    fn background_park_stays_running_normal_without_thinking() {
+        let prev = state(AgentStatus::Running, true, false);
         let t = step(
             Some(&prev),
             &LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: true,
             },
-            None,
         );
-        // A designed edge — running, no log noise.
+        // A designed edge — running, no log noise. The foreground reasoning is
+        // done (the turn parked on background work), so the thinking head drops.
         assert_eq!(t.next.status, AgentStatus::Running);
+        assert!(!t.next.thinking);
         assert_eq!(t.kind, TransitionKind::Normal);
     }
 
     #[test]
     fn errored_wins_over_background_park() {
-        let prev = state(AgentStatus::Running, PermissionPosture::Default, false);
+        let prev = state(AgentStatus::Running, false, false);
         let t = step(
             Some(&prev),
             &LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: true,
             },
-            None,
         );
         assert_eq!(t.next.status, AgentStatus::Failed);
     }
 
     #[test]
-    fn subagent_start_running_stop_idle() {
-        let start = step(None, &LifecycleSignal::SubagentStarted, None);
+    fn subagent_start_running_thinking_stop_idle() {
+        let start = step(None, &LifecycleSignal::SubagentStarted);
         assert_eq!(start.next.status, AgentStatus::Running);
-        let stop = step(Some(&start.next), &LifecycleSignal::SubagentStopped, None);
+        assert!(start.next.thinking, "a child task opens reasoning too");
+        let stop = step(Some(&start.next), &LifecycleSignal::SubagentStopped);
         assert_eq!(stop.next.status, AgentStatus::Idle);
+        assert!(!stop.next.thinking);
     }
 
     #[test]
-    fn compacting_keeps_status_and_sets_head() {
-        let prev = state(AgentStatus::Running, PermissionPosture::Default, false);
-        let t = step(Some(&prev), &LifecycleSignal::Compacting, None);
+    fn compacting_keeps_status_and_thinking_and_sets_head() {
+        let prev = state(AgentStatus::Running, true, false);
+        let t = step(Some(&prev), &LifecycleSignal::Compacting);
         assert_eq!(t.next.status, AgentStatus::Running);
+        assert!(t.next.thinking, "compaction preserves the turn phase");
         assert!(t.next.compacting);
         assert_eq!(t.kind, TransitionKind::Normal);
     }
 
     #[test]
     fn any_signal_clears_compacting_head() {
-        let prev = state(AgentStatus::Running, PermissionPosture::Default, true);
-        let t = step(Some(&prev), &LifecycleSignal::TurnStarted, None);
+        let prev = state(AgentStatus::Running, false, true);
+        let t = step(Some(&prev), &LifecycleSignal::TurnStarted);
         assert!(!t.next.compacting);
     }
 
     #[test]
-    fn mutating_tool_in_plan_reconciles_posture_off_plan() {
-        let prev = state(AgentStatus::Running, PermissionPosture::Plan, false);
-        let t = step(
-            Some(&prev),
-            &LifecycleSignal::ToolUsed { mutates: true },
-            None,
-        );
-        assert_eq!(t.next.posture, PermissionPosture::Auto);
-        assert_eq!(t.next.status, AgentStatus::Running);
-        assert_eq!(
-            t.kind,
-            TransitionKind::Reconciled {
-                from: AgentStatus::Running,
-                reason: "mutating tool while plan posture",
-            }
-        );
-    }
-
-    #[test]
-    fn nonmutating_tool_leaves_plan_posture_intact() {
-        // The legacy shim can produce a non-mutating ToolUsed; it must not flip
-        // a genuine plan posture.
-        let prev = state(AgentStatus::Running, PermissionPosture::Plan, false);
-        let t = step(
-            Some(&prev),
-            &LifecycleSignal::ToolUsed { mutates: false },
-            None,
-        );
-        assert_eq!(t.next.posture, PermissionPosture::Plan);
-        assert_eq!(t.kind, TransitionKind::Normal);
-    }
-
-    #[test]
     fn tool_while_resting_reconciles_to_running() {
-        let prev = state(AgentStatus::Idle, PermissionPosture::Default, false);
-        let t = step(
-            Some(&prev),
-            &LifecycleSignal::ToolUsed { mutates: true },
-            None,
-        );
+        let prev = state(AgentStatus::Idle, false, false);
+        let t = step(Some(&prev), &tool(true));
         assert_eq!(t.next.status, AgentStatus::Running);
         assert_eq!(
             t.kind,
@@ -423,24 +425,11 @@ mod tests {
     }
 
     #[test]
-    fn posture_sample_wins_then_carries_forward() {
-        // A sample sets it...
-        let t = step(
-            None,
-            &LifecycleSignal::Registered,
-            Some(PermissionPosture::Yolo),
-        );
-        assert_eq!(t.next.posture, PermissionPosture::Yolo);
-        // ...and a later event that names no slider keeps it.
-        let t2 = step(Some(&t.next), &LifecycleSignal::TurnStarted, None);
-        assert_eq!(t2.next.posture, PermissionPosture::Yolo);
-    }
-
-    #[test]
     fn ended_is_ignored_and_preserves_state() {
-        let prev = state(AgentStatus::Running, PermissionPosture::Auto, false);
-        let t = step(Some(&prev), &LifecycleSignal::Ended, None);
+        let prev = state(AgentStatus::Running, true, false);
+        let t = step(Some(&prev), &LifecycleSignal::Ended);
         assert_eq!(t.next.status, AgentStatus::Running);
+        assert!(t.next.thinking);
         assert!(matches!(t.kind, TransitionKind::Ignored { .. }));
     }
 
@@ -455,24 +444,40 @@ mod tests {
             },
             LifecycleSignal::SubagentStarted,
             LifecycleSignal::SubagentStopped,
-            LifecycleSignal::ToolUsed { mutates: true },
+            tool(true),
             LifecycleSignal::Compacting,
             LifecycleSignal::Ended,
         ] {
-            let _ = step(None, &signal, None);
+            let _ = step(None, &signal);
         }
     }
 
     #[test]
     fn signal_round_trips_through_json() {
-        let signal = LifecycleSignal::TurnEnded {
-            errored: false,
-            parked_on_background: true,
+        let signal = LifecycleSignal::ToolUsed {
+            mutates: true,
+            edits: true,
         };
         let wire = serde_json::to_value(signal).unwrap();
-        assert_eq!(wire["signal"], "turn_ended");
+        assert_eq!(wire["signal"], "tool_used");
+        assert_eq!(wire["edits"], true);
         let back: LifecycleSignal = serde_json::from_value(wire).unwrap();
         assert_eq!(signal, back);
+    }
+
+    #[test]
+    fn tool_used_without_edits_bit_still_deserializes() {
+        // Events written before the `edits` bit existed carry only `mutates`;
+        // the missing field defaults to false so an old log replays.
+        let wire = serde_json::json!({ "signal": "tool_used", "mutates": true });
+        let signal: LifecycleSignal = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            signal,
+            LifecycleSignal::ToolUsed {
+                mutates: true,
+                edits: false,
+            }
+        );
     }
 
     #[test]

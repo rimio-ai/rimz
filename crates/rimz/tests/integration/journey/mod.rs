@@ -433,6 +433,16 @@ pub fn user_prompt_submit(session_id: &str, prompt: &str) -> Value {
     })
 }
 
+/// `PostToolUse` lifecycle payload naming the completed tool. A file-editing
+/// tool (`apply_patch`, `Edit`) ends the turn's thinking head.
+pub fn post_tool_use(session_id: &str, tool_name: &str) -> Value {
+    json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": session_id,
+        "tool_name": tool_name,
+    })
+}
+
 /// Permission request payload. `secret` is embedded in the
 /// payload command so a test can assert the sidebar never reproduces it
 /// (notify-don't-answer).
