@@ -251,7 +251,7 @@ The reader does exactly what they said they would: spins up four more agents acr
 ▏  ▣ ━━━━━━━━━━━━━━━━━━━━━─────────────   63%
 
  feature-migration                   +230 -23
- ! claude · Opus · xhigh · 1M
+ ! claude · Opus · xhigh · 1m
    db migrate
    ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━─────   84%
  ○ codex · GPT-5.5 · low

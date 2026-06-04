@@ -7,6 +7,7 @@
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
+use rimz::config::ContextSeverityConfig;
 use rimz::feed::AgentStatus;
 
 use super::theme::{ORANGE, Theme};
@@ -88,15 +89,39 @@ pub(super) fn loading_dots(animation_phase: u64) -> &'static str {
 }
 
 /// The brightness modifier for a breathing attention glyph (`?` / `!`) on this
-/// frame: a slow triangle pulse — `DIM` at the troughs, normal through the
-/// middle, `BOLD` at the peak — so the marker swells and fades like a breath,
-/// pulling the eye back to an unanswered row without strobing. It never blanks, so
-/// the glyph holds its cell and the column never shifts. At the 100ms animation
-/// tick the cycle is ~2.4s. Modifier-only, so the breath survives under
+/// frame, paced by the same [`age_heat`] ramp the glyph's color wears. While
+/// yellow it is a slow triangle pulse — `DIM` at the troughs, normal through
+/// the middle, `BOLD` at the peak — so the marker swells and fades like a
+/// breath (~2.4s at the 100ms animation tick), pulling the eye back to an
+/// unanswered row without strobing. Amber doubles the tempo (~1.2s): the row
+/// sits past the half hour and the breath quickens with it. Red drops the
+/// swell for a hard `BOLD`↔`DIM` blink (~0.6s, flipping on the slow paint
+/// grid) — past the hour the glyph earns the strobe the young breath avoids.
+/// Every tier holds the glyph in its cell (never blanking, so the column never
+/// shifts) and is modifier-only, so the urgency cadence survives under
 /// `NO_COLOR`.
-pub(super) fn attention_breath(animation_phase: u64) -> Modifier {
+pub(super) fn attention_breath(animation_phase: u64, age_secs: i64) -> Modifier {
+    match age_heat(age_secs) {
+        // Red: a hard square wave, flipping every third tick.
+        Some(Color::Red) => {
+            if animation_phase % 6 < 3 {
+                Modifier::BOLD
+            } else {
+                Modifier::DIM
+            }
+        }
+        // Amber: the same triangle at double-time.
+        Some(color) if color == ORANGE => breath_wave(animation_phase.wrapping_mul(2)),
+        // Yellow (including the fresh yellow floor): the resting cadence.
+        _ => breath_wave(animation_phase),
+    }
+}
+
+/// One step of the breath's triangle wave: rise `DIM` → normal → `BOLD` over
+/// the first half-cycle, fall back over the second.
+fn breath_wave(phase: u64) -> Modifier {
     const CYCLE: u64 = 24;
-    let pos = animation_phase % CYCLE;
+    let pos = phase % CYCLE;
     // Distance toward the peak at the half-cycle: rise 0→12, then fall 12→24.
     let level = if pos <= CYCLE / 2 { pos } else { CYCLE - pos };
     match level {
@@ -106,26 +131,41 @@ pub(super) fn attention_breath(animation_phase: u64) -> Modifier {
     }
 }
 
-/// The `◷` last-activity age follows the provider prompt-cache lifetime: past
-/// 20 minutes of inactivity the cache is likely cooling, past the hour it is
-/// almost certainly invalidated — resuming a red session re-reads the whole
-/// context at uncached input rates. Pragmatic markers for Claude's and Codex's
-/// cache retention, not exact TTLs.
-pub(super) const ACTIVITY_CACHE_COOLING_SECS: i64 = 20 * 60;
-pub(super) const ACTIVITY_CACHE_COLD_SECS: i64 = 60 * 60;
-
-/// Tone for the card's `◷` age cluster at `age_secs` of inactivity: dim while
-/// a resume would still hit cache, amber once it is cooling, red once it is
-/// gone — the attention ramp's tones, because a red age is a cost warning, not
-/// chrome. The figure itself still carries the magnitude under `NO_COLOR`.
-pub(super) fn activity_age_style(theme: &Theme, age_secs: i64) -> Style {
-    if age_secs >= ACTIVITY_CACHE_COLD_SECS {
-        theme.style(Color::Red, Modifier::empty())
-    } else if age_secs >= ACTIVITY_CACHE_COOLING_SECS {
-        theme.style(Color::Yellow, Modifier::empty())
-    } else {
-        theme.dim()
+/// The clock-fill glyph for an elapsed span: the face fills a quarter per
+/// quarter hour — `◔` to 15m, `◑` to 30m, `◕` to 45m, `●` to the hour — and
+/// past the hour reads the ringed `◉`, so any time readout on a card carries
+/// its magnitude iconographically. One cell, so it never disturbs alignment.
+pub(super) fn elapsed_glyph(secs: i64) -> &'static str {
+    match secs {
+        i64::MIN..=900 => "◔",
+        901..=1800 => "◑",
+        1801..=2700 => "◕",
+        2701..=3600 => "●",
+        _ => "◉",
     }
+}
+
+/// The shared age heat: one tone ramp for every idle-age reader — the clock
+/// cluster, the breathing `?`/`!`, and the cockpit attention buckets — stepping
+/// with the quarter-hour buckets that fill the clock face ([`elapsed_glyph`]).
+/// `None` through the first quarter (callers pick the resting tone), yellow to
+/// the half hour, amber beyond it, red past the hour — when resuming would
+/// almost certainly re-read the whole context at uncached input rates.
+pub(super) fn age_heat(age_secs: i64) -> Option<Color> {
+    match age_secs {
+        i64::MIN..=900 => None,
+        901..=1800 => Some(Color::Yellow),
+        1801..=3600 => Some(ORANGE),
+        _ => Some(Color::Red),
+    }
+}
+
+/// Tone for the card's elapsed-age cluster at `age_secs` of inactivity: the
+/// shared [`age_heat`] over a dim resting tone, so a fresh age stays chrome
+/// and a red one reads as the cost warning it is. The figure itself still
+/// carries the magnitude under `NO_COLOR`.
+pub(super) fn activity_age_style(theme: &Theme, age_secs: i64) -> Style {
+    age_heat(age_secs).map_or(theme.dim(), |color| theme.style(color, Modifier::empty()))
 }
 
 pub(super) fn working_glyph(animation_phase: u64) -> &'static str {
@@ -176,7 +216,7 @@ pub(super) fn status_style(theme: &Theme, status: AgentStatus) -> Style {
         AgentStatus::Idle => theme.style(Color::Green, Modifier::DIM),
         AgentStatus::Success => theme.style(Color::Green, Modifier::DIM),
         // Rate-limited stays in the amber attention family but at rest weight
-        // (not bold, and `attention_glyph_style` never reddens it): it is
+        // (not bold, and `attention_glyph_style` never heats it): it is
         // attention-class, but parked with nothing to do but wait — the held
         // tone sets it apart from the loud, actionable `?`/`!`.
         AgentStatus::RateLimited => theme.style(Color::Yellow, Modifier::empty()),
@@ -208,25 +248,23 @@ pub(super) fn agent_style(theme: &Theme, status: AgentStatus) -> Style {
 }
 
 /// Style for an agent row's leading glyph. Both attention states — `?` waiting
-/// and `!` failed — breathe (a slow `DIM`↔`BOLD` brightness pulse, see
-/// [`attention_breath`]) in yellow ("a human is needed here") and escalate to red
-/// once the row has gone unanswered past `redden_secs` (the configurable neglect
-/// window), so a fresh ask reads calm-urgent and a long-ignored one visibly heats
-/// up. Every calm state keeps its resting [`agent_style`] tone, unbreathing.
+/// and `!` failed — breathe (a `DIM`↔`BOLD` brightness pulse, see
+/// [`attention_breath`]) and wear the shared [`age_heat`] over a yellow floor:
+/// a fresh ask reads calm-urgent yellow ("a human is needed here") and heats
+/// through amber to red on the same quarter-hour ramp as the age clock beside
+/// it, so the glyph and the clock never disagree while warm. The breath paces
+/// with the same heat — slow while yellow, double-time at amber, a hard blink
+/// at red. Every calm state keeps its resting [`agent_style`] tone,
+/// unbreathing.
 pub(super) fn attention_glyph_style(
     theme: &Theme,
     status: AgentStatus,
     age_secs: i64,
-    redden_secs: i64,
     animation_phase: u64,
 ) -> Style {
     if matches!(status, AgentStatus::Waiting | AgentStatus::Failed) {
-        let color = if age_secs >= redden_secs {
-            Color::Red
-        } else {
-            Color::Yellow
-        };
-        theme.style(color, attention_breath(animation_phase))
+        let color = age_heat(age_secs).unwrap_or(Color::Yellow);
+        theme.style(color, attention_breath(animation_phase, age_secs))
     } else {
         agent_style(theme, status)
     }
@@ -250,6 +288,16 @@ pub(super) const TOKENS_CACHED: &str = "◌";
 /// the context window, sibling to the `▣` meter glyph so the two context reads
 /// pair visually while staying distinct from the `◇` fleet totals.
 pub(super) const CONTEXT_FILLED: &str = "▤";
+
+/// The context-window composition colors — one tone per segment, shared by the
+/// bar's colored runs and the context line's `◌`/`◍`/`↘` markers so the line
+/// reads as the bar's legend by construction. `↗` output is not in the window
+/// (it joins next turn), so it carries no bar segment; its green is free
+/// because the meter's calm tier reads blue.
+pub(super) const SEGMENT_CACHE_READ: Color = Color::Blue;
+pub(super) const SEGMENT_CACHE_WRITE: Color = Color::Yellow;
+pub(super) const SEGMENT_INPUT: Color = Color::Red;
+pub(super) const SEGMENT_OUTPUT: Color = Color::Green;
 
 /// The `◇ ↘ ↗ ◍ ◌` token breakdown as styled spans — the one shape every fleet
 /// token line shares (cockpit today line, provider today line, W/M ledger
@@ -298,9 +346,13 @@ pub(super) fn token_breakdown_spans(
 /// measurement), a `·` seam, then the latest API call's composition ordered by
 /// how the window filled — `◌` read back from cache, `◍` newly written to it,
 /// `↘` fresh input, `↗` output generated (which joins the window next turn).
-/// Only the `▤` marker carries a tone; the composition stays dim chrome.
+/// The `▤` head wears the bar's `severity` tone and each composition marker its
+/// bar-segment color ([`SEGMENT_CACHE_READ`] and siblings), so the line is the
+/// bar's color-keyed legend; the figures stay dim chrome.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn context_breakdown_spans(
     theme: &Theme,
+    severity: Color,
     filled: u64,
     cache_read: u64,
     cache_write: u64,
@@ -308,39 +360,36 @@ pub(super) fn context_breakdown_spans(
     output: u64,
     fmt: fn(u64) -> String,
 ) -> Vec<Span<'static>> {
-    let mut spans = context_total_spans(theme, filled, fmt);
-    spans.push(Span::styled(
-        format!(" · {TOKENS_CACHED} {}", fmt(cache_read)),
-        theme.dim(),
-    ));
-    spans.push(Span::styled(
-        format!(" {TOKENS_CACHE_WRITE} {}", fmt(cache_write)),
-        theme.dim(),
-    ));
-    spans.push(Span::styled(
-        format!(" {TOKENS_IN} {}", fmt(input)),
-        theme.dim(),
-    ));
-    spans.push(Span::styled(
-        format!(" {TOKENS_OUT} {}", fmt(output)),
-        theme.dim(),
-    ));
+    let mut spans = context_total_spans(theme, severity, filled, fmt);
+    for (seam, glyph, color, value) in [
+        (" · ", TOKENS_CACHED, SEGMENT_CACHE_READ, cache_read),
+        (" ", TOKENS_CACHE_WRITE, SEGMENT_CACHE_WRITE, cache_write),
+        (" ", TOKENS_IN, SEGMENT_INPUT, input),
+        (" ", TOKENS_OUT, SEGMENT_OUTPUT, output),
+    ] {
+        spans.push(Span::styled(seam, theme.dim()));
+        spans.push(Span::styled(glyph, theme.style(color, Modifier::empty())));
+        spans.push(Span::styled(format!(" {}", fmt(value)), theme.dim()));
+    }
     spans
 }
 
-/// The `▤ {filled}` head of the card's context line: the context-blue square +
-/// the filled-window figure, blue to pair with the calm `▣` meter glyph it
-/// complements (severity stays the bar's job). A card whose context carries no
-/// per-call split (a Codex rollout-only total, or Claude before its first API
-/// call) uses it alone, with the provider's rollup total standing in for the
-/// filled window. Display-only, never a decision driver.
+/// The `▤ {filled}` head of the card's context line: the filled-square marker +
+/// the filled-window figure. The marker wears the caller's `severity` — the
+/// same [`context_severity_color`] the bar and the `▣` glyph paint — so the
+/// absolute figure and the meter above it read as one measurement at one
+/// urgency. A card whose context carries no per-call split (a Codex
+/// rollout-only total, or Claude before its first API call) uses it alone, with
+/// the provider's rollup total standing in for the filled window. Display-only,
+/// never a decision driver.
 pub(super) fn context_total_spans(
     theme: &Theme,
+    severity: Color,
     filled: u64,
     fmt: fn(u64) -> String,
 ) -> Vec<Span<'static>> {
     vec![
-        Span::styled(CONTEXT_FILLED, theme.style(Color::Blue, Modifier::empty())),
+        Span::styled(CONTEXT_FILLED, theme.style(severity, Modifier::empty())),
         Span::styled(format!(" {}", fmt(filled)), theme.dim()),
     ]
 }
@@ -395,46 +444,64 @@ fn two_tone_bar(
     spans
 }
 
-/// The context **bar's** tone — the calm green / amber / red severity ramp from
-/// the shared [`severity_tier`]. Decides whether the bar shows its composition
-/// (only while calm-green) or goes solid, and the solid color once it warns.
-pub(super) fn context_severity_color(percent: u8, used_tokens: Option<u64>) -> Color {
-    match severity_tier(percent, used_tokens) {
-        0 => Color::Green,
+/// The context meter's **severity** tone — one calm-blue → yellow → amber →
+/// red ramp shared by the bar, the `▣` glyph, and the `▤` context-line head,
+/// so every context read on the card speaks one urgency. Calm reads **blue**
+/// ("cold — plenty of headroom"), keeping the meter clear of the green running
+/// vocabulary and of the composition segments. For the bar it also decides
+/// composition-vs-solid: the segments (where the window went) paint only while
+/// calm; once the meter warms the bar goes one solid severity run.
+pub(super) fn context_severity_color(
+    percent: u8,
+    used_tokens: Option<u64>,
+    bands: &ContextSeverityConfig,
+) -> Color {
+    match severity_tier(percent, used_tokens, bands) {
+        0 => Color::Blue,
         1 => Color::Yellow,
+        2 => ORANGE,
         _ => Color::Red,
     }
 }
 
-/// The shared usage tier (0 calm / 1 warn / 2 alarm) behind both the bar's
-/// severity color and the `▣` glyph's tone: the worse of the fill-percentage ramp
-/// (≤40 / ≤75 / above) and the absolute-token overlay (≤200k / ≤400k / above), so
-/// a large-window model green by percentage still climbs by sheer volume.
-fn severity_tier(percent: u8, used_tokens: Option<u64>) -> u8 {
-    let by_percent = match percent.min(100) {
-        0..=40 => 0u8,
-        41..=75 => 1,
-        _ => 2,
+/// The shared usage tier (0 calm / 1 yellow / 2 amber / 3 red) behind every
+/// context tone: the worse of the fill-percentage ramp and the absolute-token
+/// overlay, each tier entered at its configured inclusive lower bound
+/// (`[sidebar.context]`, [`ContextSeverityConfig`]), so a large-window model
+/// calm by percentage still climbs by sheer volume. Checked worst-first, so a
+/// misordered user config degrades to the highest matching tier.
+fn severity_tier(percent: u8, used_tokens: Option<u64>, bands: &ContextSeverityConfig) -> u8 {
+    let percent = percent.min(100);
+    let tokens = used_tokens.unwrap_or(0);
+    let reaches = |band: &rimz::config::ContextBand| -> bool {
+        percent >= band.percent || tokens >= band.tokens
     };
-    let by_tokens = match used_tokens.unwrap_or(0) {
-        0..=200_000 => 0,
-        200_001..=400_000 => 1,
-        _ => 2,
-    };
-    by_percent.max(by_tokens)
+    if reaches(&bands.red) {
+        3
+    } else if reaches(&bands.amber) {
+        2
+    } else if reaches(&bands.yellow) {
+        1
+    } else {
+        0
+    }
 }
 
-/// The context meter's `▣` glyph tone — driven by *total* window usage, never by
-/// which composition segment fills the most cells. The calm tier reads **blue**
-/// ("cold — plenty of headroom"), not green, so a barely-used window whose bar is
-/// dominated by amber cache-writes still flags its `▣` blue; it warms to amber
-/// then red only as the window genuinely fills. Decoupling glyph from bar is
-/// deliberate: the bar shows *where* the tokens went, the glyph *how full* it is.
-pub(super) fn ctx_glyph_color(percent: u8, used_tokens: Option<u64>) -> Color {
-    match severity_tier(percent, used_tokens) {
-        0 => Color::Blue,
-        1 => Color::Yellow,
-        _ => Color::Red,
+/// The identity line's window-token tone, keyed on the model's window *size* —
+/// a capability read, not a usage one: amber for the 1M class, yellow above the
+/// 200k standard, blue for the 128k–200k mainstream, and dim grey below, so a
+/// small-window model recedes to chrome while an extended window stands out.
+/// Fixed tiers (model classes move slowly); only the usage bands are
+/// config-driven.
+pub(super) fn window_style(theme: &Theme, window: u64) -> Style {
+    if window >= 1_000_000 {
+        theme.style(ORANGE, Modifier::empty())
+    } else if window > 200_000 {
+        theme.style(Color::Yellow, Modifier::empty())
+    } else if window >= 128_000 {
+        theme.style(Color::Blue, Modifier::empty())
+    } else {
+        theme.dim()
     }
 }
 
@@ -643,6 +710,8 @@ pub(super) fn diff_spans(theme: &Theme, added: u32, removed: u32) -> Vec<Span<'s
 
 #[cfg(test)]
 mod tests {
+    use rimz::config::ContextBand;
+
     use super::*;
 
     /// `NO_COLOR` strips the green→amber→red ramp, but the heavy/light weight
@@ -730,39 +799,109 @@ mod tests {
         assert_eq!(text, "━━──");
     }
 
-    /// The context tone takes the worse of two severities: the fill-percentage
-    /// ramp and an absolute-token overlay (pricey past 200k, dear past 400k), so
-    /// a large-window model green by percentage still warns by volume.
+    /// The context tone climbs calm blue → yellow → amber → red, taking the
+    /// worse of two axes — fill percentage and absolute tokens — with each tier
+    /// entered at its inclusive lower bound. Defaults: yellow at 60% / 160k,
+    /// amber at 80% / 258k, red at 95% / 420k.
     #[test]
     fn context_severity_takes_the_worse_of_percent_and_tokens() {
-        // Low fill, low tokens: calm green.
-        assert_eq!(context_severity_color(20, Some(50_000)), Color::Green);
-        // The percentage ramp alone still reddens a full window.
-        assert_eq!(context_severity_color(60, Some(10_000)), Color::Yellow);
-        assert_eq!(context_severity_color(80, Some(10_000)), Color::Red);
-        // Green by percentage, but the token volume escalates it.
-        assert_eq!(context_severity_color(20, Some(250_000)), Color::Yellow);
-        assert_eq!(context_severity_color(20, Some(500_000)), Color::Red);
+        let bands = ContextSeverityConfig::default();
+        let color = |percent, tokens| context_severity_color(percent, tokens, &bands);
+        // Low fill, low tokens: calm blue.
+        assert_eq!(color(20, Some(50_000)), Color::Blue);
+        // Just under both yellow bounds stays calm; the bound itself enters.
+        assert_eq!(color(59, Some(159_999)), Color::Blue);
+        assert_eq!(color(60, Some(10_000)), Color::Yellow);
+        assert_eq!(color(10, Some(160_000)), Color::Yellow);
+        // The percentage ramp alone climbs through all four tiers.
+        assert_eq!(color(80, Some(10_000)), ORANGE);
+        assert_eq!(color(95, Some(10_000)), Color::Red);
+        // Calm by percentage, but the token volume escalates it.
+        assert_eq!(color(20, Some(258_000)), ORANGE);
+        assert_eq!(color(20, Some(420_000)), Color::Red);
         // The worse severity wins regardless of which axis it comes from.
-        assert_eq!(context_severity_color(10, Some(450_000)), Color::Red);
+        assert_eq!(color(94, Some(419_999)), ORANGE);
         // No token reading falls back to the percentage ramp alone.
-        assert_eq!(context_severity_color(80, None), Color::Red);
-        assert_eq!(context_severity_color(10, None), Color::Green);
+        assert_eq!(color(80, None), ORANGE);
+        assert_eq!(color(10, None), Color::Blue);
+        // An out-of-range percent clamps to full and reads red.
+        assert_eq!(color(200, None), Color::Red);
     }
 
-    /// The `▣` glyph follows total usage on a blue → amber → red ramp (no green),
-    /// independent of the bar's composition: a calm window's glyph is blue even
-    /// when its bar is amber cache-write dominant, and it warms only as the window
-    /// genuinely fills — including the absolute-token overlay.
+    /// The bands come from `[sidebar.context]`, so a custom set moves every
+    /// edge; a misordered set degrades to the highest matching tier (the red
+    /// band is checked first), never to a calmer one.
     #[test]
-    fn ctx_glyph_color_is_calm_blue_then_warms() {
-        assert_eq!(ctx_glyph_color(0, None), Color::Blue);
-        assert_eq!(ctx_glyph_color(16, Some(40_000)), Color::Blue);
-        assert_eq!(ctx_glyph_color(40, Some(200_000)), Color::Blue);
-        assert_eq!(ctx_glyph_color(60, None), Color::Yellow);
-        assert_eq!(ctx_glyph_color(10, Some(250_000)), Color::Yellow); // token overlay
-        assert_eq!(ctx_glyph_color(90, None), Color::Red);
-        assert_eq!(ctx_glyph_color(10, Some(500_000)), Color::Red);
+    fn context_severity_honours_custom_and_misordered_bands() {
+        let tight = ContextSeverityConfig {
+            yellow: ContextBand {
+                percent: 10,
+                tokens: 1_000,
+            },
+            amber: ContextBand {
+                percent: 20,
+                tokens: 2_000,
+            },
+            red: ContextBand {
+                percent: 30,
+                tokens: 3_000,
+            },
+        };
+        assert_eq!(context_severity_color(5, Some(500), &tight), Color::Blue);
+        assert_eq!(context_severity_color(25, Some(0), &tight), ORANGE);
+        assert_eq!(context_severity_color(5, Some(3_000), &tight), Color::Red);
+
+        // Red configured *below* yellow: a mid fill reaches the red band even
+        // though the calmer tiers do not — worst-first keeps the warning loud.
+        let misordered = ContextSeverityConfig {
+            yellow: ContextBand {
+                percent: 90,
+                tokens: 900_000,
+            },
+            amber: ContextBand {
+                percent: 80,
+                tokens: 800_000,
+            },
+            red: ContextBand {
+                percent: 50,
+                tokens: 500_000,
+            },
+        };
+        assert_eq!(context_severity_color(60, None, &misordered), Color::Red);
+    }
+
+    /// The clock face fills a quarter per quarter hour and rings past the
+    /// hour, with each bucket's upper edge inclusive.
+    #[test]
+    fn elapsed_glyph_fills_by_the_quarter_hour() {
+        assert_eq!(elapsed_glyph(0), "◔");
+        assert_eq!(elapsed_glyph(900), "◔");
+        assert_eq!(elapsed_glyph(901), "◑");
+        assert_eq!(elapsed_glyph(1800), "◑");
+        assert_eq!(elapsed_glyph(1801), "◕");
+        assert_eq!(elapsed_glyph(2700), "◕");
+        assert_eq!(elapsed_glyph(2701), "●");
+        assert_eq!(elapsed_glyph(3600), "●");
+        assert_eq!(elapsed_glyph(3601), "◉");
+        assert_eq!(elapsed_glyph(48 * 3600), "◉");
+    }
+
+    /// The identity line's window token is a capability read keyed on size:
+    /// amber for the 1M class, yellow above the 200k standard, blue for the
+    /// mainstream 128k–200k, dim grey below — and `NO_COLOR` strips all of it.
+    #[test]
+    fn window_style_keys_on_the_window_class() {
+        let theme = Theme::fixed(false);
+        let fg = |window| window_style(&theme, window).fg;
+        assert_eq!(fg(1_050_000), Some(Color::Indexed(173)), "1M class: amber");
+        assert_eq!(fg(1_000_000), Some(Color::Indexed(173)));
+        assert_eq!(fg(272_000), Some(Color::Indexed(179)), "extended: yellow");
+        assert_eq!(fg(200_000), Some(Color::Indexed(75)), "mainstream: blue");
+        assert_eq!(fg(128_000), Some(Color::Indexed(75)));
+        assert_eq!(window_style(&theme, 32_000), theme.dim(), "small: chrome");
+
+        let plain = Theme::fixed(true);
+        assert!(window_style(&plain, 1_050_000).fg.is_none());
     }
 
     /// Largest-remainder apportionment always sums to the requested total.
@@ -876,37 +1015,35 @@ mod tests {
         }
     }
 
-    /// The attention glyph reddens only past the 30-minute neglect window, and
-    /// only for the `waiting`/`failed` states; a fresh attention row and every
-    /// calm state keep their resting tone, however old.
+    /// The attention glyph wears the shared age heat over a yellow floor — a
+    /// fresh ask reads yellow, amber past the half hour, red past the hour, the
+    /// same quarters as the age clock beside it — and only for the
+    /// `waiting`/`failed` states; every calm state keeps its resting tone,
+    /// however old.
     #[test]
-    fn attention_glyph_is_yellow_until_the_neglect_window_then_red() {
+    fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
         let theme = Theme::fixed(false);
-        let red = theme.style(Color::Red, Modifier::BOLD).fg;
         let yellow = theme.style(Color::Yellow, Modifier::BOLD).fg;
-        let redden = 30 * 60;
+        let amber = theme.style(ORANGE, Modifier::BOLD).fg;
+        let red = theme.style(Color::Red, Modifier::BOLD).fg;
 
-        // Both attention states rest yellow while fresh — `!` no longer starts
-        // red; it earns red only by going unanswered. The glyph breathes, so its
-        // brightness modifier varies by frame; only the color is asserted here.
+        // Both attention states floor at yellow while the age heat is still
+        // resting — a row that needs a human never reads as dim chrome — then
+        // step with the clock quarters. The glyph breathes, so its brightness
+        // modifier varies by frame; only the color is asserted here.
         for status in [AgentStatus::Waiting, AgentStatus::Failed] {
-            let fresh = attention_glyph_style(&theme, status, 5 * 60, redden, 0);
-            assert_eq!(fresh.fg, yellow);
-            let stale = attention_glyph_style(&theme, status, 31 * 60, redden, 0);
-            assert_eq!(stale.fg, red);
+            assert_eq!(attention_glyph_style(&theme, status, 5 * 60, 0).fg, yellow);
+            assert_eq!(attention_glyph_style(&theme, status, 25 * 60, 0).fg, yellow);
+            assert_eq!(attention_glyph_style(&theme, status, 31 * 60, 0).fg, amber);
+            assert_eq!(attention_glyph_style(&theme, status, 61 * 60, 0).fg, red);
         }
-        // The threshold is honoured: a shorter window reddens sooner.
+        // Calm states never heat, however old — they take their plain style.
         assert_eq!(
-            attention_glyph_style(&theme, AgentStatus::Waiting, 6 * 60, 5 * 60, 0).fg,
-            red
-        );
-        // Calm states never redden, however old — they take their plain style.
-        assert_eq!(
-            attention_glyph_style(&theme, AgentStatus::Idle, 60 * 60, redden, 0).fg,
+            attention_glyph_style(&theme, AgentStatus::Idle, 2 * 60 * 60, 0).fg,
             agent_style(&theme, AgentStatus::Idle).fg
         );
         assert_eq!(
-            attention_glyph_style(&theme, AgentStatus::Running, 60 * 60, redden, 0).fg,
+            attention_glyph_style(&theme, AgentStatus::Running, 2 * 60 * 60, 0).fg,
             agent_style(&theme, AgentStatus::Running).fg
         );
     }
@@ -953,9 +1090,9 @@ mod tests {
     }
 
     /// The loading dots cycle `.` → `..` → `...`, holding each step eight ticks
-    /// (a 2.4s full cycle, matching the attention breath), and the attention
-    /// glyph breathes a slow brightness pulse — `DIM` at the troughs, `BOLD` at
-    /// the peak — that wraps with the phase, never strobing.
+    /// (a 2.4s full cycle, matching the resting attention breath), and the
+    /// attention glyph breathes a slow brightness pulse — `DIM` at the troughs,
+    /// `BOLD` at the peak — that wraps with the phase, never strobing.
     #[test]
     fn loading_dots_and_attention_breath_cadence() {
         assert_eq!(loading_dots(0), ".");
@@ -965,41 +1102,90 @@ mod tests {
         assert_eq!(loading_dots(24), ".", "wraps back to one dot");
 
         // DIM at the troughs, normal between, BOLD at the half-cycle peak.
-        assert_eq!(attention_breath(0), Modifier::DIM);
-        assert_eq!(attention_breath(6), Modifier::empty());
+        let fresh = 5 * 60;
+        assert_eq!(attention_breath(0, fresh), Modifier::DIM);
+        assert_eq!(attention_breath(6, fresh), Modifier::empty());
         assert_eq!(
-            attention_breath(12),
+            attention_breath(12, fresh),
             Modifier::BOLD,
             "peak at the half-cycle"
         );
-        assert_eq!(attention_breath(18), Modifier::empty());
-        assert_eq!(attention_breath(24), Modifier::DIM, "wraps to the trough");
+        assert_eq!(attention_breath(18, fresh), Modifier::empty());
+        assert_eq!(
+            attention_breath(24, fresh),
+            Modifier::DIM,
+            "wraps to the trough"
+        );
     }
 
-    /// The `◷` age tone ramps with prompt-cache cooling: dim under 20 minutes
-    /// of inactivity, amber from 20 minutes, red from the hour — when a resume
-    /// would likely re-read the whole context uncached.
+    /// The breath paces with the age heat: yellow keeps the resting ~2.4s
+    /// triangle, amber runs the same wave at double-time (~1.2s), and red
+    /// drops the swell for a hard `BOLD`↔`DIM` blink flipping every third
+    /// tick — so the cadence alone carries the urgency under `NO_COLOR`.
     #[test]
-    fn activity_age_style_ramps_with_cache_cooling() {
+    fn attention_breath_quickens_with_the_age_heat() {
+        // Yellow (25m): the same wave as the fresh floor — slow.
+        let yellow = 25 * 60;
+        assert_eq!(attention_breath(0, yellow), Modifier::DIM);
+        assert_eq!(attention_breath(12, yellow), Modifier::BOLD);
+
+        // Amber (40m): double-time — the half-cycle peak lands at tick 6.
+        let amber = 40 * 60;
+        assert_eq!(attention_breath(0, amber), Modifier::DIM);
+        assert_eq!(
+            attention_breath(6, amber),
+            Modifier::BOLD,
+            "peak in half the time"
+        );
+        assert_eq!(
+            attention_breath(12, amber),
+            Modifier::DIM,
+            "full cycle in 1.2s"
+        );
+
+        // Red (2h): a square wave — no normal mid-level, just BOLD↔DIM.
+        let red = 2 * 60 * 60;
+        assert_eq!(attention_breath(0, red), Modifier::BOLD);
+        assert_eq!(
+            attention_breath(2, red),
+            Modifier::BOLD,
+            "held through the half"
+        );
+        assert_eq!(
+            attention_breath(3, red),
+            Modifier::DIM,
+            "hard flip, no gradient"
+        );
+        assert_eq!(attention_breath(5, red), Modifier::DIM);
+        assert_eq!(attention_breath(6, red), Modifier::BOLD, "wraps");
+    }
+
+    /// The elapsed-age tone steps with the clock-fill quarters: dim through the
+    /// first quarter (a resume still hits cache), yellow to the half hour,
+    /// amber beyond it, red past the hour — when a resume would likely re-read
+    /// the whole context uncached.
+    #[test]
+    fn activity_age_style_steps_with_the_clock_quarters() {
         let theme = Theme::fixed(false);
-        let amber = theme.style(Color::Yellow, Modifier::empty());
+        let yellow = theme.style(Color::Yellow, Modifier::empty());
+        let amber = theme.style(ORANGE, Modifier::empty());
         let red = theme.style(Color::Red, Modifier::empty());
         assert_eq!(activity_age_style(&theme, 60), theme.dim());
+        assert_eq!(activity_age_style(&theme, 900), theme.dim());
         assert_eq!(
-            activity_age_style(&theme, ACTIVITY_CACHE_COOLING_SECS - 1),
-            theme.dim()
+            activity_age_style(&theme, 901),
+            yellow,
+            "yellow from the second quarter"
         );
+        assert_eq!(activity_age_style(&theme, 1800), yellow);
         assert_eq!(
-            activity_age_style(&theme, ACTIVITY_CACHE_COOLING_SECS),
+            activity_age_style(&theme, 1801),
             amber,
-            "amber once the cache is cooling"
+            "amber past the half hour"
         );
+        assert_eq!(activity_age_style(&theme, 3600), amber);
         assert_eq!(
-            activity_age_style(&theme, ACTIVITY_CACHE_COLD_SECS - 1),
-            amber
-        );
-        assert_eq!(
-            activity_age_style(&theme, ACTIVITY_CACHE_COLD_SECS),
+            activity_age_style(&theme, 3601),
             red,
             "red once the cache is likely invalidated"
         );
@@ -1039,14 +1225,14 @@ mod tests {
     }
 
     /// The card's context line reads `▤ · ◌ ◍ ↘ ↗` — the filled window, a dot
-    /// seam, then the composition ordered by how the window filled — with only
-    /// the `▤` marker carrying a tone. Under `NO_COLOR` the glyph shapes still
-    /// spell the split.
+    /// seam, then the composition ordered by how the window filled. Under
+    /// `NO_COLOR` the glyph shapes still spell the split.
     #[test]
     fn context_breakdown_shape_leads_with_the_filled_window() {
         let theme = Theme::fixed(true);
         let spans = context_breakdown_spans(
             &theme,
+            Color::Blue,
             76_500,
             68_200,
             6_600,
@@ -1056,6 +1242,49 @@ mod tests {
         );
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k");
+        for span in &spans {
+            assert!(span.style.fg.is_none());
+        }
+    }
+
+    /// With color on, the context line is the bar's legend: the `▤` head wears
+    /// the caller's severity, each composition marker its bar-segment tone
+    /// (`◌` blue, `◍` yellow, `↘` red, `↗` green), and every figure stays dim
+    /// chrome.
+    #[test]
+    fn context_breakdown_markers_wear_their_segment_colors() {
+        let theme = Theme::fixed(false);
+        let spans = context_breakdown_spans(
+            &theme,
+            ORANGE,
+            76_500,
+            68_200,
+            6_600,
+            1_700,
+            2_300,
+            super::super::fmt::tokens_int,
+        );
+        let tone = |glyph: &str| {
+            spans
+                .iter()
+                .find(|s| s.content.as_ref() == glyph)
+                .unwrap_or_else(|| panic!("no {glyph} span"))
+                .style
+                .fg
+        };
+        assert_eq!(tone(CONTEXT_FILLED), Some(Color::Indexed(173)), "severity");
+        assert_eq!(tone(TOKENS_CACHED), Some(Color::Indexed(75)), "cache read");
+        assert_eq!(
+            tone(TOKENS_CACHE_WRITE),
+            Some(Color::Indexed(179)),
+            "cache write"
+        );
+        assert_eq!(tone(TOKENS_IN), Some(Color::Indexed(167)), "fresh input");
+        assert_eq!(tone(TOKENS_OUT), Some(Color::Indexed(108)), "output");
+        // Every figure stays dim chrome — only the markers carry tones.
+        for span in spans.iter().filter(|s| s.content.starts_with(' ')) {
+            assert_eq!(span.style.fg, theme.dim().fg, "figure {:?}", span.content);
+        }
     }
 
     /// The rate-limited glyph is the media `pause` mark carrying the
@@ -1076,17 +1305,16 @@ mod tests {
     }
 
     /// Rate-limited rests in held amber — the attention family, but *not* the
-    /// bold, reddening weight of `?`/`!`. It is attention-class yet parked, so
-    /// neglect never escalates it: even long past the redden window it stays
-    /// amber, since there is nothing to do but wait for the reset.
+    /// bold, heating weight of `?`/`!`. It is attention-class yet parked, so
+    /// neglect never escalates it: even hours parked it stays amber, since
+    /// there is nothing to do but wait for the reset.
     #[test]
     fn rate_limited_rests_in_held_amber_and_never_reddens() {
         let theme = Theme::fixed(false);
         let style = status_style(&theme, AgentStatus::RateLimited);
         assert_eq!(style.fg, Some(Color::Indexed(179)));
         assert!(!style.add_modifier.contains(Modifier::BOLD));
-        let long_parked =
-            attention_glyph_style(&theme, AgentStatus::RateLimited, 60 * 60, 30 * 60, 0);
+        let long_parked = attention_glyph_style(&theme, AgentStatus::RateLimited, 2 * 60 * 60, 0);
         assert_eq!(long_parked.fg, Some(Color::Indexed(179)));
         assert!(!long_parked.add_modifier.contains(Modifier::BOLD));
     }

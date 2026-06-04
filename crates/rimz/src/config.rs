@@ -306,16 +306,16 @@ pub struct SidebarConfig {
     /// elided. Providers are few, so the cap rarely bites; it bounds the panel
     /// height on a box that links many accounts.
     pub max_provider_blocks: usize,
-    /// Seconds an unanswered `?`/`!` attention glyph stays yellow before it
-    /// reddens — the neglect window past which a blocked agent reads as urgent.
-    /// Display-only; it tunes the colour ramp, never the ledger.
-    pub attention_redden_secs: u64,
     /// Cap on the sidebar pane width in columns. Every sidebar pane targets the
     /// standard percentage of the view at this cap; on an ultra-wide terminal
     /// the percentage alone grows absurd, so a pane born above the cap is
     /// shrunk to it once, when it is created. Creation-time only: a manual
     /// resize afterwards sticks.
     pub max_cols: NonZeroU16,
+    /// The context meter's severity bands — where the card's context read
+    /// leaves calm blue for yellow, amber, and red. Display-only; it tunes the
+    /// colour ramp, never the ledger.
+    pub context: ContextSeverityConfig,
 }
 
 impl Default for SidebarConfig {
@@ -323,10 +323,58 @@ impl Default for SidebarConfig {
         Self {
             providers: BTreeMap::new(),
             max_provider_blocks: default_max_provider_blocks(),
-            attention_redden_secs: default_attention_redden_secs(),
             max_cols: default_sidebar_max_cols(),
+            context: ContextSeverityConfig::default(),
         }
     }
+}
+
+/// The context meter's severity bands: each tier names the inclusive lower
+/// bound where it begins, on both axes — the fill percentage and the absolute
+/// tokens in the window. Severity is the worse of the two axes, so a
+/// large-window model calm by percentage still warms by sheer volume. Below
+/// `yellow` on both axes the meter rests calm blue.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ContextSeverityConfig {
+    /// Where the meter leaves calm blue for yellow.
+    pub yellow: ContextBand,
+    /// Where yellow deepens to amber.
+    pub amber: ContextBand,
+    /// Where amber escalates to red.
+    pub red: ContextBand,
+}
+
+impl Default for ContextSeverityConfig {
+    fn default() -> Self {
+        Self {
+            yellow: ContextBand {
+                percent: 60,
+                tokens: 160_000,
+            },
+            // 258k matches Codex's effective GPT-5.5 window (272k catalog ×
+            // 95%), so a Codex session deepens to amber as it crosses its own
+            // ceiling.
+            amber: ContextBand {
+                percent: 80,
+                tokens: 258_000,
+            },
+            red: ContextBand {
+                percent: 95,
+                tokens: 420_000,
+            },
+        }
+    }
+}
+
+/// One severity tier's entry thresholds: the tier begins once *either* axis
+/// reaches its value (`value >= threshold`, inclusive).
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ContextBand {
+    /// Fill percentage (0–100) of the context window.
+    pub percent: u8,
+    /// Absolute tokens occupying the window.
+    pub tokens: u64,
 }
 
 /// Default column cap on the sidebar pane width: comfortably past the widest
@@ -339,11 +387,6 @@ fn default_sidebar_max_cols() -> NonZeroU16 {
 /// Default cap on provider blocks in the bottom dashboard.
 fn default_max_provider_blocks() -> usize {
     3
-}
-
-/// Default neglect window before an unanswered attention glyph reddens (30 min).
-fn default_attention_redden_secs() -> u64 {
-    30 * 60
 }
 
 /// Per-provider styling: the ASCII emblem and brand color for the bottom
@@ -581,20 +624,41 @@ mod tests {
         assert_eq!(config.sidebar.max_provider_blocks, 3);
         // Set just one sidebar field: the cap still falls back to its default.
         let partial =
-            MachineConfig::load_from(&write(&dir, "[sidebar]\nattention_redden_secs = 600\n"))
-                .expect("load");
+            MachineConfig::load_from(&write(&dir, "[sidebar]\nmax_cols = 60\n")).expect("load");
         assert_eq!(partial.sidebar.max_provider_blocks, 3);
     }
 
     #[test]
-    fn attention_redden_window_defaults_to_thirty_minutes_and_parses() {
+    fn context_severity_bands_default_and_parse() {
         let dir = tempdir().expect("tempdir");
+        // The shipped bands: yellow 60% / 160k, amber 80% / 258k (Codex's
+        // effective GPT-5.5 window), red 95% / 420k.
         let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
-        assert_eq!(config.sidebar.attention_redden_secs, 30 * 60);
-        let tuned =
-            MachineConfig::load_from(&write(&dir, "[sidebar]\nattention_redden_secs = 600\n"))
-                .expect("load");
-        assert_eq!(tuned.sidebar.attention_redden_secs, 600);
+        let defaults = ContextSeverityConfig::default();
+        assert_eq!(config.sidebar.context, defaults);
+        assert_eq!(defaults.yellow.percent, 60);
+        assert_eq!(defaults.yellow.tokens, 160_000);
+        assert_eq!(defaults.amber.percent, 80);
+        assert_eq!(defaults.amber.tokens, 258_000);
+        assert_eq!(defaults.red.percent, 95);
+        assert_eq!(defaults.red.tokens, 420_000);
+
+        // A tuned tier states both axes together; an omitted tier keeps its
+        // default.
+        let tuned = MachineConfig::load_from(&write(
+            &dir,
+            "[sidebar.context]\nred = { percent = 50, tokens = 100000 }\n",
+        ))
+        .expect("load");
+        assert_eq!(
+            tuned.sidebar.context.red,
+            ContextBand {
+                percent: 50,
+                tokens: 100_000
+            }
+        );
+        assert_eq!(tuned.sidebar.context.yellow, defaults.yellow);
+        assert_eq!(tuned.sidebar.context.amber, defaults.amber);
     }
 
     #[test]

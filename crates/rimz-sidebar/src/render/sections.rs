@@ -10,6 +10,7 @@ use jiff::{SignedDuration, Timestamp};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use rimz::agents::{AgentContext, RateLimitWindow};
+use rimz::config::ContextSeverityConfig;
 use rimz::feed::AgentStatus;
 use rimz::{
     SidebarProviderPanel, SidebarRow, SidebarRowKind, SidebarStatusCount, SidebarSubAgent,
@@ -20,22 +21,18 @@ use super::TallyAnim;
 
 use super::fmt::{
     activity_short, age_secs, age_short, clip, compact_seconds, dollars2, model_label, pct_label,
-    reset_countdown, time_remaining, tokens_int, tokens_short, window_label,
+    reset_countdown, time_remaining, tokens_int, tokens_short, window_label, window_short,
 };
 use super::labels::{
-    TOKENS_CACHED, TOKENS_IN, TOKENS_OUT, TOKENS_TOTAL, activity_age_style, agent_glyph,
-    agent_style, attention_glyph_style, compacting_glyph, compacting_style,
-    context_breakdown_spans, context_severity_color, context_total_spans, ctx_glyph_color,
-    diff_spans, gauge_spans, infinite_bar_spans, loading_dots, mana_bar_spans, mana_color,
-    resolver_glyph, segmented_gauge_spans, status_glyph, status_style, subagent_glyph,
-    subagent_style, todo_spans, token_breakdown_spans, tokens_total_spans, working_glyph,
+    SEGMENT_CACHE_READ, SEGMENT_CACHE_WRITE, SEGMENT_INPUT, TOKENS_CACHED, TOKENS_IN, TOKENS_OUT,
+    TOKENS_TOTAL, activity_age_style, age_heat, agent_glyph, agent_style, attention_glyph_style,
+    compacting_glyph, compacting_style, context_breakdown_spans, context_severity_color,
+    context_total_spans, diff_spans, elapsed_glyph, gauge_spans, infinite_bar_spans, loading_dots,
+    mana_bar_spans, mana_color, resolver_glyph, segmented_gauge_spans, status_glyph, status_style,
+    subagent_glyph, subagent_style, todo_spans, token_breakdown_spans, tokens_total_spans,
+    window_style, working_glyph,
 };
 use super::theme::Theme;
-
-/// Clock face for a worked / elapsed span. Leads the work line (`◷ 12m worked`)
-/// and prefixes the card's last-activity age (`◷ 1m`), so any time readout on a
-/// card reads iconographically. One cell, so it never disturbs alignment.
-const WORKED_GLYPH: &str = "◷";
 
 /// The context-meter label — a framed square reading as "the window", replacing
 /// the `ctx` word now that it is the row's one bar (the account-scoped budget
@@ -109,10 +106,10 @@ impl Tier {
 /// ```
 ///
 /// The line splits the make-up by who might want you. The left cluster is the
-/// rows worth a glance — `waiting` `?` and `failed` `!` (each yellow, reddening
-/// once any of its rows is past the neglect window), a free `idle` `○` (calm
+/// rows worth a glance — `waiting` `?` and `failed` `!` (each wearing its
+/// oldest row's age heat over a yellow floor), a free `idle` `○` (calm
 /// green, but grouped left because a free agent wants work), then a parked
-/// `rate-limited` `⏸` (held amber, never reddening) closing the cluster. The right
+/// `rate-limited` `⏸` (held amber, never heating) closing the cluster. The right
 /// cluster is the busy/done tail — working `⢿` (every running agent; the
 /// thinking sparkle is a per-row animation head, not a bucket), then `success`
 /// `✓`. Every bucket renders, so a zero reads a faint `? 0`. Counts span the
@@ -123,7 +120,6 @@ pub(super) fn fleet_header_lines(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
     width: usize,
-    redden_secs: i64,
 ) -> Vec<Line<'static>> {
     let working = status_total(groups, AgentStatus::Running);
     let waiting = status_total(groups, AgentStatus::Waiting);
@@ -141,8 +137,8 @@ pub(super) fn fleet_header_lines(
     }
 
     // Top line — the make-up split by who might want you. The left cluster gathers
-    // the rows worth a glance: `waiting` `?` and `failed` `!` (yellow, reddening
-    // once any of their rows is stale), a free `idle` `○` — calm green, but grouped
+    // the rows worth a glance: `waiting` `?` and `failed` `!` (the oldest row's
+    // heat over a yellow floor), a free `idle` `○` — calm green, but grouped
     // left because a free agent wants work — then a parked `rate-limited` `⏸`
     // closing the cluster. The right cluster is the busy/done tail: working,
     // then success. Every bucket shows its count.
@@ -152,20 +148,14 @@ pub(super) fn fleet_header_lines(
         &mut left,
         status_glyph(AgentStatus::Waiting),
         waiting,
-        attention_bucket_style(
-            theme,
-            any_attention_stale(groups, AgentStatus::Waiting, redden_secs),
-        ),
+        attention_bucket_style(theme, groups, AgentStatus::Waiting),
     );
     push_count(
         theme,
         &mut left,
         status_glyph(AgentStatus::Failed),
         failed,
-        attention_bucket_style(
-            theme,
-            any_attention_stale(groups, AgentStatus::Failed, redden_secs),
-        ),
+        attention_bucket_style(theme, groups, AgentStatus::Failed),
     );
     push_count(
         theme,
@@ -178,7 +168,7 @@ pub(super) fn fleet_header_lines(
     // attention-class but parked. It renders like every other bucket — a faint
     // `⏸ 0` when empty — so the make-up stays a fixed dashboard, scannable by
     // position. It takes the held-amber resting tone (`status_style`), never the
-    // reddening `attention_bucket_style`, since there is nothing to do but wait
+    // heating `attention_bucket_style`, since there is nothing to do but wait
     // for the window to reset.
     push_count(
         theme,
@@ -237,27 +227,24 @@ pub(super) fn fleet_size(groups: &[SidebarWorktreeGroup]) -> (usize, usize) {
     (main, subs)
 }
 
-/// The cockpit attention bucket's tone: bold yellow while every contributing row
-/// is fresh, bold red once any has sat unanswered past the neglect window — the
-/// aggregate echo of the per-row glyph escalation in [`attention_glyph_style`].
-fn attention_bucket_style(theme: &Theme, stale: bool) -> Style {
-    let color = if stale { Color::Red } else { Color::Yellow };
-    theme.style(color, Modifier::BOLD)
-}
-
-/// Whether any visible row in `status` has gone unanswered past `redden_secs`.
-/// Reads the rendered rows (capped-away agents are excluded — the bucket count
-/// still spans them, but a hidden agent never drives the visible heat).
-fn any_attention_stale(
+/// The cockpit attention bucket's tone: bold, wearing the oldest contributing
+/// row's [`age_heat`] over the same yellow floor as the per-row glyph — the
+/// aggregate echo of [`attention_glyph_style`]'s escalation. Reads the rendered
+/// rows (capped-away agents are excluded — the bucket count still spans them,
+/// but a hidden agent never drives the visible heat).
+fn attention_bucket_style(
+    theme: &Theme,
     groups: &[SidebarWorktreeGroup],
     status: AgentStatus,
-    redden_secs: i64,
-) -> bool {
-    groups
+) -> Style {
+    let oldest = groups
         .iter()
         .flat_map(|group| &group.rows)
         .filter(|row| row.status == Some(status))
-        .any(|row| age_secs(row.last_activity) >= redden_secs)
+        .map(|row| age_secs(row.last_activity))
+        .max()
+        .unwrap_or(0);
+    theme.style(age_heat(oldest).unwrap_or(Color::Yellow), Modifier::BOLD)
 }
 
 /// Append a `glyph n` bucket to a header line, spaced from the previous one. The
@@ -395,7 +382,7 @@ pub(super) fn worktree_group_lines(
     group: &SidebarWorktreeGroup,
     providers: &[SidebarProviderPanel],
     width: usize,
-    redden_secs: i64,
+    bands: &ContextSeverityConfig,
     row_index: &mut usize,
     selected_index: usize,
     animation_phase: u64,
@@ -449,7 +436,7 @@ pub(super) fn worktree_group_lines(
             tier,
             selected,
             animation_phase,
-            redden_secs,
+            bands,
             gutter,
         );
         map.extend(std::iter::repeat_n(Some(this_row), row_lines.len()));
@@ -586,7 +573,7 @@ fn row_lines(
     tier: Tier,
     selected: bool,
     animation_phase: u64,
-    redden_secs: i64,
+    bands: &ContextSeverityConfig,
     gutter: Gutter,
 ) -> Vec<Line<'static>> {
     let cw = content_width(width);
@@ -602,7 +589,6 @@ fn row_lines(
         tier,
         cw,
         animation_phase,
-        redden_secs,
     )];
     // An active process row carries its full command on a dim second line under
     // the shell anchor — the build or `sudo` install reads in full while line 1
@@ -617,13 +603,13 @@ fn row_lines(
         // A just-started idle agent sits on the 0% baseline gauge with nothing
         // behind it, so it rests at identity + description alone. Once an agent
         // has real context, the bar and the context line — the per-card
-        // `▤ · ◌ ◍ ↘ ↗` breakdown with the `◷` last-activity age — join the
-        // resting card.
+        // `▤ · ◌ ◍ ↘ ↗` breakdown with the clock-fill last-activity age — join
+        // the resting card.
         if !idle_unstarted(row) {
-            if let Some(line) = gauge_line(theme, row, cw) {
+            if let Some(line) = gauge_line(theme, row, bands, cw) {
                 inner.push(line);
             }
-            if let Some(line) = context_tokens_line(theme, row, cw) {
+            if let Some(line) = context_tokens_line(theme, row, bands, cw) {
                 inner.push(line);
             }
         }
@@ -682,7 +668,8 @@ fn sub_agent_lines(
 
         // Line 2: token spend (left) and elapsed work (right-pinned), drawn only
         // when `subagentStatusLine` reported a positive figure. A deeper indent
-        // sets it below the type line; the `◷` lands under the parent's age.
+        // sets it below the type line; the clock-fill glyph lands under the
+        // parent's age and fills with the child's worked span.
         let tokens = sub.total_tokens.filter(|total| *total > 0);
         let elapsed = sub.elapsed_secs.filter(|secs| *secs > 0);
         if tokens.is_some() || elapsed.is_some() {
@@ -691,7 +678,14 @@ fn sub_agent_lines(
                 left.extend(tokens_total_spans(theme, total, tokens_short));
             }
             let right = elapsed
-                .map(|secs| metric_spans(theme, WORKED_GLYPH, Color::Cyan, &compact_seconds(secs)))
+                .map(|secs| {
+                    metric_spans(
+                        theme,
+                        elapsed_glyph(secs),
+                        Color::Cyan,
+                        &compact_seconds(secs),
+                    )
+                })
                 .unwrap_or_default();
             lines.push(pin_right(left, right, width));
         }
@@ -723,7 +717,6 @@ fn identity_line(
     tier: Tier,
     width: usize,
     animation_phase: u64,
-    redden_secs: i64,
 ) -> Line<'static> {
     if row.row_kind == SidebarRowKind::Process {
         return process_row_line(theme, row, width, animation_phase);
@@ -755,16 +748,7 @@ fn identity_line(
     }
 
     let status = row.status.unwrap_or(AgentStatus::Idle);
-    agent_identity_line(
-        theme,
-        row,
-        providers,
-        status,
-        tier,
-        width,
-        animation_phase,
-        redden_secs,
-    )
+    agent_identity_line(theme, row, providers, status, tier, width, animation_phase)
 }
 
 /// The leading status cell for an agent row, applying the two transient render
@@ -779,7 +763,6 @@ fn agent_lead_cell(
     row: &SidebarRow,
     status: AgentStatus,
     animation_phase: u64,
-    redden_secs: i64,
 ) -> Span<'static> {
     let actionable = matches!(status, AgentStatus::Waiting | AgentStatus::Failed);
     if !actionable && row.compacting {
@@ -798,13 +781,7 @@ fn agent_lead_cell(
     // never blanks, so the one-cell column never shifts as it swells and fades.
     Span::styled(
         agent_glyph(status, row.thinking, animation_phase),
-        attention_glyph_style(
-            theme,
-            status,
-            age_secs(row.last_activity),
-            redden_secs,
-            animation_phase,
-        ),
+        attention_glyph_style(theme, status, age_secs(row.last_activity), animation_phase),
     )
 }
 
@@ -816,9 +793,8 @@ fn agent_lead_cell(
 /// hook-derived fallback second, omitted when neither has named it. Capability
 /// tokens degrade by width tier: L2 carries model + effort + window, L1 drops
 /// effort, L0 keeps just the name — cost always pins right. A blocked `?`/`!`
-/// glyph reddens once the row has gone unanswered past the 30-minute neglect
-/// window, so a long-ignored ask escalates without a timestamp.
-#[allow(clippy::too_many_arguments)]
+/// glyph heats through amber to red on the age clock's quarter-hour ramp, so a
+/// long-ignored ask escalates without a timestamp.
 fn agent_identity_line(
     theme: &Theme,
     row: &SidebarRow,
@@ -827,7 +803,6 @@ fn agent_identity_line(
     tier: Tier,
     width: usize,
     animation_phase: u64,
-    redden_secs: i64,
 ) -> Line<'static> {
     // Right cluster, built first so the left trims to whatever's left: the
     // session cost, bold in money-green.
@@ -843,12 +818,13 @@ fn agent_identity_line(
         ));
     }
 
-    // Left cluster: glyph + name + dim capability tokens. The glyph reddens once
-    // a `waiting`/`failed` row has sat past the neglect window. The kind name is
-    // repeated and low-information, so it dims to chrome; the leading glyph and
-    // its color carry identity, and the bright slot is saved for the task below.
+    // Left cluster: glyph + name + dim capability tokens. The glyph heats with
+    // the age clock once a `waiting`/`failed` row sits unanswered. The kind name
+    // is repeated and low-information, so it dims to chrome; the leading glyph
+    // and its color carry identity, and the bright slot is saved for the task
+    // below.
     let mut left: Vec<Span<'static>> = vec![
-        agent_lead_cell(theme, row, status, animation_phase, redden_secs),
+        agent_lead_cell(theme, row, status, animation_phase),
         Span::raw(" "),
         Span::styled(
             clip(&row.name, NAME_MAX),
@@ -866,15 +842,21 @@ fn agent_identity_line(
             left.push(Span::styled(" · ", theme.dim()));
             left.push(Span::styled(effort.to_owned(), theme.dim()));
         }
+        // The window token wears its size-class tone (`window_style`: amber 1m,
+        // yellow past 200k, blue mainstream, grey small) in the lowercase
+        // window form, so the capability cluster ends on a color-keyed class.
         if let Some(window) = display_context_window(row) {
             left.push(Span::styled(" · ", theme.dim()));
-            left.push(Span::styled(tokens_int(window), theme.dim()));
+            left.push(Span::styled(
+                window_short(window),
+                window_style(theme, window),
+            ));
         }
     }
     pin_right(left, right, width)
 }
 
-/// The model's context window for the identity line (`258k`, `1M`). Prefers the
+/// The model's context window for the identity line (`258k`, `1m`). Prefers the
 /// out-of-band runtime reading (Claude's statusline / Codex's app-server — the
 /// live truth), falls back to the hook-derived scalar, and omits when neither
 /// source has named it.
@@ -1160,27 +1142,32 @@ fn bar_row(
 
 /// The context meter — the resting card's one bar. `ctx` on the left, the
 /// **percent used** on the right (always — the window *size* moves to the
-/// expanded token line), the bar between. The fill amount and its green → amber
-/// → red ramp come from the used percentage; when the statusline reports the
-/// per-message token breakdown the fill is split into colored segments (cache
-/// writes / cache reads / fresh input) that add up to exactly that percentage.
-/// The value prefers a one-decimal precise fraction (`78.2%`) over the integer
-/// gauge. An empty (0%) window reads the hollow `▢`; any usage fills it to `▣`.
-fn gauge_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
+/// expanded token line), the bar between. The fill amount and its calm-blue →
+/// yellow → amber → red severity ([`context_severity_color`], bands from
+/// `[sidebar.context]`) come from the used percentage and the absolute tokens;
+/// when the statusline reports the per-message token breakdown a *calm* fill is
+/// split into colored segments (cache writes / cache reads / fresh input) that
+/// add up to exactly that percentage, and a warmed bar goes one solid severity
+/// run. The `▣` glyph wears the same severity, so glyph, bar, and the `▤` line
+/// below speak one urgency. The value prefers a one-decimal precise fraction
+/// (`78.2%`) over the integer gauge. An empty (0%) window reads the hollow
+/// `▢`; any usage fills it to `▣`.
+fn gauge_line(
+    theme: &Theme,
+    row: &SidebarRow,
+    bands: &ContextSeverityConfig,
+    width: usize,
+) -> Option<Line<'static>> {
     let percent = gauge_percent(row)?;
     let value = pct_label(precise_context_pct(row), percent);
     let used = context_used_tokens(row);
-    // The bar's severity decides composition-vs-solid and the solid color: the
-    // composition segments (where the window went) paint only while it is
-    // calm-green; once it warns the bar goes solid severity.
-    let bar_color = context_severity_color(percent, used);
-    let segments = (bar_color == Color::Green)
+    let severity = context_severity_color(percent, used, bands);
+    // The severity decides composition-vs-solid: the segments (where the window
+    // went) paint only while the meter rests calm-blue; once it warms the bar
+    // goes solid severity.
+    let segments = (severity == Color::Blue)
         .then(|| gauge_segments(row))
         .flatten();
-    // The `▣` glyph follows *total* usage (blue when calm), decoupled from the
-    // bar's dominant segment — it reads how full the window is, not where it went.
-    // An empty window is the hollow `▢`, so a fresh card reads "nothing in it yet".
-    let glyph_color = ctx_glyph_color(percent, used);
     let glyph = if percent == 0 {
         CONTEXT_EMPTY_GLYPH
     } else {
@@ -1189,11 +1176,11 @@ fn gauge_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'sta
     Some(bar_row(
         theme,
         glyph,
-        theme.style(glyph_color, Modifier::empty()),
+        theme.style(severity, Modifier::empty()),
         &value,
         |bar_width| match &segments {
-            Some(segments) => segmented_gauge_spans(theme, segments, bar_color, percent, bar_width),
-            None => gauge_spans(theme, bar_color, percent, bar_width),
+            Some(segments) => segmented_gauge_spans(theme, segments, severity, percent, bar_width),
+            None => gauge_spans(theme, severity, percent, bar_width),
         },
         width,
     ))
@@ -1237,48 +1224,67 @@ fn gauge_percent(row: &SidebarRow) -> Option<u8> {
 }
 
 /// The context bar's color segments, when the per-message breakdown is known,
-/// left to right: cache writes (amber), cache reads (blue), fresh `input` (red).
-/// `None` when no breakdown was reported (a fresh session, post-compact, or a
-/// non-Claude agent), so the bar falls back to a single-color ramp.
+/// left to right: cache writes (yellow), cache reads (blue), fresh `input`
+/// (red) — the shared `SEGMENT_*` tones the context line's markers also wear,
+/// so the line legends the bar by construction. `None` when no breakdown was
+/// reported (a fresh session, post-compact, or a non-Claude agent), so the bar
+/// falls back to a single-color ramp.
 fn gauge_segments(row: &SidebarRow) -> Option<[(u64, Color); 3]> {
     let usage = ctx(row)?.tokens.as_ref()?.current_usage.as_ref()?;
     let input = usage.input_tokens.unwrap_or(0);
     let writes = usage.cache_creation_input_tokens.unwrap_or(0);
     let reads = usage.cache_read_input_tokens.unwrap_or(0);
     (input + writes + reads > 0).then_some([
-        (writes, Color::Yellow),
-        (reads, Color::Blue),
-        (input, Color::Red),
+        (writes, SEGMENT_CACHE_WRITE),
+        (reads, SEGMENT_CACHE_READ),
+        (input, SEGMENT_INPUT),
     ])
 }
 
 /// The card's context line — `▤` the filled part of the window (integer
-/// magnitudes) with the `◷` last-activity age pinned right. `▤` is
+/// magnitudes) with the last-activity age pinned right. `▤` is
 /// `input + cache_write + cache_read` of the latest API call — exactly the
 /// numerator the `▣` meter scales — so the bar's percent and this absolute
-/// figure read as one measurement. A `·` seam separates the headline from the
+/// figure read as one measurement, and the `▤` head wears the bar's severity
+/// tone to seal that pairing. A `·` seam separates the headline from the
 /// latest call's composition, ordered by how the window filled: `◌` read back
 /// from cache, `◍` newly written to it, `↘` fresh input, `↗` output generated
-/// (which joins the window next turn). The `◇` totals stay the cockpit /
+/// (which joins the window next turn) — each marker in its bar-segment color,
+/// so the line doubles as the bar's legend. The `◇` totals stay the cockpit /
 /// fleet-ledger / subagent vocabulary — this line answers "what is in the
 /// window", not "what did today burn". Falls back to the bare `▤` rollup
 /// total for an agent whose context carries no per-call token split (Codex's
 /// app-server exposes none, and Claude reports none before the first API call
 /// and right after `/compact`), so the line shows *something* for every
-/// agent. The `◷` age rides the right edge only once it crosses a full minute
+/// agent. The age rides the right edge only once it crosses a full minute
 /// — a just-active agent shows the breakdown alone, left-aligned, rather than
-/// a misleading `1m` — and its tone ramps with prompt-cache cooling
-/// ([`activity_age_style`]): dim warm, amber from 20 minutes idle, red from
-/// the hour, when resuming would likely re-read the whole context uncached.
-fn context_tokens_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<Line<'static>> {
+/// a misleading `1m` — as the clock-fill glyph ([`elapsed_glyph`]) over the
+/// quarter-stepping age tone ([`activity_age_style`]): dim warm, yellow from
+/// the second quarter, amber past the half hour, red from the hour, when
+/// resuming would likely re-read the whole context uncached.
+fn context_tokens_line(
+    theme: &Theme,
+    row: &SidebarRow,
+    bands: &ContextSeverityConfig,
+    width: usize,
+) -> Option<Line<'static>> {
     let age = activity_short(row.last_activity)
         .map(|label| {
+            let secs = age_secs(row.last_activity);
             vec![Span::styled(
-                format!("{WORKED_GLYPH} {label}"),
-                activity_age_style(theme, age_secs(row.last_activity)),
+                format!("{} {label}", elapsed_glyph(secs)),
+                activity_age_style(theme, secs),
             )]
         })
         .unwrap_or_default();
+    // The `▤` head mirrors the bar's severity — same inputs, same ramp — so the
+    // absolute figure and the meter above it read at one urgency. A row with no
+    // gauge percent folds to 0 and lets the token overlay alone speak.
+    let severity = context_severity_color(
+        gauge_percent(row).unwrap_or(0),
+        context_used_tokens(row),
+        bands,
+    );
     if let Some(usage) = ctx(row)
         .and_then(|context| context.tokens.as_ref())
         .and_then(|tokens| tokens.current_usage.as_ref())
@@ -1290,6 +1296,7 @@ fn context_tokens_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<
         let mut left = vec![Span::raw("  ")];
         left.extend(context_breakdown_spans(
             theme,
+            severity,
             input + cache_write + cache_read,
             cache_read,
             cache_write,
@@ -1301,7 +1308,7 @@ fn context_tokens_line(theme: &Theme, row: &SidebarRow, width: usize) -> Option<
     }
     let total = row.total_tokens?;
     let mut left = vec![Span::raw("  ")];
-    left.extend(context_total_spans(theme, total, tokens_int));
+    left.extend(context_total_spans(theme, severity, total, tokens_int));
     Some(pin_right(left, age, width))
 }
 

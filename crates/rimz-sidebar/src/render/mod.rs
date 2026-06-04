@@ -183,10 +183,11 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
                 if row.resolver.is_some() || row.status == Some(AgentStatus::Running) {
                     return AnimationCadence::Fast;
                 }
-                // `?`/`!` breathe to pull the eye back to an unanswered row, and
-                // the idle "waiting for a prompt" loading-dots cue cycles in
-                // place. Both are deliberately slow and do not need a 10fps
-                // full-frame redraw.
+                // `?`/`!` breathe to pull the eye back to an unanswered row —
+                // quickening with age up to the red blink, which flips every
+                // 300ms by design so it samples cleanly on this grid — and the
+                // idle "waiting for a prompt" loading-dots cue cycles in
+                // place. None of it needs a 10fps full-frame redraw.
                 if matches!(row.status, Some(AgentStatus::Waiting | AgentStatus::Failed))
                     || sections::shows_loading_dots(row)
                 {
@@ -425,14 +426,10 @@ fn snapshot_lines(
     // height — one line for a populated room, none for an empty one — so the body
     // below never shifts vertically as agents change state. It is chrome, never a
     // jump target, so every header line maps to `None`.
-    // The configurable neglect window (seconds an unanswered `?`/`!` stays
-    // yellow before it reddens) rides in on the snapshot like `project_root`
-    // does, so the renderer stays a pure consumer. Clamp into the `i64` age space.
-    let redden_secs = i64::try_from(snapshot.sidebar.attention_redden_secs).unwrap_or(i64::MAX);
     extend_inert(
         &mut lines,
         &mut map,
-        fleet_header_lines(theme, &snapshot.worktree_groups, inner, redden_secs),
+        fleet_header_lines(theme, &snapshot.worktree_groups, inner),
     );
     if snapshot.worktree_groups.is_empty() {
         if !active && should_show_first_run_hint(snapshot) {
@@ -456,7 +453,7 @@ fn snapshot_lines(
                 group,
                 &snapshot.providers,
                 width,
-                redden_secs,
+                &snapshot.sidebar.context,
                 &mut row_index,
                 ui.selected_index,
                 ui.animation_phase,
@@ -762,10 +759,14 @@ mod tests {
                 (r"degraded for \d+[smhd]", "degraded for <elapsed>"),
                 // Budget-bar reset countdowns are a live two-unit duration in the
                 // bar's right value column (`3h12m`, `3d3h`); scrub them so the
-                // card snapshot stays stable across time. Single-unit ages and
-                // the `5h`/`7d` labels fall to the age scrub below.
+                // card snapshot stays stable across time.
                 (r"\b\d+[dhms]\d+[dhms]\b", "<reset>"),
-                (r"\b\d+[smhd]\b", "<t>"),
+                // Single-unit live durations, anchored to where they render so
+                // the identity line's deterministic window token (`1m`) stays
+                // visible: an age after its clock-fill glyph, and the `5h`/`7d`
+                // budget label ahead of its mana bar.
+                (r"([◔◑◕●◉]) \d+[smhd]\b", "$1 <t>"),
+                (r"\b\d+[hd](\s+[▰▱])", "<t>$1"),
             ],
         }, {
             insta::assert_snapshot!(name, screen);
@@ -1155,9 +1156,9 @@ mod tests {
     fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
         // A selected parent expands its `⧉ subagents` list. Each child reads two
         // lines: the type and its `subagentStatusLine` description, then the token
-        // spend `◇` left with the elapsed work `◷` pinned right. The child is
-        // finished, so its elapsed is frozen at `last_activity − started` (exactly
-        // 60s here, independent of wall-clock) — a deterministic `1m`.
+        // spend `◇` left with the clock-fill elapsed work pinned right. The child
+        // is finished, so its elapsed is frozen at `last_activity − started`
+        // (exactly 60s here, independent of wall-clock) — a deterministic `◔ 1m`.
         let mut parent = agent(
             "claude-1",
             "claude",
@@ -1211,7 +1212,7 @@ mod tests {
             "line 2 carries the token spend:\n{rendered}"
         );
         assert!(
-            rendered.contains("◷ 1m"),
+            rendered.contains("◔ 1m"),
             "line 2 carries the frozen elapsed:\n{rendered}"
         );
         assert_snapshot("subagent_two_line_entry", rendered);
@@ -1296,14 +1297,15 @@ mod tests {
         assert!(!rendered.contains('$'));
     }
 
-    /// The card's `◷` age tone ramps with prompt-cache cooling: dim while a
-    /// resume would still hit cache, amber from 20 minutes idle, red from the
-    /// hour — the cost warning that resuming will likely re-read the whole
-    /// context uncached.
+    /// The card's age cluster pairs a clock-fill glyph (the face fills with the
+    /// idle span) with a tone stepping the same quarters: dim while a resume
+    /// would still hit cache, yellow from the second quarter, amber past the
+    /// half hour, red past the hour — the cost warning that resuming will
+    /// likely re-read the whole context uncached.
     #[test]
-    fn context_line_age_tone_ramps_with_cache_cooling() {
+    fn context_line_age_tone_steps_with_the_clock_quarters() {
         let theme = Theme::fixed(false);
-        let age_style = |idle_secs: u64| {
+        let age_style = |idle_secs: u64, clock: char| {
             let mut codex = agent(
                 "codex-1",
                 "codex",
@@ -1319,18 +1321,27 @@ mod tests {
             group_lines(&snapshot, &theme, usize::MAX)
                 .iter()
                 .flat_map(|line| line.spans.iter())
-                .find(|span| span.content.contains('◷'))
+                .find(|span| span.content.contains(clock))
                 .map(|span| span.style)
-                .expect("the context line carries the ◷ age")
+                .unwrap_or_else(|| panic!("the context line carries the {clock} age"))
         };
-        assert_eq!(age_style(4 * 60), theme.dim(), "warm cache stays chrome");
         assert_eq!(
-            age_style(25 * 60),
-            theme.style(Color::Yellow, Modifier::empty()),
-            "amber once the cache is cooling"
+            age_style(4 * 60, '◔'),
+            theme.dim(),
+            "warm cache stays chrome"
         );
         assert_eq!(
-            age_style(2 * 60 * 60),
+            age_style(25 * 60, '◑'),
+            theme.style(Color::Yellow, Modifier::empty()),
+            "yellow with the half-full face"
+        );
+        assert_eq!(
+            age_style(40 * 60, '◕'),
+            theme.style(theme::ORANGE, Modifier::empty()),
+            "amber past the half hour"
+        );
+        assert_eq!(
+            age_style(2 * 60 * 60, '◉'),
             theme.style(Color::Red, Modifier::empty()),
             "red once a resume would pay for the context again"
         );
@@ -1869,7 +1880,7 @@ mod tests {
             &snapshot.worktree_groups[0],
             &snapshot.providers,
             54,
-            30 * 60,
+            &snapshot.sidebar.context,
             &mut row_index,
             selected_index,
             0,
@@ -1968,7 +1979,7 @@ mod tests {
                 &snapshot.worktree_groups[0],
                 &snapshot.providers,
                 54,
-                30 * 60,
+                &snapshot.sidebar.context,
                 &mut row_index,
                 selected_index,
                 0,
@@ -2033,7 +2044,7 @@ mod tests {
             &snapshot.worktree_groups[0],
             &snapshot.providers,
             54,
-            30 * 60,
+            &snapshot.sidebar.context,
             &mut row_index,
             selected_index,
             0,
@@ -2787,6 +2798,44 @@ mod tests {
         assert!(
             screen.contains('▏'),
             "the selected worktree shows the lane spine:\n{screen}"
+        );
+    }
+
+    /// The cockpit `?`/`!` buckets echo the per-row glyph escalation: each
+    /// wears its oldest contributing row's age heat over the same yellow floor
+    /// — yellow while fresh, amber past the half hour, red past the hour.
+    #[test]
+    fn attention_bucket_wears_the_oldest_rows_age_heat() {
+        let theme = Theme::fixed(false);
+        let bucket_fg = |idle_secs: u64| {
+            let mut waiting = agent(
+                "w",
+                "claude",
+                AgentStatus::Waiting,
+                Some("/repo/main"),
+                Some("main"),
+                Some("a"),
+            );
+            waiting.last_activity = fixed_now() - Duration::from_secs(idle_secs);
+            let snapshot = snapshot_with(Vec::new(), vec![waiting]);
+            fleet_header_lines(&theme, &snapshot.worktree_groups, 60)
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .find(|span| span.content.contains('?'))
+                .map(|span| span.style.fg)
+                .expect("the make-up line carries the ? bucket")
+        };
+        let style = |color| theme.style(color, Modifier::BOLD).fg;
+        assert_eq!(bucket_fg(5 * 60), style(Color::Yellow), "yellow floor");
+        assert_eq!(
+            bucket_fg(40 * 60),
+            style(theme::ORANGE),
+            "amber past the half hour"
+        );
+        assert_eq!(
+            bucket_fg(2 * 60 * 60),
+            style(Color::Red),
+            "red past the hour"
         );
     }
 

@@ -244,6 +244,20 @@ pub(super) fn tokens_int(count: u64) -> String {
     }
 }
 
+/// The model's context window as a compact lowercase magnitude — `200k`,
+/// `272k`, `1m` — for the identity line's capability token. Lowercase `m`
+/// keeps the window class quiet beside the model name; the count-of-tokens
+/// figures elsewhere keep [`tokens_int`]'s uppercase `M`.
+pub(super) fn window_short(window: u64) -> String {
+    if window >= 1_000_000 {
+        format!("{}m", window / 1_000_000)
+    } else if window >= 1_000 {
+        format!("{}k", window / 1_000)
+    } else {
+        window.to_string()
+    }
+}
+
 /// A token count as a thin magnitude with no unit suffix — `523`, `76.5k`,
 /// `1.2M`, `1.2B` — so callers compose it into a label (`{} tok`) or a split
 /// line. The `B` tier keeps an all-time token pile compact as it crosses a
@@ -399,6 +413,17 @@ mod tests {
         assert_eq!(tokens_int(999), "999");
         assert_eq!(tokens_int(1_900_000), "1M");
         assert_eq!(tokens_int(2_500_000_000), "2B");
+    }
+
+    #[test]
+    fn window_short_reads_lowercase_magnitudes() {
+        // The 1M class reads a quiet lowercase `m`, unlike `tokens_int`'s `M`.
+        assert_eq!(window_short(1_000_000), "1m");
+        assert_eq!(window_short(1_050_000), "1m");
+        assert_eq!(window_short(272_000), "272k");
+        assert_eq!(window_short(258_400), "258k");
+        assert_eq!(window_short(200_000), "200k");
+        assert_eq!(window_short(523), "523");
     }
 
     #[test]

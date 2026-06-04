@@ -1,6 +1,6 @@
 ---
 source: crates/rimz-sidebar/src/render/mod.rs
-assertion_line: 735
+assertion_line: 776
 expression: screen
 ---
  ⌘ query-engine
@@ -11,7 +11,7 @@ expression: screen
  ? 0   ! 1   ○ 0   ⏸︎ 0 ⢿ 0   ✓ 0
 
 ▏⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄
-▌! claude · Opus · 1M
+▌! claude · Opus · 1m
 ▌  db migrate
 ▌  ▢ ──────────────────────    0%
       ␣ next ?!   ? for help

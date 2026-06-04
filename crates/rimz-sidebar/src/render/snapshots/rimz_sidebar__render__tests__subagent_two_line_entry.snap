@@ -1,6 +1,6 @@
 ---
 source: crates/rimz-sidebar/src/render/mod.rs
-assertion_line: 767
+assertion_line: 776
 expression: screen
 ---
  ⌘ query-engine
@@ -17,7 +17,7 @@ expression: screen
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k
 ▌  ⧉ subagents (1)
 ▌    ✓ Explore — locate the render seam
-▌      ◇ 12.4k                                   ◷ <t>
+▌      ◇ 12.4k                                   ◔ <t>
 
 
                       ? for help

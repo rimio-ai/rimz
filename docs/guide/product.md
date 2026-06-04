@@ -28,7 +28,7 @@ Rimz gives every project one room — a Zellij or tmux session with a sidebar �
 ▏  ▣ ━━━━━━━━━━━━━━━──────────── 63%
 
  feature-migration                     +230 -23
- ! claude · Opus · 1M
+ ! claude · Opus · 1m
    db migrate
 
  ○ codex · GPT-5.5 · low

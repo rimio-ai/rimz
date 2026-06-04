@@ -9,7 +9,7 @@ Rimz pins every repo to one durable room — a Zellij or tmux session with a sid
  ✦ 6   ✧ 2                              $4.20
  ──────────────────────────────────────────────
  ? 2   ! 1   ○ 1            ✽ 1   ⢿ 1   ✓ 0
- ◷ 41m · ◇ 486.0k · ◆ 4
+ ◕ 41m · ◇ 486.0k · ◆ 4
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌? claude · Opus · xhigh
@@ -25,7 +25,7 @@ Rimz pins every repo to one durable room — a Zellij or tmux session with a sid
 ▏  ▣ ━━━━━━━━━━━━━━━──────────── 63%
 
  feature-migration                     +230 -23
- ! claude · Opus · 1M
+ ! claude · Opus · 1m
    db migrate
 
  ○ codex · GPT-5.5 · low

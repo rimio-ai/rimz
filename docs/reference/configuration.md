@@ -86,15 +86,6 @@ When a session is reborn — reboot, multiplexer crash, or a Rimz-initiated rebi
 
 Per-machine, display-only tuning of how the sidebar paints. None of it affects ledger correctness.
 
-#### Attention escalation
-
-```toml
-[sidebar]
-attention_redden_secs = 1800   # seconds before an unanswered ?/! reddens (default 1800 = 30 min)
-```
-
-A `waiting` `?` or `failed` `!` glyph rests bold yellow and reddens once the row has gone unanswered past this window. Lower it for a tighter SLA, raise it for long unattended work.
-
 #### Pane width
 
 ```toml
@@ -104,7 +95,16 @@ max_cols = 72     # column cap on the 30% sidebar split (default 72)
 
 Every sidebar pane targets 30% of the view at the `max_cols` cap, on both backends — on an ultra-wide terminal 30% alone is a hundred-column sidebar. The launch path reads your terminal's width once and resolves the verdict — `min(30%, max_cols)` in columns — into the session's pane templates, constant for the session's life: every new tab or window is born at exactly that width, however the terminal has changed since, and a `max_cols` edit applies at the next `rimz start`. Every pane — session birth, every new tab or window, recovery — lands at its size the instant it exists; resize a pane afterwards and your width sticks, and the sidebar always renders at the pane's full width. (A launch outside a terminal resolves to the bare `max_cols`; how each backend spells the verdict is in [internals/multiplexers.md](../internals/multiplexers.md).)
 
-#### Provider dashboard
+#### Context meter
+
+```toml
+[sidebar.context]
+yellow = { percent = 60, tokens = 160000 }   # the meter leaves calm blue
+amber  = { percent = 80, tokens = 258000 }   # yellow deepens to amber
+red    = { percent = 95, tokens = 420000 }   # amber escalates to red
+```
+
+The agent card's context meter — the bar, the `▣` glyph, and the `▤` head — ramps calm blue → yellow → amber → red on these bands. Each tier names the inclusive lower bound where it begins, on two axes at once: the window's fill `percent` and the absolute `tokens` occupying it. The meter wears the worse of the two axes, so a large-window model calm by percentage still warms by sheer volume. The defaults above are the shipped values (the 258k amber edge matches Codex's effective GPT-5.5 window); a tier you omit keeps its default, and within a tier both fields are stated together.
 
 ```toml
 [sidebar]
