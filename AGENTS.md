@@ -94,6 +94,7 @@ Every other document is a leaf from here. The `docs/` tree groups by audience: *
 - [adapter/claude-reference.md](./docs/internals/adapter/claude-reference.md) — Claude Code upstream protocol reference: hook events and decision schema, the full statusline JSON schema, and the auth surface, each pinned to its source URL for refresh.
 - [adapter/codex-reference.md](./docs/internals/adapter/codex-reference.md) — Codex upstream protocol reference: hooks, the `notify` channel, the app-server JSON-RPC API, the rollout JSONL, and the auth file, each pinned to its source URL for refresh.
 - [adapter/pi-reference.md](./docs/internals/adapter/pi-reference.md) — Pi upstream protocol reference: the in-process extension API (events, payloads, blocking returns, install surface), the session JSONL, the headless RPC/JSON modes, and the auth file, each pinned to its source URL for refresh.
+- [adapter/opencode-reference.md](./docs/internals/adapter/opencode-reference.md) — OpenCode upstream protocol reference: the in-process plugin API (hooks, bus events, blocking returns, install surface), the SQLite session store, the server HTTP API, and the auth file, each pinned to its source URL for refresh.
 - [web.md](./docs/internals/web.md) — Zellij-only browser access and session-route design.
 - [performance.md](./docs/internals/performance.md) — render-thread hot path, the cost map, and the rules a performance change follows.
 

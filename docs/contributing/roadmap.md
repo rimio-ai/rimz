@@ -61,7 +61,7 @@ Remaining: gated auto-open of a subagent surface only when preconditions are met
 
 Done: the Pi adapter — a Rimz-authored in-process extension forwarding pi's lifecycle events, whole-file install, resume, and spend (mapping in [hooks.md → Appendix Pi](../internals/hooks.md#appendix--pi); upstream surface in [adapter/pi-reference.md](../internals/adapter/pi-reference.md)).
 
-Remaining: OpenCode and other agents when their extension APIs and decision contracts are stable enough to test, plus Pi's unwired increments (context gauge, account probe — [pi-reference.md → Mapping feasibility](../internals/adapter/pi-reference.md#mapping-feasibility)).
+Remaining: the OpenCode adapter — upstream surface mirrored and live-verified in [adapter/opencode-reference.md](../internals/adapter/opencode-reference.md), with the proposed mapping and the unsupportable surfaces in its [Mapping feasibility](../internals/adapter/opencode-reference.md#mapping-feasibility) — other agents when their extension APIs and decision contracts are stable enough to test, plus Pi's unwired increments (context gauge, account probe — [pi-reference.md → Mapping feasibility](../internals/adapter/pi-reference.md#mapping-feasibility)).
 
 ## Optional — Zellij docked plugin rail
 

@@ -7,6 +7,7 @@ This doc owns both: the account/balance model, where each provider's facts come 
 
 It is the **single home for account/balance semantics**: what the metered/unmetered/plan facts mean, and how the producer folds them onto the internal types [`AgentAccount`](../../crates/rimz/src/agents/context.rs), [`AgentRateLimits`](../../crates/rimz/src/agents/context.rs), and the [`SidebarProviderPanel`](../../crates/rimz/src/ledger/snapshot/view.rs) the renderer paints.
 The raw auth surfaces it reads — `claude auth status`, `~/.codex/auth.json`, the app-server `account/rateLimits/read` response — are in the per-provider reference: [adapter/claude-reference.md](./adapter/claude-reference.md#auth-surface) and [adapter/codex-reference.md](./adapter/codex-reference.md#auth-file); [adapter/pi-reference.md → Auth file](./adapter/pi-reference.md#auth-file) mirrors Pi's auth surface — and its missing balance surface; the Pi probe is an unwired increment.
+[adapter/opencode-reference.md → Auth file](./adapter/opencode-reference.md#auth-file) mirrors OpenCode's auth surface ahead of its adapter — credential types only, with the same missing balance surface.
 
 Account and balance are **enrichment, never correctness** — the no-transcript-correctness rule.
 A missing binary, a logged-out account, an unparseable file: each degrades to an omitted plan label or a blank bar, never a failed snapshot or a wrong decision.
