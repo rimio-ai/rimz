@@ -468,6 +468,7 @@ fn invariants(root: &Path) -> Result<()> {
     }
 
     ensure_no_core_pane_auto_use(root, &files)?;
+    ensure_inline_tests_stay_small(&files)?;
     Ok(())
 }
 
@@ -568,4 +569,42 @@ fn ensure_no_core_pane_auto_use(root: &Path, files: &[PathBuf]) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+/// An inline `mod tests { … }` past this many lines moves to a sibling
+/// `tests.rs` (`#[cfg(test)] mod tests;`) per
+/// docs/contributing/rust-conventions.md#tests.
+const INLINE_TESTS_MAX_LINES: usize = 500;
+
+fn ensure_inline_tests_stay_small(files: &[PathBuf]) -> Result<()> {
+    let mut violations = Vec::new();
+    for path in files {
+        if path.extension().and_then(OsStr::to_str) != Some("rs") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let lines: Vec<&str> = text.lines().collect();
+        // Exact-line match so needles in strings never self-trip; the house
+        // shape keeps the tests module last, so its span runs to EOF.
+        let Some(start) = lines.iter().position(|line| *line == "mod tests {") else {
+            continue;
+        };
+        let span = lines.len() - start;
+        if span > INLINE_TESTS_MAX_LINES {
+            violations.push(format!(
+                "{}:{}: inline tests module spans {span} lines",
+                path.display(),
+                start + 1,
+            ));
+        }
+    }
+    if violations.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "inline tests modules past {INLINE_TESTS_MAX_LINES} lines move to a sibling tests.rs — see docs/contributing/rust-conventions.md#tests\n{}",
+        violations.join("\n")
+    );
 }
