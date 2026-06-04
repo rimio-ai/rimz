@@ -4,3 +4,4 @@
 
 mod hook_bridge;
 mod pane_send;
+mod pi_hook_bridge;

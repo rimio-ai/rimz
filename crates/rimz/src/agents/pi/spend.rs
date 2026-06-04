@@ -1,13 +1,15 @@
 //! Pi agent JSONL transcript parser.
 //!
 //! [`spending`](crate::agents::spending) consumes this parser through the
-//! adapter's `parse_spend`, fed every Pi session fleet-wide by the producer. Pi
-//! logs `costUSD` directly, so each entry carries a cost as parsed — no pricing
-//! table needed.
+//! adapter's `parse_spend`, fed every Pi session fleet-wide by the producer.
+//! Pi logs dollars directly (`usage.cost.total`), so each entry carries a
+//! cost as parsed — no pricing table needed.
 //!
 //! Pi session files live under `~/.pi/agent/sessions/--<cwd-with-dashes>--/`
-//! (upstream overrides: `--session-dir` / `PI_CODING_AGENT_SESSION_DIR`); the
-//! `PI_AGENT_DIR` env honored here is Rimz's own comma-separated test
+//! as one `<ISO-timestamp>_<uuid>.jsonl` per session (e.g.
+//! `2026-06-04T06-45-56-308Z_019e9161-….jsonl`, the uuid being the session
+//! id). Upstream overrides: `--session-dir` / `PI_CODING_AGENT_SESSION_DIR`;
+//! the `PI_AGENT_DIR` env honored here is Rimz's own comma-separated test
 //! override, not a pi variable. Upstream shapes are mirrored in
 //! `docs/internals/adapter/pi-reference.md`. JSONL shape (one entry per
 //! assistant turn):

@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 use crate::common::{
     Env, claude_pre_tool_use_payload, codex_permission_payload, permission_payload,
+    pi_tool_call_payload,
 };
 
 const BRIDGE_ITEM_WAIT: Duration = Duration::from_secs(5);
@@ -348,6 +349,259 @@ fn codex_install_uninstall_cli_round_trips_into_codex_config() {
     assert!(!removed.is_empty(), "must report removed events");
     let written = std::fs::read_to_string(&codex_config).expect("read codex config");
     assert!(!written.contains("rimz hooks feed --source codex"));
+}
+
+#[test]
+fn pi_tool_call_with_no_resolver_emits_neutral_and_no_feed_item() {
+    // Pi has no native permission prompt (`native_ask_ui` = false): with no
+    // fresh resolver the hook must answer neutral (empty stdout = the tool
+    // runs) and push NO feed item — nothing could ever answer one.
+    let env = Env::new();
+    let output = env.run_hook("pi", &pi_tool_call_payload("bash"));
+    assert_hook_succeeded_neutral("pi", output);
+
+    let items = env.feed_list_json();
+    assert_eq!(
+        items.as_array().expect("array").len(),
+        0,
+        "pi must not orphan an unanswerable native_ui item: {items}"
+    );
+}
+
+#[test]
+fn pi_tool_call_with_stale_heartbeat_emits_neutral_and_no_feed_item() {
+    let env = Env::new();
+    env.enrol("opus-policy", 10, "30s");
+    env.write_heartbeat("opus-policy", Timestamp::now() - Duration::from_secs(60));
+
+    let output = env.run_hook("pi", &pi_tool_call_payload("bash"));
+    assert_hook_succeeded_neutral("pi", output);
+    assert_eq!(
+        env.feed_list_json().as_array().expect("array").len(),
+        0,
+        "a stale resolver downgrades, but pi still gets no native_ui item"
+    );
+}
+
+#[test]
+fn pi_tool_call_bridge_allow_renders_empty_object() {
+    let env = Env::new();
+    env.enrol("opus-policy", 10, "30s");
+    env.write_heartbeat("opus-policy", Timestamp::now());
+
+    let child = env.spawn_hook("pi", &pi_tool_call_payload("bash"));
+    let request_id = env
+        .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
+        .expect("bridge item should appear in feed");
+    let resolve = env.resolve(
+        &request_id,
+        r#"{"choice":"allow"}"#,
+        "opus-policy",
+        "hook-bridge",
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve failed: {}",
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    let output = child.wait_with_output().expect("wait child");
+    assert!(
+        output.status.success(),
+        "pi hook stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+    let decision: Value = serde_json::from_str(stdout.trim()).expect("pi decision json");
+    // Pi's allow is the empty object — the extension blocks only on
+    // `block === true`.
+    assert_eq!(decision, json!({}), "decision: {decision}");
+}
+
+#[test]
+fn pi_tool_call_bridge_deny_renders_block_with_reason() {
+    let env = Env::new();
+    env.enrol("opus-policy", 10, "30s");
+    env.write_heartbeat("opus-policy", Timestamp::now());
+
+    let child = env.spawn_hook("pi", &pi_tool_call_payload("bash"));
+    let request_id = env
+        .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
+        .expect("bridge item should appear in feed");
+    let resolve = env.resolve(
+        &request_id,
+        r#"{"choice":"deny","reason":"rm -rf is not on the allowlist"}"#,
+        "opus-policy",
+        "hook-bridge",
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve failed: {}",
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    let output = child.wait_with_output().expect("wait child");
+    assert!(
+        output.status.success(),
+        "pi hook stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+    let decision: Value = serde_json::from_str(stdout.trim()).expect("pi decision json");
+    assert_eq!(
+        decision,
+        json!({ "block": true, "reason": "rm -rf is not on the allowlist" }),
+        "decision: {decision}"
+    );
+}
+
+#[test]
+fn pi_session_start_writes_agent_lifecycle_event() {
+    let env = Env::new();
+    let payload = serde_json::to_string(&json!({
+        "hook_event_name": "session_start",
+        "session_id": "019e9161-a5d0-791d-879e-39679acd4ded",
+        "reason": "startup",
+        "model": "gpt-5.5",
+        "context_pct": 3,
+        "context_window": 272000,
+        "total_tokens": 8160,
+    }))
+    .expect("payload");
+
+    let output = env.run_hook("pi", &payload);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty(), "lifecycle hook is silent");
+
+    let parsed = env.snapshot_json();
+    let agents = parsed["agents"].as_array().expect("agents array");
+    assert_eq!(agents.len(), 1, "exactly one agent rolled up: {agents:?}");
+    assert_eq!(agents[0]["kind"], "pi");
+    assert_eq!(
+        agents[0]["agent_id"],
+        "019e9161-a5d0-791d-879e-39679acd4ded"
+    );
+    // session_start registers the agent idle (wired in, nothing asked yet).
+    assert_eq!(agents[0]["status"], "idle");
+    assert_eq!(agents[0]["model"], "gpt-5.5");
+    assert_eq!(agents[0]["context_window"], 272000);
+}
+
+#[test]
+fn pi_turn_opens_thinking_until_the_first_file_edit() {
+    let env = Env::new();
+    let run = |payload: &serde_json::Value| {
+        let payload = serde_json::to_string(payload).expect("payload");
+        let output = env.run_hook("pi", &payload);
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+
+    run(&json!({
+        "hook_event_name": "before_agent_start",
+        "session_id": "sess-pi-phase",
+        "prompt": "refactor the parser",
+    }));
+    let parsed = env.snapshot_json();
+    assert_eq!(parsed["agents"][0]["status"], "running");
+    assert_eq!(
+        parsed["agents"][0]["phase"], "reasoning",
+        "a fresh turn opens in its reasoning phase"
+    );
+    assert_eq!(parsed["agents"][0]["task"], "refactor the parser");
+
+    // bash mutates but edits nothing — still reasoning. The adapter
+    // classifies off `tool_name` via the descriptor's tool tables.
+    run(&json!({
+        "hook_event_name": "tool_execution_end",
+        "session_id": "sess-pi-phase",
+        "tool_name": "bash",
+    }));
+    let parsed = env.snapshot_json();
+    assert_eq!(parsed["agents"][0]["phase"], "reasoning");
+
+    // The first file edit flips the turn to acting.
+    run(&json!({
+        "hook_event_name": "tool_execution_end",
+        "session_id": "sess-pi-phase",
+        "tool_name": "edit",
+    }));
+    let parsed = env.snapshot_json();
+    assert_eq!(parsed["agents"][0]["status"], "running");
+    assert_eq!(parsed["agents"][0]["phase"], "acting");
+
+    // A clean turn end settles to success and the resting phase.
+    run(&json!({
+        "hook_event_name": "agent_end",
+        "session_id": "sess-pi-phase",
+        "stop_reason": "stop",
+    }));
+    let parsed = env.snapshot_json();
+    assert_eq!(parsed["agents"][0]["status"], "success");
+    assert_eq!(parsed["agents"][0]["phase"], "idle");
+}
+
+#[test]
+fn pi_install_uninstall_cli_round_trips_into_extension_file() {
+    let env = Env::new();
+    let extension = env.agent_config_path("pi");
+
+    let install = env
+        .rimz()
+        .args(["hooks", "install", "pi"])
+        .output()
+        .expect("spawn install");
+    assert!(
+        install.status.success(),
+        "install stderr: {}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    let report: Value = serde_json::from_slice(&install.stdout).expect("install report json");
+    assert_eq!(report["agent"], "pi");
+    assert_eq!(report["merged"], false);
+    let events = report["installed_events"].as_array().expect("events");
+    let names: Vec<&str> = events.iter().filter_map(Value::as_str).collect();
+    assert!(names.contains(&"session_start"));
+    assert!(names.contains(&"tool_call"));
+
+    let written = std::fs::read_to_string(&extension).expect("read pi extension");
+    assert!(
+        written
+            .lines()
+            .next()
+            .is_some_and(|line| line.contains("_rimz_managed")),
+        "extension must carry the ownership marker on line one:\n{written}"
+    );
+    assert!(written.contains("\"hooks\", \"feed\", \"--source\", \"pi\""));
+    assert!(env.agent_hooks_installed("pi"));
+
+    let uninstall = env
+        .rimz()
+        .args(["hooks", "uninstall", "pi"])
+        .output()
+        .expect("spawn uninstall");
+    assert!(
+        uninstall.status.success(),
+        "uninstall stderr: {}",
+        String::from_utf8_lossy(&uninstall.stderr)
+    );
+    let report: Value = serde_json::from_slice(&uninstall.stdout).expect("uninstall report json");
+    assert_eq!(report["existed"], true);
+    assert!(
+        !report["removed_events"]
+            .as_array()
+            .expect("removed events")
+            .is_empty()
+    );
+    assert!(!extension.exists(), "uninstall removes the managed file");
+    assert!(!env.agent_hooks_installed("pi"));
 }
 
 #[test]

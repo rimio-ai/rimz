@@ -36,8 +36,9 @@ RESOLVER_VERSION = "0.1.0"
 #: Built-in policy: which agent tools this resolver answers ``allow`` for.
 #: Anything outside this set abstains and the chain advances. Real resolvers
 #: derive this list from policy or a model call; we keep it static so the
-#: example stays readable.
-ALLOW_TOOLS = frozenset({"Read", "Grep", "Glob", "LS"})
+#: example stays readable. Capitalized names are Claude's; the lowercase set
+#: is pi's (its wire reports ``read``/``grep``/``find``/``ls``).
+ALLOW_TOOLS = frozenset({"Read", "Grep", "Glob", "LS", "read", "grep", "find", "ls"})
 
 
 def runtime_root() -> Path:

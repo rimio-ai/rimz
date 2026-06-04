@@ -46,6 +46,19 @@ pub fn claude_pre_tool_use_payload(tool_name: &str) -> String {
     .expect("payload")
 }
 
+/// Pi-shaped blocking `tool_call` payload. Rimz authors pi's wire (the
+/// extension is Rimz code), so this mirrors `extension.ts`'s envelope —
+/// lowercase pi tool names (`bash`, `read`, `edit`, …).
+pub fn pi_tool_call_payload(tool_name: &str) -> String {
+    serde_json::to_string(&json!({
+        "hook_event_name": "tool_call",
+        "session_id": "sess-pi-tool",
+        "tool_name": tool_name,
+        "tool_input": { "command": "echo hi" },
+    }))
+    .expect("payload")
+}
+
 /// Absolute path to a reference resolver script under `examples/resolvers/`.
 /// One place owns the `crates/<crate>` → workspace-root climb that every
 /// example-resolver test would otherwise hand-roll.

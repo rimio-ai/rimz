@@ -181,6 +181,12 @@ impl Env {
         match source {
             "codex" => self.project_root.join(".codex").join("config.toml"),
             "claude" => self.project_root.join(".claude").join("settings.json"),
+            "pi" => self
+                .project_root
+                .join(".pi")
+                .join("agent")
+                .join("extensions")
+                .join("rimz.ts"),
             other => panic!("unknown agent `{other}`"),
         }
     }
@@ -211,7 +217,7 @@ impl Env {
         };
         match source {
             "codex" => text.contains("rimz hooks feed --source codex"),
-            "claude" => text.contains("_rimz_managed"),
+            "claude" | "pi" => text.contains("_rimz_managed"),
             _ => false,
         }
     }
