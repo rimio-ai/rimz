@@ -144,11 +144,17 @@ fn reconcile_live(
 
     // 2. Reconcile panes: keep each view's live sidebar, close duplicates and
     //    unresponsive ones, add to any working view left without one.
+    let width = SidebarWidth::from_config(&machine_config.sidebar);
     let opts = SidebarPaneOptions {
         session_name: ws.session_name.clone(),
         workspace_id: ws.workspace_id.clone(),
         cwd: ws.project_root.clone(),
-        width: SidebarWidth::from_config(&machine_config.sidebar),
+        width,
+        // A reload can run from a terminal (or no terminal) unrelated to the
+        // session's clients, so no probe feeds the birth size here; the heal
+        // paths size from the session's own live geometry and fall back to
+        // this percentage.
+        birth_size: width.birth_size(None),
         rimz_bin: rimz_bin.to_path_buf(),
         replace_existing: false,
         config: MultiplexerConfig::from(machine_config),

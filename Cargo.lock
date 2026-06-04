@@ -1664,6 +1664,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "tempfile",
+ "terminal_size",
  "thiserror 2.0.18",
  "tokio",
  "toml",

@@ -18,7 +18,7 @@ use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal;
 use rimz::ids::PaneId;
 use rimz::ledger::paths::PathErr;
-use rimz::mux::{PaneListOptions, SidebarWidth};
+use rimz::mux::PaneListOptions;
 use rimz::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use tracing::{debug, info, warn};
 
@@ -102,11 +102,6 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // wall-clock (rather than a per-tick counter) keeps the spin continuous
     // across re-fetches and ledger deltas, so no redraw path can stall it.
     let anim_start = Instant::now();
-    // The `sidebar.max_cols` creation-time trigger: armed only on a genuinely
-    // fresh pane — a reload re-exec inherits its pane (and any width the user
-    // chose) and marks itself, so it never re-caps.
-    let serve_started = Instant::now();
-    let mut width_cap_armed = std::env::var_os(REEXEC_ENV).is_none();
 
     // The snapshot subprocess (workspace resolve + `list-panes` + git) runs on
     // a background worker, so animation and input never block on it. The worker
@@ -239,23 +234,6 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     rejected = applied.rejected;
                     if snapshot_ok {
                         last_self_close_check = Instant::now();
-                    }
-                    // Creation-time width cap: evaluated only while armed (the
-                    // settle window of a freshly-born pane), latched off by the
-                    // first fire or by the window passing — never re-armed, so
-                    // a manual resize afterwards is the user's.
-                    if snapshot_ok && width_cap_armed {
-                        let width = SidebarWidth::from_config(&current.sidebar);
-                        let own_cols = terminal.size().ok().map(|size| size.width);
-                        match width_cap_action(serve_started.elapsed(), own_cols, width.cap_cols())
-                        {
-                            WidthCapAction::Fire => {
-                                width_cap_armed = false;
-                                enforce_sidebar_width_cap(&config, width);
-                            }
-                            WidthCapAction::Disarm => width_cap_armed = false,
-                            WidthCapAction::Hold => {}
-                        }
                     }
                     // The fold mutated the model; the frame phase paints it.
                     dirty = true;
@@ -542,11 +520,6 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     Ok(())
 }
 
-/// Marks a re-exec'd renderer (`rimz reload` / the `r` key): the fresh process
-/// inherits a pane that already lived — and any width the user chose — so the
-/// creation-time width cap never arms.
-const REEXEC_ENV: &str = "RIMZ_SIDEBAR_REEXEC";
-
 /// Replace this process with a fresh invocation of `exe` and our own argv.
 /// After `rimz reload`, the renderer's binary on disk has been updated in
 /// place; re-execing the resolved path loads the new code without touching the
@@ -555,7 +528,7 @@ fn reexec_self(exe: &Path) -> SidebarAppErr {
     use std::os::unix::process::CommandExt;
 
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let source = Command::new(exe).args(&args).env(REEXEC_ENV, "1").exec();
+    let source = Command::new(exe).args(&args).exec();
     SidebarAppErr::CommandIo {
         program: exe.display().to_string(),
         source,
@@ -1620,61 +1593,6 @@ fn apply_fetch_outcome(
     })
 }
 
-/// How long after launch the `sidebar.max_cols` trigger stays armed. A
-/// freshly-born pane settles within this window — including the session-birth
-/// race where both backends size a detached session at default geometry until
-/// the client attaches (the attach SIGWINCH pulls a fresh snapshot, so the
-/// real size is evaluated here in time). Past the window the pane is the
-/// user's: the trigger disarms without acting, so a manual resize sticks.
-const WIDTH_CAP_ARM_WINDOW: Duration = Duration::from_secs(30);
-
-/// The width-cap verdict for one snapshot fold while the trigger is armed.
-#[derive(Debug, PartialEq, Eq)]
-enum WidthCapAction {
-    /// The pane exceeds the cap: fire the one creation-time resize and latch.
-    Fire,
-    /// The settle window has passed: latch off without acting.
-    Disarm,
-    /// Within the window, at/below the cap (or size unknown): stay armed.
-    Hold,
-}
-
-/// Pure decision for the creation-time width cap, evaluated on each successful
-/// snapshot fold while armed. `Fire` and `Disarm` both latch the trigger off —
-/// the cap acts at most once per renderer process, which is exactly once per
-/// pane creation (every new tab/window births a fresh renderer).
-fn width_cap_action(elapsed: Duration, own_cols: Option<u16>, cap_cols: u64) -> WidthCapAction {
-    if elapsed > WIDTH_CAP_ARM_WINDOW {
-        return WidthCapAction::Disarm;
-    }
-    match own_cols {
-        Some(cols) if u64::from(cols) > cap_cols => WidthCapAction::Fire,
-        _ => WidthCapAction::Hold,
-    }
-}
-
-/// Fire the one creation-time resize toward the capped width, off-thread so
-/// the render loop never blocks on a mux round-trip. Best-effort: width is
-/// cosmetic, so a failure is logged and the pane simply stays wider.
-fn enforce_sidebar_width_cap(config: &ServeConfig, width: SidebarWidth) {
-    let Some(pane) = own_pane_id(config.mux) else {
-        return;
-    };
-    let mux = config.mux;
-    let session_name = config.session_name.clone();
-    std::thread::spawn(move || {
-        let backend = rimz::mux::backend_for(mux);
-        if let Err(err) = backend.resize_sidebar_pane(&session_name, &pane, width) {
-            warn!(
-                session = %session_name,
-                pane = %pane.as_str(),
-                error = %err,
-                "sidebar pane width cap resize failed; leaving the wider pane",
-            );
-        }
-    });
-}
-
 /// Detach the attached client from the session, best-effort, by shelling out to
 /// `rimz pane detach` (the same cached binary the snapshot fork uses, so no mux
 /// command knowledge leaks into the sidebar). The daemon-view sidebar calls this
@@ -2661,29 +2579,6 @@ mod tests {
         assert_eq!(
             strip_deleted_suffix(Path::new("/opt/my (deleted)/rimz-sidebar")),
             None
-        );
-    }
-
-    #[test]
-    fn width_cap_fires_above_the_cap_and_disarms_past_the_window() {
-        let within = Duration::from_secs(1);
-        // Above the cap inside the settle window: fire (the caller latches).
-        assert_eq!(
-            width_cap_action(within, Some(100), 72),
-            WidthCapAction::Fire
-        );
-        // At/below the cap, or size unknown: stay armed — the geometry may
-        // still be the pre-attach default, and the attach SIGWINCH pulls a
-        // fresh snapshot that re-evaluates here.
-        assert_eq!(width_cap_action(within, Some(72), 72), WidthCapAction::Hold);
-        assert_eq!(width_cap_action(within, Some(40), 72), WidthCapAction::Hold);
-        assert_eq!(width_cap_action(within, None, 72), WidthCapAction::Hold);
-        // Past the window the pane is the user's: disarm without acting, even
-        // when wider than the cap — a manual resize is never fought.
-        let past = WIDTH_CAP_ARM_WINDOW + Duration::from_secs(1);
-        assert_eq!(
-            width_cap_action(past, Some(100), 72),
-            WidthCapAction::Disarm
         );
     }
 

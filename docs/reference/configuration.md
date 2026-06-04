@@ -102,7 +102,7 @@ A `waiting` `?` or `failed` `!` glyph rests bold yellow and reddens once the row
 max_cols = 72     # column cap on the 30% sidebar split (default 72)
 ```
 
-Every sidebar pane targets 30% of the view at the `max_cols` cap, on both backends — on an ultra-wide terminal 30% alone is a hundred-column sidebar, so a pane born above the cap is shrunk to it once, when it is created: session birth, every new tab or window, recovery. Creation-time only: resize the pane afterwards and your width sticks, and the sidebar always renders at the pane's full width.
+Every sidebar pane targets 30% of the view at the `max_cols` cap, on both backends — on an ultra-wide terminal 30% alone is a hundred-column sidebar. The launch path reads your terminal's width once and bakes the decision into the session's pane templates: capped at `max_cols` when 30% would exceed it, plain 30% otherwise. Every pane — session birth, every new tab or window, recovery — lands at its size the instant it exists; resize a pane afterwards and your width sticks, and the sidebar always renders at the pane's full width. (A launch outside a terminal falls back to the 30% split; how each backend spells the cap is in [internals/multiplexers.md](../internals/multiplexers.md).)
 
 #### Provider dashboard
 

@@ -91,11 +91,13 @@ impl SidebarHarness {
     }
 
     fn sidebar_opts(&self) -> SidebarPaneOptions {
+        let width = SidebarWidth::default();
         SidebarPaneOptions {
             session_name: "session".to_owned(),
             workspace_id: self.workspace_id.clone(),
             cwd: self.cwd.clone(),
-            width: SidebarWidth::default(),
+            width,
+            birth_size: width.birth_size(None),
             rimz_bin: PathBuf::from("rimz"),
             replace_existing: false,
             config: rimz::config::MultiplexerConfig::default(),
@@ -200,15 +202,6 @@ impl MuxBackend for FakeBackend {
     }
 
     fn focus_pane(&self, _pane: &PaneId) -> rimz::mux::Result<()> {
-        Ok(())
-    }
-
-    fn resize_sidebar_pane(
-        &self,
-        _session_name: &str,
-        _pane: &PaneId,
-        _width: SidebarWidth,
-    ) -> rimz::mux::Result<()> {
         Ok(())
     }
 

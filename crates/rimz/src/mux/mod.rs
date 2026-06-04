@@ -230,6 +230,12 @@ pub struct SessionOptions {
     pub session_name: String,
     pub cwd: PathBuf,
     pub config: crate::config::MultiplexerConfig,
+    /// The invoking terminal's `(cols, rows)`, when launch ran in one
+    /// ([`detect_terminal_size`]). tmux sizes a detached birth with `-x`/`-y`
+    /// so a fixed sidebar width is correct before the client attaches; `None`
+    /// leaves the backend's default geometry. Zellij ignores it (a background
+    /// session adopts the client size on attach).
+    pub detected_size: Option<(u16, u16)>,
 }
 
 /// Default sidebar width as a percentage of the view. The single source of
@@ -237,12 +243,11 @@ pub struct SessionOptions {
 const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
 
 /// Sidebar pane width: a percentage of the view, capped at `max_cols` columns
-/// (`sidebar.max_cols`). Panes are born at the percentage — a Zellij layout
-/// spells fixed sizes or percentages but never `min(percent, columns)`, and a
-/// detached tmux session births at default geometry where an absolute size
-/// would be wrong — so the cap lands as one creation-time
-/// [`MuxBackend::resize_sidebar_pane`] fired by the freshly-born renderer.
-/// Creation-time only: a manual resize afterwards sticks.
+/// (`sidebar.max_cols`). The cap lands at layout-generation time: the launch
+/// paths probe the invoking terminal once ([`detect_terminal_size`]) and
+/// [`SidebarWidth::birth_size`] decides whether the cap bites — [`BirthSize`]
+/// carries the spellings each backend births with. Birth-time only: a manual
+/// resize afterwards sticks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SidebarWidth {
     /// Percentage of the view width — tracks terminal size below the cap.
@@ -268,11 +273,57 @@ impl SidebarWidth {
         percent.min(self.cap_cols())
     }
 
-    /// The column cap alone — the threshold above which a freshly-born pane is
-    /// shrunk once.
+    /// The column cap alone — the threshold above which a pane is born fixed.
     pub fn cap_cols(self) -> u64 {
         u64::from(self.max_cols.get())
     }
+
+    /// The size a pane is born with on a terminal `detected_cols` wide:
+    /// capped when the percentage split would exceed `max_cols`, else the
+    /// percentage. An unknown width (`None` — launch outside a tty) births at
+    /// the percentage, which tracks whatever size the view turns out to have.
+    pub fn birth_size(self, detected_cols: Option<u16>) -> BirthSize {
+        let percent = self.percent.clamp(10, 90);
+        match detected_cols {
+            Some(total) if u64::from(total) * u64::from(percent) / 100 > self.cap_cols() => {
+                // Floor keeps the derived percentage at or under the cap on
+                // the detected terminal; at least 1% so the spelling is valid.
+                let derived = (self.cap_cols() * 100 / u64::from(total)).max(1);
+                BirthSize::Capped {
+                    cols: self.max_cols,
+                    percent: u16::try_from(derived).unwrap_or(percent),
+                }
+            }
+            _ => BirthSize::Percent(percent),
+        }
+    }
+}
+
+/// How a sidebar pane is born sized, decided once at layout-generation time by
+/// [`SidebarWidth::birth_size`].
+///
+/// When the percentage would exceed `sidebar.max_cols` on the launching
+/// terminal, the decision is `Capped` and carries two spellings of the same
+/// width: fixed columns for panes instantiated at live geometry (tmux splits
+/// and hooks on a `-x`/`-y`-sized session, the Zellij `new_tab_template` a
+/// user opens tabs from), and the equivalent percentage of the detected width
+/// for panes a detached Zellij birth instantiates — a fixed size larger than
+/// the background session's default geometry kills the session, while a
+/// percentage fits any geometry and lands at the cap when the client attaches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BirthSize {
+    /// The `sidebar.max_cols` cap bites: `cols` is the cap, `percent` its
+    /// equivalent share of the detected terminal width.
+    Capped { cols: NonZeroU16, percent: u16 },
+    /// Born at a percentage of the view — tracks terminal size.
+    Percent(u16),
+}
+
+/// The invoking terminal's `(cols, rows)`, when stdout is attached to one.
+/// Probed once per launch command; the width feeds
+/// [`SidebarWidth::birth_size`] and the pair sizes a detached tmux birth.
+pub fn detect_terminal_size() -> Option<(u16, u16)> {
+    terminal_size::terminal_size().map(|(width, height)| (width.0, height.0))
 }
 
 impl Default for SidebarWidth {
@@ -286,7 +337,12 @@ pub struct SidebarPaneOptions {
     pub session_name: String,
     pub workspace_id: WorkspaceId,
     pub cwd: PathBuf,
+    /// The configured width — the reconcile heal path still steps a recovered
+    /// pane toward [`SidebarWidth::target_cols`] from live geometry.
     pub width: SidebarWidth,
+    /// The size freshly-born panes are spelled with in layouts, splits, and
+    /// hooks — resolved once per command by [`SidebarWidth::birth_size`].
+    pub birth_size: BirthSize,
     pub rimz_bin: PathBuf,
     pub replace_existing: bool,
     pub config: crate::config::MultiplexerConfig,
@@ -535,18 +591,6 @@ pub trait MuxBackend: Send + Sync {
     }
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()>;
     fn focus_pane(&self, pane: &PaneId) -> Result<()>;
-    /// Best-effort resize of a live sidebar pane toward its configured width.
-    /// This is how `sidebar.max_cols` lands: panes are born at the percentage
-    /// (neither backend can spell `min(percent, columns)` at creation), and the
-    /// freshly-born renderer fires this once when its pane exceeds the cap —
-    /// session birth, every new tab/window, recovery. Creation-time only: the
-    /// renderer never fires it again, so a manual resize sticks.
-    fn resize_sidebar_pane(
-        &self,
-        session_name: &str,
-        pane: &PaneId,
-        width: SidebarWidth,
-    ) -> Result<()>;
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture>;
     fn send_keys(&self, pane: &PaneId, text: &str) -> Result<()>;
     /// Birth (or heal) the session's working view with its sidebar. When `daemon`
@@ -683,6 +727,34 @@ mod tests {
         assert_eq!(width.target_cols(120), 36);
         assert_eq!(width.target_cols(300), 72);
         assert_eq!(width.cap_cols(), 72);
+    }
+
+    #[test]
+    fn birth_size_is_capped_only_when_the_percent_would_exceed_the_cap() {
+        let width = SidebarWidth::default();
+        // Below the threshold the percentage rules: 30% of 120 is 36 ≤ 72.
+        assert_eq!(width.birth_size(Some(120)), BirthSize::Percent(30));
+        // Exactly at the cap stays the percentage: 30% of 240 is 72, not above.
+        assert_eq!(width.birth_size(Some(240)), BirthSize::Percent(30));
+        // Past it the cap bites: 30% of 340 is 102 > 72, and the derived
+        // percentage floors to the cap's share of the detected width.
+        assert_eq!(
+            width.birth_size(Some(340)),
+            BirthSize::Capped {
+                cols: NonZeroU16::new(72).expect("nonzero"),
+                percent: 21, // ⌊72·100/340⌋
+            },
+        );
+        // The derived percentage never floors below 1%, however wide the view.
+        assert_eq!(
+            width.birth_size(Some(7300)),
+            BirthSize::Capped {
+                cols: NonZeroU16::new(72).expect("nonzero"),
+                percent: 1,
+            },
+        );
+        // Unknown width (no tty) births at the percentage, the status quo.
+        assert_eq!(width.birth_size(None), BirthSize::Percent(30));
     }
 
     #[test]

@@ -40,6 +40,11 @@ jiff = { version = "0.2", features = ["serde"] }
 # CLI
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 
+# Terminal geometry probe — the launch paths read the invoking terminal's
+# width once to pick the sidebar's birth size (fixed cap vs percentage).
+# Already in the tree transitively via clap's `wrap_help`; trivial API.
+terminal_size = "0.4"
+
 # HTTP — pricing refresh: the runtime LiteLLM/models.dev fetch and the
 # build-time embed both GET a static JSON document. `ureq` is a small,
 # synchronous, rustls-backed client — the right shape for a one-shot

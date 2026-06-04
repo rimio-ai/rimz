@@ -21,8 +21,8 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, WorkspaceId};
 use rimz::mux::{
-    DaemonView, HostPane, MuxBackend, PaneListOptions, SessionHealth, SidebarPaneOptions,
-    SidebarWidth, ZellijBackend, zellij,
+    BirthSize, DaemonView, HostPane, MuxBackend, PaneListOptions, SessionHealth,
+    SidebarPaneOptions, SidebarWidth, ZellijBackend, zellij,
 };
 use tempfile::TempDir;
 
@@ -130,6 +130,61 @@ impl Drop for ZellijSession {
         let _ = scoped_zellij(self.xdg.path())
             .args(["delete-session", &self.name, "--force"])
             .bounded_output();
+    }
+}
+
+/// A live client attached to an existing session on the test's private server,
+/// held open on a PTY of the given size so the session adopts real terminal
+/// geometry (a background birth is tiny until a client attaches). Drop kills
+/// the client; session teardown stays with [`ScopedSessionCleanup`].
+struct AttachedClient {
+    _master: Box<dyn portable_pty::MasterPty + Send>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+}
+
+impl AttachedClient {
+    fn attach(xdg: &Path, name: &str, cols: u16, rows: u16) -> Self {
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut cmd = CommandBuilder::new("zellij");
+        cmd.env("XDG_RUNTIME_DIR", xdg);
+        // The test process may itself run inside a Zellij pane; a client
+        // refuses to attach when it believes it is already in a session.
+        cmd.env_remove("ZELLIJ");
+        cmd.env_remove("ZELLIJ_SESSION_NAME");
+        cmd.env_remove("ZELLIJ_PANE_ID");
+        cmd.args(["attach", name]);
+        let child = pair.slave.spawn_command(cmd).expect("spawn zellij attach");
+        drop(pair.slave);
+        // Drain the PTY in the background so the kernel buffer never fills and
+        // stalls the client; the thread exits with the PTY on drop.
+        let mut reader = pair.master.try_clone_reader().expect("clone reader");
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => continue,
+                }
+            }
+        });
+        Self {
+            _master: pair.master,
+            child,
+        }
+    }
+}
+
+impl Drop for AttachedClient {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -300,6 +355,7 @@ fn open_sidebar_births_native_layout_and_template() {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-test")),
                 cwd: cwd.path().to_path_buf(),
                 width: SidebarWidth::default(),
+                birth_size: BirthSize::Percent(30),
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
@@ -371,6 +427,7 @@ fn open_sidebar_on_live_session_is_idempotent() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-idem")),
         cwd: cwd.path().to_path_buf(),
         width: SidebarWidth::default(),
+        birth_size: BirthSize::Percent(30),
         rimz_bin: stub,
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
@@ -421,6 +478,7 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-cleanroom")),
         cwd: cwd.path().to_path_buf(),
         width: SidebarWidth::default(),
+        birth_size: BirthSize::Percent(30),
         rimz_bin: stub,
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
@@ -518,6 +576,7 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-nosb")),
                 cwd: cwd.path().to_path_buf(),
                 width: SidebarWidth::default(),
+                birth_size: BirthSize::Percent(30),
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
@@ -958,6 +1017,137 @@ fn assert_sidebar_is_left_thirty_percent(xdg: &Path, session: &str) {
     );
 }
 
+/// The `rimz-sidebar` pane's column width per tab, from the live pane listing.
+/// Tabs without a sidebar are absent; an unanswerable listing is empty.
+fn sidebar_columns_by_tab(xdg: &Path, session: &str) -> std::collections::BTreeMap<u64, u64> {
+    let Ok(output) = scoped_zellij(xdg)
+        .args(["--session", session, "action", "list-panes", "-j", "-a"])
+        .bounded_output()
+    else {
+        return std::collections::BTreeMap::new();
+    };
+    let Ok(panes) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+        return std::collections::BTreeMap::new();
+    };
+    panes
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter(|pane| {
+            pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false)
+                && pane.get("title").and_then(|value| value.as_str()) == Some("rimz-sidebar")
+        })
+        .filter_map(|pane| {
+            Some((
+                pane.get("tab_id")?.as_u64()?,
+                pane.get("pane_columns")?.as_u64()?,
+            ))
+        })
+        .collect()
+}
+
+/// Poll until `session` reports one sidebar per entry of `expected`, each
+/// inside its tab's column range (ordered by tab id) — attach and tab-open
+/// geometry settles asynchronously. `false` on timeout.
+fn wait_for_sidebar_columns(
+    xdg: &Path,
+    session: &str,
+    expected: &[std::ops::RangeInclusive<u64>],
+) -> bool {
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    loop {
+        let widths = sidebar_columns_by_tab(xdg, session);
+        if widths.len() == expected.len()
+            && widths
+                .values()
+                .zip(expected)
+                .all(|(width, range)| range.contains(width))
+        {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+/// A capped birth size is enforced by Zellij itself, in the spelling each tab
+/// instantiates with: the birth tab carries the derived percentage (a fixed
+/// size wider than the detached session's default geometry kills the session)
+/// and lands within rounding of the cap once a real-size client attaches,
+/// while every tab opened later is born from the `new_tab_template` at exactly
+/// the cap — no post-birth resize anywhere.
+#[test]
+fn capped_birth_size_lands_the_cap_in_every_tab() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("fixedw");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+
+    // A long-lived stand-in for the renderer: this test waits through an
+    // attach and a tab open, which can outlive the shared 30s stub.
+    let stub_dir = TempDir::new().expect("stub dir");
+    let stub = stub_dir.path().join("rimz-stub");
+    std::fs::write(&stub, "#!/bin/sh\nsleep 600\n").expect("write stub");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&stub).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&stub, perms).expect("chmod");
+    }
+    let width = SidebarWidth::default();
+    ZellijBackend::with_runtime_dir(xdg.path())
+        .open_sidebar(
+            &SidebarPaneOptions {
+                session_name: name.clone(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-fixed-width")),
+                cwd: cwd.path().to_path_buf(),
+                width,
+                // The launch path's decision on a 340-column terminal: 30%
+                // would be 102, so the birth is capped — 72 columns, derived
+                // as 21% for the tabs that instantiate detached.
+                birth_size: width.birth_size(Some(340)),
+                rimz_bin: stub,
+                replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
+                resume_panes: Vec::new(),
+            },
+            None,
+        )
+        .expect("open_sidebar");
+    wait_for_pane_count(xdg.path(), &name, 2);
+
+    // A real-size client: the detached birth geometry is tiny, so the cap
+    // only shows once the session adopts the attaching terminal's 340 cols.
+    // The birth tab is the derived 21% — within a column or two of the cap.
+    let _client = AttachedClient::attach(xdg.path(), &name, 340, 80);
+    assert!(
+        wait_for_sidebar_columns(xdg.path(), &name, &[69..=72]),
+        "the attached session must land the birth sidebar within rounding of \
+         the 72-column cap, got {:?}",
+        sidebar_columns_by_tab(xdg.path(), &name),
+    );
+
+    // A user-opened tab instantiates the `new_tab_template` at live geometry:
+    // the fixed spelling lands exactly at the cap.
+    open_new_tab(xdg.path(), &name);
+    wait_for_tab_count(xdg.path(), &name, 2);
+    assert!(
+        wait_for_sidebar_columns(xdg.path(), &name, &[69..=72, 72..=72]),
+        "a tab opened from an attached client must be born at exactly the \
+         72-column cap, got {:?}",
+        sidebar_columns_by_tab(xdg.path(), &name),
+    );
+}
+
 /// A `BackgroundViewOptions` for a session whose host is a long-lived `sleep`
 /// and whose sidebar runs the alive-keeping `stub`, so the launched tab is a
 /// faithful `sidebar | host`.
@@ -973,6 +1163,7 @@ fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundView
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgview")),
             cwd: std::env::temp_dir(),
             width: SidebarWidth::default(),
+            birth_size: BirthSize::Percent(30),
             rimz_bin: stub.to_path_buf(),
             replace_existing: false,
             config: rimz::config::MultiplexerConfig::default(),
@@ -1071,6 +1262,7 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgfirst")),
                 cwd: cwd.path().to_path_buf(),
                 width: SidebarWidth::default(),
+                birth_size: BirthSize::Percent(30),
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),

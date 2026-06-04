@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, DaemonView, HostPane, MuxBackend,
-    MuxErr, PaneCapture, PaneListOptions, Result, ResumePane, SessionHealth, SessionOptions,
-    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions,
-    ViewSidebars, ensure_pane_backend,
+    BackgroundViewLaunch, BackgroundViewOptions, BirthSize, CommandSpec, DaemonView, HostPane,
+    MuxBackend, MuxErr, PaneCapture, PaneListOptions, Result, ResumePane, SessionHealth,
+    SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SidebarWidth,
+    SplitPaneOptions, ViewSidebars, ensure_pane_backend,
 };
 use crate::config::ZellijConfig;
 use crate::feed::PaneRef;
@@ -495,13 +495,15 @@ impl ZellijBackend {
         Ok(pane_id)
     }
 
-    /// Shrink a freshly-born sidebar toward the configured width — the
+    /// Shrink the reconcile heal path's freshly-split sidebar (born at ~50% —
+    /// `new-pane` has no tiled-size flag) toward the configured width — the
     /// percentage of the tab at the `max_cols` cap — landing on the width
-    /// *closest* to the target without ever finishing above the cap. The
-    /// resize step is coarse, so the target usually falls between two
-    /// reachable widths; stopping at the first width at or below it can
-    /// overshoot, so when the prior width was closer we step back up one —
-    /// but only when that prior width respects the cap, so a cap-bound
+    /// *closest* to the target without ever finishing above the cap. Measures
+    /// live tab geometry each step, so it is correct from any invoking
+    /// terminal. The resize step is coarse, so the target usually falls
+    /// between two reachable widths; stopping at the first width at or below
+    /// it can overshoot, so when the prior width was closer we step back up
+    /// one — but only when that prior width respects the cap, so a cap-bound
     /// target always lands at or below it (a final width one step over the
     /// cap reads as the cap never applying). Bounded and best-effort: it
     /// stops at the target, when a step makes no progress (hit a minimum), or
@@ -762,33 +764,6 @@ impl MuxBackend for ZellijBackend {
             .args(["action", "focus-pane-id", pane.raw()])
             .run()
             .map(|_| ())
-    }
-
-    fn resize_sidebar_pane(
-        &self,
-        session_name: &str,
-        pane: &PaneId,
-        width: SidebarWidth,
-    ) -> Result<()> {
-        ensure_pane_backend(pane, MuxName::Zellij)?;
-        let raw = parse_terminal_id(pane.raw()).ok_or_else(|| MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: format!("sidebar pane id is not a terminal pane: {}", pane.raw()),
-        })?;
-        let tab_id = self
-            .list_panes_with_session(Some(session_name))?
-            .into_iter()
-            .find(|listed| listed.id == raw && listed.is_terminal())
-            .map(|listed| listed.tab_id)
-            .ok_or_else(|| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!(
-                    "sidebar pane {} not found in session {session_name}",
-                    pane.raw()
-                ),
-            })?;
-        self.resize_sidebar_toward(session_name, tab_id, pane.raw(), width);
-        Ok(())
     }
 
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture> {
@@ -1388,19 +1363,41 @@ const COMPACT_BAR_KDL: &str = r#"pane size=1 borderless=true {
         plugin location="zellij:compact-bar"
     }"#;
 
+/// Which geometry a layout's panes instantiate at, picking the spelling of a
+/// [`BirthSize::Capped`] width. `Detached` covers panes that can materialize
+/// on the background session's small default geometry — session-birth tabs and
+/// `new-tab --layout` views — where a fixed size wider than that geometry
+/// kills the session; they spell the percentage of the detected terminal and
+/// land at the cap when the client attaches. `Attached` covers panes only an
+/// attached client instantiates — the `new_tab_template` behind every tab the
+/// user opens — which spell the fixed cap exactly.
+#[derive(Clone, Copy)]
+enum BirthGeometry {
+    Detached,
+    Attached,
+}
+
 /// The left `rimz sidebar serve` pane every Zellij view carries, as a KDL `pane`
 /// block. `cwd` is spelled only when the pane can't inherit the session's
 /// `--default-cwd` — the `new-tab --layout` path ([`render_background_view_layout`]).
 /// Birth layouts set `--default-cwd` and pass `None`.
-fn sidebar_pane_kdl(opts: &SidebarPaneOptions, cwd: Option<&Path>) -> Result<String> {
+fn sidebar_pane_kdl(
+    opts: &SidebarPaneOptions,
+    cwd: Option<&Path>,
+    geometry: BirthGeometry,
+) -> Result<String> {
     let rimz_bin = kdl_string(&opts.rimz_bin.to_string_lossy())?;
     let workspace_id = kdl_string(opts.workspace_id.as_str())?;
     let session_name = kdl_string(&opts.session_name)?;
-    // The layout grammar spells a fixed size or a percentage, never
-    // `min(percent, columns)`, so the template is born at the percentage and
-    // the `sidebar.max_cols` cap lands as the renderer's one creation-time
-    // `resize_sidebar_pane`.
-    let size = kdl_string(&format!("{}%", opts.width.percent.clamp(10, 90)))?;
+    // The layout grammar spells a fixed size (bare integer, columns) or a
+    // percentage (quoted string) — the launch path already picked the width via
+    // `SidebarWidth::birth_size`, and `geometry` picks the spelling that
+    // survives where the pane instantiates ([`BirthGeometry`]).
+    let size = match (opts.birth_size, geometry) {
+        (BirthSize::Capped { cols, .. }, BirthGeometry::Attached) => cols.to_string(),
+        (BirthSize::Capped { percent, .. }, BirthGeometry::Detached)
+        | (BirthSize::Percent(percent), _) => kdl_string(&format!("{percent}%"))?,
+    };
     let pane_name = kdl_string(SIDEBAR_PANE_NAME)?;
     let cwd_attr = match cwd {
         Some(cwd) => format!(" cwd={}", kdl_string(&cwd.to_string_lossy())?),
@@ -1417,11 +1414,17 @@ fn sidebar_pane_kdl(opts: &SidebarPaneOptions, cwd: Option<&Path>) -> Result<Str
 }
 
 fn render_sidebar_layout(opts: &SidebarPaneOptions) -> Result<String> {
-    let sidebar = sidebar_pane_kdl(opts, None)?;
-    // The whole layout is the `default_tab_template`, so every tab — the first
-    // one born with the session and any the user opens later — is identical:
-    // the sidebar on the left and a focused terminal on the right. The working
-    // cwd comes from the session's `--default-cwd`, so panes need no `cwd`.
+    let sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Detached)?;
+    let new_tab_sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Attached)?;
+    // Every tab carries the same shape — the sidebar on the left and a focused
+    // terminal on the right — in the spelling that fits where it instantiates:
+    // the `default_tab_template` wraps the explicit birth tab on the detached
+    // session, and the `new_tab_template` sizes each tab the user opens from an
+    // attached client ([`BirthGeometry`]). The bare `tab` node is load-bearing:
+    // on Zellij 0.44.3 a layout carrying a `new_tab_template` but no tab node
+    // kills the background session instead of creating the implicit first tab.
+    // The working cwd comes from the session's `--default-cwd`, so panes need
+    // no `cwd`.
     //
     // The terminal is an explicit `pane focus=true`, not Zellij's `children`
     // placeholder. A nested `children` template has version-sensitive behavior:
@@ -1437,6 +1440,14 @@ fn render_sidebar_layout(opts: &SidebarPaneOptions) -> Result<String> {
         }}
         {COMPACT_BAR_KDL}
     }}
+    new_tab_template {{
+        pane split_direction="vertical" {{
+            {new_tab_sidebar}
+            pane focus=true
+        }}
+        {COMPACT_BAR_KDL}
+    }}
+    tab focus=true
 }}
 "#,
     ))
@@ -1460,7 +1471,10 @@ fn render_session_layout(
     daemon: Option<&DaemonView>,
     resume: &[ResumePane],
 ) -> Result<String> {
-    let sidebar = sidebar_pane_kdl(opts, None)?;
+    // The explicit tabs instantiate on the detached background session at
+    // birth; only the `new_tab_template` waits for an attached client.
+    let sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Detached)?;
+    let new_tab_sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Attached)?;
 
     // The daemon tab leads, when present.
     let daemon_tab = match daemon {
@@ -1514,7 +1528,7 @@ fn render_session_layout(
         r#"layout {{
     new_tab_template {{
         pane split_direction="vertical" {{
-            {sidebar}
+            {new_tab_sidebar}
             pane focus=true
         }}
         {COMPACT_BAR_KDL}
@@ -1553,8 +1567,13 @@ fn render_background_view_layout(opts: &BackgroundViewOptions) -> Result<String>
         });
     }
     // `new-tab --layout` does not set a tab `--default-cwd`, so the sidebar pane
-    // spells its own worktree cwd; each host carries its own.
-    let sidebar = sidebar_pane_kdl(&opts.sidebar, Some(&opts.sidebar.cwd))?;
+    // spells its own worktree cwd; each host carries its own. The view can be
+    // opened before the launch attaches a client, so it sizes detached-safe.
+    let sidebar = sidebar_pane_kdl(
+        &opts.sidebar,
+        Some(&opts.sidebar.cwd),
+        BirthGeometry::Detached,
+    )?;
     let host_panes = opts
         .hosts
         .iter()
@@ -1681,6 +1700,8 @@ fn trim_capture(raw_text: String, max_lines: Option<u16>) -> (String, Vec<String
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU16;
+
     use super::*;
 
     #[test]
@@ -2042,6 +2063,7 @@ mod tests {
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bar")),
             cwd: PathBuf::from("/tmp/rimz-bar"),
             width: SidebarWidth::default(),
+            birth_size: BirthSize::Percent(30),
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),
@@ -2063,6 +2085,7 @@ mod tests {
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-focus")),
             cwd: PathBuf::from("/tmp/rimz-focus"),
             width: SidebarWidth::default(),
+            birth_size: BirthSize::Percent(30),
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),
@@ -2081,22 +2104,25 @@ mod tests {
             "the layout must not depend on `children`: placeholder semantics \
              can misplace focus or omit the right terminal in template-born tabs:\n{layout}",
         );
-        // One self-contained template, no separate `tab` node, so the initial
-        // tab and every later one are born identically.
+        // The bare `tab` node is load-bearing: with a `new_tab_template`
+        // present and no tab node, Zellij 0.44.3 kills the background session
+        // instead of creating the implicit first tab.
         assert!(
-            !layout.contains("tab "),
-            "every tab comes from the template; no explicit `tab` node:\n{layout}",
+            layout.contains("tab focus=true"),
+            "the layout must carry an explicit birth tab alongside the \
+             templates or the detached session dies:\n{layout}",
         );
     }
 
     #[test]
-    fn sidebar_layout_is_born_at_the_percent_never_the_cap() {
+    fn sidebar_layout_spells_the_birth_size_percent_or_capped() {
         use crate::ids::WorkspaceId;
         let opts = SidebarPaneOptions {
             session_name: "rimz-width".to_owned(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-width")),
             cwd: PathBuf::from("/tmp/rimz-width"),
             width: SidebarWidth::default(),
+            birth_size: BirthSize::Percent(30),
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),
@@ -2105,13 +2131,38 @@ mod tests {
         let layout = render_sidebar_layout(&opts).expect("render layout");
         assert!(
             layout.contains(r#"pane size="30%" name="rimz-sidebar""#),
-            "the template is born at the percentage (a KDL string, so it tracks \
-             terminal size); the renderer's one creation-time resize enforces \
-             `max_cols`:\n{layout}",
+            "a percent birth is a KDL string, so the pane tracks terminal size:\n{layout}",
         );
+        let capped = SidebarPaneOptions {
+            birth_size: BirthSize::Capped {
+                cols: NonZeroU16::new(72).expect("nonzero"),
+                percent: 21,
+            },
+            ..opts
+        };
+        let layout = render_sidebar_layout(&capped).expect("render layout");
+        // The birth tab spells the derived percentage — a fixed size wider
+        // than the detached session's default geometry kills the session —
+        // and lands at the cap when the client attaches.
         assert!(
-            !layout.contains("size=72"),
-            "max_cols must not become a fixed-width birth template:\n{layout}",
+            layout.contains(r#"pane size="21%" name="rimz-sidebar""#),
+            "the default_tab_template births detached, so a capped width is \
+             its derived percentage:\n{layout}",
+        );
+        // Tabs the user opens later instantiate at live geometry, so the
+        // new_tab_template lands the cap exactly, as a bare KDL integer.
+        assert!(
+            layout.contains(r#"pane size=72 name="rimz-sidebar""#),
+            "the new_tab_template instantiates attached, so a capped width is \
+             the fixed `max_cols` cap:\n{layout}",
+        );
+        let new_tab_template = layout
+            .split("new_tab_template")
+            .nth(1)
+            .expect("layout carries a new_tab_template");
+        assert!(
+            !new_tab_template.contains("21%"),
+            "the new_tab_template carries no percentage:\n{layout}",
         );
     }
 
@@ -2132,6 +2183,7 @@ mod tests {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/proj/root")),
                 cwd: PathBuf::from("/proj/worktree"),
                 width: SidebarWidth::default(),
+                birth_size: BirthSize::Percent(30),
                 rimz_bin: PathBuf::from("/usr/bin/rimz"),
                 replace_existing: false,
                 config: crate::config::MultiplexerConfig::default(),
@@ -2319,6 +2371,7 @@ mod tests {
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
             cwd: PathBuf::from("/tmp/rimz-run"),
             width: SidebarWidth::default(),
+            birth_size: BirthSize::Percent(30),
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),

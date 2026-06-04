@@ -452,6 +452,9 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     let machine_config = machine_config();
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let sidebar_width = SidebarWidth::from_config(&machine_config.sidebar);
+    // One terminal probe per command flow: the width picks every sidebar
+    // pane's birth size; the pair sizes a detached tmux birth.
+    let detected_size = rimz::mux::detect_terminal_size();
     let remote_control = &machine_config.remote_control;
     // Fail-fast precondition: an enabled host that cannot start aborts the
     // launch here, with the fix, before any hook-install or session side
@@ -469,12 +472,21 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         session_name: workspace.session_name.clone(),
         cwd: workspace.worktree_root.clone(),
         config: mux_config.clone(),
+        detected_size,
     })?;
     // The daemon view (`rimzd`) is computed once, before the session is born: its
     // hosts depend on config and which agents are on PATH. When present, it leads
     // the session — on Zellij that order is fixed at birth (`open_sidebar` renders
     // the daemon tab first), since Zellij can't reorder tabs afterwards.
-    let daemon_view = build_daemon_view(remote_control, &workspace, &mux_config, sidebar_width);
+    let room = RoomTarget {
+        workspace_id: &workspace.workspace_id,
+        session_name: &workspace.session_name,
+        cwd: &workspace.worktree_root,
+        mux_config: &mux_config,
+        width: sidebar_width,
+        detected_size,
+    };
+    let daemon_view = build_daemon_view(remote_control, &workspace, &mux_config, &room);
     let daemon = daemon_view.as_ref().map(|view| DaemonView {
         name: view.name.clone(),
         hosts: view.hosts.clone(),
@@ -492,13 +504,6 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
             &machine_config.resume,
             args.no_resume,
         )
-    };
-    let room = RoomTarget {
-        workspace_id: &workspace.workspace_id,
-        session_name: &workspace.session_name,
-        cwd: &workspace.worktree_root,
-        mux_config: &mux_config,
-        width: sidebar_width,
     };
     launch_sidebar_for_workspace(backend.as_ref(), &room, daemon.as_ref(), &resume_plan.panes);
     maybe_launch_remote_control(
@@ -536,6 +541,7 @@ fn attach_cwd(mode: AttachMode, no_resume: bool, globals: &GlobalFlags) -> Resul
     let machine_config = machine_config();
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let sidebar_width = SidebarWidth::from_config(&machine_config.sidebar);
+    let detected_size = rimz::mux::detect_terminal_size();
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
     retire_renamed_session(backend.as_ref(), &workspace);
@@ -545,6 +551,7 @@ fn attach_cwd(mode: AttachMode, no_resume: bool, globals: &GlobalFlags) -> Resul
         session_name: workspace.session_name.clone(),
         cwd: workspace.worktree_root.clone(),
         config: mux_config.clone(),
+        detected_size,
     })?;
     let resume_plan = if was_live {
         rimz::resume::ResumePlan::default()
@@ -562,6 +569,7 @@ fn attach_cwd(mode: AttachMode, no_resume: bool, globals: &GlobalFlags) -> Resul
         cwd: &workspace.worktree_root,
         mux_config: &mux_config,
         width: sidebar_width,
+        detected_size,
     };
     launch_sidebar_for_workspace(backend.as_ref(), &room, None, &resume_plan.panes);
     gate_room_before_attach(backend.as_ref(), &room, None, &resume_plan.panes)?;
@@ -585,6 +593,7 @@ fn attach_named(
     let machine_config = machine_config();
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let sidebar_width = SidebarWidth::from_config(&machine_config.sidebar);
+    let detected_size = rimz::mux::detect_terminal_size();
     let mux = pick_mux_for_session(session, globals.mux, missing_report)?;
     let backend = rimz::mux::backend_for(mux);
     // Captured before `ensure_session` so a tmux create never masks a reattach.
@@ -595,6 +604,7 @@ fn attach_named(
                 session_name: record.session_name.clone(),
                 cwd: record.project_root.clone(),
                 config: mux_config.clone(),
+                detected_size,
             })?;
             let resume_plan = if was_live {
                 rimz::resume::ResumePlan::default()
@@ -612,6 +622,7 @@ fn attach_named(
                 cwd: &record.project_root,
                 mux_config: &mux_config,
                 width: sidebar_width,
+                detected_size,
             };
             launch_sidebar_for_workspace(backend.as_ref(), &room, None, &resume_plan.panes);
             // Only a session Rimz owns (a matching record) is force-reset; a bare
@@ -848,6 +859,19 @@ struct RoomTarget<'a> {
     cwd: &'a Path,
     mux_config: &'a rimz::config::MultiplexerConfig,
     width: SidebarWidth,
+    /// The launching terminal's `(cols, rows)`, probed once per command
+    /// ([`rimz::mux::detect_terminal_size`]): the width picks the sidebar's
+    /// birth size, the pair sizes a detached tmux birth.
+    detected_size: Option<(u16, u16)>,
+}
+
+impl RoomTarget<'_> {
+    /// The size this command's sidebar panes are born with — fixed at the cap
+    /// when the launching terminal makes the percentage exceed it.
+    fn birth_size(&self) -> rimz::mux::BirthSize {
+        self.width
+            .birth_size(self.detected_size.map(|(cols, _)| cols))
+    }
 }
 
 fn build_sidebar_opts(
@@ -860,6 +884,7 @@ fn build_sidebar_opts(
         workspace_id: target.workspace_id.clone(),
         cwd: target.cwd.to_path_buf(),
         width: target.width,
+        birth_size: target.birth_size(),
         rimz_bin,
         replace_existing: false,
         config: target.mux_config.clone(),
@@ -1094,7 +1119,7 @@ fn build_daemon_view(
     config: &rimz::config::RemoteControlConfig,
     workspace: &rimz::ResolvedWorkspace,
     mux_config: &rimz::config::MultiplexerConfig,
-    width: SidebarWidth,
+    room: &RoomTarget<'_>,
 ) -> Option<BackgroundViewOptions> {
     let rimz_bin = match std::env::current_exe() {
         Ok(path) => path,
@@ -1129,7 +1154,8 @@ fn build_daemon_view(
             session_name: workspace.session_name.clone(),
             workspace_id: workspace.workspace_id.clone(),
             cwd: workspace.worktree_root.clone(),
-            width,
+            width: room.width,
+            birth_size: room.birth_size(),
             rimz_bin,
             replace_existing: false,
             config: mux_config.clone(),
