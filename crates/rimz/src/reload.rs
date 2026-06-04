@@ -151,9 +151,9 @@ fn reconcile_live(
         cwd: ws.project_root.clone(),
         width,
         // A reload can run from a terminal (or no terminal) unrelated to the
-        // session's clients, so no probe feeds the birth size here; the heal
-        // paths size from the session's own live geometry and fall back to
-        // this percentage.
+        // session's clients, so there is no probe to resolve a verdict from —
+        // and reconcile never consumes one: the heal paths size from the
+        // session's own live geometry (`width`).
         birth_size: width.birth_size(None),
         rimz_bin: rimz_bin.to_path_buf(),
         replace_existing: false,
@@ -253,24 +253,18 @@ fn is_sidebar_serve(cmdline: &str, workspace_id: &str, session_name: &str) -> bo
 }
 
 /// The normalized pane a sidebar process paints, from its inherited mux env var —
-/// the same mapping the renderer applies to its own pane (`own_pane_id`). `None`
-/// when the var is absent, so reload never reaps a process it cannot place.
+/// the same mapping the renderer applies to its own pane
+/// ([`crate::mux::own_pane_id`]). `None` when the var is absent, so reload never
+/// reaps a process it cannot place.
 fn attributed_pane(pid: u32, mux: MuxName) -> Option<PaneId> {
     let key = match mux {
         MuxName::Zellij => "ZELLIJ_PANE_ID",
         MuxName::Tmux => "TMUX_PANE",
     };
-    Some(pane_from_env_value(mux, &crate::proc::env_var(pid, key)?))
-}
-
-/// Normalize a raw mux pane env value into a [`PaneId`]: Zellij exposes a bare
-/// integer (`terminal_<id>`), tmux the full raw id (`%<n>`).
-fn pane_from_env_value(mux: MuxName, raw_env: &str) -> PaneId {
-    let raw = match mux {
-        MuxName::Zellij => format!("terminal_{raw_env}"),
-        MuxName::Tmux => raw_env.to_owned(),
-    };
-    PaneId::from_parts(mux, raw)
+    Some(crate::mux::pane_from_env_value(
+        mux,
+        &crate::proc::env_var(pid, key)?,
+    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -322,18 +316,6 @@ mod tests {
     fn is_sidebar_serve_is_scoped_to_the_workspace_and_session() {
         let other_session = "rimz-sidebar serve --workspace-id ws_other --session-name rimz-other";
         assert!(!is_sidebar_serve(other_session, WS, SESSION));
-    }
-
-    #[test]
-    fn pane_from_env_value_normalizes_per_mux() {
-        assert_eq!(
-            pane_from_env_value(MuxName::Zellij, "3"),
-            PaneId::from_parts(MuxName::Zellij, "terminal_3"),
-        );
-        assert_eq!(
-            pane_from_env_value(MuxName::Tmux, "%5"),
-            PaneId::from_parts(MuxName::Tmux, "%5"),
-        );
     }
 
     #[test]

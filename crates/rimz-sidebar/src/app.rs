@@ -831,17 +831,6 @@ impl SessionExitState {
     }
 }
 
-/// This process's normalized pane id, read from the multiplexer's per-pane env
-/// var. Zellij exposes a bare integer in `ZELLIJ_PANE_ID` (normalized as
-/// `terminal_<id>`); tmux exposes the full raw id in `TMUX_PANE`.
-fn own_pane_id(mux: MuxName) -> Option<PaneId> {
-    let raw = match mux {
-        MuxName::Zellij => format!("terminal_{}", std::env::var("ZELLIJ_PANE_ID").ok()?),
-        MuxName::Tmux => std::env::var("TMUX_PANE").ok()?,
-    };
-    Some(PaneId::from_parts(mux, raw))
-}
-
 /// A single transient fetch hiccup must not flash a scary banner: the loop
 /// already holds the last good frame, so absorb the first failures silently
 /// and only raise an alert once a failure persists this many consecutive
@@ -1239,7 +1228,7 @@ struct FetchOutcome {
 /// published frame yet reports a soft miss so the gate holds its last good frame.
 fn run_fetch(config: &ServeConfig, runtime: &RuntimePaths, request: FetchRequest) -> FetchOutcome {
     let is_producer = !rimz::sidebar::elder_sidebar_present(runtime, &config.instance_id);
-    let exclude = own_pane_id(config.mux);
+    let exclude = rimz::mux::own_pane_id(config.mux);
     // Take the producer path — fork the real `list-panes`/git snapshot — when we
     // are the elected producer, when the user forced a reload (`r`), or when the
     // producer's published frame has gone stale. The last is the consumer
@@ -1380,7 +1369,7 @@ fn spawn_self_close_probe_worker(
 }
 
 fn run_self_close_probe(config: &ServeConfig) -> SelfCloseProbeOutcome {
-    let Some(own) = own_pane_id(config.mux) else {
+    let Some(own) = rimz::mux::own_pane_id(config.mux) else {
         return SelfCloseProbeOutcome {
             sibling_count: None,
             error: None,
@@ -1663,7 +1652,7 @@ fn write_heartbeat(config: &ServeConfig, runtime: &RuntimePaths, socket_path: &P
         config.mux,
         &config.session_name,
         socket_path,
-        own_pane_id(config.mux),
+        rimz::mux::own_pane_id(config.mux),
     )
     .map_err(|err| SidebarAppErr::Heartbeat(err.to_string()))
 }

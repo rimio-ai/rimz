@@ -326,6 +326,28 @@ pub fn detect_terminal_size() -> Option<(u16, u16)> {
     terminal_size::terminal_size().map(|(width, height)| (width.0, height.0))
 }
 
+/// Normalize a raw per-pane mux env value into a [`PaneId`]: Zellij exposes a
+/// bare integer in `ZELLIJ_PANE_ID` (normalized as `terminal_<id>`), tmux the
+/// full raw id (`%<n>`) in `TMUX_PANE`. The one place the env→id mapping lives —
+/// the renderer and reload both resolve through here.
+pub fn pane_from_env_value(mux: MuxName, raw_env: &str) -> PaneId {
+    let raw = match mux {
+        MuxName::Zellij => format!("terminal_{raw_env}"),
+        MuxName::Tmux => raw_env.to_owned(),
+    };
+    PaneId::from_parts(mux, raw)
+}
+
+/// This process's normalized pane id, read from the multiplexer's per-pane env
+/// var via [`pane_from_env_value`]. `None` outside a pane.
+pub fn own_pane_id(mux: MuxName) -> Option<PaneId> {
+    let key = match mux {
+        MuxName::Zellij => "ZELLIJ_PANE_ID",
+        MuxName::Tmux => "TMUX_PANE",
+    };
+    Some(pane_from_env_value(mux, &std::env::var(key).ok()?))
+}
+
 impl Default for SidebarWidth {
     fn default() -> Self {
         Self::from_config(&crate::config::SidebarConfig::default())
@@ -692,6 +714,18 @@ mod tests {
             claimed_panes: claimed.iter().map(|raw| pane(raw)).collect(),
             has_unlocated: false,
         }
+    }
+
+    #[test]
+    fn pane_from_env_value_normalizes_per_mux() {
+        assert_eq!(
+            pane_from_env_value(MuxName::Zellij, "3"),
+            PaneId::from_parts(MuxName::Zellij, "terminal_3"),
+        );
+        assert_eq!(
+            pane_from_env_value(MuxName::Tmux, "%5"),
+            PaneId::from_parts(MuxName::Tmux, "%5"),
+        );
     }
 
     #[test]
