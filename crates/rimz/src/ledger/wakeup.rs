@@ -183,6 +183,39 @@ pub fn reload_sidebars(rt: &RuntimePaths) -> Result<usize> {
 /// sender and the sidebar's decoder cannot drift.
 pub const RELOAD_WAKEUP: &[u8] = b"reload";
 
+/// Control word the tmux presence watch and the Zellij presence plugin both
+/// pulse on a pane-topology change; the renderer decodes it into a
+/// fresh-panes refetch. The renderer keeps its own byte-identical copy
+/// (`rimz-sidebar` `app::input::PANES_CHANGED_WAKEUP`) — the two crates share
+/// no dependency, so a unit test here pins the literal against drift.
+pub const PANES_CHANGED_WAKEUP: &[u8] = b"panes_changed";
+
+/// The eldest fresh heartbeat: the minimum instance id — UUIDv7 ids sort by
+/// birth, the same order the producer election
+/// (`crate::sidebar::elder_sidebar_present`) relies on.
+fn eldest_heartbeat(sidebars: Vec<SidebarHeartbeat>) -> Option<SidebarHeartbeat> {
+    sidebars
+        .into_iter()
+        .min_by(|a, b| a.instance_id.as_str().cmp(b.instance_id.as_str()))
+}
+
+/// Post the `panes_changed` wire word to the eldest fresh, protocol-current
+/// sidebar of this workspace — and only that one. The renderer maps the word
+/// to a force-produce fresh-panes fetch, so broadcasting it to every tab's
+/// socket would fork an N-way produce storm per topology change; the eldest
+/// is the elected producer, so the one fork lands where the shared pane cache
+/// is published and every consumer reads it back on its own cycle. A poke
+/// that races the elder's death is lost — the event-mode pane TTL bounds the
+/// staleness and the next poke targets the new eldest. Returns whether a
+/// datagram was sent (`false`: no live sidebar).
+pub fn wake_eldest_sidebar_panes_changed(rt: &RuntimePaths) -> Result<bool> {
+    let Some(eldest) = eldest_heartbeat(collect_fresh_sidebars(rt)?) else {
+        return Ok(false);
+    };
+    send_datagram(PANES_CHANGED_WAKEUP, &eldest.wakeup_socket);
+    Ok(true)
+}
+
 /// Walk the runtime heartbeat dir and return every sidebar heartbeat that is
 /// readable, on the current protocol, and fresh (including a TOCTOU re-stat
 /// just before return). Both the ledger wakeup fanout and `reload` share this
@@ -313,5 +346,47 @@ fn send_datagram_with(sender: &UnixDatagram, payload: &[u8], target: &Path) {
                 "wakeup: send_to failed (target may have exited)"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::ids::{MuxName, SidebarInstanceId};
+
+    /// The renderer's decoder (`rimz-sidebar` `app::input`) keeps a private,
+    /// byte-identical copy of this word; the two crates share no dependency,
+    /// so this pin is the drift guard.
+    #[test]
+    fn panes_changed_wire_word_is_pinned() {
+        assert_eq!(PANES_CHANGED_WAKEUP, b"panes_changed");
+    }
+
+    fn heartbeat(id: &str, socket: &str) -> SidebarHeartbeat {
+        SidebarHeartbeat::new(
+            WorkspaceId::from_project_root(Path::new("/tmp/eldest-test")),
+            SidebarInstanceId::parse(id).unwrap(),
+            MuxName::Zellij,
+            "rimz-test",
+            PathBuf::from(socket),
+            None,
+        )
+    }
+
+    #[test]
+    fn eldest_heartbeat_is_the_lowest_instance_id() {
+        // UUIDv7 ids sort by birth: the lower id is the elder regardless of
+        // the candidates' order, matching `elder_sidebar_present`.
+        let young = heartbeat("sb_019e8c565bbd7b22854f93a905e1034c", "/sock/young");
+        let old = heartbeat("sb_019e8c565bbd708097fce9514f79da04", "/sock/old");
+        let eldest = eldest_heartbeat(vec![young, old]).expect("two candidates");
+        assert_eq!(eldest.wakeup_socket, PathBuf::from("/sock/old"));
+    }
+
+    #[test]
+    fn eldest_heartbeat_of_none_is_none() {
+        assert!(eldest_heartbeat(Vec::new()).is_none());
     }
 }

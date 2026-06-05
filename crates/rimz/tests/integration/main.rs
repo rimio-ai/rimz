@@ -20,6 +20,7 @@ mod journey;
 mod ledger;
 mod list;
 mod performance;
+mod presence_wake;
 mod property;
 mod reload;
 mod remote_attach;

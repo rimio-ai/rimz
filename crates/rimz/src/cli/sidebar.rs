@@ -20,7 +20,7 @@ use rimz::sidebar::snapshot::{
     RollupCursor, SnapshotCache, WorktreeRootsCache, effective_pane_ttl, enrich_consumer,
     hot_worktree_paths, needed_worktree_paths, presence_stamp_age_ms, project_diff_stats,
     read_diff_stats_cache, read_published_snapshot, read_snapshot_cache, snapshot_cache_is_fresh,
-    unix_now_ms,
+    unix_now_ms, write_presence_stamp,
 };
 use rimz::workspace::{RootClass, WorkspaceResolver};
 use rimz::{Ledger, RuntimePaths, StatePaths};
@@ -66,6 +66,26 @@ enum SidebarSubcmd {
         #[arg(long, default_value_t = 1)]
         tick_seconds: u64,
     },
+    /// Presence poke from the Zellij presence plugin: refresh the liveness
+    /// stamp and, on a topology change, datagram the eldest sidebar for a
+    /// fresh-panes refetch. Hidden — plugin infrastructure, not a human verb.
+    #[command(hide = true)]
+    Wake {
+        #[arg(long)]
+        workspace_id: Option<String>,
+        #[arg(long, value_enum)]
+        reason: WakeReason,
+    },
+}
+
+/// Why a presence poke fired. Both reasons refresh the liveness stamp; only a
+/// topology change additionally datagrams the eldest sidebar. `alive` is the
+/// plugin's keepalive — stamp-only — so an idle-but-healthy channel stays
+/// distinguishable from a dead one.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum WakeReason {
+    PanesChanged,
+    Alive,
 }
 
 pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
@@ -362,6 +382,38 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 .with_context(|| format!("running `{}` serve", program.to_string_lossy()))?;
             if !status.success() {
                 bail!("rimz-sidebar serve exited with {status}");
+            }
+            Ok(())
+        }
+        SidebarSubcmd::Wake {
+            workspace_id,
+            reason,
+        } => {
+            // Feather-weight by design: the poke needs only the workspace
+            // runtime dir — one stamp write plus at most one datagram — so it
+            // never opens the ledger, never lists panes, never touches the
+            // mux. The plugin calls this per topology change.
+            let workspace_id = match workspace_id {
+                Some(raw) => raw.parse::<WorkspaceId>()?,
+                None => {
+                    WorkspaceResolver::resolve_participant(".", globals.root.clone())?.workspace_id
+                }
+            };
+            let runtime =
+                RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
+            // Both reasons refresh the stamp that flips the producer's pane
+            // TTL to event mode; the write is best-effort cache-class — a
+            // miss only means the channel reads as dead one poke longer.
+            write_presence_stamp(&runtime);
+            if let WakeReason::PanesChanged = reason {
+                // Topology changed: nudge the eldest sidebar (the elected
+                // producer) into a fresh-panes fetch. Eldest-only — the word
+                // maps to a force-produce, so a broadcast would fork an N-way
+                // produce storm. Best-effort: no live sidebar is fine.
+                if let Err(err) = rimz::ledger::wakeup::wake_eldest_sidebar_panes_changed(&runtime)
+                {
+                    tracing::debug!(error = %err, "presence poke: eldest datagram failed");
+                }
             }
             Ok(())
         }
