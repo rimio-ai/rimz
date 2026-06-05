@@ -18,7 +18,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -485,12 +485,52 @@ pub fn write_spending_cache(path: &Path, cache: &SpendingDiskCache) {
 
 // ── Provider-spending cache ───────────────────────────────────────────────────
 
-/// Atomic write of the aggregated `Spending` to a small JSON cache so consumer
-/// sidebar tabs can read the fleet and per-provider totals without re-walking
-/// the JSONL transcript history. Follows the same temp-then-rename durability
-/// contract as [`write_spending_cache`].
-pub fn write_provider_spending_cache(path: &Path, spending: &Spending) {
-    let Ok(bytes) = serde_json::to_vec(spending) else {
+/// How long the producer trusts a published fleet-spending walk before
+/// re-walking every provider's transcript tree. Spend is display-only (the
+/// eased odometer roll absorbs the step) and the walk — discovery readdirs,
+/// per-file stats, the cursor-map parse, the price-book load — is the
+/// producer's largest steady cost, so a coarse TTL pays for itself. One TTL,
+/// no retry split like `ACCOUNTS_RETRY_TTL`: the walk is per-file best-effort
+/// and an empty fleet prices to zero cheaply, so there is no
+/// infrastructure-failure state to re-probe fast — a partial read is a
+/// smaller-than-true figure that heals on the next due walk.
+pub const SPENDING_TTL: Duration = Duration::from_secs(15);
+
+/// The published provider-spending cache: the aggregated [`Spending`] plus the
+/// stamp the producer's [`SPENDING_TTL`] gate reads. A wrapper rather than a
+/// field on [`Spending`] keeps the in-memory value the fold path threads
+/// stamp-free; `#[serde(flatten)]` keeps a pre-stamp file (a bare `Spending`)
+/// readable — its values survive, with `refreshed_at_ms` defaulting to 0 so it
+/// reads as stale and refreshes once.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ProviderSpendingCache {
+    /// When the producer last walked and published, for the TTL gate.
+    #[serde(default)]
+    pub refreshed_at_ms: u64,
+    #[serde(flatten)]
+    pub spending: Spending,
+}
+
+impl ProviderSpendingCache {
+    /// Whether the published walk is young enough that the producer skips the
+    /// transcript walk this tick. Saturating, so a clock that ran backwards
+    /// reads fresh rather than re-walking every tick.
+    pub fn is_fresh(&self, now_ms: u64) -> bool {
+        now_ms.saturating_sub(self.refreshed_at_ms) <= SPENDING_TTL.as_millis() as u64
+    }
+}
+
+/// Atomic write of the aggregated `Spending`, stamped `refreshed_at_ms`, so
+/// consumer sidebar tabs read the fleet and per-provider totals — and the
+/// producer its own [`SPENDING_TTL`] gate — without re-walking the JSONL
+/// transcript history. Follows the same temp-then-rename durability contract
+/// as [`write_spending_cache`].
+pub fn write_provider_spending_cache(path: &Path, refreshed_at_ms: u64, spending: &Spending) {
+    let cache = ProviderSpendingCache {
+        refreshed_at_ms,
+        spending: spending.clone(),
+    };
+    let Ok(bytes) = serde_json::to_vec(&cache) else {
         return;
     };
     let tmp = path.with_extension("json.tmp");
@@ -500,11 +540,13 @@ pub fn write_provider_spending_cache(path: &Path, spending: &Spending) {
 }
 
 /// Read the provider-spending cache written by [`write_provider_spending_cache`].
-/// Returns [`Spending::default`] on any error so callers always get a usable value.
-pub fn read_provider_spending_cache(path: &Path) -> Spending {
+/// Returns a default (stamp 0, so it reads as stale) on any error so callers
+/// always get a usable value; a pre-stamp file deserializes with its spending
+/// values intact.
+pub fn read_provider_spending_cache(path: &Path) -> ProviderSpendingCache {
     fs::read(path)
         .ok()
-        .and_then(|bytes| serde_json::from_slice::<Spending>(&bytes).ok())
+        .and_then(|bytes| serde_json::from_slice::<ProviderSpendingCache>(&bytes).ok())
         .unwrap_or_default()
 }
 

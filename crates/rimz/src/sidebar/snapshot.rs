@@ -738,7 +738,8 @@ pub fn fold_machine_config_cached(
     let accounts = read_accounts_cache(&runtime.root.join("accounts.json")).accounts;
     // Consumers read the producer's published spending cache rather than
     // re-walking the JSONL transcript history themselves.
-    let spending = read_provider_spending_cache(&runtime.root.join("provider-spending.json"));
+    let spending =
+        read_provider_spending_cache(&runtime.root.join("provider-spending.json")).spending;
     let mut snapshot = fold_machine_config_with(
         snapshot,
         crate::config::MachineConfig::load().unwrap_or_default(),

@@ -699,3 +699,74 @@ fn per_provider_breakdown_splits_claude_and_codex() {
     assert!((spending.by_provider["codex"].today.usd - 0.001).abs() < 1e-9);
     assert!((spending.total.today.usd - 0.501).abs() < 1e-9);
 }
+
+// ── Provider-spending cache (the SPENDING_TTL gate's stamp) ────────────────────
+
+/// A `Spending` with distinguishable values, so round-trip assertions can tell
+/// a preserved payload from a defaulted one.
+fn sample_spending() -> Spending {
+    let mut spending = Spending::default();
+    spending.total.today.usd = 1.25;
+    spending.total.today.tokens = 4_200;
+    spending
+        .by_provider
+        .insert("claude".into(), spending.total.clone());
+    spending
+}
+
+#[test]
+fn provider_cache_round_trips_with_stamp() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("provider-spending.json");
+    let spending = sample_spending();
+
+    write_provider_spending_cache(&path, 12_345, &spending);
+    let cache = read_provider_spending_cache(&path);
+
+    assert_eq!(cache.refreshed_at_ms, 12_345);
+    assert_eq!(cache.spending, spending);
+}
+
+#[test]
+fn pre_stamp_provider_cache_reads_values_as_stale() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("provider-spending.json");
+    // The pre-stamp on-disk shape: a bare `Spending` with no `refreshed_at_ms`.
+    let spending = sample_spending();
+    std::fs::write(&path, serde_json::to_vec(&spending).unwrap()).unwrap();
+
+    let cache = read_provider_spending_cache(&path);
+
+    // Flatten tolerance: the values survive the upgrade; the missing stamp
+    // defaults to 0, which any real wall clock reads as stale, so the gate
+    // refreshes once instead of serving the old shape forever.
+    assert_eq!(cache.refreshed_at_ms, 0);
+    assert_eq!(cache.spending, spending);
+    assert!(!cache.is_fresh(NOW_SECS * 1_000));
+}
+
+#[test]
+fn provider_cache_missing_or_corrupt_reads_default() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("provider-spending.json");
+    assert_eq!(read_provider_spending_cache(&path).refreshed_at_ms, 0);
+
+    std::fs::write(&path, b"not json").unwrap();
+    let cache = read_provider_spending_cache(&path);
+    assert_eq!(cache.refreshed_at_ms, 0);
+    assert_eq!(cache.spending, Spending::default());
+}
+
+#[test]
+fn provider_cache_expires_after_spending_ttl() {
+    let cache = ProviderSpendingCache {
+        refreshed_at_ms: 1_000,
+        spending: Spending::default(),
+    };
+    let ttl_ms = SPENDING_TTL.as_millis() as u64;
+    // Boundary-exact: fresh at exactly the TTL, stale one ms past it.
+    assert!(cache.is_fresh(1_000 + ttl_ms));
+    assert!(!cache.is_fresh(1_001 + ttl_ms));
+    // A clock that ran backwards reads fresh (saturating), never a walk storm.
+    assert!(cache.is_fresh(500));
+}
