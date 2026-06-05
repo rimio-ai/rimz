@@ -126,6 +126,12 @@ fn fresh_sidebar_instances(rt: &RuntimePaths) -> Vec<SidebarInstanceId> {
         .collect()
 }
 
+/// Grace for a just-spawned sidebar pane before reconcile may read "no
+/// heartbeat yet" as "wedged": two heartbeat windows, so a just-added sidebar
+/// is never closed before its first heartbeat lands — even by a reload run
+/// seconds after the one that added it.
+pub const FRESH_PANE_GRACE: Duration = SIDEBAR_HEARTBEAT_TTL.saturating_mul(2);
+
 /// The live sidebars for one workspace runtime: every pane a fresh,
 /// current-protocol heartbeat claims, plus whether any fresh heartbeat is
 /// unlocated (no pane id). `rimz reload` folds this into the reconcile planner so

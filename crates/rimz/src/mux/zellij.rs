@@ -78,6 +78,21 @@ const TAB_NAMES_RETRY_DELAY: Duration = Duration::from_millis(50);
 /// where deleting the file early births a sidebar-less session.
 const SIDEBAR_LAYOUT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Ceiling on how long an in-place sidebar add waits for its `new-pane` to
+/// mount. `new-pane` prints the allocated pane id *before* the screen thread
+/// mounts the pane, so the add discovers the mounted pane by listing rather
+/// than trusting that id — a healthy mount lands within a tick or two; the
+/// ceiling bounds a dropped mount (e.g. a detached session discards it).
+const MOUNT_POLL_TIMEOUT: Duration = Duration::from_secs(2);
+const MOUNT_POLL_STEP: Duration = Duration::from_millis(50);
+
+/// A kept sidebar wider than this share of its tab's columns — and past the
+/// `max_cols` cap, so a deliberately cap-wide pane on a narrow client never
+/// reads as broken — is resized back toward the layout width. Tolerant by
+/// design: a layout-born width never trips it; only a mis-mounted ~50% split
+/// does, so geometry convergence can never churn a healthy pane.
+const SIDEBAR_RESIZE_TRIGGER_PERCENT: u64 = 45;
+
 /// Bundle reported by `rimz doctor` when the active backend is Zellij.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ZellijCapabilities {
@@ -459,25 +474,180 @@ impl ZellijBackend {
     }
 
     /// Inject a left-docked sidebar into a live tab without a rebirth: split a
-    /// pane to the right, move it left, then resize it toward the layout width.
+    /// pane to the right, move it left, then resize it toward the layout width
+    /// — trusting nothing `new-pane` prints. Take a before-set of the tab's
+    /// pane ids, spawn the pane, *discover* the mounted pane by listing, then
+    /// dock and resize it. On a mount that never lands or a dock that fails,
+    /// undo — close the pane and kill the spawned serve pair — so a failed add
+    /// never leaks a malformed pane or a paneless renderer.
     fn add_sidebar_to_tab(&self, opts: &SidebarPaneOptions, tab_id: u64) -> Result<()> {
-        let new_pane = self.new_sidebar_pane(opts, tab_id)?;
-        self.zellij_action(&opts.session_name)
+        let before: std::collections::HashSet<u64> = self
+            .list_panes_with_session(Some(&opts.session_name))?
+            .iter()
+            .filter(|pane| pane.is_terminal() && pane.tab_id == tab_id)
+            .map(|pane| pane.id)
+            .collect();
+        // A `new-pane` failure is remembered, not fatal yet: concurrent action
+        // clients can cross-talk responses, so the command can misreport while
+        // the pane is still created — discovery gets its window either way.
+        let (hint, spawn_err) = match self.new_sidebar_pane(opts, tab_id) {
+            Ok(hint) => (hint, None),
+            Err(err) => (None, Some(err)),
+        };
+        let Some(pane_id) =
+            self.wait_for_mounted_sidebar(&opts.session_name, tab_id, &before, hint.as_deref())
+        else {
+            self.cleanup_failed_add(opts, hint.as_deref());
+            return Err(spawn_err.unwrap_or_else(|| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!("new-pane never mounted a sidebar pane in tab {tab_id}"),
+            }));
+        };
+        if let Err(err) = self.dock_left(&opts.session_name, &pane_id) {
+            self.cleanup_failed_add(opts, Some(&pane_id));
+            return Err(err);
+        }
+        self.resize_sidebar_toward(&opts.session_name, tab_id, &pane_id, opts.width);
+        Ok(())
+    }
+
+    /// Bounded poll for the sidebar pane an add just spawned to mount in
+    /// `tab_id`. Returns its id (e.g. `terminal_58`), or `None` once
+    /// [`MOUNT_POLL_TIMEOUT`] elapses — the mount was dropped.
+    fn wait_for_mounted_sidebar(
+        &self,
+        session: &str,
+        tab_id: u64,
+        before: &std::collections::HashSet<u64>,
+        hint: Option<&str>,
+    ) -> Option<String> {
+        let hint_raw = hint.and_then(parse_terminal_id);
+        let deadline = Instant::now() + MOUNT_POLL_TIMEOUT;
+        loop {
+            if let Ok(panes) = self.list_panes_with_session(Some(session))
+                && let Some(id) = mounted_sidebar_pane(&panes, tab_id, before, hint_raw)
+            {
+                return Some(format!("terminal_{id}"));
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(MOUNT_POLL_STEP);
+        }
+    }
+
+    /// Move a pane to its tab's left column — the dock position the layout
+    /// gives a sidebar at birth.
+    fn dock_left(&self, session: &str, pane_id: &str) -> Result<()> {
+        self.zellij_action(session)
             .args([
                 "move-pane".to_owned(),
                 "left".to_owned(),
                 "--pane-id".to_owned(),
-                new_pane.clone(),
+                pane_id.to_owned(),
             ])
-            .run()?;
-        self.resize_sidebar_toward(&opts.session_name, tab_id, &new_pane, opts.width);
-        Ok(())
+            .run()
+            .map(|_| ())
+    }
+
+    /// Converge one kept sidebar pane onto the layout's dock, in place and
+    /// without touching its renderer: a bounded move-left loop (re-listing
+    /// between steps — `move-pane left` swaps one position per call) until the
+    /// pane reaches the left column or stops progressing, then a resize back
+    /// toward the layout width when it is still past the trigger. Returns
+    /// whether any repair was issued. Best-effort: geometry is cosmetic, so
+    /// any failure just leaves the pane where it is for the next pass.
+    fn converge_sidebar_geometry(
+        &self,
+        opts: &SidebarPaneOptions,
+        tab_id: u64,
+        raw_id: u64,
+    ) -> bool {
+        const REDOCK_MAX_STEPS: u32 = 4;
+        let pane_raw = format!("terminal_{raw_id}");
+        let mut repaired = false;
+        let mut last_x = u64::MAX;
+        for _ in 0..REDOCK_MAX_STEPS {
+            let Ok(panes) = self.list_panes_with_session(Some(&opts.session_name)) else {
+                break;
+            };
+            // Plugin panes share the integer id space (`plugin_1` beside
+            // `terminal_1`), so the terminal filter is load-bearing here.
+            let Some(pane) = panes
+                .iter()
+                .find(|pane| pane.is_terminal() && pane.tab_id == tab_id && pane.id == raw_id)
+            else {
+                break;
+            };
+            let Some(x) = pane.pane_x else { break };
+            if x == 0 || x >= last_x {
+                break; // docked, or no progress — stop rather than spin.
+            }
+            last_x = x;
+            if self.dock_left(&opts.session_name, &pane_raw).is_err() {
+                break;
+            }
+            repaired = true;
+        }
+        if let Some((cols, total)) = self.sidebar_and_tab_cols(&opts.session_name, tab_id, raw_id)
+            && sidebar_width_off_spec(cols, total, opts.width)
+        {
+            self.resize_sidebar_toward(&opts.session_name, tab_id, &pane_raw, opts.width);
+            repaired = true;
+        }
+        repaired
+    }
+
+    /// Undo a failed add: best-effort close the pane (a never-mounted id reads
+    /// "not found" — fine), then kill the spawned serve pair still attributed
+    /// to it, which a dropped mount leaves running with no pane to paint.
+    fn cleanup_failed_add(&self, opts: &SidebarPaneOptions, pane_id: Option<&str>) {
+        let Some(raw) = pane_id else {
+            // No id to attribute by; the post-reconcile orphan reap catches a
+            // pair whose pane the mux never lists.
+            return;
+        };
+        let pane = PaneId::from_parts(MuxName::Zellij, raw);
+        let _ = self.close_pane(&opts.session_name, &pane);
+        let killed = super::recovery::kill_sidebar_serve_for_pane(
+            opts.workspace_id.as_str(),
+            &opts.session_name,
+            &pane,
+            MuxName::Zellij,
+        );
+        if killed > 0 {
+            tracing::debug!(
+                session = %opts.session_name,
+                pane = raw,
+                killed,
+                "sidebar add cleanup: reaped the unmounted serve pair",
+            );
+        }
+    }
+
+    /// Whether `session` has at least one attached client. `list-clients`
+    /// prints a header line plus one row per client, so header-only output
+    /// reads detached. An unanswerable probe also reads detached — deferring
+    /// an add for one run is recoverable, a leaked serve pair is not.
+    fn session_has_attached_client(&self, session: &str) -> bool {
+        self.zellij_action(session)
+            .arg("list-clients")
+            .run()
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .skip(1)
+                    .any(|line| !line.trim().is_empty())
+            })
+            .unwrap_or(false)
     }
 
     /// `new-pane` to the right of the tab's focus, titled and `close_on_exit` to
     /// match the layout, running the same `rimz sidebar serve` command. Returns
-    /// the created pane id Zellij prints (e.g. `terminal_58`).
-    fn new_sidebar_pane(&self, opts: &SidebarPaneOptions, tab_id: u64) -> Result<String> {
+    /// the created pane id Zellij prints (e.g. `terminal_58`) — as a *hint*
+    /// only: under concurrent action clients the stdout can carry another
+    /// client's response or nothing, while the pane is still created.
+    fn new_sidebar_pane(&self, opts: &SidebarPaneOptions, tab_id: u64) -> Result<Option<String>> {
         let args: Vec<String> = vec![
             "new-pane".to_owned(),
             "--direction".to_owned(),
@@ -501,14 +671,7 @@ impl ZellijBackend {
             opts.session_name.clone(),
         ];
         let output = self.zellij_action(&opts.session_name).args(args).run()?;
-        let pane_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        if pane_id.is_empty() {
-            return Err(MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: "new-pane returned no pane id".to_owned(),
-            });
-        }
-        Ok(pane_id)
+        Ok(parse_new_pane_id(&String::from_utf8_lossy(&output.stdout)))
     }
 
     /// Shrink the reconcile heal path's freshly-split sidebar (born at ~50% —
@@ -583,10 +746,10 @@ impl ZellijBackend {
             .map(|_| ())
     }
 
-    /// Current column width of `target_raw` and the total columns of its tab
-    /// (the sum across the tab's panes — exact for the sidebar-plus-terminal row
-    /// the recovery produces). `None` when the pane has vanished or carries no
-    /// geometry.
+    /// Current column width of `target_raw` and the total columns of its tab —
+    /// the *extents* (`max(pane_x + pane_columns)`), not the sum, which would
+    /// double-count vertically stacked panes and inflate the resize target.
+    /// `None` when the pane has vanished or carries no geometry.
     fn sidebar_and_tab_cols(
         &self,
         session: &str,
@@ -594,19 +757,11 @@ impl ZellijBackend {
         target_raw: u64,
     ) -> Option<(u64, u64)> {
         let panes = self.list_panes_with_session(Some(session)).ok()?;
-        let mut total = 0;
-        let mut current = None;
-        for pane in panes
+        let current = panes
             .iter()
-            .filter(|pane| pane.is_terminal() && pane.tab_id == tab_id)
-        {
-            let cols = pane.pane_columns?;
-            total += cols;
-            if pane.id == target_raw {
-                current = Some(cols);
-            }
-        }
-        Some((current?, total))
+            .find(|pane| pane.is_terminal() && pane.tab_id == tab_id && pane.id == target_raw)
+            .and_then(|pane| pane.pane_columns)?;
+        Some((current, tab_extent_cols(&panes, tab_id)))
     }
 
     /// Block until Zellij has materialized the layout's sidebar pane alongside a
@@ -715,15 +870,12 @@ impl MuxBackend for ZellijBackend {
         Ok(raws
             .into_iter()
             .filter(RawPane::is_live_terminal)
-            .map(|p| PaneRef {
+            .map(|mut p| PaneRef {
                 pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", p.id)),
                 session_name: session_name.clone(),
                 view_id: Some(format!("tab_{}", p.tab_id)),
                 view_kind: Some(ViewKind::Tab),
-                // Zellij `list-panes` carries no per-pane tab name; the
-                // remote-control classifier reads the full command line here
-                // instead (which Zellij does report).
-                view_name: None,
+                view_name: p.tab_name.take(),
                 is_focused: p.is_focused,
                 pane_pid: p.pid(),
                 pane_process_start: p.process_start(),
@@ -926,7 +1078,21 @@ impl MuxBackend for ZellijBackend {
         let panes = self.list_panes_with_session(Some(&opts.session_name))?;
         let views = views_with_sidebars(&panes);
         let plan = super::plan_reconcile(&views, live);
-        if plan.close.is_empty() && plan.add.is_empty() {
+        // Kept sidebars (not planned for closing) whose geometry sits off the
+        // layout's dock — the residue of a mis-mounted add — converge in place
+        // this pass, renderer untouched.
+        let closing: std::collections::HashSet<&PaneId> = plan.close.iter().collect();
+        let off_spec: Vec<(u64, u64)> = panes
+            .iter()
+            .filter(|pane| pane.is_live_terminal() && is_sidebar_pane(pane))
+            .filter(|pane| {
+                let id = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", pane.id));
+                !closing.contains(&id)
+            })
+            .filter(|pane| sidebar_geometry_off_spec(pane, &panes, opts.width))
+            .map(|pane| (pane.tab_id, pane.id))
+            .collect();
+        if plan.close.is_empty() && plan.add.is_empty() && off_spec.is_empty() {
             return Ok(SidebarRecovery::default());
         }
 
@@ -953,55 +1119,79 @@ impl MuxBackend for ZellijBackend {
                 ),
             }
         }
-        let mut tabs_with_sidebar = if plan.add.is_empty() {
-            Some(std::collections::HashSet::new())
-        } else {
-            match self.list_panes_with_session(Some(&opts.session_name)) {
-                Ok(panes) => Some(tabs_with_sidebars(&panes)),
-                Err(err) => {
-                    tracing::warn!(
-                        session = %opts.session_name,
-                        error = %err,
-                        "sidebar reconcile: cannot verify sidebar absence before add; skipping adds",
-                    );
-                    None
+        // In-place adds and geometry moves both need an attached client: a
+        // detached session's screen thread drops the mount while the spawned
+        // serve pair keeps running, so adding there only leaks (the closes
+        // above are safe detached). An unanswerable probe reads detached —
+        // deferring one run is recoverable, a leaked pair is not. tmux splits
+        // fine detached, so the gate is Zellij-internal.
+        let attached = (!plan.add.is_empty() || !off_spec.is_empty())
+            && self.session_has_attached_client(&opts.session_name);
+        if attached {
+            for (tab_id, raw_id) in &off_spec {
+                if self.converge_sidebar_geometry(opts, *tab_id, *raw_id) {
+                    report.redocked += 1;
                 }
             }
-        };
-        for tab in &plan.add {
-            let Ok(tab_id) = tab.parse::<u64>() else {
-                report.failed += 1;
-                continue;
-            };
-            let Some(occupied_tabs) = tabs_with_sidebar.as_mut() else {
-                report.failed += 1;
-                continue;
-            };
-            if occupied_tabs.contains(tab) {
-                tracing::warn!(
-                    session = %opts.session_name,
-                    tab = tab_id,
-                    "sidebar reconcile: add skipped because the tab still has a sidebar",
-                );
-                report.failed += 1;
-                continue;
-            }
-            match self.add_sidebar_to_tab(opts, tab_id) {
-                Ok(()) => {
-                    report.recovered += 1;
-                    occupied_tabs.insert(tab.clone());
-                    if let Some(work) = focused_in_tab.get(&tab_id) {
-                        let _ = self.focus_terminal(&opts.session_name, *work);
+        }
+        if !plan.add.is_empty() && !attached {
+            report.deferred = plan.add.len();
+            tracing::info!(
+                session = %opts.session_name,
+                deferred = report.deferred,
+                "sidebar reconcile: no attached client; deferring in-place adds",
+            );
+        } else {
+            let mut tabs_with_sidebar = if plan.add.is_empty() {
+                Some(std::collections::HashSet::new())
+            } else {
+                match self.list_panes_with_session(Some(&opts.session_name)) {
+                    Ok(panes) => Some(tabs_with_sidebars(&panes)),
+                    Err(err) => {
+                        tracing::warn!(
+                            session = %opts.session_name,
+                            error = %err,
+                            "sidebar reconcile: cannot verify sidebar absence before add; skipping adds",
+                        );
+                        None
                     }
                 }
-                Err(err) => {
+            };
+            for tab in &plan.add {
+                let Ok(tab_id) = tab.parse::<u64>() else {
+                    report.failed += 1;
+                    continue;
+                };
+                let Some(occupied_tabs) = tabs_with_sidebar.as_mut() else {
+                    report.failed += 1;
+                    continue;
+                };
+                if occupied_tabs.contains(tab) {
                     tracing::warn!(
                         session = %opts.session_name,
                         tab = tab_id,
-                        error = %err,
-                        "sidebar reconcile: in-place add failed; leaving the tab without a sidebar",
+                        "sidebar reconcile: add skipped because the tab still has a sidebar",
                     );
                     report.failed += 1;
+                    continue;
+                }
+                match self.add_sidebar_to_tab(opts, tab_id) {
+                    Ok(()) => {
+                        report.recovered += 1;
+                        occupied_tabs.insert(tab.clone());
+                        if let Some(work) = focused_in_tab.get(&tab_id) {
+                            let _ = self.focus_terminal(&opts.session_name, *work);
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            session = %opts.session_name,
+                            tab = tab_id,
+                            error = %err,
+                            "sidebar reconcile: in-place add failed; leaving the tab without a sidebar",
+                        );
+                        report.failed += 1;
+                    }
                 }
             }
         }
@@ -1190,9 +1380,17 @@ fn tabs_with_sidebars(panes: &[RawPane]) -> std::collections::HashSet<String> {
         .collect()
 }
 
+/// A managed daemon-host pane: any pane in the `rimzd` tab, or one whose
+/// command carries a host marker. The tab name is the signal that works on
+/// Zellij 0.44 — its pane list emits no live command fields, and the
+/// `reported_command` ladder bottoms out at `terminal_command`, the spawn
+/// command, so a host that re-execs (the Claude remote-control host does)
+/// keeps its marker only there.
 fn is_daemon_host_pane(pane: &RawPane) -> bool {
-    pane.reported_command()
-        .is_some_and(crate::remote_control::command_is_host)
+    pane.tab_name.as_deref() == Some(crate::remote_control::VIEW_NAME)
+        || pane
+            .reported_command()
+            .is_some_and(crate::remote_control::command_is_host)
 }
 
 fn classify_session_panes(panes: &[RawPane]) -> SessionCleanliness {
@@ -1235,6 +1433,73 @@ fn parse_terminal_id(pane_id: &str) -> Option<u64> {
     pane_id.strip_prefix("terminal_")?.parse().ok()
 }
 
+/// Strict parse of `new-pane` stdout into a pane-id hint: exactly
+/// `terminal_<digits>` after trimming, else `None`. Concurrent `zellij action`
+/// clients can receive each other's responses, so anything looser would take
+/// another command's output (an empty body, a JSON blob) for a pane id.
+fn parse_new_pane_id(stdout: &str) -> Option<String> {
+    let trimmed = stdout.trim();
+    parse_terminal_id(trimmed)?;
+    Some(trimmed.to_owned())
+}
+
+/// A tab's total width in columns: the extents (`max(pane_x + pane_columns)`)
+/// over its terminal panes. A missing `pane_x` reads as `0`, degrading toward
+/// the widest single pane rather than the stacked-pane-inflated sum.
+fn tab_extent_cols(panes: &[RawPane], tab_id: u64) -> u64 {
+    panes
+        .iter()
+        .filter(|pane| pane.is_terminal() && pane.tab_id == tab_id)
+        .filter_map(|pane| Some(pane.pane_x.unwrap_or(0) + pane.pane_columns?))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Whether a sidebar `cols` wide in a `total`-wide tab is past the resize
+/// trigger: over [`SIDEBAR_RESIZE_TRIGGER_PERCENT`] of the tab *and* over the
+/// `max_cols` cap — a pane born fixed at the cap is a deliberate width verdict
+/// on any client, never a mis-mount.
+fn sidebar_width_off_spec(cols: u64, total: u64, width: SidebarWidth) -> bool {
+    total > 0 && cols * 100 > total * SIDEBAR_RESIZE_TRIGGER_PERCENT && cols > width.cap_cols()
+}
+
+/// Whether a kept sidebar pane sits off the layout's dock: not in the left
+/// column, or past the width trigger ([`sidebar_width_off_spec`]). The
+/// mis-mounted shape (right side, ~50%) trips both; a healthy layout-born pane
+/// (left, percentage at the cap) trips neither. Unknown geometry never reads
+/// off-spec.
+fn sidebar_geometry_off_spec(pane: &RawPane, panes: &[RawPane], width: SidebarWidth) -> bool {
+    if pane.pane_x.is_some_and(|x| x != 0) {
+        return true;
+    }
+    pane.pane_columns.is_some_and(|cols| {
+        sidebar_width_off_spec(cols, tab_extent_cols(panes, pane.tab_id), width)
+    })
+}
+
+/// The mounted sidebar pane an add produced: a live, sidebar-titled terminal
+/// pane in `tab_id` matching the stdout hint, or — the hint being unreliable —
+/// the lowest such id absent from the before-set, so a cross-talk duplicate
+/// resolves deterministically and reconcile closes the rest.
+fn mounted_sidebar_pane(
+    panes: &[RawPane],
+    tab_id: u64,
+    before: &std::collections::HashSet<u64>,
+    hint: Option<u64>,
+) -> Option<u64> {
+    let ids: Vec<u64> = panes
+        .iter()
+        .filter(|pane| pane.tab_id == tab_id && pane.is_live_terminal() && is_sidebar_pane(pane))
+        .map(|pane| pane.id)
+        .collect();
+    if let Some(raw) = hint
+        && ids.contains(&raw)
+    {
+        return Some(raw);
+    }
+    ids.into_iter().filter(|id| !before.contains(id)).min()
+}
+
 /// Subset of fields `zellij action list-panes -j -a` emits. We deserialize
 /// only what we route into `PaneRef`; serde silently ignores everything else.
 #[derive(Debug, Deserialize)]
@@ -1252,10 +1517,19 @@ struct RawPane {
     #[serde(default)]
     is_focused: bool,
     tab_id: u64,
+    /// Name of the tab the pane lives in. Routed into [`PaneRef::view_name`];
+    /// also how the `rimzd` daemon view is recognised on Zellij, whose pane list
+    /// reports no command fields a classifier could read instead.
+    #[serde(default)]
+    tab_name: Option<String>,
     /// Column width of the pane, used by in-place sidebar recovery to resize a
     /// freshly-split sidebar toward the layout's width percentage.
     #[serde(default)]
     pane_columns: Option<u64>,
+    /// Column offset of the pane's left edge — `0` is the left column. Drives
+    /// the tab-width extents math and the off-spec redock in sidebar recovery.
+    #[serde(default)]
+    pane_x: Option<u64>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]

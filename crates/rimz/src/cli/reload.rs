@@ -49,6 +49,12 @@ fn report(outcome: &ReloadOutcome) {
             count(outcome.closed, "duplicate or unresponsive sidebar"),
         );
     }
+    if outcome.redocked > 0 {
+        println!(
+            "Re-docked {} to the left column.",
+            count(outcome.redocked, "sidebar")
+        );
+    }
     if outcome.reaped > 0 {
         println!(
             "Reaped {}.",
@@ -59,6 +65,12 @@ fn report(outcome: &ReloadOutcome) {
         println!(
             "Swept {} from stopped sessions.",
             count(outcome.dead_swept, "leftover process"),
+        );
+    }
+    if outcome.deferred > 0 {
+        println!(
+            "Deferred {} (no attached client); attach and re-run `rimz reload`.",
+            count(outcome.deferred, "sidebar add"),
         );
     }
     if outcome.failed > 0 {

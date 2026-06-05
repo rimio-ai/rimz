@@ -833,6 +833,10 @@ fn reconcile_sidebars_adds_one_to_a_sidebarless_window() {
     );
     assert_eq!(report.closed, 0, "nothing to close in a sidebarless window");
     assert_eq!(report.failed, 0);
+    assert_eq!(
+        report.deferred, 0,
+        "tmux splits mount on a detached session, so an add is never deferred",
+    );
     let after = server
         .backend
         .list_panes(PaneListOptions {

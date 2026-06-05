@@ -803,9 +803,9 @@ impl SidebarSnapshot {
     /// signal. Returns `false` for an empty or not-yet-born session (no daemon
     /// view), so the renderer never detaches at startup.
     ///
-    /// Keys on `view_id` + `pane_is_host`, never on `view_name`, so it behaves
-    /// identically on Zellij (where `list_panes` leaves `view_name` `None`) and
-    /// tmux (where it carries the window name).
+    /// Keys on `view_id` + `pane_is_host` (which reads the command marker or
+    /// the `rimzd` view name — both backends report the view name), so it
+    /// behaves identically on Zellij and tmux.
     pub fn only_daemon_view(panes: &[PaneRef]) -> bool {
         // Per view_id: (host pane count, working pane count). Sidebar panes are
         // dropped but still register the view, so a sidebar-only view exists as

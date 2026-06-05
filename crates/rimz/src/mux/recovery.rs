@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::RuntimePaths;
-use crate::ids::WorkspaceId;
+use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::MuxBackend;
 use crate::proc::ProcInfo;
 
@@ -207,6 +207,69 @@ pub(crate) fn sweep_orphan_processes(
     Vec::new()
 }
 
+/// Whether `cmdline` is one of `(workspace, session)`'s sidebar *serve* processes
+/// — the wrapper `rimz sidebar serve` or the renderer `rimz-sidebar serve` — and
+/// not the mux server or the agent app-server. The exact, path-derived session
+/// name plus the workspace id scope it; `sidebar` + `serve` selects the renderer
+/// pair and excludes `rimz codex app-server serve`.
+pub(crate) fn is_sidebar_serve(cmdline: &str, workspace_id: &str, session_name: &str) -> bool {
+    cmdline.contains(session_name)
+        && cmdline.contains(workspace_id)
+        && cmdline.contains("sidebar")
+        && cmdline.contains("serve")
+}
+
+/// The normalized pane a sidebar process paints, from its inherited mux env var
+/// — through [`super::pane_from_env_value`], the same mapping the renderer
+/// applies to its own pane ([`super::own_pane_id`]). `None` when the var is
+/// absent, so a caller never reaps a process it cannot place.
+pub(crate) fn attributed_pane(pid: u32, mux: MuxName) -> Option<PaneId> {
+    let key = match mux {
+        MuxName::Zellij => "ZELLIJ_PANE_ID",
+        MuxName::Tmux => "TMUX_PANE",
+    };
+    Some(super::pane_from_env_value(
+        mux,
+        &crate::proc::env_var(pid, key)?,
+    ))
+}
+
+/// SIGTERM→SIGKILL the sidebar serve pair attributed (by its inherited mux pane
+/// env) to exactly `pane` — the cleanup for an in-place add whose pane never
+/// mounted or could not be docked, so a failed add never leaks a paneless
+/// renderer. Same uid/ancestor scoping as the orphan sweep. Returns the number
+/// of processes signalled; empty off-Linux, where `list_processes` is empty.
+pub(crate) fn kill_sidebar_serve_for_pane(
+    workspace_id: &str,
+    session_name: &str,
+    pane: &PaneId,
+    mux: MuxName,
+) -> usize {
+    let procs = crate::proc::list_processes();
+    let protected = protected_pids(&procs, std::process::id());
+    let my_uid = current_uid();
+    let targets: Vec<u32> = procs
+        .iter()
+        .filter(|proc| proc.real_uid == my_uid)
+        .filter(|proc| !protected.contains(&proc.pid))
+        .filter(|proc| is_sidebar_serve(&proc.cmdline, workspace_id, session_name))
+        .filter(|proc| attributed_pane(proc.pid, mux).as_ref() == Some(pane))
+        .map(|proc| proc.pid)
+        .collect();
+    kill_pids(&targets, SWEEP_GRACE).len()
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn current_uid() -> u32 {
+    nix::unistd::Uid::current().as_raw()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn current_uid() -> u32 {
+    // No `/proc`, so `list_processes` is empty and this is never compared.
+    u32::MAX
+}
+
 /// SIGTERM each pid, wait `grace`, then SIGKILL any still alive; returns the pids
 /// signalled. The shared graceful-then-forceful kill path for the `rimz reset`
 /// orphan sweep and `rimz reload`'s zombie-sidebar reaping. Linux-only — callers
@@ -375,5 +438,38 @@ mod tests {
         assert!(purge_zellij_session_cache_in(root, SESSION).is_empty());
         // An absent cache root is a no-op.
         assert!(purge_zellij_session_cache_in(&root.join("missing"), SESSION).is_empty());
+    }
+
+    #[test]
+    fn is_sidebar_serve_matches_wrapper_and_renderer_only() {
+        let wrapper =
+            format!("rimz sidebar serve --mux zellij --workspace-id {WS} --session-name {SESSION}");
+        let renderer = format!(
+            "rimz-sidebar serve --workspace-id {WS} --mux zellij --session-name {SESSION} --tick-seconds 1"
+        );
+        assert!(is_sidebar_serve(&wrapper, WS, SESSION));
+        assert!(is_sidebar_serve(&renderer, WS, SESSION));
+    }
+
+    #[test]
+    fn is_sidebar_serve_excludes_server_and_app_server() {
+        let app_server =
+            format!("rimz codex app-server serve --workspace-id {WS} --session-name {SESSION}");
+        let mux_server =
+            format!("zellij --server /run/user/1000/zellij/contract_version_1/{SESSION}");
+        assert!(
+            !is_sidebar_serve(&app_server, WS, SESSION),
+            "app-server is not a sidebar"
+        );
+        assert!(
+            !is_sidebar_serve(&mux_server, WS, SESSION),
+            "the mux server is never reaped"
+        );
+    }
+
+    #[test]
+    fn is_sidebar_serve_is_scoped_to_the_workspace_and_session() {
+        let other_session = "rimz-sidebar serve --workspace-id ws_other --session-name rimz-other";
+        assert!(!is_sidebar_serve(other_session, WS, SESSION));
     }
 }

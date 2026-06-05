@@ -407,3 +407,183 @@ fn live_session_name_excludes_exited_rows() {
         None,
     );
 }
+
+#[test]
+fn raw_pane_deserializes_tab_name_and_geometry() {
+    // The identity and geometry fields Zellij 0.44 actually emits per terminal
+    // pane — no live command, cwd, or pid fields exist in its `list-panes -j`
+    // output.
+    let json = r#"[{
+          "id": 1, "is_plugin": false, "tab_id": 0, "tab_name": "rimzd",
+          "pane_x": 60, "pane_columns": 118,
+          "title": "claude remote-control --spawn worktree",
+          "terminal_command": "claude remote-control --spawn worktree"
+        }]"#;
+    let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    assert_eq!(parsed[0].tab_name.as_deref(), Some("rimzd"));
+    assert_eq!(parsed[0].pane_x, Some(60));
+    assert_eq!(parsed[0].pane_columns, Some(118));
+    assert_eq!(
+        parsed[0].terminal_command.as_deref(),
+        Some("claude remote-control --spawn worktree"),
+    );
+}
+
+#[test]
+fn rimzd_tab_name_marks_the_daemon_view_without_command_fields() {
+    // Zellij 0.44 reports no command fields, and the Claude host re-execs
+    // into a bare versioned binary anyway — the tab name alone must carry
+    // the daemon classification so reload never treats `rimzd` as work.
+    let json = r#"[
+          {"id": 1, "is_plugin": false, "tab_id": 0, "tab_name": "rimzd",
+           "title": "claude"},
+          {"id": 5, "is_plugin": false, "tab_id": 1, "tab_name": "Tab #2",
+           "title": "zsh"}
+        ]"#;
+    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    let views = views_with_sidebars(&panes);
+    assert_eq!(views.len(), 2);
+    assert!(views[0].has_daemon_host, "rimzd tab is the daemon view");
+    assert!(!views[0].has_working);
+    assert!(views[1].has_working, "an ordinary tab still reads as work");
+    assert!(!views[1].has_daemon_host);
+}
+
+#[test]
+fn tab_extent_cols_takes_extents_not_the_sum() {
+    // A left sidebar beside two vertically stacked panes: the sum (60 +
+    // 238 + 238 = 536) would nearly double the real tab width (298).
+    let json = r#"[
+          {"id": 0, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 60},
+          {"id": 1, "is_plugin": false, "tab_id": 0, "title": "zsh",
+           "pane_x": 60, "pane_columns": 238},
+          {"id": 2, "is_plugin": false, "tab_id": 0, "title": "vim",
+           "pane_x": 60, "pane_columns": 238},
+          {"id": 3, "is_plugin": false, "tab_id": 1, "title": "zsh",
+           "pane_x": 0, "pane_columns": 120}
+        ]"#;
+    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    assert_eq!(tab_extent_cols(&panes, 0), 298);
+    assert_eq!(tab_extent_cols(&panes, 1), 120);
+    assert_eq!(tab_extent_cols(&panes, 9), 0, "an absent tab has no width");
+}
+
+#[test]
+fn sidebar_geometry_off_spec_trips_on_the_mis_mounted_shape_only() {
+    // Tab 0: the mis-mounted shape — sidebar on the right at 50%.
+    // Tab 1: a healthy layout-born sidebar — left at ~21%.
+    // Tab 2: docked left but still half the tab (dock landed, resize lost).
+    let json = r#"[
+          {"id": 1, "is_plugin": false, "tab_id": 0, "title": "zsh",
+           "pane_x": 0, "pane_columns": 149},
+          {"id": 2, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar",
+           "pane_x": 149, "pane_columns": 149},
+          {"id": 3, "is_plugin": false, "tab_id": 1, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 64},
+          {"id": 4, "is_plugin": false, "tab_id": 1, "title": "zsh",
+           "pane_x": 64, "pane_columns": 234},
+          {"id": 5, "is_plugin": false, "tab_id": 2, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 149},
+          {"id": 6, "is_plugin": false, "tab_id": 2, "title": "zsh",
+           "pane_x": 149, "pane_columns": 149}
+        ]"#;
+    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    let width = SidebarWidth::default();
+    let by_id = |id: u64| panes.iter().find(|pane| pane.id == id).unwrap();
+    assert!(
+        sidebar_geometry_off_spec(by_id(2), &panes, width),
+        "right-docked 50% sidebar is off-spec",
+    );
+    assert!(
+        !sidebar_geometry_off_spec(by_id(3), &panes, width),
+        "a healthy ~21% layout-born sidebar is never churned",
+    );
+    assert!(
+        sidebar_geometry_off_spec(by_id(5), &panes, width),
+        "left but 50%-wide still wants the resize",
+    );
+}
+
+#[test]
+fn sidebar_width_at_the_cap_is_never_off_spec() {
+    // A pane born fixed at `max_cols` (launch outside a tty) can exceed 45%
+    // of a narrow client's tab; the cap guard keeps reload from fighting the
+    // birth-time width verdict.
+    let width = SidebarWidth::default();
+    let cap = width.cap_cols();
+    assert!(
+        !sidebar_width_off_spec(cap, 140, width),
+        "cap-wide on a 140-col tab is a width verdict, not a mis-mount",
+    );
+    assert!(
+        sidebar_width_off_spec(149, 298, width),
+        "the 50% mis-mount is past both the trigger and the cap",
+    );
+    assert!(!sidebar_width_off_spec(90, 298, width), "30% never trips");
+}
+
+#[test]
+fn sidebar_geometry_without_coordinates_is_never_off_spec() {
+    // Builds that omit geometry give convergence nothing to act on.
+    let json = r#"[
+          {"id": 1, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar"},
+          {"id": 2, "is_plugin": false, "tab_id": 0, "title": "zsh"}
+        ]"#;
+    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    assert!(!sidebar_geometry_off_spec(
+        &panes[0],
+        &panes,
+        SidebarWidth::default()
+    ));
+}
+
+#[test]
+fn new_pane_stdout_parses_only_a_bare_terminal_id() {
+    assert_eq!(
+        parse_new_pane_id(" terminal_58\n"),
+        Some("terminal_58".to_owned()),
+    );
+    // Cross-talked responses from concurrent action clients: an empty
+    // body, another command's JSON, a plugin id, or trailing garbage are
+    // all hints we must refuse — never errors, never pane ids.
+    assert_eq!(parse_new_pane_id(""), None);
+    assert_eq!(
+        parse_new_pane_id("[{\"id\": 3, \"is_plugin\": false}]"),
+        None
+    );
+    assert_eq!(parse_new_pane_id("plugin_3"), None);
+    assert_eq!(parse_new_pane_id("terminal_"), None);
+    assert_eq!(parse_new_pane_id("terminal_5x"), None);
+    assert_eq!(parse_new_pane_id("terminal_5 terminal_6"), None);
+}
+
+#[test]
+fn mounted_sidebar_discovery_prefers_the_hint_then_the_new_pane() {
+    let json = r#"[
+          {"id": 1, "is_plugin": false, "tab_id": 0, "title": "zsh"},
+          {"id": 7, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar"},
+          {"id": 9, "is_plugin": false, "tab_id": 1, "title": "rimz-sidebar"}
+        ]"#;
+    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    let before: std::collections::HashSet<u64> = [1].into();
+    // The hint wins when it names a mounted sidebar pane in the tab.
+    assert_eq!(mounted_sidebar_pane(&panes, 0, &before, Some(7)), Some(7));
+    // Without a usable hint, the new (not-in-before) sidebar pane is it.
+    assert_eq!(mounted_sidebar_pane(&panes, 0, &before, None), Some(7));
+    assert_eq!(mounted_sidebar_pane(&panes, 0, &before, Some(42)), Some(7));
+    // Another tab's sidebar never matches; a tab with none reports none.
+    assert_eq!(mounted_sidebar_pane(&panes, 2, &before, None), None);
+}
+
+#[test]
+fn mounted_sidebar_discovery_ignores_preexisting_and_non_sidebar_panes() {
+    let json = r#"[
+          {"id": 3, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar"},
+          {"id": 4, "is_plugin": false, "tab_id": 0, "title": "vim"}
+        ]"#;
+    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    // The tab's only sidebar pane predates the add: the mount never landed.
+    let before: std::collections::HashSet<u64> = [3, 4].into();
+    assert_eq!(mounted_sidebar_pane(&panes, 0, &before, None), None);
+}

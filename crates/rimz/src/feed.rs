@@ -309,10 +309,9 @@ pub struct PaneRef {
     pub view_id: Option<String>,
     #[serde(default)]
     pub view_kind: Option<ViewKind>,
-    /// View name as reported by the multiplexer (tmux window name; Zellij does
-    /// not expose tab names per pane, so this stays `None` there). Advisory UI
-    /// metadata — used to recognise Rimz-launched background views such as the
-    /// remote-control host. Never a correctness signal.
+    /// View name as reported by the multiplexer (tmux window name, Zellij tab
+    /// name). Advisory UI metadata — used to recognise Rimz-launched background
+    /// views such as the remote-control host. Never a correctness signal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view_name: Option<String>,
     /// Whether the pane is its mux view's active pane — the mux marks exactly

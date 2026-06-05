@@ -695,7 +695,12 @@ impl MuxBackend for TmuxBackend {
         // tmux re-adds a sidebar in place with the same left split the initial
         // window got — `-d` keeps the user's focus, `-l <pct>%` sets the width —
         // and drops a stray sidebar with `kill-pane -t`; no move/resize/refocus
-        // dance and no session teardown is needed.
+        // dance and no session teardown is needed. `split-window` mounts fine on
+        // a detached session, so tmux never defers an add the way the Zellij
+        // backend must (its detached screen thread drops the mount). Geometry
+        // convergence is likewise a deliberate no-op here: `-b` births every
+        // sidebar left at the layout width synchronously, so the mis-mounted
+        // right/50% shape Zellij repairs cannot occur.
         let panes = self.list_panes(PaneListOptions {
             session_name: Some(opts.session_name.clone()),
             ..Default::default()

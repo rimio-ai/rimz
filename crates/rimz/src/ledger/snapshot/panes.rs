@@ -51,8 +51,9 @@ impl SidebarOwnView {
             .filter(|pane| pane.pane_id != *own && pane.view_id.as_deref() == own_view)
             .collect::<Vec<_>>();
         // The own view is the daemon view iff, after dropping sidebar panes, its
-        // remaining siblings are non-empty and all managed hosts. Keys on
-        // `pane_is_host`, never `view_name`, for Zellij/tmux parity.
+        // remaining siblings are non-empty and all managed hosts
+        // (`pane_is_host`: a host command marker or the `rimzd` view name —
+        // both backends report the view name).
         let non_sidebar_siblings: Vec<&PaneRef> = siblings
             .iter()
             .copied()
@@ -466,8 +467,8 @@ mod tests {
 
     #[test]
     fn own_view_is_daemon_true_in_the_rimzd_view_zellij() {
-        // Zellij leaves view_name None; the daemon view is recognised by the
-        // host command markers alone.
+        // No view_name on these fixtures: the daemon view is recognised by the
+        // host command markers alone, covering builds that omit tab names.
         let own = PaneId::from_parts(MuxName::Zellij, "terminal_0");
         let panes = vec![
             pane_cmd("terminal_0", "tab_0", "rimz-sidebar serve", None),

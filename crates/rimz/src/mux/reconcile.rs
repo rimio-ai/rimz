@@ -21,6 +21,15 @@ pub struct SidebarRecovery {
     /// Views that needed a sidebar but whose in-place add failed — logged and
     /// skipped, never retried.
     pub failed: usize,
+    /// Views whose in-place add was deferred for want of an attached client —
+    /// Zellij drops the mount on a detached session while the spawned renderer
+    /// keeps running, so adding there would only leak. The next reconcile on an
+    /// attached session adds them.
+    pub deferred: usize,
+    /// Kept sidebar panes whose geometry was converged back onto the layout's
+    /// dock — moved to the left column and/or resized toward the layout width —
+    /// in place, renderer untouched.
+    pub redocked: usize,
 }
 
 /// The live sidebars the runtime knows about when a reconcile runs: the panes a
@@ -33,6 +42,12 @@ pub struct SidebarRecovery {
 pub struct SidebarLiveness {
     pub claimed_panes: HashSet<PaneId>,
     pub has_unlocated: bool,
+    /// Panes whose sidebar serve process was born within
+    /// [`crate::sidebar::FRESH_PANE_GRACE`] — too young for a first heartbeat,
+    /// so the planner reads "unclaimed" as "still starting", never "wedged".
+    /// Keeps back-to-back reloads from closing the sidebar the previous run
+    /// just added.
+    pub young_panes: HashSet<PaneId>,
 }
 
 /// One view's sidebar panes (in mux order) and how it is otherwise occupied: a
@@ -56,35 +71,37 @@ pub(crate) struct ReconcilePlan {
 }
 
 /// Plan the reconcile for one session, view by view:
-/// - **Working view** — keep exactly one *claimed* (live) sidebar pane, close the
+/// - **Working or daemon view** — keep exactly one sidebar pane, close the
 ///   rest, and add one if none survived, so duplicates collapse to one and a
-///   wedged sidebar is replaced.
+///   wedged sidebar is replaced. The keeper is the first *claimed* (live) pane;
+///   with none claimed, the first *young* pane (serve process inside the
+///   fresh-pane grace) is kept tentatively and nothing is added — its first
+///   heartbeat simply hasn't landed, and the next pass settles it either way.
+///   A young extra beside a claimed keeper still closes: that is a botched-add
+///   duplicate, not a starting renderer. The daemon view (`rimzd`) is born with
+///   a sidebar beside its managed hosts and earns the same convergence — but
+///   never the collapse below, since its hosts are managed, not work.
 /// - **Orphan sidebar-only view** — no working pane and no daemon host, so its
 ///   working siblings all closed but the sidebar never self-closed (a wedged
 ///   renderer that stopped ticking). Close every sidebar pane and let the view
 ///   collapse; reload cannot rely on self-close for a renderer that is no longer
 ///   ticking.
-/// - **Daemon view** — a sidebar beside managed daemon hosts (`rimzd`) is
-///   intentional; leave it alone.
 ///
 /// When a live sidebar is unlocated (a fresh heartbeat carrying no pane id), each
 /// view is handled conservatively: keep one physical sidebar as the possible
-/// owner, close duplicate panes, add only when a working view has none, and leave
-/// a single orphan for self-close.
+/// owner, close duplicate panes, add only when an occupied view has none, and
+/// leave a single orphan for self-close.
 /// First-seen order; shared by both backends so the rule lives in one place and
 /// is unit-tested without a mux.
 pub(crate) fn plan_reconcile(views: &[ViewSidebars], live: &SidebarLiveness) -> ReconcilePlan {
     let mut plan = ReconcilePlan::default();
     for view in views {
-        if view.has_working {
+        if view.has_working || view.has_daemon_host {
             let keep = sidebar_to_keep(view, live, live.has_unlocated);
             close_unkept_sidebars(view, keep, &mut plan.close);
             if keep.is_none() {
                 plan.add.push(view.view.clone());
             }
-        } else if view.has_daemon_host {
-            let keep = sidebar_to_keep(view, live, !view.sidebar_panes.is_empty());
-            close_unkept_sidebars(view, keep, &mut plan.close);
         } else if live.has_unlocated {
             // Orphan sidebar-only view: keep one possible owner for self-close,
             // but still collapse duplicates so a tab never accumulates chrome.
@@ -99,6 +116,10 @@ pub(crate) fn plan_reconcile(views: &[ViewSidebars], live: &SidebarLiveness) -> 
     plan
 }
 
+/// The index of the pane a view keeps, by signal strength: a claimed (live)
+/// pane wins, then a young one (heartbeat pending), then — only under
+/// `keep_unclaimed` (the unlocated wildcard, or an orphan's possible owner) —
+/// the first pane at all.
 fn sidebar_to_keep(
     view: &ViewSidebars,
     live: &SidebarLiveness,
@@ -107,6 +128,11 @@ fn sidebar_to_keep(
     view.sidebar_panes
         .iter()
         .position(|pane| live.claimed_panes.contains(pane))
+        .or_else(|| {
+            view.sidebar_panes
+                .iter()
+                .position(|pane| live.young_panes.contains(pane))
+        })
         .or_else(|| (keep_unclaimed && !view.sidebar_panes.is_empty()).then_some(0))
 }
 
@@ -141,7 +167,31 @@ mod tests {
     fn live(claimed: &[&str]) -> SidebarLiveness {
         SidebarLiveness {
             claimed_panes: claimed.iter().map(|raw| pane(raw)).collect(),
-            has_unlocated: false,
+            ..SidebarLiveness::default()
+        }
+    }
+
+    fn live_with_young(claimed: &[&str], young: &[&str]) -> SidebarLiveness {
+        SidebarLiveness {
+            claimed_panes: claimed.iter().map(|raw| pane(raw)).collect(),
+            young_panes: young.iter().map(|raw| pane(raw)).collect(),
+            ..SidebarLiveness::default()
+        }
+    }
+
+    fn unlocated() -> SidebarLiveness {
+        SidebarLiveness {
+            has_unlocated: true,
+            ..SidebarLiveness::default()
+        }
+    }
+
+    fn daemon_view(sidebars: &[&str]) -> ViewSidebars {
+        ViewSidebars {
+            view: "0".to_owned(),
+            sidebar_panes: sidebars.iter().map(|raw| pane(raw)).collect(),
+            has_working: false,
+            has_daemon_host: true,
         }
     }
 
@@ -194,19 +244,73 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_leaves_the_daemon_view_alone() {
-        // The daemon view (`rimzd`) has a sidebar beside managed hosts but no
-        // working pane — intentional, never collapsed.
-        let daemon = ViewSidebars {
-            view: "0".to_owned(),
-            sidebar_panes: vec![pane("terminal_2")],
-            has_working: false,
-            has_daemon_host: true,
-        };
+    fn reconcile_leaves_a_healthy_daemon_view_untouched() {
+        // The daemon view (`rimzd`) has a live sidebar beside managed hosts —
+        // intentional, nothing to do.
         assert_eq!(
-            plan_reconcile(&[daemon], &live(&["terminal_2"])),
+            plan_reconcile(&[daemon_view(&["terminal_2"])], &live(&["terminal_2"])),
             ReconcilePlan::default(),
         );
+    }
+
+    #[test]
+    fn reconcile_adds_to_a_daemon_view_missing_its_sidebar() {
+        // The daemon view is born with a sidebar; one that lost it gains one
+        // back, same as a working view.
+        let plan = plan_reconcile(&[daemon_view(&[])], &live(&[]));
+        assert_eq!(plan.close, Vec::<PaneId>::new());
+        assert_eq!(plan.add, vec!["0".to_owned()]);
+    }
+
+    #[test]
+    fn reconcile_never_collapses_the_daemon_view() {
+        // A wedged (unclaimed) sidebar in the daemon view is replaced in place —
+        // the view holds managed hosts, never the sidebar-only orphan collapse.
+        let plan = plan_reconcile(&[daemon_view(&["terminal_2"])], &live(&[]));
+        assert_eq!(plan.close, vec![pane("terminal_2")]);
+        assert_eq!(plan.add, vec!["0".to_owned()]);
+    }
+
+    #[test]
+    fn reconcile_graces_a_young_unclaimed_lone_sidebar() {
+        // A sidebar added seconds ago has no heartbeat yet; reconcile keeps it
+        // tentatively and adds nothing — the next pass settles it either way.
+        let views = vec![view("15", &["terminal_15"], true)];
+        let plan = plan_reconcile(&views, &live_with_young(&[], &["terminal_15"]));
+        assert_eq!(plan, ReconcilePlan::default());
+    }
+
+    #[test]
+    fn reconcile_keeps_one_young_pane_and_closes_the_rest() {
+        // Two young unclaimed panes are a cross-talk double-add: keep the
+        // first, close the other, and never stack an add on top.
+        let views = vec![view("15", &["terminal_15", "terminal_16"], true)];
+        let plan = plan_reconcile(
+            &views,
+            &live_with_young(&[], &["terminal_15", "terminal_16"]),
+        );
+        assert_eq!(plan.close, vec![pane("terminal_16")]);
+        assert!(plan.add.is_empty(), "a young keeper means no add");
+    }
+
+    #[test]
+    fn reconcile_closes_a_young_extra_beside_a_claimed_keeper() {
+        // Young or not, an extra sidebar pane beside a claimed live one is a
+        // botched-add duplicate, never a starting renderer worth waiting on.
+        let views = vec![view("15", &["terminal_15", "terminal_99"], true)];
+        let plan = plan_reconcile(&views, &live_with_young(&["terminal_15"], &["terminal_99"]));
+        assert_eq!(plan.close, vec![pane("terminal_99")]);
+        assert!(plan.add.is_empty());
+    }
+
+    #[test]
+    fn reconcile_prefers_the_claimed_keeper_over_an_earlier_young_pane() {
+        // The claimed pane wins the keep even when a young pane precedes it in
+        // mux order — a heartbeat is the stronger signal.
+        let views = vec![view("15", &["terminal_14", "terminal_15"], true)];
+        let plan = plan_reconcile(&views, &live_with_young(&["terminal_15"], &["terminal_14"]));
+        assert_eq!(plan.close, vec![pane("terminal_14")]);
+        assert!(plan.add.is_empty());
     }
 
     #[test]
@@ -214,11 +318,7 @@ mod tests {
         // An unlocated heartbeat might own one of the panes, but the view still
         // keeps only one physical sidebar.
         let views = vec![view("15", &["terminal_15", "terminal_99"], true)];
-        let unlocated = SidebarLiveness {
-            claimed_panes: HashSet::new(),
-            has_unlocated: true,
-        };
-        let plan = plan_reconcile(&views, &unlocated);
+        let plan = plan_reconcile(&views, &unlocated());
         assert_eq!(plan.close, vec![pane("terminal_99")]);
         assert!(plan.add.is_empty(), "one possible owner remains in the tab");
     }
@@ -228,11 +328,12 @@ mod tests {
         // A claimed pane is the best owner signal; the unlocated wildcard only
         // protects an unclaimed pane when no claimed one exists in the view.
         let views = vec![view("15", &["terminal_15", "terminal_99"], true)];
-        let unlocated = SidebarLiveness {
+        let wildcard_with_claim = SidebarLiveness {
             claimed_panes: [pane("terminal_99")].into(),
             has_unlocated: true,
+            ..SidebarLiveness::default()
         };
-        let plan = plan_reconcile(&views, &unlocated);
+        let plan = plan_reconcile(&views, &wildcard_with_claim);
         assert_eq!(plan.close, vec![pane("terminal_15")]);
         assert!(
             plan.add.is_empty(),
@@ -244,13 +345,10 @@ mod tests {
     fn reconcile_closes_duplicate_sidebars_in_the_daemon_view() {
         // The daemon view itself is intentional, but duplicate chrome in that
         // view is not.
-        let daemon = ViewSidebars {
-            view: "0".to_owned(),
-            sidebar_panes: vec![pane("terminal_2"), pane("terminal_3")],
-            has_working: false,
-            has_daemon_host: true,
-        };
-        let plan = plan_reconcile(&[daemon], &live(&["terminal_2"]));
+        let plan = plan_reconcile(
+            &[daemon_view(&["terminal_2", "terminal_3"])],
+            &live(&["terminal_2"]),
+        );
         assert_eq!(plan.close, vec![pane("terminal_3")]);
         assert!(plan.add.is_empty());
     }
@@ -260,22 +358,17 @@ mod tests {
         // An unlocated live sidebar might own the orphan's pane, so don't close
         // blind — leave it for self-close.
         let views = vec![view("16", &["terminal_16"], false)];
-        let unlocated = SidebarLiveness {
-            claimed_panes: HashSet::new(),
-            has_unlocated: true,
-        };
-        assert_eq!(plan_reconcile(&views, &unlocated), ReconcilePlan::default());
+        assert_eq!(
+            plan_reconcile(&views, &unlocated()),
+            ReconcilePlan::default()
+        );
     }
 
     #[test]
     fn reconcile_collapses_duplicate_orphan_sidebars_under_an_unlocated_wildcard() {
         // Keep one possible owner for self-close, but close duplicate chrome.
         let views = vec![view("16", &["terminal_16", "terminal_17"], false)];
-        let unlocated = SidebarLiveness {
-            claimed_panes: HashSet::new(),
-            has_unlocated: true,
-        };
-        let plan = plan_reconcile(&views, &unlocated);
+        let plan = plan_reconcile(&views, &unlocated());
         assert_eq!(plan.close, vec![pane("terminal_17")]);
         assert!(plan.add.is_empty());
     }
@@ -285,11 +378,7 @@ mod tests {
         // A fresh heartbeat with no pane id is a wildcard for the last physical
         // sidebar in a view; only add to a working view that has none at all.
         let views = vec![view("15", &["terminal_15"], true), view("12", &[], true)];
-        let unlocated = SidebarLiveness {
-            claimed_panes: HashSet::new(),
-            has_unlocated: true,
-        };
-        let plan = plan_reconcile(&views, &unlocated);
+        let plan = plan_reconcile(&views, &unlocated());
         assert!(plan.close.is_empty(), "never close blind under a wildcard");
         assert_eq!(plan.add, vec!["12".to_owned()]);
     }

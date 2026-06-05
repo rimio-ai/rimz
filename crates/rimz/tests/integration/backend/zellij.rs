@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::feed::PaneRef;
-use rimz::ids::{MuxName, WorkspaceId};
+use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{
     DaemonView, HostPane, MuxBackend, PaneListOptions, SessionHealth, SidebarPaneOptions,
     SidebarWidth, ZellijBackend, zellij,
@@ -46,12 +46,28 @@ macro_rules! require_zellij {
 /// shared lock. The `rz` prefix + 6 random bytes keeps the socket path (and
 /// rimz's own per-instance wakeup socket beneath it) under the 108-byte AF_UNIX
 /// limit; `TempDir::new`'s long default prefix would not.
+///
+/// The dir doubles as the scoped `HOME`/`XDG_CONFIG_HOME` (see `scoped_zellij`),
+/// and a seeded config keeps Zellij off its first-run setup wizard: a missing
+/// config makes the server write one and float the wizard modal, which blocks
+/// the screen thread's pane mounts — a wizard session silently drops every
+/// `new-pane` while it shows. Zellij prefers (and creates) `$HOME/.config/zellij`
+/// over `$XDG_CONFIG_HOME/zellij` (`home_unix.rs` in zellij), so the seed goes
+/// to the home-relative path.
 fn scoped_runtime_dir() -> TempDir {
-    tempfile::Builder::new()
+    let dir = tempfile::Builder::new()
         .prefix("rz")
         .rand_bytes(6)
         .tempdir()
-        .expect("xdg runtime tempdir")
+        .expect("xdg runtime tempdir");
+    let zellij_config_dir = dir.path().join(".config").join("zellij");
+    std::fs::create_dir_all(&zellij_config_dir).expect("zellij config dir");
+    std::fs::write(
+        zellij_config_dir.join("config.kdl"),
+        "// Hermetic test config: stock behavior, no first-run wizard or tips UI.\nshow_startup_tips false\nshow_release_notes false\n",
+    )
+    .expect("zellij config.kdl");
+    dir
 }
 
 /// A `zellij` command pinned to `xdg` as `XDG_RUNTIME_DIR`. Every raw `zellij`
@@ -60,7 +76,17 @@ fn scoped_runtime_dir() -> TempDir {
 /// chokepoint, so no stray command can leak to the user's default server.
 fn scoped_zellij(xdg: &Path) -> std::process::Command {
     let mut cmd = std::process::Command::new("zellij");
-    cmd.env("XDG_RUNTIME_DIR", xdg);
+    // The first command against a runtime dir forks the session server, and
+    // every pane command inherits the server's env — so scope the whole home
+    // surface here, not just the socket root. A real `HOME` leaks the
+    // developer's per-machine config and fleet transcript history into
+    // renderer panes (the snapshot producer then cold-parses minutes of real
+    // `~/.claude` history), and a real `XDG_CONFIG_HOME` leaks their Zellij
+    // config into the session under test.
+    cmd.env("XDG_RUNTIME_DIR", xdg)
+        .env("XDG_STATE_HOME", xdg)
+        .env("XDG_CONFIG_HOME", xdg)
+        .env("HOME", xdg);
     cmd
 }
 
@@ -79,8 +105,19 @@ struct ZellijSession {
 
 impl ZellijSession {
     fn spawn(name: impl Into<String>) -> Self {
-        let xdg = scoped_runtime_dir();
-        let name = name.into();
+        Self::attach_pty(scoped_runtime_dir(), name.into(), true)
+    }
+
+    /// Attach a PTY client to a session that already exists on `xdg` (born via
+    /// `attach --create-background`). A detached server under load can drop a
+    /// pane-exit or relayout outright and only reconciles on the next attach,
+    /// so a test asserting prompt close/resize behaviour keeps a client
+    /// attached for the session's lifetime.
+    fn attach_existing(xdg: TempDir, name: impl Into<String>) -> Self {
+        Self::attach_pty(xdg, name.into(), false)
+    }
+
+    fn attach_pty(xdg: TempDir, name: String, create: bool) -> Self {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -91,11 +128,19 @@ impl ZellijSession {
             })
             .expect("openpty");
         let mut cmd = CommandBuilder::new("zellij");
-        // Pin the attaching client to the test's private server. `CommandBuilder`
-        // seeds its env from the current process, so this overrides one var and
-        // leaves PATH and friends intact.
+        // Pin the attaching client to the test's private server, with the same
+        // hermetic home surface as `scoped_zellij` (the client can be the one
+        // that forks the server). `CommandBuilder` seeds its env from the
+        // current process, so these override and leave PATH and friends intact.
         cmd.env("XDG_RUNTIME_DIR", xdg.path());
-        cmd.args(["attach", "--create", &name]);
+        cmd.env("XDG_STATE_HOME", xdg.path());
+        cmd.env("XDG_CONFIG_HOME", xdg.path());
+        cmd.env("HOME", xdg.path());
+        if create {
+            cmd.args(["attach", "--create", &name]);
+        } else {
+            cmd.args(["attach", &name]);
+        }
         let child = pair.slave.spawn_command(cmd).expect("spawn zellij");
         drop(pair.slave);
 
@@ -601,6 +646,266 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
     assert_sidebar_is_left_thirty_percent(xdg.path(), &name);
 }
 
+/// Count this user's live sidebar-serve processes scoped to `session` — the
+/// leak check for a deferred or failed in-place add. Scans `/proc` directly so
+/// the test needs no extra tooling; empty on platforms without it.
+fn serve_processes_for(session: &str) -> usize {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return 0;
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
+            std::fs::read(format!("/proc/{pid}/cmdline")).ok()
+        })
+        .filter(|cmdline| {
+            let cmdline = String::from_utf8_lossy(cmdline).replace('\0', " ");
+            cmdline.contains(session) && cmdline.contains("sidebar") && cmdline.contains("serve")
+        })
+        .count()
+}
+
+/// Poll until no `sidebar … serve` process for `session` remains, or the
+/// timeout elapses.
+fn wait_for_no_serve_processes(session: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if serve_processes_for(session) == 0 {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+/// An in-place add on a *detached* session is deferred, never attempted:
+/// Zellij's screen thread drops a `new-pane` mount when no client is attached
+/// while the spawned process keeps running, so the only safe move is to wait
+/// for an attached client. Regression test for the reload loop that leaked
+/// (and then reaped) one serve pair per run against a detached session.
+#[test]
+fn reconcile_defers_the_add_on_a_detached_session() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("defer");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+
+    // A detached background session with a working pane and no sidebar.
+    let layout = cwd.path().join("plain.kdl");
+    std::fs::write(
+        &layout,
+        "layout {\n    pane command=\"sleep\" {\n        args \"60\"\n    }\n}\n",
+    )
+    .expect("write plain layout");
+    let created = scoped_zellij(xdg.path())
+        .args(["attach", "--create-background", &name, "options"])
+        .arg("--default-cwd")
+        .arg(cwd.path())
+        .arg("--default-layout")
+        .arg(&layout)
+        .bounded_status()
+        .expect("create plain session");
+    assert!(created.success(), "create-background failed for {name}");
+    let before = wait_for_pane_count(xdg.path(), &name, 1);
+    assert!(
+        !before.is_empty(),
+        "plain session should have a pane before reconcile: {before:?}",
+    );
+
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let report = ZellijBackend::with_runtime_dir(xdg.path())
+        .reconcile_sidebars(
+            &SidebarPaneOptions {
+                session_name: name.clone(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-defer")),
+                cwd: cwd.path().to_path_buf(),
+                width: SidebarWidth::default(),
+                birth_size: SidebarWidth::default().birth_size(Some(120)),
+                rimz_bin: stub,
+                replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
+                resume_panes: Vec::new(),
+            },
+            &rimz::mux::SidebarLiveness::default(),
+        )
+        .expect("reconcile_sidebars");
+
+    assert_eq!(report.deferred, 1, "the detached session's add is deferred");
+    assert_eq!(report.recovered, 0, "nothing is added without a client");
+    assert_eq!(report.failed, 0, "a deferral is not a failure");
+    let after = ZellijBackend::with_runtime_dir(xdg.path())
+        .list_panes(PaneListOptions {
+            session_name: Some(name.clone()),
+            ..Default::default()
+        })
+        .expect("list_panes after");
+    assert_eq!(after.len(), 1, "no pane was added detached: {after:?}");
+    assert_eq!(
+        serve_processes_for(&name),
+        0,
+        "no serve pair leaked for the deferred add",
+    );
+}
+
+/// Poll until an attached client registers on `session` — `list-clients`
+/// reports a row past the header. A pane action that lands while the client is
+/// still mid-startup gets its mount dropped exactly like on a detached
+/// session, so tests that mount panes against a PTY client gate on this first
+/// (the same attachment signal reconcile's defer gate reads).
+fn wait_for_attached_client(xdg: &Path, session: &str) {
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    loop {
+        let attached = scoped_zellij(xdg)
+            .args(["--session", session, "action", "list-clients"])
+            .bounded_output()
+            .is_ok_and(|out| {
+                out.status.success() && String::from_utf8_lossy(&out.stdout).lines().count() > 1
+            });
+        if attached {
+            return;
+        }
+        if Instant::now() > deadline {
+            panic!("no client attached to {session}");
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+/// The raw `list-panes` JSON object for the session's `rimz-sidebar` pane.
+fn raw_sidebar_pane(xdg: &Path, session: &str) -> serde_json::Value {
+    let output = scoped_zellij(xdg)
+        .args(["--session", session, "action", "list-panes", "-j", "-a"])
+        .bounded_output()
+        .expect("list-panes for sidebar lookup");
+    assert!(output.status.success(), "list-panes for sidebar lookup");
+    let panes: serde_json::Value = serde_json::from_slice(&output.stdout).expect("list-panes json");
+    panes
+        .as_array()
+        .expect("pane array")
+        .iter()
+        .find(|pane| {
+            pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false)
+                && pane.get("title").and_then(|value| value.as_str()) == Some("rimz-sidebar")
+        })
+        .expect("rimz-sidebar pane")
+        .clone()
+}
+
+/// A claimed live sidebar sitting off the layout's dock — the residue of the
+/// pre-discovery mis-mount (right side, ~50%) — is converged in place by
+/// reconcile: moved to the left column and resized toward the layout width,
+/// with the renderer's pane (and so the renderer) untouched.
+#[test]
+fn reconcile_redocks_an_off_spec_claimed_sidebar() {
+    require_zellij!();
+
+    let xdg_dir = scoped_runtime_dir();
+    let name = unique_session_name("redock");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg_dir.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+
+    // A background session with one long-lived working pane.
+    let layout = cwd.path().join("plain.kdl");
+    std::fs::write(
+        &layout,
+        "layout {\n    pane command=\"sleep\" {\n        args \"600\"\n    }\n}\n",
+    )
+    .expect("write plain layout");
+    let created = scoped_zellij(xdg_dir.path())
+        .args(["attach", "--create-background", &name, "options"])
+        .arg("--default-cwd")
+        .arg(cwd.path())
+        .arg("--default-layout")
+        .arg(&layout)
+        .bounded_status()
+        .expect("create plain session");
+    assert!(created.success(), "create-background failed for {name}");
+    wait_for_pane_count(xdg_dir.path(), &name, 1);
+
+    // A wide client: the 50% mis-mount must exceed the `max_cols` cap (72) to
+    // trip the tolerant width trigger — at 240 columns it lands at ~120.
+    let _client = AttachedClient::attach(xdg_dir.path(), &name, 240, 60);
+    let xdg = xdg_dir.path().to_path_buf();
+    wait_for_attached_client(&xdg, &name);
+    let (_stub_dir, stub) = sidebar_command_stub();
+
+    // Recreate the mis-mounted shape against the attached client: a right-side
+    // 50% pane titled like the sidebar, exactly where a raced add left it.
+    let spawned = scoped_zellij(&xdg)
+        .args([
+            "--session",
+            &name,
+            "action",
+            "new-pane",
+            "--direction",
+            "right",
+            "--name",
+            "rimz-sidebar",
+            "--",
+        ])
+        .arg(&stub)
+        .bounded_output()
+        .expect("new-pane");
+    assert!(
+        spawned.status.success(),
+        "new-pane failed: {}",
+        String::from_utf8_lossy(&spawned.stderr),
+    );
+    let panes = wait_for_pane_count(&xdg, &name, 2);
+    assert!(panes.len() >= 2, "sidebar pane should mount: {panes:?}");
+    let before = raw_sidebar_pane(&xdg, &name);
+    let sidebar_id = before.get("id").and_then(|value| value.as_u64()).unwrap();
+    assert!(
+        before.get("pane_x").and_then(|value| value.as_u64()) > Some(0),
+        "the recreated mis-mount starts off the left column: {before}",
+    );
+
+    let mut liveness = rimz::mux::SidebarLiveness::default();
+    liveness.claimed_panes.insert(PaneId::from_parts(
+        MuxName::Zellij,
+        format!("terminal_{sidebar_id}"),
+    ));
+    let report = ZellijBackend::with_runtime_dir(&xdg)
+        .reconcile_sidebars(
+            &SidebarPaneOptions {
+                session_name: name.clone(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-redock")),
+                cwd: std::env::temp_dir(),
+                width: SidebarWidth::default(),
+                birth_size: SidebarWidth::default().birth_size(Some(240)),
+                rimz_bin: stub,
+                replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
+                resume_panes: Vec::new(),
+            },
+            &liveness,
+        )
+        .expect("reconcile_sidebars");
+
+    assert_eq!(report.redocked, 1, "the off-spec claimed sidebar converges");
+    assert_eq!(report.closed, 0, "the renderer's pane is never closed");
+    assert_eq!(report.recovered, 0, "nothing needed adding");
+    assert_eq!(report.failed, 0);
+    assert_sidebar_is_left_thirty_percent(&xdg, &name);
+    let after = raw_sidebar_pane(&xdg, &name);
+    assert_eq!(
+        after.get("id").and_then(|value| value.as_u64()),
+        Some(sidebar_id),
+        "the same pane survived the move — the renderer was never replaced",
+    );
+}
+
 /// The sidebar layout replaces Zellij's default tab template, so it must re-add
 /// the bottom bar plugin itself. Assert the born session actually carries it —
 /// not just that the layout string mentions it.
@@ -795,20 +1100,36 @@ fn sidebar_self_closes_when_its_tab_empties() {
         .expect("create background session");
     assert!(created.success(), "create-background failed for {name}");
 
+    // Watch through an attached PTY client: a detached server under load can
+    // drop the last pane's exit processing outright (verified live — the pane
+    // stays `exited: false` past any deadline and reconciles only on the next
+    // attach), so the close below is observable only with a client present.
+    let session = ZellijSession::attach_existing(xdg, name.clone());
+    let xdg = session.xdg.path();
+    wait_for_attached_client(xdg, &name);
+
     assert!(
-        wait_for_nonplugin_panes(xdg.path(), &name, 2, Duration::from_secs(15)),
+        wait_for_nonplugin_panes(xdg, &name, 2, Duration::from_secs(15)),
         "expected sidebar + terminal before self-close for {name}",
     );
+    // The renderer-owned fact first: the serve process exits once its tab
+    // empties (sleep 3 + one 2s tick + slack; 15s tolerates instrumented runs
+    // at full suite parallelism). Only then assert Zellij's consequence — the
+    // pane closes and the session winds down — which the attached client above
+    // makes processable at all.
     assert!(
-        wait_for_nonplugin_panes(xdg.path(), &name, 0, Duration::from_secs(7)),
-        "lone sidebar did not close promptly after the terminal exited for {name}",
+        wait_for_no_serve_processes(&name, Duration::from_secs(15)),
+        "sidebar serve process did not exit after the terminal left its tab for {name}",
+    );
+    assert!(
+        wait_for_nonplugin_panes(xdg, &name, 0, Duration::from_secs(15)),
+        "lone sidebar pane did not close after its renderer exited for {name}",
     );
 
     // On exit the sidebar removes its heartbeat (RuntimeFileGuard); otherwise it
     // stays mtime-fresh for the TTL and a later `rimz` launch skips relaunch,
     // rebirthing the session with no sidebar. Assert none lingers once gone.
     let heartbeat_dir = xdg
-        .path()
         .join("rimz")
         .join("ws_0123456789abcdef01234567")
         .join("heartbeat");
@@ -851,10 +1172,13 @@ fn wait_for_no_sidebar_heartbeat(dir: &Path, timeout: Duration) -> bool {
 /// Both panes are `close_on_exit`, so each disappears when its command ends.
 fn self_close_layout(session: &str, rimz: &Path, sidebar: &Path, xdg: &Path) -> String {
     let q = |s: String| serde_json::to_string(&s).expect("kdl escape");
-    // Keep the data tick deliberately slow. The test should pass via the
-    // resize-triggered fast self-close probe, not by waiting for the normal
-    // snapshot backstop.
-    let serve = sidebar_serve_command_with_tick(session, rimz, sidebar, xdg, 20);
+    // A short data tick so the snapshot backstop drives the detection. The
+    // resize-triggered fast probe is the accelerator when Zellij delivers the
+    // relayout, but delivery is best-effort — under load the server drops it
+    // even with a client attached (observed live) — and the backstop is the
+    // path the product guarantees. The probe's latch is unit-tested in
+    // `app.rs`.
+    let serve = sidebar_serve_command_with_tick(session, rimz, sidebar, xdg, 2);
     format!(
         r#"layout {{
     default_tab_template split_direction="vertical" {{
@@ -885,8 +1209,15 @@ fn sidebar_serve_command_with_tick(
     xdg: &Path,
     tick_seconds: u64,
 ) -> String {
+    // `HOME` and `XDG_CONFIG_HOME` are scoped like the CLI harness (`Env::rimz`)
+    // scopes them: the snapshot producer otherwise reads the developer's real
+    // per-machine config and walks the real `~/.claude`/`~/.codex` transcript
+    // trees for fleet spending — minutes of cold-cache parsing on a dev box
+    // with a large fleet history, which starves the renderer's first frame and
+    // every deadline below.
     format!(
-        "XDG_STATE_HOME={xdg} XDG_RUNTIME_DIR={xdg} RIMZ_BIN={rimz} \
+        "HOME={xdg} XDG_CONFIG_HOME={xdg} XDG_STATE_HOME={xdg} XDG_RUNTIME_DIR={xdg} \
+         RIMZ_BIN={rimz} \
          exec {sidebar} serve --mux zellij --workspace-id ws_0123456789abcdef01234567 \
          --session-name {session} --tick-seconds {tick_seconds}",
         xdg = xdg.display(),

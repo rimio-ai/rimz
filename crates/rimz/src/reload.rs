@@ -11,6 +11,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::config::{MachineConfig, MultiplexerConfig};
 use crate::ids::{MuxName, PaneId};
@@ -37,6 +38,10 @@ pub struct ReloadOutcome {
     pub dead_swept: usize,
     /// Views whose in-place add failed.
     pub failed: usize,
+    /// Views whose in-place add was deferred (no attached client).
+    pub deferred: usize,
+    /// Kept sidebars re-docked onto the layout's left column / width.
+    pub redocked: usize,
 }
 
 /// Reload and reconcile every running sidebar across all of this user's
@@ -160,12 +165,15 @@ fn reconcile_live(
         config: MultiplexerConfig::from(machine_config),
         resume_panes: Vec::new(),
     };
-    let liveness = crate::sidebar::sidebar_liveness(runtime);
+    let mut liveness = crate::sidebar::sidebar_liveness(runtime);
+    liveness.young_panes = young_sidebar_panes(mux, ws, jiff::Timestamp::now());
     match backend.reconcile_sidebars(&opts, &liveness) {
         Ok(report) => {
             outcome.recovered += report.recovered;
             outcome.closed += report.closed;
             outcome.failed += report.failed;
+            outcome.deferred += report.deferred;
+            outcome.redocked += report.redocked;
         }
         Err(err) => {
             tracing::warn!(session = %ws.session_name, error = %err, "reload: reconcile pass failed");
@@ -175,6 +183,12 @@ fn reconcile_live(
     // 3. Reap orphan sidebar processes whose pane is gone — the mux cannot close a
     //    pane that no longer exists, so a wedged renderer would otherwise linger.
     outcome.reaped += reap_orphan_sidebars(backend.as_ref(), mux, ws);
+
+    // 4. Sweep runtime files whose owner is gone — stale heartbeats and
+    //    ownerless sockets accumulate in a live session too (every SIGKILLed or
+    //    reaped renderer leaves a pair), and the sweep already spares anything
+    //    fresh or still starting.
+    crate::sidebar::sweep_orphan_runtime(runtime);
 }
 
 /// SIGTERM→SIGKILL this user's sidebar *processes* for `ws` whose pane the mux no
@@ -192,19 +206,51 @@ fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorksp
     };
     let procs = crate::proc::list_processes();
     let protected = recovery::protected_pids(&procs, std::process::id());
-    let my_uid = current_uid();
+    let my_uid = recovery::current_uid();
     let orphans: Vec<u32> = procs
         .iter()
         .filter(|proc| proc.real_uid == my_uid)
         .filter(|proc| !protected.contains(&proc.pid))
-        .filter(|proc| is_sidebar_serve(&proc.cmdline, ws.workspace_id.as_str(), &ws.session_name))
-        .filter(|proc| match attributed_pane(proc.pid, mux) {
+        .filter(|proc| {
+            recovery::is_sidebar_serve(&proc.cmdline, ws.workspace_id.as_str(), &ws.session_name)
+        })
+        .filter(|proc| match recovery::attributed_pane(proc.pid, mux) {
             Some(pane) => !live_panes.contains(&pane),
             None => false,
         })
         .map(|proc| proc.pid)
         .collect();
     recovery::kill_pids(&orphans, recovery::SWEEP_GRACE).len()
+}
+
+/// The panes whose sidebar serve process for `ws` was born within
+/// [`crate::sidebar::FRESH_PANE_GRACE`]: a just-added sidebar's first heartbeat
+/// may not have landed yet, so the reconcile planner treats its unclaimed pane
+/// as still starting rather than wedged. Attribution mirrors
+/// [`reap_orphan_sidebars`] (cmdline scope + inherited mux pane env).
+/// `/proc`-backed; empty elsewhere, where the planner just falls back to
+/// close-and-readd.
+fn young_sidebar_panes(mux: MuxName, ws: &KnownWorkspace, now: jiff::Timestamp) -> HashSet<PaneId> {
+    crate::proc::list_processes()
+        .iter()
+        .filter(|proc| {
+            recovery::is_sidebar_serve(&proc.cmdline, ws.workspace_id.as_str(), &ws.session_name)
+        })
+        .filter(|proc| {
+            crate::proc::process_start(proc.pid)
+                .is_some_and(|start| born_recently(start, now, crate::sidebar::FRESH_PANE_GRACE))
+        })
+        .filter_map(|proc| recovery::attributed_pane(proc.pid, mux))
+        .collect()
+}
+
+/// Whether a process born at `start` is still within `grace` of `now` — the
+/// youth predicate behind the fresh-pane grace, pure so the boundary is tested
+/// without `/proc`. A start *after* `now` (clock fuzz on a just-spawned
+/// process) reads as young.
+fn born_recently(start: jiff::Timestamp, now: jiff::Timestamp, grace: Duration) -> bool {
+    let grace = i64::try_from(grace.as_secs()).unwrap_or(0);
+    now.as_second().saturating_sub(start.as_second()) <= grace
 }
 
 /// Both backends' live session names, so a workspace maps to the mux actually
@@ -240,82 +286,29 @@ impl LiveSessions {
     }
 }
 
-/// Whether `cmdline` is one of `(workspace, session)`'s sidebar *serve* processes
-/// — the wrapper `rimz sidebar serve` or the renderer `rimz-sidebar serve` — and
-/// not the mux server or the agent app-server. The exact, path-derived session
-/// name plus the workspace id scope it; `sidebar` + `serve` selects the renderer
-/// pair and excludes `rimz codex app-server serve`.
-fn is_sidebar_serve(cmdline: &str, workspace_id: &str, session_name: &str) -> bool {
-    cmdline.contains(session_name)
-        && cmdline.contains(workspace_id)
-        && cmdline.contains("sidebar")
-        && cmdline.contains("serve")
-}
-
-/// The normalized pane a sidebar process paints, from its inherited mux env var —
-/// the same mapping the renderer applies to its own pane
-/// ([`crate::mux::own_pane_id`]). `None` when the var is absent, so reload never
-/// reaps a process it cannot place.
-fn attributed_pane(pid: u32, mux: MuxName) -> Option<PaneId> {
-    let key = match mux {
-        MuxName::Zellij => "ZELLIJ_PANE_ID",
-        MuxName::Tmux => "TMUX_PANE",
-    };
-    Some(crate::mux::pane_from_env_value(
-        mux,
-        &crate::proc::env_var(pid, key)?,
-    ))
-}
-
-#[cfg(target_os = "linux")]
-fn current_uid() -> u32 {
-    nix::unistd::Uid::current().as_raw()
-}
-
-#[cfg(not(target_os = "linux"))]
-fn current_uid() -> u32 {
-    // No `/proc`, so `list_processes` is empty and this is never compared.
-    u32::MAX
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const SESSION: &str = "rimz-home-marvin-workspace-project-rimz-rimz";
-    const WS: &str = "ws_f89e49906df0621ad2765112";
-
     #[test]
-    fn is_sidebar_serve_matches_wrapper_and_renderer_only() {
-        let wrapper =
-            format!("rimz sidebar serve --mux zellij --workspace-id {WS} --session-name {SESSION}");
-        let renderer = format!(
-            "rimz-sidebar serve --workspace-id {WS} --mux zellij --session-name {SESSION} --tick-seconds 1"
-        );
-        assert!(is_sidebar_serve(&wrapper, WS, SESSION));
-        assert!(is_sidebar_serve(&renderer, WS, SESSION));
-    }
-
-    #[test]
-    fn is_sidebar_serve_excludes_server_and_app_server() {
-        let app_server =
-            format!("rimz codex app-server serve --workspace-id {WS} --session-name {SESSION}");
-        let mux_server =
-            format!("zellij --server /run/user/1000/zellij/contract_version_1/{SESSION}");
+    fn born_recently_holds_inside_the_grace_and_for_clock_fuzz() {
+        let now = jiff::Timestamp::from_second(1_000_000).unwrap();
+        let grace = crate::sidebar::FRESH_PANE_GRACE;
+        let at = |secs_ago: i64| jiff::Timestamp::from_second(1_000_000 - secs_ago).unwrap();
+        assert!(born_recently(at(0), now, grace));
+        assert!(born_recently(
+            at(i64::try_from(grace.as_secs()).unwrap()),
+            now,
+            grace
+        ));
         assert!(
-            !is_sidebar_serve(&app_server, WS, SESSION),
-            "app-server is not a sidebar"
+            !born_recently(at(i64::try_from(grace.as_secs()).unwrap() + 1), now, grace),
+            "one second past the grace is old",
         );
         assert!(
-            !is_sidebar_serve(&mux_server, WS, SESSION),
-            "the mux server is never reaped"
+            born_recently(at(-3), now, grace),
+            "a start after `now` is a just-spawned process under clock fuzz",
         );
-    }
-
-    #[test]
-    fn is_sidebar_serve_is_scoped_to_the_workspace_and_session() {
-        let other_session = "rimz-sidebar serve --workspace-id ws_other --session-name rimz-other";
-        assert!(!is_sidebar_serve(other_session, WS, SESSION));
     }
 
     #[test]
