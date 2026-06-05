@@ -12,7 +12,8 @@ Re-fetch these pages — and, for the app-server, re-run the schema generators �
 
 | Surface | Source |
 | --- | --- |
-| Hooks reference (events, payloads, decision schema) | <https://developers.openai.com/codex/hooks> |
+| Hooks reference (events, payloads, decision schema, trust) | <https://developers.openai.com/codex/hooks> |
+| Hook executor (cwd/env semantics) | <https://github.com/openai/codex/blob/main/codex-rs/hooks/src/engine/command_runner.rs> |
 | Config reference (`notify`, `[tui]` notifications) | <https://developers.openai.com/codex/config-reference> |
 | Advanced config (`notify` payload) | <https://developers.openai.com/codex/config-advanced> |
 | App-server API (protocol, methods, notifications) | <https://developers.openai.com/codex/app-server> |
@@ -30,6 +31,8 @@ codex app-server generate-json-schema --out DIR  # JSON Schema bundle
 
 Codex hooks mirror Claude's shape: a command Codex runs at a lifecycle point, fed a JSON payload on **stdin**, returning a decision on **stdout**. They are wired in `~/.codex/config.toml` as `[[hooks.Event]]` tables. Rimz's [`CodexAdapter`](../../../crates/rimz/src/agents/codex/mod.rs) `INSTALLED_EVENTS` constant is the source of truth for the wired set; the native-event → Rimz status mapping is the [hooks.md Codex appendix](../hooks.md#appendix--codex).
 
+**Execution.** A hook command runs with the **session cwd** as working directory and the **spawning process's environment** (`command_runner.rs`: no `env_clear`, per-handler overlays only). Since 0.137 a plain TUI launch routes hooks through the shared per-user app-server daemon, so the hook child's parent — and its environment — is the daemon's, not the pane's; the mux-stamped identity pin never arrives via env, and Rimz recovers it from the in-pane process instead ([hooks.md → Hooks resolve the room they live in](../hooks.md#hooks-resolve-the-room-they-live-in)).
+
 ### Config shape
 
 ```toml
@@ -45,6 +48,17 @@ statusMessage = "Checking Bash command"
 ```
 
 `matcher` is a regex over the tool name (or source, for `SessionStart`). Default `timeout` is **600** seconds.
+
+### Trust state
+
+Codex requires the user to review and trust each non-managed hook definition before it runs, records trust against the definition's hash, and **silently skips** a new or changed hook until it is trusted — `/hooks` inside Codex is the management UI (`--dangerously-bypass-hook-trust` bypasses for one invocation). Trust lands in the user config as `[hooks.state]` entries keyed `"<config-path>:<event_token>:<i>:<j>"`, the event token in lower_snake:
+
+```toml
+[hooks.state."/home/user/.codex/config.toml:permission_request:0:0"]
+trusted_hash = "sha256:…"
+```
+
+A fresh `rimz hooks install` — or any change to the installed command — is therefore a wired-but-dead channel until the user trusts it inside Codex. Rimz detects the gap presence-only (`untrusted_hook_events_at` matches installed events against the state keys by token; the hash algorithm stays Codex's), and `rimz start`/`rimz doctor` surface the fix ([hooks.md → Appendix Codex](../hooks.md#appendix--codex)).
 
 ### Common input
 

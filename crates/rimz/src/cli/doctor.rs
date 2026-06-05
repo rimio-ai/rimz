@@ -333,7 +333,12 @@ fn report_agent_hooks() {
                         .to_owned(),
                 )
             } else if agent.hooks_installed() {
-                AgentHookDoctorStatus::Installed
+                let untrusted = agent.untrusted_installed_hooks();
+                if untrusted.is_empty() {
+                    AgentHookDoctorStatus::Installed
+                } else {
+                    AgentHookDoctorStatus::InstalledUntrusted(untrusted)
+                }
             } else {
                 AgentHookDoctorStatus::NotInstalled
             };
@@ -353,6 +358,13 @@ fn report_agent_hooks() {
             AgentHookDoctorStatus::NotInstalled => {
                 println!("  hooks install : run `rimz hooks install {name}` to wire {name} agents");
             }
+            AgentHookDoctorStatus::InstalledUntrusted(events) => {
+                println!(
+                    "  hooks trust   : {name} silently skips untrusted hooks ({}) — {}",
+                    events.join(", "),
+                    rimz::agents::hook_trust_fix(name),
+                );
+            }
             AgentHookDoctorStatus::Unsupported(reason) => {
                 println!("  hooks install : {name} unsupported ({reason})");
             }
@@ -363,6 +375,8 @@ fn report_agent_hooks() {
 
 enum AgentHookDoctorStatus {
     Installed,
+    /// Installed, but the agent's own trust gate still skips these events.
+    InstalledUntrusted(Vec<String>),
     NotInstalled,
     Unsupported(String),
 }
@@ -371,6 +385,7 @@ impl AgentHookDoctorStatus {
     fn label(&self) -> &'static str {
         match self {
             Self::Installed => "installed",
+            Self::InstalledUntrusted(_) => "installed, untrusted",
             Self::NotInstalled => "not installed",
             Self::Unsupported(_) => "unsupported",
         }

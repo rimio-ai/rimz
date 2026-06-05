@@ -413,6 +413,21 @@ pub trait AgentAdapter: Send + Sync {
     fn hooks_installed(&self) -> bool {
         false
     }
+
+    /// Rimz-installed hook events this agent will silently skip until the
+    /// user trusts them in the agent's own UI. Empty for agents without a
+    /// trust gate; Codex overrides it from `[hooks.state]` in its config.
+    /// Rimz cannot trust on the user's behalf, so `rimz start` and
+    /// `rimz doctor` surface the fix ([`hook_trust_fix`]) instead.
+    fn untrusted_installed_hooks(&self) -> Vec<String> {
+        Vec::new()
+    }
+}
+
+/// One-line fix for an installed-but-untrusted hook set, shared by the
+/// `rimz start` notice and `rimz doctor`.
+pub fn hook_trust_fix(kind: &str) -> String {
+    format!("run /hooks inside {kind} and trust the Rimz hooks")
 }
 
 /// Resolve an agent's per-user config file path. An explicit `override_env`

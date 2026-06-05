@@ -395,6 +395,12 @@ impl AgentAdapter for CodexAdapter {
         codex_config_path().is_ok_and(|path| hooks_installed_at(&path))
     }
 
+    fn untrusted_installed_hooks(&self) -> Vec<String> {
+        codex_config_path()
+            .map(|path| untrusted_hook_events_at(&path))
+            .unwrap_or_default()
+    }
+
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
         account::probe()
     }
@@ -853,6 +859,50 @@ fn hooks_installed_at(path: &std::path::Path) -> bool {
     INSTALLED_EVENTS
         .iter()
         .all(|(event, _)| has_rimz_hook_command(&root, event))
+}
+
+/// Rimz-installed hook events Codex has not yet trusted. Codex records trust
+/// per hook-definition hash under `[hooks.state]`
+/// (`"<config-path>:<event_token>:<i>:<j>"` keys) and **silently skips** an
+/// untrusted hook, so an installed-but-untrusted event is a dead channel only
+/// the user can open (`/hooks` inside Codex). Presence-only by token: a hash
+/// mismatch is Codex's to re-flag, and mirroring its hash algorithm would
+/// couple Rimz to an upstream internal.
+fn untrusted_hook_events_at(path: &std::path::Path) -> Vec<String> {
+    let Ok(root) = read_existing_table(path) else {
+        return Vec::new();
+    };
+    let state = root
+        .get(HOOKS_TABLE)
+        .and_then(toml::Value::as_table)
+        .and_then(|hooks| hooks.get("state"))
+        .and_then(toml::Value::as_table);
+    INSTALLED_EVENTS
+        .iter()
+        .filter(|(event, _)| has_rimz_hook_command(&root, event))
+        .filter(|(event, _)| {
+            let needle = format!(":{}:", snake_event_token(event));
+            !state.is_some_and(|state| state.keys().any(|key| key.contains(&needle)))
+        })
+        .map(|(event, _)| (*event).to_owned())
+        .collect()
+}
+
+/// Codex's `[hooks.state]` event token: the hook event name in lower_snake
+/// (`PermissionRequest` → `permission_request`), as Codex writes it.
+fn snake_event_token(event: &str) -> String {
+    let mut out = String::with_capacity(event.len() + 4);
+    for (i, c) in event.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn read_existing_table(path: &std::path::Path) -> Result<toml::Table> {

@@ -256,7 +256,10 @@ fn ensure_detected_agent_hooks() -> Result<()> {
 
         if !agent.hooks_installed() {
             missing.push(agent.preview_hook_install()?);
+            continue;
         }
+
+        warn_untrusted_hooks(descriptor.kind, &agent.untrusted_installed_hooks())?;
     }
 
     if missing.is_empty() {
@@ -271,15 +274,39 @@ fn ensure_detected_agent_hooks() -> Result<()> {
     for name in approve_hook_install(&missing)? {
         let agent = rimz::agents::adapter_by_kind(name)?;
         let report = agent.install_hooks()?;
-        let mut stderr = std::io::stderr().lock();
-        writeln!(
-            stderr,
-            "Installed {} hooks at {}",
-            report.agent,
-            report.config_path.display(),
-        )?;
+        {
+            let mut stderr = std::io::stderr().lock();
+            writeln!(
+                stderr,
+                "Installed {} hooks at {}",
+                report.agent,
+                report.config_path.display(),
+            )?;
+        }
+        // A fresh install lands untrusted, so the notice must follow it here
+        // — the user is one `/hooks` away from a live channel, not done.
+        warn_untrusted_hooks(name, &agent.untrusted_installed_hooks())?;
     }
 
+    Ok(())
+}
+
+/// Stderr notice for hooks the agent's own trust gate still skips: the gate
+/// silences every untrusted hook with no signal of its own, so the start
+/// notice is where the dead channel becomes visible. Rimz cannot trust on
+/// the user's behalf — only the agent's own UI can — so this warns with the
+/// fix rather than gating the start. No-op when `untrusted` is empty.
+fn warn_untrusted_hooks(kind: &str, untrusted: &[String]) -> Result<()> {
+    if untrusted.is_empty() {
+        return Ok(());
+    }
+    let mut stderr = std::io::stderr().lock();
+    writeln!(
+        stderr,
+        "{kind} hooks are installed but untrusted ({}) — {kind} silently skips them; {}",
+        untrusted.join(", "),
+        rimz::agents::hook_trust_fix(kind),
+    )?;
     Ok(())
 }
 

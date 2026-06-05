@@ -40,7 +40,7 @@ Backend-specific fast paths cannot become correctness requirements. If a feature
 
 ### The identity pin
 
-Session birth stamps the room's identity — `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT` ([`pin_env`](../../crates/rimz/src/workspace.rs)) — into the session environment, so every pane, and so every agent and its hook children, inherits the workspace it lives in ([hooks.md → participant resolution](./hooks.md#hooks-resolve-the-room-they-live-in)). Each backend pins at its birth seam:
+Session birth stamps the room's identity — `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT` ([`pin_env`](../../crates/rimz/src/workspace.rs)) — into the session environment, so every pane, and so every agent and its in-pane hook children, inherits the workspace it lives in; a daemon-routed hook misses the env pin and recovers it from the in-pane agent process ([hooks.md → participant resolution](./hooks.md#hooks-resolve-the-room-they-live-in)). Each backend pins at its birth seam:
 
 - **tmux** sets the pair with `new-session -e`, so the first window's panes already carry it, and re-asserts it idempotently with `set-environment -t` on every ensure — `-A` on a live session ignores `-e` (the same shape as the `-x`/`-y` caveat), and `set-environment` reaches only panes created after it runs.
 - **Zellij** carries the pair on the spawning client's environment: the per-session server forks from that command and every pane forks from the server, so inheritance is transitive. Zellij has no post-birth `set-environment`, so birth is the one stamping point — the honest asymmetry: a session born before the pin existed keeps its old environment, and its participants fall back to the static resolution ladder.

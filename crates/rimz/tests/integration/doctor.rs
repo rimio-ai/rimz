@@ -206,6 +206,71 @@ fn doctor_reports_agent_hooks_installed_after_wiring() {
     );
 }
 
+/// Append `[hooks.state]` trust entries for every Rimz-installed codex event,
+/// key-shaped exactly as Codex writes them after the user trusts via /hooks.
+fn trust_codex_hooks(env: &Env) {
+    let config = env.agent_config_path("codex");
+    let mut text = std::fs::read_to_string(&config).expect("read codex config");
+    for token in [
+        "session_start",
+        "user_prompt_submit",
+        "subagent_start",
+        "subagent_stop",
+        "stop",
+        "permission_request",
+        "pre_tool_use",
+        "post_tool_use",
+    ] {
+        text.push_str(&format!(
+            "\n[hooks.state.\"{}:{token}:0:0\"]\ntrusted_hash = \"sha256:deadbeef\"\n",
+            config.display(),
+        ));
+    }
+    std::fs::write(&config, text).expect("write trust state");
+}
+
+#[test]
+fn doctor_reports_untrusted_codex_hooks_with_the_fix() {
+    // Codex silently skips installed-but-untrusted hooks, so a fresh install
+    // is a dead channel until the user trusts it inside Codex — doctor is
+    // where that gap and its fix become visible.
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+
+    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+
+    assert!(
+        stdout.contains("codex installed, untrusted"),
+        "freshly installed hooks are untrusted until /hooks:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("run /hooks inside codex and trust the Rimz hooks"),
+        "doctor names the fix:\n{stdout}"
+    );
+}
+
+#[test]
+fn doctor_trust_line_clears_once_codex_hooks_are_trusted() {
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
+
+    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+
+    assert!(
+        stdout.contains("codex installed") && !stdout.contains("untrusted"),
+        "trusted hooks read plain installed:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("hooks trust"),
+        "no trust-fix line once trusted:\n{stdout}"
+    );
+}
+
 #[test]
 fn doctor_reports_protocol_version_mismatches() {
     let env = Env::new();

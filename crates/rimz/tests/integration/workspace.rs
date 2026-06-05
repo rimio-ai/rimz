@@ -246,6 +246,109 @@ fn corrupt_pin_falls_back_to_the_repo_workspace() {
     );
 }
 
+/// A fake in-pane `codex` carrying the room's pin: a sleeper script whose
+/// kernel `comm` is the script name `codex`, parked at `cwd` with the pin in
+/// its environment — the sibling process a daemon-routed hook recovers from.
+/// Killed on drop so a failing assertion never leaks the sleeper.
+#[cfg(target_os = "linux")]
+struct SiblingAgent {
+    child: std::process::Child,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for SiblingAgent {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_sibling_codex(env: &Env, cwd: &std::path::Path) -> SiblingAgent {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script = env.home_root.join("codex");
+    // Plain `sleep` (no `exec`) keeps the interpreter — and so the `codex`
+    // comm — alive for the scan.
+    std::fs::write(&script, "#!/bin/sh\nsleep 30\n").expect("write sibling script");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let child = std::process::Command::new(&script)
+        .current_dir(cwd)
+        .env(rimz::workspace::ENV_WORKSPACE_ID, env.workspace_id.as_str())
+        .env(rimz::workspace::ENV_PROJECT_ROOT, &env.project_root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn sibling codex");
+
+    // `spawn` returns at fork; wait for the exec so the kernel comm reads
+    // `codex` before the hook scans /proc.
+    let sibling = SiblingAgent { child };
+    let comm_path = format!("/proc/{}/comm", sibling.child.id());
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::fs::read_to_string(&comm_path) {
+            Ok(comm) if comm.trim() == "codex" => break,
+            _ => {
+                assert!(std::time::Instant::now() < deadline, "sibling never exec'd");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+    sibling
+}
+
+#[test]
+fn codex_hook_recovers_pin_from_sibling_process_when_env_pin_absent() {
+    // The daemon-routed regression this guards: Codex's per-user app-server
+    // spawns hook children with the daemon's env — no session pin — and the
+    // session cwd. Without recovery the static ladder mints a workspace at
+    // the cwd (`cd ~; codex` lands in a hidden `$HOME` ledger the room's
+    // sidebar never reads); recovery adopts the pin from the in-pane agent
+    // process sharing that cwd.
+    #[cfg(not(target_os = "linux"))]
+    {
+        tracing::warn!("skipping: /proc recovery is Linux-only");
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let env = Env::new();
+        // The agent's launch dir sits outside the room root, like `$HOME`.
+        let elsewhere = env.home_root.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).expect("mkdir elsewhere");
+        let _sibling = spawn_sibling_codex(&env, &elsewhere);
+
+        // The harness scrubs the pin from the hook's own env (`Env::rimz`),
+        // exactly like a daemon-spawned hook child.
+        let mut cmd = env.hook_command("codex");
+        cmd.current_dir(&elsewhere);
+        let output = env
+            .spawn_payload(cmd, &crate::common::codex_permission_payload())
+            .wait_with_output()
+            .expect("wait hook");
+        assert!(
+            output.status.success(),
+            "hook failed: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+
+        let pinned = env.state_path_for(&env.project_root);
+        let stray = env.state_path_for(&elsewhere);
+        let events = std::fs::read_to_string(&pinned.events_log)
+            .expect("the recovered pin routes the hook into the room's ledger");
+        assert!(
+            events.contains("\"source\":\"codex\""),
+            "the room's ledger holds the codex hook event:\n{events}",
+        );
+        assert!(
+            !stray.events_log.exists(),
+            "no hidden cwd-derived ledger appears beside the room",
+        );
+    }
+}
+
 #[test]
 fn doctor_reports_the_room_tree_with_root_classes() {
     let env = Env::new();

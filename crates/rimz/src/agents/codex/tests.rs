@@ -749,3 +749,83 @@ fn find_session_transcript_walks_codex_date_hierarchy() {
     assert_eq!(found, expected);
     assert!(find_session_transcript_under(dir.path(), "sess-missing").is_none());
 }
+
+// --- the hook trust gate ---
+//
+// Codex records trust per hook-definition hash under `[hooks.state]` and
+// silently skips an untrusted hook; these pin the presence-only detection
+// that lets `rimz start` and `rimz doctor` surface the dead channel.
+
+/// Append a `[hooks.state]` trust entry for `token`, key-shaped exactly as
+/// Codex writes it: `"<config-path>:<event_token>:<i>:<j>"`.
+fn trust_event(path: &std::path::Path, token: &str) {
+    let entry = format!(
+        "\n[hooks.state.\"{}:{token}:0:0\"]\ntrusted_hash = \"sha256:deadbeef\"\n",
+        path.display(),
+    );
+    let mut text = std::fs::read_to_string(path).unwrap();
+    text.push_str(&entry);
+    std::fs::write(path, text).unwrap();
+}
+
+#[test]
+fn untrusted_hooks_report_every_installed_event_when_state_is_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    install_into(&path).unwrap();
+
+    let expected: Vec<String> = INSTALLED_EVENTS
+        .iter()
+        .map(|(event, _)| (*event).to_owned())
+        .collect();
+    assert_eq!(untrusted_hook_events_at(&path), expected);
+}
+
+#[test]
+fn untrusted_hooks_empty_when_every_event_is_trusted() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    install_into(&path).unwrap();
+    for (event, _) in INSTALLED_EVENTS {
+        trust_event(&path, &snake_event_token(event));
+    }
+
+    assert_eq!(untrusted_hook_events_at(&path), Vec::<String>::new());
+}
+
+#[test]
+fn untrusted_hooks_report_the_exact_missing_subset() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    install_into(&path).unwrap();
+    for (event, _) in INSTALLED_EVENTS {
+        // `subagent_stop` trusted while `stop` is not also proves the token
+        // match is colon-delimited, not substring-loose.
+        if *event != "Stop" && *event != "PermissionRequest" {
+            trust_event(&path, &snake_event_token(event));
+        }
+    }
+
+    assert_eq!(
+        untrusted_hook_events_at(&path),
+        vec!["Stop".to_owned(), "PermissionRequest".to_owned()],
+    );
+}
+
+#[test]
+fn untrusted_hooks_empty_when_rimz_hooks_are_not_installed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "model = \"gpt-5.5\"\n").unwrap();
+
+    assert_eq!(untrusted_hook_events_at(&path), Vec::<String>::new());
+}
+
+#[test]
+fn snake_event_token_matches_codex_state_keys() {
+    assert_eq!(snake_event_token("PermissionRequest"), "permission_request");
+    assert_eq!(snake_event_token("PreToolUse"), "pre_tool_use");
+    assert_eq!(snake_event_token("SessionStart"), "session_start");
+    assert_eq!(snake_event_token("Stop"), "stop");
+    assert_eq!(snake_event_token("SubagentStop"), "subagent_stop");
+}

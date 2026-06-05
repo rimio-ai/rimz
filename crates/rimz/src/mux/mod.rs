@@ -86,7 +86,10 @@ pub struct SessionOptions {
     pub session_name: String,
     /// The room's identity, stamped into the session environment at birth
     /// ([`crate::workspace::pin_env`]) so every pane — and so every agent and
-    /// its hook children — inherits the workspace it lives in.
+    /// its in-pane hook children — inherits the workspace it lives in. A
+    /// daemon-routed hook child inherits its daemon's env instead; resolution
+    /// recovers the pin from the in-pane agent process
+    /// ([`crate::workspace::WorkspaceResolver::resolve_participant_with_pin_recovery`]).
     pub workspace_id: WorkspaceId,
     pub project_root: PathBuf,
     pub cwd: PathBuf,
