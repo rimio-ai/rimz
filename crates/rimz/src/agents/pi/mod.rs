@@ -59,7 +59,7 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "pi",
     display_name: "Pi",
     brand: Brand {
-        emblem: "\
+        emblem: "
  █▜███▛█
 ▝▜▛▀▀▀▜▛▘
  ▝▘   ▝▘",

@@ -68,7 +68,7 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "codex",
     display_name: "Codex",
     brand: Brand {
-        emblem: "\
+        emblem: "
  ▗▛███▜▖
 ▐▜▌ ▚ ▐▛▌
  ▝▀▀▀▀▀▘",

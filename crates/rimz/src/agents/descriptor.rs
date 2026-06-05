@@ -77,7 +77,10 @@ pub enum ThreadKey {
 /// Brand styling for the provider dashboard panel.
 #[derive(Debug)]
 pub struct Brand {
-    /// Multi-line ASCII emblem, written as drawn (one row per line).
+    /// Multi-line ASCII emblem, written as drawn (one row per line). The
+    /// literal opens with a bare newline so the art starts at column 0 with
+    /// its leading spaces intact — a `\` continuation would eat them — and
+    /// the read path trims the surrounding newlines.
     pub emblem: &'static str,
     /// 256-color index.
     pub color: u8,

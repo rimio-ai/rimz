@@ -1282,6 +1282,7 @@ fn default_provider_style(kind: &str) -> (String, Vec<String>, u8) {
             descriptor
                 .brand
                 .emblem
+                .trim_matches('\n')
                 .lines()
                 .map(ToOwned::to_owned)
                 .collect(),

@@ -63,7 +63,7 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "claude",
     display_name: "Claude",
     brand: Brand {
-        emblem: "\
+        emblem: "
  ▐▛███▜▌
 ▝▜█████▛▘
   ▘▘ ▝▝",
