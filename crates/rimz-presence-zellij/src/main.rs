@@ -87,15 +87,15 @@ mod shell {
             false // headless: never render
         }
 
-        fn pipe(&mut self, pipe_message: PipeMessage) -> bool {
+        fn pipe(&mut self, _pipe_message: PipeMessage) -> bool {
             // The launch channel: rimz loads this plugin via `zellij pipe
             // --plugin`, the one load verb that works on a clientless session.
-            // The CLI blocks until the message is consumed — unblock it
-            // immediately so the launching fork never hangs (the message
-            // itself carries nothing; loading was the point).
-            if let PipeSource::Cli(ref name) = pipe_message.source {
-                unblock_cli_pipe_input(name);
-            }
+            // The message carries nothing — loading was the point — and
+            // delivery itself releases the CLI (an explicit
+            // `unblock_cli_pipe_input` would need a third permission,
+            // `ReadCliPipes`, for nothing). The CLI blocks only while the
+            // launch is permission-pending, which rimz bounds with its
+            // command deadline.
             false // headless: never render
         }
     }
