@@ -37,7 +37,7 @@ runtime directory ($XDG_RUNTIME_DIR/rimz/<id>/)
   heartbeat/resolver.<resolver_id>.json
 ```
 
-The CLI and hook subprocesses are the only durable-state writers. The sidebar reads through `rimz sidebar snapshot` and never touches ledger files. There is no Rimz daemon. The per-instance sidebar socket is the wakeup channel of record; backend-specific fast paths are latency hints layered over it ([multiplexers.md](./docs/internals/multiplexers.md)).
+The CLI and hook subprocesses are the only durable-state writers. The sidebar reads ledger state in process, read-only; the elder renderer additionally writes the shared runtime caches through `sidebar::produce`, and `rimz sidebar snapshot` is the same pipeline's one-shot inspection surface. There is no Rimz daemon. The per-instance sidebar socket is the wakeup channel of record; backend-specific fast paths are latency hints layered over it ([multiplexers.md](./docs/internals/multiplexers.md)).
 
 ## State ownership
 
@@ -86,7 +86,7 @@ Contracts live in the layered `AGENTS.md` files — the root contract plus a loc
 | `src/mux/` | the Zellij/tmux seam: `MuxBackend`, bounded subprocess engine, reconcile planner, recovery | [contract](./crates/rimz/src/mux/AGENTS.md) · [multiplexers.md](./docs/internals/multiplexers.md) |
 | `src/agents/` | the agent integration layer: adapter trait, registry, per-provider adapters, spend/pricing/account | [contract](./crates/rimz/src/agents/AGENTS.md) · [hooks.md](./docs/internals/hooks.md) |
 | `src/resolver/` | per-machine allowlist, heartbeat freshness, TOCTOU restat | [resolvers.md](./docs/internals/resolvers.md) |
-| `src/sidebar/` | producer-side sidebar liveness: producer election, heartbeats, published-snapshot reads | [sidebar.md](./docs/internals/sidebar.md) · [performance.md](./docs/internals/performance.md) |
+| `src/sidebar/` | sidebar data plane: producer election, heartbeats, the in-process consumer read, the shared enrichment fold, and the produce pipeline (`produce/` — panes, metrics, git, spending) | [sidebar.md](./docs/internals/sidebar.md) · [performance.md](./docs/internals/performance.md) |
 | `src/schema/` | event envelope, heartbeat shape, protocol-version constants | [ledger.md](./docs/internals/ledger.md) |
 
 Top-level domain modules are one file each, their `//!` headers carrying the detail: `workspace` (project identity), `trust` (executable-surface hash and grant state; [trust.md](./docs/internals/trust.md)), `feed` (item lifecycle, surfaces, statuses), `bridge` (per-request sockets, nonce validation), `ids` (typed identifier newtypes), `resume` (resume-on-rebirth planner), `remote` and `remote_control` (SSH attach, agent remote-control launch), `config` (per-machine settings), `agent_activity` (liveness hints), `proc` (`/proc` reader), `reload` (binary-upgrade convergence).

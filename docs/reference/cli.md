@@ -155,7 +155,7 @@ Hooks, the sidebar, the statusline, and other Rimz processes invoke these. You r
 
 ```sh
 rimz ping                                          # liveness check; prints `ok`
-rimz sidebar snapshot --workspace-id <id> [--json] # the shared view-model JSON
+rimz sidebar snapshot --workspace-id <id> [--json] # the view-model JSON (inspection; the plugin rail's read)
 rimz sidebar serve ...                             # the terminal sidebar renderer
 rimz sidebar wake --reason <r> [--workspace-id <id>] # Zellij presence-plugin poke (stamp + eldest nudge)
 rimz statusline feed --source <agent>              # captures statusline context
