@@ -30,6 +30,7 @@ pub(super) use cockpit::{cockpit_spend_line, cockpit_summary_line};
 pub(super) use fleet::{first_run_hint_lines, fleet_header_lines, fleet_size};
 #[cfg(test)]
 pub(super) use process::proc_stats_spans;
+pub(crate) use provider::ProviderTabHit;
 pub(super) use provider::{fleet_ledger_lines, provider_panel_lines};
 pub(super) use worktree::worktree_group_lines;
 

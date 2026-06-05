@@ -152,33 +152,114 @@ fn wm_row(
     pin_right(left, right, width)
 }
 
-/// The pinned per-provider dashboard: one block per provider (`Claude`,
-/// `Codex`, …), each a header line then the brand emblem zipped against the
-/// aggregate stats and the account-scoped budget bars. A metered account drains
-/// one "mana" bar per budget window toward its reset; an unmetered (API-key)
-/// account shows the `∞` "infinite power" bar in the label slot with no countdown. The bars
-/// share one start and one end column across every block, so the whole
-/// dashboard reads as one aligned grid. Bottom chrome — never a jump target.
+/// One clickable tab in the dashboard's tab bar: the tab-bar line's position,
+/// the half-open column range its label occupies, and the provider kind it
+/// activates. [`provider_panel_lines`] emits positions relative to its returned
+/// lines and columns relative to the unpadded content; `compose_lines`
+/// translates both into absolute screen coordinates (the bottom-block base and
+/// the one-cell chrome gutter) before storing them on `UiState::tab_hits` for
+/// the mouse hit-test.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProviderTabHit {
+    pub(crate) line: usize,
+    pub(crate) col_start: u16,
+    pub(crate) col_end: u16,
+    pub(crate) kind: String,
+}
+
+/// The pinned per-provider dashboard. With one account it is that provider's
+/// block — a header line then the brand emblem zipped against the aggregate
+/// stats and the account-scoped budget bars. With several it is **tabbed**: a
+/// tab bar of agent-kind labels (each in its brand color, the active tab led by
+/// a `▸` marker so the pick survives `NO_COLOR` by shape) over the active
+/// provider's block alone — the budgets read one account at a time instead of
+/// stacking. A metered account drains one "mana" bar per budget window toward
+/// its reset; an unmetered (API-key) account shows the `∞` "infinite power" bar
+/// in the label slot with no countdown. The bars share one start and one end
+/// column across every block, so the dashboard reads as one aligned grid.
+/// Bottom chrome — the tab labels are its only hit targets, never a jump.
 pub(in crate::render) fn provider_panel_lines(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
+    active_kind: Option<&str>,
     width: usize,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
     let mut lines = Vec::new();
-    for (index, panel) in providers.iter().enumerate() {
-        // A blank line sets each provider block apart, so two providers read as
-        // two distinct cards rather than one dense slab.
-        if index > 0 {
-            lines.push(Line::from(""));
-        }
-        lines.push(provider_header_line(theme, panel, width));
-        // A blank line below the provider name sets the identity apart from the
-        // emblem + stats body, matching the cockpit's breathing room.
-        lines.push(Line::from(""));
-        lines.extend(provider_body_lines(theme, panel, width));
+    let Some(first) = providers.first() else {
+        return (lines, Vec::new());
+    };
+    let active = active_kind
+        .and_then(|kind| providers.iter().find(|panel| panel.kind == kind))
+        .unwrap_or(first);
+    let mut hits = Vec::new();
+    if providers.len() > 1 {
+        let (tab_line, tab_hits) = provider_tab_line(theme, providers, &active.kind, width);
+        hits = tab_hits;
+        lines.push(tab_line);
     }
-    lines
+    lines.push(provider_header_line(theme, active, width));
+    // A blank line below the provider name sets the identity apart from the
+    // emblem + stats body, matching the cockpit's breathing room.
+    lines.push(Line::from(""));
+    lines.extend(provider_body_lines(theme, active, width));
+    (lines, hits)
 }
+
+/// The dashboard's tab bar: every provider's kind label in its brand color,
+/// the active tab bold behind a `▸` marker, the rest dim. Each tab reserves
+/// the marker cell whether or not it is active, so switching tabs never shifts
+/// a label — the bar holds still and only the marker and weight move. The bar
+/// holds to one screen row: a tab that would overflow `width` is dropped
+/// whole (label and hit together), so the hit map stays in lockstep with the
+/// frame however many kinds register or however narrow the pane. Returns the
+/// line plus one [`ProviderTabHit`] per rendered label (line index 0, columns
+/// over the marker + label cells) for the mouse hit-test.
+fn provider_tab_line(
+    theme: &Theme,
+    providers: &[SidebarProviderPanel],
+    active_kind: &str,
+    width: usize,
+) -> (Line<'static>, Vec<ProviderTabHit>) {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut hits = Vec::new();
+    let mut col: u16 = 0;
+    for (index, panel) in providers.iter().enumerate() {
+        let gap: u16 = if index > 0 { 2 } else { 0 };
+        let active = panel.kind == active_kind;
+        let label = if active {
+            format!("{TAB_MARKER}{}", panel.kind)
+        } else {
+            format!(" {}", panel.kind)
+        };
+        // Kind labels are registry-fixed ASCII slugs, so chars == cells.
+        let cells = label.chars().count() as u16;
+        if usize::from(col + gap + cells) > width {
+            break;
+        }
+        if gap > 0 {
+            spans.push(Span::raw("  "));
+            col += gap;
+        }
+        let style = if active {
+            theme.style(Color::Indexed(panel.color), Modifier::BOLD)
+        } else {
+            theme.style(Color::Indexed(panel.color), Modifier::DIM)
+        };
+        spans.push(Span::styled(label, style));
+        hits.push(ProviderTabHit {
+            line: 0,
+            col_start: col,
+            col_end: col + cells,
+            kind: panel.kind.clone(),
+        });
+        col += cells;
+    }
+    (Line::from(spans), hits)
+}
+
+/// The active-tab marker: the lead cell every tab reserves, filled on the
+/// active one — the pick's `NO_COLOR`-surviving shape.
+const TAB_MARKER: char = '▸';
 
 /// `Claude v2.1.158 · Claude Max          ⇅ rc`: the product name in the
 /// brand color and the version + plan dim on the left, with the violet `⇅ rc`
@@ -250,15 +331,19 @@ fn provider_body_lines(
     lines
 }
 
-/// The provider's aggregate stats line beside the emblem: today's token
-/// breakdown `◇ ↘ ↗ ◍ ◌` (integer magnitudes) on the left, the bold money-green
-/// spend pinned to the right edge of the bar `region`. Always rendered — an idle
-/// account reads `◇ 0 …  $0.00` so the line above the budget bars is never blank.
-/// Every figure is today's transcript-history burn for this provider, summed
-/// across every session from the JSONL — the accurate cross-session total, and
-/// the only cost source for token-only providers like Codex. The summed `+/-`
-/// churn is intentionally absent — a noisy per-account aggregate; per-worktree
-/// churn lives on the group headers and per-agent churn on the work line.
+/// The provider's aggregate stats line beside the emblem: today's `◎` session
+/// count then the token breakdown `◇ ↘ ↗ ◌` (integer magnitudes) on the
+/// left — the fleet-ledger rows' exact vocabulary, scoped to this provider —
+/// with the bold money-green spend pinned to the right edge of the bar
+/// `region`. Always rendered — an idle account reads `◎ 0  ◇ 0 …  $0.00` so
+/// the line above the budget bars is never blank. Every figure is today's
+/// transcript-history burn for this provider, summed across every session from
+/// the JSONL — the accurate cross-session total, and the only cost source for
+/// token-only providers like Codex. The `◍` cache-write figure is omitted like
+/// the ledger rows' — the line keeps to the headline figures so the `◎` count
+/// fits beside the emblem. The summed `+/-` churn is intentionally absent —
+/// a noisy per-account aggregate; per-worktree churn lives on the group
+/// headers and per-agent churn on the work line.
 fn provider_stats_spans(
     theme: &Theme,
     panel: &SidebarProviderPanel,
@@ -269,7 +354,12 @@ fn provider_stats_spans(
         .as_ref()
         .map(|spending| spending.today)
         .unwrap_or_default();
-    let left = token_breakdown_spans(
+    let mut left = vec![
+        Span::styled(SESSIONS_GLYPH, theme.style(Color::Cyan, Modifier::empty())),
+        Span::styled(format!(" {}", today.sessions), theme.value()),
+        Span::raw("  "),
+    ];
+    left.extend(token_breakdown_spans(
         theme,
         today.tokens,
         today.input,
@@ -277,8 +367,8 @@ fn provider_stats_spans(
         today.cache_write,
         today.cache_read,
         tokens_int,
-        true,
-    );
+        false,
+    ));
     let right = vec![Span::styled(
         dollars2(today.usd),
         theme.style(Color::Green, Modifier::BOLD),

@@ -29,7 +29,7 @@ A real room: one Claude agent working in `main`, its card selected, with the per
  ────────────────────────────────────────────────────
  Claude v2.1.158 · Claude Max                    ⇅ rc    ← provider · plan · remote-control flag
                                                          ← blank line below the name
-  ▐▛███▜▌  ◇ 486k ↘ 64k ↗ 422k ◍ 12k ◌ 68k      $3.50    ← brand emblem · today's tokens · spend
+  ▐▛███▜▌  ◎ 12  ◇ 486k ↘ 64k ↗ 422k ◌ 68k      $3.50    ← brand emblem · sessions · today's tokens · spend
  ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ ↻ 2h06m    ← 5-hour budget left, until reset
    ▘▘ ▝▝   7d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h    ← 7-day budget left, until reset
 
@@ -90,7 +90,7 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `≡ main`          | worktree fully landed on the trunk — zero ahead, zero diff, safe to remove (behind doesn't count against it); the trunk worktree itself never wears it |
 | `●●●○○ 3/5`       | todo progress |
 | `$1.27`           | spend — money-green, always two decimals; omitted while a session's cost still rounds to zero |
-| `▰▱` / `∞`        | provider budget bar (fill = left) / unmetered account — the `∞` icon and its empty track share the provider's brand color |
+| `▰▱` / `∞`        | provider budget bar (fill = left), draining green → yellow → amber → red by what remains / unmetered account — the `∞` icon and its empty track share the provider's brand color |
 | `↻ 2h06m`         | when that budget resets |
 
 **Structure and chrome.**
@@ -108,6 +108,7 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `┄ commands ┄`  | the seam between a worktree's agent cards and its process rows |
 | `─`             | a section hairline |
 | `▐` / `▕`       | the cards' scrollbar — thumb / track, riding the right margin when the cards overflow the viewport |
+| `▸claude`       | the provider dashboard's active tab — the marker fills a lead cell every tab reserves, so the pick reads by shape and the bar never shifts |
 | `⇅ rc`          | remote control is on for that provider |
 
 ## Zone 1 — the cockpit
@@ -274,47 +275,52 @@ You don't read where to go; you go. Selecting a row focuses that pane — no mux
 - `↑/↓` select a row, `↵` jump to it.
 - `1`–`9` jump by the row's visible position.
 - `␣` jump to the **next thing that needs you** — the oldest waiting/failed row, without selecting first. One key tames a fleet; press again for the next.
+- `←/→` switch the provider dashboard's tab — a pick in place, never a jump.
 - A click anywhere in a card's block jumps to it.
 - The mouse wheel scrolls the card list without moving the selection; the next selection change snaps the view back to the selected card.
 
 ## Zone 3 — the provider dashboard
 
-The budgets are account-scoped — every session of a provider shares one account's budget — so they leave the rows for a pinned panel at the bottom. One block per provider, including any account that is logged in but idle this run, so your accounts and budgets show even between turns. Each provider shows one bar per window it reports — both Claude and Codex a 5-hour and a 7-day — so the dashboard tracks whatever windows a provider exposes. Codex budgets are pulled out-of-band from the app-server: active sessions refresh during long turns, and a logged-in idle account refreshes from the shared cache path.
+The budgets are account-scoped — every session of a provider shares one account's budget — so they leave the rows for a pinned panel at the bottom. With several accounts the panel is **tabbed**: a tab bar names every provider by its agent kind (each label in its brand color, the active tab bold behind a `▸` marker), and one account's block paints at a time, so the budgets read one account deep instead of stacking. The active tab **follows the selected pane's provider** — select a codex pane and the dashboard reads the ChatGPT account behind it; a process pane falls to the first tab. `←`/`→` or a click on a tab label picks one by hand; the pick holds until you select a pane of a *different* provider, then the follow-the-selection default takes over. A single account keeps its bare block — nothing to switch, no tab bar. Every account that is logged in but idle this run still earns its tab, so your accounts and budgets show even between turns. Each provider shows one bar per window it reports — both Claude and Codex a 5-hour and a 7-day — so the dashboard tracks whatever windows a provider exposes. Codex budgets are pulled out-of-band from the app-server: active sessions refresh during long turns, and a logged-in idle account refreshes from the shared cache path.
 
-A **metered account** drains one "mana" bar per budget window toward its reset. The bar fills with what's *left*, ramping green → amber → red as it empties — and a fully-spent window (0% left) flips its whole empty track red, so an exhausted budget never reads as an untouched one. Each window's label (`5h`/`7d`) wears its own bar's color, so the row reads as one unit. A spent longer window gates the shorter ones: once the `7d` is exhausted the `5h` row is painted exhausted too — red, no countdown — regardless of its own reading, since that budget is unusable until the longer window resets.
+Each block's stats line speaks the fleet ledger's vocabulary, scoped to the provider: today's `◎` session count, then the `◇ ↘ ↗ ◌` token breakdown (the `◍` cache-write figure omitted, like the ledger rows), with the spend pinned right.
+
+A **metered account** drains one "mana" bar per budget window toward its reset. The bar fills with what's *left*, ramping green → yellow → amber → red as it empties — and a fully-spent window (0% left) flips its whole empty track red, so an exhausted budget never reads as an untouched one. Each window's label (`5h`/`7d`) wears its own bar's color, so the row reads as one unit. A spent longer window gates the shorter ones: once the `7d` is exhausted the `5h` row is painted exhausted too — red, no countdown — regardless of its own reading, since that budget is unusable until the longer window resets.
 
 These are **sliding windows** that begin counting only on your first token, so until then the provider keeps sliding the reset a full window-length ahead. A window whose reset still sits ~a full window out has **not started** (it still reads ~1% used, not 0 — so it's the reset distance that gives it away). Any usage above that ~1% floor means it has already started, countdown and all; only a 0–1% window with a near-full reset qualifies. A not-started window shows a near-full bar with **no countdown**, reading "ready — send a message to start it" rather than a misleading ticking placeholder; the countdown appears once your first token fixes the reset and it begins ticking down.
 
 ```
+ ▸claude   codex                                         tab bar — the selected pane runs Claude
  Claude v2.1.158 · Claude Max                    ⇅ rc    header — product · version · plan, rc flag right
                                                          blank line below the name
-  ▐▛███▜▌  ◇ 486k ↘ 422k ↗ 64k ◍ 12k ◌ 68k      $3.50    emblem + today's token breakdown · spend (right)
+  ▐▛███▜▌  ◎ 12  ◇ 486k ↘ 422k ↗ 64k ◌ 68k      $3.50    emblem + sessions · today's tokens · spend (right)
  ▝▜█████▛▘ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱ ↻ 2h06m    5-hour window left, until reset
    ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h    7-day window, same start/end column
 ```
 
-The dashboard isn't pinned to a fixed set of windows. If a provider reports a single window — as Codex briefly did during a server-side bug that widened its window to ~30 days — it paints one bar, labeled by its length, instead of misrendering:
+Switching the tab (`→`, or a click on `codex`) moves the `▸` marker and swaps the block in place — the bar's labels never shift, since every tab reserves the marker cell. This account is **unmetered** (an API key): no budget to drain, so it shows an `∞` bar — the icon in the front slot and an empty track, both in the provider's brand color so the row reads as one branded unmetered bar, no countdown:
 
 ```
- Codex v0.136.0 · ChatGPT Pro                            header — product · version · plan
+  claude  ▸codex                                         the picked tab
+ Codex v0.135.0 · ChatGPT Pro                            header — product · version · plan
 
-  ▐▛███▜▌  ◇ 88k ↘ 76k ↗ 12k ◍ 0 ◌ 8k           $1.20    emblem + today's token breakdown · spend
+  ▐▛███▜▌  ◎ 3  ◇ 88k ↘ 76k ↗ 12k ◌ 8k          $1.20    emblem + sessions · today's tokens · spend
+ ▝▜█████▛▘ ∞   ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱            unmetered — branded `∞` bar, no countdown
+   ▘▘ ▝▝
+```
+
+The dashboard isn't pinned to a fixed set of windows, either — a provider's bars are whatever windows it reports. When a server-side bug briefly widened Codex's window to ~30 days, the block painted one bar labeled by its length instead of misrendering:
+
+```
+ Codex v0.136.0 · ChatGPT Pro
+
+  ▐▛███▜▌  ◎ 3  ◇ 88k ↘ 76k ↗ 12k ◌ 8k          $1.20
  ▝▜█████▛▘ 30d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱ ↻ 28d04h    a single window, labeled by length
 ```
 
-An **unmetered (API-key) account** has no budget to drain, so it shows an `∞` bar — the icon in the front slot and an empty track, both in the provider's brand color so the row reads as one branded unmetered bar, no countdown:
+A **Pi block** names its version and the subscription it runs on — `Pi v0.78.0 · Anthropic OAuth` — read out-of-band from `pi -v` and Pi's auth file (the freshest session's provider picks among several credentials; [account.md](../internals/account.md#per-provider-mapping)). Pi reads no window surface of its own, but an OAuth sub *is* a sibling provider's account — Anthropic OAuth is the Claude account, OpenAI OAuth the Codex one — so the Pi tab paints that account's 5h/7d bars: same budget, same bars as the sibling's own tab. A sub with no sibling readings shows no bars, and an API key the `∞` bar.
 
-```
- Codex v0.135.0 · ChatGPT Pro
-
-  ▐▛███▜▌  ◇ 88k ↘ 76k ↗ 12k ◍ 0 ◌ 8k           $1.20
- ▝▜█████▛▘ ∞  ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱
-   ▘▘ ▝▝  
-```
-
-A **Pi block** names its version and the subscription it runs on — `Pi v0.78.0 · Anthropic OAuth` — read out-of-band from `pi -v` and Pi's auth file (the freshest session's provider picks among several credentials; [account.md](../internals/account.md#per-provider-mapping)). Pi exposes no window readings, so an OAuth sub shows no bars and an API key shows the `∞` bar.
-
-Every bar across every block shares one start column and one end column, so the dashboard reads as one aligned grid. A blank line separates blocks. The `⇅ rc` flag pins to a block's top-right when remote control is on for that provider (Claude only — it's host infrastructure, never its own row). Below ~34 columns the emblem is dropped and the bars run full-width. The brand emblem, color, and name are config-driven (`[sidebar.providers.<kind>]`, see [configuration.md](../reference/configuration.md)).
+Every bar shares one start column and one end column whichever tab is active, so the dashboard reads as one aligned grid. The `⇅ rc` flag pins to the block's top-right when remote control is on for that provider (Claude only — it's host infrastructure, never its own row). Below ~34 columns the emblem is dropped and the bars run full-width. The brand emblem, color, and name are config-driven (`[sidebar.providers.<kind>]`, see [configuration.md](../reference/configuration.md)).
 
 ### The fleet ledger
 
@@ -334,7 +340,7 @@ Every figure is computed from the transcript JSONL — Codex's dollars priced fr
 
 Pinned to the bottom edge, below all three zones. The body is truncated before this chrome is ever clipped, so it can never scroll off.
 
-**Footer.** The faintest line. At rest it is just `? for help`; the triage key joins it only when something actually needs you, so the signature `␣` stays discoverable without shouting:
+**Footer.** The darkest chrome line — the hairline rules' own tone, receding to pure scaffolding. At rest it is just `? for help`; the triage key joins it only when something actually needs you, so the signature `␣` stays discoverable without shouting:
 
 ```
                       ? for help            ← nothing needs you
@@ -346,7 +352,8 @@ Pinned to the bottom edge, below all three zones. The body is truncated before t
 ```
  keys & legend
  ↑/↓ select   1-9 jump   ↵ jump
- ␣ next ?!   x dismiss   r reload   ? close
+ ␣ next ?!   ←/→ provider tab
+ x dismiss   r reload   ? close
  ⢿ working   ✽ thinking   ? waiting
  ! attention   ○ idle   ✓ done   ┄ commands ┄
 ```
@@ -387,7 +394,8 @@ The renderer's golden tests in [`crates/rimz-sidebar/src/render/`](../../crates/
 | selection-driven scroll to bottom | `scroll_offset_follows_selection_to_bottom` |
 | tall expanded card pinned to top | `scroll_pins_tall_expanded_card_top` |
 | wheel pin holds the viewport | `scroll_manual_offset_holds` |
-| provider dashboard | `provider_dashboard` |
+| provider dashboard, tabbed (derived tab) | `provider_dashboard` |
+| provider dashboard, manual tab pick | `provider_dashboard_codex_tab` |
 | fleet ledger (week/month) | `fleet_ledger` |
 | health alert | `degraded_banner` |
 

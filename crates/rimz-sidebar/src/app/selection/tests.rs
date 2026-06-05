@@ -506,7 +506,7 @@ fn line_map_for(snapshot: &SidebarSnapshot, selected: usize) -> Vec<Option<usize
         line_map: Vec::new(),
         ..Default::default()
     };
-    let (_lines, map, _offset) = render::compose_lines(snapshot, None, &ui, 54, 64);
+    let (_lines, map, _tab_hits, _offset) = render::compose_lines(snapshot, None, &ui, 54, 64);
     map
 }
 
@@ -881,21 +881,213 @@ fn help_overlay_holds_the_viewport_through_selection_churn() {
 
     // Opening help lands the viewport on the overlay at the zone's tail.
     handle_key(KeyAction::Help, &mut ui, &snapshot);
-    let (_lines, _map, offset) = render::compose_lines(&snapshot, None, &ui, 38, 14);
+    let (_lines, _map, _hits, offset) = render::compose_lines(&snapshot, None, &ui, 38, 14);
     assert!(offset > 0, "the overlay overflows the short frame");
     ui.scroll_offset = offset; // the draw's write-back
 
     // A genuine selection move beneath the open overlay holds the window.
     reconcile_selection(&mut ui, &snapshot, Some(second));
-    let (_lines, _map, held) = render::compose_lines(&snapshot, None, &ui, 38, 14);
+    let (_lines, _map, _hits, held) = render::compose_lines(&snapshot, None, &ui, 38, 14);
     assert_eq!(held, offset, "the open overlay owns the viewport");
     ui.scroll_offset = held;
 
     // Closing resumes auto-follow: the selected card scrolls back into view.
     handle_key(KeyAction::Help, &mut ui, &snapshot);
-    let (_lines, map, _offset) = render::compose_lines(&snapshot, None, &ui, 38, 14);
+    let (_lines, map, _hits, _offset) = render::compose_lines(&snapshot, None, &ui, 38, 14);
     assert!(
         map.contains(&Some(ui.selected_index)),
         "the selection is back on screen"
     );
+}
+
+// ── The dashboard tab model ──────────────────────────────────────────────────
+
+/// A minimal provider panel — only `kind` matters to the tab model.
+fn provider(kind: &str) -> rimz::SidebarProviderPanel {
+    rimz::SidebarProviderPanel {
+        kind: kind.to_owned(),
+        product_name: kind.to_owned(),
+        art: Vec::new(),
+        color: 7,
+        version: None,
+        plan: None,
+        metered: false,
+        remote_control: false,
+        spending: None,
+        windows: Vec::new(),
+    }
+}
+
+/// The clickable-block room (a claude agent row, then a process row) with a
+/// three-account dashboard — the tab-model fixture.
+fn tabbed_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
+    let mut snapshot = clickable_block_snapshot(ws);
+    snapshot.providers = vec![provider("claude"), provider("codex"), provider("pi")];
+    snapshot
+}
+
+#[test]
+fn tab_keys_cycle_the_dashboard_and_wrap() {
+    let ws = workspace();
+    let snapshot = tabbed_snapshot(&ws);
+    let mut ui = UiState::default();
+    // Selected row 0 is the claude agent, so the derived tab starts there.
+    assert_eq!(
+        render::active_provider_kind(&snapshot, &ui).as_deref(),
+        Some("claude")
+    );
+
+    let outcome = handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(
+        render::active_provider_kind(&snapshot, &ui).as_deref(),
+        Some("codex")
+    );
+    // The first pick captures the derived kind it began from.
+    assert_eq!(
+        ui.dashboard_tab
+            .as_ref()
+            .unwrap()
+            .derived_at_start
+            .as_deref(),
+        Some("claude")
+    );
+
+    // A later pick only moves the tab — the anchor holds.
+    handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+    assert_eq!(
+        render::active_provider_kind(&snapshot, &ui).as_deref(),
+        Some("pi")
+    );
+    handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+    assert_eq!(
+        render::active_provider_kind(&snapshot, &ui).as_deref(),
+        Some("claude"),
+        "→ wraps past the last tab"
+    );
+    handle_key(KeyAction::TabPrev, &mut ui, &snapshot);
+    assert_eq!(
+        render::active_provider_kind(&snapshot, &ui).as_deref(),
+        Some("pi"),
+        "← wraps back from the first tab"
+    );
+    assert_eq!(
+        ui.dashboard_tab
+            .as_ref()
+            .unwrap()
+            .derived_at_start
+            .as_deref(),
+        Some("claude"),
+        "the browse anchor survives every pick"
+    );
+}
+
+#[test]
+fn tab_keys_noop_without_a_second_panel() {
+    let ws = workspace();
+    let mut snapshot = clickable_block_snapshot(&ws);
+    snapshot.providers = vec![provider("claude")];
+    let mut ui = UiState::default();
+
+    let outcome = handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+
+    assert_eq!(outcome, InputOutcome::default());
+    assert!(ui.dashboard_tab.is_none(), "one account: nothing to cycle");
+}
+
+#[test]
+fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
+    let ws = workspace();
+    let snapshot = tabbed_snapshot(&ws);
+    let agent_pane = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+    let process_pane = PaneId::from_parts(MuxName::Zellij, "terminal_10");
+    let mut ui = UiState::default();
+    reconcile_selection(&mut ui, &snapshot, Some(agent_pane.clone()));
+    handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+    assert_eq!(
+        render::active_provider_kind(&snapshot, &ui).as_deref(),
+        Some("codex")
+    );
+
+    // Re-deriving the same claude row keeps the pick.
+    reconcile_selection(&mut ui, &snapshot, Some(agent_pane.clone()));
+    assert!(ui.dashboard_tab.is_some(), "same derived kind: pick holds");
+
+    // A process-row selection derives no kind — the pick survives the hop.
+    reconcile_selection(&mut ui, &snapshot, Some(process_pane));
+    assert!(
+        ui.dashboard_tab.is_some(),
+        "a None derivation never ends the pick"
+    );
+
+    // The selected agent row turning into another provider's ends it: the
+    // derived kind genuinely changed, so the derived default takes over.
+    let mut moved = tabbed_snapshot(&ws);
+    moved.worktree_groups[0].rows[0].name = "pi".to_owned();
+    reconcile_selection(&mut ui, &moved, Some(agent_pane));
+    assert!(
+        ui.dashboard_tab.is_none(),
+        "a genuine derived-kind change hands the tab back"
+    );
+    assert_eq!(
+        render::active_provider_kind(&moved, &ui).as_deref(),
+        Some("pi")
+    );
+}
+
+#[test]
+fn tab_pick_drops_when_its_panel_leaves_the_dashboard() {
+    let ws = workspace();
+    let snapshot = tabbed_snapshot(&ws);
+    let agent_pane = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+    let mut ui = UiState::default();
+    reconcile_selection(&mut ui, &snapshot, Some(agent_pane.clone()));
+    handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+
+    let mut shrunk = tabbed_snapshot(&ws);
+    shrunk.providers = vec![provider("claude"), provider("pi")];
+    reconcile_selection(&mut ui, &shrunk, Some(agent_pane));
+
+    assert!(
+        ui.dashboard_tab.is_none(),
+        "a pick whose panel left the dashboard is dropped"
+    );
+}
+
+#[test]
+fn clicking_a_tab_label_picks_that_tab_in_place() {
+    let ws = workspace();
+    let snapshot = tabbed_snapshot(&ws);
+    let mut ui = UiState {
+        tab_hits: vec![
+            crate::render::ProviderTabHit {
+                line: 30,
+                col_start: 1,
+                col_end: 8,
+                kind: "claude".to_owned(),
+            },
+            crate::render::ProviderTabHit {
+                line: 30,
+                col_start: 10,
+                col_end: 16,
+                kind: "codex".to_owned(),
+            },
+        ],
+        ..Default::default()
+    };
+
+    let outcome = handle_mouse_click(12, 30, &mut ui, &snapshot);
+
+    // A tab click repaints in place — never a jump.
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert!(outcome.focus.is_none());
+    assert_eq!(
+        render::active_provider_kind(&snapshot, &ui).as_deref(),
+        Some("codex")
+    );
+
+    // The hit range is half-open: the cell past the label falls through to the
+    // row hit-test (and lands nowhere on this chrome line).
+    let outcome = handle_mouse_click(16, 30, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::default());
 }

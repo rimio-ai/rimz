@@ -200,7 +200,7 @@ fn activity_heartbeat_updates_last_activity_not_phase() {
 // ── Provider dashboard aggregation ──────────────────────────────────────────
 
 #[test]
-fn provider_panel_spending_is_attached_and_ranks_panels() {
+fn provider_panel_spending_is_attached_and_panels_order_by_kind() {
     let claude = agent("claude", "c1", AgentStatus::Idle, 10);
     let codex = agent("codex", "x1", AgentStatus::Idle, 20);
     let snapshot = room(Vec::new(), vec![claude, codex]);
@@ -219,19 +219,53 @@ fn provider_panel_spending_is_attached_and_ranks_panels() {
     let snapshot =
         snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &by_provider);
 
-    // Codex's today spend (5.0) outranks Claude's (1.0), so it sorts first —
-    // even though Codex has no live `total_cost_usd`.
-    assert_eq!(snapshot.providers[0].kind, "codex");
+    // The panels are the dashboard's tabs, so they hold a stable kind order —
+    // Codex's larger today spend (5.0) never reorders the row.
+    assert_eq!(snapshot.providers[0].kind, "claude");
+    assert_eq!(snapshot.providers[1].kind, "codex");
+    // Each panel still carries its own spending tally.
     assert_eq!(
         snapshot.providers[0].spending.as_ref().unwrap().today.usd,
+        1.0
+    );
+    assert_eq!(
+        snapshot.providers[1].spending.as_ref().unwrap().today.usd,
         5.0
     );
-    let claude_panel = snapshot
+}
+
+#[test]
+fn provider_cap_keeps_top_spenders_then_orders_by_kind() {
+    // Three providers, room for two: today's spend decides *which* panels
+    // survive the cap (claude's 1.0 is dropped), and the survivors render in
+    // stable kind order regardless of who outspends whom.
+    let claude = agent("claude", "c1", AgentStatus::Idle, 10);
+    let codex = agent("codex", "x1", AgentStatus::Idle, 20);
+    let pi = agent("pi", "p1", AgentStatus::Idle, 30);
+    let mut snapshot = room(Vec::new(), vec![claude, codex, pi]);
+    snapshot.sidebar.max_provider_blocks = 2;
+
+    let today_tally = |usd: f64| SpendTally {
+        today: SpendWindow {
+            usd,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut by_provider: BTreeMap<String, SpendTally> = BTreeMap::new();
+    by_provider.insert("claude".to_owned(), today_tally(1.0));
+    by_provider.insert("codex".to_owned(), today_tally(5.0));
+    by_provider.insert("pi".to_owned(), today_tally(3.0));
+
+    let snapshot =
+        snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &by_provider);
+
+    let kinds: Vec<&str> = snapshot
         .providers
         .iter()
-        .find(|panel| panel.kind == "claude")
-        .expect("claude panel present");
-    assert_eq!(claude_panel.spending.as_ref().unwrap().today.usd, 1.0);
+        .map(|panel| panel.kind.as_str())
+        .collect();
+    assert_eq!(kinds, vec!["codex", "pi"]);
 }
 
 #[test]

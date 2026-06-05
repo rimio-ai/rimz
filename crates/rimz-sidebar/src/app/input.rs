@@ -55,6 +55,9 @@ pub(super) enum KeyAction {
     Help,
     Dismiss,
     Digit(u8),
+    /// `←`/`→` — cycle the provider dashboard's tab.
+    TabPrev,
+    TabNext,
 }
 
 /// The control word the background fetch worker sends to the loop's wakeup
@@ -69,6 +72,8 @@ pub(super) fn encode_key(code: KeyCode) -> Option<String> {
     let wire = match code {
         KeyCode::Up => "key:up",
         KeyCode::Down => "key:down",
+        KeyCode::Left => "key:tab_prev",
+        KeyCode::Right => "key:tab_next",
         KeyCode::Enter => "key:enter",
         KeyCode::Char(' ') => "key:space",
         KeyCode::Char('?') => "key:help",
@@ -122,6 +127,8 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         "reload" => Wakeup::Reload,
         "key:up" => Wakeup::Key(KeyAction::Up),
         "key:down" => Wakeup::Key(KeyAction::Down),
+        "key:tab_prev" => Wakeup::Key(KeyAction::TabPrev),
+        "key:tab_next" => Wakeup::Key(KeyAction::TabNext),
         "key:enter" => Wakeup::Key(KeyAction::Enter),
         "key:space" => Wakeup::Key(KeyAction::Space),
         "key:help" => Wakeup::Key(KeyAction::Help),
@@ -296,6 +303,8 @@ mod tests {
         for code in [
             KeyCode::Up,
             KeyCode::Down,
+            KeyCode::Left,
+            KeyCode::Right,
             KeyCode::Enter,
             KeyCode::Char(' '),
             KeyCode::Char('?'),

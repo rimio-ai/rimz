@@ -919,8 +919,10 @@ impl SidebarSnapshot {
     /// `provider_spending`, still earns a block;
     /// `remote_control` carries the per-kind `⇅ rc` flag. Styling (emblem, color,
     /// name) resolves from `self.sidebar.providers` over the built-in defaults, so
-    /// the renderer gets a ready-to-paint block. Capped to `max_provider_blocks`,
-    /// ordered by spend. Producer-only: the pure reducer leaves `providers` empty.
+    /// the renderer gets a ready-to-paint block. Capped to `max_provider_blocks`
+    /// by today's spend, then ordered stably by kind — the panels are the
+    /// dashboard's tabs, so the row never reorders as spend shifts. Producer-only:
+    /// the pure reducer leaves `providers` empty.
     pub fn with_provider_aggregates(
         mut self,
         probed_accounts: &BTreeMap<String, AgentAccount>,
@@ -1069,10 +1071,12 @@ impl SidebarSnapshot {
             });
         }
 
-        // Most spend first, then kind for a stable order; cap the panel height.
-        // Rank by today's JSONL spend so the provider you are actively spending
-        // on floats up, and a token-only provider (Codex) ranks on the same
-        // transcript-derived footing as a live-cost one.
+        // Today's JSONL spend decides only *which* panels survive the cap — the
+        // provider you are actively spending on always earns its block, and a
+        // token-only provider (Codex) ranks on the same transcript-derived
+        // footing as a live-cost one. The retained set then orders stably by
+        // kind: the panels are the dashboard's tabs, and a tab row must not
+        // reorder as today's spend shifts between providers.
         panels.sort_by(|left, right| {
             right
                 .rank_cost()
@@ -1081,6 +1085,7 @@ impl SidebarSnapshot {
                 .then_with(|| left.kind.cmp(&right.kind))
         });
         panels.truncate(self.sidebar.max_provider_blocks);
+        panels.sort_by(|left, right| left.kind.cmp(&right.kind));
         self.providers = panels;
         self
     }

@@ -295,7 +295,8 @@ The footer advertises `?`. Pressing it overlays the legend and keys, so the glyp
 ```
  keys & legend
  ↑/↓ select   1-9 jump   ↵ jump
- ␣ next ?!   x dismiss   r reload   ? close
+ ␣ next ?!   ←/→ provider tab
+ x dismiss   r reload   ? close
  ⢿ working   ✽ thinking   ? waiting
  ! attention   ○ idle   ✓ done   ┄ commands ┄
 ```

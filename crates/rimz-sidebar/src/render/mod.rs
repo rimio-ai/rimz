@@ -33,6 +33,7 @@ use rimz::ids::PaneId;
 use rimz::{SidebarRowKind, SidebarSnapshot};
 
 use self::fmt::age_short;
+pub(crate) use self::sections::ProviderTabHit;
 use self::sections::{
     cockpit_spend_line, cockpit_summary_line, content_width, first_run_hint_lines,
     fleet_header_lines, fleet_ledger_lines, fleet_size, provider_panel_lines, worktree_group_lines,
@@ -84,6 +85,27 @@ pub struct UiState {
     /// The transient wheel-scroll pin riding above the auto-follow, or `None`
     /// while the viewport follows the selection (see [`ManualScroll`]).
     pub(crate) manual_scroll: Option<ManualScroll>,
+    /// The dashboard tab the user picked by hand (`←`/`→` or a click on a tab
+    /// label), riding above the selection-derived default. Ends like a browse:
+    /// it clears when the selection-derived provider kind *genuinely* changes
+    /// from the value captured at pick time (a `None` derivation — a process
+    /// row — holds it), or when its panel leaves the dashboard.
+    pub(crate) dashboard_tab: Option<DashboardTab>,
+    /// Hit-test map of the dashboard tab bar in the most recently drawn frame:
+    /// the absolute screen line and column range of each tab label, written as
+    /// a byproduct of every draw like `line_map`. Empty when no tab bar is on
+    /// screen.
+    pub(crate) tab_hits: Vec<ProviderTabHit>,
+}
+
+/// The manual dashboard-tab pick: the provider kind to show, plus the
+/// selection-derived kind captured when the pick was made — the clear
+/// condition, mirroring [`Browse`]: the pick holds until the derived kind
+/// genuinely changes from `derived_at_start`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DashboardTab {
+    pub(crate) kind: String,
+    pub(crate) derived_at_start: Option<String>,
 }
 
 /// Arrow-key browse: pins `pane` WITHOUT moving focus, roaming every visible
@@ -212,14 +234,50 @@ pub fn draw_with_ui(
     // fills the whole area; a title line and faint hairline rules carry the
     // structure the border used to.
     //
-    // The composed map and the resolved scroll offset are byproducts of the
+    // The composed maps and the resolved scroll offset are byproducts of the
     // draw: store them so the mouse hit-test and the next frame's viewport read
     // the geometry of the frame the user is actually looking at.
-    let (lines, map, scroll_offset) = compose_lines(snapshot, alert, ui, area.width, area.height);
+    let (lines, map, tab_hits, scroll_offset) =
+        compose_lines(snapshot, alert, ui, area.width, area.height);
     ui.line_map = map;
+    ui.tab_hits = tab_hits;
     ui.scroll_offset = scroll_offset;
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
+}
+
+/// The provider kind the dashboard's tab focus derives from the selection: the
+/// selected row's agent kind (agent rows carry the kind in `SidebarRow::name`),
+/// or `None` for a process row or an empty room — the caller falls back to the
+/// first tab.
+pub(crate) fn selected_agent_kind(snapshot: &SidebarSnapshot, ui: &UiState) -> Option<String> {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .nth(ui.selected_index)
+        .filter(|row| row.row_kind == SidebarRowKind::Agent)
+        .map(|row| row.name.clone())
+}
+
+/// The provider kind whose block the dashboard shows: the manual tab pick while
+/// its panel is still on the dashboard, else the selection-derived kind
+/// ([`selected_agent_kind`]) when a panel exists for it, else the first panel.
+/// `None` only when the dashboard is empty.
+pub(crate) fn active_provider_kind(snapshot: &SidebarSnapshot, ui: &UiState) -> Option<String> {
+    let panels = &snapshot.providers;
+    let has_panel = |kind: &str| panels.iter().any(|panel| panel.kind == kind);
+    if let Some(tab) = &ui.dashboard_tab
+        && has_panel(&tab.kind)
+    {
+        return Some(tab.kind.clone());
+    }
+    if let Some(kind) = selected_agent_kind(snapshot, ui)
+        && has_panel(&kind)
+    {
+        return Some(kind);
+    }
+    panels.first().map(|panel| panel.kind.clone())
 }
 
 /// Lay out the frame as three vertical zones: the top-pinned cockpit (identity,
@@ -242,21 +300,27 @@ pub fn draw_with_ui(
 /// carries a track/thumb glyph in the right-margin column the content leaves
 /// free — part of the composed line, so every consumer of the frame sees it.
 ///
-/// Returns the composed frame, a parallel hit-test map of equal length, and the
-/// effective scroll offset. Map entry `i` is the visible row index that
-/// on-screen content line `i` belongs to (`app::visible_rows()` order), or
-/// `None` for structural lines (cockpit header, gaps, the external divider,
-/// `+K more`, help, footer, alert); a worktree header routes to the row it
-/// jumps into. The map is the single authority on row geometry — built from the
-/// same final line vector that is rendered, so it stays 1:1 with what the user
-/// sees through every clip and every scroll position.
+/// Returns the composed frame, two parallel hit-test maps, and the effective
+/// scroll offset. Row-map entry `i` is the visible row index that on-screen
+/// content line `i` belongs to (`app::visible_rows()` order), or `None` for
+/// structural lines (cockpit header, gaps, the external divider, `+K more`,
+/// help, footer, alert); a worktree header routes to the row it jumps into.
+/// The dashboard tab hits ride beside it in absolute screen coordinates. The
+/// maps are the single authority on hit geometry — built from the same final
+/// line vector that is rendered, so they stay 1:1 with what the user sees
+/// through every clip and every scroll position.
 pub(crate) fn compose_lines(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
     ui: &UiState,
     width: u16,
     height: u16,
-) -> (Vec<Line<'static>>, Vec<Option<usize>>, usize) {
+) -> (
+    Vec<Line<'static>>,
+    Vec<Option<usize>>,
+    Vec<ProviderTabHit>,
+    usize,
+) {
     // One `Theme` per frame, handed to the body and the bottom chrome alike:
     // the cached `NO_COLOR` reading plus the palette the producer resolved from
     // `[sidebar.theme]` onto the snapshot — so a re-themed config lands with
@@ -278,14 +342,30 @@ pub(crate) fn compose_lines(
     // it breathes in the same one-cell frame as the body.
     let active = alert.is_some_and(Alert::is_active);
     let mut bottom: Vec<Line<'static>> = Vec::new();
+    // The tab hits arrive from the panel relative to its own lines; they are
+    // translated to absolute screen coordinates once the bottom block's final
+    // position is known, below.
+    let mut tab_hits: Vec<ProviderTabHit> = Vec::new();
     let dashboard_present = !active && !snapshot.providers.is_empty();
     if dashboard_present {
         bottom.push(pad_chrome(hairline_rule(&theme, inner)));
-        bottom.extend(
-            provider_panel_lines(&theme, &snapshot.providers, inner)
-                .into_iter()
-                .map(pad_chrome),
-        );
+        let panel_base = bottom.len();
+        let active_kind = active_provider_kind(snapshot, ui);
+        let (panel_lines, panel_hits) =
+            provider_panel_lines(&theme, &snapshot.providers, active_kind.as_deref(), inner);
+        tab_hits = panel_hits
+            .into_iter()
+            .map(|hit| ProviderTabHit {
+                // Position within the bottom block; the absolute base lands on
+                // top once the body's final height is known.
+                line: panel_base + hit.line,
+                // The chrome gutter `pad_chrome` opens every panel line with.
+                col_start: hit.col_start + 1,
+                col_end: hit.col_end + 1,
+                kind: hit.kind,
+            })
+            .collect();
+        bottom.extend(panel_lines.into_iter().map(pad_chrome));
     }
     // The fleet ledger — the static `W:`/`M:` week/month rows — seals the bottom
     // of the dashboard. It rides under the dashboard's blank-line block separator
@@ -380,11 +460,17 @@ pub(crate) fn compose_lines(
     let pad = height.saturating_sub(lines.len() + bottom_height);
     lines.extend(std::iter::repeat_n(Line::from(""), pad));
     map.extend(std::iter::repeat_n(None, pad));
+    // The bottom block's final position is now fixed, so the tab hits land on
+    // their absolute screen lines.
+    for hit in &mut tab_hits {
+        hit.line += lines.len();
+    }
     // The footer and alert are pinned chrome, never jump targets: one `None`
-    // per line.
+    // per line. The dashboard's tab labels are the bottom block's only hit
+    // targets, carried by `tab_hits` rather than the row map.
     map.extend(std::iter::repeat_n(None, bottom.len()));
     lines.extend(bottom);
-    (lines, map, offset)
+    (lines, map, tab_hits, offset)
 }
 
 /// Minimally nudge the viewport so the selected row's full line range — its
@@ -785,7 +871,8 @@ fn footer_lines(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> Vec<
             row.status
                 .is_some_and(rimz::feed::AgentStatus::is_actionable)
         });
-    // The faintest chrome — quieter than the old dim footer. `? for help` is the
+    // The darkest chrome — the hairline-rule tone, a step below even the faint
+    // separators, so the footer recedes to pure scaffolding. `? for help` is the
     // resting hint; the `␣ next ?!` triage key joins it only when something
     // actually needs you, so the signature key stays discoverable without
     // shouting at rest. The full key model lives behind the `?` overlay.
@@ -795,7 +882,7 @@ fn footer_lines(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> Vec<
         "? for help"
     };
     vec![center_line(
-        Line::styled(text.to_owned(), theme.faint()),
+        Line::styled(text.to_owned(), theme.rule()),
         width,
     )]
 }
@@ -826,7 +913,8 @@ fn help_lines() -> Vec<Line<'static>> {
     vec![
         Line::styled("keys & legend", dim),
         Line::styled("↑/↓ select   1-9 jump   ↵ jump", dim),
-        Line::styled("␣ next ?!   x dismiss   r reload   ? close", dim),
+        Line::styled("␣ next ?!   ←/→ provider tab", dim),
+        Line::styled("x dismiss   r reload   ? close", dim),
         Line::styled("⢿ working   ✽ thinking   ? waiting", dim),
         Line::styled("! attention   ○ idle   ✓ done   ┄ commands ┄", dim),
     ]

@@ -1,6 +1,6 @@
 ---
-source: crates/rimz-sidebar/src/render/mod.rs
-assertion_line: 749
+source: crates/rimz-sidebar/src/render/tests.rs
+assertion_line: 83
 expression: screen
 ---
  ⌘ query-engine
@@ -29,7 +29,7 @@ expression: screen
  ──────────────────────────────────────────────────────────
  Claude v2.1.158 · Claude Max                          ⇅ rc
 
-  ▐▛███▜▌  ◇ 486k ↘ 422k ↗ 64k ◍ 12k ◌ 68k            $3.50
+  ▐▛███▜▌  ◎ 12  ◇ 486k ↘ 422k ↗ 64k ◌ 68k            $3.50
  ▝▜█████▛▘ <t>  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱  ↻ <reset>
    ▘▘ ▝▝   <t>  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ↻ <reset>
 

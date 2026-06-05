@@ -149,7 +149,7 @@ ascii_art = """
 """
 ```
 
-The dashboard pinned at the bottom of the sidebar carries one block per agent kind. `[sidebar.providers.<kind>]` overrides the built-in style — `<kind>` is `claude`, `codex`, `pi`, …; each field is optional and falls back to the shipped default, so you can recolour without restating the art. `max_provider_blocks` caps how many blocks render, ordered by spend. How each block's account, plan, and usage budgets are sourced is in [internals/account.md](../internals/account.md).
+The dashboard pinned at the bottom of the sidebar carries one block per agent kind. `[sidebar.providers.<kind>]` overrides the built-in style — `<kind>` is `claude`, `codex`, `pi`, …; each field is optional and falls back to the shipped default, so you can recolour without restating the art. `max_provider_blocks` caps how many providers earn a tab — today's spend decides which survive the cap, and the retained set orders stably by kind so the tab row never reorders as spend shifts. How each block's account, plan, and usage budgets are sourced is in [internals/account.md](../internals/account.md).
 
 ## Resolver allowlist — `~/.config/rimz/resolvers.toml`
 

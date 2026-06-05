@@ -577,10 +577,11 @@ fn apportion(weights: impl IntoIterator<Item = u64>, total: usize) -> Vec<usize>
 /// The provider dashboard's draining budget ("mana / stamina") bar:
 /// `remaining_pct` of the width in `▰`, the rest a `▱` track, with no brackets.
 /// A full bar means budget *left*: it shortens as the window is spent, and the
-/// reset countdown beside it says when it refills. Ramps green → yellow → red by
-/// how much remains, so a near-spent window reddens regardless of which window it
-/// is. At 0% remaining — the budget fully spent — the whole empty track turns
-/// red; any nonzero remaining budget keeps at least one filled cell.
+/// reset countdown beside it says when it refills. Ramps green → yellow → amber
+/// → red by how much remains ([`mana_color`]), so a near-spent window reddens
+/// regardless of which window it is. At 0% remaining — the budget fully spent —
+/// the whole empty track turns red; any nonzero remaining budget keeps at least
+/// one filled cell.
 pub(super) fn mana_bar_spans(theme: &Theme, remaining_pct: u8, width: usize) -> Vec<Span<'static>> {
     // A fully spent window (0% remaining) reads as a full-width *red* empty track,
     // not the faint "no fill" track a plain drain leaves — `two_tone_bar` always
@@ -605,13 +606,16 @@ pub(super) fn mana_bar_spans(theme: &Theme, remaining_pct: u8, width: usize) -> 
 }
 
 /// The severity color for a mana bar at `remaining_pct` budget left: red when
-/// near-spent (or fully spent), amber mid-drain, sage green with plenty left.
-/// Shared by the bar fill and the `5h`/`7d` label beside it so the label mirrors
-/// its bar's tone.
+/// near-spent (or fully spent), then the same gold → clay-amber escalation the
+/// age and context ramps speak — green with a clear majority left, yellow
+/// mid-drain, amber once under a third remains, red under a tenth. Shared by
+/// the bar fill and the `5h`/`7d` label beside it so the label mirrors its
+/// bar's tone.
 pub(super) fn mana_color(remaining_pct: u8) -> Color {
     match remaining_pct.min(100) {
-        0..=20 => Color::Red,
-        21..=50 => Color::Yellow,
+        0..=9 => Color::Red,
+        10..=30 => ORANGE,
+        31..=60 => Color::Yellow,
         _ => Color::Green,
     }
 }

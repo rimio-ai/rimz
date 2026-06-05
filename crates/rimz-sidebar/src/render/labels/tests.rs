@@ -166,8 +166,9 @@ fn apportion_sums_to_total() {
 
 /// The mana bar drains (filled = remaining) in the segmented `▰`/`▱` style
 /// and reads by that fill/hollow shape under `NO_COLOR`; its color ramps
-/// green → yellow → red by how much budget is left — one ramp for both the
-/// 5-hour and weekly windows.
+/// green → yellow → amber → red by how much budget is left — one ramp for
+/// both the 5-hour and weekly windows, speaking the same gold → clay-amber
+/// escalation as the age and context ramps.
 #[test]
 fn mana_bar_drains_and_ramps() {
     let plain = Theme::fixed(true);
@@ -180,10 +181,17 @@ fn mana_bar_drains_and_ramps() {
 
     let lit = Theme::fixed(false);
     let fg = |remaining| mana_bar_spans(&lit, remaining, 10)[0].style.fg.unwrap();
-    // Green when full, amber mid-drain, red nearly spent.
+    // Green with a clear majority left, yellow mid-drain, amber under a third,
+    // red under a tenth — band edges pinned on both sides.
     assert_eq!(fg(80), Color::Indexed(108));
+    assert_eq!(fg(61), Color::Indexed(108));
+    assert_eq!(fg(60), Color::Indexed(179));
     assert_eq!(fg(40), Color::Indexed(179));
-    assert_eq!(fg(10), Color::Indexed(167));
+    assert_eq!(fg(31), Color::Indexed(179));
+    assert_eq!(fg(30), Color::Indexed(173));
+    assert_eq!(fg(10), Color::Indexed(173));
+    assert_eq!(fg(9), Color::Indexed(167));
+    assert_eq!(fg(1), Color::Indexed(167));
 }
 
 /// A fully spent window (0% remaining) is a full-width *empty* `▱` track —

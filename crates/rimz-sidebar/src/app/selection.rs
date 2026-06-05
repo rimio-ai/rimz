@@ -5,7 +5,9 @@
 use rimz::SidebarSnapshot;
 use rimz::ids::PaneId;
 
-use crate::render::{Browse, ManualScroll, UiState};
+use crate::render::{
+    Browse, DashboardTab, ManualScroll, UiState, active_provider_kind, selected_agent_kind,
+};
 
 use super::input::KeyAction;
 
@@ -115,15 +117,56 @@ pub(super) fn handle_key(
             }
             InputOutcome::default()
         }
+        KeyAction::TabPrev => cycle_dashboard_tab(ui, snapshot, -1),
+        KeyAction::TabNext => cycle_dashboard_tab(ui, snapshot, 1),
     }
 }
 
+/// Step the dashboard's tab `step` panels left or right of the currently
+/// active one, wrapping at the ends — the manual layer over the
+/// selection-derived default ([`active_provider_kind`]). A dashboard with
+/// fewer than two panels has nothing to cycle.
+fn cycle_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, step: isize) -> InputOutcome {
+    let panels = &snapshot.providers;
+    if panels.len() < 2 {
+        return InputOutcome::default();
+    }
+    let current = active_provider_kind(snapshot, ui)
+        .and_then(|kind| panels.iter().position(|panel| panel.kind == kind))
+        .unwrap_or(0);
+    let len = panels.len() as isize;
+    let next = (current as isize + step).rem_euclid(len) as usize;
+    pick_dashboard_tab(ui, snapshot, panels[next].kind.clone());
+    InputOutcome::redraw()
+}
+
+/// Pin a manual dashboard-tab pick. The first pick captures the
+/// selection-derived kind it began from — the clear condition — and a later
+/// pick only moves the tab, so a browse through the tabs keeps one anchor and
+/// a genuine selection change still ends it (the [`Browse`] discipline).
+fn pick_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, kind: String) {
+    let derived_at_start = match ui.dashboard_tab.take() {
+        Some(tab) => tab.derived_at_start,
+        None => selected_agent_kind(snapshot, ui),
+    };
+    ui.dashboard_tab = Some(DashboardTab {
+        kind,
+        derived_at_start,
+    });
+}
+
 pub(super) fn handle_mouse_click(
-    _column: u16,
+    column: u16,
     row: u16,
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
 ) -> InputOutcome {
+    // The dashboard's tab labels are the bottom block's only hit targets — a
+    // click on one picks that tab in place, never a jump.
+    if let Some(kind) = tab_kind_at(ui, column, row) {
+        pick_dashboard_tab(ui, snapshot, kind);
+        return InputOutcome::redraw();
+    }
     if let Some(index) = row_index_at_screen_position(ui, row)
         && let Some(pane) = pane_at_row(snapshot, index)
     {
@@ -155,6 +198,16 @@ fn pin_manual_scroll(ui: &mut UiState) {
             selection_at_start: ui.selected_pane.clone(),
         });
     }
+}
+
+/// The provider kind whose tab label sits under a click, from the tab hit map
+/// the renderer emitted in lockstep with the frame (`UiState::tab_hits`, the
+/// tab bar's twin of `line_map`).
+fn tab_kind_at(ui: &UiState, column: u16, row: u16) -> Option<String> {
+    ui.tab_hits
+        .iter()
+        .find(|hit| hit.line == usize::from(row) && column >= hit.col_start && column < hit.col_end)
+        .map(|hit| hit.kind.clone())
 }
 
 /// Point the highlight at a visible row by index — the identity-keyed selection
@@ -225,6 +278,9 @@ fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
 /// 3. **Follow the baseline** — the steady state.
 /// 4. **Reanchor.** State whose pane left the room is dropped, and
 ///    `anchor_selection` re-derives `selected_index` by identity.
+/// 5. **Dashboard tab.** A manual tab pick ends when the selection-derived
+///    provider kind genuinely changes from the value captured at pick time —
+///    the dashboard's twin of the browse end-condition.
 pub(super) fn reconcile_selection(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
@@ -273,6 +329,24 @@ pub(super) fn reconcile_selection(
         && ui.selected_pane != manual.selection_at_start
     {
         ui.manual_scroll = None;
+    }
+
+    // 6. The manual dashboard-tab pick ends like a browse: a selection-derived
+    //    provider kind that *genuinely* changed from the value captured at pick
+    //    time hands the tab back to the derived default. A `None` derivation —
+    //    a process row, an empty room — holds the pick, so jumping through a
+    //    shell pane never loses it; a pick whose panel left the dashboard is
+    //    dropped too.
+    if let Some(tab) = &ui.dashboard_tab {
+        let derived = selected_agent_kind(snapshot, ui);
+        let derived_moved = derived.is_some() && derived != tab.derived_at_start;
+        let panel_gone = !snapshot
+            .providers
+            .iter()
+            .any(|panel| panel.kind == tab.kind);
+        if derived_moved || panel_gone {
+            ui.dashboard_tab = None;
+        }
     }
 }
 
