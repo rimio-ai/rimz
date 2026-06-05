@@ -46,19 +46,12 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 
 - Run the suite with `cargo xtask test` (wraps `cargo nextest run`) — nextest is the only suite runner; never bare `cargo test`. Doctests go through `cargo xtask doctest`.
 - Routine validation defaults to the fast relevant nextest subset plus lightweight gates; run journey, live-backend, performance, or full CI only when the change touches those surfaces, their fixtures, or shared infrastructure.
-- Unit tests around state machines, schema rendering, and trust decisions.
-- Integration tests for ledger CAS, bridge timeouts, socket wakeups, and backend parity.
 - Keep test tiers separate: function/unit tests stay in-module and pure, integration tests own subprocess/filesystem behavior, journey tests own rendered user flows, live-backend tests own real tmux/Zellij behavior, and performance tests assert bounded resource use rather than product semantics.
 - A module's unit tests have one home: inline `#[cfg(test)] mod tests` by default; past the size gate the whole module moves to a sibling `tests.rs` (enforced by `cargo xtask invariants`). Doctests stay on public items as minimal usage examples. Shape and threshold in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
 - Do not land ignored tests for future product targets. Capture planned behaviour in docs/roadmap, then add the executable test when the implementation is ready to make it pass under nextest.
-- Golden tests for every agent hook stdout shape, including neutral timeout output.
-- Every command-executing config field projected into `ExecutableSurface` (asserted by the `hash_covers_every_documented_surface_field` unit test in `crates/rimz/src/trust.rs`).
-- Grep-style CI invariants reject:
-  - `Stdio::inherit` in hook subprocess paths,
-  - sidebar imports of ledger-write modules,
-  - core auto-use of `pane capture` or `pane send`.
+- Grep-style CI invariants (`cargo xtask invariants`) guard the architectural boundaries — decision-channel integrity, sidebar/ledger separation, the trust hash, pane-primitive use, and more.
 
-Full matrix in [docs/contributing/testing.md](./docs/contributing/testing.md).
+Full matrix and the invariant list in [docs/contributing/testing.md](./docs/contributing/testing.md).
 
 ## Documentation map
 

@@ -1,3 +1,5 @@
+//! `rimz pane` — the public pane primitives: list, capture, send, focus.
+
 use std::collections::BTreeMap;
 
 use anyhow::{Result, bail};

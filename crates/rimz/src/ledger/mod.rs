@@ -1,7 +1,7 @@
 //! Durable workspace state — ledger paths, atomic helpers, event log, feed
 //! item store, snapshots.
 //!
-//! Module split mirrors `ARCHITECTURE.md`:
+//! Module split (the local contract lives in `AGENTS.md` beside this file):
 //!
 //! ```text
 //! ledger/

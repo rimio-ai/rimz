@@ -131,8 +131,8 @@ The morning after six overnight agents: "Opus answered 47 routine permissions, a
 
 Two reference resolvers ship with Rimz, ready to enrol and adapt:
 
-- **auto-approve** — answers routine permission requests against a policy you set. It is the audited form of yolo mode: every approval flows through the bridge and lands in the ledger as a real decision, so you keep a per-decision record instead of skipping the prompt at the source.
-- **rate-limit-resume** — watches an agent that stalled on its provider's 5-hour limit and nudges it to continue the moment the window resets, off the same `↻` countdown the provider dashboard shows. Long runs pick themselves back up overnight instead of waiting for you.
+- **hook-bridge** (`hook_bridge_resolver.py`) — answers routine permission requests against a policy you set, read-only tools out of the box. It is the audited form of yolo mode: every approval flows through the bridge and lands in the ledger as a real decision, so you keep a per-decision record instead of skipping the prompt at the source.
+- **pane-send** (`pane_send_resolver.py`) — answers well-known terminal prompts in the agent's own pane: capture, match a bounded pattern list, type the reply, confirm. The same skeleton adapts into a rate-limit resumer that nudges a stalled run the moment the `↻` countdown on the provider dashboard resets, so long runs pick themselves back up overnight.
 
 Both are starting points you copy and edit. The chain mechanics, the heartbeat protocol, and the two examples live in [resolvers.md](../internals/resolvers.md); trust gates and the allowlist are in [security.md](./security.md).
 
@@ -142,7 +142,7 @@ Inside a sandboxed CI runner there's no human to ask. Two patterns work:
 
 **Agent-native bypass.** Launch each agent with its own bypass flag — `claude --dangerously-skip-permissions`, `codex --ask-for-approval never --sandbox danger-full-access`. The agent never blocks. Rimz still observes everything the agent reports through lifecycle hooks (sessions, completions, failures). The tradeoff: the agent skips permission events at the source, so the ledger records only what other hooks report — not a complete per-decision audit trail.
 
-**Permissive resolver.** Enrol a resolver that answers `allow` to anything (or anything matching a policy) — the bundled **auto-approve** resolver is exactly this. Every permission request still flows through Rimz, gets a decision attributed to that resolver, and lands in the ledger as a real audit record. Prefer this when you need full audit fidelity.
+**Permissive resolver.** Enrol a resolver that answers `allow` to anything (or anything matching a policy) — the bundled `hook_bridge_resolver.py` example is exactly this. Every permission request still flows through Rimz, gets a decision attributed to that resolver, and lands in the ledger as a real audit record. Prefer this when you need full audit fidelity.
 
 The two patterns compose: a permissive resolver for routine cases with the agent's bypass flag as the ultimate fallback for anything the resolver doesn't catch in time. Prefer the resolver when the per-decision ledger record matters.
 

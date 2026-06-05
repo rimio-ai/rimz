@@ -2,7 +2,7 @@
 
 > See [DESIGN.md](../../DESIGN.md) for the commitments this doc operationalizes.
 
-A resolver is an external process that answers feed items on your behalf. Rimz ships no resolver as product, but two reference examples come in the box — **auto-approve** and **rate-limit-resume** — ready to enrol and adapt. You enrol the ones you trust on the machine that runs the workspace, and the chain ends with you.
+A resolver is an external process that answers feed items on your behalf. Rimz ships no resolver as product, but two reference examples come in the box ([`examples/resolvers/`](../../examples/resolvers/README.md)) — ready to enrol and adapt. You enrol the ones you trust on the machine that runs the workspace, and the chain ends with you.
 
 > Product invariant lives in [DESIGN.md](../../DESIGN.md). A resolver is the explicit, opt-in way to delegate routine answers.
 
@@ -12,8 +12,8 @@ You're answering "can I run `cargo check`?" for the eighth time today and you've
 
 The two reference examples are concrete starting points you copy and edit:
 
-- **auto-approve** — a [hook-bridge](#hook-bridge-answer-path) policy that approves routine permission requests. It is the audited form of yolo mode: every approval flows through the bridge and lands in the ledger as a real decision.
-- **rate-limit-resume** — a [pane-send](#pane-primitives--the-universal-answer-surface) resolver that watches an agent stalled on its provider's 5-hour limit and resumes it when the window resets — the same `↻` countdown the provider dashboard shows — so a long run picks itself back up overnight.
+- **`hook_bridge_resolver.py`** — a [hook-bridge](#hook-bridge-answer-path) policy that approves routine permission requests (read-only tools out of the box; the policy function is where a model or an organization rule plugs in). It is the audited form of yolo mode: every approval flows through the bridge and lands in the ledger as a real decision.
+- **`pane_send_resolver.py`** — a [pane-send](#pane-primitives--the-universal-answer-surface) resolver that answers well-known terminal prompts: capture the pane, match a bounded pattern list, type the reply, re-capture to confirm, record the resolution. The same skeleton adapts into a rate-limit resumer that nudges a stalled run when the `↻` countdown on the provider dashboard resets.
 
 ```text
 [ opus-policy ]  →  [ slack-on-call ]  →  [ pagerduty ]  →  [ you ]

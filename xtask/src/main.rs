@@ -1,3 +1,5 @@
+//! Contributor task runner — `cargo xtask <task>`; `ci` is the single entry point for every quality gate.
+
 #![deny(clippy::print_stdout)]
 #![deny(clippy::print_stderr)]
 

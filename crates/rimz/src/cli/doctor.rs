@@ -1,3 +1,5 @@
+//! `rimz doctor` — workspace health report: trust state, protocol versions, resolver freshness, socket-path budget, and the agent rollup.
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;

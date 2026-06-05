@@ -623,8 +623,8 @@ impl ContextSeverity {
 /// future hook flow emits and a resolver acts on, riding the same feed the
 /// resolver chain already drains (an auto-compact policy matching
 /// `ContextSeverity { to: Amber, .. }` and answering with `rimz pane send
-/// /compact`, exactly as the rate-limit-resume resolver acts on the spent `⏸`
-/// window today). Defined now so the seam is typed against the verdicts the
+/// /compact`, exactly as the pane-send reference resolver acts on a recognised
+/// prompt today). Defined now so the seam is typed against the verdicts the
 /// snapshot already stamps ([`ContextSeverity`] on each row,
 /// [`AgentStatus::is_attention`] on the buckets); emission and handling are
 /// deliberately unbuilt — see the hook-readiness note in

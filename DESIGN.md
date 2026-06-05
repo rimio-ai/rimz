@@ -18,7 +18,7 @@ One human, many agents, finite attention. A fleet emits far more than one person
 
 The sidebar is a worktree-keyed presence and attention map: one row per live pane, agents enriched from the ledger, grouped by the worktree they live in. It is built to answer four questions in a single glance — *what is working smoothly, what is blocked, what errored, and how much has been done* — and to keep answering them as the fleet grows.
 
-- **A small state vocabulary the agent owns.** Each agent rolls up to one of five states — `running`, `waiting`, `idle`, `success`, `failed`. Rimz observes that state; it does not invent one.
+- **A small state vocabulary the agent owns.** Each agent rolls up to one of five states — `running`, `waiting`, `idle`, `success`, `failed`. Rimz observes that state; the one state it derives is `rate_limited`, a display park for agents whose account window is spent, lifted the moment the window resets ([docs/internals/agent.md](./docs/internals/agent.md)).
 - **Shape carries meaning; color reinforces.** Two symbols carry every call for attention — `?` *needs your answer* and `!` *needs a look* — so the signal survives `NO_COLOR` and color-blindness, with color as a second, redundant channel. Only genuinely-live work animates; a calm, blocked, or finished agent holds still.
 - **Ranking is the triage.** The most overdue attention rises to the top, oldest first; calm work settles below; a per-worktree cap trims only the calm tail and never hides a row that needs you. You don't sort — the column arrives triaged.
 - **One line summarises the room.** A fixed cockpit make-up (`? 2  ! 1 …`) compresses the whole fleet to a single line: a row of zeros means nothing needs you, so you skip the scan entirely.
@@ -34,7 +34,7 @@ Rimz adds a sidebar and a feed to the terminal you already run.
 
 - **Wrap the multiplexer; don't build one.** Zellij and tmux already own panes, sessions, attach/detach, and scrollback, and your muscle memory already lives there. Rimz drives them through a thin backend seam and leaves your keybinds, your layout, and your detach/reattach exactly as they were.
 - **A ledger, not a database.** Durable state is a directory of flat files written with atomic temp-file-plus-rename. There is no daemon to keep alive and no schema to migrate; it survives detach, reload, and reboot, travels over SSH, and you can read it with `cat`.
-- **Both backends are first-class.** The ledger, the bridge, the CLI, and the sidebar model are identical on Zellij and tmux, and core behaviour leans on no Zellij-only pipe or tmux-only feature. The optional Zellij plugin rail is presentation polish over the same view-model.
+- **Both backends are first-class.** The ledger, the bridge, the CLI, and the sidebar model are identical on Zellij and tmux, and core behaviour leans on no Zellij-only pipe or tmux-only feature.
 
 ### One feed, three audiences
 
@@ -44,7 +44,7 @@ Anything that wants to participate publishes or resolves through one CLI — `ri
 
 Out of the box, Rimz observes and routes: an agent asks in its own UI, Rimz writes the feed item, wakes the sidebar, and points you at the pane. The default loop answers nothing on your behalf — it gets you to the question fast and lets you answer where the full context lives.
 
-When the routine answers start repeating, enrol a **resolver** — an external process you trust on this machine — to handle them ahead of you. Resolvers form an ordered chain (a fast policy, then a slower human escalation, then you) that always ends with you, and they are the path to continuous, unattended agent work. Rimz ships the protocol rather than a policy: the contract is the product. Two reference resolvers ship as examples to prove it — **auto-approve**, a permissive permission policy, and **rate-limit-resume**, which resumes a stalled agent when its provider's 5-hour window resets. The chain, the heartbeat, and the two examples live in [docs/internals/resolvers.md](./docs/internals/resolvers.md).
+When the routine answers start repeating, enrol a **resolver** — an external process you trust on this machine — to handle them ahead of you. Resolvers form an ordered chain (a fast policy, then a slower human escalation, then you) that always ends with you, and they are the path to continuous, unattended agent work. Rimz ships the protocol rather than a policy: the contract is the product. Two reference resolvers ship as examples to prove it — **hook-bridge**, a permission policy that answers routine read-only tool calls on the bridge, and **pane-send**, which answers well-known terminal prompts through the pane primitives. The chain, the heartbeat, and the two examples live in [docs/internals/resolvers.md](./docs/internals/resolvers.md).
 
 ## The three operating paths
 
@@ -65,7 +65,7 @@ Each line is a decision a reader might challenge, with the reason on the same li
 - **One repo, one room.** A project repo maps to one workspace, one multiplexer session, one ledger, one sidebar; worktrees of the repo group inside it. A repo with five branches and ten agents stays scannable as one room.
 - **The ledger owns durability.** Detach, sidebar reload, sidebar crash, or no-client mode never lose feed state. The sidebar is a renderer over the ledger; correctness lives one layer down.
 - **A reborn room comes back, not empty.** When a session must be reborn — reboot, multiplexer crash, or a rebirth of a stuck room — Rimz re-seeds the prior agents from the durable rollup, each restored idle in its own pane (`claude --resume`, `codex resume`, `pi --session`). Continuity is Rimz-owned and transcript-based, not multiplexer serialization (which resurrects suspended, unhealthy panes); the clean rebirth is guaranteed, the resume is best-effort enrichment over it.
-- **One feed, many renderers.** The `rimz sidebar snapshot` JSON is the shared view-model; the native pane, the optional Zellij rail, and CLI listings are all projections of it. None owns state; none gates correctness.
+- **One feed, many renderers.** The `rimz sidebar snapshot` JSON is the shared view-model; the native pane and CLI listings are projections of it, and any future renderer joins the same way. None owns state; none gates correctness.
 - **Interactive attach is opportunistic.** `rimz` enters the selected mux only when stdin/stdout are TTYs and the caller is not already inside it; non-interactive callers get a printed attach command, and explicit flags override.
 - **Resolvers are explicit and per-machine.** A resolver engages the bridge only when it is on the local allowlist *and* heartbeating freshly. Same-UID file access is not the trust boundary.
 - **Transcripts and panes enrich display.** Pane contents and transcripts decorate rows; the ledger and explicit events decide permissions, state, and correctness. Core reads a pane to render, never to decide.

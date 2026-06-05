@@ -1,14 +1,19 @@
 # Agent adapters
 
-Local contract for `crates/rimz/src/agents/` — the integration layer. Extends the root [AGENTS.md](../../../../AGENTS.md); it never restates parent rules. The decision/lifecycle hook model lives in [docs/internals/hooks.md](../../../../docs/internals/hooks.md); the context read-path — transcript-tail parsing and the rich-context transports — is [docs/internals/transcript.md](../../../../docs/internals/transcript.md); the account/balance mapping — auth probes, rate-limit windows, dashboard aggregation — is [docs/internals/account.md](../../../../docs/internals/account.md); the agent-state rollup is [docs/internals/agent.md](../../../../docs/internals/agent.md). The upstream protocol each adapter binds to — native hook events, statusline schema, app-server methods, decision JSON, with source URLs — is mirrored in [docs/internals/adapter/claude-reference.md](../../../../docs/internals/adapter/claude-reference.md), [docs/internals/adapter/codex-reference.md](../../../../docs/internals/adapter/codex-reference.md), and [docs/internals/adapter/pi-reference.md](../../../../docs/internals/adapter/pi-reference.md).
+Local contract for `crates/rimz/src/agents/` — the integration layer. Extends [crates/rimz/AGENTS.md](../../AGENTS.md); it never restates parent rules.
+
+Topic detail lives in the internals leaves the root map describes — [hooks.md](../../../../docs/internals/hooks.md) (the hook model and the adding-an-agent recipe), [transcript.md](../../../../docs/internals/transcript.md), [account.md](../../../../docs/internals/account.md), [agent.md](../../../../docs/internals/agent.md), and the per-agent upstream references in [adapter/](../../../../docs/internals/adapter/).
 
 ## Layout
 
-Shared, provider-agnostic code sits at the top level — the [`AgentAdapter`](./mod.rs) trait, the static [`AgentDescriptor`](./descriptor.rs), the [`registry`](./registry.rs) table, [`AgentLifecycleObservation`](./observation.rs) and its shared `observe_lifecycle` scaffolding, [`AgentContext`](./context.rs), the wire enums in [`hook_types.rs`](./hook_types.rs), the [`account`](./account.rs) probe, and [`spending`](./spending.rs) aggregation. Each provider's adapter is a sibling directory ([`claude/`](./claude/mod.rs), [`codex/`](./codex/mod.rs), [`pi/`](./pi/mod.rs)) owning its integration, typed payloads, rich-context transport, and `spend.rs` — the read-only, sidebar-safe full-history cost parser `spending` consumes through `transcript_files` / `parse_spend` (shared walk helpers in [`transcript_fs.rs`](./transcript_fs.rs)). A CI grep keeps every `spend.rs` free of ledger-write, bridge, and broker imports. Pi's adapter also owns its wire: pi has no hook config — install ships the Rimz-authored [`pi/extension.ts`](./pi/extension.ts), so the payload schema is Rimz's by design and drift is a Rimz bug, never an upstream one. Adding an agent is a new `<name>/` directory plus one line in [`registry::ADAPTERS`](./registry.rs).
+- Shared, provider-agnostic code sits at the top level — the [`AgentAdapter`](./mod.rs) trait and its descriptor/registry/lifecycle/context companions, the wire enums, the account probe contract, [`spending`](./spending.rs) aggregation, and the [`pricing/`](./pricing/mod.rs) tables; per-file detail lives in the `//!` headers.
+- Each provider is a sibling directory ([`claude/`](./claude/mod.rs), [`codex/`](./codex/mod.rs), [`pi/`](./pi/mod.rs)) owning its integration, typed payloads, rich-context transport, account probe, and `spend.rs`.
+- `spend.rs` is the read-only, sidebar-safe full-history cost parser; a CI grep keeps every `spend.rs` free of ledger-write, bridge, and broker imports.
+- Pi owns its wire: pi has no hook config — install ships the Rimz-authored [`pi/extension.ts`](./pi/extension.ts), so the payload schema is Rimz's by design and drift is a Rimz bug, never an upstream one.
 
 ## The boundary
 
-An adapter is the *single* place a native agent protocol is normalized. It owns `classify_hook`, `observe_lifecycle`, `render_decision`, `render_neutral`, and install / uninstall / preview for one agent. Adding an agent is implementing [`AgentAdapter`](./mod.rs), declaring its [`AgentDescriptor`](./descriptor.rs), and nothing else.
+An adapter is the *single* place a native agent protocol is normalized. It owns `classify_hook`, `observe_lifecycle`, `render_decision`, `render_neutral`, and install / uninstall / preview for one agent. Adding an agent is implementing [`AgentAdapter`](./mod.rs), declaring its [`AgentDescriptor`](./descriptor.rs), and one line in [`registry::ADAPTERS`](./registry.rs) — nothing else.
 
 - **Adapters never touch the ledger.** They are pure mappers; [`cli/hooks.rs`](../cli/hooks.rs) owns every ledger write and all bridge I/O, calling the adapter for classification and rendering only.
 - **Emit only the two outputs downstream consumes** — an `AgentLifecycleObservation` and the decision `Value`. A native event name or payload field reached for outside this module is a mapping that belongs *in* an adapter.
@@ -17,10 +22,10 @@ An adapter is the *single* place a native agent protocol is normalized. It owns 
 ## Hook discipline
 
 - **Blocking decision hooks are sync.** Installing one as async is a hard install error — the source of truth for "must block" is the adapter's `BLOCKING_EVENTS`-style constant, never the on-disk config.
-- **Hook stdout is the decision channel.** It carries the decision JSON on a resolver answer and nothing else; the neutral path is empty stdout. Any helper child (a wrapped statusline, a notifier) gets fresh, fully-piped stdio — never `Stdio::inherit` (CI grep).
+- **Neutral is empty stdout.** A resolver answer renders as the agent's own decision JSON; anything else stays off stdout. The fresh-stdio rule for helper children (a wrapped statusline, a notifier) is enforced by the no-`Stdio::inherit` CI grep.
 - **Set `hook_cap` from the upstream's published deadline**, leaving margin so the bridge times out before the agent kills the hook.
 - **Install is idempotent.** Reclaim every rimz-owned entry by the stable command substring before rewriting the canonical set; leave user-authored entries untouched.
 
 ## Tests
 
-Golden every stdout shape in the adapter's `tests` module with inline `insta::assert_*_snapshot!(... @"...")`: neutral no-op, allow, deny, modified-input (where supported), malformed payload, and version-drift fallback. Cover install/uninstall, lifecycle mapping, feed classification, and PID attribution. Run through `cargo xtask test`.
+Golden every stdout shape in the adapter's `tests` module with inline `insta::assert_*_snapshot!(... @"...")`: neutral no-op, allow, deny, modified-input (where supported), malformed payload, and version-drift fallback. Cover install/uninstall, lifecycle mapping, feed classification, and PID attribution.

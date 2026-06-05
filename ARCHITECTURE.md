@@ -15,11 +15,10 @@ Product invariant and operating paths live in [DESIGN.md](./DESIGN.md); they are
 ```text
 terminal emulator
   mux session (Zellij or tmux)
-    sidebar renderer (native pane — default; optional Zellij plugin rail)
+    sidebar renderer (native pane)
     shells, scripts, agents, CI helpers
                 │
                 │  per-instance sidebar socket  (wakeup of record)
-                │  zellij pipe                  (Zellij-only fast path)
                 │  hook stdin/stdout            (decision channel)
                 ▼
 rimz CLI and hook subprocesses
@@ -38,7 +37,7 @@ runtime directory ($XDG_RUNTIME_DIR/rimz/<id>/)
   heartbeat/resolver.<resolver_id>.json
 ```
 
-The CLI and hook subprocesses are the only durable-state writers. The sidebar reads through `rimz sidebar snapshot` and never touches ledger files. There is no Rimz daemon. The per-instance sidebar socket is the wakeup channel of record; the Zellij pipe is an optimization on top, never a correctness path.
+The CLI and hook subprocesses are the only durable-state writers. The sidebar reads through `rimz sidebar snapshot` and never touches ledger files. There is no Rimz daemon. The per-instance sidebar socket is the wakeup channel of record; backend-specific fast paths are latency hints layered over it ([multiplexers.md](./docs/internals/multiplexers.md)).
 
 ## State ownership
 
@@ -54,147 +53,53 @@ The CLI and hook subprocesses are the only durable-state writers. The sidebar re
 
 ## Repository layout
 
-Documentation-first today. Module paths are pinned so code can land without re-inventing the shape; entries marked `(planned)` are not yet implemented.
-
 ```text
 .
-|-- AGENTS.md              contributor and coding-agent contract (root)
+|-- AGENTS.md              root of the layered contributor contract
 |-- ARCHITECTURE.md        this file
 |-- DESIGN.md              design commitments and the three operating paths
 |-- README.md              product entry point
-|-- docs/                  focused product and engineering docs
-|   |-- guide/             user-facing tour and trust model
-|   |-- reference/         CLI surface and configuration
-|   |-- internals/         ledger, mux, sidebar, resolvers, agents
-|   `-- contributing/      rust conventions, tests, roadmap
+|-- docs/                  product and engineering docs (map in AGENTS.md)
 |-- Cargo.toml
+|-- Makefile               thin aliases over cargo xtask
 |-- crates/
 |   |-- rimz/              CLI binary plus runtime/domain library
-|   |-- rimz-sidebar/      native terminal sidebar renderer (default, both backends)
-|   `-- rimz-sidebar-zellij/  optional Zellij plugin rail (cdylib, wasm32-wasip1)
+|   `-- rimz-sidebar/      native terminal sidebar renderer (both backends)
 |-- examples/resolvers/    reference resolver artifacts (Python, stdlib-only)
-|-- tests/                 integration tests live under each crate's `tests/`
+|-- supply-chain/          cargo-vet audit state
 `-- xtask/                 contributor task runner; entry point for every quality gate
 ```
 
-Add a crate only when ownership, target type, or dependency profile justifies it. The CLI is one runtime artifact and the native sidebar renderer is another; the optional Zellij plugin rail is a third because its target type differs (`wasm32-wasip1` `cdylib`). All renderers project the same `rimz sidebar snapshot` JSON view-model — there is no shared render crate.
+Add a crate only when ownership, target type, or dependency profile justifies it. The CLI is one runtime artifact and the native sidebar renderer is another. Every renderer projects the same `rimz sidebar snapshot` JSON view-model — there is no shared render crate, and a future renderer (the planned Zellij plugin rail, [roadmap](./docs/contributing/roadmap.md)) joins as its own crate projecting the same snapshot.
 
-## Implementation ownership
+## Module ownership
 
-General coding rules live in [AGENTS.md](./AGENTS.md); only crate-local constraints appear below.
+Contracts live in the layered `AGENTS.md` files — the root contract plus a local contract per subtree, loaded automatically when you work there. This map says what lives where; per-file detail lives in each module's `//!` header.
 
-### `crates/rimz`
+### `crates/rimz` — [local contract](./crates/rimz/AGENTS.md)
 
-CLI binary, hook entrypoints, and the runtime/domain library. Start here for any non-sidebar behaviour.
+| Subtree | Owns | Detail |
+| --- | --- | --- |
+| `src/cli/` | command parsing and per-subcommand handlers; one `run(...)` per subcommand | [cli.md](./docs/reference/cli.md) |
+| `src/ledger/` | durable state: atomic helpers, event log, feed store, snapshot rebuild, wakeups, GC | [contract](./crates/rimz/src/ledger/AGENTS.md) · [ledger.md](./docs/internals/ledger.md) |
+| `src/mux/` | the Zellij/tmux seam: `MuxBackend`, bounded subprocess engine, reconcile planner, recovery | [contract](./crates/rimz/src/mux/AGENTS.md) · [multiplexers.md](./docs/internals/multiplexers.md) |
+| `src/agents/` | the agent integration layer: adapter trait, registry, per-provider adapters, spend/pricing/account | [contract](./crates/rimz/src/agents/AGENTS.md) · [hooks.md](./docs/internals/hooks.md) |
+| `src/resolver/` | per-machine allowlist, heartbeat freshness, TOCTOU restat | [resolvers.md](./docs/internals/resolvers.md) |
+| `src/sidebar/` | producer-side sidebar liveness: producer election, heartbeats, published-snapshot reads | [sidebar.md](./docs/internals/sidebar.md) · [performance.md](./docs/internals/performance.md) |
+| `src/schema/` | event envelope, heartbeat shape, protocol-version constants | [ledger.md](./docs/internals/ledger.md) |
 
-- `build.rs` — compacts the checked-in `pricing/litellm-pricing.json` (or a `RIMZ_PRICING_JSON_PATH` override) into `OUT_DIR` for `include_str!` embedding (tier-1 of `src/agents/pricing/`); network-free, so every build is reproducible. The snapshot is refreshed by `cargo xtask pricing-refresh`.
-- `src/main.rs` — CLI bootstrap, top-level error reporting.
-- `src/cli/` — command parsing and per-subcommand handlers (`workspace`, `list`, `event`, `feed`, `gc`, `pane`, `resolver`, `sidebar`, `hooks`, `codex`, `trust`, `doctor`). `codex refresh-context` is the hidden entrypoint the Codex hook spawns to refresh the app-server `AgentContext` sidecar; `codex app-server serve` is the hidden entrypoint `rimz start` runs in the `rimzd` daemon tab to host the per-session app-server broker.
-- `src/workspace.rs` — project root, worktree root, workspace ID, session name.
-- `src/trust.rs` — executable-surface hash, per-machine grant record, trust state (no_config / untrusted / trusted / stale). `status` re-hashes every call so staleness is auto-detected.
-- `src/ids.rs` — typed identifier newtypes (workspace, request, event, resolver, sidebar instance, pane, mux).
-- `src/schema/` — event envelope, heartbeat, and protocol-version constants.
-- `src/feed.rs` — feed item lifecycle, surfaces, statuses, resolution methods.
-- `src/ledger/paths.rs` — XDG state/runtime paths and `/tmp/rimz-<uid>` fallback.
-- `src/ledger/atomic.rs` — temp+rename and length-framed append helpers.
-- `src/ledger/lock.rs` — workspace advisory locking.
-- `src/ledger/event_log.rs` — length-framed append log, fsync, torn-trailing-record recovery, size-cap rotation, archive pruning.
-- `src/ledger/feed_store.rs` — atomic feed item writes and status CAS.
-- `src/ledger/gc.rs` — runtime garbage collection for stale liveness hints.
-- `src/ledger/snapshot/` — reduced workspace snapshot, one file per pipeline stage: `fold.rs` (resumable event-log rollup, carryover across rotation), `project.rs` (agent-lifecycle reducer), `panes.rs` (pane binding, own/daemon view), `process.rs` (non-agent process rows, command classification), `view.rs` (sidebar view-model assembly), `assemble.rs` (read entry points, fresh-latest fast path). The pane-presence fold-in stays pure — the `sidebar` CLI supplies the live pane list; the reducer never calls the mux.
-- `src/ledger/workspace_record.rs` — `workspace.json` maintenance index for `workspace migrate` and `gc`.
-- `src/ledger/wakeup.rs` — best-effort per-request and sidebar wakeup datagrams.
-- `src/ledger/writer.rs` — the write choreography: every mutator's lock → feed-write → event-append critical section and the off-lock wakeup + publish tail.
-- `src/ledger/mod.rs` — `Ledger` handle (`Arc<LedgerInner>`): types, constructor, and the lock-free read methods; mutators live in `writer.rs`. No actor.
-- `src/bridge.rs` — per-request sockets, waiter polling fallback, nonce validation.
-- `src/mux/mod.rs` — `MuxBackend` trait, option structs, the `backend_for` factory, env→pane-id normalization, and shared backend errors.
-- `src/mux/command.rs` — `CommandSpec` and the bounded subprocess engine (event-driven wait, output drain, deadline kill).
-- `src/mux/width.rs` — sidebar sizing math: `SidebarWidth`, `BirthSize`, the launch-terminal probe.
-- `src/mux/reconcile.rs` — the cross-backend one-sidebar-per-view reconcile planner, unit-tested without a mux.
-- `src/sidebar.rs` — sidebar heartbeat freshness check used to avoid duplicate native panes.
-- `src/mux/zellij.rs` — Zellij commands, background session creation, native sidebar pane launch, pipe fast path.
-- `src/mux/zellij/layout.rs` — KDL layout rendering: session birth, daemon view, resumed-agent seeding, background views.
-- `src/mux/tmux.rs` — tmux commands, native managed sidebar pane, popup/status integrations.
-- `src/mux/selection.rs` — backend selection precedence.
-- `src/mux/recovery.rs` — room teardown for `rimz reset` / `rimz reload`: session kill, resurrection-cache purge, scoped orphan-process sweep.
-- `src/resume.rs` — resume-on-rebirth planner: turns the durable agent rollup into the `ResumePane` seeds a reborn session re-launches (`claude --resume`, `codex resume`), so a rebirth comes up where the user left off. Pure over the rollup; the cli reads the audit projection and the backend seeds the panes at birth. See [docs/internals/sidebar.md](./docs/internals/sidebar.md#resume-on-rebirth).
-- `src/remote.rs` — SSH remote attach: the scp-flavored `[user@]host:<session-or-path>` target parser, the guarded `ssh -t` `CommandSpec` builder, and the autossh-style reconnect policy (`verdict`). Pure over strings and exit codes; the cli execs or supervises the result, and the whole room — sidebar included — runs on the remote host.
-- `src/agents/` — the agent integration layer; conventions in its own [`AGENTS.md`](./crates/rimz/src/agents/AGENTS.md), the decision boundary in [docs/internals/hooks.md](./docs/internals/hooks.md), the context read-path in [docs/internals/transcript.md](./docs/internals/transcript.md), the account/balance mapping in [docs/internals/account.md](./docs/internals/account.md). Shared, provider-agnostic types sit at the top level; each provider's behaviour is a sibling directory.
-- `src/agents/mod.rs` — `AgentAdapter` trait and the shared bounded transcript-tail reader.
-- `src/agents/descriptor.rs` — `AgentDescriptor`: static per-agent identity, branding, capabilities, and tool-classification tables.
-- `src/agents/registry.rs` — `ADAPTERS`, the single registration table every dispatch site resolves through.
-- `src/agents/observation.rs` — `AgentLifecycleObservation` (the unified event shape every reducer reads) and the `observe_lifecycle` scaffolding the adapters share (worktree fields, the payload-overrides-transcript context-gauge resolution).
-- `src/agents/context.rs` — the agent-agnostic `AgentContext` and its sub-records, the normalized target every rich-context transport produces.
-- `src/agents/hook_types.rs` — wire enums shared across adapters (`PermissionMode`, `SessionSource`, …), tolerant of unknown upstream values.
-- `src/agents/account.rs` — the `AccountProbe` outcome contract for the out-of-band provider account probes; each adapter's probe lives in its own `account.rs` (`claude auth status`, `~/.codex/auth.json`), resolved through `AgentAdapter::probe_account`; producer-only, cached as `accounts.json`. The account/balance model and dashboard aggregation are in [docs/internals/account.md](./docs/internals/account.md).
-- `src/agents/spending.rs` — fleet + per-provider today/week/month/all-time spend and token (`input + output`) aggregation over agent transcript history (the `SpendTally` type, cache types, cross-file Claude dedup); dispatches to each adapter's `spend.rs` parser (next bullet) and prices token-only providers (Codex) through `pricing/`.
-- `src/agents/<name>/spend.rs` — each adapter's read-only, sidebar-safe full-history cost/usage parser, consumed by `spending.rs` through `AgentAdapter::transcript_files` / `parse_spend`; shared walk helpers live in `src/agents/transcript_fs.rs`. Distinct from the bounded-tail context gauge each adapter reads inline. A CI grep keeps these parsers free of ledger-write, bridge, and broker imports.
-- `src/agents/pi/` — the Pi adapter: descriptor, the embedded `extension.ts` it installs whole-file, typed `payloads.rs`, lifecycle mapping, and `spend.rs`.
-- `src/agents/pricing/` — the per-model token price table (`embedded.rs` build-time snapshot, `remote.rs` TTL-gated LiteLLM/models.dev refresh, `builtins.rs` hardcoded prices, model resolution in `mod.rs`); turns Codex token counts into dollars for `spending.rs`. See [docs/internals/pricing.md](./docs/internals/pricing.md).
-- `src/agents/claude/` — the Claude hook adapter: `mod.rs` (`ClaudeAdapter` — classification, rendering, install/uninstall, transcript `message.usage` gauge), `payloads.rs` (typed hook wire structs), `statusline.rs` (statusline payload parser and the wrap/restore of an existing `statusLine`).
-- `src/agents/codex/` — the Codex hook adapter: `mod.rs` (`CodexAdapter` — install merge, classification, rendering, rollout-tail gauge and discovery, `refresh_context`), `payloads.rs` (typed hook wire structs), `app_server.rs` (read-only Codex app-server JSON-RPC client for rate limits / model display name / version, behind a transport seam, preferring broker → daemon → cold-spawn), `broker.rs` (the per-session `codex app-server serve` broker holding one warm handshaked server over a unix socket, run as a pane in the `rimzd` daemon tab).
-- Additional agent adapters (OpenCode, etc.) land as new `src/agents/<name>/` directories per [docs/contributing/roadmap.md](./docs/contributing/roadmap.md) once their hook surfaces and decision shapes are verified — the mapping recipe is in [docs/internals/hooks.md](./docs/internals/hooks.md#adding-an-agent), with `src/agents/pi/` as the worked example.
-- `src/resolver/mod.rs` — re-exports for the resolver subsystem.
-- `src/resolver/allowlist.rs` — per-machine TOML allowlist with atomic writes.
-- `src/resolver/freshness.rs` — heartbeat TTL walk, single-resolver health check, TOCTOU `restat`.
-- Hook stdout goldens live as inline `insta::assert_*_snapshot!(... @"...")` macros inside each adapter's `tests` module.
+Top-level domain modules are one file each, their `//!` headers carrying the detail: `workspace` (project identity), `trust` (executable-surface hash and grant state; [trust.md](./docs/internals/trust.md)), `feed` (item lifecycle, surfaces, statuses), `bridge` (per-request sockets, nonce validation), `ids` (typed identifier newtypes), `resume` (resume-on-rebirth planner), `remote` and `remote_control` (SSH attach, agent remote-control launch), `config` (per-machine settings), `agent_activity` (liveness hints), `proc` (`/proc` reader), `reload` (binary-upgrade convergence).
 
-Crate-local rules:
+`build.rs` embeds the checked-in pricing snapshot (`pricing/litellm-pricing.json`) at compile time, network-free; `cargo xtask pricing-refresh` refreshes it ([pricing.md](./docs/internals/pricing.md)). Hidden subcommands are machinery, not humans — the `sidebar` and `statusline` helper APIs and the `codex` helpers (`refresh-context`, `refresh-rate-limits`, and the `app-server serve` broker hosted in the `rimzd` daemon view) — listed in [cli.md](./docs/reference/cli.md#commands-rimz-calls-for-you).
 
-- Command handlers call domain modules; they never own domain logic.
-- Domain modules stay free of Zellij, tmux, and agent-specific dependencies.
-- Resolution matching uses `workspace_id`, `request_id`, and nonce — never PID alone.
-- Raw pane IDs stay inside backend adapters; normalized IDs (`zellij:terminal_3`, `tmux:%3`) travel everywhere else.
-- Backend-specific fast paths cannot become correctness requirements.
-- Blocking decision hooks are sync. Installing one as async is a hard error.
+### `crates/rimz-sidebar` — [local contract](./crates/rimz-sidebar/AGENTS.md)
 
-### `crates/rimz-sidebar`
-
-Native terminal sidebar renderer — the default on both backends.
-
-- `app.rs` — the fixed-timestep serve loop and its wiring; each concern the loop folds is its own one-responsibility submodule.
-- `app/fetch.rs` — the two-speed off-thread fetch cycle (in-process fast lane + forked produce), single-flight request coalescing, the self-close probe worker.
-- `app/state.rs` — the pure `compute_next_state` reducer and the fold integrator (`apply_fetch_outcome`).
-- `app/gate.rs` — the last-known-good regression hold; `app/health.rs` — failure debounce and the give-up rule; `app/lifecycle.rs` — self-close and daemon-detach latches; `app/reload.rs` — binary resolution and in-place re-exec; `app/selection.rs` — the identity-keyed highlight, browse layer, key/mouse handlers, and the hit-test reader.
-- `app/input.rs` — the wakeup wire codec; `app/tmux_watch.rs` — the elder's tmux control-mode presence stream.
-- `render/` — projects the snapshot view-model into the frame: one module per section under `render/sections/` (`cockpit`, `fleet`, `worktree`, `agent_card`, `process`, `provider`), the glyph vocabulary in `render/labels.rs`, and the config-driven semantic palette in `render/theme.rs` (`[sidebar.theme]`, resolved producer-side onto the snapshot).
-
-Crate-local rules:
-
-- Read state through `rimz sidebar snapshot`. Never import ledger writer modules from `crates/rimz`.
-- Write liveness in-process through the `rimz::sidebar::write_heartbeat` helper (a runtime-file write, not a ledger-writer import).
-- Default-mode (`native_ui`) items show focus/dismiss, never approve/deny.
-
-### `crates/rimz-sidebar-zellij`
-
-Optional Zellij plugin rail (`cdylib`, `wasm32-wasip1`): the same view-model as a docked, persistent left rail. Not on the correctness path — the native pane is the fallback.
-
-Crate-local rules:
-
-- Project the `rimz sidebar snapshot --json` view-model; do not re-derive grouping. There is no shared render code with `crates/rimz-sidebar` — visual parity is a maintained discipline, aligned through the semantic→glyph conventions in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
-- Read state inside the wasm sandbox through the snapshot JSON only — no sockets, no ledger-writer imports. The `zellij pipe --name rimz::feed` wakeup plus a keepalive tick trigger refetches.
+Native terminal sidebar renderer, the default on both backends: the fixed-timestep serve loop (`app.rs`, one one-responsibility submodule per folded concern) and frame composition (`render/`, one module per section, the glyph vocabulary in `render/labels.rs`, the config-driven semantic palette in `render/theme.rs`). A pure projection of the snapshot view-model; the local contract holds the boundary.
 
 ### `examples/resolvers`
 
-Reference resolver artifacts for tests and documentation. Not shipped as product.
-
-- `hook_bridge_resolver.py` (**auto-approve**) — heartbeat loop, polls `rimz feed list`, runs a `tool_name` allowlist policy, approves matching permission requests via `rimz feed resolve --method hook-bridge` (else `feed abstain`).
-- `pane_send_resolver.py` (**rate-limit-resume**) — heartbeat loop, captures the active pane, matches a bounded prompt-shape list, resumes the agent via `rimz pane send` + `feed resolve --method pane-send`.
-
-Both scripts are stdlib-only Python 3 single files, not built or shipped — the workspace `Cargo.toml` excludes them. They exist to prove the resolver protocol from `docs/internals/resolvers.md` is implementable through the public CLI alone.
-
-Resolvers treat pane text as untrusted data. Match bounded prompt shapes; abstain on unknown shapes.
+Reference resolver artifacts — stdlib-only Python 3, excluded from the workspace, never shipped. They prove the resolver protocol in [resolvers.md](./docs/internals/resolvers.md) is implementable through the public CLI alone; each script and its discipline is described in [examples/resolvers/README.md](./examples/resolvers/README.md).
 
 ### Tests
 
-Integration tests live under each crate's `tests/` directory; `crates/rimz` collects its suites into a single `tests/integration/` binary whose `common/` module carries the shared harness.
-
-- `crates/rimz/tests/integration/ledger/bridge.rs` — synthetic hook tests over the per-request bridge socket and sidebar wakeup walk.
-- `crates/rimz/tests/integration/ledger/round_trip.rs` — push/resolve/dismiss/timeout round trips, CAS, snapshot rebuild.
-- `crates/rimz/tests/integration/wakeup_pipe.rs` — Zellij pipe wakeup fast path.
-- `crates/rimz/tests/integration/backend/{zellij,tmux}.rs` — backend parity, env injection, managed pane (self-skip when the mux binary is absent).
-- `crates/rimz/tests/integration/chain_advance.rs` — chain advancement on budget-elapse, heartbeat-stale, and chain-exhausted.
-- `crates/rimz/tests/integration/doctor.rs` — agent rollup rendering from `agent.lifecycle` events.
-- `crates/rimz/tests/integration/examples/{hook_bridge,pane_send}.rs` — end-to-end coverage for the reference Python resolvers (self-skip when `python3` is absent).
-- `crates/rimz/tests/fixtures/` — `zellij-trace` shim and stable payload fixtures.
-- `xtask/src/main.rs::invariants` — grep-style architectural rules (no `Stdio::inherit` in hook paths, no sidebar imports of ledger-write modules, no `chrono` / `bytes` / `tokio_util`).
+Integration tests live under each crate's `tests/`; `crates/rimz` collects its suites into a single `tests/integration/` binary with a shared `common/` harness and `tests/fixtures/` trace shims — layout and conventions in the [suite contract](./crates/rimz/tests/integration/AGENTS.md). The required matrix and the grep-style architectural invariants (`cargo xtask invariants`) live in [docs/contributing/testing.md](./docs/contributing/testing.md).

@@ -76,10 +76,16 @@ Recorded non-gaps, so they are not re-opened as missing coverage: wakeup-datagra
 - No sidebar code imports ledger writer APIs.
 
 **Trust-hash completeness.**
-- Every command-executing config field enters the executable-surface hash.
+- Every command-executing config field enters the executable-surface hash (asserted by the `hash_covers_every_documented_surface_field` unit test in `crates/rimz/src/trust.rs`).
 
 **Pane primitive boundary.**
 - No Rimz core path automatically calls `pane capture` or `pane send`.
+
+**Spend-parser isolation.**
+- Adapter spend parsers (`src/agents/<name>/spend.rs`, `transcript_fs.rs`) import no ledger-write, bridge, or broker modules.
+
+**Unit-test placement.**
+- An inline `#[cfg(test)] mod tests` stays under the size gate; past it the module's tests move whole to a sibling `tests.rs` (shape and threshold in [rust-conventions.md](./rust-conventions.md)).
 
 **Removed dependencies.**
 - No `chrono::` imports in workspace crates (timestamps go through `jiff`).

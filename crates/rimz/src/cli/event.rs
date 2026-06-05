@@ -1,3 +1,5 @@
+//! `rimz event` — emit events into the workspace ledger.
+
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use serde_json::{Value, json};

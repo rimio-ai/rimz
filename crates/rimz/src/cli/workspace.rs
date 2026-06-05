@@ -1,3 +1,5 @@
+//! `rimz workspace` — identity and maintenance: resolve, migrate, rotate-events.
+
 use std::path::PathBuf;
 use std::time::Duration;
 

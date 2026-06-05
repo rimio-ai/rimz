@@ -103,9 +103,9 @@ A layout is the only way to place a left, sized pane at creation: `zellij run` s
 
 **Mouse passthrough.** Birth and attach pass `options --mouse-click-through true` on Zellij ≥ 0.44.0 (the release that added the option), and default `focus_follows_mouse = false`, so a single click both focuses the sidebar pane and reaches the renderer — a jump lands on the first click rather than the second. The click-through flag is version-gated and best-effort: older Zellij does not know it, so Rimz omits it and degrades to Zellij's default focus-then-click. Attach carries it onto an already-running session, which picks it up on the next attach. The renderer's selection model treats the resulting `from-pane → sidebar → target` focus transition correctly — see [sidebar.md → selection](./sidebar.md#jump--the-row-is-the-link).
 
-### Zellij sidebar plugin rail (optional)
+### Zellij sidebar plugin rail (planned)
 
-Zellij users can opt in (`[layout.zellij]` in [configuration.md](../reference/configuration.md)) to a wasm plugin that presents the same snapshot view-model as a docked, persistent left rail. It is launched with an idempotent `launch-or-focus-plugin`, so any `rimz` / attach re-summons it, and it fetches `rimz sidebar snapshot --json` through the host `run_command` bridge on the `zellij pipe --name rimz::feed` wakeup — no sockets, no ledger writes. The rail is the only way to dock the sidebar left as true chrome; the native pane remains the default and the fallback, and the plugin never gates correctness. Renderer details live in [sidebar.md](./sidebar.md).
+A planned opt-in renderer — tracked in the [roadmap](../contributing/roadmap.md), unbuilt today: a wasm plugin (`[layout.zellij]` in [configuration.md](../reference/configuration.md)) presenting the same snapshot view-model as a docked, persistent left rail. It launches with an idempotent `launch-or-focus-plugin`, so any `rimz` / attach re-summons it, and it fetches `rimz sidebar snapshot --json` through the host `run_command` bridge on the `zellij pipe --name rimz::feed` wakeup — no sockets, no ledger writes. The rail is the only way to dock the sidebar left as true chrome; the native pane remains the default and the fallback, and the plugin never gates correctness. Design spec in [sidebar.md](./sidebar.md#zellij-plugin-rail-planned).
 
 ### Zellij backend caveats
 
@@ -160,6 +160,6 @@ What both backends must deliver:
 
 - **Detach and reattach are multiplexer features** — Rimz does not reimplement them.
 - **Runtime correctness does not require a visible sidebar** — hooks, the bridge, and `rimz feed ask` work headless.
-- **The renderer is interchangeable and optional** — the native pane is the default on both backends; the Zellij plugin rail is an opt-in upgrade. Correctness never depends on which renderer (or none) is attached.
+- **The renderer is interchangeable and optional** — the native pane is the default on both backends. Correctness never depends on which renderer (or none) is attached.
 - **The ledger survives host restart; processes do not**, unless a host supervisor is wired (tmux-resurrect, Zellij resurrect, systemd unit).
 - **`rimz doctor` reports** selected backend, versions, feature availability, sidebar liveness, socket-path headroom (the 108-byte `AF_UNIX` limit bites quickly), and any degraded modes.

@@ -1,0 +1,16 @@
+# Integration suite
+
+Local contract for `crates/rimz/tests/integration/` — the crate's single integration-test binary. Extends [crates/rimz/AGENTS.md](../../AGENTS.md); it never restates parent rules. The required matrix and tier definitions live in [docs/contributing/testing.md](../../../../docs/contributing/testing.md).
+
+## Harness
+
+- One binary: every suite is a module of [`main.rs`](./main.rs), and [`common/`](./common/mod.rs) is declared once — no per-file harness duplication.
+- Pick the tier by what the test drives: `common::Env` runs the `rimz` binary out of process with XDG roots scoped to a tempdir; `common::Harness` opens a real in-process `rimz::Ledger` for direct API tests; `common::payloads` holds the golden agent hook payloads and environment probes both tiers share.
+- Real tempdir, real ledger files — no in-memory stubs.
+
+## Placement
+
+- Subdirectory matches tier: `ledger/` durability and CAS, `backend/` live-mux parity, `examples/` the reference resolvers, `journey/` rendered user flows, `performance/` bounded resource use. A new suite lands where its tier says, not beside a similar-looking file.
+- Host dependencies self-skip: a test that needs `zellij`, `tmux`, or `python3` probes for the binary and skips when absent — CI never requires an installed mux.
+- External seams are faked with the [`tests/fixtures/`](../fixtures/) shims (`zellij-trace`, `git-trace`, `ssh-trace`, `codex-appserver-stub`); resolver tests route `rimz` invocations at an isolated tmux server env so a developer's live session is never touched.
+- Time is deterministic: fixed-epoch fixtures, boundary-exact.

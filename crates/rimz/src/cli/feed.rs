@@ -1,3 +1,5 @@
+//! `rimz feed` — the feed surface: push, ask, list, show, resolve, dismiss, abstain.
+
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
