@@ -658,7 +658,7 @@ fn help_lines() -> Vec<Line<'static>> {
         Line::styled("↑/↓ select   1-9 jump   ↵ jump", dim),
         Line::styled("␣ next ?!   x dismiss   r reload   ? close", dim),
         Line::styled("⢿ working   ✽ thinking   ? waiting", dim),
-        Line::styled("! attention   ○ idle   ✓ done   dim = process", dim),
+        Line::styled("! attention   ○ idle   ✓ done   ┄ commands ┄", dim),
     ]
 }
 

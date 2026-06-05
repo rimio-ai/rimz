@@ -1,6 +1,6 @@
 ---
-source: crates/rimz-sidebar/src/render/mod.rs
-assertion_line: 749
+source: crates/rimz-sidebar/src/render/tests.rs
+assertion_line: 83
 expression: screen
 ---
  ⌘ query-engine
@@ -10,7 +10,7 @@ expression: screen
  ──────────────────────────────────────────────────────
 
 ▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-▌⣾ cargo                          C 34%  M 512M  ⇅ 8M/s
+▌⣾ cargo                       C  34%  M 512M  ⇅   8M/s
 ▌  cargo build --release
 
  no agents yet

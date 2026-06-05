@@ -53,6 +53,18 @@ pub(super) fn activity_short(at: Timestamp) -> Option<String> {
     (seconds >= 60).then(|| activity_label(seconds))
 }
 
+/// A subagent's elapsed work span in the age vocabulary, never seconds: `<1m`
+/// under a minute, then the floored `{m}m` / `{h}h` / `>1d` of
+/// [`activity_label`]. Every form is at most three cells, so the caller can
+/// right-align it into a fixed slot and the clusters stack vertically.
+pub(super) fn elapsed_label(seconds: i64) -> String {
+    if seconds < 60 {
+        "<1m".to_owned()
+    } else {
+        activity_label(seconds)
+    }
+}
+
 pub(super) fn time_remaining(deadline: Timestamp) -> String {
     let seconds = deadline.duration_since(Timestamp::now()).as_secs();
     if seconds <= 0 {
@@ -292,48 +304,41 @@ pub(super) fn fmt_cpu(pct: u16) -> String {
     format!("{pct}%")
 }
 
-/// RSS in a compact form: `45k`, `234M`, `1.1G` (one decimal for ≥1 GiB,
-/// integer otherwise). Input is in kibibytes.
+/// RSS in a compact form whose figure holds to four cells — `45k`, `512M`,
+/// `1.1G`, `12G` — so the process row's fixed `M` slot never shifts: each unit
+/// rolls to the next as its figure would reach four digits, and the GiB
+/// decimal drops from 10 GiB on. Input is in kibibytes.
 pub(super) fn fmt_rss(rss_kb: u64) -> String {
-    if rss_kb >= 1_048_576 {
-        format!("{:.1}G", rss_kb as f64 / 1_048_576.0)
-    } else if rss_kb >= 1_024 {
-        format!("{}M", rss_kb / 1_024)
+    let mib = rss_kb as f64 / 1_024.0;
+    let gib = rss_kb as f64 / 1_048_576.0;
+    if gib >= 9.95 {
+        format!("{gib:.0}G")
+    } else if mib >= 999.5 {
+        format!("{gib:.1}G")
+    } else if rss_kb >= 1_000 {
+        format!("{mib:.0}M")
     } else {
         format!("{rss_kb}k")
     }
 }
 
-/// IO rate as `3M/s`, `450k/s`, `12B/s` (bytes/s, integer magnitude).
+/// IO rate whose magnitude holds to four cells before the `/s` — `12B/s`,
+/// `450k/s`, `8M/s`, `2G/s` — so the process row's fixed `⇅` slot never
+/// shifts: each unit rolls to the next as its figure would reach four digits
+/// (bytes/s, integer magnitude).
 pub(super) fn fmt_io(bps: u64) -> String {
-    if bps >= 1_048_576 {
-        format!("{}M/s", bps / 1_048_576)
-    } else if bps >= 1_024 {
-        format!("{}k/s", bps / 1_024)
+    let kib = bps as f64 / 1_024.0;
+    let mib = bps as f64 / 1_048_576.0;
+    let gib = bps as f64 / 1_073_741_824.0;
+    if mib >= 999.5 {
+        format!("{gib:.0}G/s")
+    } else if kib >= 999.5 {
+        format!("{mib:.0}M/s")
+    } else if bps >= 1_000 {
+        format!("{kib:.0}k/s")
     } else {
         format!("{bps}B/s")
     }
-}
-
-/// A span as its two highest non-zero units — `3d12h`, `3h12m`, `2m30s`, `45s`.
-/// Skipping zero units keeps it short, so a span with no minutes reads `3h3s`
-/// rather than padding a `0m`; a non-positive span is empty (the caller only
-/// paints a positive elapsed). Formats the subagent elapsed-work readout.
-pub(super) fn compact_seconds(seconds: i64) -> String {
-    if seconds <= 0 {
-        return String::new();
-    }
-    [
-        (seconds / 86_400, 'd'),
-        (seconds % 86_400 / 3_600, 'h'),
-        (seconds % 3_600 / 60, 'm'),
-        (seconds % 60, 's'),
-    ]
-    .into_iter()
-    .filter(|(value, _)| *value > 0)
-    .take(2)
-    .map(|(value, unit)| format!("{value}{unit}"))
-    .collect()
 }
 #[cfg(test)]
 mod tests {
@@ -359,16 +364,19 @@ mod tests {
     }
 
     #[test]
-    fn compact_seconds_takes_two_highest_nonzero_units() {
-        assert_eq!(compact_seconds(3 * 86_400 + 12 * 3_600), "3d12h");
-        assert_eq!(compact_seconds(3 * 3_600 + 12 * 60), "3h12m");
-        assert_eq!(compact_seconds(2 * 60 + 30), "2m30s");
-        assert_eq!(compact_seconds(45), "45s");
-        // Zero units are skipped, not padded.
-        assert_eq!(compact_seconds(3 * 3_600 + 3), "3h3s");
-        // A non-positive span is empty; the caller only paints a positive one.
-        assert_eq!(compact_seconds(0), "");
-        assert_eq!(compact_seconds(-5), "");
+    fn elapsed_label_never_reads_seconds_and_fits_three_cells() {
+        // Sub-minute is the explicit `<1m`, never a seconds figure.
+        assert_eq!(elapsed_label(0), "<1m");
+        assert_eq!(elapsed_label(45), "<1m");
+        // From a minute on it is the floored activity vocabulary.
+        assert_eq!(elapsed_label(60), "1m");
+        assert_eq!(elapsed_label(59 * 60), "59m");
+        assert_eq!(elapsed_label(3 * 3_600 + 12 * 60), "3h");
+        assert_eq!(elapsed_label(36 * 3_600), ">1d");
+        // Every form right-aligns into a three-cell slot.
+        for secs in [0, 45, 60, 59 * 60, 3_600, 23 * 3_600, 86_400] {
+            assert!(elapsed_label(secs).chars().count() <= 3);
+        }
     }
 
     #[test]
@@ -506,10 +514,42 @@ mod tests {
     }
 
     #[test]
+    fn fmt_rss_figure_holds_to_four_cells() {
+        // Each unit rolls to the next as its figure would reach four digits,
+        // so the fixed `M` slot never shifts.
+        assert_eq!(fmt_rss(999), "999k");
+        assert_eq!(fmt_rss(1_000), "1M");
+        assert_eq!(fmt_rss(1_023 * 1_024), "1.0G");
+        // The GiB decimal drops from 10 GiB on.
+        assert_eq!(fmt_rss(12 * 1_048_576), "12G");
+        for rss_kb in [0, 999, 1_000, 1_023 * 1_024, 1_048_576, 128 * 1_048_576] {
+            assert!(fmt_rss(rss_kb).chars().count() <= 4);
+        }
+    }
+
+    #[test]
     fn fmt_io_picks_the_right_unit() {
         assert_eq!(fmt_io(500), "500B/s");
         assert_eq!(fmt_io(3 * 1_048_576), "3M/s");
         assert_eq!(fmt_io(450 * 1_024), "450k/s");
+    }
+
+    #[test]
+    fn fmt_io_magnitude_holds_to_four_cells() {
+        // Each unit rolls at four digits, so the fixed `⇅` slot never shifts.
+        assert_eq!(fmt_io(999), "999B/s");
+        assert_eq!(fmt_io(1_000), "1k/s");
+        assert_eq!(fmt_io(1_023 * 1_048_576), "1G/s");
+        for bps in [
+            0,
+            999,
+            1_000,
+            450 * 1_024,
+            1_023 * 1_048_576,
+            u64::from(u32::MAX),
+        ] {
+            assert!(fmt_io(bps).chars().count() <= 6);
+        }
     }
 
     #[test]

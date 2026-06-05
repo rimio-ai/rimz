@@ -11,7 +11,7 @@ use rimz::feed::{AgentStatus, ContextSeverity};
 use rimz::{SidebarProviderPanel, SidebarRow, SidebarRowKind, SidebarSubAgent};
 
 use crate::render::fmt::{
-    activity_short, age_secs, clip, compact_seconds, dollars2, model_label, pct_label,
+    activity_short, age_secs, clip, dollars2, elapsed_label, model_label, pct_label,
     time_remaining, tokens_int, tokens_short, window_short,
 };
 use crate::render::labels::{
@@ -24,9 +24,7 @@ use crate::render::labels::{
 use crate::render::theme::Theme;
 
 use super::process::{composed_row, process_detail_line, process_row_line};
-use super::{
-    Gutter, Tier, content_width, metric_spans, pin_right, trim_spans_to_width, with_gutter,
-};
+use super::{Gutter, Tier, content_width, pin_right, trim_spans_to_width, with_gutter};
 
 /// The context-meter label — a framed square reading as "the window", replacing
 /// the `ctx` word now that it is the row's one bar (the account-scoped budget
@@ -85,7 +83,7 @@ pub(super) fn row_lines(
     // the shell anchor — the build or `sudo` install reads in full while line 1
     // stays the stable shell label. Idle process rows have no detail to add.
     if row.row_kind == SidebarRowKind::Process
-        && let Some(line) = process_detail_line(theme, row, cw)
+        && let Some(line) = process_detail_line(row, cw)
     {
         inner.push(line);
     }
@@ -121,11 +119,12 @@ pub(super) fn row_lines(
 /// in the delegation violet, the label dim — then up to two indented lines per
 /// child. Line 1 is the status glyph, the type, and the description of what
 /// the parent asked it to do; line 2 (deeper indent) is its token spend `◇`
-/// and elapsed work `◷`, pinned right under the parent's own stats. Children
-/// are subordinate to the parent card, so their text stays dim and indented
-/// past the parent's stat lines. The enrichment (description, tokens, elapsed)
-/// rides in from Claude's `subagentStatusLine`; a Codex child or one before
-/// its first render degrades to the bare type line, with line 2 dropped.
+/// and elapsed work (the clock-fill glyph over a fixed `<1m`/`9m`/`2h` label
+/// in the parent's age tone ramp), pinned right under the parent's own stats.
+/// Children are subordinate to the parent card, so their text stays dim and
+/// indented past the parent's stat lines. The enrichment (description, tokens,
+/// elapsed) rides in from Claude's `subagentStatusLine`; a Codex child or one
+/// before its first render degrades to the bare type line, with line 2 dropped.
 fn sub_agent_lines(
     theme: &Theme,
     sub_agents: &[SidebarSubAgent],
@@ -163,12 +162,11 @@ fn sub_agent_lines(
         }
         lines.push(Line::from(trim_spans_to_width(spans, width)));
 
-        // Line 2: token spend (left) and elapsed work (right-pinned), drawn only
-        // when `subagentStatusLine` reported a positive figure. A deeper indent
-        // sets it below the type line; the clock-fill glyph lands under the
-        // parent's age and fills with the child's worked span.
+        // Line 2: token spend (left) and elapsed work (right-pinned). A deeper
+        // indent sets it below the type line; the clock-fill glyph lands under
+        // the parent's age and fills with the child's worked span.
         let tokens = sub.total_tokens.filter(|total| *total > 0);
-        let elapsed = sub.elapsed_secs.filter(|secs| *secs > 0);
+        let elapsed = sub.elapsed_secs;
         if tokens.is_some() || elapsed.is_some() {
             let mut left = vec![Span::raw("      ")];
             if let Some(total) = tokens {
@@ -176,15 +174,17 @@ fn sub_agent_lines(
                 // keeps the dim tone the rest of the subagent list wears.
                 left.extend(tokens_total_spans(theme, total, tokens_short, theme.dim()));
             }
+            // Elapsed work in the parent's age vocabulary: the clock-fill glyph
+            // and a fixed three-cell m/h label (`<1m`, ` 9m`, ` 2h`, `>1d`,
+            // never seconds), toned by the same quarter-hour heat ramp the
+            // parent's age wears — so the right-pinned clusters stack into one
+            // column across children and a long-running child visibly heats up.
             let right = elapsed
                 .map(|secs| {
-                    metric_spans(
-                        theme,
-                        elapsed_glyph(secs),
-                        Color::Cyan,
-                        &compact_seconds(secs),
-                        theme.dim(),
-                    )
+                    vec![Span::styled(
+                        format!("{} {:>3}", elapsed_glyph(secs), elapsed_label(secs)),
+                        activity_age_style(theme, secs),
+                    )]
                 })
                 .unwrap_or_default();
             lines.push(pin_right(left, right, width));

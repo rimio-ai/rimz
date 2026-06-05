@@ -56,7 +56,7 @@ One vocabulary runs through the whole sidebar: a shape carries the meaning, colo
 | `⠙`   | resolving  | a resolver is answering on the bridge — braille spin | pending, being handled |
 | `○`   | idle       | alive, nothing to do | no |
 | `✓`   | done       | finished cleanly | no |
-| `○`/`⢿` dim | process | a pane with no agent (shell, editor); idle shows the hollow `○`, real work the `⢿` spinner — both in the dim process tone | no |
+| `○`/`⢿`   | process | a pane with no agent (shell, editor); idle shows the hollow `○` in the idle quiet green, real work the `⢿` spinner in the working clay — set apart from the agent cards by the `┄ commands ┄` seam, never a cockpit tally | no |
 
 Three short-lived heads ride over the base status on the leading cell, so they never earn a cockpit bucket of their own:
 
@@ -81,10 +81,10 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `▣ ━━━━──── 38.2%` | context meter — how full the window is, bar fills as used; an empty 0% window reads the hollow `▢`. Glyph, bar, and the `▤` head below share one severity ramp — calm blue → yellow → amber → red, bands configurable via `[sidebar.context]` |
 | `▤ 76k`           | filled context — the absolute tokens in the window (the `▣` meter's numerator); leads the card's context line in the meter's severity tone |
 | `◇` `↘` `↗` `◍` `◌` | tokens: total · input · output · cache-write · cache-read. One color per marker, everywhere: the `◇` total soft-violet, the rest their bar-segment tones (`◌` blue · `◍` yellow · `↘` red · `↗` green) — so the card's context line legends the bar and the cockpit/dashboard/ledger lines speak the same vocabulary; the figures beside them read at full strength on the fleet lines |
-| `◔ 1m`            | last-activity age — shown only once it crosses a full minute; the clock face fills by the quarter hour (`◔` ≤15m · `◑` ≤30m · `◕` ≤45m · `●` ≤60m · `◉` past it) and its tone steps the same quarters: dim through `◔` (a resume still hits cache), yellow to the half hour, amber beyond it, red past the hour — a red age means resuming likely re-reads the whole context uncached |
-| `C 11%`           | CPU utilisation of the pane's foreground process — the marker in work clay; the three resource stats ride process rows only |
-| `M 512M`          | resident set size (RSS) — `k` / `M` / `G`; the marker violet |
-| `⇅ 3M/s`          | combined VFS I/O rate (rchar + wchar bytes/s); the marker teal |
+| `◔ 1m`            | last-activity age — shown only once it crosses a full minute; the clock face fills by the quarter hour (`◔` ≤15m · `◑` ≤30m · `◕` ≤45m · `●` ≤60m · `◉` past it) and its tone steps the same quarters: dim through `◔` (a resume still hits cache), yellow to the half hour, amber beyond it, red past the hour — a red age means resuming likely re-reads the whole context uncached. On a subagent line the same face and ramp read the child's elapsed work, as a fixed three-cell `m`/`h` label (`<1m` under a minute, never seconds) |
+| `C  11%`          | CPU utilisation of the pane's foreground process; the three resource stats ride process rows only, as one dim fixed-width grid — each figure right-aligned in its slot, so the cluster never shifts as values change |
+| `M 512M`          | resident set size (RSS) — `k` / `M` / `G` |
+| `⇅   3M/s`        | combined VFS I/O rate (rchar + wchar bytes/s) |
 | `+127 -43`        | lines added / removed |
 | `⇡3 ⇣1`           | commits ahead / behind the trunk (worktree header; zero components drop) |
 | `≡ main`          | worktree fully landed on the trunk — zero ahead, zero diff, safe to remove (behind doesn't count against it); the trunk worktree itself never wears it |
@@ -105,6 +105,7 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `▏`             | the selection lane — the worktree you're in |
 | `▌`             | the selected card |
 | `┄ external ┄`  | out-of-project panes (scripts, CI, stray shells) |
+| `┄ commands ┄`  | the seam between a worktree's agent cards and its process rows |
 | `─`             | a section hairline |
 | `⇅ rc`          | remote control is on for that provider |
 
@@ -177,14 +178,14 @@ The `▣`/`▢` and `▤` glyphs share one lead column, so the card reads as an 
                                   ▌    ⢿ Explore
 ```
 
-The expanded card also lists any **subagents** the agent spawned this turn — a `⧉ subagents (N)` header (the marker violet, the label dim) then, per child in spawn order (creation time ascending, stable across refreshes), the status glyph and type with what the parent asked it to do, and a deeper-indented second line carrying its token spend `◇` and elapsed work (the clock-fill glyph, filling with the child's worked span) pinned right under the parent's stats:
+The expanded card also lists any **subagents** the agent spawned this turn — a `⧉ subagents (N)` header (the marker violet, the label dim) then, per child in spawn order (creation time ascending, stable across refreshes), the status glyph and type with what the parent asked it to do, and a deeper-indented second line carrying its token spend `◇` and elapsed work pinned right under the parent's stats: the clock-fill glyph (filling with the child's worked span) over a fixed three-cell `m`/`h` label — `<1m` under a minute, never seconds — toned by the parent's age ramp, so the clusters stack into one column across children and a long-running child visibly heats up:
 
 ```
 ▌  ⧉ subagents (2)
 ▌    ⢿ Explore — locate the render seam
-▌        ◇ 12.4k                              ◔ 1m30s
+▌      ◇ 12.4k                                  ◔ 14m
 ▌    ✓ review — audit the trust hash
-▌        ◇ 3.1k                                  ◔ 45s
+▌      ◇ 3.1k                                   ◔ <1m
 ```
 
 The description, tokens, and elapsed ride in from Claude's `subagentStatusLine` (Claude-only; harvested at install time). A Codex child, or a Claude child before its first render, shows just the `glyph type` line. Subagents have no pane of their own, so they never get a row; they nest here only.
@@ -210,11 +211,12 @@ A `?` waiting row reads the same with a `?` glyph. The row carries *who* needs y
 
 ### Process rows
 
-A pane no agent has stamped reads in the dim process tone — a hollow `○` (the same idle glyph an agent shows, never the agent's clay) for an idle shell or editor, the `⢿` spinner for a pane doing real work like a build, test, or install. An active pane anchors its primary line on the shell that owns it, so the line stays put as commands come and go, and carries the live command in full on a dim second line. At wide (L2) widths the row pins `C <n>%  M <n>[k/M/G]  ⇅ <n>[k/M/G]/s` right on line 1 — CPU, RAM, and combined VFS I/O rate, each marker in its own tone (`C` work clay · `M` violet · `⇅` teal) over dim figures, in the same right slot an agent card gives its `$cost` — so resource load reads at a glance without leaving the sidebar. The stats are process-row vocabulary; an agent card keeps that line for its identity and cost:
+A pane no agent has stamped reads like a slim agent card: a hollow `○` in the idle agent's quiet green for an idle shell or editor, the `⢿` spinner in the working clay for a pane doing real work like a build, test, or install, and the program name at full strength. Inside a worktree group the process rows settle below the agent cards behind a faint `┄ commands ┄┄┄` seam, so the command tail reads apart from the agents without dimming it. An active pane anchors its primary line on the shell that owns it, so the line stays put as commands come and go, and carries the live command in full on a second line. At wide (L2) widths the row pins `C  <n>%  M <n>[k/M/G]  ⇅  <n>[k/M/G]/s` right on line 1 — CPU, RAM, and combined VFS I/O rate as one dim fixed-width grid (each figure right-aligned in its slot, a metric not yet sampled blank-filling it, so the cluster never wanders as values change), in the same right slot an agent card gives its `$cost` — so resource load reads at a glance without leaving the sidebar. The stats are process-row vocabulary; an agent card keeps that line for its identity and cost:
 
 ```
+┄ commands ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ○ zsh
-⢿ zsh                              C 34%  M 512M  ⇅ 8M/s
+⢿ zsh                           C  34%  M 512M  ⇅   8M/s
     cargo build --release
 ```
 
@@ -342,7 +344,7 @@ Pinned to the bottom edge, below all three zones. The body is truncated before t
  ↑/↓ select   1-9 jump   ↵ jump
  ␣ next ?!   x dismiss   r reload   ? close
  ⢿ working   ✽ thinking   ? waiting
- ! attention   ○ idle   ✓ done   dim = process
+ ! attention   ○ idle   ✓ done   ┄ commands ┄
 ```
 
 **Health alert.** When the refresh loop can't read the room, a sticky line takes over the bottom and the footer steps aside — an empty body under a failed fetch is a missing snapshot, not an empty room:
@@ -372,6 +374,8 @@ The renderer's golden tests in [`crates/rimz-sidebar/src/render/`](../../crates/
 | selected, enriched card | `enriched_selected_agent_card` |
 | card context line + age pin | `agent_card_context_age` |
 | process row + resource stats | `process_row_resource_stats` |
+| agents + commands seam | `commands_divider` |
+| subagent list + elapsed column | `subagent_two_line_entry` |
 | worktree grouping + external | `worktree_attention_map` |
 | landed worktree header (`≡`) | `worktree_equal_to_trunk` |
 | per-worktree cap | `group_cap_with_overflow` |

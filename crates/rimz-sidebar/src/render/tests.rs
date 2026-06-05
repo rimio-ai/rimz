@@ -477,11 +477,11 @@ fn render_agent_card_context_line_pins_age_not_resource_stats() {
 
 #[test]
 fn render_process_row_pins_resource_stats_at_l2() {
-    // An active process pane at L2 width pins `C n%  M nM  ⇅ nM/s` right on
-    // line 1 — the slot an agent card gives its `$cost` — while the full
-    // command rides the dim detail line below, so a build's resource load
-    // reads at a glance without leaving the sidebar. The marker tones are
-    // asserted separately in `proc_stats_markers_wear_their_tones`.
+    // An active process pane at L2 width pins `C  n%  M  nM  ⇅  nM/s` right
+    // on line 1 — the slot an agent card gives its `$cost` — while the full
+    // command rides the detail line below, so a build's resource load reads
+    // at a glance without leaving the sidebar. The fixed-grid shape and tone
+    // are asserted separately in `proc_stats_hold_a_fixed_dim_grid`.
     let mut busy = pane("%1", "cargo build --release", "/repo/main");
     busy.cpu_pct = Some(34);
     busy.rss_kb = Some(512 * 1_024);
@@ -491,7 +491,7 @@ fn render_process_row_pins_resource_stats_at_l2() {
     let rendered = snapshot_to_screen(&snapshot, 56, 14);
 
     assert!(
-        rendered.contains("C 34%  M 512M  ⇅ 8M/s"),
+        rendered.contains("C  34%  M 512M  ⇅   8M/s"),
         "the stats pin right on the primary line:\n{rendered}"
     );
     assert!(
@@ -502,10 +502,11 @@ fn render_process_row_pins_resource_stats_at_l2() {
 }
 
 #[test]
-fn proc_stats_markers_wear_their_tones() {
-    // The stat markers carry one tone each — `C` the live-work clay, `M`
-    // the capacity violet, `⇅` the flow teal — while every figure stays in
-    // the dim process tone; `NO_COLOR` strips the tones and keeps the text.
+fn proc_stats_hold_a_fixed_dim_grid() {
+    // The whole stats cluster stays in the dim process tone — markers
+    // included; the colored lead glyph carries the row's liveness — and each
+    // figure right-aligns into its fixed slot so a changing magnitude never
+    // walks the cluster sideways.
     let mut busy = pane("%1", "cargo build --release", "/repo/main");
     busy.cpu_pct = Some(34);
     busy.rss_kb = Some(512 * 1_024);
@@ -516,30 +517,74 @@ fn proc_stats_markers_wear_their_tones() {
     let theme = Theme::fixed(false);
     let spans = sections::proc_stats_spans(&theme, row);
     let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
-    assert_eq!(text, "C 34%  M 512M  ⇅ 8M/s");
-    let fg_of = |glyph: &str| {
-        spans
-            .iter()
-            .find(|span| span.content == glyph)
-            .unwrap_or_else(|| panic!("marker {glyph} missing"))
-            .style
-            .fg
-    };
-    assert_eq!(fg_of("C"), Some(theme::ORANGE), "CPU wears the work clay");
-    assert_eq!(fg_of("M"), Some(Color::Indexed(141)), "RSS wears violet");
-    assert_eq!(fg_of("⇅"), Some(Color::Indexed(73)), "I/O wears teal");
+    assert_eq!(text, "C  34%  M 512M  ⇅   8M/s");
     let dim = theme.dim();
     assert!(
-        spans
-            .iter()
-            .filter(|span| span.content.starts_with(' '))
-            .all(|span| span.style == dim),
-        "figures and gaps stay in the dim process tone"
+        spans.iter().all(|span| span.style == dim),
+        "markers and figures alike stay in the dim process tone"
     );
+
+    // A figure changing magnitude re-aligns within its slot; the grid width
+    // holds, so the right-pinned cluster never moves.
+    let mut hotter = row.clone();
+    hotter.cpu_pct = Some(100);
+    hotter.rss_kb = Some(1_153_024); // 1.1 GiB
+    hotter.io_bps = Some(450 * 1_024);
+    let shifted: String = sections::proc_stats_spans(&theme, &hotter)
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert_eq!(shifted, "C 100%  M 1.1G  ⇅ 450k/s");
+    assert_eq!(text.chars().count(), shifted.chars().count());
+
+    // A metric not yet sampled (rates on the first tick) blank-fills its
+    // slot, so the columns hold still from the first reading on.
+    let mut first_tick = row.clone();
+    first_tick.cpu_pct = None;
+    first_tick.io_bps = None;
+    let blanked: String = sections::proc_stats_spans(&theme, &first_tick)
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert_eq!(blanked, "        M 512M          ");
+    assert_eq!(blanked.chars().count(), text.chars().count());
 
     // NO_COLOR keeps the shape and sheds every tone.
     let plain = sections::proc_stats_spans(&Theme::fixed(true), row);
     assert!(plain.iter().all(|span| span.style.fg.is_none()));
+}
+
+#[test]
+fn render_commands_divider_between_agents_and_processes() {
+    // A worktree group holding both agent cards and bare process rows seams
+    // the two with a faint `┄ commands ┄┄┄` divider: processes read at
+    // agent-card strength now, so the seam — not a dim tone — marks the
+    // group's command tail. Rows sort agents-first, so the seam lands once.
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    let stamped = pane("%1", "claude", "/repo/main");
+    claude.pane = Some(stamped.clone());
+    let shell = pane("%2", "zsh", "/repo/main");
+    let snapshot =
+        snapshot_with(Vec::new(), vec![claude]).with_live_panes(vec![stamped, shell], None);
+
+    let rendered = snapshot_to_screen(&snapshot, 44, 18);
+
+    assert!(
+        rendered.contains("┄ commands ┄"),
+        "the seam splits the agent cards from the process rows:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("○ zsh"),
+        "the process row renders below the seam:\n{rendered}"
+    );
+    assert_snapshot("commands_divider", rendered);
 }
 
 #[test]
@@ -653,9 +698,12 @@ fn render_api_error_dead_turn_card() {
 fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
     // A selected parent expands its `⧉ subagents` list. Each child reads two
     // lines: the type and its `subagentStatusLine` description, then the token
-    // spend `◇` left with the clock-fill elapsed work pinned right. The child
-    // is finished, so its elapsed is frozen at `last_activity − started`
-    // (exactly 60s here, independent of wall-clock) — a deterministic `◔ 1m`.
+    // spend `◇` left with the clock-fill elapsed work pinned right. The first
+    // child is finished, so its elapsed is frozen at `last_activity − started`
+    // (exactly 60s here, independent of wall-clock) — a deterministic ` 1m` in
+    // the fixed three-cell slot; the second is still running ~30s in, so it
+    // reads the sub-minute `<1m` (never seconds), and the two right-pinned
+    // clusters stack into one column.
     let mut parent = agent(
         "claude-1",
         "claude",
@@ -681,7 +729,20 @@ fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
     child.last_seen = fixed_now() - Duration::from_secs(30);
     child.total_tokens = Some(12_400);
 
-    let snapshot = snapshot_with(Vec::new(), vec![parent, child]);
+    let mut fresh = agent(
+        "child-2",
+        "claude",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("review"),
+    );
+    fresh.parent_agent_id = Some("claude-1".into());
+    fresh.subagent_description = Some("audit the trust hash".to_owned());
+    fresh.subagent_started_at = Some(fixed_now() - Duration::from_secs(30));
+    fresh.total_tokens = Some(3_100);
+
+    let snapshot = snapshot_with(Vec::new(), vec![parent, child, fresh]);
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
@@ -690,12 +751,12 @@ fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
             ..Default::default()
         },
         54,
-        18,
+        20,
     );
 
     assert!(
-        rendered.contains("⧉ subagents (1)"),
-        "the expanded card lists its child:\n{rendered}"
+        rendered.contains("⧉ subagents (2)"),
+        "the expanded card lists its children:\n{rendered}"
     );
     // Line 1: type + the description of what the parent asked it to do.
     assert!(
@@ -703,14 +764,19 @@ fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
         "line 1 carries the description:\n{rendered}"
     );
     // Line 2: token spend left, elapsed work right-pinned. 12_400 → `12.4k`,
-    // 60s frozen → `1m`.
+    // 60s frozen → ` 1m` right-aligned in the fixed slot.
     assert!(
         rendered.contains("◇ 12.4k"),
         "line 2 carries the token spend:\n{rendered}"
     );
     assert!(
-        rendered.contains("◔ 1m"),
-        "line 2 carries the frozen elapsed:\n{rendered}"
+        rendered.contains("◔  1m"),
+        "line 2 carries the frozen elapsed in the fixed slot:\n{rendered}"
+    );
+    // The running child reads the sub-minute `<1m`, never a seconds figure.
+    assert!(
+        rendered.contains("◔ <1m"),
+        "a sub-minute child reads `<1m`:\n{rendered}"
     );
     assert_snapshot("subagent_two_line_entry", rendered);
 }
@@ -1110,7 +1176,7 @@ fn render_footer_and_help_overlay() {
     assert!(help.contains("keys & legend"));
     assert!(help.contains("? waiting"));
     assert!(help.contains("○ idle"));
-    assert!(help.contains("dim = process"));
+    assert!(help.contains("┄ commands ┄"));
     assert!(!help.contains("posture"), "the posture legend is gone");
 }
 

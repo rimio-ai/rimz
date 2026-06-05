@@ -297,7 +297,7 @@ The footer advertises `?`. Pressing it overlays the legend and keys, so the glyp
  ↑/↓ select   1-9 jump   ↵ jump
  ␣ next ?!   x dismiss   r reload   ? close
  ⢿ working   ✽ thinking   ? waiting
- ! attention   ○ idle   ✓ done   dim = process
+ ! attention   ○ idle   ✓ done   ┄ commands ┄
 ```
 
 > **Design law — color reinforces, shape carries.** Every status is legible under `NO_COLOR` and to color-blind readers because the *glyph shape* carries the meaning; color is a second, redundant channel. The legend shows both.

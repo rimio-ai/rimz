@@ -1,13 +1,13 @@
-//! Bare process rows: the dim shell/build line, its right-pinned resource
-//! stats, the full-command detail line, and the resolver's composed row.
+//! Bare process rows: the shell/build line, its right-pinned resource stats,
+//! the full-command detail line, and the resolver's composed row.
 
-use ratatui::style::{Color, Modifier};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use rimz::SidebarRow;
 use rimz::feed::AgentStatus;
 
 use crate::render::fmt::{age_short, clip, fmt_cpu, fmt_io, fmt_rss};
-use crate::render::labels::{status_glyph, working_glyph};
+use crate::render::labels::{status_glyph, status_style, working_glyph};
 use crate::render::theme::{ORANGE, Theme};
 
 use super::{Tier, pin_right, trim_spans_to_width};
@@ -18,24 +18,30 @@ pub(super) fn process_row_line(
     width: usize,
     animation_phase: u64,
 ) -> Line<'static> {
-    let dim = theme.dim();
-    // An active pane (a build, a test, a script) gets the running braille spinner
-    // so live work reads at a glance; an idle shell or a TUI the user just sits in
-    // rests on the same hollow `○` an idle agent shows, so the lead column reads
-    // and aligns alike across the two. Both stay in the dim chrome tone, never the
-    // agent's clay, so a process stays secondary to an agent.
-    let lead = if row.process_active {
-        working_glyph(animation_phase)
+    // The row reads like an agent card: an active pane (a build, a test, a
+    // script) gets the running braille spinner in the same work clay a running
+    // agent wears, an idle shell or a TUI rests on the quiet-green hollow `○`
+    // of an idle agent, and the program name reads at full strength. The
+    // `┄ commands ┄` seam in the group body — not a dim tone — is what sets
+    // processes apart from the agent cards above them.
+    let (lead, lead_style) = if row.process_active {
+        (
+            working_glyph(animation_phase),
+            theme.style(ORANGE, Modifier::empty()),
+        )
     } else {
-        status_glyph(AgentStatus::Idle)
+        (
+            status_glyph(AgentStatus::Idle),
+            status_style(theme, AgentStatus::Idle),
+        )
     };
     let left = vec![
-        Span::styled(lead, dim),
+        Span::styled(lead, lead_style),
         Span::raw(" "),
-        Span::styled(row.name.clone(), dim),
+        Span::raw(row.name.clone()),
     ];
-    // At L2 width, resource stats pin right: `C 11%  M 1.1G  ⇅ 3M/s`.
-    // Any token whose data is absent is omitted; all three drop at L0/L1.
+    // At L2 width, resource stats pin right: `C  11%  M 1.1G  ⇅   3M/s`.
+    // The whole cluster drops at L0/L1, or when no metric has reported yet.
     if Tier::for_width(width) == Tier::L2 {
         let right = proc_stats_spans(theme, row);
         if !right.is_empty() {
@@ -45,51 +51,51 @@ pub(super) fn process_row_line(
     Line::from(trim_spans_to_width(left, width))
 }
 
-/// Build the right-pinned resource stats spans for a process row. Returns an
-/// empty vec when no metrics are available. Tokens are joined with a two-space
-/// gap. Each marker wears its own tone — `C` in the live-work clay (CPU is how
-/// hard the pane works), `M` in the capacity violet, `⇅` in the flow teal —
-/// while the figures stay dim so the row keeps its secondary process tone.
+/// The figure slot widths of the fixed stats grid: each figure right-aligns
+/// into the slot its formatter guarantees (`100%` · `512M` / `1.1G` ·
+/// `450k/s`), so a changing magnitude never walks the cluster sideways.
+const CPU_SLOT: usize = 4;
+const RSS_SLOT: usize = 4;
+const IO_SLOT: usize = 6;
+
+/// Build the right-pinned resource stats for a process row as one fixed grid —
+/// `C  34%  M 512M  ⇅   8M/s`. Each metric owns a fixed slot (marker, space,
+/// right-aligned figure); a metric not yet sampled (rates on the first tick)
+/// blank-fills its slot, so the columns hold still from the first reading on.
+/// The whole cluster is dim — the stats are secondary chrome, and the colored
+/// lead glyph carries the row's liveness. Empty when no metric has reported at
+/// all (non-Linux).
 pub(in crate::render) fn proc_stats_spans(theme: &Theme, row: &SidebarRow) -> Vec<Span<'static>> {
-    let dim = theme.dim();
-    let mut tokens: Vec<(&str, Color, String)> = Vec::new();
-    if let Some(pct) = row.cpu_pct {
-        tokens.push(("C", ORANGE, fmt_cpu(pct)));
+    let slots: [(&str, usize, Option<String>); 3] = [
+        ("C", CPU_SLOT, row.cpu_pct.map(fmt_cpu)),
+        ("M", RSS_SLOT, row.rss_kb.map(fmt_rss)),
+        ("⇅", IO_SLOT, row.io_bps.map(fmt_io)),
+    ];
+    if slots.iter().all(|(_, _, figure)| figure.is_none()) {
+        return Vec::new();
     }
-    if let Some(rss) = row.rss_kb {
-        tokens.push(("M", Color::Magenta, fmt_rss(rss)));
-    }
-    if let Some(bps) = row.io_bps {
-        tokens.push(("⇅", Color::Cyan, fmt_io(bps)));
-    }
-    let mut spans = Vec::with_capacity(tokens.len() * 3);
-    for (i, (glyph, color, figure)) in tokens.into_iter().enumerate() {
+    let mut text = String::new();
+    for (i, (marker, width, figure)) in slots.into_iter().enumerate() {
         if i > 0 {
-            spans.push(Span::styled("  ".to_owned(), dim));
+            text.push_str("  ");
         }
-        spans.push(Span::styled(
-            glyph.to_owned(),
-            theme.style(color, Modifier::empty()),
-        ));
-        spans.push(Span::styled(format!(" {figure}"), dim));
+        match figure {
+            Some(figure) => text.push_str(&format!("{marker} {figure:>width$}")),
+            // Marker cell + space + figure slot, all blank.
+            None => text.extend(std::iter::repeat_n(' ', 2 + width)),
+        }
     }
-    spans
+    vec![Span::styled(text, theme.dim())]
 }
 
-/// Line 2 for an *active* process row: the full foreground command, dim and
-/// indented under the shell anchor, so a build or a `sudo` install reads in full
-/// while the primary line keeps the stable shell label. `None` when the producer
-/// left no detail (an idle pane, or a command already shown whole on line 1).
-pub(super) fn process_detail_line(
-    theme: &Theme,
-    row: &SidebarRow,
-    width: usize,
-) -> Option<Line<'static>> {
+/// Line 2 for an *active* process row: the full foreground command at full
+/// strength, indented under the shell anchor, so a build or a `sudo` install
+/// reads in full while the primary line keeps the stable shell label. `None`
+/// when the producer left no detail (an idle pane, or a command already shown
+/// whole on line 1).
+pub(super) fn process_detail_line(row: &SidebarRow, width: usize) -> Option<Line<'static>> {
     let detail = row.command_detail.as_deref()?;
-    let left = vec![
-        Span::raw("  "),
-        Span::styled(detail.to_owned(), theme.dim()),
-    ];
+    let left = vec![Span::raw("  "), Span::raw(detail.to_owned())];
     Some(Line::from(trim_spans_to_width(left, width)))
 }
 
