@@ -1,8 +1,10 @@
 //! Disk-write primitives.
 //!
-//! Two helpers cover every durable write in the project:
+//! Two write shapes cover every disk write in the project:
 //!
-//! - [`write_temp_then_rename`] for feed files, snapshots, and heartbeats.
+//! - [`write_temp_then_rename`] (cold-path durable) and
+//!   [`write_temp_then_rename_cache`] (rename-atomic, no fsync) for whole
+//!   files.
 //! - [`append_record_bytes`] for the event log — one `write()` per record,
 //!   no fsync; durability rides the write tail's debounced [`sync_file_data`]
 //!   group barrier and the pre-rotation sync.
@@ -71,11 +73,14 @@ pub fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
 /// Whether a temp+rename write fsyncs before it becomes observable.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Fsync {
-    /// fsync the temp file and the parent dir — survives power loss. The default
-    /// for durable ledger state (feed files, snapshots, records, heartbeats).
+    /// fsync the temp file and the parent dir — survives power loss. For
+    /// cold-path durable state: trust grants, resolver allowlists, workspace
+    /// records, hook installs, the rotation carryover. Cold paths keep the
+    /// fsync even where the same-host argument would allow relaxing it,
+    /// because removing it there buys nothing.
     Durable,
     /// Skip both fsyncs. The rename stays atomic (a reader never sees a torn
-    /// file), but the write is not crash-durable. Disposable caches only.
+    /// file), but the write is not crash-durable.
     Skip,
 }
 
@@ -88,11 +93,14 @@ pub fn write_temp_then_rename<T: Serialize>(path: &Path, value: &T) -> Result<()
 }
 
 /// Like [`write_temp_then_rename`] but skips the temp-file and parent-dir
-/// fsyncs. For disposable runtime caches — the sidebar snapshot/diff-stats
-/// caches and the agent-context sidecar — that are rebuilt on the next tick:
-/// durability there buys nothing, and the two fsyncs per write add disk latency
-/// to a path the UI (or a hook) waits on. The rename is still atomic, so a
-/// reader never sees a torn file; only "survives a power cut" is traded away.
+/// fsyncs. For everything whose correctness rides rename atomicity rather
+/// than crash durability: feed files (CAS state re-checked under the
+/// workspace lock, with the event log as the audit trail), liveness files
+/// (sidebar heartbeats, agent activity), and rebuilt-on-next-tick caches
+/// (snapshots, diff stats, the agent-context sidecar). Two fsyncs per write
+/// add disk latency to paths the UI (or a hook) waits on, and for these
+/// files "survives a power cut" buys nothing — the rename is still atomic,
+/// so a reader never sees a torn file.
 pub fn write_temp_then_rename_cache<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     write_temp_then_rename_with(path, value, Fsync::Skip)
 }

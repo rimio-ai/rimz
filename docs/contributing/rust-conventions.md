@@ -164,9 +164,9 @@ When a long-lived process *does* arrive (resolver host, watcher daemon), it gets
 
 ## Atomic writes
 
-Two helper functions in `ledger/atomic.rs` cover every disk write in the project:
+Two write shapes in `ledger/atomic.rs` cover every disk write in the project:
 
-- `write_temp_then_rename(path, bytes) -> Result<()>` — feed files, snapshot files, heartbeats.
+- `write_temp_then_rename(path, value)` for cold-path durable state (trust grants, workspace records, hook installs, the rotation carryover); `write_temp_then_rename_cache` — rename-atomic, no fsync — for feed files, liveness files, and rebuilt-on-next-read caches.
 - `append_record_bytes(path, line) -> Result<()>` — the event-log append discipline (one `write()` per record, no fsync — appended frames become durable through the write tail's debounced group fdatasync and rotation's pre-rename sync); the frame encoding itself lives beside its decoder in `ledger/event_log.rs`.
 
 Both helpers live next to the durability contract they enforce. No module hand-rolls its own temp-file dance, and every fsync syscall lives in `ledger/atomic.rs` (CI grep), counted through its `testkit` seam so the performance tier can assert fsync budgets from the integration binary. See [ledger.md](../internals/ledger.md) for the frame format, torn-record recovery, and rotation rules.

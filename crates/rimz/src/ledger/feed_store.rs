@@ -1,7 +1,9 @@
 //! Per-request feed files: `feed/<request_id>.json` while pending,
 //! `feed/terminal/<request_id>.json` once resolved, timed out, or abandoned.
 //!
-//! Writes go through [`crate::ledger::atomic::write_temp_then_rename`]. The
+//! Writes go through [`crate::ledger::atomic::write_temp_then_rename_cache`]
+//! — rename-atomic, no fsync; correctness rides the CAS under the workspace
+//! lock and the event log's audit trail, not crash-durable item files. The
 //! ledger module owns CAS sequencing under the workspace lock.
 //!
 //! The pending/terminal split keeps every decision-path scan O(pending): a
@@ -18,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use crate::feed::{FeedItem, FeedStatus, Surface};
 use crate::ids::{RequestId, ResolverId};
-use crate::ledger::atomic::{self, write_temp_then_rename};
+use crate::ledger::atomic::{self, write_temp_then_rename_cache};
 
 #[derive(Debug, thiserror::Error)]
 pub enum FeedStoreErr {
@@ -73,7 +75,13 @@ fn terminal_path(feed_dir: &Path, request_id: &RequestId) -> PathBuf {
 #[must_use = "durability barrier; check the result"]
 pub fn write(feed_dir: &Path, item: &FeedItem) -> Result<()> {
     let path = pending_path(feed_dir, &item.request_id);
-    write_temp_then_rename(&path, item)?;
+    // Cache-class: the CAS and the pending→terminal split rely on rename
+    // atomicity, not fsync — same-host writers always read their own
+    // renames, and after a power cut the dead-owner expel abandons any ask
+    // whose waiter died with the machine. Trading "survives a power cut"
+    // for a fsync-free decision path is the write-class contract
+    // (docs/internals/ledger.md); the event log keeps the audit trail.
+    write_temp_then_rename_cache(&path, item)?;
     if item.status.is_terminal() {
         // Relocate the decided item out of the pending scan. The rename is
         // atomic: a crash leaves the file on exactly one side, and a

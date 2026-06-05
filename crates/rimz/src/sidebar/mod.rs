@@ -78,7 +78,9 @@ pub fn write_heartbeat(
         pane_id,
     );
     let path = runtime.sidebar_heartbeat_path(instance_id);
-    atomic::write_temp_then_rename(&path, &heartbeat)
+    // Cache-class: a heartbeat is disposable liveness, rewritten every beat
+    // and gc-swept when stale — surviving a power cut buys nothing.
+    atomic::write_temp_then_rename_cache(&path, &heartbeat)
         .map_err(|source| HeartbeatWriteErr { path, source })
 }
 

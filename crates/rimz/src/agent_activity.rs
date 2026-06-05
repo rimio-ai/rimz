@@ -55,16 +55,18 @@ fn activity_path(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> PathBuf 
     runtime.agent_activity_dir.join(format!("{name}.json"))
 }
 
-/// Record that `(kind, agent_id)` just made progress. Atomic temp-then-rename,
-/// like every other runtime liveness file. Best-effort: a failed write only
-/// degrades the liveness hint, never correctness, so callers log and continue.
+/// Record that `(kind, agent_id)` just made progress. Cache-class atomic
+/// rename, like every other runtime liveness file: the sidecar is rewritten
+/// on the next heartbeat, so crash-durability buys nothing. Best-effort: a
+/// failed write only degrades the liveness hint, never correctness, so
+/// callers log and continue.
 pub fn touch(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> Result<(), atomic::AtomicErr> {
     let record = AgentActivity {
         kind: AgentKind::new_unchecked(kind),
         agent_id: agent_id.into(),
         at: Timestamp::now(),
     };
-    atomic::write_temp_then_rename(&activity_path(runtime, kind, agent_id), &record)
+    atomic::write_temp_then_rename_cache(&activity_path(runtime, kind, agent_id), &record)
 }
 
 fn read_one(path: PathBuf) -> Option<AgentActivity> {
