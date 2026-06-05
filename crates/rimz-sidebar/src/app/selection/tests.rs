@@ -1066,25 +1066,28 @@ fn tab_pick_drops_when_its_panel_leaves_the_dashboard() {
 fn clicking_a_tab_label_picks_that_tab_in_place() {
     let ws = workspace();
     let snapshot = tabbed_snapshot(&ws);
+    // The rail's geometry after the gutter translation: the active
+    // `┤ Claude ├` chip cap-to-cap, then the inactive `─ Codex ─` footprint
+    // (caps reserved as fill) past the 2-cell `──` gap.
     let mut ui = UiState {
         tab_hits: vec![
             crate::render::ProviderTabHit {
                 line: 30,
-                col_start: 1,
-                col_end: 8,
+                col_start: 3,
+                col_end: 13,
                 kind: "claude".to_owned(),
             },
             crate::render::ProviderTabHit {
                 line: 30,
-                col_start: 10,
-                col_end: 16,
+                col_start: 15,
+                col_end: 24,
                 kind: "codex".to_owned(),
             },
         ],
         ..Default::default()
     };
 
-    let outcome = handle_mouse_click(12, 30, &mut ui, &snapshot);
+    let outcome = handle_mouse_click(17, 30, &mut ui, &snapshot);
 
     // A tab click repaints in place — never a jump.
     assert_eq!(outcome, InputOutcome::redraw());
@@ -1094,8 +1097,8 @@ fn clicking_a_tab_label_picks_that_tab_in_place() {
         Some("codex")
     );
 
-    // The hit range is half-open: the cell past the label falls through to the
+    // The hit range is half-open: the cell past the tab falls through to the
     // row hit-test (and lands nowhere on this chrome line).
-    let outcome = handle_mouse_click(16, 30, &mut ui, &snapshot);
+    let outcome = handle_mouse_click(24, 30, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
 }

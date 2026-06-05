@@ -91,10 +91,10 @@ pub struct UiState {
     /// from the value captured at pick time (a `None` derivation — a process
     /// row — holds it), or when its panel leaves the dashboard.
     pub(crate) dashboard_tab: Option<DashboardTab>,
-    /// Hit-test map of the dashboard tab bar in the most recently drawn frame:
-    /// the absolute screen line and column range of each tab label, written as
-    /// a byproduct of every draw like `line_map`. Empty when no tab bar is on
-    /// screen.
+    /// Hit-test map of the dashboard tab rail in the most recently drawn
+    /// frame: the absolute screen line and column range of each tab's
+    /// cap-to-cap footprint, written as a byproduct of every draw like
+    /// `line_map`. Empty when no rail is on screen.
     pub(crate) tab_hits: Vec<ProviderTabHit>,
 }
 
@@ -335,11 +335,12 @@ pub(crate) fn compose_lines(
     let (scroll, scroll_map) = scroll_lines(snapshot, alert, ui, cells, &theme);
 
     // Bottom-pinned chrome, top to bottom: the per-provider dashboard (account-
-    // scoped budgets + brand emblem), the navigation footer (centered), then the
-    // sticky health alert — each bracketed by a faint hairline rule. While an
-    // alert is active the body is a stale/empty fetch, so the panel and footer
-    // step aside and the alert speaks alone. Every chrome line is gutter-padded so
-    // it breathes in the same one-cell frame as the body.
+    // scoped budgets + brand emblem, which opens with its own top hairline — the
+    // tab rail when several accounts register), the navigation footer (centered),
+    // then the sticky health alert. While an alert is active the body is a
+    // stale/empty fetch, so the panel and footer step aside and the alert speaks
+    // alone. Every chrome line is gutter-padded so it breathes in the same
+    // one-cell frame as the body.
     let active = alert.is_some_and(Alert::is_active);
     let mut bottom: Vec<Line<'static>> = Vec::new();
     // The tab hits arrive from the panel relative to its own lines; they are
@@ -348,7 +349,8 @@ pub(crate) fn compose_lines(
     let mut tab_hits: Vec<ProviderTabHit> = Vec::new();
     let dashboard_present = !active && !snapshot.providers.is_empty();
     if dashboard_present {
-        bottom.push(pad_chrome(hairline_rule(&theme, inner)));
+        // The panel owns its top hairline (the tab rail when several accounts
+        // register), so its line 0 lands directly at the block base.
         let panel_base = bottom.len();
         let active_kind = active_provider_kind(snapshot, ui);
         let (panel_lines, panel_hits) =
@@ -466,7 +468,7 @@ pub(crate) fn compose_lines(
         hit.line += lines.len();
     }
     // The footer and alert are pinned chrome, never jump targets: one `None`
-    // per line. The dashboard's tab labels are the bottom block's only hit
+    // per line. The dashboard's tabs are the bottom block's only hit
     // targets, carried by `tab_hits` rather than the row map.
     map.extend(std::iter::repeat_n(None, bottom.len()));
     lines.extend(bottom);

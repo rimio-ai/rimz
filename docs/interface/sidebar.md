@@ -108,7 +108,7 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `┄ commands ┄`  | the seam between a worktree's agent cards and its process rows |
 | `─`             | a section hairline |
 | `▐` / `▕`       | the cards' scrollbar — thumb / track, riding the right margin when the cards overflow the viewport |
-| `▸claude`       | the provider dashboard's active tab — the marker fills a lead cell every tab reserves, so the pick reads by shape and the bar never shifts |
+| `┤ Tab ├`       | the provider dashboard's active tab — a brand-colored chip notched into the panel's top hairline between `┤ ├` caps, so the pick reads by shape under `NO_COLOR` |
 | `⇅ rc`          | remote control is on for that provider |
 
 ## Zone 1 — the cockpit
@@ -281,7 +281,7 @@ You don't read where to go; you go. Selecting a row focuses that pane — no mux
 
 ## Zone 3 — the provider dashboard
 
-The budgets are account-scoped — every session of a provider shares one account's budget — so they leave the rows for a pinned panel at the bottom. With several accounts the panel is **tabbed**: a tab bar names every provider by its agent kind (each label in its brand color, the active tab bold behind a `▸` marker), and one account's block paints at a time, so the budgets read one account deep instead of stacking. The active tab **follows the selected pane's provider** — select a codex pane and the dashboard reads the ChatGPT account behind it; a process pane falls to the first tab. `←`/`→` or a click on a tab label picks one by hand; the pick holds until you select a pane of a *different* provider, then the follow-the-selection default takes over. A single account keeps its bare block — nothing to switch, no tab bar. Every account that is logged in but idle this run still earns its tab, so your accounts and budgets show even between turns. Each provider shows one bar per window it reports — both Claude and Codex a 5-hour and a 7-day — so the dashboard tracks whatever windows a provider exposes. Codex budgets are pulled out-of-band from the app-server: active sessions refresh during long turns, and a logged-in idle account refreshes from the shared cache path.
+The budgets are account-scoped — every session of a provider shares one account's budget — so they leave the rows for a pinned panel at the bottom. With several accounts the panel is **tabbed**: the panel's top hairline becomes a tab rail naming every provider (each label in its brand color, the active tab a brand-colored chip notched into the line between `┤ ├` caps; every tab reserves its cap cells, so switching never shifts a label), and one account's block paints at a time, so the budgets read one account deep instead of stacking. The rail names the account, so the block's header drops the product name and reads plan-first (`Claude Max · v2.1.158`), indented to start over the `◎` stats column. The active tab **follows the selected pane's provider** — select a codex pane and the dashboard reads the ChatGPT account behind it; a process pane falls to the first tab. `←`/`→` or a click on a tab label picks one by hand; the pick holds until you select a pane of a *different* provider, then the follow-the-selection default takes over. A single account keeps its bare block — nothing to switch, no tab rail. Every account that is logged in but idle this run still earns its tab, so your accounts and budgets show even between turns. Each provider shows one bar per window it reports — both Claude and Codex a 5-hour and a 7-day — so the dashboard tracks whatever windows a provider exposes. Codex budgets are pulled out-of-band from the app-server: active sessions refresh during long turns, and a logged-in idle account refreshes from the shared cache path.
 
 Each block's stats line speaks the fleet ledger's vocabulary, scoped to the provider: today's `◎` session count, then the `◇ ↘ ↗ ◌` token breakdown (the `◍` cache-write figure omitted, like the ledger rows), with the spend pinned right.
 
@@ -290,20 +290,20 @@ A **metered account** drains one "mana" bar per budget window toward its reset. 
 These are **sliding windows** that begin counting only on your first token, so until then the provider keeps sliding the reset a full window-length ahead. A window whose reset still sits ~a full window out has **not started** (it still reads ~1% used, not 0 — so it's the reset distance that gives it away). Any usage above that ~1% floor means it has already started, countdown and all; only a 0–1% window with a near-full reset qualifies. A not-started window shows a near-full bar with **no countdown**, reading "ready — send a message to start it" rather than a misleading ticking placeholder; the countdown appears once your first token fixes the reset and it begins ticking down.
 
 ```
- ▸claude   codex                                         tab bar — the selected pane runs Claude
- Claude v2.1.158 · Claude Max                    ⇅ rc    header — product · version · plan, rc flag right
-                                                         blank line below the name
+ ──┤ Claude ├─── Codex ──────────────────────────────    tab rail — the panel's top hairline; the selected pane runs Claude
+                                                         blank line below the rail
+           Claude Max · v2.1.158                 ⇅ rc    header — plan · version over the stats column, rc flag right
   ▐▛███▜▌  ◎ 12  ◇ 486k ↘ 422k ↗ 64k ◌ 68k      $3.50    emblem + sessions · today's tokens · spend (right)
  ▝▜█████▛▘ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱ ↻ 2h06m    5-hour window left, until reset
    ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h    7-day window, same start/end column
 ```
 
-Switching the tab (`→`, or a click on `codex`) moves the `▸` marker and swaps the block in place — the bar's labels never shift, since every tab reserves the marker cell. This account is **unmetered** (an API key): no budget to drain, so it shows an `∞` bar — the icon in the front slot and an empty track, both in the provider's brand color so the row reads as one branded unmetered bar, no countdown:
+Switching the tab (`→`, or a click on `Codex`) re-notches the `┤ ├` caps onto the picked tab and swaps the block in place — every tab reserves its cap cells (painted as rail fill when resting), so no label ever shifts. This account is **unmetered** (an API key): no budget to drain, so it shows an `∞` bar — the icon in the front slot and an empty track, both in the provider's brand color so the row reads as one branded unmetered bar, no countdown:
 
 ```
-  claude  ▸codex                                         the picked tab
- Codex v0.135.0 · ChatGPT Pro                            header — product · version · plan
+ ─── Claude ───┤ Codex ├─────────────────────────────    the picked tab, chipped in place — labels hold still
 
+           ChatGPT Pro · v0.135.0                        header — plan · version
   ▐▛███▜▌  ◎ 3  ◇ 88k ↘ 76k ↗ 12k ◌ 8k          $1.20    emblem + sessions · today's tokens · spend
  ▝▜█████▛▘ ∞   ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱            unmetered — branded `∞` bar, no countdown
    ▘▘ ▝▝

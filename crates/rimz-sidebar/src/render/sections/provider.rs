@@ -152,8 +152,8 @@ fn wm_row(
     pin_right(left, right, width)
 }
 
-/// One clickable tab in the dashboard's tab bar: the tab-bar line's position,
-/// the half-open column range its label occupies, and the provider kind it
+/// One clickable tab in the dashboard's tab rail: the rail line's position,
+/// the half-open column range the tab occupies, and the provider kind it
 /// activates. [`provider_panel_lines`] emits positions relative to its returned
 /// lines and columns relative to the unpadded content; `compose_lines`
 /// translates both into absolute screen coordinates (the bottom-block base and
@@ -168,16 +168,19 @@ pub(crate) struct ProviderTabHit {
 }
 
 /// The pinned per-provider dashboard. With one account it is that provider's
-/// block — a header line then the brand emblem zipped against the aggregate
-/// stats and the account-scoped budget bars. With several it is **tabbed**: a
-/// tab bar of agent-kind labels (each in its brand color, the active tab led by
-/// a `▸` marker so the pick survives `NO_COLOR` by shape) over the active
-/// provider's block alone — the budgets read one account at a time instead of
-/// stacking. A metered account drains one "mana" bar per budget window toward
-/// its reset; an unmetered (API-key) account shows the `∞` "infinite power" bar
-/// in the label slot with no countdown. The bars share one start and one end
-/// column across every block, so the dashboard reads as one aligned grid.
-/// Bottom chrome — the tab labels are its only hit targets, never a jump.
+/// block — a hairline rule, then a header line, then the brand emblem zipped
+/// against the aggregate stats and the account-scoped budget bars. With
+/// several it is **tabbed**: the top hairline becomes a [tab
+/// rail](provider_tab_rail) — each account set into the rule, the active one a
+/// `┤ … ├`-capped brand chip — over the active provider's block alone, so the
+/// budgets read one account at a time instead of stacking; the header then
+/// drops the name the rail carries and indents to the stats column, sitting
+/// directly over the `◎` line as the right-column grid's title row. A metered
+/// account drains one "mana" bar per budget window toward its reset; an
+/// unmetered (API-key) account shows the `∞` "infinite power" bar in the label
+/// slot with no countdown. The bars share one start and one end column across
+/// every block, so the dashboard reads as one aligned grid. Bottom chrome —
+/// the tabs are its only hit targets, never a jump.
 pub(in crate::render) fn provider_panel_lines(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
@@ -191,95 +194,175 @@ pub(in crate::render) fn provider_panel_lines(
     let active = active_kind
         .and_then(|kind| providers.iter().find(|panel| panel.kind == kind))
         .unwrap_or(first);
+    let tabbed = providers.len() > 1;
     let mut hits = Vec::new();
-    if providers.len() > 1 {
-        let (tab_line, tab_hits) = provider_tab_line(theme, providers, &active.kind, width);
+    if tabbed {
+        let (rail, tab_hits) = provider_tab_rail(theme, providers, &active.kind, width);
         hits = tab_hits;
-        lines.push(tab_line);
+        lines.push(rail);
+        // A blank line below the rail sets the tabs apart from the active
+        // account's block, matching the cockpit's breathing room; the header
+        // then sits directly over the stats line as the grid's title row.
+        lines.push(Line::from(""));
+        lines.push(provider_header_line(theme, active, width, true));
+    } else {
+        // One account: the dashboard's top hairline is a plain rule, and the
+        // header keeps the product name no rail carries.
+        lines.push(super::super::hairline_rule(theme, width));
+        lines.push(provider_header_line(theme, active, width, false));
+        // A blank line below the provider name sets the identity apart from
+        // the emblem + stats body, matching the cockpit's breathing room.
+        lines.push(Line::from(""));
     }
-    lines.push(provider_header_line(theme, active, width));
-    // A blank line below the provider name sets the identity apart from the
-    // emblem + stats body, matching the cockpit's breathing room.
-    lines.push(Line::from(""));
     lines.extend(provider_body_lines(theme, active, width));
     (lines, hits)
 }
 
-/// The dashboard's tab bar: every provider's kind label in its brand color,
-/// the active tab bold behind a `▸` marker, the rest dim. Each tab reserves
-/// the marker cell whether or not it is active, so switching tabs never shifts
-/// a label — the bar holds still and only the marker and weight move. The bar
-/// holds to one screen row: a tab that would overflow `width` is dropped
-/// whole (label and hit together), so the hit map stays in lockstep with the
-/// frame however many kinds register or however narrow the pane. Returns the
-/// line plus one [`ProviderTabHit`] per rendered label (line index 0, columns
-/// over the marker + label cells) for the mouse hit-test.
-fn provider_tab_line(
+/// The dashboard's tab rail — the top hairline with every account set into it:
+/// a leading `──` stub, then each tab in order, the active one a
+/// `┤ Claude ├`-capped chip (brand-color fill, dark ink) and the rest dim
+/// brand labels resting in the line, separated and trailed by `─` fill in the
+/// rule's own tone so the chips read as notched into the hairline. The caps
+/// are the pick's `NO_COLOR`-surviving shape (the chip fill drops with the
+/// colors). Every tab reserves its two cap cells — an inactive tab paints them
+/// as rail fill — so switching tabs swaps `─` for `┤ ├` in place and never
+/// shifts a label. Labels are the kind slugs first-char-capitalized — the rail
+/// carries the product-name role the tabbed header drops. Holds to one screen
+/// row: a tab that would overflow `width` is dropped whole (label and hit
+/// together), so the hit map stays in lockstep with the frame however many
+/// kinds register or however narrow the pane. Returns the line plus one
+/// [`ProviderTabHit`] per rendered tab (line index 0, columns over the full
+/// cap-to-cap footprint, so the click target holds still too) for the mouse
+/// hit-test.
+fn provider_tab_rail(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
     active_kind: &str,
     width: usize,
 ) -> (Line<'static>, Vec<ProviderTabHit>) {
+    let rule = theme.rule();
+    let fill = |cells: usize| Span::styled(RAIL_FILL.to_string().repeat(cells), rule);
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut hits = Vec::new();
-    let mut col: u16 = 0;
+    let mut col: usize = 0;
+    let stub = RAIL_STUB.min(width);
+    spans.push(fill(stub));
+    col += stub;
     for (index, panel) in providers.iter().enumerate() {
-        let gap: u16 = if index > 0 { 2 } else { 0 };
+        let gap = if index > 0 { RAIL_STUB } else { 0 };
         let active = panel.kind == active_kind;
-        let label = if active {
-            format!("{TAB_MARKER}{}", panel.kind)
-        } else {
-            format!(" {}", panel.kind)
-        };
-        // Kind labels are registry-fixed ASCII slugs, so chars == cells.
-        let cells = label.chars().count() as u16;
-        if usize::from(col + gap + cells) > width {
+        // Kind labels are registry-fixed ASCII slugs, so chars == cells; the
+        // footprint adds the two pad cells and the two reserved cap cells.
+        let label = tab_label(&panel.kind);
+        let cells = label.chars().count() + 4;
+        if col + gap + cells > width {
             break;
         }
         if gap > 0 {
-            spans.push(Span::raw("  "));
+            spans.push(fill(gap));
             col += gap;
         }
-        let style = if active {
-            theme.style(Color::Indexed(panel.color), Modifier::BOLD)
+        if active {
+            spans.push(Span::styled(TAB_CAP_LEFT.to_string(), rule));
+            spans.push(Span::styled(
+                format!(" {label} "),
+                theme.chip(TAB_INK, Color::Indexed(panel.color), Modifier::BOLD),
+            ));
+            spans.push(Span::styled(TAB_CAP_RIGHT.to_string(), rule));
         } else {
-            theme.style(Color::Indexed(panel.color), Modifier::DIM)
-        };
-        spans.push(Span::styled(label, style));
+            spans.push(fill(1));
+            spans.push(Span::styled(
+                format!(" {label} "),
+                theme.style(Color::Indexed(panel.color), Modifier::DIM),
+            ));
+            spans.push(fill(1));
+        }
         hits.push(ProviderTabHit {
             line: 0,
-            col_start: col,
-            col_end: col + cells,
+            col_start: col as u16,
+            col_end: (col + cells) as u16,
             kind: panel.kind.clone(),
         });
         col += cells;
     }
+    if col < width {
+        spans.push(fill(width - col));
+    }
     (Line::from(spans), hits)
 }
 
-/// The active-tab marker: the lead cell every tab reserves, filled on the
-/// active one — the pick's `NO_COLOR`-surviving shape.
-const TAB_MARKER: char = '▸';
+/// The active tab's caps, notching its chip into the rail on either side —
+/// the pick's `NO_COLOR`-surviving shape.
+const TAB_CAP_LEFT: char = '┤';
+const TAB_CAP_RIGHT: char = '├';
 
-/// `Claude v2.1.158 · Claude Max          ⇅ rc`: the product name in the
-/// brand color and the version + plan dim on the left, with the violet `⇅ rc`
-/// flag pinned to the top-right corner of the block when remote control is on for
-/// the provider. Fields drop out when unknown.
+/// The rail's fill glyph — the same `─` the plain hairline draws — and the
+/// width of its leading stub and inter-tab gaps.
+const RAIL_FILL: char = '─';
+const RAIL_STUB: usize = 2;
+
+/// The active chip's ink: near-black, crisp on every mid-brightness brand
+/// fill. A brand-tone pass-through like the theme's `ORANGE`, not a palette
+/// slot.
+const TAB_INK: Color = Color::Indexed(16);
+
+/// A tab's display label: the registry kind slug with its first ASCII char
+/// capitalized (`claude` → `Claude`) — the rail names the product, so the
+/// tabbed header doesn't have to. Hits keep the raw slug. Kind slugs are
+/// registry-fixed ASCII — the rail's cell math counts on it — so a non-ASCII
+/// first char (a mid-codepoint `get_mut` range) is left uncapitalized rather
+/// than split.
+fn tab_label(kind: &str) -> String {
+    let mut label = kind.to_owned();
+    if let Some(first) = label.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    label
+}
+
+/// The block's header line, with the violet `⇅ rc` flag pinned to the
+/// top-right corner when remote control is on for the provider. Untabbed it
+/// reads `Claude v2.1.158 · Claude Max` — the product name in the brand color,
+/// version and plan dim. Tabbed, the rail already names the account, so the
+/// name drops and the line reads `Claude Max · v2.1.158` — plan first, the
+/// version demoted to trailing trivia — indented to the stats column
+/// (the art column's width, zero when the narrow pane drops the emblem) so it
+/// sits over the `◎` line as the right-column grid's title row. Fields drop
+/// out when unknown; a tabbed account with neither plan nor version leaves a
+/// near-empty header, acceptable since the rail names it.
 fn provider_header_line(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     width: usize,
+    tabbed: bool,
 ) -> Line<'static> {
-    let mut left = vec![Span::styled(
-        panel.product_name.clone(),
-        theme.style(Color::Indexed(panel.color), Modifier::BOLD),
-    )];
-    if let Some(version) = panel.version.as_deref() {
-        left.push(Span::styled(format!(" v{version}"), theme.dim()));
-    }
-    if let Some(plan) = panel.plan.as_deref() {
-        left.push(Span::styled(" · ", theme.faint()));
-        left.push(Span::styled(plan.to_owned(), theme.dim()));
+    let mut left = Vec::new();
+    if tabbed {
+        let show_art = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
+        if show_art {
+            left.push(Span::raw(" ".repeat(PROVIDER_ART_WIDTH + 1)));
+        }
+        if let Some(plan) = panel.plan.as_deref() {
+            left.push(Span::styled(plan.to_owned(), theme.dim()));
+        }
+        if let Some(version) = panel.version.as_deref() {
+            if panel.plan.is_some() {
+                left.push(Span::styled(" · ", theme.faint()));
+            }
+            left.push(Span::styled(format!("v{version}"), theme.dim()));
+        }
+    } else {
+        left.push(Span::styled(
+            panel.product_name.clone(),
+            theme.style(Color::Indexed(panel.color), Modifier::BOLD),
+        ));
+        if let Some(version) = panel.version.as_deref() {
+            left.push(Span::styled(format!(" v{version}"), theme.dim()));
+        }
+        if let Some(plan) = panel.plan.as_deref() {
+            left.push(Span::styled(" · ", theme.faint()));
+            left.push(Span::styled(plan.to_owned(), theme.dim()));
+        }
     }
     let right = if panel.remote_control {
         vec![Span::styled(

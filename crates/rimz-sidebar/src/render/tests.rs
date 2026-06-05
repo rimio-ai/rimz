@@ -2331,42 +2331,74 @@ fn two_provider_panels() -> Vec<rimz::SidebarProviderPanel> {
     ]
 }
 
-/// The tab bar holds to one screen row: a tab that would overflow the panel
+/// The tab rail holds to one screen row: a tab that would overflow the panel
 /// width is dropped whole — label and hit together — so the hit map stays in
 /// lockstep with the frame however many kinds register or however narrow the
-/// pane.
+/// pane, and the rail still fills with `─`.
 #[test]
-fn tab_bar_drops_whole_tabs_that_overflow_the_width() {
+fn tab_rail_drops_whole_tabs_that_overflow_the_width() {
     let theme = Theme::fixed(false);
     let panels = vec![
         provider_panel("claude", "Claude", 173, true, false, Some((25, 40))),
         provider_panel("codex", "Codex", 33, false, false, None),
         provider_panel("pi", "Pi", 28, false, false, None),
     ];
-    // `▸claude` (7) + gap (2) + ` codex` (6) = 15 fits in 16; ` pi` would
-    // land at 20, so it drops whole.
-    let (lines, hits) = provider_panel_lines(&theme, &panels, Some("claude"), 16);
+    // Stub (2) + `┤ Claude ├` (10) + gap (2) + `─ Codex ─` (9, the cap cells
+    // reserved as fill) = 23 fits in 24; `─ Pi ─` would land at 31, so it
+    // drops whole and `─` fills the tail.
+    let (lines, hits) = provider_panel_lines(&theme, &panels, Some("claude"), 24);
     let tab_line: String = lines[0]
         .spans
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
-    assert_eq!(tab_line, "▸claude   codex");
+    assert_eq!(tab_line, "──┤ Claude ├─── Codex ──");
     assert_eq!(
         hits.iter().map(|hit| hit.kind.as_str()).collect::<Vec<_>>(),
         vec!["claude", "codex"],
         "the dropped tab carries no hit"
     );
-    assert!(tab_line.chars().count() <= 16, "the bar never wraps");
+    assert!(tab_line.chars().count() <= 24, "the rail never wraps");
 }
 
-/// The pinned per-provider dashboard, tabbed: the tab bar names every account
-/// (the active tab behind the `▸` marker), and only the active provider's
-/// block paints — here the selection-derived Claude tab, a metered block
-/// (header with version and plan on the left, the `⇅ rc` flag pinned
-/// top-right; the brand emblem; the `◎` session count leading today's stats;
-/// 5h/7d "mana" bars draining toward their resets). The other account stays a
-/// dim tab label, its block off screen.
+/// Every tab reserves its two cap cells, so re-notching the pick swaps `─` for
+/// `┤ ├` in place: whichever tab is active, every label rests at the same
+/// column and every hit covers the same cap-to-cap footprint.
+#[test]
+fn tab_rail_keeps_every_footprint_still_across_picks() {
+    let theme = Theme::fixed(false);
+    let panels = two_provider_panels();
+    let rail_text = |lines: &[Line<'static>]| -> String {
+        lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    };
+    let (claude_lines, claude_hits) = provider_panel_lines(&theme, &panels, Some("claude"), 52);
+    let (codex_lines, codex_hits) = provider_panel_lines(&theme, &panels, Some("codex"), 52);
+    assert_eq!(
+        claude_hits, codex_hits,
+        "the click targets hold still as the pick moves"
+    );
+    let (claude_rail, codex_rail) = (rail_text(&claude_lines), rail_text(&codex_lines));
+    for label in ["Claude", "Codex"] {
+        assert_eq!(
+            claude_rail.find(label),
+            codex_rail.find(label),
+            "`{label}` rests at one column whichever tab is active:\n{claude_rail}\n{codex_rail}"
+        );
+    }
+}
+
+/// The pinned per-provider dashboard, tabbed: the tab rail names every account
+/// (the active tab a `┤ … ├`-capped chip notched into the top hairline), and
+/// only the active provider's block paints — here the selection-derived Claude
+/// tab, a metered block (the de-named header with plan and version indented to
+/// the stats column, the `⇅ rc` flag pinned top-right; the brand emblem; the
+/// `◎` session count leading today's stats; 5h/7d "mana" bars draining toward
+/// their resets). The other account stays a dim label resting in the rail, its
+/// block off screen.
 #[test]
 fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
     let mut claude = agent(
@@ -2382,20 +2414,21 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
     snapshot.providers = two_provider_panels();
     let rendered = snapshot_to_screen(&snapshot, 54, 34);
 
-    // The tab bar: the selected pane runs Claude, so its tab wears the `▸`
-    // marker and Codex rests beside it.
+    // The tab rail: the selected pane runs Claude, so its tab wears the
+    // `┤ … ├` caps and Codex rests in the line beside it.
     assert!(
-        rendered.contains("▸claude"),
+        rendered.contains("┤ Claude ├"),
         "the selection-derived active tab:\n{rendered}"
     );
-    assert!(rendered.contains("codex"), "the resting tab:\n{rendered}");
-    // The metered Claude block: header carries the version and plan on the
-    // left with the `⇅ rc` remote-control flag pinned to the top-right corner,
-    // the stats line leads with today's `◎` session count, then the 5h/7d
-    // budget bars drain.
+    assert!(rendered.contains("Codex"), "the resting tab:\n{rendered}");
+    // The metered Claude block: the rail names the account, so the header
+    // drops the name and reads plan-first with the `⇅ rc` remote-control flag
+    // pinned to the top-right corner, the stats line leads with today's `◎`
+    // session count, then the 5h/7d budget bars drain.
+    assert!(rendered.contains("Claude Max · v2.1.158"), "{rendered}");
     assert!(
-        rendered.contains("Claude v2.1.158 · Claude Max"),
-        "{rendered}"
+        !rendered.contains("Claude v2.1.158"),
+        "the tabbed header repeats no product name:\n{rendered}"
     );
     assert!(
         rendered.contains("⇅ rc"),
@@ -2416,9 +2449,9 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
 }
 
 /// A manual tab pick (`←`/`→` or a click on the label) swaps the dashboard to
-/// that provider's block: the `▸` marker moves to `codex` and the unmetered
-/// block (the `∞` icon at the front, an empty `▱` track, no countdown) paints
-/// where Claude's was, fleet ledger and footer untouched.
+/// that provider's block: the `┤ … ├` caps re-notch onto `Codex` and the
+/// unmetered block (the `∞` icon at the front, an empty `▱` track, no
+/// countdown) paints where Claude's was, fleet ledger and footer untouched.
 #[test]
 fn render_provider_dashboard_manual_tab_shows_the_picked_block() {
     let mut claude = agent(
@@ -2442,25 +2475,22 @@ fn render_provider_dashboard_manual_tab_shows_the_picked_block() {
     let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 34);
 
     assert!(
-        rendered.contains("▸codex"),
-        "the picked tab wears the marker:\n{rendered}"
+        rendered.contains("┤ Codex ├"),
+        "the picked tab wears the caps:\n{rendered}"
     );
-    assert!(
-        rendered.contains("Codex v0.135.0 · ChatGPT Pro"),
-        "{rendered}"
-    );
+    assert!(rendered.contains("ChatGPT Pro · v0.135.0"), "{rendered}");
     assert!(rendered.contains('∞'), "infinity at the front:\n{rendered}");
     assert!(rendered.contains('▱'), "the empty ∞ track:\n{rendered}");
     assert!(
-        !rendered.contains("Claude v2.1.158"),
+        !rendered.contains("Claude Max"),
         "the unpicked block stays off screen:\n{rendered}"
     );
     assert_snapshot("provider_dashboard_codex_tab", rendered);
 }
 
 /// With no manual pick, the tab focus follows the selected pane's provider:
-/// a selected Codex row lands the `▸` on the codex tab and paints its block,
-/// however the panels are ordered.
+/// a selected Codex row notches the `┤ … ├` caps onto the codex tab and
+/// paints its block, however the panels are ordered.
 #[test]
 fn render_provider_dashboard_tab_follows_the_selected_agent() {
     let codex = agent(
@@ -2476,23 +2506,21 @@ fn render_provider_dashboard_tab_follows_the_selected_agent() {
     let rendered = snapshot_to_screen(&snapshot, 54, 34);
 
     assert!(
-        rendered.contains("▸codex"),
+        rendered.contains("┤ Codex ├"),
         "the selected agent's tab is active:\n{rendered}"
     );
+    assert!(rendered.contains("ChatGPT Pro · v0.135.0"), "{rendered}");
     assert!(
-        rendered.contains("Codex v0.135.0 · ChatGPT Pro"),
-        "{rendered}"
-    );
-    assert!(
-        !rendered.contains("Claude v2.1.158"),
+        !rendered.contains("Claude Max"),
         "the other block stays off screen:\n{rendered}"
     );
 }
 
-/// A dashboard with a single account keeps its block bare — no tab bar: there
-/// is nothing to switch to, so the header line alone names the provider.
+/// A dashboard with a single account keeps its block bare — no tab rail, a
+/// plain hairline: there is nothing to switch to, so the header line alone
+/// names the provider (the one place the de-named tabbed header never applies).
 #[test]
-fn render_single_provider_dashboard_has_no_tab_bar() {
+fn render_single_provider_dashboard_has_no_tab_rail() {
     let mut claude = agent(
         "claude-1",
         "claude",
@@ -2513,8 +2541,8 @@ fn render_single_provider_dashboard_has_no_tab_bar() {
     )];
     let rendered = snapshot_to_screen(&snapshot, 54, 34);
     assert!(
-        !rendered.contains('▸'),
-        "one account, no tab bar:\n{rendered}"
+        !rendered.contains('┤') && !rendered.contains('├'),
+        "one account, plain rule, no rail:\n{rendered}"
     );
     assert!(
         rendered.contains("Claude v2.1.158 · Claude Max"),

@@ -145,6 +145,21 @@ impl Theme {
         }
     }
 
+    /// Style a chip — `fg` ink on a `bg` fill plus `modifier` — the provider
+    /// tab rail's active pick. Both colors are suppressed under `NO_COLOR`
+    /// (the `┤ ├` caps then carry the pick by shape); otherwise each maps
+    /// through the palette, so an explicit `Indexed` brand fill and the dark
+    /// ink pass through unchanged like every other indexed tone. Modifiers
+    /// always survive — they shape the glyph, not its color.
+    pub(crate) fn chip(&self, fg: Color, bg: Color, modifier: Modifier) -> Style {
+        let style = Style::default().add_modifier(modifier);
+        if self.no_color {
+            style
+        } else {
+            style.fg(self.resolve(fg)).bg(self.resolve(bg))
+        }
+    }
+
     /// Shared dim-chrome style — for ages, labels, and values that sit
     /// alongside the active vocabulary glyphs.
     pub(crate) fn dim(&self) -> Style {
@@ -252,6 +267,23 @@ mod tests {
             theme.style(ORANGE, Modifier::empty()).fg,
             Some(Color::Indexed(173))
         );
+    }
+
+    #[test]
+    fn chip_suppresses_both_fg_and_bg_under_no_color() {
+        let lit = Theme::fixed(false).chip(Color::Indexed(16), Color::Indexed(173), Modifier::BOLD);
+        assert_eq!(lit.fg, Some(Color::Indexed(16)));
+        assert_eq!(
+            lit.bg,
+            Some(Color::Indexed(173)),
+            "brand fill passes through unmapped"
+        );
+        assert!(lit.add_modifier.contains(Modifier::BOLD));
+
+        let dark = Theme::fixed(true).chip(Color::Indexed(16), Color::Indexed(173), Modifier::BOLD);
+        assert_eq!(dark.fg, None);
+        assert_eq!(dark.bg, None, "NO_COLOR suppresses the chip fill too");
+        assert!(dark.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]

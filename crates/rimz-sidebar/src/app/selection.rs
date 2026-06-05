@@ -161,7 +161,7 @@ pub(super) fn handle_mouse_click(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
 ) -> InputOutcome {
-    // The dashboard's tab labels are the bottom block's only hit targets — a
+    // The dashboard's tabs are the bottom block's only hit targets — a
     // click on one picks that tab in place, never a jump.
     if let Some(kind) = tab_kind_at(ui, column, row) {
         pick_dashboard_tab(ui, snapshot, kind);
@@ -200,9 +200,9 @@ fn pin_manual_scroll(ui: &mut UiState) {
     }
 }
 
-/// The provider kind whose tab label sits under a click, from the tab hit map
+/// The provider kind whose tab sits under a click, from the tab hit map
 /// the renderer emitted in lockstep with the frame (`UiState::tab_hits`, the
-/// tab bar's twin of `line_map`).
+/// tab rail's twin of `line_map`).
 fn tab_kind_at(ui: &UiState, column: u16, row: u16) -> Option<String> {
     ui.tab_hits
         .iter()
