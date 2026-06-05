@@ -58,31 +58,22 @@ mod shell {
             let now = now_ms();
             match event {
                 Event::PermissionRequestResult(PermissionStatus::Granted) => {
-                    // First grant: one immediate keepalive flips the producer
-                    // into event mode now rather than after the first cadence.
-                    if !self.granted {
-                        self.granted = true;
-                        self.poke(Poke::Alive);
-                    }
+                    self.mark_granted();
                 }
                 Event::PermissionRequestResult(PermissionStatus::Denied) => {
                     self.granted = false;
                 }
                 Event::PaneUpdate(manifest) => {
                     // Application state flowing proves the (possibly cached)
-                    // grant covers us even when no explicit result arrived.
-                    if !self.granted {
-                        self.granted = true;
-                        self.poke(Poke::Alive);
-                    }
+                    // grant covers us: Zellij sends no PermissionRequestResult
+                    // when the grant comes from the permission cache (verified
+                    // live on 0.44.3), so this path is load-bearing.
+                    self.mark_granted();
                     self.tabs = project(&manifest);
                     self.fold(now);
                 }
                 Event::TabUpdate(tabs) => {
-                    if !self.granted {
-                        self.granted = true;
-                        self.poke(Poke::Alive);
-                    }
+                    self.mark_granted();
                     self.active_tab = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
                     self.fold(now);
                 }
@@ -95,9 +86,35 @@ mod shell {
             self.rearm(now);
             false // headless: never render
         }
+
+        fn pipe(&mut self, pipe_message: PipeMessage) -> bool {
+            // The launch channel: rimz loads this plugin via `zellij pipe
+            // --plugin`, the one load verb that works on a clientless session.
+            // The CLI blocks until the message is consumed — unblock it
+            // immediately so the launching fork never hangs (the message
+            // itself carries nothing; loading was the point).
+            if let PipeSource::Cli(ref name) = pipe_message.source {
+                unblock_cli_pipe_input(name);
+            }
+            false // headless: never render
+        }
     }
 
     impl State {
+        /// Flip into granted mode once: poke an immediate keepalive so the
+        /// producer enters event mode now rather than after the first
+        /// cadence, and hide the pane Zellij surfaced for the permission
+        /// prompt — the plugin is headless, so a visible pane is only ever
+        /// that prompt's leftover. Idempotent; already-hidden panes no-op.
+        fn mark_granted(&mut self) {
+            if self.granted {
+                return;
+            }
+            self.granted = true;
+            self.poke(Poke::Alive);
+            hide_self();
+        }
+
         /// Fold the current projected shape into the policy.
         fn fold(&mut self, now: u64) {
             let hash = policy::manifest_hash(&self.tabs, self.active_tab);
