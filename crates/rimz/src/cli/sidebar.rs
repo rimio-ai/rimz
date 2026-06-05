@@ -1003,11 +1003,44 @@ struct MetricsSampleEntry {
     /// so a stale binding can never latch onto a stranger's process.
     #[serde(default)]
     root_start_ticks: Option<u64>,
+    /// Last computed display values, persisted so a within-TTL produce copies
+    /// them onto the matching pane instead of re-reading `/proc`. `cpu_pct` /
+    /// `io_bps` are `None` on an entry's first sample (no prior reading to
+    /// rate); `rss_kb` is the last stat read. Carried forward only under the
+    /// `pane_command` re-tenancy guard, mirroring [`cached_root_pid`].
+    #[serde(default)]
+    cpu_pct: Option<u16>,
+    #[serde(default)]
+    io_bps: Option<u64>,
+    #[serde(default)]
+    rss_kb: Option<u64>,
 }
+
+/// How often the producer takes a fresh two-sample `/proc` reading per pane.
+/// Rate sampling needs a steady clock of its own — never the pane-read cadence,
+/// which event-paced pane updates make a topology clock — and the carried
+/// display values bound `/proc` IO to once per window regardless of produce
+/// rate. A ~3s two-sample window also smooths the rates a 1s window made
+/// jumpy; a new pane's stats warm up one window later, same as before.
+const METRICS_SAMPLE_TTL: Duration = Duration::from_secs(3);
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct MetricsSampleCache {
+    /// Unix ms of the last full `/proc` sample, for the cadence gate.
+    /// serde-default 0, so a pre-stamp cache reads as due and the first
+    /// produce after an upgrade samples and re-stamps.
+    #[serde(default)]
+    sampled_at_ms: u64,
     entries: HashMap<String, MetricsSampleEntry>,
+}
+
+impl MetricsSampleCache {
+    /// Whether the last sample is young enough that this produce skips `/proc`
+    /// and carries the stored display values forward. Saturating, so a clock
+    /// that ran backwards reads fresh rather than re-sampling every tick.
+    fn is_fresh(&self, now_ms: u64) -> bool {
+        now_ms.saturating_sub(self.sampled_at_ms) <= METRICS_SAMPLE_TTL.as_millis() as u64
+    }
 }
 
 fn read_metrics_sample_cache(path: &Path) -> MetricsSampleCache {
@@ -1017,13 +1050,15 @@ fn read_metrics_sample_cache(path: &Path) -> MetricsSampleCache {
     serde_json::from_slice(&bytes).unwrap_or_default()
 }
 
-/// Enrich each pane with per-process resource metrics from `/proc`. Reads the
-/// prior sample cache to compute two-sample rates (CPU%, IO bytes/s); writes a
-/// fresh sample for the next tick. Linux-only; on other platforms every pane's
-/// metric fields stay `None`.
+/// Enrich each pane with per-process resource metrics from `/proc`, on the
+/// sampling cadence's own clock: within [`METRICS_SAMPLE_TTL`] of the last
+/// sample the stored display values carry forward with zero `/proc` IO; a due
+/// produce reads the prior sample cache to compute two-sample rates (CPU%, IO
+/// bytes/s) and writes a fresh stamped sample for the next window. Linux-only;
+/// on other platforms every pane's metric fields stay `None`.
 ///
-/// The steady-state tick is O(panes) small `/proc` reads: each Zellij pane's
-/// root pid restores from the prior tick's guarded binding
+/// The steady-state due sample is O(panes) small `/proc` reads: each Zellij
+/// pane's root pid restores from the prior window's guarded binding
 /// ([`restore_cached_bindings`]) and each shell's foreground child comes from
 /// its own `/proc/<pid>/task/<pid>/children` file. The full process-table walk
 /// runs only while some pane's binding is unknown — pane churn or a foreground
@@ -1035,6 +1070,28 @@ fn enrich_pane_metrics(
 ) {
     let cache_path = runtime.root.join("metrics-sample.json");
     let prior = read_metrics_sample_cache(&cache_path);
+    let now_ms = unix_now_ms();
+
+    // Within the sampling window: carry the stored display values forward onto
+    // the matching panes and return — zero `/proc` IO (no binding restore, no
+    // table walk, no stat/io reads) and no cache write. The carry is keyed by
+    // pane id and guarded by the foreground command, so a pane id re-tenanted
+    // inside one window never wears its predecessor's stats; a pane absent
+    // from the cache (or re-tenanted) keeps `None`s — the same warmup it has
+    // today, one window wider.
+    if prior.is_fresh(now_ms) {
+        for pane in panes.iter_mut() {
+            let Some(entry) = prior.entries.get(&pane.pane_id.to_string()) else {
+                continue;
+            };
+            if entry.pane_command == pane.command {
+                pane.cpu_pct = entry.cpu_pct;
+                pane.io_bps = entry.io_bps;
+                pane.rss_kb = entry.rss_kb;
+            }
+        }
+        return;
+    }
 
     // Zellij's `list-panes` reports no per-pane pid (tmux fills `#{pane_pid}`
     // natively), so first restore each pidless pane's root pid from the prior
@@ -1062,7 +1119,6 @@ fn enrich_pane_metrics(
         );
     }
 
-    let now_ms = unix_now_ms();
     let clk_tck = rimz::proc::clk_tck() as f64;
     let mut new_entries: HashMap<String, MetricsSampleEntry> = HashMap::new();
 
@@ -1129,11 +1185,15 @@ fn enrich_pane_metrics(
                 pane_pid: Some(shell_pid),
                 pane_command: pane.command.clone(),
                 root_start_ticks,
+                cpu_pct: pane.cpu_pct,
+                io_bps: pane.io_bps,
+                rss_kb: pane.rss_kb,
             },
         );
     }
 
     let new_cache = MetricsSampleCache {
+        sampled_at_ms: now_ms,
         entries: new_entries,
     };
     if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &new_cache) {

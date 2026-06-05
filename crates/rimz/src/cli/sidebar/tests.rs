@@ -611,6 +611,9 @@ fn binding_entry(pane_pid: u32, command: &str, start_ticks: u64) -> MetricsSampl
         pane_pid: Some(pane_pid),
         pane_command: Some(command.to_owned()),
         root_start_ticks: Some(start_ticks),
+        cpu_pct: None,
+        io_bps: None,
+        rss_kb: None,
     }
 }
 
@@ -694,4 +697,117 @@ fn binding_misses_drive_the_walk_and_unbindable_panes_do_not() {
         &|_| None,
     ));
     assert_eq!(inert[2].pane_pid, Some(9));
+}
+
+// ── Metrics sampling cadence (METRICS_SAMPLE_TTL) ───────────────────────────────
+
+#[test]
+fn metrics_cache_expires_after_sample_ttl() {
+    let cache = MetricsSampleCache {
+        sampled_at_ms: 1_000,
+        entries: HashMap::new(),
+    };
+    let ttl_ms = METRICS_SAMPLE_TTL.as_millis() as u64;
+    // Boundary-exact: fresh at exactly the TTL, due one ms past it.
+    assert!(cache.is_fresh(1_000 + ttl_ms));
+    assert!(!cache.is_fresh(1_001 + ttl_ms));
+    // A clock that ran backwards reads fresh (saturating), never a re-sample
+    // every tick.
+    assert!(cache.is_fresh(500));
+    // A pre-stamp cache (serde-default 0) is due on any real wall clock.
+    assert!(!MetricsSampleCache::default().is_fresh(unix_now_ms()));
+}
+
+/// The within-TTL skip path: stored display values carry forward onto the
+/// matching pane, the re-tenancy guard blanks a reused pane id, an uncached
+/// pane keeps its `None`s, and the cache file is left unwritten.
+#[test]
+fn metrics_within_ttl_carries_display_values_forward() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let runtime = rimz::RuntimePaths::under(
+        rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/metrics-ttl")),
+        dir.path(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(&runtime.root).unwrap();
+
+    let mut panes = vec![
+        pane("terminal_1", Some("zsh"), Some("/repo")),
+        pane("terminal_2", Some("cargo build"), Some("/repo")),
+        pane("terminal_3", Some("zsh"), Some("/repo")),
+    ];
+    let mut cache = MetricsSampleCache {
+        sampled_at_ms: unix_now_ms(),
+        entries: HashMap::new(),
+    };
+    cache.entries.insert(
+        panes[0].pane_id.to_string(),
+        MetricsSampleEntry {
+            cpu_pct: Some(42),
+            io_bps: Some(1_024),
+            rss_kb: Some(2_048),
+            ..binding_entry(42, "zsh", 700)
+        },
+    );
+    // terminal_2's entry recorded a different foreground: the pane id was
+    // re-tenanted inside the window, so its stats must not carry.
+    cache.entries.insert(
+        panes[1].pane_id.to_string(),
+        MetricsSampleEntry {
+            cpu_pct: Some(99),
+            io_bps: Some(9_999),
+            rss_kb: Some(9_999),
+            ..binding_entry(43, "zsh", 701)
+        },
+    );
+    let cache_path = runtime.root.join("metrics-sample.json");
+    std::fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
+    let written = std::fs::read(&cache_path).unwrap();
+
+    enrich_pane_metrics(&mut panes, "rimz-query-engine", &runtime);
+
+    assert_eq!(panes[0].cpu_pct, Some(42), "matching pane carries forward");
+    assert_eq!(panes[0].io_bps, Some(1_024));
+    assert_eq!(panes[0].rss_kb, Some(2_048));
+    assert_eq!(
+        panes[1].cpu_pct, None,
+        "re-tenanted pane id carries nothing"
+    );
+    assert_eq!(panes[2].cpu_pct, None, "uncached pane warms up next window");
+    assert_eq!(
+        std::fs::read(&cache_path).unwrap(),
+        written,
+        "the skip path never rewrites the sample cache"
+    );
+}
+
+/// A due cache (stamp older than the TTL) re-samples and re-stamps, so the
+/// next produce inside the new window skips again.
+#[test]
+fn metrics_due_path_resamples_and_restamps() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let runtime = rimz::RuntimePaths::under(
+        rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/metrics-due")),
+        dir.path(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(&runtime.root).unwrap();
+
+    let stale_ms = unix_now_ms() - METRICS_SAMPLE_TTL.as_millis() as u64 - 1_000;
+    let cache = MetricsSampleCache {
+        sampled_at_ms: stale_ms,
+        entries: HashMap::new(),
+    };
+    let cache_path = runtime.root.join("metrics-sample.json");
+    std::fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
+
+    let mut panes = vec![pane("terminal_1", Some("zsh"), Some("/repo"))];
+    enrich_pane_metrics(&mut panes, "rimz-query-engine", &runtime);
+
+    let rewritten: MetricsSampleCache =
+        serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
+    assert!(
+        rewritten.sampled_at_ms > stale_ms,
+        "a due produce re-samples and re-stamps the cache"
+    );
 }
