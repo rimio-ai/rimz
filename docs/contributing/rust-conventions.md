@@ -194,6 +194,7 @@ Current snapshot — entries move when a better-designed alternative wins on des
 | **Runtime — utility** | `tempfile`, `fs4`, `which`, `sha2`, `hex`, `crc32fast` (event-log frame checksum: hardware CRC32 on the per-frame validate and the repair scan; already transitive via `ureq` → `flate2` and already vet-exempted), `nix` (Unix sockets, sigaction) on `cfg(unix)`, `ureq` (rustls; the runtime pricing-refresh HTTP client, also used by `xtask pricing-refresh`), `terminal_size` (the launch-path terminal probe behind the sidebar birth size; already transitive via clap's `wrap_help`) |
 | **Binary boundary only** | `anyhow` — permitted in `crates/rimz/src/main.rs`, the private `cli/` module tree, `crates/rimz-sidebar/src/main.rs`, and `xtask/` |
 | **Sidebar runtime** | `ratatui` (via its `crossterm_0_29` feature); direct `crossterm` only when sidebar I/O actually requires it |
+| **Zellij plugin (wasm-only)** | `zellij-tile` — the official plugin API, a `cfg(target_family = "wasm")` dependency of `crates/rimz-presence-zellij` alone, so no host artifact links it. Its tree is excluded from `deny.toml`'s audited targets (the wasm executes inside Zellij's plugin sandbox) and covered by `cargo vet` at `safe-to-run` |
 | **Tests** | `insta`, `proptest`, `assert_cmd`, `predicates`, `vt100`, `tempfile`, `portable-pty` |
 
 Rules:
@@ -208,7 +209,7 @@ Rules:
 
 ### Toolchain
 
-The stable channel is pinned in `rust-toolchain.toml`. No Cargo.toml carries `rust-version`. Required components: `rustfmt`, `clippy`, `llvm-tools-preview`.
+The stable channel is pinned in `rust-toolchain.toml`. No Cargo.toml carries `rust-version`. Required components: `rustfmt`, `clippy`, `llvm-tools-preview`. Required targets: `wasm32-wasip1` (the Zellij presence plugin; rustup and the CI toolchain action provision it from the same file).
 
 A fast linker is required and configured per target in `.cargo/config.toml`: `clang` + `mold` on Linux, `clang` + `lld` on macOS. mold replaces the default bfd linker on the link-heavy integration-test binary, which relinks on every incremental change; it is a build-time tool only — no runtime or transitive footprint — and is the SOTA Unix linker. CI re-adds the mold link-arg to `RUSTFLAGS` because a `RUSTFLAGS` env overrides `[target.*].rustflags` while leaving the `linker` key intact.
 
@@ -226,11 +227,11 @@ Every gate runs in CI with warnings treated as errors. Local equivalent is `carg
 - `cargo llvm-cov nextest --workspace --all-features --locked` — coverage. This *is* the suite run inside `ci`: the tests run once, under instrumentation, instead of building and running a second uninstrumented pass.
 - `cargo semver-checks` — release-time API check; skipped while the workspace version is the unpublished pre-release `0.0.0`.
 
-Inside `ci` the gates are ordered for speed, not listed order: the instant text gates (`fmt`, `invariants`) run first and fail fast; the metadata-only audits (`deny`, `deps`, `vet`) overlap the compile gates on their own threads; the compile gates run sequentially (`lint → coverage → doctest → semver`) because concurrent cargo builds only serialize on the target-dir lock. `ci` prints a per-gate timing summary to stderr.
+Inside `ci` the gates are ordered for speed, not listed order: the instant text gates (`fmt`, `invariants`) run first and fail fast; the metadata-only audits (`deny`, `deps`, `vet`) overlap the compile gates on their own threads; the compile gates run sequentially (`build-plugin → lint → coverage → doctest → semver`) because concurrent cargo builds only serialize on the target-dir lock. `ci` prints a per-gate timing summary to stderr.
 
 ### Contributor command surface
 
-`cargo xtask <task>` is the entry point. Tasks: `build`, `install`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `invariants`, `ci`. Shell scripts are not added; new automation lands in `xtask/`.
+`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `install`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `invariants`, `ci`. Shell scripts are not added; new automation lands in `xtask/`.
 
 ## Reading order for new contributors
 

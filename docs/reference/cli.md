@@ -157,6 +157,7 @@ Hooks, the sidebar, the statusline, and other Rimz processes invoke these. You r
 rimz ping                                          # liveness check; prints `ok`
 rimz sidebar snapshot --workspace-id <id> [--json] # the shared view-model JSON
 rimz sidebar serve ...                             # the terminal sidebar renderer
+rimz sidebar wake --reason <r> [--workspace-id <id>] # Zellij presence-plugin poke (stamp + eldest nudge)
 rimz statusline feed --source <agent>              # captures statusline context
 rimz hooks feed --source <agent> [--event <e>]     # routes a hook payload (--event is a debug override)
 rimz codex ...                                     # Codex enrichment helpers

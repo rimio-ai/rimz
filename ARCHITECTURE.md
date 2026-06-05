@@ -64,13 +64,14 @@ The CLI and hook subprocesses are the only durable-state writers. The sidebar re
 |-- Makefile               thin aliases over cargo xtask
 |-- crates/
 |   |-- rimz/              CLI binary plus runtime/domain library
+|   |-- rimz-presence-zellij/  headless Zellij presence plugin (wasm32-wasip1)
 |   `-- rimz-sidebar/      native terminal sidebar renderer (both backends)
 |-- examples/resolvers/    reference resolver artifacts (Python, stdlib-only)
 |-- supply-chain/          cargo-vet audit state
 `-- xtask/                 contributor task runner; entry point for every quality gate
 ```
 
-Add a crate only when ownership, target type, or dependency profile justifies it. The CLI is one runtime artifact and the native sidebar renderer is another. Every renderer projects the same `rimz sidebar snapshot` JSON view-model — there is no shared render crate, and a future renderer (the planned Zellij plugin rail, [roadmap](./docs/contributing/roadmap.md)) joins as its own crate projecting the same snapshot.
+Add a crate only when ownership, target type, or dependency profile justifies it. The CLI is one runtime artifact and the native sidebar renderer is another. `rimz-presence-zellij` clears the bar on all three: a wasm32-wasip1 plugin binary (built by `cargo xtask build-plugin`, installed beside the host binaries), owned by the Zellij plugin-host boundary, with `zellij-tile` as a wasm-only dependency no host artifact links. It is signal-only — it runs `rimz sidebar wake` and ships no data — and depends on no rimz crate; its pure poke policy unit-tests on the host ([multiplexers.md → Zellij presence channel](./docs/internals/multiplexers.md#zellij-presence-channel)). Every renderer projects the same `rimz sidebar snapshot` JSON view-model — there is no shared render crate, and a future renderer (the planned Zellij plugin rail, [roadmap](./docs/contributing/roadmap.md)) joins as its own crate projecting the same snapshot.
 
 ## Module ownership
 
@@ -91,6 +92,10 @@ Contracts live in the layered `AGENTS.md` files — the root contract plus a loc
 Top-level domain modules are one file each, their `//!` headers carrying the detail: `workspace` (project identity), `trust` (executable-surface hash and grant state; [trust.md](./docs/internals/trust.md)), `feed` (item lifecycle, surfaces, statuses), `bridge` (per-request sockets, nonce validation), `ids` (typed identifier newtypes), `resume` (resume-on-rebirth planner), `remote` and `remote_control` (SSH attach, agent remote-control launch), `config` (per-machine settings), `agent_activity` (liveness hints), `proc` (`/proc` reader), `reload` (binary-upgrade convergence).
 
 `build.rs` embeds the checked-in pricing snapshot (`pricing/litellm-pricing.json`) at compile time, network-free; `cargo xtask pricing-refresh` refreshes it ([pricing.md](./docs/internals/pricing.md)). Hidden subcommands are machinery, not humans — the `sidebar` and `statusline` helper APIs and the `codex` helpers (`refresh-context`, `refresh-rate-limits`, and the `app-server serve` broker hosted in the `rimzd` daemon view) — listed in [cli.md](./docs/reference/cli.md#commands-rimz-calls-for-you).
+
+### `crates/rimz-presence-zellij`
+
+The Zellij presence plugin: a headless wasm32-wasip1 binary Zellij loads into every rimz session, poking `rimz sidebar wake` on pane-topology and focus changes so the producer can stretch its pane poll ([multiplexers.md → Zellij presence channel](./docs/internals/multiplexers.md#zellij-presence-channel)). Everything decision-shaped lives in `policy.rs` — a `zellij-tile`-free pure core, host-tested in the ordinary workspace run — and the wasm shell in `main.rs` only projects host events into it and executes the pokes it returns. Talks to rimz exclusively through the wake argv; depends on no rimz crate.
 
 ### `crates/rimz-sidebar` — [local contract](./crates/rimz-sidebar/AGENTS.md)
 

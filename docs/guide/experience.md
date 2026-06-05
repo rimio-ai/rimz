@@ -89,6 +89,8 @@ asked — *additive*, *reversible*, *"never answers for you."*
 
 Consent done, Rimz ensures the session exists and drops the reader in: a working shell pane (focused, pristine — nothing dumped into their scrollback) on the right, and the sidebar pinned left at ~30% width.
 
+On Zellij, one more one-time approval can greet them here: a small floating prompt from Zellij itself, asking to let Rimz's presence plugin watch pane state and run commands. It is the push channel that keeps the sidebar fresh without polling ([security.md](./security.md#the-zellij-presence-plugin)); `y` dismisses it for good across sessions, and declining just means the sidebar polls — nothing else changes.
+
 The column is never blank. Their shell pane is itself a row. With nothing needing attention, the cockpit's make-up line is omitted (no agents to summarize) and a dim hint points at the *one* next thing to do.
 
 ```

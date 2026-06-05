@@ -56,6 +56,10 @@ The mechanics behind these guarantees — the decision channel, the neutral no-o
 
 `rimz pane capture` returns untrusted terminal text. Rimz core does not parse it for correctness and does not auto-type. Resolvers that use pane primitives must pattern-match bounded prompt shapes and abstain when unsure. Captured text is data, never an instruction stream — feeding it into an LLM prompt as if it were a user message is the standard prompt-injection footgun.
 
+## The Zellij presence plugin
+
+On Zellij, rimz loads a small presence plugin into each session so the sidebar learns of pane changes by push instead of polling ([internals](../internals/multiplexers.md#zellij-presence-channel)). The first load surfaces Zellij's own permission prompt, once: **Access Zellij state** (it watches pane/tab shape) and **Run commands** (its one action is running `rimz sidebar wake`, a fixed argv rimz pins at load). Approve with `y` and the prompt pane closes itself; Zellij remembers the grant across sessions and restarts, keyed to the plugin's installed path. Declining costs latency only — the sidebar falls back to its poll — and `rimz doctor` shows which mode a workspace is in. The plugin's argv, artifact, and configuration are all rimz-owned (never your `config.kdl`), it ships no pane content anywhere, and the grant stays in Zellij's own permission store where its plugin manager can revoke it.
+
 ## State safety
 
 - State directories use `0700` permissions.
