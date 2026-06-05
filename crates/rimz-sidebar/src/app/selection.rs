@@ -5,9 +5,13 @@
 use rimz::SidebarSnapshot;
 use rimz::ids::PaneId;
 
-use crate::render::{Browse, UiState};
+use crate::render::{Browse, ManualScroll, UiState};
 
 use super::input::KeyAction;
+
+/// Content lines a wheel tick moves the viewport — about one card line-group
+/// per notch, so a flick traverses cards rather than crawling line by line.
+const SCROLL_STEP: usize = 3;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct InputOutcome {
@@ -88,6 +92,19 @@ pub(super) fn handle_key(
         }
         KeyAction::Help => {
             ui.help_visible = !ui.help_visible;
+            if ui.help_visible {
+                // The overlay lives at the scroll zone's tail: jump the
+                // viewport to the end so toggling help always reveals it — the
+                // draw clamps the sentinel to the zone's last window. The open
+                // overlay itself owns the viewport (the draw suppresses
+                // auto-follow while `help_visible`), so selection churn beneath
+                // it never pulls the view away mid-read; the wheel may roam.
+                ui.scroll_offset = usize::MAX;
+            } else {
+                // Closing drops any wheel peek made while reading, so the view
+                // snaps back to the selected card.
+                ui.manual_scroll = None;
+            }
             InputOutcome::redraw()
         }
         KeyAction::Dismiss => InputOutcome::dismiss(),
@@ -115,13 +132,40 @@ pub(super) fn handle_mouse_click(
     InputOutcome::default()
 }
 
+/// A wheel tick: move the viewport, never the selection. The first tick pins a
+/// [`ManualScroll`] capturing the selection it began over — the clear condition
+/// — and later ticks only move the window, so a long peek keeps one anchor.
+/// Overshoot is fine: the draw clamps the offset to the zone and writes the
+/// effective value back.
+pub(super) fn handle_scroll(down: bool, ui: &mut UiState) -> InputOutcome {
+    pin_manual_scroll(ui);
+    ui.scroll_offset = if down {
+        ui.scroll_offset.saturating_add(SCROLL_STEP)
+    } else {
+        ui.scroll_offset.saturating_sub(SCROLL_STEP)
+    };
+    InputOutcome::redraw()
+}
+
+/// Pin the viewport against auto-follow, capturing the current selection as the
+/// snap-back condition. A pin already held keeps its original anchor.
+fn pin_manual_scroll(ui: &mut UiState) {
+    if ui.manual_scroll.is_none() {
+        ui.manual_scroll = Some(ManualScroll {
+            selection_at_start: ui.selected_pane.clone(),
+        });
+    }
+}
+
 /// Point the highlight at a visible row by index — the identity-keyed selection
 /// (`selected_pane`) plus its derived render index. A pure positioner for the
 /// arrow-key browse; the jump actions resolve their target through
-/// [`pane_at_row`] instead and never move the highlight.
+/// [`pane_at_row`] instead and never move the highlight. An explicit pick ends
+/// any wheel pin, so the viewport snaps back to following the selection.
 fn select_row(ui: &mut UiState, snapshot: &SidebarSnapshot, index: usize) {
     ui.selected_index = index;
     ui.selected_pane = pane_at_row(snapshot, index);
+    ui.manual_scroll = None;
 }
 
 /// The pane backing visible row `index`, or `None` for a pane-less row or an
@@ -221,6 +265,15 @@ pub(super) fn reconcile_selection(
         ui.browse = None;
     }
     anchor_selection(ui, snapshot);
+
+    // 5. A wheel pin holds the viewport only while the selection it began over
+    //    stands; a genuine selection change — a jump landing, an external focus
+    //    move — ends the peek and the viewport snaps back to the selected card.
+    if let Some(manual) = &ui.manual_scroll
+        && ui.selected_pane != manual.selection_at_start
+    {
+        ui.manual_scroll = None;
+    }
 }
 
 /// Re-derive `selected_index` from the identity-keyed `selected_pane`. When the

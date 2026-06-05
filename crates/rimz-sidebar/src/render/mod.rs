@@ -75,6 +75,15 @@ pub struct UiState {
     /// The transient arrow-key browse pick riding above the baseline, or `None`
     /// when not browsing (see [`Browse`]).
     pub(crate) browse: Option<Browse>,
+    /// First scroll-zone content line visible in the agent-cards viewport.
+    /// Resolved by every draw — clamped to the zone, then auto-scrolled so the
+    /// selected card stays in view unless a [`ManualScroll`] pin or the open
+    /// help overlay holds it — and written back as a byproduct of the draw,
+    /// like `line_map`.
+    pub(crate) scroll_offset: usize,
+    /// The transient wheel-scroll pin riding above the auto-follow, or `None`
+    /// while the viewport follows the selection (see [`ManualScroll`]).
+    pub(crate) manual_scroll: Option<ManualScroll>,
 }
 
 /// Arrow-key browse: pins `pane` WITHOUT moving focus, roaming every visible
@@ -86,6 +95,16 @@ pub struct UiState {
 pub(crate) struct Browse {
     pub(crate) pane: PaneId,
     pub(crate) baseline_at_start: Option<PaneId>,
+}
+
+/// Wheel scroll: pins the viewport offset WITHOUT moving the selection, so the
+/// user can peek at cards beyond the fold. Holds until the selection genuinely
+/// changes from `selection_at_start` — the value captured when the scroll began
+/// — then the viewport snaps back to following the selected card. The browse
+/// twin, one layer down: browse pins *which card*, this pins *which window*.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ManualScroll {
+    pub(crate) selection_at_start: Option<PaneId>,
 }
 
 /// A sticky health alert pinned to the bottom of the sidebar.
@@ -193,36 +212,51 @@ pub fn draw_with_ui(
     // fills the whole area; a title line and faint hairline rules carry the
     // structure the border used to.
     //
-    // The composed map is a byproduct of the draw: store it so the mouse
-    // hit-test reads the geometry of the frame the user is actually looking at.
-    let (lines, map) = compose_lines(snapshot, alert, ui, area.width, area.height);
+    // The composed map and the resolved scroll offset are byproducts of the
+    // draw: store them so the mouse hit-test and the next frame's viewport read
+    // the geometry of the frame the user is actually looking at.
+    let (lines, map, scroll_offset) = compose_lines(snapshot, alert, ui, area.width, area.height);
     ui.line_map = map;
+    ui.scroll_offset = scroll_offset;
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }
 
-/// Lay out the body, then pin the bottom chrome to the bottom edge of the
-/// viewport like a status bar: the centered navigation footer, and beneath it
-/// the sticky health alert. Space for the bottom block is always reserved — the
-/// body is truncated before it is ever clipped — so the footer and notice can
-/// never scroll off the bottom of a full sidebar. While an alert is *active* the
-/// body is a stale/empty fetch, so the footer steps aside and the alert speaks
-/// alone.
+/// Lay out the frame as three vertical zones: the top-pinned cockpit (identity,
+/// summary, make-up line), a scroll viewport over the agent cards, and the
+/// bottom chrome pinned to the bottom edge like a status bar — the provider
+/// dashboard, the centered navigation footer, and beneath it the sticky health
+/// alert. Space for the pinned zones is always reserved — the scroll zone is
+/// windowed before either is ever clipped — so the cockpit and the footer can
+/// never scroll off a full sidebar. While an alert is *active* the body is a
+/// stale/empty fetch, so the footer steps aside and the alert speaks alone.
 ///
-/// Returns the composed body *and* a parallel hit-test map of equal length:
-/// entry `i` is the visible row index that on-screen content line `i` belongs
-/// to (`app::visible_rows()` order), or `None` for structural lines (cockpit
-/// header, gaps, the external divider, `+K more`, help, footer, alert); a
-/// worktree header routes to the row it jumps into. The map is the single
-/// authority on row geometry — built from the same final line vector that is
-/// rendered, so it stays 1:1 with what the user sees through every clip.
+/// The viewport window is `UiState::scroll_offset`, resolved here each frame:
+/// clamped to the zone, then minimally auto-scrolled so the selected card —
+/// its expanded subagent lines included — sits fully in view, unless a manual
+/// wheel pin ([`ManualScroll`]) or the open help overlay holds the window —
+/// the overlay owns the viewport while it is up, immune to selection churn
+/// beneath it. The effective
+/// offset is returned for the caller to write back, a draw byproduct like the
+/// hit-test map. When the cards overflow the viewport, each visible scroll line
+/// carries a track/thumb glyph in the right-margin column the content leaves
+/// free — part of the composed line, so every consumer of the frame sees it.
+///
+/// Returns the composed frame, a parallel hit-test map of equal length, and the
+/// effective scroll offset. Map entry `i` is the visible row index that
+/// on-screen content line `i` belongs to (`app::visible_rows()` order), or
+/// `None` for structural lines (cockpit header, gaps, the external divider,
+/// `+K more`, help, footer, alert); a worktree header routes to the row it
+/// jumps into. The map is the single authority on row geometry — built from the
+/// same final line vector that is rendered, so it stays 1:1 with what the user
+/// sees through every clip and every scroll position.
 pub(crate) fn compose_lines(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
     ui: &UiState,
     width: u16,
     height: u16,
-) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
+) -> (Vec<Line<'static>>, Vec<Option<usize>>, usize) {
     // One `Theme` per frame, handed to the body and the bottom chrome alike:
     // the cached `NO_COLOR` reading plus the palette the producer resolved from
     // `[sidebar.theme]` onto the snapshot — so a re-themed config lands with
@@ -233,7 +267,8 @@ pub(crate) fn compose_lines(
     // width and opened with a blank gutter, leaving the trailing column as the
     // matching right margin — the same frame the cards carry (see `with_gutter`).
     let inner = content_width(cells);
-    let (mut body, mut map) = snapshot_lines(snapshot, alert, ui, cells, &theme);
+    let (mut lines, mut map) = top_lines(snapshot, ui, cells, &theme);
+    let (scroll, scroll_map) = scroll_lines(snapshot, alert, ui, cells, &theme);
 
     // Bottom-pinned chrome, top to bottom: the per-provider dashboard (account-
     // scoped budgets + brand emblem), the navigation footer (centered), then the
@@ -282,9 +317,6 @@ pub(crate) fn compose_lines(
     if let Some(alert) = alert {
         bottom.extend(alert_lines(&theme, alert).into_iter().map(pad_chrome));
     }
-    if bottom.is_empty() {
-        return (body, map);
-    }
 
     let height = usize::from(height);
     let bottom_height = bottom
@@ -296,19 +328,146 @@ pub(crate) fn compose_lines(
         .sum::<usize>()
         .min(height);
 
-    let max_body = height.saturating_sub(bottom_height);
-    if body.len() > max_body {
-        body.truncate(max_body);
-        map.truncate(max_body);
+    // Zone heights, reserved pinned-first: the bottom chrome, then the cockpit,
+    // and the scroll viewport takes what remains — zero on a degenerate frame,
+    // so the cards give way before either pinned zone is ever clipped.
+    let after_bottom = height.saturating_sub(bottom_height);
+    let top_shown = lines.len().min(after_bottom);
+    let viewport = after_bottom - top_shown;
+    lines.truncate(top_shown);
+    map.truncate(top_shown);
+
+    // Resolve the viewport offset: clamp to the zone, then — unless a manual
+    // wheel pin or the open help overlay holds the window — minimally
+    // auto-scroll the selected card fully into view. The clamp runs first so
+    // the help toggle's `usize::MAX` jump-to-end lands on the zone's last
+    // window; while the overlay is open it owns the viewport, so selection
+    // churn beneath it never pulls the view away mid-read.
+    let scroll_len = scroll.len();
+    let max_offset = scroll_len.saturating_sub(viewport);
+    let mut offset = ui.scroll_offset.min(max_offset);
+    if ui.manual_scroll.is_none() && !ui.help_visible {
+        offset = auto_scroll_to_selection(&scroll_map, ui.selected_index, offset, viewport)
+            .min(max_offset);
     }
-    let pad = height.saturating_sub(body.len() + bottom_height);
-    body.extend(std::iter::repeat_n(Line::from(""), pad));
+
+    // Window the scroll zone, riding the scrollbar glyph on each visible line's
+    // right-margin column when the cards overflow the viewport.
+    let end = (offset + viewport).min(scroll_len);
+    let overflow = scroll_len > viewport && viewport > 0;
+    for (index, line) in scroll
+        .into_iter()
+        .enumerate()
+        .skip(offset)
+        .take(end - offset)
+    {
+        lines.push(if overflow {
+            with_scrollbar(
+                line,
+                &theme,
+                cells,
+                index - offset,
+                offset,
+                scroll_len,
+                viewport,
+            )
+        } else {
+            line
+        });
+    }
+    map.extend(scroll_map[offset..end].iter().copied());
+
+    let pad = height.saturating_sub(lines.len() + bottom_height);
+    lines.extend(std::iter::repeat_n(Line::from(""), pad));
     map.extend(std::iter::repeat_n(None, pad));
     // The footer and alert are pinned chrome, never jump targets: one `None`
     // per line.
     map.extend(std::iter::repeat_n(None, bottom.len()));
-    body.extend(bottom);
-    (body, map)
+    lines.extend(bottom);
+    (lines, map, offset)
+}
+
+/// Minimally nudge the viewport so the selected row's full line range — its
+/// expanded subagent lines, and the group header when the first row of a group
+/// is selected (both carry the row's map entry) — sits inside the window. A
+/// fully visible selection moves nothing; a card taller than the viewport pins
+/// its first line to the top; a selection with no lines in the scroll zone
+/// holds the clamped offset.
+fn auto_scroll_to_selection(
+    map: &[Option<usize>],
+    selected: usize,
+    offset: usize,
+    viewport: usize,
+) -> usize {
+    if viewport == 0 {
+        return offset;
+    }
+    let Some(first) = map.iter().position(|entry| *entry == Some(selected)) else {
+        return offset;
+    };
+    let last = map
+        .iter()
+        .rposition(|entry| *entry == Some(selected))
+        .unwrap_or(first);
+    if last - first + 1 >= viewport {
+        return first;
+    }
+    if first < offset {
+        return first;
+    }
+    if last >= offset + viewport {
+        return last + 1 - viewport;
+    }
+    offset
+}
+
+/// Ride the scrollbar on a visible scroll-zone line: pad to the right-margin
+/// column the content leaves free (content builds to `content_width`, the
+/// gutter takes column 0) and append the track or thumb glyph — so the bar is
+/// part of the composed frame, reflows nothing, and adds no line the hit-test
+/// map would have to account for. The solid `▐` thumb against the hairline `▕`
+/// track carries the position by shape, so it survives `NO_COLOR`. The pad
+/// measures display cells (`Line::width`) against the char-count budget the
+/// content was built to; the two agree because every glyph in the sidebar
+/// lexicon is single-cell.
+fn with_scrollbar(
+    mut line: Line<'static>,
+    theme: &Theme,
+    cells: usize,
+    row: usize,
+    offset: usize,
+    scroll_len: usize,
+    viewport: usize,
+) -> Line<'static> {
+    let (thumb_start, thumb_len) = scroll_thumb(offset, scroll_len, viewport);
+    let pad = cells.saturating_sub(1).saturating_sub(line.width());
+    if pad > 0 {
+        line.spans.push(Span::raw(" ".repeat(pad)));
+    }
+    let in_thumb = (thumb_start..thumb_start + thumb_len).contains(&row);
+    line.spans.push(if in_thumb {
+        Span::styled(labels::SCROLL_THUMB, theme.dim())
+    } else {
+        Span::styled(labels::SCROLL_TRACK, theme.rule())
+    });
+    line
+}
+
+/// Proportional thumb geometry over a `viewport`-tall track: the thumb's length
+/// scales with how much of the zone is visible (never below one row) and its
+/// start maps the offset across the track, reaching the last row exactly at the
+/// bottom — so "at the top" and "at the bottom" always read true. Caller
+/// guarantees `scroll_len > viewport > 0`.
+fn scroll_thumb(offset: usize, scroll_len: usize, viewport: usize) -> (usize, usize) {
+    let thumb_len = (viewport * viewport / scroll_len).clamp(1, viewport);
+    let max_start = viewport - thumb_len;
+    let max_offset = scroll_len - viewport;
+    let thumb_start = if offset >= max_offset {
+        max_start
+    } else {
+        offset * max_start / max_offset
+    };
+    (thumb_start, thumb_len)
 }
 
 pub fn draw_to_terminal<B: Backend>(
@@ -345,24 +504,16 @@ pub fn render_fixed<W: Write>(
     Ok(())
 }
 
-/// Compose the sidebar body and, in lockstep, the hit-test map: every content
-/// line gets one map entry, `Some(row)` for an agent/process row line and the
-/// worktree header that jumps into it, `None` for structural chrome (cockpit
-/// header, gaps, the external divider, first-run hint, help, `+K more`). The
-/// footer and alert are pinned to the bottom by [`compose_lines`], not here. The
-/// two vectors stay equal length and same order so [`compose_lines`] can hand
-/// the map straight to the hit-test.
-fn snapshot_lines(
+/// Compose the top-pinned cockpit zone and, in lockstep, its hit-test map. All
+/// inert chrome — identity, summary, the make-up line — so every entry is
+/// `None`. Fixed height for a given room population, never windowed, so the
+/// scroll zone below starts at a stable row.
+fn top_lines(
     snapshot: &SidebarSnapshot,
-    alert: Option<&Alert>,
     ui: &UiState,
     width: usize,
     theme: &Theme,
 ) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
-    // An *active* alert means the body is a stale/empty fetch, not a live room:
-    // suppress the first-run hint, footer, and help so the alert speaks alone.
-    // A recovered alert is just a lingering notice — the room below it is live.
-    let active = alert.is_some_and(Alert::is_active);
     let mut lines = Vec::new();
     let mut map: Vec<Option<usize>> = Vec::new();
 
@@ -410,9 +561,35 @@ fn snapshot_lines(
         &mut map,
         fleet_header_lines(theme, &snapshot.worktree_groups, inner),
     );
+    (lines, map)
+}
+
+/// Compose the scrollable agent-cards zone and, in lockstep, its hit-test map:
+/// every content line gets one map entry, `Some(row)` for an agent/process row
+/// line and the worktree header that jumps into it, `None` for structural
+/// chrome (gaps, the external divider, first-run hint, help, `+K more`). The
+/// zone opens with its own section gap — the top zone always ends on a
+/// non-empty line — so an unscrolled frame composes exactly as the unsplit
+/// body did. [`compose_lines`] windows this zone by the scroll offset and pins
+/// the cockpit above it and the footer chrome below.
+fn scroll_lines(
+    snapshot: &SidebarSnapshot,
+    alert: Option<&Alert>,
+    ui: &UiState,
+    width: usize,
+    theme: &Theme,
+) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
+    // An *active* alert means the body is a stale/empty fetch, not a live room:
+    // suppress the first-run hint, footer, and help so the alert speaks alone.
+    // A recovered alert is just a lingering notice — the room below it is live.
+    let active = alert.is_some_and(Alert::is_active);
+    let mut lines = Vec::new();
+    let mut map: Vec<Option<usize>> = Vec::new();
+
     if snapshot.worktree_groups.is_empty() {
         if !active && should_show_first_run_hint(snapshot) {
-            push_section_gap(&mut lines, &mut map);
+            lines.push(Line::from(""));
+            map.push(None);
             extend_inert(
                 &mut lines,
                 &mut map,
@@ -420,7 +597,8 @@ fn snapshot_lines(
             );
         }
     } else {
-        push_section_gap(&mut lines, &mut map);
+        lines.push(Line::from(""));
+        map.push(None);
         let mut row_index = 0;
         for (index, group) in snapshot.worktree_groups.iter().enumerate() {
             if index > 0 {
@@ -475,8 +653,7 @@ fn extend_inert(
 /// so the whole sidebar sits inside a one-cell frame — the trailing column the
 /// content leaves free is the matching right margin. A genuinely empty line (a
 /// blank separator, or the cockpit's reserved-but-empty totals slot) is left as
-/// is, so it stays zero-width and never reads as a one-space "content" line that
-/// would trip the section-gap heuristic.
+/// is, so it stays zero-width and reads as a true blank row.
 fn pad_chrome(line: Line<'static>) -> Line<'static> {
     if line.spans.iter().all(|span| span.content.is_empty()) {
         return line;
@@ -581,13 +758,6 @@ fn alert_lines(theme: &Theme, alert: &Alert) -> Vec<Line<'static>> {
             format!("⚠ last alert {elapsed} ago: {}  ·  x dismiss", alert.reason),
             theme.style(Color::Yellow, Modifier::DIM),
         )]
-    }
-}
-
-fn push_section_gap(lines: &mut Vec<Line<'static>>, map: &mut Vec<Option<usize>>) {
-    if lines.last().is_some_and(|line| line.width() > 0) {
-        lines.push(Line::from(""));
-        map.push(None);
     }
 }
 

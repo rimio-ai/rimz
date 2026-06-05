@@ -48,7 +48,7 @@ use gate::GateState;
 use input::{Wakeup, encode_key, encode_mouse, wait_for_wakeup};
 use lifecycle::{SELF_CLOSE_WATCHDOG, SelfCloseState, SessionExitState, resize_grew};
 use reload::{ReloadAction, reexec_self, reload_action};
-use selection::{InputOutcome, handle_key, handle_mouse_click};
+use selection::{InputOutcome, handle_key, handle_mouse_click, handle_scroll};
 use state::{apply_fetch_outcome, placeholder_snapshot};
 
 pub use health::Health;
@@ -775,6 +775,7 @@ fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -
     match wakeup {
         Wakeup::Key(action) => handle_key(action, ui, snapshot),
         Wakeup::MouseClick { column, row } => handle_mouse_click(column, row, ui, snapshot),
+        Wakeup::Scroll { down } => handle_scroll(down, ui),
         Wakeup::Resize => InputOutcome::redraw(),
         // The serve loop intercepts these before dispatching here: a tick, a
         // ledger delta, or a presence nudge is a re-fetch trigger, worker

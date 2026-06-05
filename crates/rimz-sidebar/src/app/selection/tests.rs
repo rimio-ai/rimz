@@ -506,7 +506,7 @@ fn line_map_for(snapshot: &SidebarSnapshot, selected: usize) -> Vec<Option<usize
         line_map: Vec::new(),
         ..Default::default()
     };
-    let (_lines, map) = render::compose_lines(snapshot, None, &ui, 54, 64);
+    let (_lines, map, _offset) = render::compose_lines(snapshot, None, &ui, 54, 64);
     map
 }
 
@@ -758,4 +758,144 @@ fn enter_fires_focus_at_the_selected_pane_without_mutating_ui() {
     ui.selected_pane = None;
     let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
+}
+
+#[test]
+fn wheel_scroll_pins_the_viewport_and_steps_the_offset() {
+    // The wheel moves the window, never the selection: each tick steps the
+    // offset and the first tick pins a ManualScroll anchored on the selection
+    // it began over.
+    let mut ui = UiState::default();
+
+    let outcome = handle_scroll(true, &mut ui);
+
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.scroll_offset, SCROLL_STEP);
+    assert!(ui.manual_scroll.is_some());
+    assert_eq!(ui.selected_index, 0, "the wheel never moves the selection");
+
+    handle_scroll(true, &mut ui);
+    assert_eq!(ui.scroll_offset, 2 * SCROLL_STEP);
+
+    // Scrolling back above the top clamps at zero rather than wrapping.
+    handle_scroll(false, &mut ui);
+    handle_scroll(false, &mut ui);
+    handle_scroll(false, &mut ui);
+    assert_eq!(ui.scroll_offset, 0);
+    assert!(
+        ui.manual_scroll.is_some(),
+        "the pin outlives the round trip"
+    );
+}
+
+#[test]
+fn selection_change_snaps_a_wheel_pin_back() {
+    // The pin holds across folds that keep the selection, and ends the moment
+    // the selection genuinely changes — the viewport snaps back to following
+    // the selected card.
+    let ws = workspace();
+    let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let snapshot = snapshot_with_panes(
+        &ws,
+        vec![
+            pane("terminal_1", "tab_0", false),
+            pane("terminal_2", "tab_0", false),
+        ],
+    );
+    let mut ui = UiState::default();
+    reconcile_selection(&mut ui, &snapshot, Some(first.clone()));
+    handle_scroll(true, &mut ui);
+
+    // An unchanged selection keeps the peek.
+    reconcile_selection(&mut ui, &snapshot, Some(first));
+    assert!(ui.manual_scroll.is_some());
+
+    // A genuine selection move ends it.
+    reconcile_selection(&mut ui, &snapshot, Some(second));
+    assert_eq!(ui.manual_scroll, None);
+}
+
+#[test]
+fn arrow_browse_ends_a_wheel_pin() {
+    // ↑/↓ are explicit picks: the wheel peek ends and the viewport resumes
+    // following the selection.
+    let ws = workspace();
+    let snapshot = snapshot_with_panes(
+        &ws,
+        vec![
+            pane("terminal_1", "tab_0", false),
+            pane("terminal_2", "tab_0", false),
+        ],
+    );
+    let mut ui = UiState::default();
+    handle_scroll(true, &mut ui);
+    assert!(ui.manual_scroll.is_some());
+
+    handle_key(KeyAction::Down, &mut ui, &snapshot);
+
+    assert_eq!(ui.manual_scroll, None);
+}
+
+#[test]
+fn help_toggle_jumps_the_viewport_to_the_overlay() {
+    // The overlay lives at the scroll zone's tail: opening help jumps the
+    // viewport to the end (the draw clamps the sentinel to the zone's last
+    // window) and the open overlay itself owns the viewport — no wheel pin
+    // needed, the wheel may still roam. Closing drops any roaming peek so the
+    // view snaps back to the selection.
+    let ws = workspace();
+    let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
+    let mut ui = UiState::default();
+
+    handle_key(KeyAction::Help, &mut ui, &snapshot);
+    assert!(ui.help_visible);
+    assert_eq!(ui.scroll_offset, usize::MAX);
+    assert_eq!(ui.manual_scroll, None, "the overlay needs no wheel pin");
+
+    handle_scroll(false, &mut ui);
+    assert!(ui.manual_scroll.is_some(), "the wheel roams while reading");
+
+    handle_key(KeyAction::Help, &mut ui, &snapshot);
+    assert!(!ui.help_visible);
+    assert_eq!(ui.manual_scroll, None);
+}
+
+#[test]
+fn help_overlay_holds_the_viewport_through_selection_churn() {
+    // While the overlay is open it owns the viewport: a fold that genuinely
+    // moves the selection — an external focus move landing — never pulls the
+    // view away mid-read. Closing the overlay resumes auto-follow and the
+    // selected card scrolls back into view.
+    let ws = workspace();
+    let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let snapshot = snapshot_with_panes(
+        &ws,
+        (1..=6)
+            .map(|n| pane(&format!("terminal_{n}"), "tab_0", false))
+            .collect(),
+    );
+    let mut ui = UiState::default();
+    reconcile_selection(&mut ui, &snapshot, Some(first));
+
+    // Opening help lands the viewport on the overlay at the zone's tail.
+    handle_key(KeyAction::Help, &mut ui, &snapshot);
+    let (_lines, _map, offset) = render::compose_lines(&snapshot, None, &ui, 38, 14);
+    assert!(offset > 0, "the overlay overflows the short frame");
+    ui.scroll_offset = offset; // the draw's write-back
+
+    // A genuine selection move beneath the open overlay holds the window.
+    reconcile_selection(&mut ui, &snapshot, Some(second));
+    let (_lines, _map, held) = render::compose_lines(&snapshot, None, &ui, 38, 14);
+    assert_eq!(held, offset, "the open overlay owns the viewport");
+    ui.scroll_offset = held;
+
+    // Closing resumes auto-follow: the selected card scrolls back into view.
+    handle_key(KeyAction::Help, &mut ui, &snapshot);
+    let (_lines, map, _offset) = render::compose_lines(&snapshot, None, &ui, 38, 14);
+    assert!(
+        map.contains(&Some(ui.selected_index)),
+        "the selection is back on screen"
+    );
 }

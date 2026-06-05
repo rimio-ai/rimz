@@ -408,6 +408,12 @@ const BAR_TRACK: char = '─';
 const MANA_FILLED: char = '▰';
 const MANA_TRACK: char = '▱';
 
+/// The agent-cards viewport scrollbar, ridden on the right-margin column when
+/// the cards overflow: a solid `▐` thumb over a hairline `▕` track. The
+/// solid/thin shape difference carries the position, so it survives `NO_COLOR`.
+pub(super) const SCROLL_THUMB: &str = "▐";
+pub(super) const SCROLL_TRACK: &str = "▕";
+
 /// Filled-cell count for `percent` of `width`, to the nearest whole cell: 0%
 /// stays an unbroken track, 100% fills the whole width.
 fn filled_cells(percent: u8, width: usize) -> usize {

@@ -107,6 +107,7 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `┄ external ┄`  | out-of-project panes (scripts, CI, stray shells) |
 | `┄ commands ┄`  | the seam between a worktree's agent cards and its process rows |
 | `─`             | a section hairline |
+| `▐` / `▕`       | the cards' scrollbar — thumb / track, riding the right margin when the cards overflow the viewport |
 | `⇅ rc`          | remote control is on for that provider |
 
 ## Zone 1 — the cockpit
@@ -146,6 +147,8 @@ The first-run hint names the real next step: an un-wired room points at `rimz ho
 ## Zone 2 — the agent cards
 
 The body: one card per pane, grouped under the worktree it lives in. A worktree is total isolation — only same-worktree agents collaborate — so each group reads as one bounded block.
+
+**The cards scroll between the pinned zones.** When the cards outgrow the pane, they scroll between the cockpit above and the provider dashboard below — both stay put — and a thin scrollbar rides the right margin: a solid `▐` thumb over a hairline `▕` track, the position carried by shape so it reads under `NO_COLOR`. The viewport follows the selection: picking any row — arrows, a click landing, `␣` — brings its card, expanded subagent list included, fully into view, and a card taller than the window pins its first line to the top. The mouse wheel scrolls the viewport freely without moving the selection — peek anywhere; the next selection change snaps the view back to the selected card. `?` reveals the help overlay at the zone's tail whatever the scroll position, and the view holds there while the overlay is open.
 
 ### The card
 
@@ -272,6 +275,7 @@ You don't read where to go; you go. Selecting a row focuses that pane — no mux
 - `1`–`9` jump by the row's visible position.
 - `␣` jump to the **next thing that needs you** — the oldest waiting/failed row, without selecting first. One key tames a fleet; press again for the next.
 - A click anywhere in a card's block jumps to it.
+- The mouse wheel scrolls the card list without moving the selection; the next selection change snaps the view back to the selected card.
 
 ## Zone 3 — the provider dashboard
 
@@ -379,6 +383,10 @@ The renderer's golden tests in [`crates/rimz-sidebar/src/render/`](../../crates/
 | worktree grouping + external | `worktree_attention_map` |
 | landed worktree header (`≡`) | `worktree_equal_to_trunk` |
 | per-worktree cap | `group_cap_with_overflow` |
+| cards overflow + scrollbar | `scroll_overflow_shows_bar` |
+| selection-driven scroll to bottom | `scroll_offset_follows_selection_to_bottom` |
+| tall expanded card pinned to top | `scroll_pins_tall_expanded_card_top` |
+| wheel pin holds the viewport | `scroll_manual_offset_holds` |
 | provider dashboard | `provider_dashboard` |
 | fleet ledger (week/month) | `fleet_ledger` |
 | health alert | `degraded_banner` |

@@ -39,6 +39,11 @@ pub(super) enum Wakeup {
         column: u16,
         row: u16,
     },
+    /// A mouse wheel tick. Scrolls the agent-cards viewport without moving the
+    /// selection; the next selection change snaps the viewport back to it.
+    Scroll {
+        down: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,8 +90,10 @@ pub(super) fn encode_mouse(kind: MouseEventKind, column: u16, row: u16) -> Optio
         // between the two events, the second landed on a now-shifted row and the
         // highlight flashed to the wrong card. One event per click fixes it.
         MouseEventKind::Down(MouseButton::Left) => Some(format!("mouse:left:{column}:{row}")),
-        MouseEventKind::ScrollUp => Some("key:up".to_owned()),
-        MouseEventKind::ScrollDown => Some("key:down".to_owned()),
+        // The wheel scrolls the viewport, never the selection — ↑/↓ own the
+        // selection browse, so a wheel peek past the fold moves no highlight.
+        MouseEventKind::ScrollUp => Some("scroll:up".to_owned()),
+        MouseEventKind::ScrollDown => Some("scroll:down".to_owned()),
         _ => None,
     }
 }
@@ -119,6 +126,8 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         "key:space" => Wakeup::Key(KeyAction::Space),
         "key:help" => Wakeup::Key(KeyAction::Help),
         "key:dismiss" => Wakeup::Key(KeyAction::Dismiss),
+        "scroll:up" => Wakeup::Scroll { down: false },
+        "scroll:down" => Wakeup::Scroll { down: true },
         _ => Wakeup::Tick,
     }
 }
@@ -203,13 +212,15 @@ mod tests {
             encode_mouse(MouseEventKind::Up(MouseButton::Left), 4, 7),
             None
         );
+        // The wheel scrolls the viewport, never the selection: it must round-
+        // trip to the scroll wakeup, not an arrow key.
         assert_eq!(
             decode_wakeup(
                 encode_mouse(MouseEventKind::ScrollUp, 4, 7)
                     .unwrap()
                     .as_bytes()
             ),
-            Wakeup::Key(KeyAction::Up)
+            Wakeup::Scroll { down: false }
         );
         assert_eq!(
             decode_wakeup(
@@ -217,7 +228,7 @@ mod tests {
                     .unwrap()
                     .as_bytes()
             ),
-            Wakeup::Key(KeyAction::Down)
+            Wakeup::Scroll { down: true }
         );
     }
 

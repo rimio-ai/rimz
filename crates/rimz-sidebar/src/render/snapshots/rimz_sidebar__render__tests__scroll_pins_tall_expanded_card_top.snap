@@ -1,0 +1,18 @@
+---
+source: crates/rimz-sidebar/src/render/tests.rs
+assertion_line: 83
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0
+ ¤ 1
+ ────────────────────────────────────────────────────
+ ? 0   ! 0   ○ 0   ⏸︎ 0                     ⢿ 1   ✓ 0
+▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄▐
+▌_ claude                                            ▐
+▌  db migrate                                        ▕
+▌  ▢ ──────────────────────────────────────────    0%▕
+▌  ⧉ subagents (4)                                   ▕
+▌    ⢿ Explore — survey area 0                       ▕
+                      ? for help
