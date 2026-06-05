@@ -175,6 +175,24 @@ impl TmuxServer {
             .map(|line| line.trim().to_owned())
             .collect()
     }
+
+    /// `show-options <scope-args…> -v <option>`, asserting success — reads one
+    /// option's live value back from the server.
+    fn show_option(&self, scope_args: &[&str], option: &str) -> String {
+        let output = Command::new("tmux")
+            .args(["-S", self.socket.to_str().expect("utf8 socket")])
+            .arg("show-options")
+            .args(scope_args)
+            .args(["-v", option])
+            .output()
+            .expect("spawn tmux show-options");
+        assert!(
+            output.status.success(),
+            "show-options {option} failed: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
 }
 
 impl Drop for TmuxServer {
@@ -213,6 +231,36 @@ fn ensure_and_list_sessions_round_trip() {
     assert_eq!(
         server.pane_current_path("rimz-test"),
         cwd.path().display().to_string()
+    );
+}
+
+/// `ensure_session` applies the room options in one batched client invocation
+/// (`TmuxBackend::batch` joins the twelve option sets with standalone `;`
+/// tokens). Assert a representative option from each scope actually took on
+/// the live server — server (`escape-time 0`), session (`mouse on`), and
+/// window (`allow-passthrough on`) — proving the `;` tokenization reached
+/// tmux as a command sequence, not as arguments.
+#[test]
+fn ensure_session_applies_room_options_in_one_batch() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    server
+        .backend
+        .ensure_session(&SessionOptions {
+            session_name: "rimz-options".to_owned(),
+            cwd: cwd.path().to_path_buf(),
+            config: rimz::config::MultiplexerConfig::default(),
+            detected_size: None,
+        })
+        .expect("ensure");
+
+    assert_eq!(server.show_option(&["-s"], "escape-time"), "0");
+    assert_eq!(server.show_option(&["-t", "rimz-options"], "mouse"), "on");
+    assert_eq!(
+        server.show_option(&["-w", "-t", "rimz-options"], "allow-passthrough"),
+        "on",
     );
 }
 

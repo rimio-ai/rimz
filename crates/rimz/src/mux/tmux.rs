@@ -71,12 +71,17 @@ fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
     Some((major, minor, patch))
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct TmuxBackend {
     /// Override for the tmux server socket. When `None` tmux picks the
     /// default (`$TMUX_TMPDIR/tmux-<uid>/default`). Integration tests set
     /// this to a tempdir path so they never touch the user's sessions.
     socket: Option<PathBuf>,
+    /// Memoized `tmux -V` stdout ([`MuxBackend::version`]), probed once per
+    /// instance — Zellij parity. An instance lives one CLI command, so an
+    /// upgraded binary is seen by the next command. Only a successful probe
+    /// is stored, so a transient failure retries.
+    version: std::sync::OnceLock<String>,
 }
 
 impl TmuxBackend {
@@ -87,6 +92,7 @@ impl TmuxBackend {
     pub fn with_socket(socket: impl Into<PathBuf>) -> Self {
         Self {
             socket: Some(socket.into()),
+            ..Self::default()
         }
     }
 
@@ -97,6 +103,31 @@ impl TmuxBackend {
             spec = spec.args(["-S".to_owned(), socket.to_string_lossy().into_owned()]);
         }
         spec
+    }
+
+    /// Run several tmux commands in one client invocation, joined by standalone
+    /// `;` argv tokens (`tmux <cmd-a…> ; <cmd-b…>`) — one fork and one server
+    /// round-trip instead of N. tmux runs the sequence left-to-right and exits
+    /// non-zero at the first failure, naming it on stderr; commands before it
+    /// stay applied (the same partial application the sequential loop had), and
+    /// the returned [`MuxErr::Command`] carries the joined argv with that
+    /// stderr. Only for commands whose output is not read back per command —
+    /// anything parsed (`-P -F`, `show-options`, `display-message`) stays a
+    /// separate `run()`.
+    fn batch(&self, commands: &[Vec<String>]) -> Result<()> {
+        // Zero commands is a no-op: an argv-less `tmux` client would
+        // `new-session` instead.
+        if commands.is_empty() {
+            return Ok(());
+        }
+        let mut spec = self.cmd();
+        for (index, command) in commands.iter().enumerate() {
+            if index > 0 {
+                spec = spec.arg(";");
+            }
+            spec = spec.args(command.iter().cloned());
+        }
+        spec.run().map(|_| ())
     }
 
     /// Close a single pane by id (`kill-pane -t %N`), terminating its process.
@@ -156,13 +187,23 @@ impl TmuxBackend {
     /// view is idempotent on its window name, so a relaunch into a session that
     /// already carries it is skipped.
     fn session_has_window(&self, session: &str, name: &str) -> Result<bool> {
+        Ok(self
+            .window_names(session)?
+            .iter()
+            .any(|window| window == name))
+    }
+
+    /// Every window name in `session` — one `list-windows` probe that callers
+    /// checking several names share instead of forking per name.
+    fn window_names(&self, session: &str) -> Result<Vec<String>> {
         let output = self
             .cmd()
             .args(["list-windows", "-t", session, "-F", "#{window_name}"])
             .run()?;
         Ok(String::from_utf8_lossy(&output.stdout)
             .lines()
-            .any(|line| line.trim() == name))
+            .map(|line| line.trim().to_owned())
+            .collect())
     }
 
     /// Force the named window to the session's first slot. tmux opens the daemon
@@ -199,20 +240,28 @@ impl TmuxBackend {
     /// attach lands on it, mirroring the Zellij layout's focus. Best-effort:
     /// a failed window is logged and skipped — the room is still usable.
     fn seed_resume_windows(&self, opts: &SidebarPaneOptions) {
+        if opts.resume_panes.is_empty() {
+            return;
+        }
+        // One `list-windows` probe covers every pane's idempotency check —
+        // this replaces a probe fork per resumed agent. A failed probe means
+        // re-seeding cannot be made idempotent, so every agent is left out
+        // (the same degradation the per-agent probe had, once instead of N).
+        let existing = match self.window_names(&opts.session_name) {
+            Ok(names) => names,
+            Err(err) => {
+                tracing::warn!(
+                    session = %opts.session_name,
+                    error = %err,
+                    "resume: window probe failed; leaving the agents out",
+                );
+                return;
+            }
+        };
         let mut focus_window: Option<String> = None;
         for pane in &opts.resume_panes {
-            match self.session_has_window(&opts.session_name, &pane.label) {
-                Ok(true) => continue, // already seeded by an earlier birth
-                Ok(false) => {}
-                Err(err) => {
-                    tracing::warn!(
-                        session = %opts.session_name,
-                        agent = %pane.label,
-                        error = %err,
-                        "resume: window probe failed; leaving the agent out",
-                    );
-                    continue;
-                }
+            if existing.iter().any(|window| window == &pane.label) {
+                continue; // already seeded by an earlier birth
             }
             // `-d` keeps the user on the working window; `-P -F` prints the new
             // window id so we can land focus on the freshest agent without the
@@ -273,44 +322,38 @@ impl TmuxBackend {
     /// Apply Rimz's tmux room options. tmux splits these across server,
     /// session, and window scopes; server options affect every session in this
     /// tmux server because tmux offers no per-session equivalent for clipboard
-    /// and rich-key handling.
+    /// and rich-key handling. All twelve sets ride one batched client
+    /// invocation — this runs on the `rimz start` birth path, where a fork per
+    /// option was the dominant cost.
     fn apply_room_options(&self, session: &str, config: &TmuxConfig) -> Result<()> {
+        let mut commands: Vec<Vec<String>> = Vec::new();
         for (key, value) in tmux_server_options(config) {
-            self.cmd()
-                .args([
-                    "set-option".to_owned(),
-                    "-s".to_owned(),
-                    key.to_owned(),
-                    value,
-                ])
-                .run()
-                .map(|_| ())?;
+            commands.push(vec![
+                "set-option".to_owned(),
+                "-s".to_owned(),
+                key.to_owned(),
+                value,
+            ]);
         }
         for (key, value) in tmux_session_options(config) {
-            self.cmd()
-                .args([
-                    "set-option".to_owned(),
-                    "-t".to_owned(),
-                    session.to_owned(),
-                    key.to_owned(),
-                    value,
-                ])
-                .run()
-                .map(|_| ())?;
+            commands.push(vec![
+                "set-option".to_owned(),
+                "-t".to_owned(),
+                session.to_owned(),
+                key.to_owned(),
+                value,
+            ]);
         }
         for (key, value) in tmux_window_options(config) {
-            self.cmd()
-                .args([
-                    "set-window-option".to_owned(),
-                    "-t".to_owned(),
-                    session.to_owned(),
-                    key.to_owned(),
-                    value,
-                ])
-                .run()
-                .map(|_| ())?;
+            commands.push(vec![
+                "set-window-option".to_owned(),
+                "-t".to_owned(),
+                session.to_owned(),
+                key.to_owned(),
+                value,
+            ]);
         }
-        Ok(())
+        self.batch(&commands)
     }
 }
 
@@ -604,19 +647,17 @@ impl MuxBackend for TmuxBackend {
             None => format!("{}%", opts.birth_size.percent),
         };
         let command = sidebar_serve_command(opts);
-        self.cmd()
-            .args([
-                "split-window".to_owned(),
-                "-d".to_owned(),
-                "-h".to_owned(),
-                "-l".to_owned(),
-                size,
-                "-b".to_owned(),
-                "-t".to_owned(),
-                opts.session_name.clone(),
-            ])
-            .args(command.clone())
-            .run()?;
+        let mut split = vec![
+            "split-window".to_owned(),
+            "-d".to_owned(),
+            "-h".to_owned(),
+            "-l".to_owned(),
+            size,
+            "-b".to_owned(),
+            "-t".to_owned(),
+            opts.session_name.clone(),
+        ];
+        split.extend(command.iter().cloned());
 
         // Cross-backend parity (DESIGN.md): a Zellij session's layout doubles
         // as its tab template, so every new tab is born with the same
@@ -630,15 +671,15 @@ impl MuxBackend for TmuxBackend {
         let serve = command.join(" ");
         let cols = opts.birth_size.cols;
         let hook = format!("split-window -h -b -d -l {cols} '{serve}'");
-        self.cmd()
-            .args([
-                "set-hook".to_owned(),
-                "-t".to_owned(),
-                opts.session_name.clone(),
-                "after-new-window".to_owned(),
-                hook,
-            ])
-            .run()?;
+        let set_hook = vec![
+            "set-hook".to_owned(),
+            "-t".to_owned(),
+            opts.session_name.clone(),
+            "after-new-window".to_owned(),
+            hook,
+        ];
+        // One client invocation births the sidebar and installs the hook.
+        self.batch(&[split, set_hook])?;
         // With the `after-new-window` hook installed, re-seed the reborn
         // session's prior agents: each becomes its own window, born
         // `sidebar | agent` as the hook docks the sidebar on its left.
@@ -757,6 +798,9 @@ impl MuxBackend for TmuxBackend {
     }
 
     fn version(&self) -> Result<String> {
+        if let Some(cached) = self.version.get() {
+            return Ok(cached.clone());
+        }
         let output =
             self.cmd()
                 .arg("-V")
@@ -768,7 +812,9 @@ impl MuxBackend for TmuxBackend {
                     },
                     _ => MuxErr::Io(err),
                 })?;
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        let raw = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        // First writer wins on a probe race; both raced probes read one binary.
+        Ok(self.version.get_or_init(|| raw).clone())
     }
 }
 
@@ -1001,6 +1047,18 @@ mod tests {
         assert!((3, 2, 0) >= MIN_TMUX_VERSION);
         assert!((3, 5, 0) >= MIN_TMUX_VERSION);
         assert!((3, 1, 9) < MIN_TMUX_VERSION);
+    }
+
+    #[test]
+    fn version_serves_the_memoized_probe() {
+        let backend = TmuxBackend::default();
+        backend
+            .version
+            .set("tmux 9.9".to_owned())
+            .expect("a fresh instance has not probed yet");
+        // The cache is consulted before any probe: the seeded value comes back
+        // verbatim — no `tmux -V` fork, no overwrite by a real binary.
+        assert_eq!(backend.version().expect("cached version"), "tmux 9.9");
     }
 
     #[test]

@@ -5,21 +5,26 @@
 //! only inside the adapter — see [`crate::ids::PaneId`] for the normalized
 //! form that travels everywhere else.
 
+mod command;
+mod reconcile;
 pub mod recovery;
 mod selection;
 pub mod tmux;
+mod width;
 pub mod zellij;
 
+pub(crate) use command::COMMAND_TIMEOUT;
+pub use command::CommandSpec;
+pub use reconcile::{SidebarLiveness, SidebarRecovery};
+pub(crate) use reconcile::{ViewSidebars, plan_reconcile};
 pub use selection::auto_detect_backend;
 pub use tmux::TmuxBackend;
+pub use width::{BirthSize, SidebarWidth, detect_terminal_size};
 pub use zellij::ZellijBackend;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::io;
-use std::io::Read as _;
-use std::num::NonZeroU16;
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -59,155 +64,6 @@ pub enum MuxErr {
 
 pub type Result<T> = std::result::Result<T, MuxErr>;
 
-/// Upper bound on a single control-command round-trip ([`CommandSpec::run`]).
-/// Generous — a real `zellij`/`tmux` control command answers in milliseconds, so
-/// this only ever fires on a wedged child (a Zellij action client spinning
-/// against a dead server), bounding the hang instead of letting it run forever.
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Poll granularity while waiting for a control command to exit — the most
-/// latency [`CommandSpec::run_bounded`] adds on the common (fast) path.
-const POLL_STEP: Duration = Duration::from_millis(10);
-
-/// A built-up command we can run or hand back to `exec(3)`.
-#[derive(Clone, Debug, Default)]
-pub struct CommandSpec {
-    pub program: String,
-    pub args: Vec<String>,
-    pub env: BTreeMap<String, String>,
-}
-
-impl CommandSpec {
-    pub fn new(program: impl Into<String>) -> Self {
-        Self {
-            program: program.into(),
-            args: Vec::new(),
-            env: BTreeMap::new(),
-        }
-    }
-
-    pub fn arg(mut self, arg: impl Into<String>) -> Self {
-        self.args.push(arg.into());
-        self
-    }
-
-    pub fn args<I, S>(mut self, args: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.args.extend(args.into_iter().map(Into::into));
-        self
-    }
-
-    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.env.insert(key.into(), value.into());
-        self
-    }
-
-    pub fn to_command(&self) -> Command {
-        let mut command = Command::new(&self.program);
-        command.args(&self.args);
-        command.envs(&self.env);
-        command
-    }
-
-    /// Run the command to completion and capture its output, bounded by
-    /// [`COMMAND_TIMEOUT`]. A control command (`zellij action …`, `tmux …`)
-    /// finishes in milliseconds; exceeding the bound means it wedged — a Zellij
-    /// action client busy-loops at 100% CPU when its session server dies, which
-    /// would otherwise hang the caller (and `rimz start`) forever. On the bound
-    /// the child is SIGKILLed and a [`MuxErr::Timeout`] returned, so callers — all
-    /// of which treat these best-effort — degrade instead of blocking. The
-    /// interactive attach never comes through here (it `exec`s).
-    pub fn run(&self) -> Result<Output> {
-        self.run_with_timeout(COMMAND_TIMEOUT)
-    }
-
-    /// Like [`Self::run`], but with a caller-chosen bound. The health probe at
-    /// `rimz start` uses a tight one so a wedged action client (spinning against
-    /// a dead server) is killed in a few seconds rather than stalling the launch
-    /// for the full [`COMMAND_TIMEOUT`].
-    pub fn run_with_timeout(&self, timeout: Duration) -> Result<Output> {
-        let output = self.run_bounded(timeout)?;
-        if !output.status.success() {
-            return Err(MuxErr::Command {
-                program: self.program.clone(),
-                args: self.args.join(" "),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            });
-        }
-        Ok(output)
-    }
-
-    /// Spawn the child and wait at most `timeout` for it. Its stdout/stderr are
-    /// drained on threads so a full pipe never deadlocks the wait, while the child
-    /// handle stays here so a deadline can `kill()` it. Polling `try_wait` adds at
-    /// most [`POLL_STEP`] of latency on the common (fast) path; on the deadline the
-    /// child is killed and reaped and a [`MuxErr::Timeout`] returned.
-    fn run_bounded(&self, timeout: Duration) -> Result<Output> {
-        let mut child = self
-            .to_command()
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|err| match err.kind() {
-                io::ErrorKind::NotFound => MuxErr::NotInstalled {
-                    program: self.program.clone(),
-                },
-                _ => MuxErr::Io(err),
-            })?;
-        let drain = |pipe: Option<Box<dyn io::Read + Send>>| {
-            std::thread::spawn(move || {
-                let mut buf = Vec::new();
-                if let Some(mut pipe) = pipe {
-                    let _ = pipe.read_to_end(&mut buf);
-                }
-                buf
-            })
-        };
-        let stdout = drain(
-            child
-                .stdout
-                .take()
-                .map(|p| Box::new(p) as Box<dyn io::Read + Send>),
-        );
-        let stderr = drain(
-            child
-                .stderr
-                .take()
-                .map(|p| Box::new(p) as Box<dyn io::Read + Send>),
-        );
-        let deadline = std::time::Instant::now() + timeout;
-        loop {
-            match child.try_wait()? {
-                Some(status) => {
-                    let stdout = stdout.join().unwrap_or_default();
-                    let stderr = stderr.join().unwrap_or_default();
-                    return Ok(Output {
-                        status,
-                        stdout,
-                        stderr,
-                    });
-                }
-                None if std::time::Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = stdout.join();
-                    let _ = stderr.join();
-                    return Err(MuxErr::Timeout {
-                        program: self.program.clone(),
-                        args: self.args.join(" "),
-                        seconds: timeout.as_secs(),
-                    });
-                }
-                None => std::thread::sleep(POLL_STEP),
-            }
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PaneCapture {
     pub pane_id: PaneId,
@@ -238,109 +94,6 @@ pub struct SessionOptions {
     pub detected_size: Option<(u16, u16)>,
 }
 
-/// Default sidebar width as a percentage of the view. The single source of
-/// truth for both the CLI launch paths and the user-wide reload reconcile.
-const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
-
-/// Sidebar pane width: a percentage of the view, capped at `max_cols` columns
-/// (`sidebar.max_cols`). The width is resolved once per launch command: the
-/// launch paths probe the invoking terminal ([`detect_terminal_size`]) and
-/// [`SidebarWidth::birth_size`] turns the probe into the one [`BirthSize`]
-/// verdict every pane of the session is born with — constant for the
-/// session's life. Birth-time only: a manual resize afterwards sticks, and a
-/// `max_cols` edit applies at the next launch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SidebarWidth {
-    /// Percentage of the view width — tracks terminal size below the cap.
-    pub percent: u16,
-    /// Column cap the percentage never exceeds (`sidebar.max_cols`).
-    pub max_cols: NonZeroU16,
-}
-
-impl SidebarWidth {
-    /// The width a machine config asks for: the default percentage at the
-    /// configured column cap.
-    pub fn from_config(sidebar: &crate::config::SidebarConfig) -> Self {
-        Self {
-            percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
-            max_cols: sidebar.max_cols,
-        }
-    }
-
-    /// The capped target in columns for a view `total_cols` wide:
-    /// `min(percent, max_cols)`.
-    pub fn target_cols(self, total_cols: u64) -> u64 {
-        let percent = (total_cols * u64::from(self.percent.clamp(10, 90)) / 100).max(1);
-        percent.min(self.cap_cols())
-    }
-
-    /// The column cap alone — the threshold above which a pane is born fixed.
-    pub fn cap_cols(self) -> u64 {
-        u64::from(self.max_cols.get())
-    }
-
-    /// The width verdict a launch resolves on a terminal `detected_cols`
-    /// wide: [`Self::target_cols`] of the probe — the percentage capped at
-    /// `max_cols` — as fixed columns, plus its percentage spelling for panes
-    /// that materialize at unknown geometry. An unknown width (`None` —
-    /// launch outside a tty) resolves to the bare cap with the raw
-    /// percentage.
-    pub fn birth_size(self, detected_cols: Option<u16>) -> BirthSize {
-        let percent = self.percent.clamp(10, 90);
-        match detected_cols {
-            Some(total) if total > 0 => {
-                let target = self.target_cols(u64::from(total));
-                // target_cols is ≥ 1 and ≤ max_cols, so the fallback chain is
-                // unreachable; spelled without panicking per the error rules.
-                let cols = u16::try_from(target)
-                    .ok()
-                    .and_then(NonZeroU16::new)
-                    .unwrap_or(self.max_cols);
-                // Floor keeps the percentage spelling at or under the verdict
-                // on the probed terminal; at least 1% so the spelling stays
-                // valid. `target ≤ total` bounds it at 100, so the conversion
-                // holds.
-                let derived = (target * 100 / u64::from(total)).max(1);
-                BirthSize {
-                    cols,
-                    percent: u16::try_from(derived).unwrap_or(percent),
-                }
-            }
-            _ => BirthSize {
-                cols: self.max_cols,
-                percent,
-            },
-        }
-    }
-}
-
-/// The one width verdict every sidebar pane of a launch is born with —
-/// resolved once per command by [`SidebarWidth::birth_size`] from the
-/// invoking terminal, then constant for the session's life. Two spellings of
-/// the same verdict: `cols` pins panes that instantiate at known geometry
-/// (the Zellij `new_tab_template` an attached client opens tabs from, the
-/// tmux `after-new-window` hook), and `percent` covers panes that materialize
-/// at unknown geometry — the detached Zellij birth, where a fixed size wider
-/// than the background session's default geometry kills the session — and
-/// rescales to `cols` when the launching client attaches.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BirthSize {
-    /// The verdict in columns: `min(percent × probed width, max_cols)`, the
-    /// bare cap when no terminal was probed.
-    pub cols: NonZeroU16,
-    /// The verdict as a share of the probed width (floor, ≥ 1%) — the
-    /// unknown-geometry spelling; the configured percentage when no terminal
-    /// was probed.
-    pub percent: u16,
-}
-
-/// The invoking terminal's `(cols, rows)`, when stdout is attached to one.
-/// Probed once per launch command; the width feeds
-/// [`SidebarWidth::birth_size`] and the pair sizes a detached tmux birth.
-pub fn detect_terminal_size() -> Option<(u16, u16)> {
-    terminal_size::terminal_size().map(|(width, height)| (width.0, height.0))
-}
-
 /// Normalize a raw per-pane mux env value into a [`PaneId`]: Zellij exposes a
 /// bare integer in `ZELLIJ_PANE_ID` (normalized as `terminal_<id>`), tmux the
 /// full raw id (`%<n>`) in `TMUX_PANE`. The one place the env→id mapping lives —
@@ -361,12 +114,6 @@ pub fn own_pane_id(mux: MuxName) -> Option<PaneId> {
         MuxName::Tmux => "TMUX_PANE",
     };
     Some(pane_from_env_value(mux, &std::env::var(key).ok()?))
-}
-
-impl Default for SidebarWidth {
-    fn default() -> Self {
-        Self::from_config(&crate::config::SidebarConfig::default())
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -406,118 +153,6 @@ pub struct ResumePane {
     /// Short display and view label, e.g. `claude:feature-migration`. Doubles
     /// as the Zellij tab / tmux window name and the seed's idempotency key.
     pub label: String,
-}
-
-/// Tally of one in-place sidebar reconcile pass ([`MuxBackend::reconcile_sidebars`]).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SidebarRecovery {
-    /// Views (Zellij tabs / tmux windows) that gained a sidebar this pass —
-    /// because they had none, or their only sidebar was unresponsive and was
-    /// closed first.
-    pub recovered: usize,
-    /// Duplicate or unresponsive sidebar panes closed so each view keeps exactly
-    /// one live sidebar.
-    pub closed: usize,
-    /// Views that needed a sidebar but whose in-place add failed — logged and
-    /// skipped, never retried.
-    pub failed: usize,
-}
-
-/// The live sidebars the runtime knows about when a reconcile runs: the panes a
-/// fresh, current-protocol heartbeat claims, and whether any fresh heartbeat is
-/// *unlocated* (carries no pane id — an old/edge renderer with no per-pane env).
-/// An unlocated live sidebar is a wildcard for the last physical sidebar in a
-/// view: reconcile keeps one possible owner, while duplicate panes still close
-/// so one view never carries multiple sidebars.
-#[derive(Clone, Debug, Default)]
-pub struct SidebarLiveness {
-    pub claimed_panes: HashSet<PaneId>,
-    pub has_unlocated: bool,
-}
-
-/// One view's sidebar panes (in mux order) and how it is otherwise occupied: a
-/// user-working pane (neither a sidebar nor a managed daemon host), and/or a
-/// managed daemon host. A view with neither is sidebar-only — an orphan to
-/// collapse; one with a daemon host is the intentional `rimzd` view.
-pub(crate) struct ViewSidebars {
-    pub view: String,
-    pub sidebar_panes: Vec<PaneId>,
-    pub has_working: bool,
-    pub has_daemon_host: bool,
-}
-
-/// What a reconcile must do to converge one session to a single live sidebar per
-/// working view: close these sidebar panes (duplicates + unclaimed/unresponsive),
-/// then add a sidebar to these views (none survived, or none existed).
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct ReconcilePlan {
-    pub close: Vec<PaneId>,
-    pub add: Vec<String>,
-}
-
-/// Plan the reconcile for one session, view by view:
-/// - **Working view** — keep exactly one *claimed* (live) sidebar pane, close the
-///   rest, and add one if none survived, so duplicates collapse to one and a
-///   wedged sidebar is replaced.
-/// - **Orphan sidebar-only view** — no working pane and no daemon host, so its
-///   working siblings all closed but the sidebar never self-closed (a wedged
-///   renderer that stopped ticking). Close every sidebar pane and let the view
-///   collapse; reload cannot rely on self-close for a renderer that is no longer
-///   ticking.
-/// - **Daemon view** — a sidebar beside managed daemon hosts (`rimzd`) is
-///   intentional; leave it alone.
-///
-/// When a live sidebar is unlocated (a fresh heartbeat carrying no pane id), each
-/// view is handled conservatively: keep one physical sidebar as the possible
-/// owner, close duplicate panes, add only when a working view has none, and leave
-/// a single orphan for self-close.
-/// First-seen order; shared by both backends so the rule lives in one place and
-/// is unit-tested without a mux.
-pub(crate) fn plan_reconcile(views: &[ViewSidebars], live: &SidebarLiveness) -> ReconcilePlan {
-    let mut plan = ReconcilePlan::default();
-    for view in views {
-        if view.has_working {
-            let keep = sidebar_to_keep(view, live, live.has_unlocated);
-            close_unkept_sidebars(view, keep, &mut plan.close);
-            if keep.is_none() {
-                plan.add.push(view.view.clone());
-            }
-        } else if view.has_daemon_host {
-            let keep = sidebar_to_keep(view, live, !view.sidebar_panes.is_empty());
-            close_unkept_sidebars(view, keep, &mut plan.close);
-        } else if live.has_unlocated {
-            // Orphan sidebar-only view: keep one possible owner for self-close,
-            // but still collapse duplicates so a tab never accumulates chrome.
-            let keep = sidebar_to_keep(view, live, !view.sidebar_panes.is_empty());
-            close_unkept_sidebars(view, keep, &mut plan.close);
-        } else {
-            // Orphan sidebar-only view: close every sidebar pane so the view
-            // collapses. Without a wildcard there is no live owner to preserve.
-            plan.close.extend(view.sidebar_panes.iter().cloned());
-        }
-    }
-    plan
-}
-
-fn sidebar_to_keep(
-    view: &ViewSidebars,
-    live: &SidebarLiveness,
-    keep_unclaimed: bool,
-) -> Option<usize> {
-    view.sidebar_panes
-        .iter()
-        .position(|pane| live.claimed_panes.contains(pane))
-        .or_else(|| (keep_unclaimed && !view.sidebar_panes.is_empty()).then_some(0))
-}
-
-fn close_unkept_sidebars(view: &ViewSidebars, keep: Option<usize>, close: &mut Vec<PaneId>) {
-    close.extend(
-        view.sidebar_panes
-            .iter()
-            .enumerate()
-            .filter(|(index, _pane)| Some(*index) != keep)
-            .map(|(_index, pane)| pane.clone()),
-    );
 }
 
 #[derive(Clone, Debug, Default)]
@@ -712,26 +347,6 @@ pub(crate) fn ensure_pane_backend(pane: &PaneId, expected: MuxName) -> Result<()
 mod tests {
     use super::*;
 
-    fn pane(raw: &str) -> PaneId {
-        PaneId::from_parts(MuxName::Zellij, raw)
-    }
-
-    fn view(id: &str, sidebars: &[&str], has_working: bool) -> ViewSidebars {
-        ViewSidebars {
-            view: id.to_owned(),
-            sidebar_panes: sidebars.iter().map(|raw| pane(raw)).collect(),
-            has_working,
-            has_daemon_host: false,
-        }
-    }
-
-    fn live(claimed: &[&str]) -> SidebarLiveness {
-        SidebarLiveness {
-            claimed_panes: claimed.iter().map(|raw| pane(raw)).collect(),
-            has_unlocated: false,
-        }
-    }
-
     #[test]
     fn pane_from_env_value_normalizes_per_mux() {
         assert_eq!(
@@ -742,203 +357,6 @@ mod tests {
             pane_from_env_value(MuxName::Tmux, "%5"),
             PaneId::from_parts(MuxName::Tmux, "%5"),
         );
-    }
-
-    #[test]
-    fn sidebar_width_is_the_default_percent_at_the_configured_cap() {
-        let mut sidebar = crate::config::SidebarConfig::default();
-        assert_eq!(
-            SidebarWidth::from_config(&sidebar),
-            SidebarWidth {
-                percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
-                max_cols: NonZeroU16::new(72).expect("nonzero"),
-            },
-        );
-        assert_eq!(SidebarWidth::from_config(&sidebar), SidebarWidth::default());
-        let max = NonZeroU16::new(100).expect("nonzero");
-        sidebar.max_cols = max;
-        assert_eq!(SidebarWidth::from_config(&sidebar).max_cols, max);
-    }
-
-    #[test]
-    fn width_targets_the_percent_below_the_cap_and_the_cap_above_it() {
-        let width = SidebarWidth::default();
-        assert_eq!(width.target_cols(120), 36);
-        assert_eq!(width.target_cols(300), 72);
-        assert_eq!(width.cap_cols(), 72);
-    }
-
-    #[test]
-    fn birth_size_resolves_one_fixed_verdict_per_launch() {
-        let width = SidebarWidth::default();
-        let birth = |cols: u16, percent: u16| BirthSize {
-            cols: NonZeroU16::new(cols).expect("nonzero"),
-            percent,
-        };
-        // Below the cap the verdict is the percentage share, as fixed columns:
-        // 30% of 120 is 36 ≤ 72 — never a raw percentage that re-evaluates
-        // against whatever geometry instantiates a later tab.
-        assert_eq!(width.birth_size(Some(120)), birth(36, 30));
-        // Exactly at the cap: 30% of 240 is 72.
-        assert_eq!(width.birth_size(Some(240)), birth(72, 30));
-        // Past it the cap bites, and the percentage spelling floors to the
-        // cap's share of the probed width: ⌊72·100/340⌋ = 21.
-        assert_eq!(width.birth_size(Some(340)), birth(72, 21));
-        // The percentage spelling never floors below 1%, however wide the view.
-        assert_eq!(width.birth_size(Some(7300)), birth(72, 1));
-        // Unknown width (no tty, or a zero-width probe) resolves to the bare
-        // cap with the raw percentage for unknown-geometry panes.
-        assert_eq!(width.birth_size(None), birth(72, 30));
-        assert_eq!(width.birth_size(Some(0)), birth(72, 30));
-    }
-
-    #[test]
-    fn reconcile_adds_to_a_working_view_without_a_sidebar() {
-        let views = vec![view("12", &[], true)];
-        let plan = plan_reconcile(&views, &live(&[]));
-        assert_eq!(plan.close, Vec::<PaneId>::new());
-        assert_eq!(plan.add, vec!["12".to_owned()]);
-    }
-
-    #[test]
-    fn reconcile_leaves_a_healthy_view_untouched() {
-        // One sidebar pane, claimed live, plus a working pane: nothing to do.
-        let views = vec![view("15", &["terminal_15"], true)];
-        let plan = plan_reconcile(&views, &live(&["terminal_15"]));
-        assert_eq!(plan, ReconcilePlan::default());
-    }
-
-    #[test]
-    fn reconcile_closes_duplicates_keeping_one_live() {
-        // Two sidebar panes in one tab; the live one is kept, the other closed.
-        let views = vec![view("15", &["terminal_15", "terminal_99"], true)];
-        let plan = plan_reconcile(&views, &live(&["terminal_15"]));
-        assert_eq!(plan.close, vec![pane("terminal_99")]);
-        assert!(plan.add.is_empty(), "a live sidebar already serves the tab");
-    }
-
-    #[test]
-    fn reconcile_replaces_an_unresponsive_only_sidebar() {
-        // The tab's lone sidebar is not claimed (wedged): close it and add fresh.
-        let views = vec![view("15", &["terminal_15"], true)];
-        let plan = plan_reconcile(&views, &live(&[]));
-        assert_eq!(plan.close, vec![pane("terminal_15")]);
-        assert_eq!(plan.add, vec!["15".to_owned()]);
-    }
-
-    #[test]
-    fn reconcile_collapses_an_orphan_sidebar_only_view() {
-        // A sidebar-only view (working siblings all closed, no daemon host) is an
-        // orphan a wedged renderer never self-closed: close every sidebar pane so
-        // the view collapses, and add nothing — there is no working pane to serve.
-        let views = vec![view("16", &["terminal_16", "terminal_17"], false)];
-        let plan = plan_reconcile(&views, &live(&["terminal_16"]));
-        assert_eq!(plan.close, vec![pane("terminal_16"), pane("terminal_17")]);
-        assert!(
-            plan.add.is_empty(),
-            "no working pane means no sidebar to add"
-        );
-    }
-
-    #[test]
-    fn reconcile_leaves_the_daemon_view_alone() {
-        // The daemon view (`rimzd`) has a sidebar beside managed hosts but no
-        // working pane — intentional, never collapsed.
-        let daemon = ViewSidebars {
-            view: "0".to_owned(),
-            sidebar_panes: vec![pane("terminal_2")],
-            has_working: false,
-            has_daemon_host: true,
-        };
-        assert_eq!(
-            plan_reconcile(&[daemon], &live(&["terminal_2"])),
-            ReconcilePlan::default(),
-        );
-    }
-
-    #[test]
-    fn reconcile_closes_duplicate_sidebars_under_an_unlocated_wildcard() {
-        // An unlocated heartbeat might own one of the panes, but the view still
-        // keeps only one physical sidebar.
-        let views = vec![view("15", &["terminal_15", "terminal_99"], true)];
-        let unlocated = SidebarLiveness {
-            claimed_panes: HashSet::new(),
-            has_unlocated: true,
-        };
-        let plan = plan_reconcile(&views, &unlocated);
-        assert_eq!(plan.close, vec![pane("terminal_99")]);
-        assert!(plan.add.is_empty(), "one possible owner remains in the tab");
-    }
-
-    #[test]
-    fn reconcile_prefers_a_claimed_sidebar_when_collapsing_unlocated_duplicates() {
-        // A claimed pane is the best owner signal; the unlocated wildcard only
-        // protects an unclaimed pane when no claimed one exists in the view.
-        let views = vec![view("15", &["terminal_15", "terminal_99"], true)];
-        let unlocated = SidebarLiveness {
-            claimed_panes: [pane("terminal_99")].into(),
-            has_unlocated: true,
-        };
-        let plan = plan_reconcile(&views, &unlocated);
-        assert_eq!(plan.close, vec![pane("terminal_15")]);
-        assert!(
-            plan.add.is_empty(),
-            "the claimed sidebar already serves the tab"
-        );
-    }
-
-    #[test]
-    fn reconcile_closes_duplicate_sidebars_in_the_daemon_view() {
-        // The daemon view itself is intentional, but duplicate chrome in that
-        // view is not.
-        let daemon = ViewSidebars {
-            view: "0".to_owned(),
-            sidebar_panes: vec![pane("terminal_2"), pane("terminal_3")],
-            has_working: false,
-            has_daemon_host: true,
-        };
-        let plan = plan_reconcile(&[daemon], &live(&["terminal_2"]));
-        assert_eq!(plan.close, vec![pane("terminal_3")]);
-        assert!(plan.add.is_empty());
-    }
-
-    #[test]
-    fn reconcile_leaves_an_orphan_view_alone_under_an_unlocated_wildcard() {
-        // An unlocated live sidebar might own the orphan's pane, so don't close
-        // blind — leave it for self-close.
-        let views = vec![view("16", &["terminal_16"], false)];
-        let unlocated = SidebarLiveness {
-            claimed_panes: HashSet::new(),
-            has_unlocated: true,
-        };
-        assert_eq!(plan_reconcile(&views, &unlocated), ReconcilePlan::default());
-    }
-
-    #[test]
-    fn reconcile_collapses_duplicate_orphan_sidebars_under_an_unlocated_wildcard() {
-        // Keep one possible owner for self-close, but close duplicate chrome.
-        let views = vec![view("16", &["terminal_16", "terminal_17"], false)];
-        let unlocated = SidebarLiveness {
-            claimed_panes: HashSet::new(),
-            has_unlocated: true,
-        };
-        let plan = plan_reconcile(&views, &unlocated);
-        assert_eq!(plan.close, vec![pane("terminal_17")]);
-        assert!(plan.add.is_empty());
-    }
-
-    #[test]
-    fn reconcile_with_an_unlocated_live_sidebar_never_closes_blind() {
-        // A fresh heartbeat with no pane id is a wildcard for the last physical
-        // sidebar in a view; only add to a working view that has none at all.
-        let views = vec![view("15", &["terminal_15"], true), view("12", &[], true)];
-        let unlocated = SidebarLiveness {
-            claimed_panes: HashSet::new(),
-            has_unlocated: true,
-        };
-        let plan = plan_reconcile(&views, &unlocated);
-        assert!(plan.close.is_empty(), "never close blind under a wildcard");
-        assert_eq!(plan.add, vec!["12".to_owned()]);
     }
 
     #[test]

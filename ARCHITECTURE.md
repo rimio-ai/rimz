@@ -107,11 +107,16 @@ CLI binary, hook entrypoints, and the runtime/domain library. Start here for any
 - `src/ledger/writer.rs` — the write choreography: every mutator's lock → feed-write → event-append critical section and the off-lock wakeup + publish tail.
 - `src/ledger/mod.rs` — `Ledger` handle (`Arc<LedgerInner>`): types, constructor, and the lock-free read methods; mutators live in `writer.rs`. No actor.
 - `src/bridge.rs` — per-request sockets, waiter polling fallback, nonce validation.
-- `src/mux/mod.rs` — `MuxBackend` trait and shared backend errors.
+- `src/mux/mod.rs` — `MuxBackend` trait, option structs, the `backend_for` factory, env→pane-id normalization, and shared backend errors.
+- `src/mux/command.rs` — `CommandSpec` and the bounded subprocess engine (event-driven wait, output drain, deadline kill).
+- `src/mux/width.rs` — sidebar sizing math: `SidebarWidth`, `BirthSize`, the launch-terminal probe.
+- `src/mux/reconcile.rs` — the cross-backend one-sidebar-per-view reconcile planner, unit-tested without a mux.
 - `src/sidebar.rs` — sidebar heartbeat freshness check used to avoid duplicate native panes.
 - `src/mux/zellij.rs` — Zellij commands, background session creation, native sidebar pane launch, pipe fast path.
+- `src/mux/zellij/layout.rs` — KDL layout rendering: session birth, daemon view, resumed-agent seeding, background views.
 - `src/mux/tmux.rs` — tmux commands, native managed sidebar pane, popup/status integrations.
 - `src/mux/selection.rs` — backend selection precedence.
+- `src/mux/recovery.rs` — room teardown for `rimz reset` / `rimz reload`: session kill, resurrection-cache purge, scoped orphan-process sweep.
 - `src/resume.rs` — resume-on-rebirth planner: turns the durable agent rollup into the `ResumePane` seeds a reborn session re-launches (`claude --resume`, `codex resume`), so a rebirth comes up where the user left off. Pure over the rollup; the cli reads the audit projection and the backend seeds the panes at birth. See [docs/internals/sidebar.md](./docs/internals/sidebar.md#resume-on-rebirth).
 - `src/remote.rs` — SSH remote attach: the scp-flavored `[user@]host:<session-or-path>` target parser, the guarded `ssh -t` `CommandSpec` builder, and the autossh-style reconnect policy (`verdict`). Pure over strings and exit codes; the cli execs or supervises the result, and the whole room — sidebar included — runs on the remote host.
 - `src/agents/` — the agent integration layer; conventions in its own [`AGENTS.md`](./crates/rimz/src/agents/AGENTS.md), the decision boundary in [docs/internals/hooks.md](./docs/internals/hooks.md), the context read-path in [docs/internals/transcript.md](./docs/internals/transcript.md), the account/balance mapping in [docs/internals/account.md](./docs/internals/account.md). Shared, provider-agnostic types sit at the top level; each provider's behaviour is a sibling directory.
