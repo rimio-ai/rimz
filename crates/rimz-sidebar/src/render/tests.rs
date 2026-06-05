@@ -697,13 +697,15 @@ fn render_api_error_dead_turn_card() {
 #[test]
 fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
     // A selected parent expands its `⧉ subagents` list. Each child reads two
-    // lines: the type and its `subagentStatusLine` description, then the token
-    // spend `◇` left with the clock-fill elapsed work pinned right. The first
-    // child is finished, so its elapsed is frozen at `last_activity − started`
-    // (exactly 60s here, independent of wall-clock) — a deterministic ` 1m` in
-    // the fixed three-cell slot; the second is still running ~30s in, so it
-    // reads the sub-minute `<1m` (never seconds), and the two right-pinned
-    // clusters stack into one column.
+    // lines: the live head (the thinking sparkle while it reasons, `✓` once
+    // it lands), the type, and its `subagentStatusLine` description, then the
+    // token spend `◇`, model, and effort left with the clock-fill elapsed
+    // work pinned right. The first child is finished, so its elapsed is
+    // frozen at `last_activity − started` (exactly 60s here, independent of
+    // wall-clock) — a deterministic ` 1m` in the fixed three-cell slot — and
+    // it carries the effort its `SubagentStop` reported; the second is still
+    // running ~30s in, so it reads the sub-minute `<1m` (never seconds), and
+    // the two right-pinned clusters stack into one column.
     let mut parent = agent(
         "claude-1",
         "claude",
@@ -728,6 +730,10 @@ fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
     child.last_activity = fixed_now() - Duration::from_secs(30);
     child.last_seen = fixed_now() - Duration::from_secs(30);
     child.total_tokens = Some(12_400);
+    // A bare model id — the renderer prettifies it through `model_label`.
+    child.model = Some("claude-opus-4-8".to_owned());
+    // Claude reports the child's effort on its `SubagentStop`.
+    child.effort = Some("high".to_owned());
 
     let mut fresh = agent(
         "child-2",
@@ -738,9 +744,14 @@ fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
         Some("review"),
     );
     fresh.parent_agent_id = Some("claude-1".into());
+    // Mid-reasoning: the child's leading cell is the thinking sparkle (frame 0
+    // of the animation at the test's fixed phase), not the static `⢿`.
+    fresh.phase = rimz::agents::TurnPhase::Reasoning;
     fresh.subagent_description = Some("audit the trust hash".to_owned());
     fresh.subagent_started_at = Some(fixed_now() - Duration::from_secs(30));
     fresh.total_tokens = Some(3_100);
+    // A sibling on a different model — the per-child label tells them apart.
+    fresh.model = Some("claude-haiku-4-5".to_owned());
 
     let snapshot = snapshot_with(Vec::new(), vec![parent, child, fresh]);
     let rendered = snapshot_to_screen_with_alert_and_ui(
@@ -763,11 +774,22 @@ fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
         rendered.contains("Explore — locate the render seam"),
         "line 1 carries the description:\n{rendered}"
     );
-    // Line 2: token spend left, elapsed work right-pinned. 12_400 → `12.4k`,
-    // 60s frozen → ` 1m` right-aligned in the fixed slot.
+    // The running child's leading cell is the thinking sparkle (frame 0 at the
+    // test's fixed animation phase), the agent-row head vocabulary verbatim.
     assert!(
-        rendered.contains("◇ 12.4k"),
-        "line 2 carries the token spend:\n{rendered}"
+        rendered.contains("· review — audit the trust hash"),
+        "a reasoning child wears the thinking head:\n{rendered}"
+    );
+    // Line 2: token spend, model, and effort left, elapsed work right-pinned.
+    // 12_400 → `12.4k`, the bare id prettified to `Opus 4.8`, the stop-reported
+    // effort after it, 60s frozen → ` 1m` right-aligned in the fixed slot.
+    assert!(
+        rendered.contains("◇ 12.4k · Opus 4.8 · high"),
+        "line 2 carries the token spend, model, and effort:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("◇ 3.1k · Haiku 4.5"),
+        "the sibling carries its own model:\n{rendered}"
     );
     assert!(
         rendered.contains("◔  1m"),

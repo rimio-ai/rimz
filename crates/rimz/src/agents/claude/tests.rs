@@ -188,7 +188,7 @@ fn subagent_start_observes_running_child_keyed_by_agent_id() {
 }
 
 #[test]
-fn subagent_stop_returns_child_idle_keeping_its_label() {
+fn subagent_stop_clean_resolves_success_keeping_its_label() {
     let obs = ClaudeAdapter
         .observe_lifecycle(
             "SubagentStop",
@@ -201,10 +201,33 @@ fn subagent_stop_returns_child_idle_keeping_its_label() {
         .unwrap();
 
     assert_eq!(obs.agent_id.as_deref(), Some("child-1"));
-    assert_eq!(obs.signal, LifecycleSignal::SubagentStopped);
+    // No exit code reads as a clean finish.
+    assert_eq!(
+        obs.signal,
+        LifecycleSignal::SubagentStopped { errored: false }
+    );
     // The label persists past stop; the parent link survives.
     assert_eq!(obs.task.as_deref(), Some("Explore"));
     assert_eq!(obs.parent_agent_id.as_deref(), Some("sess-parent"));
+}
+
+#[test]
+fn subagent_stop_nonzero_exit_code_resolves_errored() {
+    let obs = ClaudeAdapter
+        .observe_lifecycle(
+            "SubagentStop",
+            &json!({
+                "session_id": "sess-parent",
+                "agent_id": "child-1",
+                "agent_type": "Explore",
+                "exit_code": 1,
+            }),
+        )
+        .unwrap();
+    assert_eq!(
+        obs.signal,
+        LifecycleSignal::SubagentStopped { errored: true }
+    );
 }
 
 #[test]

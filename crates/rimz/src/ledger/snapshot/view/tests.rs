@@ -927,13 +927,19 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
 
     // Running: elapsed counts to `now` (100s), enrichment projects through.
     let mut running = child_state("sess-root", "child-1", AgentStatus::Running, 5);
+    running.phase = TurnPhase::Reasoning;
     running.subagent_description = Some("locate the render seam".to_owned());
     running.subagent_started_at = Some(started);
     running.total_tokens = Some(12_400);
+    running.model = Some("claude-opus-4-8".to_owned());
+    running.effort = Some("high".to_owned());
     let sub = sub_agent_from_state(&running, now);
+    assert_eq!(sub.phase, TurnPhase::Reasoning);
     assert_eq!(sub.description.as_deref(), Some("locate the render seam"));
     assert_eq!(sub.total_tokens, Some(12_400));
     assert_eq!(sub.elapsed_secs, Some(100));
+    assert_eq!(sub.model.as_deref(), Some("claude-opus-4-8"));
+    assert_eq!(sub.effort.as_deref(), Some("high"));
 
     // Finished: elapsed freezes at `last_activity` (40s after start), never `now`.
     let mut finished = child_state("sess-root", "child-2", AgentStatus::Success, 0);
@@ -945,9 +951,12 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     // A child with no enrichment (Codex, or pre-first-render) degrades cleanly.
     let bare = child_state("sess-root", "child-3", AgentStatus::Running, 5);
     let sub = sub_agent_from_state(&bare, now);
+    assert_eq!(sub.phase, TurnPhase::Idle);
     assert_eq!(sub.description, None);
     assert_eq!(sub.total_tokens, None);
     assert_eq!(sub.elapsed_secs, None);
+    assert_eq!(sub.model, None);
+    assert_eq!(sub.effort, None);
 }
 
 #[test]
@@ -955,7 +964,7 @@ fn finished_sub_agent_drops_once_parent_starts_next_turn() {
     let mut parent = agent("claude", "sess-root", AgentStatus::Running, 100);
     // The current turn began AFTER the child finished — a past-turn child.
     parent.turn_started_at = Some(ago(30));
-    let child = child_state("sess-root", "child-1", AgentStatus::Idle, 60);
+    let child = child_state("sess-root", "child-1", AgentStatus::Success, 60);
     let mut rows = vec![row_from_agent(&parent, epoch())];
     attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
     assert!(rows[0].sub_agents.is_empty());
@@ -997,7 +1006,7 @@ fn finished_sub_agent_of_current_turn_is_kept() {
     let mut parent = agent("claude", "sess-root", AgentStatus::Running, 100);
     // The turn began BEFORE the child finished — same-turn, so it stays.
     parent.turn_started_at = Some(ago(90));
-    let child = child_state("sess-root", "child-1", AgentStatus::Idle, 30);
+    let child = child_state("sess-root", "child-1", AgentStatus::Success, 30);
     let mut rows = vec![row_from_agent(&parent, epoch())];
     attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
     assert_eq!(rows[0].sub_agents.len(), 1);
@@ -1060,52 +1069,41 @@ fn typeless_child_renders_degraded_label_never_the_kind() {
 }
 
 #[test]
-fn finished_child_drops_past_ttl_without_a_turn_boundary() {
-    // The parent never took a fresh turn (`turn_started_at` stays None), so
-    // only the TTL backstop can clear a long-finished child — without it the
-    // ghost would linger forever.
+fn running_child_past_ghost_ttl_is_reaped() {
+    // A running child that never sent `SubagentStop` and has been silent past
+    // the generous ghost TTL is a leftover — reaped so it can't freeze the
+    // parent's delegated-wait head, even with no fresh turn boundary.
     let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
     assert!(parent.turn_started_at.is_none());
     let child = child_state(
         "sess-root",
         "child-1",
-        AgentStatus::Idle,
-        SUBAGENT_FINISHED_TTL_SECS + 10,
+        AgentStatus::Running,
+        GHOST_SESSION_TTL_SECS + 10,
     );
     let mut rows = vec![row_from_agent(&parent, epoch())];
     attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
     assert!(
         rows[0].sub_agents.is_empty(),
-        "a long-finished child clears on the TTL"
+        "a running child silent past the ghost TTL is reaped"
     );
 }
 
 #[test]
-fn finished_child_retention_ttl_is_boundary_exact() {
-    // The retention cutoff is exact: a finished child one second inside the
-    // TTL still renders; *at* the TTL it is gone (retention keeps strictly
-    // inside the window). Putting the dropped arm on the hinge itself pins
-    // the operator — a `<` → `<=` flip fails it, not just a shifted constant.
+fn finished_child_is_kept_however_long_ago_it_finished() {
+    // The regression: a finished child used to clear on a 5-minute TTL even
+    // mid-turn, vanishing from the list while its siblings still ran. With
+    // retention purely turn-scoped, a finished child stays — however stale —
+    // until the parent's next turn supersedes it.
     let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
-    let kept = child_state(
-        "sess-root",
-        "child-kept",
-        AgentStatus::Idle,
-        SUBAGENT_FINISHED_TTL_SECS - 1,
-    );
-    let dropped = child_state(
-        "sess-root",
-        "child-dropped",
-        AgentStatus::Idle,
-        SUBAGENT_FINISHED_TTL_SECS,
-    );
+    assert!(parent.turn_started_at.is_none());
+    let child = child_state("sess-root", "child-1", AgentStatus::Success, 60 * 60);
     let mut rows = vec![row_from_agent(&parent, epoch())];
-    attach_sub_agents(&mut rows, &[parent.clone(), kept, dropped], epoch());
-    let ids: Vec<&str> = rows[0].sub_agents.iter().map(|s| s.id.as_str()).collect();
+    attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
     assert_eq!(
-        ids,
-        vec!["child-kept"],
-        "TTL-1s is kept, the TTL itself drops"
+        rows[0].sub_agents.len(),
+        1,
+        "a finished child never clears on age, only on the next turn"
     );
 }
 

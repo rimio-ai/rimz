@@ -30,10 +30,12 @@ pub(crate) fn all_signals() -> Vec<LifecycleSignal> {
         LifecycleSignal::Registered,
         LifecycleSignal::TurnStarted,
         LifecycleSignal::SubagentStarted,
-        LifecycleSignal::SubagentStopped,
         LifecycleSignal::Compacting,
         LifecycleSignal::Ended,
     ];
+    for errored in [false, true] {
+        signals.push(LifecycleSignal::SubagentStopped { errored });
+    }
     for errored in [false, true] {
         for parked_on_background in [false, true] {
             signals.push(LifecycleSignal::TurnEnded {

@@ -350,9 +350,15 @@ impl AgentAdapter for ClaudeAdapter {
             "SessionStart" => LifecycleSignal::Registered,
             "UserPromptSubmit" => LifecycleSignal::TurnStarted,
             // A subagent fires before the child model request, so it registers
-            // running under the child `agent_id`; a finished child returns to idle.
+            // running under the child `agent_id`; a finished child resolves to
+            // success, or failed on a non-zero exit code.
             "SubagentStart" => LifecycleSignal::SubagentStarted,
-            "SubagentStop" => LifecycleSignal::SubagentStopped,
+            "SubagentStop" => LifecycleSignal::SubagentStopped {
+                errored: subagent_stop
+                    .as_ref()
+                    .and_then(|p| p.exit_code)
+                    .is_some_and(|code| code != 0),
+            },
             // A clean Stop completes the turn; in-flight `background_tasks`
             // (Claude Code v2.1.145+) mean the main thread only parked, so `step`
             // keeps it running and the row paints a secondary background marker

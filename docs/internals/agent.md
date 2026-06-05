@@ -63,7 +63,8 @@ The glyph, animation, and color for each are the canonical table in [the interfa
                           ▲                                          │
            turn started   │   turn ended clean ──► success           │
            re-enters ─────┤   turn ended errored ──► failed   ◄───────┤
-           running        │   subagent stopped ──► idle (child)       │
+           running        │   subagent stopped clean ──► success      │
+                          │   subagent stopped errored ──► failed     │
                           │   tool used (mutating) ──► running        │
                           └──────────────────────────────────────────┘
    compacting : prior status held, compacting head stamped (cleared by next signal)
@@ -71,7 +72,7 @@ The glyph, animation, and color for each are the canonical table in [the interfa
    session ended / pid dead / pane reverted to shell ──► removed (no row)
 ```
 
-A `TurnEnded` signal resolves the turn to `success`, or `failed` on its error bit — never back to `idle`. One exception keeps it `running`: a clean end whose signal also carries `parked_on_background` is the main thread *parking on still-in-flight background work*, not a turn end, so the row stays `running` and paints a distinct secondary `⋯ bg` marker rather than a false `✓` — the activity description stays the agent's real task, never a synthetic count (the provider-specific detection lives in [hooks.md → Appendix Claude](./hooks.md#appendix--claude-code)). An error bit still wins.
+A `TurnEnded` signal resolves the turn to `success`, or `failed` on its error bit — never back to `idle`. One exception keeps it `running`: a clean end whose signal also carries `parked_on_background` is the main thread *parking on still-in-flight background work*, not a turn end, so the row stays `running` and paints a distinct secondary `⋯ bg` marker rather than a false `✓` — the activity description stays the agent's real task, never a synthetic count (the provider-specific detection lives in [hooks.md → Appendix Claude](./hooks.md#appendix--claude-code)). An error bit still wins. A `SubagentStopped` signal resolves the *child* entity the same way — `success`, or `failed` on its error bit (Claude maps a non-zero `exit_code`; Codex reports no subagent error signal, so its children always resolve clean) — so a finished child reads `✓`/`!` in the parent's expanded list for the rest of the turn.
 
 `waiting` is **not** a lifecycle transition — it is a pending blocking feed item joined to the agent (the feed channel; see [hooks.md → Two hook channels](./hooks.md#two-hook-channels)). The lifecycle channel drives the other four.
 

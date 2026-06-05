@@ -240,7 +240,9 @@ fn subagent_start_reduces_parent_link_that_survives_stop() {
         .find(|a| a.agent_id == "child-1")
         .expect("child row");
     assert_eq!(child.parent_agent_id.as_deref(), Some("sess-root"));
-    assert_eq!(child.status, AgentStatus::Idle);
+    // The bare `subagent_stopped` wire shape (no `errored` bit) replays as a
+    // clean finish.
+    assert_eq!(child.status, AgentStatus::Success);
 }
 
 #[test]
@@ -280,7 +282,7 @@ fn subagent_keeps_its_type_when_stop_omits_it() {
         .iter()
         .find(|a| a.agent_id == "child-1")
         .expect("child row");
-    assert_eq!(child.status, AgentStatus::Idle);
+    assert_eq!(child.status, AgentStatus::Success);
     assert_eq!(
         child.task.as_deref(),
         Some("Explore"),

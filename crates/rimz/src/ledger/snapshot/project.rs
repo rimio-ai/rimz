@@ -108,7 +108,7 @@ pub(super) fn reduce_agent_states_seeded(
             continue;
         }
         let prior = map.get(&(kind.clone(), agent_id.clone()));
-        if matches!(signal, lifecycle::LifecycleSignal::SubagentStopped)
+        if matches!(signal, lifecycle::LifecycleSignal::SubagentStopped { .. })
             && prior.is_none()
             && event_parent_agent_id.is_some()
             && event_task.is_none()

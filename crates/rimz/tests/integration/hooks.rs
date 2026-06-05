@@ -655,7 +655,9 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
 
     let parsed = env.snapshot_json();
     assert_eq!(parsed["agents"][0]["agent_id"], "child-thread-1");
-    assert_eq!(parsed["agents"][0]["status"], "idle");
+    // Codex reports no subagent error signal, so a stop resolves success and
+    // the finished child reads `✓` in the parent's expanded list.
+    assert_eq!(parsed["agents"][0]["status"], "success");
     // The type label and the parent link both persist past stop so a finished
     // child stays labeled and nested while it lingers in the parent's list.
     assert_eq!(parsed["agents"][0]["task"], "review");

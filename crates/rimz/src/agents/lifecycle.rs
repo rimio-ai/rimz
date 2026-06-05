@@ -46,8 +46,13 @@ pub enum LifecycleSignal {
     /// A subagent began (`SubagentStart`) — only ever observed for a child
     /// entity, keyed by its own child id.
     SubagentStarted,
-    /// A subagent finished (`SubagentStop`) — child entity returns to idle.
-    SubagentStopped,
+    /// A subagent finished (`SubagentStop`) — the child entity resolves to
+    /// failed when `errored`, else success. Defaulted so a `subagent_stopped`
+    /// event written before the bit existed still replays.
+    SubagentStopped {
+        #[serde(default)]
+        errored: bool,
+    },
     /// A tool completed (`PostToolUse`). Adapters emit this only for a
     /// *mutating* tool, so it doubles as proof the agent is doing real work —
     /// which is why it can reconcile a rollup that wrongly thinks the agent is
@@ -164,7 +169,15 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
     let status = match signal {
         LifecycleSignal::Registered => AgentStatus::Idle,
         LifecycleSignal::TurnStarted | LifecycleSignal::SubagentStarted => AgentStatus::Running,
-        LifecycleSignal::SubagentStopped => AgentStatus::Idle,
+        // A finished child resolves to a terminal verdict, so the parent's
+        // expanded list reads `✓`/`!` instead of a resting `○`.
+        LifecycleSignal::SubagentStopped { errored } => {
+            if *errored {
+                AgentStatus::Failed
+            } else {
+                AgentStatus::Success
+            }
+        }
         LifecycleSignal::TurnEnded {
             errored,
             parked_on_background,
@@ -233,7 +246,7 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
         LifecycleSignal::Compacting => prior_phase,
         LifecycleSignal::Registered
         | LifecycleSignal::TurnEnded { .. }
-        | LifecycleSignal::SubagentStopped => TurnPhase::Idle,
+        | LifecycleSignal::SubagentStopped { .. } => TurnPhase::Idle,
         // Handled above.
         LifecycleSignal::Ended => unreachable!("Ended returns early"),
     };
@@ -415,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn subagent_start_reasoning_stop_idle() {
+    fn subagent_start_reasoning_stop_clean_is_success() {
         let start = step(None, &LifecycleSignal::SubagentStarted);
         assert_eq!(start.next.status, AgentStatus::Running);
         assert_eq!(
@@ -423,8 +436,22 @@ mod tests {
             TurnPhase::Reasoning,
             "a child task opens reasoning too"
         );
-        let stop = step(Some(&start.next), &LifecycleSignal::SubagentStopped);
-        assert_eq!(stop.next.status, AgentStatus::Idle);
+        let stop = step(
+            Some(&start.next),
+            &LifecycleSignal::SubagentStopped { errored: false },
+        );
+        assert_eq!(stop.next.status, AgentStatus::Success);
+        assert_eq!(stop.next.phase, TurnPhase::Idle);
+    }
+
+    #[test]
+    fn subagent_stop_errored_is_failed() {
+        let start = step(None, &LifecycleSignal::SubagentStarted);
+        let stop = step(
+            Some(&start.next),
+            &LifecycleSignal::SubagentStopped { errored: true },
+        );
+        assert_eq!(stop.next.status, AgentStatus::Failed);
         assert_eq!(stop.next.phase, TurnPhase::Idle);
     }
 
@@ -576,6 +603,15 @@ mod tests {
                 edits: false,
             }
         );
+    }
+
+    #[test]
+    fn subagent_stopped_without_errored_bit_still_deserializes() {
+        // Events written before the `errored` bit existed carry the bare tag;
+        // the missing field defaults to false so an old log replays as clean.
+        let wire = serde_json::json!({ "signal": "subagent_stopped" });
+        let signal: LifecycleSignal = serde_json::from_value(wire).unwrap();
+        assert_eq!(signal, LifecycleSignal::SubagentStopped { errored: false });
     }
 
     #[test]

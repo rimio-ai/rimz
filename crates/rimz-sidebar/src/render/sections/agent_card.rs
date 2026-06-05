@@ -16,9 +16,9 @@ use crate::render::fmt::{
 };
 use crate::render::labels::{
     SEGMENT_CACHE_READ, SEGMENT_CACHE_WRITE, SEGMENT_INPUT, activity_age_style, agent_glyph,
-    attention_glyph_style, compacting_glyph, compacting_style, context_breakdown_spans,
-    context_total_spans, elapsed_glyph, gauge_spans, loading_dots, resolver_glyph,
-    segmented_gauge_spans, severity_color, status_glyph, status_style, subagent_glyph,
+    agent_style, attention_glyph_style, compacting_glyph, compacting_style,
+    context_breakdown_spans, context_total_spans, elapsed_glyph, gauge_spans, loading_dots,
+    resolver_glyph, segmented_gauge_spans, severity_color, status_style, subagent_glyph,
     subagent_style, todo_spans, tokens_total_spans, window_style,
 };
 use crate::render::theme::Theme;
@@ -106,7 +106,7 @@ pub(super) fn row_lines(
         // card — appended after the stats so the resting card never reflows
         // (selection only ever adds lines).
         if selected && !row.sub_agents.is_empty() {
-            inner.extend(sub_agent_lines(theme, &row.sub_agents, cw));
+            inner.extend(sub_agent_lines(theme, &row.sub_agents, cw, animation_phase));
         }
     }
     inner
@@ -117,18 +117,23 @@ pub(super) fn row_lines(
 
 /// The expanded card's subagent list: a `⧉ subagents (N)` header — the marker
 /// in the delegation violet, the label dim — then up to two indented lines per
-/// child. Line 1 is the status glyph, the type, and the description of what
-/// the parent asked it to do; line 2 (deeper indent) is its token spend `◇`
-/// and elapsed work (the clock-fill glyph over a fixed `<1m`/`9m`/`2h` label
-/// in the parent's age tone ramp), pinned right under the parent's own stats.
-/// Children are subordinate to the parent card, so their text stays dim and
-/// indented past the parent's stat lines. The enrichment (description, tokens,
-/// elapsed) rides in from Claude's `subagentStatusLine`; a Codex child or one
-/// before its first render degrades to the bare type line, with line 2 dropped.
+/// child. Line 1 leads with the same live cell an agent row wears — the
+/// thinking sparkle while the child reasons, the working fill while it acts,
+/// the static `✓`/`!` verdict once it finishes — then the type and the
+/// description of what the parent asked it to do; line 2 (deeper indent) is
+/// its token spend `◇`, model, and reasoning effort, with elapsed work (the
+/// clock-fill glyph over a fixed `<1m`/`9m`/`2h` label in the parent's age
+/// tone ramp) pinned right under the parent's own stats. Children are
+/// subordinate to the parent card, so their text stays dim and indented past
+/// the parent's stat lines. The description, tokens, and elapsed ride in from
+/// Claude's `subagentStatusLine`; the model, effort, and phase from the
+/// child's own lifecycle events. A child with none of them degrades to the
+/// bare type line, with line 2 dropped.
 fn sub_agent_lines(
     theme: &Theme,
     sub_agents: &[SidebarSubAgent],
     width: usize,
+    animation_phase: u64,
 ) -> Vec<Line<'static>> {
     // The `⧉` marker wears the violet of the delegation/meta family (the
     // compacting head, the `⇅ rc` flag); the label text stays dim chrome.
@@ -143,9 +148,16 @@ fn sub_agent_lines(
         width,
     ))];
     for sub in sub_agents {
+        // The leading cell is the agent-row vocabulary verbatim: a running
+        // child sparkles (reasoning) or fills (acting) in the live clay, a
+        // finished one holds its static `✓`/`!` verdict — one head grammar
+        // for the parent's cell and its children's.
         let mut spans = vec![
             Span::raw("    "),
-            Span::styled(status_glyph(sub.status), status_style(theme, sub.status)),
+            Span::styled(
+                agent_glyph(sub.status, sub.phase, animation_phase),
+                agent_style(theme, sub.status),
+            ),
             Span::raw(" "),
             Span::styled(sub.name.clone(), theme.dim()),
         ];
@@ -162,17 +174,40 @@ fn sub_agent_lines(
         }
         lines.push(Line::from(trim_spans_to_width(spans, width)));
 
-        // Line 2: token spend (left) and elapsed work (right-pinned). A deeper
-        // indent sets it below the type line; the clock-fill glyph lands under
-        // the parent's age and fills with the child's worked span.
+        // Line 2: token spend, model, and effort (left) and elapsed work
+        // (right-pinned). A deeper indent sets it below the type line; the
+        // clock-fill glyph lands under the parent's age and fills with the
+        // child's worked span.
         let tokens = sub.total_tokens.filter(|total| *total > 0);
         let elapsed = sub.elapsed_secs;
-        if tokens.is_some() || elapsed.is_some() {
+        let model = sub.model.as_deref();
+        let effort = sub.effort.as_deref();
+        if tokens.is_some() || elapsed.is_some() || model.is_some() || effort.is_some() {
             let mut left = vec![Span::raw("      ")];
             if let Some(total) = tokens {
                 // Children stay subordinate to the parent card, so the figure
                 // keeps the dim tone the rest of the subagent list wears.
                 left.extend(tokens_total_spans(theme, total, tokens_short, theme.dim()));
+            }
+            if let Some(model) = model {
+                // The model rides after the spend, joined by the `·` seam when
+                // a figure precedes it; bare otherwise, so the indent never
+                // carries an orphan separator.
+                let seam = if tokens.is_some() { " · " } else { "" };
+                left.push(Span::styled(
+                    format!("{seam}{}", model_label(model)),
+                    theme.dim(),
+                ));
+            }
+            if let Some(effort) = effort {
+                // Effort keeps the parent line's `model · effort` adjacency,
+                // with the same orphan-seam rule as the model.
+                let seam = if tokens.is_some() || model.is_some() {
+                    " · "
+                } else {
+                    ""
+                };
+                left.push(Span::styled(format!("{seam}{effort}"), theme.dim()));
             }
             // Elapsed work in the parent's age vocabulary: the clock-fill glyph
             // and a fixed three-cell m/h label (`<1m`, ` 9m`, ` 2h`, `>1d`,

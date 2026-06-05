@@ -158,7 +158,7 @@ fn subagent_start_observes_child_id_and_type() {
 }
 
 #[test]
-fn subagent_stop_observes_idle_child_id() {
+fn subagent_stop_resolves_success_child_id() {
     let obs = CodexAdapter
         .observe_lifecycle(
             "SubagentStop",
@@ -171,7 +171,11 @@ fn subagent_stop_observes_idle_child_id() {
         .unwrap();
 
     assert_eq!(obs.agent_id.as_deref(), Some("child-thread-1"));
-    assert_eq!(obs.signal, LifecycleSignal::SubagentStopped);
+    // Codex reports no subagent error signal, so a stop is always clean.
+    assert_eq!(
+        obs.signal,
+        LifecycleSignal::SubagentStopped { errored: false }
+    );
     // The type label persists across stop so a finished child stays labeled
     // while it lingers in the parent's list.
     assert_eq!(obs.task.as_deref(), Some("review"));

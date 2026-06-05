@@ -264,10 +264,10 @@ impl AgentAdapter for CodexAdapter {
             // running under the child `agent_id`.
             "SubagentStart" => LifecycleSignal::SubagentStarted,
             "UserPromptSubmit" => LifecycleSignal::TurnStarted,
-            // A child finishing returns its row to idle; the root Stop completes
-            // the turn (success), or fails it on an error signal. Codex has no
-            // background-task parking.
-            "SubagentStop" => LifecycleSignal::SubagentStopped,
+            // A child finishing resolves to success — Codex reports no subagent
+            // error signal; the root Stop completes the turn (success), or fails
+            // it on an error signal. Codex has no background-task parking.
+            "SubagentStop" => LifecycleSignal::SubagentStopped { errored: false },
             "Stop" => LifecycleSignal::TurnEnded {
                 errored: stop_payload_errored(payload),
                 parked_on_background: false,

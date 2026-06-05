@@ -182,17 +182,17 @@ The `▣`/`▢` and `▤` glyphs share one lead column, so the card reads as an 
                                   ▌    ⢿ Explore
 ```
 
-The expanded card also lists any **subagents** the agent spawned this turn — a `⧉ subagents (N)` header (the marker violet, the label dim) then, per child in spawn order (creation time ascending, stable across refreshes), the status glyph and type with what the parent asked it to do, and a deeper-indented second line carrying its token spend `◇` and elapsed work pinned right under the parent's stats: the clock-fill glyph (filling with the child's worked span) over a fixed three-cell `m`/`h` label — `<1m` under a minute, never seconds — toned by the parent's age ramp, so the clusters stack into one column across children and a long-running child visibly heats up:
+The expanded card also lists any **subagents** the agent spawned this turn — a `⧉ subagents (N)` header (the marker violet, the label dim) then, per child in spawn order (creation time ascending, stable across refreshes), the same live head an agent row wears — the `✽` thinking sparkle while the child reasons, the `⢿` working fill while it acts, the static verdict once it lands — and the type with what the parent asked it to do, then a deeper-indented second line carrying its token spend `◇`, model, and reasoning effort with elapsed work pinned right under the parent's stats: the clock-fill glyph (filling with the child's worked span) over a fixed three-cell `m`/`h` label — `<1m` under a minute, never seconds — toned by the parent's age ramp, so the clusters stack into one column across children and a long-running child visibly heats up. A finished child holds its `✓` (or `!`) on the list until the parent's next turn clears it:
 
 ```
 ▌  ⧉ subagents (2)
-▌    ⢿ Explore — locate the render seam
-▌      ◇ 12.4k                                  ◔ 14m
+▌    ✻ Explore — locate the render seam
+▌      ◇ 12.4k · Opus 4.8                       ◔ 14m
 ▌    ✓ review — audit the trust hash
-▌      ◇ 3.1k                                   ◔ <1m
+▌      ◇ 3.1k · Haiku 4.5 · high                ◔ <1m
 ```
 
-The description, tokens, and elapsed ride in from Claude's `subagentStatusLine` (Claude-only; harvested at install time). A Codex child, or a Claude child before its first render, shows just the `glyph type` line. Subagents have no pane of their own, so they never get a row; they nest here only.
+The description, tokens, and elapsed ride in from Claude's `subagentStatusLine` (Claude-only; harvested at install time); the model, effort, and turn phase from the child's own lifecycle events, so siblings on different models read apart at a glance and a reasoning child sparkles like its parent would (Claude reports a child's effort on its `SubagentStop`, so the effort token typically joins the line as the child finishes). A child with none of them — a Codex child, or a Claude child before its first render — shows just the `glyph type` line. Subagents have no pane of their own, so they never get a row; they nest here only.
 
 ### Attention rows
 

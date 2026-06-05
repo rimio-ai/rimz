@@ -430,8 +430,23 @@ pub struct SidebarSubAgent {
     /// reported.
     pub name: String,
     pub status: AgentStatus,
+    /// The running turn's shape (reasoning / acting), the child's own lifecycle
+    /// machine output — it drives the thinking/working head on the child's list
+    /// glyph exactly as the parent's drives its row cell. Always
+    /// [`TurnPhase::Idle`] outside `Running`; the machine normalizes it.
+    #[serde(default, skip_serializing_if = "turn_phase_is_idle")]
+    pub phase: TurnPhase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
+    /// The model the child runs on, from its own `AgentState.model` (carried
+    /// forward by the reducer). `None` until an event names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The child's reasoning effort (`high`, `medium`, …) — Claude reports it
+    /// on `SubagentStop`, so it typically lands once the child finishes. Same
+    /// carry-forward discipline as `model`; `None` until an event names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     /// What the parent asked this child to do (`subagentStatusLine` description),
     /// painted after the type on the first row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1214,13 +1229,6 @@ const WORKTREE_ROW_CAP: usize = 6;
 /// abandoned one clears on its own.
 const GHOST_SESSION_TTL_SECS: i64 = 3 * 60 * 60;
 
-/// Age in seconds after which a *finished* (idle/success) subagent clears from
-/// its parent's expanded list even when no fresh parent turn boundary has
-/// arrived. The turn boundary is the primary signal, but a parent that never
-/// re-prompts would otherwise pin a finished child forever — this is the
-/// backstop that closes that gap. Short: a finished child is pure history.
-const SUBAGENT_FINISHED_TTL_SECS: i64 = 5 * 60;
-
 fn agent_is_pidless(agent: &AgentState) -> bool {
     agent.runtime_owner.is_none() && agent.agent_pid.is_none()
 }
@@ -1615,12 +1623,11 @@ fn build_worktree_groups_from_rows(
 /// skips it). This pass matches each child to its parent row by
 /// `(kind, parent_agent_id)` and pushes a compact summary onto it.
 ///
-/// Retention reaps a child three ways: a finished (idle/success) child whose
-/// work predates the parent's *current* turn (`turn_started_at`, advanced only
-/// by `UserPromptSubmit`) belongs to a past turn and is dropped; a finished
-/// child sat idle past [`SUBAGENT_FINISHED_TTL_SECS`] is dropped even when no
-/// fresh parent turn arrived (the gap that let ghosts linger); and a *running*
-/// child superseded by a newer parent turn, or silent past the generous
+/// Retention is turn-scoped: a finished (success/failed) child stays listed —
+/// however long ago it finished — until its work predates the parent's
+/// *current* turn (`turn_started_at`, advanced only by `UserPromptSubmit`),
+/// when it belongs to a past turn and is dropped. A *running* child superseded
+/// by a newer parent turn, or silent past the generous
 /// [`GHOST_SESSION_TTL_SECS`] backstop, is a ghost that never sent `Stop` —
 /// reaped so it can't freeze the parent's delegated-wait head. A child whose
 /// parent row is absent (parent ended, reaped, or has no live pane) is an
@@ -1663,8 +1670,9 @@ pub(super) fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState], 
                 true
             }
         } else {
-            // Finished: history once the parent moved on, or once idle past the TTL.
-            !superseded && idle_secs(child) < SUBAGENT_FINISHED_TTL_SECS
+            // Finished: kept for the whole turn that spawned it; history once
+            // the parent moves on to its next turn.
+            !superseded
         };
         if !keep {
             continue;
@@ -1889,7 +1897,10 @@ pub(super) fn sub_agent_from_state(child: &AgentState, now: Timestamp) -> Sideba
         id: child.agent_id.to_string(),
         name,
         status: child.status,
+        phase: child.phase,
         task: child.task.clone(),
+        model: child.model.clone(),
+        effort: child.effort.clone(),
         description: child.subagent_description.clone(),
         total_tokens: child.total_tokens,
         elapsed_secs,
