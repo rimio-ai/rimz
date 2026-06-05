@@ -3103,3 +3103,43 @@ fn context_sidecar_ttl_matches_the_ghost_session_ttl() {
         GHOST_SESSION_TTL_SECS,
     );
 }
+
+// ── The per-call split: the context line's row-level fallback ────────────────
+
+#[test]
+fn call_split_projects_the_lifecycle_rail_composition() {
+    // The per-call split a rollout's `last_token_usage` feeds onto the
+    // lifecycle rail projects onto the row, and its `filled()` — cache reads +
+    // fresh input, exactly the window numerator the `▣` percent scales —
+    // stands in for the severity axis's absolute-token read when no rich blob
+    // exists.
+    let mut codex = agent("codex", "sess-1", AgentStatus::Running, 1_000).worktree("/repo/main");
+    codex.cache_read_input_tokens = Some(120_000);
+    codex.fresh_input_tokens = Some(9_200);
+    codex.output_tokens = Some(800);
+    let snapshot = room(Vec::new(), vec![codex]);
+
+    let projected = row(&snapshot, "sess-1");
+    let split = projected
+        .call_split()
+        .expect("the split projects onto the row");
+    assert_eq!(split.cache_read, 120_000);
+    assert_eq!(split.fresh_input, 9_200);
+    assert_eq!(split.output, 800);
+    assert_eq!(split.filled(), 129_200);
+    assert_eq!(projected.context_used_tokens(), Some(129_200));
+}
+
+#[test]
+fn call_split_waits_for_a_known_input_side() {
+    // Until the input side of a call is known the row keeps the bare total —
+    // a pre-first-turn agent never legends a partial composition.
+    let mut codex = agent("codex", "sess-1", AgentStatus::Running, 1_000).worktree("/repo/main");
+    codex.total_tokens = Some(5_000);
+    codex.cache_read_input_tokens = Some(99);
+    let snapshot = room(Vec::new(), vec![codex]);
+
+    let projected = row(&snapshot, "sess-1");
+    assert_eq!(projected.call_split(), None);
+    assert_eq!(projected.context_used_tokens(), None);
+}

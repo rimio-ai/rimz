@@ -159,6 +159,12 @@ pub(super) fn reduce_agent_states_seeded(
             param_number("context_window").or_else(|| prior.and_then(|p| p.context_window));
         let total_tokens =
             param_number("total_tokens").or_else(|| prior.and_then(|p| p.total_tokens));
+        let cache_read_input_tokens = param_number("cache_read_input_tokens")
+            .or_else(|| prior.and_then(|p| p.cache_read_input_tokens));
+        let fresh_input_tokens =
+            param_number("fresh_input_tokens").or_else(|| prior.and_then(|p| p.fresh_input_tokens));
+        let output_tokens =
+            param_number("output_tokens").or_else(|| prior.and_then(|p| p.output_tokens));
         let todo_done = param_number("todo_done")
             .map(|v| v.min(u32::MAX as u64) as u32)
             .or_else(|| prior.and_then(|p| p.todo_done));
@@ -282,6 +288,9 @@ pub(super) fn reduce_agent_states_seeded(
             context_pct,
             context_window,
             total_tokens,
+            cache_read_input_tokens,
+            fresh_input_tokens,
+            output_tokens,
             todo_done,
             todo_total,
             // Never reduced from events — the snapshot CLI folds the latest

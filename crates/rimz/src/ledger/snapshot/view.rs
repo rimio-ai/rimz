@@ -296,6 +296,18 @@ pub struct SidebarRow {
     pub context_window: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u64>,
+    /// The latest API call's per-call token split (`◌` cache-read, `↘` fresh
+    /// input, `↗` output), carried forward from `AgentState` — the Codex
+    /// rollout's `last_token_usage`. The renderer's composition line falls back
+    /// to it when the rich `context.tokens.current_usage` is absent; see
+    /// [`Self::call_split`]. No cache-write: the provider feeding this path
+    /// reports none per call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub todo_done: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -400,20 +412,57 @@ impl SidebarRow {
     /// Tokens currently occupying the context window — the current message's
     /// `input + cache_creation + cache_read`, exactly the numerator the gauge
     /// percent scales. The severity classification's absolute-token axis.
-    /// `None` when no per-message breakdown was reported.
+    /// Falls back to the row-level [`call_split`](Self::call_split) when the
+    /// rich blob carries no per-message breakdown; `None` when neither source
+    /// reported one.
     pub fn context_used_tokens(&self) -> Option<u64> {
-        let usage = self
+        let rich = self
             .context
-            .as_ref()?
-            .tokens
-            .as_ref()?
-            .current_usage
-            .as_ref()?;
-        Some(
-            usage.input_tokens.unwrap_or(0)
-                + usage.cache_creation_input_tokens.unwrap_or(0)
-                + usage.cache_read_input_tokens.unwrap_or(0),
-        )
+            .as_ref()
+            .and_then(|context| context.tokens.as_ref())
+            .and_then(|tokens| tokens.current_usage.as_ref())
+            .map(|usage| {
+                usage.input_tokens.unwrap_or(0)
+                    + usage.cache_creation_input_tokens.unwrap_or(0)
+                    + usage.cache_read_input_tokens.unwrap_or(0)
+            });
+        rich.or_else(|| self.call_split().map(|split| split.filled()))
+    }
+
+    /// The latest call's composition when the rich `context.tokens.
+    /// current_usage` blob is absent — the row-level split the lifecycle rail
+    /// fills (Codex's rollout `last_token_usage`). `None` until the input side
+    /// of a call is known, so a pre-first-turn row keeps the bare total.
+    pub fn call_split(&self) -> Option<RowCallSplit> {
+        let fresh_input = self.fresh_input_tokens?;
+        Some(RowCallSplit {
+            cache_read: self.cache_read_input_tokens.unwrap_or(0),
+            fresh_input,
+            output: self.output_tokens.unwrap_or(0),
+        })
+    }
+}
+
+/// A row-level per-call token composition — the fallback the renderer legends
+/// when no rich per-call blob exists. Carries no cache-write: the provider
+/// that feeds this path (Codex) reports none per call, so that column simply
+/// drops from the line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowCallSplit {
+    /// Tokens read back from cache (`◌`).
+    pub cache_read: u64,
+    /// Fresh, uncached input (`↘`).
+    pub fresh_input: u64,
+    /// Output generated (`↗`) — it joins the window next turn.
+    pub output: u64,
+}
+
+impl RowCallSplit {
+    /// The window numerator — everything occupying the window after this call
+    /// (`cache_read + fresh_input`), exactly what the `▣` percent scales and
+    /// the `▤` head shows.
+    pub fn filled(&self) -> u64 {
+        self.cache_read + self.fresh_input
     }
 }
 
@@ -1950,6 +1999,9 @@ pub(super) fn row_from_agent(agent: &AgentState, now: Timestamp) -> SidebarRow {
         context_pct: Some(agent.context_pct.unwrap_or(0)),
         context_window: agent.context_window,
         total_tokens: agent.total_tokens,
+        cache_read_input_tokens: agent.cache_read_input_tokens,
+        fresh_input_tokens: agent.fresh_input_tokens,
+        output_tokens: agent.output_tokens,
         todo_done: agent.todo_done,
         todo_total: agent.todo_total,
         context: agent.context.clone(),
@@ -2030,6 +2082,9 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         },
         context_window: matched.and_then(|agent| agent.context_window),
         total_tokens: matched.and_then(|agent| agent.total_tokens),
+        cache_read_input_tokens: matched.and_then(|agent| agent.cache_read_input_tokens),
+        fresh_input_tokens: matched.and_then(|agent| agent.fresh_input_tokens),
+        output_tokens: matched.and_then(|agent| agent.output_tokens),
         todo_done: matched.and_then(|agent| agent.todo_done),
         todo_total: matched.and_then(|agent| agent.todo_total),
         context: matched.and_then(|agent| agent.context.clone()),

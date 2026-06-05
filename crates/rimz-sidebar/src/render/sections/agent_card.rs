@@ -643,18 +643,32 @@ fn gauge_percent(row: &SidebarRow) -> Option<u8> {
 /// The context bar's color segments, when the per-message breakdown is known,
 /// left to right: cache writes (yellow), cache reads (blue), fresh `input`
 /// (red) — the shared `SEGMENT_*` tones the context line's markers also wear,
-/// so the line legends the bar by construction. `None` when no breakdown was
-/// reported (a fresh session, post-compact, or a non-Claude agent), so the bar
-/// falls back to a single-color ramp.
+/// so the line legends the bar by construction. The rich statusline blob is
+/// preferred; the row-level [`SidebarRow::call_split`] (Codex's rollout
+/// `last_token_usage`, which reports no cache-write) stands in when the blob
+/// carries no split. `None` when neither source reported one (a fresh
+/// session, or a statusline blob cleared by `/compact` — a rollout-fed split
+/// refreshes with the next call instead), so the bar falls back to a
+/// single-color ramp.
 fn gauge_segments(row: &SidebarRow) -> Option<[(u64, Color); 3]> {
-    let usage = ctx(row)?.tokens.as_ref()?.current_usage.as_ref()?;
-    let input = usage.input_tokens.unwrap_or(0);
-    let writes = usage.cache_creation_input_tokens.unwrap_or(0);
-    let reads = usage.cache_read_input_tokens.unwrap_or(0);
-    (input + writes + reads > 0).then_some([
-        (writes, SEGMENT_CACHE_WRITE),
-        (reads, SEGMENT_CACHE_READ),
-        (input, SEGMENT_INPUT),
+    if let Some(usage) = ctx(row)
+        .and_then(|context| context.tokens.as_ref())
+        .and_then(|tokens| tokens.current_usage.as_ref())
+    {
+        let input = usage.input_tokens.unwrap_or(0);
+        let writes = usage.cache_creation_input_tokens.unwrap_or(0);
+        let reads = usage.cache_read_input_tokens.unwrap_or(0);
+        return (input + writes + reads > 0).then_some([
+            (writes, SEGMENT_CACHE_WRITE),
+            (reads, SEGMENT_CACHE_READ),
+            (input, SEGMENT_INPUT),
+        ]);
+    }
+    let split = row.call_split()?;
+    (split.filled() > 0).then_some([
+        (0, SEGMENT_CACHE_WRITE),
+        (split.cache_read, SEGMENT_CACHE_READ),
+        (split.fresh_input, SEGMENT_INPUT),
     ])
 }
 
@@ -669,11 +683,14 @@ fn gauge_segments(row: &SidebarRow) -> Option<[(u64, Color); 3]> {
 /// (which joins the window next turn) — each marker in its bar-segment color,
 /// so the line doubles as the bar's legend. The `◇` totals stay the cockpit /
 /// fleet-ledger / subagent vocabulary — this line answers "what is in the
-/// window", not "what did today burn". Falls back to the bare `▤` rollup
-/// total for an agent whose context carries no per-call token split (Codex's
-/// app-server exposes none, and Claude reports none before the first API call
-/// and right after `/compact`), so the line shows *something* for every
-/// agent. The age rides the right edge only once it crosses a full minute
+/// window", not "what did today burn". The rich statusline blob is preferred;
+/// the row-level [`SidebarRow::call_split`] (Codex's rollout
+/// `last_token_usage`) stands in when the blob carries no split — its
+/// cache-write column is unreported there, so it drops from the line. Falls
+/// back to the bare `▤` rollup total when neither source has a split (Claude
+/// before the first API call and right after `/compact`), so the line shows
+/// *something* for every agent. The age rides the right edge only once it
+/// crosses a full minute
 /// — a just-active agent shows the breakdown alone, left-aligned, rather than
 /// a misleading `1m` — as the clock-fill glyph ([`elapsed_glyph`]) over the
 /// quarter-stepping age tone ([`activity_age_style`]): dim warm, yellow from
@@ -717,6 +734,23 @@ fn context_tokens_line(
             cache_write,
             input,
             output,
+            tokens_int,
+        ));
+        return Some(pin_right(left, age, width));
+    }
+    // The row-level split — the lifecycle rail's per-call composition (Codex's
+    // rollout `last_token_usage`). Its protocol reports no per-call
+    // cache-write, so that column passes 0 and drops from the line.
+    if let Some(split) = row.call_split() {
+        let mut left = vec![Span::raw("  ")];
+        left.extend(context_breakdown_spans(
+            theme,
+            severity,
+            split.filled(),
+            split.cache_read,
+            0,
+            split.fresh_input,
+            split.output,
             tokens_int,
         ));
         return Some(pin_right(left, age, width));

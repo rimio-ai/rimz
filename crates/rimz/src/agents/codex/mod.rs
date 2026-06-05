@@ -359,6 +359,14 @@ impl AgentAdapter for CodexAdapter {
         // as the card's window label.
         observation.context_window = usage.context_window;
         observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
+        // The latest call's split — the card's composition line. The rollout's
+        // `input_tokens` includes the cached slice (the protocol reports no
+        // per-call cache-write), so fresh input is the uncached remainder.
+        observation.cache_read_input_tokens = usage.last_cached_input_tokens;
+        observation.fresh_input_tokens = usage
+            .last_input_tokens
+            .map(|input| input.saturating_sub(usage.last_cached_input_tokens.unwrap_or(0)));
+        observation.output_tokens = usage.last_output_tokens;
         // Codex exposes no stable todo-state hook field; the dots stay None.
         observation.todo_done = None;
         observation.todo_total = None;
@@ -508,6 +516,16 @@ struct TranscriptUsage {
     context_window: Option<u64>,
     total_tokens: Option<u64>,
     model: Option<String>,
+    /// The latest call's full input from `last_token_usage.input_tokens` —
+    /// the cached slice included, so this is the window numerator the
+    /// composition line splits.
+    last_input_tokens: Option<u64>,
+    /// The cached slice of the latest call's input from
+    /// `last_token_usage.cached_input_tokens` — the card's `◌` cache-read
+    /// figure. The protocol has no per-call cache-write.
+    last_cached_input_tokens: Option<u64>,
+    /// The latest call's output from `last_token_usage.output_tokens`.
+    last_output_tokens: Option<u64>,
     /// Cumulative session input tokens from the most-recent `total_token_usage`
     /// block — the billable input total, used to estimate the session cost.
     cumulative_input_tokens: Option<u64>,
@@ -529,6 +547,9 @@ impl TranscriptUsage {
             context_window: None,
             total_tokens: Some(0),
             model: None,
+            last_input_tokens: Some(0),
+            last_cached_input_tokens: Some(0),
+            last_output_tokens: Some(0),
             cumulative_input_tokens: None,
             cumulative_cached_tokens: 0,
             cumulative_output_tokens: None,
@@ -606,6 +627,15 @@ fn sorted_subdirs_desc(path: &Path) -> Vec<PathBuf> {
 /// and takes the most recent record. Best-effort: any IO or parse failure
 /// yields empty fields (enrichment, never correctness).
 fn usage_from_transcript(path: &Path) -> TranscriptUsage {
+    // The per-call fields of the most recent `token_count` record, raw so an
+    // absent field stays unknown.
+    struct LastUsage {
+        input: Option<u64>,
+        total: Option<u64>,
+        window: u64,
+        cached: Option<u64>,
+        output: Option<u64>,
+    }
     let Some(text) = read_transcript_tail(path) else {
         return TranscriptUsage::default();
     };
@@ -614,7 +644,7 @@ fn usage_from_transcript(path: &Path) -> TranscriptUsage {
     // totals (cumulative_input_tokens, etc.), plus the model from
     // `turn_context`. Bail once all targets are filled.
     let mut latest_model: Option<String> = None;
-    let mut latest_usage: Option<(u64, Option<u64>, u64)> = None;
+    let mut latest_usage: Option<LastUsage> = None;
     // (cumulative_input, cumulative_cached, cumulative_output)
     let mut latest_cumulative: Option<(u64, u64, u64)> = None;
     for line in text.lines().rev() {
@@ -648,13 +678,24 @@ fn usage_from_transcript(path: &Path) -> TranscriptUsage {
                 let last = info.and_then(|info| info.get("last_token_usage"));
                 let input = last
                     .and_then(|last| last.get("input_tokens"))
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
+                    .and_then(Value::as_u64);
                 let total = last
                     .and_then(|last| last.get("total_tokens"))
                     .and_then(Value::as_u64);
-                if window > 0 || input > 0 || total.is_some() {
-                    latest_usage = Some((input, total, window));
+                let cached = last
+                    .and_then(|last| last.get("cached_input_tokens"))
+                    .and_then(Value::as_u64);
+                let output = last
+                    .and_then(|last| last.get("output_tokens"))
+                    .and_then(Value::as_u64);
+                if window > 0 || input.unwrap_or(0) > 0 || total.is_some() {
+                    latest_usage = Some(LastUsage {
+                        input,
+                        total,
+                        window,
+                        cached,
+                        output,
+                    });
                 }
             }
             if latest_cumulative.is_none() {
@@ -687,16 +728,21 @@ fn usage_from_transcript(path: &Path) -> TranscriptUsage {
             None => (None, 0, None),
         };
     match latest_usage {
-        Some((input, total, window)) => {
-            let context_pct = input
+        Some(last) => {
+            let context_pct = last
+                .input
+                .unwrap_or(0)
                 .saturating_mul(100)
-                .checked_div(window)
+                .checked_div(last.window)
                 .map(|pct| pct.min(100) as u8);
             TranscriptUsage {
                 context_pct,
-                context_window: (window > 0).then_some(window),
-                total_tokens: total,
+                context_window: (last.window > 0).then_some(last.window),
+                total_tokens: last.total,
                 model: latest_model,
+                last_input_tokens: last.input,
+                last_cached_input_tokens: last.cached,
+                last_output_tokens: last.output,
                 cumulative_input_tokens,
                 cumulative_cached_tokens,
                 cumulative_output_tokens,

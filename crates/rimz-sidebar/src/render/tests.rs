@@ -160,6 +160,9 @@ fn agent(
         context_pct: None,
         context_window: None,
         total_tokens: None,
+        cache_read_input_tokens: None,
+        fresh_input_tokens: None,
+        output_tokens: None,
         todo_done: None,
         todo_total: None,
         context: None,
@@ -928,8 +931,124 @@ fn selected_agent_without_context_keeps_bare_token_total() {
     );
 
     assert!(rendered.contains("▤ 5k"));
+    // No split fields, so no composition columns trail the bare total.
+    for marker in ['◌', '◍', '↘', '↗'] {
+        assert!(
+            !rendered.contains(marker),
+            "a splitless row keeps the bare total alone:\n{rendered}"
+        );
+    }
     assert!(!rendered.contains('↻'));
     assert!(!rendered.contains('$'));
+}
+
+#[test]
+fn codex_card_renders_the_per_call_composition() {
+    // A Codex row carries the per-call split from its rollout's
+    // `last_token_usage` on the lifecycle rail — no rich context blob. The
+    // context line legends it: `▤` the window numerator (cache reads + fresh
+    // input, exactly what the `▣` percent scales — not the call total, which
+    // includes output), then `◌`/`↘`/`↗`. No `◍` column: the protocol reports
+    // no per-call cache-write, so it drops rather than reading a false zero.
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("add tests"),
+    );
+    codex.model = Some("GPT-5.5".to_owned());
+    codex.context_pct = Some(50);
+    codex.context_window = Some(258_400);
+    codex.total_tokens = Some(130_000);
+    codex.cache_read_input_tokens = Some(120_000);
+    codex.fresh_input_tokens = Some(9_200);
+    codex.output_tokens = Some(800);
+    assert!(codex.context.is_none());
+    let snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            selected_index: 0,
+            help_visible: false,
+            animation_phase: 0,
+            line_map: Vec::new(),
+            ..Default::default()
+        },
+        44,
+        14,
+    );
+
+    assert!(
+        rendered.contains("▤ 129k · ◌ 120k ↘ 9k ↗ 800"),
+        "the context line legends the split:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains('◍'),
+        "no per-call cache-write exists, so the column drops:\n{rendered}"
+    );
+    assert_snapshot("codex_card_context_composition", rendered);
+}
+
+/// The calm bar's colored segments come from the row-level split too: with no
+/// rich blob, a Codex card's fill splits into the cache-read and fresh-input
+/// segment tones — and no cache-write segment exists to paint — so the context
+/// line stays the bar's legend by construction. Style-level, since text
+/// goldens cannot see the segment colors.
+#[test]
+fn codex_calm_bar_splits_into_row_level_segments() {
+    let theme = Theme::fixed(false);
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("add tests"),
+    );
+    codex.context_pct = Some(50);
+    codex.context_window = Some(258_400);
+    codex.cache_read_input_tokens = Some(120_000);
+    codex.fresh_input_tokens = Some(9_200);
+    codex.output_tokens = Some(800);
+    let snapshot = snapshot_with(Vec::new(), vec![codex]);
+
+    let mut lines = Vec::new();
+    let mut map = Vec::new();
+    let mut row_index = 0;
+    worktree_group_lines(
+        &theme,
+        &snapshot.worktree_groups[0],
+        &snapshot.providers,
+        44,
+        &snapshot.sidebar.context,
+        &mut row_index,
+        0,
+        0,
+        &mut lines,
+        &mut map,
+    );
+
+    let bar_styles: Vec<_> = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter(|span| span.content.contains('━'))
+        .map(|span| span.style)
+        .collect();
+    assert!(
+        bar_styles.contains(&theme.style(labels::SEGMENT_CACHE_READ, Modifier::empty())),
+        "the cache-read segment colors the bar"
+    );
+    assert!(
+        bar_styles.contains(&theme.style(labels::SEGMENT_INPUT, Modifier::empty())),
+        "the fresh-input segment colors the bar"
+    );
+    assert!(
+        !bar_styles.contains(&theme.style(labels::SEGMENT_CACHE_WRITE, Modifier::empty())),
+        "no cache-write segment exists to paint"
+    );
 }
 
 /// The card's age cluster pairs a clock-fill glyph (the face fills with the

@@ -87,6 +87,9 @@ Install wraps Claude's per-child `subagentStatusLine` the same way (at `rimz sta
 | --------------- | ---------------------------------------------- | ----------------------------------------- |
 | `token_count`   | `payload.info.last_token_usage.input_tokens` / `payload.info.model_context_window` | `context_pct` (input × 100 ÷ window, clamped) |
 | `token_count`   | `payload.info.last_token_usage.total_tokens`   | `total_tokens`                            |
+| `token_count`   | `payload.info.last_token_usage.cached_input_tokens` | `cache_read_input_tokens` (the card's `◌`) |
+| `token_count`   | `payload.info.last_token_usage.input_tokens − cached_input_tokens` | `fresh_input_tokens` (the card's `↘`; `input_tokens` includes the cached slice) |
+| `token_count`   | `payload.info.last_token_usage.output_tokens`  | `output_tokens` (the card's `↗`)          |
 | `turn_context`  | `payload.model`                                | `model` (display name)                    |
 
 Unlike Claude — which stores raw tokens and derives the window from the payload model — Codex stores a **precomputed `context_pct`**, because the rollout carries the window (`model_context_window`) directly.
@@ -99,7 +102,7 @@ The trigger is never inline: a turn-boundary hook spawns `rimz codex refresh-con
 2. **The per-user remote-control daemon**, re-used via `codex app-server proxy --sock <path>` (overridable by `RIMZ_CODEX_APP_SERVER_SOCK`).
 3. **A fresh cold-spawned `codex app-server`** — the always-present fallback, so headless / no-mux still enriches.
 
-The one datapoint the app-server does **not** expose read-only is token / context-window usage: it rides only the live `thread/tokenUsage/updated` notification behind a subscribing `thread/resume`. So `AgentContext.tokens` stays `None` and Codex's context gauge is sourced from the rollout transcript above.
+The one datapoint the app-server does **not** expose read-only is token / context-window usage: it rides only the live `thread/tokenUsage/updated` notification behind a subscribing `thread/resume`. So `AgentContext.tokens` stays `None` and Codex's context gauge — the percent *and* the per-call composition the card legends — is sourced from the rollout transcript above, riding the lifecycle rail to the row.
 
 ## Appendix — Pi
 

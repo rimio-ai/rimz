@@ -766,6 +766,17 @@ pub struct AgentState {
     /// discipline as `context_pct`.
     #[serde(default)]
     pub total_tokens: Option<u64>,
+    /// The latest API call's per-call token split (`◌` cache-read, `↘` fresh
+    /// input, `↗` output), carried forward like `total_tokens`. Fed by the
+    /// Codex rollout tail today; the card's composition line falls back to it
+    /// when no richer realtime context (Claude's statusline) is present. No
+    /// cache-write field — the provider feeding this path reports none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
     /// Completed and total todos for the agent's current plan, as reported
     /// by the agent's plan/todo tool. `todo_total = 0` (or `None`) renders as
     /// "no todo state".

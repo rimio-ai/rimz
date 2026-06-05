@@ -63,6 +63,15 @@ pub struct AgentLifecycleObservation {
     pub context_window: Option<u64>,
     /// Cumulative token usage for this agent session.
     pub total_tokens: Option<u64>,
+    /// The latest API call's per-call token split — what the agent card's
+    /// composition line legends (`◌` cache-read, `↘` fresh input, `↗` output).
+    /// Carry-forward enrichment for an agent with no richer realtime source
+    /// (Codex's rollout tail); Claude's statusline context supersedes it at
+    /// render. No cache-write field: the one provider that feeds this path
+    /// reports none per call.
+    pub cache_read_input_tokens: Option<u64>,
+    pub fresh_input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
     /// Completed / total todos for the agent's current plan or task list.
     pub todo_done: Option<u32>,
     pub todo_total: Option<u32>,
@@ -96,6 +105,9 @@ impl AgentLifecycleObservation {
             context_pct: None,
             context_window: None,
             total_tokens: None,
+            cache_read_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
             todo_done: None,
             todo_total: None,
             pane_id: None,

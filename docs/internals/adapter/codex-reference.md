@@ -215,13 +215,14 @@ Codex writes one rollout file per session — its session log — at `~/.codex/s
 // token usage
 { "type": "event_msg", "payload": { "type": "token_count",
     "info": { "model_context_window": <u64>,
-              "last_token_usage": { "input_tokens": <u64>, "total_tokens": <u64> } } } }
+              "last_token_usage": { "input_tokens": <u64>, "cached_input_tokens": <u64>,
+                                    "output_tokens": <u64>, "total_tokens": <u64> } } } }
 
 // model
 { "type": "turn_context", "payload": { "model": "gpt-5.5-codex" } }
 ```
 
-Unlike Claude (raw tokens, window derived from the payload model), Codex carries the window directly (`model_context_window`), so the gauge is a precomputed `context_pct`. The field → internal mapping and the date-tree walk (`RIMZ_CODEX_SESSIONS` overrides the root) are in [transcript.md](../transcript.md#appendix--codex).
+Unlike Claude (raw tokens, window derived from the payload model), Codex carries the window directly (`model_context_window`), so the gauge is a precomputed `context_pct`. `last_token_usage` also feeds the card's per-call composition: `cached_input_tokens` is the `◌` cache-read figure, `input_tokens − cached_input_tokens` the `↘` fresh input (`input_tokens` includes the cached slice), and `output_tokens` the `↗` — the protocol reports no per-call cache-write, so the card grows no `◍`. The field → internal mapping and the date-tree walk (`RIMZ_CODEX_SESSIONS` overrides the root) are in [transcript.md](../transcript.md#appendix--codex).
 
 ## Auth file
 

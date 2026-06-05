@@ -348,6 +348,8 @@ pub(super) fn token_breakdown_spans(
 /// measurement), a `·` seam, then the latest API call's composition ordered by
 /// how the window filled — `◌` read back from cache, `◍` newly written to it,
 /// `↘` fresh input, `↗` output generated (which joins the window next turn).
+/// A zero column drops whole — the line shows what filled the window, and a
+/// provider with no per-call cache-write (Codex) simply never grows a `◍`.
 /// The `▤` head wears the bar's `severity` tone and each composition marker its
 /// bar-segment color ([`SEGMENT_CACHE_READ`] and siblings), so the line is the
 /// bar's color-keyed legend; the figures stay dim chrome.
@@ -363,15 +365,21 @@ pub(super) fn context_breakdown_spans(
     fmt: fn(u64) -> String,
 ) -> Vec<Span<'static>> {
     let mut spans = context_total_spans(theme, severity, filled, fmt);
-    for (seam, glyph, color, value) in [
-        (" · ", TOKENS_CACHED, SEGMENT_CACHE_READ, cache_read),
-        (" ", TOKENS_CACHE_WRITE, SEGMENT_CACHE_WRITE, cache_write),
-        (" ", TOKENS_IN, SEGMENT_INPUT, input),
-        (" ", TOKENS_OUT, SEGMENT_OUTPUT, output),
+    // The `·` seam frames the first *rendered* column, wherever it lands.
+    let mut seam = " · ";
+    for (glyph, color, value) in [
+        (TOKENS_CACHED, SEGMENT_CACHE_READ, cache_read),
+        (TOKENS_CACHE_WRITE, SEGMENT_CACHE_WRITE, cache_write),
+        (TOKENS_IN, SEGMENT_INPUT, input),
+        (TOKENS_OUT, SEGMENT_OUTPUT, output),
     ] {
+        if value == 0 {
+            continue;
+        }
         spans.push(Span::styled(seam, theme.dim()));
         spans.push(Span::styled(glyph, theme.style(color, Modifier::empty())));
         spans.push(Span::styled(format!(" {}", fmt(value)), theme.dim()));
+        seam = " ";
     }
     spans
 }

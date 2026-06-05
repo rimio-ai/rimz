@@ -631,6 +631,10 @@ fn fresh_transcript_reports_zero_context_not_unknown() {
     let usage = usage_from_transcript(&path);
     assert_eq!(usage.context_pct, Some(0));
     assert_eq!(usage.total_tokens, Some(0));
+    // The per-call split reads an explicit zero too, mirroring the totals.
+    assert_eq!(usage.last_input_tokens, Some(0));
+    assert_eq!(usage.last_cached_input_tokens, Some(0));
+    assert_eq!(usage.last_output_tokens, Some(0));
 }
 
 #[test]
@@ -664,6 +668,49 @@ fn transcript_tail_populates_cumulative_totals() {
     assert_eq!(usage.cumulative_output_tokens, Some(200));
     assert_eq!(usage.cumulative_cached_tokens, 400);
     assert_eq!(usage.model.as_deref(), Some("codex-mini"));
+}
+
+#[test]
+fn transcript_tail_populates_the_per_call_split() {
+    // `last_token_usage` carries the latest call's full field set —
+    // `input_tokens` (the cached slice included), `cached_input_tokens`, and
+    // `output_tokens` — which the card's composition line legends (`◌`
+    // cache-read, `↘` fresh input, `↗` output). The parser must surface them
+    // raw; the adapter derives fresh input as `input − cached`.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+             \"last_token_usage\":{\"input_tokens\":129200,\"cached_input_tokens\":120000,\
+             \"output_tokens\":800,\"total_tokens\":130000},\
+             \"model_context_window\":258400}}}\n",
+    )
+    .unwrap();
+    let usage = usage_from_transcript(&path);
+    assert_eq!(usage.last_input_tokens, Some(129_200));
+    assert_eq!(usage.last_cached_input_tokens, Some(120_000));
+    assert_eq!(usage.last_output_tokens, Some(800));
+}
+
+#[test]
+fn transcript_tail_without_split_fields_leaves_them_unknown() {
+    // An older rollout whose `last_token_usage` reports only `input_tokens`
+    // and `total_tokens` keeps the cached/output sides unknown rather than
+    // asserting a false zero — the card then renders the input it does know.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+             \"last_token_usage\":{\"input_tokens\":500,\"total_tokens\":600},\
+             \"model_context_window\":100000}}}\n",
+    )
+    .unwrap();
+    let usage = usage_from_transcript(&path);
+    assert_eq!(usage.last_input_tokens, Some(500));
+    assert_eq!(usage.last_cached_input_tokens, None);
+    assert_eq!(usage.last_output_tokens, None);
 }
 
 #[test]
