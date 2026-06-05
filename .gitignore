@@ -36,3 +36,4 @@ lcov.info
 plan.md
 status.md
 .claude/worktrees/
+.claude/scheduled_tasks.lock
