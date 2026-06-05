@@ -121,6 +121,9 @@ fn catch_up_rollup_equals_the_full_fold() {
     // Persist the fold base at the prefix — the seed the delta resumes from.
     let (prefix_cache, _) = catch_up_rollup(&paths).unwrap();
     write_rollup_cache(&paths.rollup_cache, &prefix_cache).unwrap();
+    // A cursor warms its in-memory base at the same prefix point.
+    let mut cursor = RollupCursor::new();
+    cursor.fold(&paths).unwrap();
 
     // Delta: a third agent appears, `a` stops, and `b`'s session ends —
     // a tombstone the incremental fold must carry exactly like the full one.
@@ -153,6 +156,7 @@ fn catch_up_rollup_equals_the_full_fold() {
         event_log::append(&paths.events_log, &event).unwrap();
     }
     let (incremental_cache, incremental) = catch_up_rollup(&paths).unwrap();
+    let (cursor_extent, cursor_merged) = cursor.fold(&paths).unwrap();
 
     // Cold path: drop the base; the same call folds the whole log from zero.
     std::fs::remove_file(&paths.rollup_cache).unwrap();
@@ -160,9 +164,15 @@ fn catch_up_rollup_equals_the_full_fold() {
 
     assert_eq!(
         sorted_value(incremental),
-        sorted_value(cold),
+        sorted_value(cold.clone()),
         "fold(seed, delta) == fold(empty, all)"
     );
+    assert_eq!(
+        sorted_value(cursor_merged),
+        sorted_value(cold),
+        "the warm in-memory cursor fold equals the cold fold too"
+    );
+    assert_eq!(cursor_extent, cold_cache.extent);
     assert_eq!(
         sorted_value(incremental_cache.raw_agents),
         sorted_value(cold_cache.raw_agents),
@@ -299,6 +309,157 @@ fn rollup_parse_cache_hits_on_identity_and_misses_on_republish() {
     assert_eq!(
         miss.raw_agents[0].agent_id, "cccc",
         "a republish changes the identity; the read re-parses"
+    );
+}
+
+#[test]
+fn cursor_serves_the_held_fold_while_the_log_is_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    event_log::append(
+        &paths.events_log,
+        &lifecycle_at(
+            &workspace,
+            "claude",
+            "SessionStart",
+            "real",
+            lifecycle::LifecycleSignal::Registered,
+        ),
+    )
+    .unwrap();
+
+    let mut cursor = RollupCursor::new();
+    let (first_extent, first) = cursor.fold(&paths).unwrap();
+
+    // Plant a ghost base on disk. A warm cursor over an unchanged log serves
+    // its held fold — it never re-reads `rollup.json`, so the ghost cannot
+    // leak into the merge.
+    write_rollup_cache(
+        &paths.rollup_cache,
+        &RollupCache {
+            version: ROLLUP_CACHE_VERSION,
+            extent: event_log::LogExtent {
+                generation: 0,
+                offset: 0,
+            },
+            raw_agents: vec![agent("claude", "ghost", AgentStatus::Running, 0)],
+            tombstones: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    let (held_extent, held) = cursor.fold(&paths).unwrap();
+    assert_eq!(held_extent, first_extent);
+    assert_eq!(sorted_value(held.clone()), sorted_value(first));
+    assert!(
+        held.iter().all(|a| a.agent_id != "ghost"),
+        "an unchanged log serves the in-memory base, not the disk base"
+    );
+}
+
+#[test]
+fn cursor_reloads_across_a_rotation() {
+    // Rotation renames the log away and recreates it; a regrown log can pass
+    // the held offset, so the cursor's reload guard is the file identity, not
+    // the length. After the swap the cursor must drop its in-memory base and
+    // reload `rollup.json`, whose bumped generation rotation reseeded.
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let lifecycle = |kind: &str, id: &str| {
+        lifecycle_at(
+            &workspace,
+            kind,
+            "SessionStart",
+            id,
+            lifecycle::LifecycleSignal::Registered,
+        )
+    };
+    event_log::append(&paths.events_log, &lifecycle("claude", "a")).unwrap();
+
+    let mut cursor = RollupCursor::new();
+    let (warm_extent, _) = cursor.fold(&paths).unwrap();
+    assert_eq!(warm_extent.generation, 0);
+
+    // Rotate: carryover the rollup, swap the log file, reseed the base —
+    // then regrow the new log *past* the held offset, the case a
+    // length-only guard would misread as appended frames.
+    let (cache, _) = catch_up_rollup(&paths).unwrap();
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents: cache.raw_agents.clone(),
+        },
+    )
+    .unwrap();
+    std::fs::remove_file(&paths.events_log).unwrap();
+    reseed_rollup_cache_for_rotation(&paths).unwrap();
+    event_log::append(&paths.events_log, &lifecycle("codex", "b")).unwrap();
+    event_log::append(&paths.events_log, &lifecycle("codex", "c")).unwrap();
+    assert!(
+        std::fs::metadata(&paths.events_log).unwrap().len() > warm_extent.offset,
+        "the regrown log must outgrow the held offset for this test to bite"
+    );
+
+    let (extent, merged) = cursor.fold(&paths).unwrap();
+    std::fs::remove_file(&paths.rollup_cache).unwrap();
+    let (cold_cache, cold) = catch_up_rollup(&paths).unwrap();
+    assert_eq!(extent.generation, 1, "the reloaded base carries the bump");
+    assert_eq!(extent.offset, cold_cache.extent.offset);
+    assert_eq!(
+        sorted_value(merged),
+        sorted_value(cold),
+        "the post-rotation cursor fold equals the cold fold"
+    );
+}
+
+#[test]
+fn cursor_reloads_on_an_offset_regression() {
+    // Same file identity, shorter log — a truncation the cursor's held offset
+    // now overruns. The reload path falls back to the cold fold (the planted
+    // base is past the log too) and the cursor re-folds what remains.
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut frame_ends = Vec::new();
+    for id in ["a", "b"] {
+        event_log::append(
+            &paths.events_log,
+            &lifecycle_at(
+                &workspace,
+                "claude",
+                "SessionStart",
+                id,
+                lifecycle::LifecycleSignal::Registered,
+            ),
+        )
+        .unwrap();
+        frame_ends.push(std::fs::metadata(&paths.events_log).unwrap().len());
+    }
+
+    let mut cursor = RollupCursor::new();
+    let (warm_extent, _) = cursor.fold(&paths).unwrap();
+    assert_eq!(warm_extent.offset, frame_ends[1]);
+
+    // Truncate in place: identity unchanged, length regressed.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&paths.events_log)
+        .unwrap()
+        .set_len(frame_ends[0])
+        .unwrap();
+
+    let (extent, merged) = cursor.fold(&paths).unwrap();
+    assert_eq!(extent.offset, frame_ends[0]);
+    let ids: Vec<&str> = merged.iter().map(|a| a.agent_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["a"],
+        "the regressed fold reflects only the surviving frames"
     );
 }
 
@@ -491,19 +652,28 @@ proptest::proptest! {
         }
         let (prefix_cache, _) = catch_up_rollup(&paths).unwrap();
         write_rollup_cache(&paths.rollup_cache, &prefix_cache).unwrap();
+        let mut cursor = RollupCursor::new();
+        cursor.fold(&paths).unwrap();
         for event in &events[at..] {
             event_log::append(&paths.events_log, event).unwrap();
         }
         let (incremental_cache, incremental) = catch_up_rollup(&paths).unwrap();
+        let (cursor_extent, cursor_merged) = cursor.fold(&paths).unwrap();
 
         std::fs::remove_file(&paths.rollup_cache).unwrap();
         let (cold_cache, cold) = catch_up_rollup(&paths).unwrap();
 
         prop_assert_eq!(
             sorted_value(incremental),
-            sorted_value(cold),
+            sorted_value(cold.clone()),
             "fold(seed, delta) == fold(empty, all)"
         );
+        prop_assert_eq!(
+            sorted_value(cursor_merged),
+            sorted_value(cold),
+            "the warm in-memory cursor fold equals the cold fold"
+        );
+        prop_assert_eq!(cursor_extent, cold_cache.extent);
         prop_assert_eq!(
             sorted_value(incremental_cache.raw_agents),
             sorted_value(cold_cache.raw_agents)

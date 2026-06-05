@@ -25,6 +25,9 @@ use crate::agents::spending::{Spending, read_provider_spending_cache};
 use crate::agents::{AgentRateLimits, RateLimitWindow};
 use crate::feed::PaneRef;
 use crate::ids::PaneId;
+/// Re-exported for long-lived consumers (the sidebar fetch worker), which sit
+/// behind this module's read-only boundary and never import `crate::ledger`.
+pub use crate::ledger::snapshot::RollupCursor;
 use crate::{
     RuntimePaths, SidebarOwnView, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind,
     StatePaths,
@@ -193,8 +196,19 @@ pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotC
 /// slower pane-list cadence. `None` only when the ledger itself is unreadable,
 /// which the caller treats as a soft miss and holds the last good frame.
 pub fn consumer_rollup(state: &StatePaths) -> Option<SidebarSnapshot> {
+    consumer_rollup_with(state, &mut RollupCursor::new())
+}
+
+/// [`consumer_rollup`] for a long-lived reader: the racing-read fallback folds
+/// through the caller's [`RollupCursor`] — O(new log bytes) per delta from the
+/// in-memory base — instead of re-reading `rollup.json` per call. The fresh
+/// `latest.json` fast path still serves first when its stamp matches the log.
+pub fn consumer_rollup_with(
+    state: &StatePaths,
+    cursor: &mut RollupCursor,
+) -> Option<SidebarSnapshot> {
     crate::ledger::snapshot::read_fresh_latest(state)
-        .or_else(|| crate::ledger::snapshot::build_from(state).ok())
+        .or_else(|| crate::ledger::snapshot::build_with_cursor(state, cursor).ok())
 }
 
 /// Age of the producer's published same-session frame at `now_ms`, in
@@ -434,9 +448,24 @@ pub fn read_published_snapshot(
     session: &str,
     exclude: Option<&PaneId>,
 ) -> Option<SidebarSnapshot> {
+    read_published_snapshot_with(&mut RollupCursor::new(), state, runtime, session, exclude)
+}
+
+/// [`read_published_snapshot`] for a long-lived reader: the rollup folds
+/// through the caller's [`RollupCursor`], so a delta storm costs O(new log
+/// bytes) per wakeup instead of a full `rollup.json` re-read. The sidebar
+/// fetch worker owns one cursor across its loop; one-shot callers (the CLI
+/// `--no-produce` read) stay on the fresh-cursor wrapper.
+pub fn read_published_snapshot_with(
+    cursor: &mut RollupCursor,
+    state: &StatePaths,
+    runtime: &RuntimePaths,
+    session: &str,
+    exclude: Option<&PaneId>,
+) -> Option<SidebarSnapshot> {
     let cache_path = runtime.root.join("snapshot.json");
     let cache = read_snapshot_cache(&cache_path, session)?;
-    let base = consumer_rollup(state)?;
+    let base = consumer_rollup_with(state, cursor)?;
     Some(enrich_consumer(base, Some(cache), runtime, exclude))
 }
 

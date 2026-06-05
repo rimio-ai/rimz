@@ -8,7 +8,7 @@ use std::time::SystemTime;
 use jiff::Timestamp;
 
 use super::Result;
-use super::fold::{catch_up_rollup, write_rollup_cache};
+use super::fold::{RollupCursor, catch_up_rollup, write_rollup_cache};
 use super::view::SidebarSnapshot;
 use crate::feed::AgentState;
 use crate::ledger::atomic::{self};
@@ -46,6 +46,14 @@ pub(crate) fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
 pub fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
     let (rollup, agents) = catch_up_rollup(paths)?;
     assemble_snapshot(paths, rollup.extent, agents)
+}
+
+/// [`build_from`] for a long-lived reader: the same projection, but the
+/// rollup base rides in the caller's [`RollupCursor`] instead of being
+/// re-read from `rollup.json` per call — O(new log bytes) per delta.
+pub fn build_with_cursor(paths: &StatePaths, cursor: &mut RollupCursor) -> Result<SidebarSnapshot> {
+    let (extent, agents) = cursor.fold(paths)?;
+    assemble_snapshot(paths, extent, agents)
 }
 
 fn assemble_snapshot(

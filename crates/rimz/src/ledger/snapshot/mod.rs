@@ -25,7 +25,8 @@ use crate::ledger::event_log::EventLogErr;
 use crate::ledger::feed_store::FeedStoreErr;
 
 pub(crate) use assemble::rebuild;
-pub use assemble::{build_from, read_fresh_latest};
+pub use assemble::{build_from, build_with_cursor, read_fresh_latest};
+pub use fold::RollupCursor;
 pub use fold::agent_tombstones_for_events;
 pub(crate) use fold::{
     EventCarryover, agent_rollup_with_carryover, catch_up_rollup, read_carryover,

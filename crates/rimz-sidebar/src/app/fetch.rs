@@ -103,6 +103,7 @@ fn run_fetch_cycle(
     config: &ServeConfig,
     runtime: &RuntimePaths,
     request: FetchRequest,
+    cursor: &mut rimz::sidebar::snapshot::RollupCursor,
     post: &mut dyn FnMut(FetchOutcome),
 ) {
     let is_producer = !rimz::sidebar::elder_sidebar_present(runtime, &config.instance_id);
@@ -111,7 +112,8 @@ fn run_fetch_cycle(
     let fast = rimz::ledger::paths::StatePaths::for_workspace(config.workspace_id.clone())
         .ok()
         .and_then(|state| {
-            rimz::sidebar::snapshot::read_published_snapshot(
+            rimz::sidebar::snapshot::read_published_snapshot_with(
+                cursor,
                 &state,
                 runtime,
                 &config.session_name,
@@ -229,6 +231,10 @@ pub(super) fn spawn_fetch_worker(
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let waker = UnixDatagram::unbound().ok();
+        // The worker's in-memory fold base: each cycle's rollup read folds
+        // only the log bytes appended since the last one, instead of
+        // re-parsing the persisted base per delta.
+        let mut cursor = rimz::sidebar::snapshot::RollupCursor::new();
         while let Ok(first) = request_rx.recv() {
             // Coalesce any requests that piled up into one run, keeping the
             // strongest intent and the newest pane-freshness floor.
@@ -239,7 +245,7 @@ pub(super) fn spawn_fetch_worker(
             // Post each outcome as it lands and poke the loop per post, so the
             // fast in-process frame paints while the fork (if any) still runs.
             let mut disconnected = false;
-            run_fetch_cycle(&config, &runtime, request, &mut |outcome| {
+            run_fetch_cycle(&config, &runtime, request, &mut cursor, &mut |outcome| {
                 if result_tx.send(outcome).is_err() {
                     disconnected = true;
                     return;

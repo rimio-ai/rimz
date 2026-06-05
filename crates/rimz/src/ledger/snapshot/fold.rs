@@ -197,9 +197,23 @@ pub(crate) fn catch_up_rollup(paths: &StatePaths) -> Result<(RollupCache, Vec<Ag
     let log_len = fs::metadata(&paths.events_log)
         .map(|meta| meta.len())
         .unwrap_or(0);
-    let cache =
+    let base =
         read_rollup_cache(&paths.rollup_cache).filter(|cache| cache.extent.offset <= log_len);
-    let (seed, mut tombstones, generation, base) = match cache {
+    catch_up_from(base, paths)
+}
+
+/// The base-parameterized fold core every entry point shares: resume from
+/// `base` (a fold cold from offset zero when `None`), fold only the frames
+/// appended past it, and return the refreshed cache beside the
+/// carryover-merged rollup. The disk-backed wrapper ([`catch_up_rollup`]) and
+/// the in-memory [`RollupCursor`] both delegate here — one implementation, so
+/// the keystone fold equivalence holds for every reader by construction.
+/// `base.extent.offset` must not exceed the live log; callers filter.
+fn catch_up_from(
+    base: Option<RollupCache>,
+    paths: &StatePaths,
+) -> Result<(RollupCache, Vec<AgentState>)> {
+    let (seed, mut tombstones, generation, start) = match base {
         Some(RollupCache {
             extent,
             raw_agents,
@@ -216,7 +230,7 @@ pub(crate) fn catch_up_rollup(paths: &StatePaths) -> Result<(RollupCache, Vec<Ag
         }
         None => (BTreeMap::new(), BTreeSet::new(), 0, 0),
     };
-    let (delta, end) = event_log::read_from_offset(&paths.events_log, base)?;
+    let (delta, end) = event_log::read_from_offset(&paths.events_log, start)?;
     let map = reduce_agent_states_seeded(seed, &delta);
     tombstones.extend(agent_tombstones_for_events(&delta));
     let raw_agents: Vec<AgentState> = map.into_values().collect();
@@ -256,6 +270,120 @@ pub(crate) fn reseed_rollup_cache_for_rotation(paths: &StatePaths) -> Result<()>
             tombstones: Vec::new(),
         },
     )
+}
+
+/// A long-lived reader's in-memory fold base: the last [`RollupCache`] this
+/// cursor folded to, the merged rollup it produced, and the identity of the
+/// log file it folded. Where [`catch_up_rollup`] re-reads `rollup.json` per
+/// call, a cursor folds each delta from memory — O(new bytes) per wakeup with
+/// one `stat` of the log, no base parse — and an unchanged log returns the
+/// held rollup without opening a file. One cursor per reader thread (the
+/// sidebar fetch worker owns one across its loop); one-shot readers stay on
+/// the disk-backed wrapper.
+///
+/// Staleness is structural, not best-effort: a swapped log file — rotation's
+/// rename-and-recreate, the identity rewrite's rename-over — changes the
+/// `(dev, ino)` identity captured by the same `stat`, and an offset past the
+/// live length means the same, so either drops the in-memory base and
+/// reloads `rollup.json`, whose generation rotation bumps unconditionally.
+/// A warm fold that errors retries cold once before propagating, so a stale
+/// base can never surface as corruption; an error out of the cold fold is
+/// the same real corruption every reader reports.
+#[derive(Debug, Default)]
+pub struct RollupCursor {
+    held: Option<CursorState>,
+}
+
+#[derive(Debug)]
+struct CursorState {
+    cache: RollupCache,
+    merged: Vec<AgentState>,
+    file_id: Option<LogFileId>,
+}
+
+/// Identity of the log file a cursor folded: device + inode on unix, so a
+/// recreated or renamed-over log reads as a different file even when the
+/// regrown log is longer than the held offset. On non-unix targets the
+/// identity is opaque-equal and staleness falls to the offset-regression
+/// guard plus the warm-fold-error cold retry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LogFileId {
+    #[cfg(unix)]
+    dev: u64,
+    #[cfg(unix)]
+    ino: u64,
+}
+
+impl LogFileId {
+    fn of(meta: &fs::Metadata) -> Self {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Self {
+                dev: meta.dev(),
+                ino: meta.ino(),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = meta;
+            Self {}
+        }
+    }
+}
+
+impl RollupCursor {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Catch the held rollup up to the live log and return the extent it
+    /// reflects beside the carryover-merged agents. The cursor twin of
+    /// [`catch_up_rollup`]; see the type docs for the staleness guards.
+    pub(crate) fn fold(
+        &mut self,
+        paths: &StatePaths,
+    ) -> Result<(event_log::LogExtent, Vec<AgentState>)> {
+        let meta = fs::metadata(&paths.events_log).ok();
+        let file_id = meta.as_ref().map(LogFileId::of);
+        let log_len = meta.map(|meta| meta.len()).unwrap_or(0);
+        if let Some(held) = self.held.take() {
+            if held.file_id == file_id && held.cache.extent.offset == log_len {
+                // Nothing appended: serve the held fold without opening a file.
+                let out = (held.cache.extent, held.merged.clone());
+                self.held = Some(held);
+                return Ok(out);
+            }
+            // A warm fold that errors falls through to the cold reload: if
+            // the log is genuinely corrupt the cold fold errors the same way,
+            // so nothing is masked — only a stale base heals.
+            if held.file_id == file_id
+                && held.cache.extent.offset < log_len
+                && let Ok((cache, merged)) = catch_up_from(Some(held.cache), paths)
+            {
+                return Ok(self.hold(cache, merged, file_id));
+            }
+            // Identity changed or the offset regressed: the file underneath
+            // was swapped, so the in-memory base describes a renamed-away log.
+        }
+        let (cache, merged) = catch_up_rollup(paths)?;
+        Ok(self.hold(cache, merged, file_id))
+    }
+
+    fn hold(
+        &mut self,
+        cache: RollupCache,
+        merged: Vec<AgentState>,
+        file_id: Option<LogFileId>,
+    ) -> (event_log::LogExtent, Vec<AgentState>) {
+        let extent = cache.extent;
+        self.held = Some(CursorState {
+            cache,
+            merged: merged.clone(),
+            file_id,
+        });
+        (extent, merged)
+    }
 }
 
 #[cfg(test)]
