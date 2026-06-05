@@ -89,6 +89,7 @@ fn frame_interval_slows_cosmetic_animation_only() {
         commits_ahead: None,
         commits_behind: None,
         trunk: None,
+        clean: None,
     }];
 
     assert_eq!(

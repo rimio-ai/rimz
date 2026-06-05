@@ -110,6 +110,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         commits_ahead: None,
         commits_behind: None,
         trunk: None,
+        clean: None,
     }];
     snapshot
 }

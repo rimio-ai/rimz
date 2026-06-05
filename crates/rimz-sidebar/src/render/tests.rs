@@ -380,6 +380,8 @@ fn render_enriched_selected_agent_card() {
     snapshot.worktree_groups[0].diff_removed = Some(43);
     snapshot.worktree_groups[0].commits_ahead = Some(3);
     snapshot.worktree_groups[0].commits_behind = Some(1);
+    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
+    snapshot.worktree_groups[0].clean = Some(true);
 
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
@@ -396,8 +398,13 @@ fn render_enriched_selected_agent_card() {
     );
 
     // The worktree's git story sits on the group header: the ⇡/⇣ commit
-    // delta leads the worktree-total diff.
+    // delta leads the worktree-total diff. Clean but carrying work: the
+    // landed markers need a zero diff too, so the cluster stays.
     assert!(rendered.contains("⇡3 ⇣1  +127 -43"), "header:\n{rendered}");
+    assert!(
+        !rendered.contains('≡') && !rendered.contains("✓ main"),
+        "a work-carrying worktree wears no landed marker:\n{rendered}"
+    );
     // Line 1 carries identity + capability + cost; line 2 is the session
     // name; the model display name sheds its window qualifier (`Opus 4.8
     // (1M context)` → `Opus 4.8`) — the dedicated window token (the
@@ -705,10 +712,41 @@ fn render_directory_room_root_pod_is_name_only() {
 
 #[test]
 fn render_worktree_equal_to_trunk() {
-    // A fully-landed worktree — zero commits ahead, zero diff against the
-    // fork point — collapses the header's git cluster to `≡ <trunk>`:
-    // nothing left to land, safe to remove. Behind deliberately doesn't
-    // count against it, so the marker holds even as the trunk moves on.
+    // A worktree that IS the trunk tip — zero ahead, zero behind, zero diff,
+    // and a proven-clean working tree — collapses the header's git cluster
+    // to `≡ <trunk>`: this checkout is `main`, nothing of its own anywhere.
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Idle,
+        Some("/home/me/query-engine-wt/feature-migration"),
+        Some("feature-migration"),
+        None,
+    );
+    codex.last_activity = fixed_now() - Duration::from_secs(30);
+    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    snapshot.worktree_groups[0].diff_added = Some(0);
+    snapshot.worktree_groups[0].diff_removed = Some(0);
+    snapshot.worktree_groups[0].commits_ahead = Some(0);
+    snapshot.worktree_groups[0].commits_behind = Some(0);
+    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
+    snapshot.worktree_groups[0].clean = Some(true);
+
+    let rendered = snapshot_to_screen(&snapshot, 38, 14);
+
+    assert!(rendered.contains("≡ main"), "header:\n{rendered}");
+    assert!(
+        !rendered.contains("+0 -0"),
+        "the landed marker replaces the zero diff"
+    );
+    assert_snapshot("worktree_equal_to_trunk", rendered);
+}
+
+#[test]
+fn render_worktree_clear_safe_to_remove() {
+    // A worktree holding no work of its own — zero ahead, zero diff, clean
+    // status — whose trunk has moved on collapses to `✓ <trunk>`: done, safe
+    // to remove. Behind picks the marker, never paints a `⇣` of its own.
     let mut codex = agent(
         "codex-1",
         "codex",
@@ -724,27 +762,61 @@ fn render_worktree_equal_to_trunk() {
     snapshot.worktree_groups[0].commits_ahead = Some(0);
     snapshot.worktree_groups[0].commits_behind = Some(5);
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
+    snapshot.worktree_groups[0].clean = Some(true);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
-    assert!(rendered.contains("≡ main"), "header:\n{rendered}");
+    assert!(rendered.contains("✓ main"), "header:\n{rendered}");
     assert!(
-        !rendered.contains("+0 -0"),
-        "the landed marker replaces the zero diff"
+        !rendered.contains("≡"),
+        "behind keeps the equal marker off:\n{rendered}"
     );
     assert!(
         !rendered.contains('⇣'),
-        "behind stays out of the landed header"
+        "behind stays out of the clear header"
     );
-    assert_snapshot("worktree_equal_to_trunk", rendered);
+    assert_snapshot("worktree_clear_safe_to_remove", rendered);
+}
+
+#[test]
+fn render_worktree_dirty_tree_keeps_the_cluster() {
+    // A dirty tree — here an untracked binary the line count can't see, so
+    // every numeric column still reads zero — blocks both landed markers:
+    // the header falls back to the plain cluster (`⇣5` is all that's left)
+    // rather than calling an unremovable worktree done.
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Idle,
+        Some("/home/me/query-engine-wt/feature-migration"),
+        Some("feature-migration"),
+        None,
+    );
+    codex.last_activity = fixed_now() - Duration::from_secs(30);
+    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    snapshot.worktree_groups[0].diff_added = Some(0);
+    snapshot.worktree_groups[0].diff_removed = Some(0);
+    snapshot.worktree_groups[0].commits_ahead = Some(0);
+    snapshot.worktree_groups[0].commits_behind = Some(5);
+    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
+    snapshot.worktree_groups[0].clean = Some(false);
+
+    let rendered = snapshot_to_screen(&snapshot, 38, 14);
+
+    assert!(
+        !rendered.contains("≡") && !rendered.contains("✓ main"),
+        "a dirty tree wears no landed marker:\n{rendered}"
+    );
+    assert!(rendered.contains("⇣5"), "header:\n{rendered}");
+    assert_snapshot("worktree_dirty_tree_keeps_the_cluster", rendered);
 }
 
 #[test]
 fn render_trunk_worktree_skips_the_landed_marker() {
-    // The trunk worktree is trivially "landed on itself," so the `≡`
-    // marker would be noise there: a main-branch group with zero stats
-    // keeps a bare header, and the marker stays reserved for a removable
-    // feature worktree.
+    // The trunk worktree is trivially "landed on itself," so the landed
+    // markers would be noise there: a clean main-branch group with zero
+    // stats keeps a bare header, and the markers stay reserved for a
+    // removable feature worktree.
     let mut codex = agent(
         "codex-1",
         "codex",
@@ -760,11 +832,12 @@ fn render_trunk_worktree_skips_the_landed_marker() {
     snapshot.worktree_groups[0].commits_ahead = Some(0);
     snapshot.worktree_groups[0].commits_behind = Some(0);
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
+    snapshot.worktree_groups[0].clean = Some(true);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
     assert!(
-        !rendered.contains('≡'),
+        !rendered.contains('≡') && !rendered.contains("✓ main"),
         "no landed marker on the trunk worktree:\n{rendered}"
     );
     assert!(rendered.contains("⑂ main"), "header:\n{rendered}");

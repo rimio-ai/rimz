@@ -87,6 +87,7 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
         commits_ahead: None,
         commits_behind: None,
         trunk: None,
+        clean: None,
     }];
     snapshot
 }
@@ -146,6 +147,7 @@ pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         commits_ahead: None,
         commits_behind: None,
         trunk: None,
+        clean: None,
     }];
     snapshot
 }

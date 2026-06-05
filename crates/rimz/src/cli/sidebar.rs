@@ -848,9 +848,9 @@ const MAX_PARALLEL_GIT: usize = 8;
 /// Refresh several worktrees' diff-stats concurrently, returning each path's
 /// fresh entry. Independent worktrees run in parallel — bounded to
 /// [`MAX_PARALLEL_GIT`] live `git` chains at a time — while each path's own
-/// `trunk ref → merge-base → numstat + rev-list ×2 → branch` chain stays
-/// sequential. Runs on the diff-stats producer (the fetch worker), never the
-/// render thread.
+/// `trunk ref → merge-base → numstat + rev-list ×2 + status → branch` chain
+/// stays sequential. Runs on the diff-stats producer (the fetch worker), never
+/// the render thread.
 fn refresh_entries(
     paths: &[String],
     now_ms: u64,
@@ -879,9 +879,9 @@ fn refresh_entries(
 
 /// Produce a fresh diff-stats entry for one worktree path: the sequential `git`
 /// forks behind the columns (trunk ref → merge-base, then numstat and the two
-/// commit counts off that one base) plus the live branch label. The trunk and
-/// merge-base are resolved once and shared by the diff and both commit counts,
-/// so each extra column costs one fork, not a full chain.
+/// commit counts off that one base, then the status read) plus the live branch
+/// label. The trunk and merge-base are resolved once and shared by the diff and
+/// both commit counts, so each extra column costs one fork, not a full chain.
 fn refresh_entry(path: &str, now_ms: u64, configured_trunk: Option<&str>) -> DiffStatsCacheEntry {
     let worktree = Path::new(path);
     let trunk = trunk_ref(worktree, configured_trunk);
@@ -898,6 +898,17 @@ fn refresh_entry(path: &str, now_ms: u64, configured_trunk: Option<&str>) -> Dif
         .as_deref()
         .zip(trunk.as_deref())
         .and_then(|(base, trunk)| worktree_commits_behind(worktree, base, trunk));
+    let status = worktree_status(worktree);
+    // Untracked content is change the diff is blind to: fold its line count
+    // into the `+` churn so an untracked-only worktree reads as carrying work,
+    // never as landed.
+    let stats = match (stats, &status) {
+        (Some(stats), Some(status)) => Some(DiffStats {
+            added: stats.added.saturating_add(status.untracked_added),
+            removed: stats.removed,
+        }),
+        (stats, _) => stats,
+    };
     DiffStatsCacheEntry::new(
         now_ms,
         stats,
@@ -905,6 +916,7 @@ fn refresh_entry(path: &str, now_ms: u64, configured_trunk: Option<&str>) -> Dif
         behind,
         trunk,
         worktree_branch(worktree),
+        status.map(|status| status.clean),
     )
 }
 
@@ -920,7 +932,9 @@ fn worktree_branch(worktree: &Path) -> Option<String> {
 /// against the `base` merge-base with the trunk, so it counts what this branch
 /// added on top of where it forked — never the trunk's own progress since the
 /// fork — and `git diff <commit>` reads the tree on disk, so staged and unstaged
-/// work land in the same number as committed work.
+/// work land in the same number as committed work. Untracked files are
+/// invisible to `git diff`; [`refresh_entry`] folds their line count in from
+/// the status probe.
 fn worktree_diff_stats(worktree: &Path, base: &str) -> Option<DiffStats> {
     let output = Command::new("git")
         .arg("-C")
@@ -945,11 +959,119 @@ fn worktree_commits_ahead(worktree: &Path, base: &str) -> Option<u32> {
 
 /// The commits the trunk has advanced past the worktree's fork point — `git
 /// rev-list --count <base>..<trunk>`, the work a rebase would pick up. The
-/// mirror of [`worktree_commits_ahead`], off the same merge-base. Deliberately
-/// no part of the header's `≡` landed test: a fully-landed worktree is safe to
-/// remove however far the trunk has moved on.
+/// mirror of [`worktree_commits_ahead`], off the same merge-base. This column
+/// splits the header's two landed markers: a clean worktree with nothing of its
+/// own is the trunk tip itself at zero behind (`≡`) and a removable leftover
+/// the trunk moved past otherwise (`✓`) — safe to remove either way.
 fn worktree_commits_behind(worktree: &Path, base: &str, trunk: &str) -> Option<u32> {
     rev_list_count(worktree, &format!("{base}..{trunk}"))
+}
+
+/// One worktree's `git status` verdict: whether the working tree is clean — no
+/// staged, unstaged, or untracked change, the safe-to-remove test behind the
+/// header's `≡`/`✓` markers — plus the added lines its untracked files carry,
+/// folded into the header's `+` churn.
+struct WorktreeStatus {
+    clean: bool,
+    untracked_added: u32,
+}
+
+/// `git status --porcelain=v1 -z --untracked-files=all`: emptiness → clean, and
+/// each `??` entry's file line-counts into the untracked churn.
+/// `--untracked-files=all` lists files inside untracked directories
+/// individually so the count sees them; `-z` keeps newline-bearing filenames
+/// parseable (paths decode lossily, so a non-UTF-8 path still dirties the tree
+/// but counts no lines); and `--no-optional-locks` keeps this background probe
+/// from taking `index.lock`, so it never races the user's own git commands in
+/// the worktree.
+fn worktree_status(worktree: &Path) -> Option<WorktreeStatus> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args([
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut budget = UNTRACKED_READ_BUDGET;
+    Some(parse_status_entries(
+        &String::from_utf8_lossy(&output.stdout),
+        |path| untracked_added_lines(&worktree.join(path), &mut budget),
+    ))
+}
+
+/// Fold a porcelain v1 `-z` status stream: any entry means a dirty tree, and
+/// each untracked (`??`) path feeds the line counter. A rename/copy entry —
+/// detected in either status column — carries its source path as a second
+/// NUL-separated token, consumed and skipped so it never reads as an entry of
+/// its own.
+fn parse_status_entries(
+    output: &str,
+    mut untracked_lines: impl FnMut(&str) -> u32,
+) -> WorktreeStatus {
+    let mut clean = true;
+    let mut untracked_added: u32 = 0;
+    let mut tokens = output.split('\0').filter(|token| !token.is_empty());
+    while let Some(entry) = tokens.next() {
+        clean = false;
+        let Some((code, path)) = entry.split_at_checked(3) else {
+            continue;
+        };
+        if code.get(..2).is_some_and(|xy| xy.contains(['R', 'C'])) {
+            tokens.next();
+        }
+        if code.starts_with("??") {
+            untracked_added = untracked_added.saturating_add(untracked_lines(path));
+        }
+    }
+    WorktreeStatus {
+        clean,
+        untracked_added,
+    }
+}
+
+/// Shared byte budget for one status probe's untracked reads. A file past the
+/// remaining budget still marks the tree dirty through its status entry; the
+/// budget only bounds the churn line count, so one refresh never reads more
+/// than this however many untracked files the tree holds.
+const UNTRACKED_READ_BUDGET: u64 = 8 * 1024 * 1024;
+
+/// The added lines one untracked file contributes to the `+` churn — what
+/// numstat would report if the file were tracked — spending the probe's shared
+/// read `budget`. Unreadable, over-budget, and non-file paths contribute
+/// nothing; the status entry already marks the tree dirty, so an uncounted
+/// file costs accuracy, never the markers.
+fn untracked_added_lines(path: &Path, budget: &mut u64) -> u32 {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return 0;
+    };
+    if !meta.is_file() || meta.len() > *budget {
+        return 0;
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return 0;
+    };
+    *budget = budget.saturating_sub(bytes.len() as u64);
+    count_added_lines(&bytes)
+}
+
+/// Line count of a blob the way numstat counts an added file: newlines plus a
+/// trailing partial line. A NUL in the first 8000 bytes reads as binary (git's
+/// own heuristic) and counts nothing, mirroring numstat's `-` cells.
+fn count_added_lines(bytes: &[u8]) -> u32 {
+    if bytes[..bytes.len().min(8000)].contains(&0) {
+        return 0;
+    }
+    let newlines = bytes.iter().filter(|byte| **byte == b'\n').count();
+    let tail = usize::from(bytes.last().is_some_and(|byte| *byte != b'\n'));
+    (newlines + tail).min(u32::MAX as usize) as u32
 }
 
 /// `git rev-list --count <range>` as a capped `u32` — the shared tail of the

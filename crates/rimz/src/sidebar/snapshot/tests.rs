@@ -118,6 +118,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
             Some(1),
             Some("origin/main".to_owned()),
             Some("feat".to_owned()),
+            Some(false),
         ),
     );
     atomic::write_temp_then_rename_cache(&runtime.root.join("diff-stats.json"), &diff).unwrap();
@@ -146,9 +147,10 @@ fn read_published_snapshot_folds_caches_without_forking() {
     assert_eq!(
         group.trunk.as_deref(),
         Some("main"),
-        "the ≡ marker names the branch, so origin/ strips for display",
+        "the ≡/✓ markers name the branch, so origin/ strips for display",
     );
     assert_eq!(group.label, "feat");
+    assert_eq!(group.clean, Some(false), "the status verdict projects too");
     // The own (sidebar) pane is excluded; the sibling renders as a row.
     assert!(
         snapshot
@@ -431,6 +433,7 @@ fn diff_stats_cache_entry_expires_after_ttl() {
         Some(2),
         Some("main".to_owned()),
         Some("feature-migration".to_owned()),
+        Some(true),
     );
 
     assert!(entry.is_fresh(1_000 + DIFF_STATS_TTL.as_millis() as u64));
@@ -446,6 +449,20 @@ fn diff_stats_cache_entry_expires_after_ttl() {
     assert_eq!(entry.behind, Some(2));
     assert_eq!(entry.trunk.as_deref(), Some("main"));
     assert_eq!(entry.branch.as_deref(), Some("feature-migration"));
+    assert_eq!(entry.clean, Some(true));
+}
+
+/// An old producer's cache entry predates the `clean` column; it must read
+/// back as "not probed" (`None`), never flash a landed marker it can't prove.
+#[test]
+fn diff_stats_cache_entry_without_clean_reads_none() {
+    let entry: DiffStatsCacheEntry = serde_json::from_str(
+        r#"{"refreshed_at_ms":1000,"added":0,"removed":0,"commits":0,"behind":3,"trunk":"main","branch":"feat"}"#,
+    )
+    .unwrap();
+
+    assert_eq!(entry.clean, None);
+    assert_eq!(entry.stats(), Some(DiffStats::default()));
 }
 
 /// A 5-hour budget window for tests — a known `duration_mins` so the
@@ -937,6 +954,7 @@ fn config_fold_stamps_agent_context_severity() {
         commits_ahead: None,
         commits_behind: None,
         trunk: None,
+        clean: None,
     }];
 
     stamp_context_severity(
@@ -966,7 +984,7 @@ fn config_fold_stamps_agent_context_severity() {
 /// fast TTL is still fresh on the idle one, boundary-exact on both.
 #[test]
 fn diff_stats_entry_freshness_is_ttl_parameterized() {
-    let entry = DiffStatsCacheEntry::new(1_000, None, None, None, None, None);
+    let entry = DiffStatsCacheEntry::new(1_000, None, None, None, None, None, None);
     let fast = DIFF_STATS_TTL.as_millis() as u64;
     let idle = DIFF_STATS_IDLE_TTL.as_millis() as u64;
 
@@ -1053,6 +1071,7 @@ fn worktree_group(path: &Path, rows: Vec<crate::SidebarRow>) -> crate::SidebarWo
         commits_ahead: None,
         commits_behind: None,
         trunk: None,
+        clean: None,
     }
 }
 

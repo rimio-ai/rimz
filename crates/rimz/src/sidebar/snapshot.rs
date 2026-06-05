@@ -257,7 +257,7 @@ pub struct DiffStatsCacheEntry {
     pub behind: Option<u32>,
     /// The trunk ref the stats compared against, as the ladder resolved it
     /// (configured `[sidebar] trunk`, else `main`/`master`/remote default).
-    /// Names the header's `≡` landed marker.
+    /// Names the header's `≡` equal and `✓` clear markers.
     #[serde(default)]
     pub trunk: Option<String>,
     /// Live branch resolved from the worktree path, cached under the same TTL
@@ -265,6 +265,13 @@ pub struct DiffStatsCacheEntry {
     /// git call every tick.
     #[serde(default)]
     pub branch: Option<String>,
+    /// Whether the working tree is clean — `git status --porcelain` emptiness,
+    /// untracked files included — the safe-to-remove verdict both landed
+    /// markers (`≡` at the trunk tip, `✓` behind it) require. `None` on an old
+    /// cache entry or a failed status read, which the renderer treats as not
+    /// proven clean.
+    #[serde(default)]
+    pub clean: Option<bool>,
 }
 
 impl DiffStatsCacheEntry {
@@ -275,6 +282,7 @@ impl DiffStatsCacheEntry {
         behind: Option<u32>,
         trunk: Option<String>,
         branch: Option<String>,
+        clean: Option<bool>,
     ) -> Self {
         Self {
             refreshed_at_ms,
@@ -284,6 +292,7 @@ impl DiffStatsCacheEntry {
             behind,
             trunk,
             branch,
+            clean,
         }
     }
 
@@ -432,14 +441,18 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
         if let Some(behind) = entry.behind {
             group.commits_behind = Some(behind);
         }
-        // A remote-default trunk resolves as `origin/<name>`; the header's `≡`
-        // marker names the branch, so the remote prefix is display noise.
+        // A remote-default trunk resolves as `origin/<name>`; the header's
+        // `≡`/`✓` markers name the branch, so the remote prefix is display
+        // noise.
         if let Some(trunk) = entry.trunk.filter(|trunk| !trunk.is_empty()) {
             let display = trunk.strip_prefix("origin/").unwrap_or(&trunk).to_owned();
             group.trunk = Some(display);
         }
         if let Some(branch) = entry.branch.filter(|branch| !branch.is_empty()) {
             group.label = branch;
+        }
+        if let Some(clean) = entry.clean {
+            group.clean = Some(clean);
         }
     }
 }

@@ -8,7 +8,9 @@ use rimz::config::ContextSeverityConfig;
 use rimz::{SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};
 
 use crate::render::fmt::clip;
-use crate::render::labels::{branch_delta_spans, diff_spans, status_glyph, trunk_equal_spans};
+use crate::render::labels::{
+    branch_delta_spans, diff_spans, status_glyph, trunk_clear_spans, trunk_equal_spans,
+};
 use crate::render::theme::Theme;
 
 use super::agent_card::row_lines;
@@ -111,13 +113,14 @@ fn group_header(
     // here in bold teal — no inline `▌`, the spine carries the lane. The header
     // builds to the content width left after the gutter cell.
     let cw = content_width(width);
-    // The worktree's git story pins right: `≡ <trunk>` when a non-trunk branch
-    // is fully landed, else the `⇡/⇣` commit delta ahead of the `+/-` churn,
-    // zero components omitted. The per-worktree status tally is gone: the
-    // cockpit owns the fleet make-up and each row carries its own status
-    // glyph, so repeating it here was noise. The label clips to whatever's
-    // left after the stats claim their width, always leaving a cell so the
-    // header never shrinks to zero on extreme narrowness.
+    // The worktree's git story pins right: a landed marker when a non-trunk
+    // branch holds no work of its own (`≡ <trunk>` at the tip, `✓ <trunk>`
+    // once the trunk moved on), else the `⇡/⇣` commit delta ahead of the
+    // `+/-` churn, zero components omitted. The per-worktree status tally is
+    // gone: the cockpit owns the fleet make-up and each row carries its own
+    // status glyph, so repeating it here was noise. The label clips to
+    // whatever's left after the stats claim their width, always leaving a
+    // cell so the header never shrinks to zero on extreme narrowness.
     //
     // A non-repo room's root pod is name-only: a plain directory has no fork
     // and no git story, so it drops the `⑂` prefix and pins nothing right.
@@ -156,25 +159,34 @@ fn group_header(
     Line::from(spans)
 }
 
-/// The header's right-pinned git cluster. `≡ <trunk>` when the worktree is
-/// fully landed — zero commits ahead *and* a zero diff against the fork point
-/// (`Some(0)`, a read that found nothing, never an unprobed `None`) — replacing
-/// every other stat: behind deliberately doesn't count against it, since a
-/// landed worktree is safe to remove however far the trunk has moved on. The
-/// trunk worktree itself (live branch == trunk) is exempt — it is trivially
-/// "landed on itself," so the marker would be noise there, and it keeps the
-/// plain delta/churn cluster instead. Otherwise the `⇡/⇣` commit delta leads
-/// the `+/-` churn, zero components omitted. Empty when no git read reached
-/// this group.
+/// The header's right-pinned git cluster. A worktree holding no work of its
+/// own — zero commits ahead, a zero diff against the fork point, and a proven
+/// clean working tree, untracked included (every read `Some`, a probe that
+/// found nothing, never an unprobed `None`) — collapses the cluster to a
+/// landed marker: `≡ <trunk>` when it sits exactly at the trunk tip (zero
+/// behind), `✓ <trunk>` once the trunk has moved on — done, safe to remove.
+/// The trunk worktree itself (live branch == trunk) is exempt — it is
+/// trivially "landed on itself," so the marker would be noise there, and it
+/// keeps the plain delta/churn cluster instead. Otherwise the `⇡/⇣` commit
+/// delta leads the `+/-` churn (untracked line counts folded in by the
+/// producer), zero components omitted. Empty when no git read reached this
+/// group.
 fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'static>> {
-    let landed = group.commits_ahead == Some(0)
+    let no_pending = group.commits_ahead == Some(0)
         && group.diff_added == Some(0)
-        && group.diff_removed == Some(0);
-    if landed
+        && group.diff_removed == Some(0)
+        && group.clean == Some(true);
+    if no_pending
         && let Some(trunk) = group.trunk.as_deref()
         && group.label != trunk
     {
-        return trunk_equal_spans(theme, trunk);
+        match group.commits_behind {
+            Some(0) => return trunk_equal_spans(theme, trunk),
+            Some(_) => return trunk_clear_spans(theme, trunk),
+            // A degraded behind read can't pick a marker; fall through to the
+            // plain cluster rather than claim equality.
+            None => {}
+        }
     }
     let mut spans = branch_delta_spans(
         theme,

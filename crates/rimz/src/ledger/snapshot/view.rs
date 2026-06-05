@@ -257,12 +257,21 @@ pub struct SidebarWorktreeGroup {
     pub commits_behind: Option<u32>,
     /// The resolved trunk name the diff and commit delta compare against
     /// (configured `[sidebar] trunk`, else detected `main`/`master`/remote
-    /// default; `origin/` stripped for display). Names the `≡` landed marker —
-    /// a non-trunk worktree with zero commits ahead and a zero diff renders
-    /// `≡ <trunk>`; the trunk worktree itself (`label == trunk`) never wears
-    /// it, since "landed on itself" carries no information.
+    /// default; `origin/` stripped for display). Names the landed markers — a
+    /// non-trunk worktree holding no work of its own (zero ahead, zero diff,
+    /// clean tree) renders `≡ <trunk>` at zero behind and `✓ <trunk>` once the
+    /// trunk has moved on; the trunk worktree itself (`label == trunk`) never
+    /// wears either, since "landed on itself" carries no information.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trunk: Option<String>,
+    /// Whether the working tree is clean — `git status --porcelain` emptiness,
+    /// untracked files included — the safe-to-remove verdict both landed
+    /// markers require. Untracked content also folds into `diff_added` as line
+    /// counts, so an untracked-only worktree reads `+N` rather than landed.
+    /// `None` when no status read was attempted or an old producer wrote the
+    /// cache; the renderer treats that as not proven clean.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clean: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1719,6 +1728,7 @@ fn build_worktree_groups_from_rows(
                 commits_ahead: None,
                 commits_behind: None,
                 trunk: None,
+                clean: None,
             }
         })
         .collect::<Vec<_>>();

@@ -338,7 +338,8 @@ pub struct SidebarConfig {
     /// ledger.
     pub budget: BudgetZonesConfig,
     /// Preferred comparison target for the worktree header's git stats (the
-    /// `+/-` diff, the `⇡`/`⇣` commit delta, and the `≡` landed marker). Tried
+    /// `+/-` diff, the `⇡`/`⇣` commit delta, and the `≡`/`✓` landed markers).
+    /// Tried
     /// first in the trunk ladder, per repo: a repo where the branch doesn't
     /// resolve falls back to the `main` → `master` → remote-default detection,
     /// so one machine-wide value never breaks other projects. Unset means

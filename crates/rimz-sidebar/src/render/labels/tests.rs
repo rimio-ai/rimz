@@ -2,7 +2,7 @@ use super::*;
 
 /// The commit delta spells only what's there: zero components drop rather
 /// than printing `⇡0`, and a fully-zero delta is no spans at all — the
-/// header's landed marker owns that state.
+/// header's landed markers own that state.
 #[test]
 fn branch_delta_omits_zero_components() {
     let theme = Theme::fixed(true);
@@ -14,6 +14,7 @@ fn branch_delta_omits_zero_components() {
     assert_eq!(text(branch_delta_spans(&theme, 0, 5)), "⇣5");
     assert_eq!(text(branch_delta_spans(&theme, 0, 0)), "");
     assert_eq!(text(trunk_equal_spans(&theme, "main")), "≡ main");
+    assert_eq!(text(trunk_clear_spans(&theme, "main")), "✓ main");
 }
 
 /// `NO_COLOR` strips the green→amber→red ramp, but the heavy/light weight

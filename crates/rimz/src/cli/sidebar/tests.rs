@@ -396,6 +396,72 @@ fn parse_numstat_sums_text_diff_and_ignores_binary_rows() {
 }
 
 #[test]
+fn parse_status_entries_reads_clean_dirty_and_untracked() {
+    let clean = parse_status_entries("", |_| unreachable!("no entries to count"));
+    assert!(clean.clean);
+    assert_eq!(clean.untracked_added, 0);
+
+    // One modified + two untracked entries; only the `??` paths feed the
+    // line counter, and any entry at all reads dirty.
+    let status =
+        parse_status_entries(
+            " M src/lib.rs\0?? notes.txt\0?? docs/new.md\0",
+            |path| match path {
+                "notes.txt" => 3,
+                "docs/new.md" => 4,
+                other => panic!("unexpected untracked path {other}"),
+            },
+        );
+    assert!(!status.clean);
+    assert_eq!(status.untracked_added, 7);
+}
+
+#[test]
+fn parse_status_entries_skips_a_rename_source_token() {
+    // A rename entry — staged (`R `) or detected in the worktree column
+    // (` R`) — carries its source path as a second NUL token; it must not
+    // read as an entry (or an untracked path) of its own.
+    let status = parse_status_entries(
+        "R  new.rs\0old.rs\0 R moved.rs\0was.rs\0?? x.txt\0",
+        |path| {
+            assert_eq!(path, "x.txt");
+            1
+        },
+    );
+
+    assert!(!status.clean);
+    assert_eq!(status.untracked_added, 1);
+}
+
+#[test]
+fn count_added_lines_counts_text_and_skips_binary() {
+    assert_eq!(count_added_lines(b""), 0);
+    assert_eq!(count_added_lines(b"a\nb\n"), 2);
+    // A trailing partial line still counts, the way numstat counts one.
+    assert_eq!(count_added_lines(b"a\nb"), 2);
+    // A NUL reads as binary — mirroring numstat's `-` cells, count nothing.
+    assert_eq!(count_added_lines(b"a\x00b\n"), 0);
+}
+
+#[test]
+fn untracked_added_lines_spends_a_shared_read_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let small = dir.path().join("small.txt");
+    let big = dir.path().join("big.txt");
+    std::fs::write(&small, "a\nb\n").unwrap();
+    std::fs::write(&big, "c\nd\ne\n").unwrap();
+
+    // The first file fits and spends its bytes; the second overflows what's
+    // left, counts nothing (its status entry still dirties the tree), and
+    // leaves the remainder intact.
+    let mut budget = 6;
+    assert_eq!(untracked_added_lines(&small, &mut budget), 2);
+    assert_eq!(budget, 2);
+    assert_eq!(untracked_added_lines(&big, &mut budget), 0);
+    assert_eq!(budget, 2);
+}
+
+#[test]
 fn worktree_branch_reads_live_checkout() {
     let dir = tempfile::tempdir().unwrap();
     let git = |args: &[&str]| {
@@ -503,14 +569,78 @@ fn worktree_diff_stats_total_committed_staged_and_unstaged_over_trunk() {
         "the behind count is the trunk's commits past the merge-base"
     );
     assert_eq!(entry.trunk.as_deref(), Some("main"));
+    // Staged + unstaged change reads dirty — the landed markers stay off.
+    assert_eq!(entry.clean, Some(false));
 
-    // A non-repository path has nothing to diff or count.
+    // A non-repository path has nothing to diff, count, or status-read.
     let plain = tempfile::tempdir().unwrap();
     let plain_entry = refresh_entry(plain.path().to_str().unwrap(), 0, None);
     assert_eq!(plain_entry.stats(), None);
     assert_eq!(plain_entry.commits, None);
     assert_eq!(plain_entry.behind, None);
     assert_eq!(plain_entry.trunk, None);
+    assert_eq!(plain_entry.clean, None);
+}
+
+#[test]
+fn worktree_status_folds_untracked_into_churn_and_reads_clean() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_str().unwrap();
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    };
+    // `-b main` needs Git >= 2.28; an older git fails init and the helper
+    // degrades to None, which is the documented fallback.
+    if !git(&["init", "-q", "-b", "main"]) {
+        assert_eq!(refresh_entry(path, 0, None).clean, None);
+        return;
+    }
+    let _ = git(&["config", "user.email", "t@example.com"]);
+    let _ = git(&["config", "user.name", "t"]);
+    std::fs::write(dir.path().join("base.txt"), "a\nb\n").unwrap();
+    let _ = git(&["add", "base.txt"]);
+    let _ = git(&["commit", "-q", "-m", "base"]);
+
+    // A pristine checkout at the trunk tip: proven clean, zero churn — the
+    // exact reading the `≡` marker requires.
+    let entry = refresh_entry(path, 0, None);
+    assert_eq!(entry.clean, Some(true));
+    assert_eq!(entry.stats(), Some(DiffStats::default()));
+
+    // An untracked two-line file nested in an untracked directory: invisible
+    // to `git diff`, so the status probe must flag the tree dirty and fold
+    // the lines into `+` (`--untracked-files=all` reaches inside the dir).
+    std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+    std::fs::write(dir.path().join("sub/notes.txt"), "n1\nn2\n").unwrap();
+    let entry = refresh_entry(path, 0, None);
+    assert_eq!(entry.clean, Some(false));
+    assert_eq!(
+        entry.stats(),
+        Some(DiffStats {
+            added: 2,
+            removed: 0,
+        }),
+        "untracked lines count as churn"
+    );
+
+    // An untracked binary contributes no lines but still dirties the tree.
+    std::fs::write(dir.path().join("blob.bin"), b"\x00\x01\x02").unwrap();
+    let entry = refresh_entry(path, 0, None);
+    assert_eq!(entry.clean, Some(false));
+    assert_eq!(
+        entry.stats(),
+        Some(DiffStats {
+            added: 2,
+            removed: 0,
+        }),
+        "a binary blob dirties the tree without inventing a line count"
+    );
 }
 
 #[test]

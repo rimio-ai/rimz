@@ -87,9 +87,10 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `C  11%`          | CPU utilisation of the pane's foreground process; the three resource stats ride process rows only, as one dim fixed-width grid — each figure right-aligned in its slot, so the cluster never shifts as values change |
 | `M 512M`          | resident set size (RSS) — `k` / `M` / `G` |
 | `⇅   3M/s`        | combined VFS I/O rate (rchar + wchar bytes/s) |
-| `+127 -43`        | lines added / removed |
+| `+127 -43`        | lines added / removed against the trunk — committed, staged, unstaged, and untracked content all counted |
 | `⇡3 ⇣1`           | commits ahead / behind the trunk (worktree header; zero components drop) |
-| `≡ main`          | worktree fully landed on the trunk — zero ahead, zero diff, safe to remove (behind doesn't count against it); the trunk worktree itself never wears it |
+| `≡ main`          | worktree IS the trunk tip — zero ahead, zero behind, zero diff, clean tree (no uncommitted changes, no untracked files); the trunk worktree itself never wears it |
+| `✓ main`          | worktree holds no work of its own — zero ahead, zero diff, clean tree — but the trunk has moved on: done, safe to remove |
 | `●●●○○ 3/5`       | todo progress |
 | `$1.27`           | spend — money-green, always two decimals; omitted while a session's cost still rounds to zero |
 | `▰▱` / `∞`        | provider budget bar (fill = left), draining green → yellow → amber → red by what remains / unmetered account — the `∞` icon and its empty track share the provider's brand color |
@@ -231,11 +232,12 @@ The label is the program the pane runs, read past a `sudo` wrapper and through a
 
 Worktrees stack as bounded blocks. The one **holding your selection** reads as a single bracketed lane: a thin `▏` spine down its header and every row, a dotted `┄` seal on its header, and the selected card itself lit with a bold `▌`. Every other worktree carries a blank gutter, so the lane is the only marker on screen and the selection is unmistakable.
 
-The worktree header carries the worktree's git story on the right: the `⇡`/`⇣` commit delta against the trunk, then the worktree's total diff (`⇡3 ⇣1 +230 -23`, zero components dropped). A fully-landed worktree — zero commits ahead and a zero diff against its fork point — collapses the whole cluster to `≡ main`: nothing left to land, safe to remove. Behind sits outside that test, since the trunk moving on makes a landed worktree no less removable; and the trunk worktree itself never wears the marker — "landed on itself" says nothing, so its header keeps the plain cluster. The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../reference/configuration.md#trunk-branch)).
+The worktree header carries the worktree's git story on the right: the `⇡`/`⇣` commit delta against the trunk, then the worktree's total diff (`⇡3 ⇣1 +230 -23`, zero components dropped) — untracked file content counts into the `+`, so work `git diff` can't see still reads as work. A worktree holding nothing of its own — zero commits ahead, a zero diff, and a clean `git status` (no uncommitted changes, no untracked files) — collapses the whole cluster to a landed marker: `≡ main` when it sits exactly at the trunk tip (this checkout IS main), `✓ main` once the trunk has moved on — done, safe to remove; behind never blocks removability, it only picks the marker. The trunk worktree itself wears neither — "landed on itself" says nothing, so its header keeps the plain cluster. The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../reference/configuration.md#trunk-branch)).
 
 ```
 ▏⑂ feature-migration ┄┄┄┄┄ ⇡3 ⇣1  +230 -23    ← in flight: commits ahead/behind, then the diff
-▏⑂ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ≡ main    ← fully landed: nothing to land, safe to remove
+▏⑂ feature-current ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ≡ main    ← at the trunk tip: this checkout IS main
+▏⑂ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main    ← landed, trunk moved on: safe to remove
 ```
 
 ```
@@ -401,7 +403,9 @@ The renderer's golden tests in [`crates/rimz-sidebar/src/render/`](../../crates/
 | agents + dimmed process tail | `agents_process_tail` |
 | subagent list + elapsed column | `subagent_two_line_entry` |
 | worktree grouping + external | `worktree_attention_map` |
-| landed worktree header (`≡`) | `worktree_equal_to_trunk` |
+| equal-to-trunk header (`≡`) | `worktree_equal_to_trunk` |
+| clear worktree header (`✓`) | `worktree_clear_safe_to_remove` |
+| dirty tree blocks the markers | `worktree_dirty_tree_keeps_the_cluster` |
 | per-worktree cap | `group_cap_with_overflow` |
 | cards overflow, scrollbar mid-scroll | `scroll_overflow_shows_bar` |
 | selection-driven scroll to bottom, bar settled away | `scroll_offset_follows_selection_to_bottom` |

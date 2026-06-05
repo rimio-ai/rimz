@@ -515,6 +515,7 @@ mod tests {
                 commits_ahead: None,
                 commits_behind: None,
                 trunk: None,
+                clean: None,
             }],
             needs_attention: Vec::new(),
             resolver_working: Vec::new(),

@@ -214,6 +214,12 @@ fn diff_stats_single_flights_and_serves_warm_consumers() {
         "numstat must fork once across {TABS} sidebars, not {TABS}×:\n{}",
         std::fs::read_to_string(&fixture.git_log).unwrap_or_default(),
     );
+    assert_eq!(
+        fixture.git_forks("--untracked-files=all"),
+        1,
+        "the status probe must fork once across {TABS} sidebars, not {TABS}×:\n{}",
+        std::fs::read_to_string(&fixture.git_log).unwrap_or_default(),
+    );
     let after_cold = fixture.git_log_len();
 
     let warm = fixture.run_snapshot();
@@ -262,6 +268,11 @@ fn assert_feature_group(stdout: &[u8], context: &str) {
     assert_eq!(
         group["diff_added"], 2,
         "the {context} group carries the worktree's +2 over trunk"
+    );
+    assert_eq!(
+        group["clean"],
+        Value::Bool(true),
+        "the {context} group carries the fully-committed tree's clean verdict"
     );
 }
 
