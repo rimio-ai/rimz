@@ -592,6 +592,79 @@ fn orphan_sub_agent_is_dropped() {
     assert!(rows.is_empty(), "a child with no parent row never renders");
 }
 
+// ── Child activity folds onto the parent's displayed clock ───────────────────
+
+#[test]
+fn child_activity_advances_parent_displayed_clock() {
+    // A delegating parent is quiet because the work is its children's: the
+    // freshest child activity becomes the row's displayed `last_activity`,
+    // while the rollup state keeps the parent's own clock.
+    let parent = agent("claude", "sess-root", AgentStatus::Running, 100).active_ago(540);
+    let child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
+    let snapshot = room(Vec::new(), vec![parent, child]);
+
+    assert_eq!(row(&snapshot, "sess-root").last_activity, ago(5));
+    let rollup = snapshot
+        .agents
+        .iter()
+        .find(|a| a.agent_id == "sess-root")
+        .expect("parent in rollup");
+    assert_eq!(
+        rollup.last_activity,
+        ago(540),
+        "the fold is display-only; the rollup keeps the parent's own clock"
+    );
+}
+
+#[test]
+fn recently_finished_child_holds_off_the_stall() {
+    // The fold runs before the displayed-status projection, so the stall
+    // check reads the folded clock: a parent silent past the stall window
+    // whose child finished four minutes ago is alive, not wedged.
+    let parent = agent("claude", "sess-root", AgentStatus::Running, 100).active_ago(660);
+    let child = child_state("sess-root", "child-1", AgentStatus::Success, 240);
+    let snapshot = room(Vec::new(), vec![parent, child]);
+
+    let row = row(&snapshot, "sess-root");
+    assert_eq!(row.status, Some(AgentStatus::Running), "not a stall");
+    assert_eq!(row.last_activity, ago(240));
+}
+
+#[test]
+fn waiting_parent_keeps_its_ask_clock() {
+    // A `waiting` row's age measures how long the ask has needed a human, so
+    // child activity never re-clocks it.
+    let parent = agent("claude", "sess-root", AgentStatus::Waiting, 100).active_ago(120);
+    let child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
+    let snapshot = room(Vec::new(), vec![parent, child]);
+
+    assert_eq!(row(&snapshot, "sess-root").last_activity, ago(120));
+}
+
+#[test]
+fn turn_dead_parent_keeps_the_death_certificate() {
+    // A turn that died on a provider API error keeps its own clock: the
+    // marker postdates the parent's activity, so the fold abstains and the
+    // finished child's fresher activity can never mask the escalation.
+    let parent = agent("claude", "sess-root", AgentStatus::Running, 100)
+        .active_ago(120)
+        .turn_error(60, "API Error: Overloaded");
+    let child = child_state("sess-root", "child-1", AgentStatus::Success, 5);
+    let snapshot = room(Vec::new(), vec![parent, child]);
+
+    let row = row(&snapshot, "sess-root");
+    assert_eq!(
+        row.status,
+        Some(AgentStatus::Failed),
+        "the turn death holds"
+    );
+    assert_eq!(row.last_activity, ago(120), "the fold abstained");
+    assert_eq!(
+        row.turn_error_label.as_deref(),
+        Some("API Error: Overloaded")
+    );
+}
+
 #[test]
 fn with_subagent_context_folds_onto_child_by_key() {
     use crate::agents::context::SubagentContext;

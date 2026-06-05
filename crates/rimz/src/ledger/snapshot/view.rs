@@ -1506,6 +1506,10 @@ fn build_worktree_groups_from_rows(
     // (`rows_from_ledger`) builders share, so nesting behaves identically on
     // either path.
     attach_sub_agents(&mut rows, agents, now);
+    // A delegating parent's work is its children's, so their activity advances
+    // the parent row's displayed clock — before the projection below, so the
+    // stall check reads the folded value too.
+    fold_child_activity_onto_parents(&mut rows);
     // Project the displayed status now that each row knows its subagents (the
     // delegated-wait exemption) and the full agent set is in hand (the account
     // rate-limit verdict). The one place display state diverges from the rollup.
@@ -1675,6 +1679,36 @@ pub(super) fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState], 
         row.sub_agents.sort_by(|a, b| {
             cmp_start_asc(a.started_at, b.started_at).then_with(|| a.id.cmp(&b.id))
         });
+    }
+}
+
+/// Advance each parent row's *displayed* `last_activity` to its freshest
+/// child's: a delegating parent is quiet because the work is its children's,
+/// so the age clock stays honest while they tick and a parent whose child just
+/// finished never false-stalls (the stall check reads the folded clock).
+/// Display-only — the rollup's own `last_activity` is untouched, so
+/// `agent_moved_past_ask` keeps reading the agent's own clock and a blocked
+/// parent stays waiting. Two guards keep the frozen clocks frozen: an
+/// attention row (`waiting`/`failed`) measures how long it has needed a human,
+/// and a turn that died on a provider error keeps its own clock so a
+/// still-ticking child can never mask the death certificate.
+fn fold_child_activity_onto_parents(rows: &mut [SidebarRow]) {
+    for row in rows.iter_mut() {
+        if row.row_kind != SidebarRowKind::Agent || row.sub_agents.is_empty() {
+            continue;
+        }
+        let Some(status) = row.status else {
+            continue;
+        };
+        if matches!(status, AgentStatus::Waiting | AgentStatus::Failed) {
+            continue;
+        }
+        if crate::feed::is_turn_dead(status, row.context.as_ref(), row.last_activity) {
+            continue;
+        }
+        if let Some(freshest) = row.sub_agents.iter().map(|child| child.last_activity).max() {
+            row.last_activity = row.last_activity.max(freshest);
+        }
     }
 }
 
