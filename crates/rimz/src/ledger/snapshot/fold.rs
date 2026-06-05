@@ -303,9 +303,12 @@ struct CursorState {
 
 /// Identity of the log file a cursor folded: device + inode on unix, so a
 /// recreated or renamed-over log reads as a different file even when the
-/// regrown log is longer than the held offset. On non-unix targets the
-/// identity is opaque-equal and staleness falls to the offset-regression
-/// guard plus the warm-fold-error cold retry.
+/// regrown log is longer than the held offset. Targets without that identity
+/// get `None`, and the cursor reloads from `rollup.json` every fold — a
+/// regrown swapped log would otherwise alias its bytes onto the stale base
+/// (the offset-regression guard cannot see a *longer* new file, and a
+/// frame-aligned offset folds cleanly rather than erroring), so the warm
+/// fold is traded away there rather than served wrong.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LogFileId {
     #[cfg(unix)]
@@ -315,20 +318,18 @@ struct LogFileId {
 }
 
 impl LogFileId {
-    fn of(meta: &fs::Metadata) -> Self {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            Self {
-                dev: meta.dev(),
-                ino: meta.ino(),
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = meta;
-            Self {}
-        }
+    #[cfg(unix)]
+    fn of(meta: &fs::Metadata) -> Option<Self> {
+        use std::os::unix::fs::MetadataExt;
+        Some(Self {
+            dev: meta.dev(),
+            ino: meta.ino(),
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn of(_meta: &fs::Metadata) -> Option<Self> {
+        None
     }
 }
 
@@ -342,10 +343,15 @@ impl RollupCursor {
     /// [`catch_up_rollup`]; see the type docs for the staleness guards.
     pub fn fold(&mut self, paths: &StatePaths) -> Result<(event_log::LogExtent, Vec<AgentState>)> {
         let meta = fs::metadata(&paths.events_log).ok();
-        let file_id = meta.as_ref().map(LogFileId::of);
+        let file_id = meta.as_ref().and_then(LogFileId::of);
         let log_len = meta.map(|meta| meta.len()).unwrap_or(0);
         if let Some(held) = self.held.take() {
-            if held.file_id == file_id && held.cache.extent.offset == log_len {
+            // The held base serves warm only when the live log carries a real
+            // identity that matches the one it folded; without one (a missing
+            // log, a target with no dev+ino) the fold reloads `rollup.json`
+            // rather than risk folding a swapped file's bytes onto it.
+            let same_file = file_id.is_some() && held.file_id == file_id;
+            if same_file && held.cache.extent.offset == log_len {
                 // Nothing appended: serve the held fold without opening a file.
                 let out = (held.cache.extent, held.merged.clone());
                 self.held = Some(held);
@@ -354,7 +360,7 @@ impl RollupCursor {
             // A warm fold that errors falls through to the cold reload: if
             // the log is genuinely corrupt the cold fold errors the same way,
             // so nothing is masked — only a stale base heals.
-            if held.file_id == file_id
+            if same_file
                 && held.cache.extent.offset < log_len
                 && let Ok((cache, merged)) = catch_up_from(Some(held.cache), paths)
             {
