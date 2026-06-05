@@ -265,7 +265,7 @@ pub fn draw_with_ui(
     // The truecolor garnish tier: a color-only effects pass over the buffer the
     // paragraph just rendered, geometry-locked to the line map this draw wrote.
     // Gated here rather than inside the pass so a non-truecolor terminal — or a
-    // `[sidebar] glow = false` opt-out — pays nothing, not even the
+    // `[sidebar] glow = "never"` opt-out — pays nothing, not even the
     // transition observation.
     let theme = Theme::for_sidebar(&snapshot.sidebar);
     if theme.effects_enabled() {
@@ -357,7 +357,7 @@ pub(crate) fn compose_lines(
     usize,
 ) {
     // One `Theme` per frame, handed to the body and the bottom chrome alike:
-    // the cached `NO_COLOR` reading plus the palette and glow flag the
+    // the cached `NO_COLOR` reading plus the palette and glow mode the
     // producer resolved from `[sidebar]` onto the snapshot — so a re-themed
     // config lands with the next snapshot, identically on every renderer of
     // the workspace.

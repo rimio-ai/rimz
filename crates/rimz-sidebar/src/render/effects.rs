@@ -10,11 +10,12 @@
 //! the golden frames and the `NO_COLOR` grammar cannot drift (locked by the
 //! `effects_pass_never_changes_the_composed_text` golden guard).
 //!
-//! The pass runs only when [`Theme::effects_enabled`] says the terminal speaks
-//! 24-bit color — smooth interpolation quantizes into banding on a 256-color
-//! palette — and it obeys the design law: the glow rides rows that already
-//! breathe, the one-shots animate the moment of change and decay, and a calm
-//! room paints nothing here.
+//! The pass runs only when [`Theme::effects_enabled`] clears it — the
+//! `[sidebar] glow` mode over the terminal's 24-bit advertisement, since
+//! smooth interpolation quantizes into banding on a 256-color palette — and
+//! it obeys the design law: the glow rides rows that already breathe, the
+//! one-shots animate the moment of change and decay, and a calm room paints
+//! nothing here.
 //!
 //! Geometry re-resolves every frame from `UiState::line_map` (the hit-test
 //! map, the renderer's one row-geometry authority), so an effect follows its

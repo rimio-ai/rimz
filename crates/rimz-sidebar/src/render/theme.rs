@@ -9,8 +9,10 @@
 //! advertises 24-bit color (and `NO_COLOR` is off) the post-render effects
 //! pass ([`super::effects`]) layers smooth color motion over the composed
 //! frame — color depth only, never the grammar. The tier is also a choice:
-//! `[sidebar] glow = false` pins the plain 256-color render on any terminal,
-//! riding the snapshot like the palette overrides.
+//! the `[sidebar] glow` mode rides the snapshot like the palette overrides —
+//! `never` pins the plain 256-color render on any terminal, and `always`
+//! forces the pass where a truecolor terminal's advertisement went missing
+//! (an SSH hop forwards `TERM` but drops `COLORTERM`).
 //!
 //! The palette is data, not constants: every semantic slot carries a built-in
 //! tone ([`Palette::BUILTIN`]) and an optional per-machine override from
@@ -22,7 +24,7 @@
 use std::sync::OnceLock;
 
 use ratatui::style::{Color, Modifier, Style};
-use rimz::config::{SidebarConfig, SidebarThemeConfig};
+use rimz::config::{GlowMode, SidebarConfig, SidebarThemeConfig};
 
 /// Claude clay — the running agent's animated working/thinking head, so the
 /// live cell reads in the agent's own brand orange. Closest muted 256-color
@@ -103,9 +105,10 @@ pub(crate) struct Theme {
     /// The terminal advertises 24-bit color (`COLORTERM`). Gates the
     /// post-render effects pass; the composed grammar never reads it.
     truecolor: bool,
-    /// The `[sidebar] glow` flag, riding the snapshot. On by default; an
-    /// opt-out pins the plain 256-color render whatever the terminal speaks.
-    glow: bool,
+    /// The `[sidebar] glow` mode, riding the snapshot. `auto` follows the
+    /// terminal capability; `always` forces the pass past a missing
+    /// `COLORTERM`; `never` pins the plain 256-color render.
+    glow: GlowMode,
     palette: Palette,
 }
 
@@ -114,7 +117,7 @@ impl Default for Theme {
         Self {
             no_color: false,
             truecolor: false,
-            glow: true,
+            glow: GlowMode::Auto,
             palette: Palette::BUILTIN,
         }
     }
@@ -122,7 +125,7 @@ impl Default for Theme {
 
 impl Theme {
     /// The active theme for a frame: the cached `NO_COLOR` and `COLORTERM`
-    /// readings plus the palette and glow flag resolved from the snapshot's
+    /// readings plus the palette and glow mode resolved from the snapshot's
     /// `[sidebar]` config. Called per compose — the resolve is ten copies of a
     /// `Color`, far below the frame budget — so a config change lands with the
     /// next produced snapshot, no renderer restart.
@@ -143,19 +146,26 @@ impl Theme {
         Self {
             no_color,
             truecolor: false,
-            glow: true,
+            glow: GlowMode::Auto,
             palette: Palette::BUILTIN,
         }
     }
 
-    /// Whether the post-render effects pass runs: the `[sidebar] glow` flag
-    /// must be on (its default), the terminal must speak 24-bit color (smooth
+    /// Whether the post-render effects pass runs. `NO_COLOR` beats everything
+    /// — the pass is color-only, so it has nothing to say on a colorless
+    /// frame. Under `auto` the terminal must advertise 24-bit color (smooth
     /// lightness interpolation quantizes into visible banding on a 256-color
-    /// palette), and the user must not have opted out of color entirely. With
-    /// the pass off the modifier-based attention breath alone carries the cue,
-    /// exactly as before the glow tier existed.
+    /// palette); `always` trusts the user's word over a missing advertisement;
+    /// `never` pins the plain render. With the pass off the modifier-based
+    /// attention breath alone carries the cue, exactly as before the glow
+    /// tier existed.
     pub(crate) fn effects_enabled(&self) -> bool {
-        self.glow && self.truecolor && !self.no_color
+        !self.no_color
+            && match self.glow {
+                GlowMode::Never => false,
+                GlowMode::Always => true,
+                GlowMode::Auto => self.truecolor,
+            }
     }
 
     /// Style with `fg` color and `modifier`, suppressing the color when
@@ -347,45 +357,52 @@ mod tests {
         assert!(style.add_modifier.contains(Modifier::BOLD));
     }
 
-    /// The effects gate: the pass needs the terminal capability (truecolor),
-    /// color left on (`NO_COLOR` beats everything), and the `[sidebar] glow`
-    /// flag — on by default, so the opt-out is the only lever a user has to
-    /// pull.
+    /// The effects gate, mode by mode: `auto` follows the terminal's
+    /// truecolor advertisement, `always` overrides a missing one, `never`
+    /// pins the pass off — and `NO_COLOR` beats every mode, since the pass
+    /// is color-only.
     #[test]
-    fn effects_run_only_under_truecolor_color_and_the_glow_flag() {
+    fn effects_follow_the_glow_mode_and_no_color_beats_it() {
         let theme = |no_color, truecolor, glow| Theme {
             no_color,
             truecolor,
             glow,
             palette: Palette::BUILTIN,
         };
-        assert!(theme(false, true, true).effects_enabled());
+        assert!(theme(false, true, GlowMode::Auto).effects_enabled());
         assert!(
-            !theme(false, false, true).effects_enabled(),
-            "a 256-color terminal never runs the pass"
+            !theme(false, false, GlowMode::Auto).effects_enabled(),
+            "auto on a terminal that advertises no truecolor stays plain"
         );
         assert!(
-            !theme(true, true, true).effects_enabled(),
-            "NO_COLOR beats both the capability and the flag"
+            theme(false, false, GlowMode::Always).effects_enabled(),
+            "always forces the pass past a missing COLORTERM (the SSH hop)"
         );
         assert!(
-            !theme(false, true, false).effects_enabled(),
-            "the glow opt-out pins the plain render on a truecolor terminal"
+            !theme(false, true, GlowMode::Never).effects_enabled(),
+            "never pins the plain render on a truecolor terminal"
+        );
+        assert!(
+            !theme(true, true, GlowMode::Always).effects_enabled(),
+            "NO_COLOR beats every mode, the forced one included"
         );
     }
 
-    /// The opt-out travels: `[sidebar] glow = false` resolves producer-side
-    /// onto the snapshot and lands in the theme, so every renderer of the
-    /// workspace falls back to the plain 256-color render together.
+    /// The mode travels: `[sidebar] glow` resolves producer-side onto the
+    /// snapshot and lands in the theme, so every renderer of the workspace
+    /// switches tiers together.
     #[test]
-    fn the_glow_opt_out_rides_the_snapshot_into_the_theme() {
-        assert!(Theme::for_sidebar(&SidebarConfig::default()).glow);
-        let opted_out = SidebarConfig {
-            glow: false,
+    fn the_glow_mode_rides_the_snapshot_into_the_theme() {
+        assert_eq!(
+            Theme::for_sidebar(&SidebarConfig::default()).glow,
+            GlowMode::Auto
+        );
+        let pinned_off = SidebarConfig {
+            glow: GlowMode::Never,
             ..SidebarConfig::default()
         };
-        let theme = Theme::for_sidebar(&opted_out);
-        assert!(!theme.glow);
+        let theme = Theme::for_sidebar(&pinned_off);
+        assert_eq!(theme.glow, GlowMode::Never);
         assert!(!theme.effects_enabled());
     }
 }

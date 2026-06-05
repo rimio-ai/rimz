@@ -139,10 +139,10 @@ Every renderer tone is a named semantic slot over a 256-color index; the values 
 
 ```toml
 [sidebar]
-glow = true    # the truecolor glow-and-flash tier (default on)
+glow = "auto"    # the truecolor glow-and-flash tier: "auto" (default) | "always" | "never"
 ```
 
-On a 24-bit terminal (`COLORTERM=truecolor`) the renderer layers smooth color motion over the composed frame — the attention glow and the brief transition flashes ([interface/sidebar.md](../interface/sidebar.md)). `glow = false` switches the tier off, keeping the plain 256-color render with the modifier-based attention breath. The flag resolves onto the snapshot like the theme, so a change lands with the next snapshot — no renderer restart — and the capability gate still stands on its own: a terminal without truecolor, or with `NO_COLOR`, never runs the pass whatever the flag says.
+On a 24-bit terminal the renderer layers smooth color motion over the composed frame — the attention glow and the brief transition flashes ([interface/sidebar.md](../interface/sidebar.md)). `auto` (default) follows the terminal's advertisement (`COLORTERM=truecolor`); `always` forces the tier on a truecolor terminal whose advertisement went missing — an SSH hop forwards `TERM` but drops `COLORTERM`, so a remote room reads plain under `auto` even in a truecolor emulator; `never` switches the tier off, keeping the plain 256-color render with the modifier-based attention breath. The mode resolves onto the snapshot like the theme, so a change lands with the next snapshot — no renderer restart — and `NO_COLOR` beats every mode: the pass is color-only, so it never runs over a colorless frame.
 
 #### Trunk branch
 

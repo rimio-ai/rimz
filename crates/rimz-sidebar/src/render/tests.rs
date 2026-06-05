@@ -1509,6 +1509,78 @@ fn effects_pass_never_changes_the_composed_text() {
 }
 
 #[test]
+fn glow_always_recolors_the_attention_glyph_without_colorterm() {
+    // The golden guard above proves the pass never changes the text; this is
+    // its color twin — proof the pass actually paints. Driven end-to-end
+    // through the real in-draw gate (`Theme::for_sidebar` →
+    // `effects_enabled`): `glow = "always"` must lift the waiting glyph to a
+    // truecolor tone with no `COLORTERM` in the environment (the SSH case the
+    // mode exists for), and `never` must leave the composed indexed tone
+    // untouched.
+    use rimz::config::GlowMode;
+    // The end-to-end gate keeps one env coupling `always` honours: `NO_COLOR`
+    // beats every mode. Surface a colorful-output-suppressing harness env as
+    // itself rather than as a mysterious color assertion below.
+    assert!(
+        std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
+        "this test needs NO_COLOR unset: the in-draw gate honours it over every glow mode"
+    );
+    let mut snapshot = snapshot_with(
+        Vec::new(),
+        vec![agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Waiting,
+            Some("/repo/main"),
+            Some("main"),
+            Some("db migrate"),
+        )],
+    );
+    let glyph_fg = |snapshot: &SidebarSnapshot| -> vt100::Color {
+        let mut bytes = Vec::new();
+        let backend = CrosstermBackend::new(&mut bytes);
+        let viewport = Viewport::Fixed(Rect::new(0, 0, 44, 18));
+        let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
+        terminal.clear().unwrap();
+        let mut ui = UiState {
+            // Mid-breath: the swell's peak, where the lift is unmistakable.
+            animation_phase: 6,
+            ..UiState::default()
+        };
+        draw_to_terminal_with_ui(&mut terminal, snapshot, None, &mut ui).unwrap();
+        drop(terminal);
+        let mut parser = vt100::Parser::new(18, 44, 0);
+        parser.process(&bytes);
+        let screen = parser.screen();
+        // Screen cells index by column, not byte — the `▌` gutter ahead of
+        // the glyph is 3 bytes but 1 column, so count chars to land on the
+        // `?` cell itself.
+        let (row, col) = screen
+            .contents()
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains("? claude"))
+            .find_map(|(row, line)| Some((row, line.chars().position(|c| c == '?')?)))
+            .expect("the waiting card renders its `? claude` identity line");
+        screen.cell(row as u16, col as u16).unwrap().fgcolor()
+    };
+
+    snapshot.sidebar.glow = GlowMode::Always;
+    let lifted = glyph_fg(&snapshot);
+    snapshot.sidebar.glow = GlowMode::Never;
+    let resting = glyph_fg(&snapshot);
+
+    assert!(
+        matches!(lifted, vt100::Color::Rgb(..)),
+        "the forced pass lifts the glyph to a truecolor tone, got {lifted:?}"
+    );
+    assert_ne!(
+        lifted, resting,
+        "glow = \"always\" must visibly recolor what \"never\" leaves alone"
+    );
+}
+
+#[test]
 fn animation_cadence_separates_fast_work_from_slow_cosmetic_motion() {
     let running = snapshot_with(
         Vec::new(),

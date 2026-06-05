@@ -307,6 +307,24 @@ pub enum ScrollbarMode {
     Never,
 }
 
+/// `[sidebar] glow`: whether the truecolor effects tier — the attention glow
+/// and the brief transition flashes — runs over the composed frame.
+/// Display-only; with the tier off the modifier-based attention breath alone
+/// carries the cue.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GlowMode {
+    /// Follow the terminal: run when `COLORTERM` advertises 24-bit color.
+    #[default]
+    Auto,
+    /// Force the pass on. The lever for a truecolor terminal the environment
+    /// under-advertises — an SSH hop forwards `TERM` but drops `COLORTERM`.
+    /// `NO_COLOR` still wins.
+    Always,
+    /// Pin the plain 256-color render on any terminal.
+    Never,
+}
+
 /// Sidebar display preferences. A personal, machine-wide tuning of how the
 /// renderer paints; it never affects ledger correctness.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -359,12 +377,14 @@ pub struct SidebarConfig {
     /// producer-side onto the snapshot like the rest of `[sidebar]`.
     pub scrollbar: ScrollbarMode,
     /// Whether the truecolor glow tier runs — the attention glow and the
-    /// brief transition flashes the renderer layers over the composed frame on
-    /// a 24-bit terminal. On by default; `glow = false` keeps the plain
-    /// 256-color render with the modifier-based attention breath. Terminal
-    /// capability still gates the pass: without `COLORTERM` truecolor, or
-    /// under `NO_COLOR`, it never runs regardless.
-    pub glow: bool,
+    /// brief transition flashes the renderer layers over the composed frame.
+    /// `auto` (default) follows the terminal's 24-bit advertisement
+    /// (`COLORTERM`); `always` forces the pass where the advertisement is
+    /// missing — an SSH hop forwards `TERM` but drops `COLORTERM`; `never`
+    /// keeps the plain 256-color render with the modifier-based attention
+    /// breath. `NO_COLOR` beats every mode. Resolved producer-side onto the
+    /// snapshot like the rest of `[sidebar]`.
+    pub glow: GlowMode,
 }
 
 impl Default for SidebarConfig {
@@ -378,7 +398,7 @@ impl Default for SidebarConfig {
             trunk: None,
             theme: SidebarThemeConfig::default(),
             scrollbar: ScrollbarMode::default(),
-            glow: true,
+            glow: GlowMode::default(),
         }
     }
 }
@@ -708,15 +728,22 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_glow_defaults_on_and_parses_an_opt_out() {
+    fn sidebar_glow_parses_and_defaults_auto() {
         let dir = tempdir().expect("tempdir");
-        assert!(
+        assert_eq!(
             MachineConfig::default().sidebar.glow,
-            "the truecolor glow tier ships enabled",
+            GlowMode::Auto,
+            "the glow tier ships following the terminal's advertisement",
         );
         let config =
-            MachineConfig::load_from(&write(&dir, "[sidebar]\nglow = false\n")).expect("load");
-        assert!(!config.sidebar.glow);
+            MachineConfig::load_from(&write(&dir, "[sidebar]\nglow = \"always\"\n")).expect("load");
+        assert_eq!(config.sidebar.glow, GlowMode::Always);
+        let config =
+            MachineConfig::load_from(&write(&dir, "[sidebar]\nglow = \"never\"\n")).expect("load");
+        assert_eq!(config.sidebar.glow, GlowMode::Never);
+        // The pre-mode boolean form fails at load with the parse error naming
+        // the field, rather than silently rendering with a default.
+        assert!(MachineConfig::load_from(&write(&dir, "[sidebar]\nglow = false\n")).is_err());
     }
 
     #[test]
