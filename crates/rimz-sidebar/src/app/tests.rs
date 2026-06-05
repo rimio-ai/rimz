@@ -68,6 +68,7 @@ fn frame_interval_slows_cosmetic_animation_only() {
             worktree_path: Some("/repo/main".to_owned()),
             worktree_branch: Some("main".to_owned()),
             last_activity: Timestamp::now(),
+            registered_at: None,
             resolver: None,
             options: Vec::new(),
             sub_agents: Vec::new(),

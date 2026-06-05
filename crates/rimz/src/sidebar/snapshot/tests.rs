@@ -512,6 +512,7 @@ fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> AgentState {
         compacting_since: None,
         last_seen: now,
         last_activity: now,
+        registered_at: Some(now),
     }
 }
 
@@ -902,6 +903,7 @@ fn config_fold_stamps_agent_context_severity() {
         worktree_path: None,
         worktree_branch: None,
         last_activity: jiff::Timestamp::now(),
+        registered_at: None,
         resolver: None,
         options: Vec::new(),
         sub_agents: Vec::new(),
@@ -1015,6 +1017,7 @@ fn activity_row(
         worktree_path: Some(worktree_path.display().to_string()),
         worktree_branch: None,
         last_activity,
+        registered_at: None,
         resolver: None,
         options: Vec::new(),
         sub_agents: Vec::new(),

@@ -250,6 +250,8 @@ fn idle_agent_row(pane: &PaneRef, kind: &str, now: Timestamp) -> SidebarRow {
         worktree_path: pane.cwd.clone(),
         worktree_branch: None,
         last_activity: pane.pane_process_start.unwrap_or(now),
+        // No session yet — the pane's process start is this row's spawn key.
+        registered_at: None,
         resolver: None,
         options: Vec::new(),
         sub_agents: Vec::new(),

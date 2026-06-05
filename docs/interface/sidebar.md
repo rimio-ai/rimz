@@ -253,7 +253,7 @@ The worktree header carries the worktree's git story on the right: the `⇡`/`�
 
 The `external` block is the catch-all for panes outside the project — untethered scripts, CI, stray shells. It renders as a dim divider rather than a worktree header, sorts last unless it holds something waiting, and keeps an attention-only `? n` / `! n` tally so an out-of-project ask still surfaces.
 
-**Ranking is automatic: the most attention-hungry rises, nothing else moves.** Within a worktree, rows sort `waiting → failed → idle → done → working` (a working agent is the least needy, so it settles to the bottom). Attention rows sort oldest-first, so the longest-overdue is always on top. Worktrees themselves sort by their most-urgent member.
+**Ranking is automatic: the most attention-hungry rises, nothing else moves.** Within a worktree, rows sort `waiting → failed → done → working → idle` (a parked idle agent is the least needy, so it settles to the bottom — which is exactly where a freshly-launched agent appears). Attention rows sort oldest-first, so the longest-overdue is always on top. Worktrees themselves sort by their most-urgent member.
 
 **The cap.** Each worktree shows a capped number of rows (configurable) with a dim `+K more`. The cap trims only the calm tail; every `waiting`/`failed` row is always shown, so the cap can never hide something that needs you:
 

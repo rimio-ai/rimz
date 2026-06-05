@@ -257,6 +257,12 @@ pub(super) fn reduce_agent_states_seeded(
             .and_then(|raw| PaneId::parse(&raw).ok())
             .map(pane_ref_from_id)
             .or_else(|| prior.and_then(|p| p.pane.clone()));
+        // Identity, never activity: the first event's instant, carried forward
+        // unchanged — the durable spawn key the sidebar's calm tiebreak falls
+        // back to when a pane reports no process start.
+        let registered_at = prior
+            .and_then(|p| p.registered_at)
+            .or(Some(event.timestamp));
         let state = AgentState {
             agent_id: agent_id.clone(),
             kind: kind.clone(),
@@ -288,6 +294,7 @@ pub(super) fn reduce_agent_states_seeded(
             compacting_since,
             last_seen: event.timestamp,
             last_activity: event.timestamp,
+            registered_at,
         };
         map.insert((kind, agent_id), state);
     }

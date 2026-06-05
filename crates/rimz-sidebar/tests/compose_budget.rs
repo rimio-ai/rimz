@@ -74,6 +74,7 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
         worktree_path: Some(format!("/repo/wt{group}")),
         worktree_branch: Some(format!("feature-{group}")),
         last_activity: Timestamp::now(),
+        registered_at: None,
         resolver: None,
         options: Vec::new(),
         // Row 0 is the default selection, so its card expands these in every

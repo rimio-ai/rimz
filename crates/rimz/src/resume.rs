@@ -245,6 +245,7 @@ mod tests {
             compacting_since: None,
             last_seen: when,
             last_activity: when,
+            registered_at: Some(when),
         }
     }
 

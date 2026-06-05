@@ -809,6 +809,14 @@ pub struct AgentState {
     pub compacting_since: Option<Timestamp>,
     pub last_seen: Timestamp,
     pub last_activity: Timestamp,
+    /// When this session first entered the rollup — the timestamp of its
+    /// earliest reduced event, set once and carried forward unchanged
+    /// (identity, never activity). The sidebar's calm tiebreak falls back to it
+    /// as the row's spawn key when the backend reports no pane process start
+    /// (Zellij), so a calm row holds a stable order without one. `None` only on
+    /// a rollup persisted before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registered_at: Option<Timestamp>,
 }
 
 impl AgentState {

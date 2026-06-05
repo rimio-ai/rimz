@@ -96,6 +96,7 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
         compacting_since: None,
         last_seen: timestamp,
         last_activity: timestamp,
+        registered_at: Some(timestamp),
     }
 }
 

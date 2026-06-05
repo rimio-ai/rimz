@@ -76,12 +76,12 @@ A pane's group is decided by membership in the project's worktrees: a cwd at or 
 
 **One principle: the most attention-hungry rises, and nothing else moves.** The status comparator is `status_rank` in [`snapshot/view.rs`](../../crates/rimz/src/ledger/snapshot/view.rs); the order it encodes:
 
-- Within a worktree, rows sort by status bucket: `waiting` → `failed` → `idle` → `success` → `running`. A working agent is the least attention-hungry, so it settles to the bottom.
+- Within a worktree, rows sort by status bucket: `waiting` → `failed` → `success` → `running` → `idle`. A parked idle agent has no work in flight, so it settles to the very bottom — and a brand-new agent (always idle) therefore appends at the bottom of the calm region, never above finished or working agents.
 - The attention buckets (`waiting`, `failed`) sort **oldest-first**: a blocked agent's `last_activity` is frozen, so the longest-overdue rises and `␣` always lands on the oldest blocked pane.
-- The calm buckets and bare process rows hold a **stable spawn order** keyed on `pane_process_start` — untouched by the activity heartbeat, so a working agent never jumps just because it finished a tool, and a new agent appends at the bottom of its bucket.
-- Worktree groups sort by their most-urgent member; same-tier groups keep a stable order — project worktrees before the `external` catch-all, then earliest pane start, then label.
+- The calm buckets and bare process rows hold a **stable spawn order** keyed on `pane_process_start` when the backend reports it, else the session's durable `registered_at` (Zellij reports no pane start) — both set-once and untouched by the activity heartbeat, so a working agent never jumps just because it finished a tool, a renamed session never reorders, and a new agent appends at the bottom of its bucket.
+- Worktree groups sort by their most-urgent member, with every calm status collapsed to one tier — a calm group holds its place through members' success/running/idle churn, and only genuine attention reorders. Same-tier groups keep a stable order — project worktrees before the `external` catch-all, then the earliest member spawn key, then label.
 
-**The cap protects the calm tail only.** Each worktree shows at most `WORKTREE_ROW_CAP` rows with a dim `+K more`. The cap truncates only calm rows; every `waiting`/`failed` agent is exempt and always shown, so the cap can never hide something that needs you.
+**The cap protects the calm tail only.** Each worktree shows at most `WORKTREE_ROW_CAP` rows with a dim `+K more`. The cap truncates only calm rows — the bottom-ranked idle tail first; every `waiting`/`failed` agent is exempt and always shown, so the cap can never hide something that needs you.
 
 ## Composing the frame
 

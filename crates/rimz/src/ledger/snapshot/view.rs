@@ -322,6 +322,13 @@ pub struct SidebarRow {
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
     pub last_activity: Timestamp,
+    /// The session's durable spawn key, copied from `AgentState.registered_at`.
+    /// The calm tiebreak falls back to it when the row's pane reports no
+    /// `pane_process_start` (Zellij), so a calm row holds a stable order
+    /// without a pane start and a renamed session never reshuffles. `None` for
+    /// process rows and a snapshot predating the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registered_at: Option<Timestamp>,
     pub resolver: Option<SidebarResolverState>,
     pub options: Vec<String>,
     /// Subagents this agent spawned this turn (Claude Task children, Codex
@@ -1950,6 +1957,7 @@ pub(super) fn row_from_agent(agent: &AgentState, now: Timestamp) -> SidebarRow {
         worktree_path: agent.worktree_path.clone(),
         worktree_branch: agent.worktree_branch.clone(),
         last_activity: agent.last_activity,
+        registered_at: agent.registered_at,
         resolver: None,
         options: Vec::new(),
         sub_agents: Vec::new(),
@@ -2035,6 +2043,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
             .clone()
             .or_else(|| matched.and_then(|agent| agent.worktree_branch.clone())),
         last_activity: item.updated_at,
+        registered_at: matched.and_then(|agent| agent.registered_at),
         resolver: active_resolver_state(item),
         options: item.options.clone(),
         sub_agents: Vec::new(),
@@ -2218,9 +2227,10 @@ fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
 }
 
 /// Trim a group's calm tail to `WORKTREE_ROW_CAP`, always keeping the rows that
-/// need you (`waiting`/`failed`) and the focused pane. Because `running` now
-/// ranks last among agents, it is the first calm bucket trimmed behind
-/// `+K more` — by design: a working agent is the least attention-hungry.
+/// need you (`waiting`/`failed`) and the focused pane. Because `idle` ranks
+/// last among agents, it is the first calm bucket trimmed behind `+K more` —
+/// by design: a parked, work-less agent is the least attention-hungry, and a
+/// finished or working agent stays visible longer.
 fn capped_rows(rows: Vec<SidebarRow>) -> Vec<SidebarRow> {
     let mut visible = Vec::new();
     for row in rows {
@@ -2235,28 +2245,39 @@ fn capped_rows(rows: Vec<SidebarRow>) -> Vec<SidebarRow> {
 }
 
 fn compare_rows(left: &SidebarRow, right: &SidebarRow) -> Ordering {
+    // The final tiebreak is the stable `id` alone — never `name`, which mutates
+    // through the session-name → task → prompt label ladder and would reshuffle
+    // a bucket on every rename.
     row_rank(left)
         .cmp(&row_rank(right))
         .then_with(|| within_bucket(left, right))
-        .then_with(|| left.name.cmp(&right.name))
         .then_with(|| left.id.cmp(&right.id))
 }
 
 /// Tiebreak two rows that share a status bucket (their ranks already tied).
 ///
-/// Attention rows (`waiting`/`failed`) sort longest-overdue-first: a blocked or
-/// failed agent's `last_activity` is frozen, so this is both stable and the
-/// triage order the `␣` "next attention" key promises. Calm rows (`idle`,
-/// `success`, `running`) and bare process rows hold a stable spawn order keyed
-/// on `pane_process_start` — untouched by the activity heartbeat — so a working
-/// agent never jumps just because it finished a tool, and new agents append at
-/// the bottom of their bucket.
+/// Attention rows (`waiting`/`failed`/`rate_limited`) sort longest-overdue-first:
+/// a blocked or failed agent's `last_activity` is frozen, so this is both stable
+/// and the triage order the `␣` "next attention" key promises. Calm rows
+/// (`success`, `running`, `idle`) and bare process rows hold a stable spawn
+/// order keyed on [`spawn_key`] — set-once and untouched by the activity
+/// heartbeat — so a working agent never jumps just because it finished a tool,
+/// and new agents append at the bottom of their bucket.
 fn within_bucket(left: &SidebarRow, right: &SidebarRow) -> Ordering {
     if is_attention(left.status) {
         left.last_activity.cmp(&right.last_activity)
     } else {
-        cmp_start_asc(pane_start(left), pane_start(right))
+        cmp_start_asc(spawn_key(left), spawn_key(right))
     }
+}
+
+/// The row's durable spawn instant: the pane's process start when the backend
+/// reports it (tmux always, Zellij only via the `/proc` agent-pane derivation),
+/// else the session's `registered_at`. Both are set-once and immune to the
+/// activity heartbeat, so the calm order is stable across refreshes and a
+/// renamed session never reorders.
+fn spawn_key(row: &SidebarRow) -> Option<Timestamp> {
+    pane_start(row).or(row.registered_at)
 }
 
 fn is_attention(status: Option<AgentStatus>) -> bool {
@@ -2283,29 +2304,44 @@ fn compare_groups(left: &SidebarWorktreeGroup, right: &SidebarWorktreeGroup) -> 
     // A worktree floats by its most-urgent member: a `waiting`-topped group sits
     // above a `failed`-topped one, above the calm groups. Among same-tier groups
     // the `external` catch-all sorts after project worktrees; then both hold a
-    // stable order keyed on the earliest spawned pane, then label. The external
+    // stable order keyed on the earliest-spawned member, then label. The external
     // group therefore only rises out of the tail when it holds a `waiting` or
     // `failed` agent — the tier carries that, no separate predicate needed.
     group_tier(left)
         .cmp(&group_tier(right))
         .then_with(|| group_is_external(left).cmp(&group_is_external(right)))
-        .then_with(|| cmp_start_asc(group_earliest_start(left), group_earliest_start(right)))
+        .then_with(|| cmp_start_asc(group_earliest_spawn(left), group_earliest_spawn(right)))
         .then_with(|| left.label.cmp(&right.label))
 }
 
-/// The most-urgent member's rank. `rows` is already sorted by `compare_rows`
-/// and the cap never hides `waiting`/`failed`, so `rows.first()` is the true
-/// top; an empty group ranks last.
+/// The most-urgent member's *group* tier. `rows` is already sorted by
+/// `compare_rows` and the cap never hides `waiting`/`failed`, so `rows.first()`
+/// is the true top; an empty group ranks last. Unlike `row_rank`, every calm
+/// status collapses to one tier: a calm group's position must not leapfrog a
+/// sibling just because its top row flipped success↔running↔idle — calm groups
+/// hold the stable earliest-pane order, and only genuine attention reorders.
 fn group_tier(group: &SidebarWorktreeGroup) -> u8 {
-    group.rows.first().map_or(u8::MAX, row_rank)
+    match group.rows.first().map(|row| row.status) {
+        Some(Some(AgentStatus::Waiting)) => 0,
+        Some(Some(AgentStatus::Failed)) => 1,
+        Some(Some(AgentStatus::RateLimited)) => 2,
+        // success / running / idle — one calm tier.
+        Some(Some(_)) => 3,
+        // Process-only group.
+        Some(None) => 4,
+        None => u8::MAX,
+    }
 }
 
 fn group_is_external(group: &SidebarWorktreeGroup) -> bool {
     group.kind == SidebarWorktreeKind::Workspace
 }
 
-fn group_earliest_start(group: &SidebarWorktreeGroup) -> Option<Timestamp> {
-    group.rows.iter().filter_map(pane_start).min()
+/// The group's earliest member [`spawn_key`] — the same durable key the
+/// within-bucket calm tiebreak uses, so group order survives a backend that
+/// reports no pane starts (Zellij) instead of degrading to the label.
+fn group_earliest_spawn(group: &SidebarWorktreeGroup) -> Option<Timestamp> {
+    group.rows.iter().filter_map(spawn_key).min()
 }
 
 fn row_rank(row: &SidebarRow) -> u8 {
@@ -2316,17 +2352,21 @@ fn row_rank(row: &SidebarRow) -> u8 {
 }
 
 fn status_rank(status: AgentStatus) -> u8 {
-    // Working agents are the least attention-hungry, so `running` ranks below the
-    // calm-but-settled `idle`/`success`. Actionable attention (`waiting`/`failed`)
-    // leads; `rate_limited` sits just under it — attention-class, but parked with
-    // nothing to do but wait, so it ranks below a real failure and above calm.
+    // Actionable attention (`waiting`/`failed`) leads; `rate_limited` sits just
+    // under it — attention-class, but parked with nothing to do but wait, so it
+    // ranks below a real failure and above calm. Among the calm states `idle`
+    // ranks *last*: a fresh agent registers idle, so idle-at-the-bottom makes a
+    // new card append at the bottom of the calm region every time — it never
+    // lands above finished or working agents only to drop on its first prompt.
+    // Finished work (`success`) reads first — it has a result for you — then
+    // live work, then the parked idle tail the per-worktree cap trims first.
     match status {
         AgentStatus::Waiting => 0,
         AgentStatus::Failed => 1,
         AgentStatus::RateLimited => 2,
-        AgentStatus::Idle => 3,
-        AgentStatus::Success => 4,
-        AgentStatus::Running => 5,
+        AgentStatus::Success => 3,
+        AgentStatus::Running => 4,
+        AgentStatus::Idle => 5,
     }
 }
 

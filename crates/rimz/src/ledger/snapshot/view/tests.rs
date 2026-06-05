@@ -2666,7 +2666,7 @@ fn calm_tail_cap_never_hides_focused_rows() {
 }
 
 #[test]
-fn bucket_order_puts_attention_first_and_running_last() {
+fn bucket_order_puts_attention_first_and_idle_last() {
     // Scrambled input proves the sort, not the insertion order.
     let agents = [
         AgentStatus::Running,
@@ -2692,11 +2692,11 @@ fn bucket_order_puts_attention_first_and_running_last() {
         vec![
             Some(AgentStatus::Waiting),
             Some(AgentStatus::Failed),
-            Some(AgentStatus::Idle),
             Some(AgentStatus::Success),
             Some(AgentStatus::Running),
+            Some(AgentStatus::Idle),
         ],
-        "attention leads; working agents sink to the bottom of the group"
+        "attention leads; parked idle agents sink to the bottom of the group"
     );
 }
 
@@ -2728,8 +2728,152 @@ fn calm_bucket_holds_stable_spawn_order() {
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
-    // Oldest pane first; the paneless row falls to the bucket tail.
+    // Oldest pane first; the paneless row keys on its `registered_at` — newer
+    // than every pane start here — and falls to the bucket tail.
     assert_eq!(order, vec!["early", "mid", "late", "nopane"]);
+}
+
+#[test]
+fn new_idle_agent_appends_below_calm_work() {
+    // A brand-new agent registers idle, so wherever the snapshot catches it —
+    // before or after its first prompt — it never lands above finished or
+    // working agents: idle is the calm region's bottom bucket.
+    let mut done = agent_in("done", "/repo/main", AgentStatus::Success, 1_000);
+    done.pane = Some(pane_started("%0", "/repo/main", ago(600)));
+    let mut work = agent_in("work", "/repo/main", AgentStatus::Running, 1_001);
+    work.pane = Some(pane_started("%1", "/repo/main", ago(500)));
+    let mut fresh = agent_in("fresh", "/repo/main", AgentStatus::Idle, 1_002);
+    fresh.pane = Some(pane_started("%2", "/repo/main", ago(5)));
+
+    let snapshot = room(Vec::new(), vec![fresh, work, done]);
+
+    let order = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec!["done", "work", "fresh"],
+        "the new idle card appends at the bottom of the calm region"
+    );
+}
+
+#[test]
+fn paneless_calm_rows_order_by_registration_not_label() {
+    // Zellij reports no pane process start, so calm rows there fall back to
+    // the durable `registered_at` spawn key — never a label: the older session
+    // leads even though its kind name sorts after its sibling's.
+    let mut older = agent("codex", "older", AgentStatus::Idle, 1_000).worktree("/repo/main");
+    older.pane = Some(pane("%0", "node", "/repo/main"));
+    let mut newer = agent("claude", "newer", AgentStatus::Idle, 9_000).worktree("/repo/main");
+    newer.pane = Some(pane("%1", "node", "/repo/main"));
+
+    let snapshot = room(Vec::new(), vec![newer, older]);
+
+    let order = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec!["older", "newer"],
+        "spawn order holds without a pane start; the label never reorders calm rows"
+    );
+}
+
+#[test]
+fn cap_trims_idle_before_running() {
+    // Idle ranks last among agents, so the per-worktree cap's calm trim eats
+    // the parked idle tail first and a working agent stays visible longer.
+    let mut agents = Vec::new();
+    for i in 0..4 {
+        agents.push(agent_in(
+            &format!("run-{i}"),
+            "/repo/main",
+            AgentStatus::Running,
+            1_000 + i,
+        ));
+    }
+    for i in 0..4 {
+        agents.push(agent_in(
+            &format!("idle-{i}"),
+            "/repo/main",
+            AgentStatus::Idle,
+            2_000 + i,
+        ));
+    }
+
+    let snapshot = room(Vec::new(), agents);
+
+    let visible = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        (0..4).all(|i| visible.contains(&format!("run-{i}"))),
+        "every running agent stays visible; only the idle tail trims: {visible:?}"
+    );
+    assert_eq!(snapshot.worktree_groups[0].hidden_count, 2);
+}
+
+#[test]
+fn calm_groups_hold_order_through_member_status_churn() {
+    // Calm worktree groups never leapfrog just because a member's calm status
+    // flipped: the group tier collapses success/running/idle to one rank, so
+    // the stable earliest-pane order decides until genuine attention arises.
+    let build = |a_status: AgentStatus, b_status: AgentStatus| {
+        let mut a = agent_in("sess-a", "/repo/a", a_status, 1_000);
+        a.pane = Some(pane_started("%0", "/repo/a", ago(600)));
+        let mut b = agent_in("sess-b", "/repo/b", b_status, 1_001);
+        b.pane = Some(pane_started("%1", "/repo/b", ago(500)));
+        room(Vec::new(), vec![a, b])
+    };
+
+    let groups = |snapshot: &SidebarSnapshot| {
+        snapshot
+            .worktree_groups
+            .iter()
+            .map(|group| group.label.clone())
+            .collect::<Vec<_>>()
+    };
+
+    let before = build(AgentStatus::Running, AgentStatus::Success);
+    // b's agent finishing a turn while a's keeps working reorders nothing.
+    let after = build(AgentStatus::Idle, AgentStatus::Running);
+    assert_eq!(groups(&before), groups(&after));
+    assert_eq!(groups(&before), vec!["a", "b"]);
+
+    // Genuine attention still floats its group to the top.
+    let blocked = build(AgentStatus::Running, AgentStatus::Waiting);
+    assert_eq!(groups(&blocked), vec!["b", "a"]);
+}
+
+#[test]
+fn paneless_calm_groups_order_by_registration_not_label() {
+    // Same fallback at the group tier as within a bucket: without a pane
+    // start (Zellij), same-tier groups key on their earliest member's
+    // `registered_at` — the worktree you opened first stays first, whatever
+    // its label.
+    let mut older = agent_in("sess-b", "/repo/b", AgentStatus::Idle, 1_000);
+    older.pane = Some(pane("%0", "node", "/repo/b"));
+    let mut newer = agent_in("sess-a", "/repo/a", AgentStatus::Idle, 9_000);
+    newer.pane = Some(pane("%1", "node", "/repo/a"));
+
+    let snapshot = room(Vec::new(), vec![newer, older]);
+
+    let groups = snapshot
+        .worktree_groups
+        .iter()
+        .map(|group| group.label.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        groups,
+        vec!["b", "a"],
+        "group spawn order holds without pane starts; the label never reorders calm groups"
+    );
 }
 
 #[test]

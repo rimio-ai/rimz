@@ -159,6 +159,7 @@ mod tests {
             compacting_since: None,
             last_seen: Timestamp::UNIX_EPOCH,
             last_activity: Timestamp::UNIX_EPOCH,
+            registered_at: Some(Timestamp::UNIX_EPOCH),
         }
     }
 

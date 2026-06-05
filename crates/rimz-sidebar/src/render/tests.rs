@@ -169,6 +169,7 @@ fn agent(
         compacting_since: None,
         last_seen: now,
         last_activity: now,
+        registered_at: Some(now),
     }
 }
 
