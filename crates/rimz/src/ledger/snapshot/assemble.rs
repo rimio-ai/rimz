@@ -17,6 +17,7 @@ use crate::ledger::parse_cache::ParseCache;
 use crate::ledger::paths::StatePaths;
 use crate::ledger::runtime::{RuntimeProjection, RuntimeScope};
 use crate::ledger::workspace_record;
+use crate::workspace::RootClass;
 
 /// Rebuild the snapshot caches from the live ledger and persist both: the
 /// rollup fold base (`rollup.json`) and the derived view (`latest.json`).
@@ -80,7 +81,9 @@ fn assemble_snapshot(
     );
     snapshot.reap_stale_sessions();
     snapshot.display_name = display_name_for(paths);
-    let mut snapshot = snapshot.with_project_root(project_root_for(paths));
+    let mut snapshot = snapshot
+        .with_root_class(root_class_for(paths))
+        .with_project_root(project_root_for(paths));
     // Stamp the extent the fold consumed. The freshness gate compares it
     // against the live log length, so a racing append can never pass a
     // stale rollup off as current.
@@ -163,6 +166,15 @@ pub(crate) fn project_root_for(paths: &StatePaths) -> Option<PathBuf> {
     workspace_record::read(&paths.workspace_record)
         .ok()
         .map(|record| record.project_root)
+}
+
+/// The room root's class from the workspace record, defaulting to `Repo` (the
+/// prior grouping) when the record is missing or pre-dates the field.
+pub(crate) fn root_class_for(paths: &StatePaths) -> RootClass {
+    workspace_record::read(&paths.workspace_record)
+        .ok()
+        .map(|record| record.root_class)
+        .unwrap_or(RootClass::Repo)
 }
 
 #[cfg(test)]

@@ -63,6 +63,16 @@ Done: the Pi adapter — a Rimz-authored in-process extension forwarding pi's li
 
 Remaining: the OpenCode adapter — upstream surface mirrored and live-verified in [adapter/opencode-reference.md](../internals/adapter/opencode-reference.md), with the proposed mapping and the unsupportable surfaces in its [Mapping feasibility](../internals/adapter/opencode-reference.md#mapping-feasibility) — other agents when their extension APIs and decision contracts are stable enough to test, plus Pi's one unwired increment (a model-change marker — [pi-reference.md → Mapping feasibility](../internals/adapter/pi-reference.md#mapping-feasibility)).
 
+## Follow-up — Fleet-room depth
+
+Done: non-git roots are first-class — typed root classes with session-pinned identity ([cli.md → Workspace resolution](../reference/cli.md#start-and-attach-a-workspace)), and the directory room groups panes by depth-1 child repos with a name-only root pod ([sidebar.md → Worktree groups](../internals/sidebar.md#worktree-groups)).
+
+Deferred, in design-readiness order:
+
+- **Depth >1 enumeration.** A repo at `<root>/org/repo` folds into the root pod today (the v1 depth rule). A deeper scan needs a depth/ignore policy before it pays its `read_dir` fan-out.
+- **Child-repo worktrees parked outside the room.** A child repo's own `git worktree list` is not consulted, so a checkout it parked elsewhere folds into `external`. Enumerating per-child worktrees multiplies the probe fan-out; wants real demand first.
+- **Cross-session aggregation.** A parent room never ingests a nested live room's ledger — overlap stays notice-and-doctor ([cli.md](../reference/cli.md#start-and-attach-a-workspace)). If aggregation is ever built it is read-side only (one ledger per workspace stays the write invariant), and the jump cannot cross Zellij sessions — both are why it waits.
+
 ## Optional — Zellij docked plugin rail
 
 A UX upgrade, not a milestone gate. A `wasm32-wasip1` plugin (`crates/rimz-sidebar-zellij`) that projects the snapshot view-model as a docked, persistent left rail for Zellij users who opt in (`[layout.zellij] sidebar_plugin`). In-sandbox snapshot-JSON ingress off the `zellij pipe --name rimz::feed` wakeup, idempotent `launch-or-focus-plugin`. The native pane stays the default and the fallback; the rail never gates correctness.

@@ -38,7 +38,7 @@ pub(in crate::render) fn worktree_group_lines(
     // inter-card gaps, with the selected card itself lit bold `▌`. The `external`
     // catch-all is never a lane.
     let first_row = *row_index;
-    let group_selected = group.kind != SidebarWorktreeKind::Workspace
+    let group_selected = group.kind != SidebarWorktreeKind::External
         && (first_row..first_row + group.rows.len()).contains(&selected_index);
     let lane = if group_selected {
         Gutter::Lane
@@ -56,7 +56,7 @@ pub(in crate::render) fn worktree_group_lines(
     // row — the agent adjacent to the header — so clicking the pod name jumps
     // straight into it. The `external` divider is not a worktree name, so it
     // stays inert chrome.
-    let header_target = (group.kind != SidebarWorktreeKind::Workspace && !group.rows.is_empty())
+    let header_target = (group.kind != SidebarWorktreeKind::External && !group.rows.is_empty())
         .then_some(*row_index);
     map.push(header_target);
     let tier = Tier::for_width(content_width(width));
@@ -104,8 +104,8 @@ fn group_header(
 ) -> Line<'static> {
     // The catch-all is not a worktree — render it as a dim divider, not a bold
     // pod header, so out-of-project sessions read as "outside the project."
-    if group.kind == SidebarWorktreeKind::Workspace {
-        return workspace_divider(theme, group, width);
+    if group.kind == SidebarWorktreeKind::External {
+        return external_divider(theme, group, width);
     }
     // The lane spine (added by the caller) opens the header, so the label leads
     // here in bold teal — no inline `▌`, the spine carries the lane. The header
@@ -118,10 +118,19 @@ fn group_header(
     // glyph, so repeating it here was noise. The label clips to whatever's
     // left after the stats claim their width, always leaving a cell so the
     // header never shrinks to zero on extreme narrowness.
-    let right = group_git_spans(theme, group);
+    //
+    // A non-repo room's root pod is name-only: a plain directory has no fork
+    // and no git story, so it drops the `⑂` prefix and pins nothing right.
+    let right = match group.kind {
+        SidebarWorktreeKind::Root => Vec::new(),
+        _ => group_git_spans(theme, group),
+    };
     let right_width: usize = right.iter().map(|span| span.content.chars().count()).sum();
     let label_width = cw.saturating_sub(right_width + 1).max(1);
-    let label_with_prefix = format!("⑂ {}", group.label);
+    let label_with_prefix = match group.kind {
+        SidebarWorktreeKind::Root => group.label.clone(),
+        _ => format!("⑂ {}", group.label),
+    };
     let left = clip(&label_with_prefix, label_width);
     // The dotted `┄` seal caps only the *selected* worktree's header, so the lane
     // reads as one bracketed block; every other header is just its bold label and
@@ -185,11 +194,11 @@ fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'sta
     spans
 }
 
-/// The `workspace` catch-all (untethered scripts/CI and out-of-project shells)
+/// The `external` catch-all (untethered scripts/CI and out-of-project shells)
 /// renders as a dim `┄ external ┄┄┄` divider rather than a bold `▌` pod header.
 /// It keeps an *attention-only* tally (`? n` / `! n`) so a waiting script ask
 /// still surfaces; the calm counts stay with the cockpit.
-fn workspace_divider(theme: &Theme, group: &SidebarWorktreeGroup, width: usize) -> Line<'static> {
+fn external_divider(theme: &Theme, group: &SidebarWorktreeGroup, width: usize) -> Line<'static> {
     let cw = content_width(width);
     let tally = attention_tally(&group.status_counts);
     let head = format!("┄ {} ", group.label);

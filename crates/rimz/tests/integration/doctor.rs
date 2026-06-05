@@ -253,13 +253,13 @@ fn doctor_reports_protocol_version_mismatches() {
     let stdout = String::from_utf8(output.stdout).expect("utf8");
 
     assert!(stdout.contains(
-        "protocols     : event rimz.event.v2; sidebar rimz.plugin.v3; resolver rimz.resolver.v1",
+        "protocols     : event rimz.event.v2; sidebar rimz.plugin.v4; resolver rimz.resolver.v1",
     ));
     assert!(stdout.contains(
         "protocol warn : event log schema rimz.event.v0 seen 1 record (expected rimz.event.v2)",
     ));
     assert!(stdout.contains(
-        "protocol warn : sidebar heartbeat sidebar.old.json uses rimz.plugin.v0 (expected rimz.plugin.v3)",
+        "protocol warn : sidebar heartbeat sidebar.old.json uses rimz.plugin.v0 (expected rimz.plugin.v4)",
     ));
     assert!(stdout.contains(
         "protocol warn : resolver heartbeat resolver.opus-policy.json uses rimz.resolver.v0 (expected rimz.resolver.v1)",

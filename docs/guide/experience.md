@@ -287,6 +287,7 @@ made me faster at being the bottleneck."*
 > - **Ranking is the triage; you don't sort.** Attention-hungry buckets rise, oldest-first within them; the cap only ever trims the *calm* tail. The sidebar physically cannot bury something that needs you.
 > - **A global "focus next attention" key is core, not a nicety.** Seeing the blocked pane and *getting* to it are different actions; the key collapses them so triage cost stays flat as the fleet grows. It's bound only inside the Rimz session, so it never touches the reader's global mux config.
 > - **Worktrees are the structure, not tabs.** Groups are keyed on worktree isolation (only same-worktree agents share files); a bold header marks each one, and the worktree you've *selected* reads as one bracketed lane — a thin spine down its full height with a faint dotted seal capping its header, the selected card inside it bolder — so the lane is the only spine ink on screen. The `external` catch-all holds scripts, CI, and panes outside any worktree; it renders as a dim `┄ external ┄` divider and sorts last unless it holds something waiting or failed.
+> - **The room scales past one repo.** `rimz start` in `~/code` — or on a headless box with no source control — makes that directory the room: each child repo is a pod with its own branch and churn, the root's own panes sit under a name-only header, and the same cockpit, ranking, and jump triage the whole machine ([the fleet room](./product.md#many-repos-one-room--the-fleet-room)).
 
 ### The `?` help overlay — discoverability without a manual
 

@@ -69,6 +69,17 @@ fn tmux_room_shows_agent_after_hook() {
     if env.skip_if_sandboxed() {
         return;
     }
+    // The agent claims branch `main`, modelling a repo room — make the room
+    // root one, or the directory room's name-only root pod (correctly)
+    // suppresses the branch label this test waits for.
+    let git_init = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&env.project_root)
+        .status();
+    if !git_init.map(|status| status.success()).unwrap_or(false) {
+        eprintln!("git unavailable; skipping deep tmux smoke");
+        return;
+    }
 
     let server_dir = TempDir::new().expect("tmux socket dir");
     let socket = server_dir.path().join("tmux.sock");

@@ -103,7 +103,8 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `¤ N`           | the live agents in the room right now — the glyph in the agents' working clay |
 | `◎ N`           | sessions (threads) that have run today (cockpit) / in the window (ledger) — teal in both |
 | `⧉ N`           | the subagents an agent spawned this turn (expanded card) — the marker violet, the label dim |
-| `⑂ name`        | a worktree group header — its live branch |
+| `⑂ name`        | a group header with a git story — a worktree's live branch, or a directory room's child repo |
+| `name` (bold)   | a directory room's own pod — name-only, no git story |
 | `▏`             | the selection lane — the worktree you're in |
 | `▌`             | the selected card |
 | `┄ external ┄`  | out-of-project panes (scripts, CI, stray shells) |
@@ -252,6 +253,17 @@ The worktree header carries the worktree's git story on the right: the `⇡`/`�
 ```
 
 The `external` block is the catch-all for panes outside the project — untethered scripts, CI, stray shells. It renders as a dim divider rather than a worktree header, sorts last unless it holds something waiting, and keeps an attention-only `? n` / `! n` tally so an out-of-project ask still surfaces.
+
+A [directory room](../reference/cli.md#start-and-attach-a-workspace) groups the same way with its child repos as the pods: each child repo keeps the full `⑂` header with its own per-repo git story, while the panes the room root itself holds sit under a **name-only header** — the directory's basename in bold, no fork glyph, no git cluster, because a plain directory has neither a fork nor a trunk to measure against. It is still a jump target and still wears the selection lane.
+
+```
+▏⑂ query-engine ┄┄┄┄┄┄┄┄┄┄ ⇡2  +12 -3    ← a child repo: full pod header, per-repo stats
+▌⣾ claude
+▌  db migrate
+
+ agents                                  ← the room's own pod: name-only, no git story
+ ○ zsh
+```
 
 **Ranking is automatic: the most attention-hungry rises, nothing else moves.** Within a worktree, rows sort `waiting → failed → done → working → idle` (a parked idle agent is the least needy, so it settles to the bottom — which is exactly where a freshly-launched agent appears). Attention rows sort oldest-first, so the longest-overdue is always on top. Worktrees themselves sort by their most-urgent member.
 

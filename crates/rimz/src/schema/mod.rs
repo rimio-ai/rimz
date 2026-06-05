@@ -10,5 +10,10 @@ pub mod heartbeat;
 // intent folded through `agents::lifecycle::step`) in place of the legacy bare
 // `status` + `compacting`. The reducer tolerantly decodes either form.
 pub const EVENT_SCHEMA_VERSION: &str = "rimz.event.v2";
-pub const SIDEBAR_PROTOCOL_VERSION: &str = "rimz.plugin.v3";
+// v4: the snapshot view-model carries `root_class`, and the worktree-group
+// kind vocabulary is `worktree`/`root`/`external` (the catch-all renamed from
+// `workspace`). The version gate keeps a mixed-version fleet from honouring
+// each other's elders mid-upgrade; a consumer that cannot parse a published
+// snapshot already falls back to its own produce.
+pub const SIDEBAR_PROTOCOL_VERSION: &str = "rimz.plugin.v4";
 pub const RESOLVER_PROTOCOL_VERSION: &str = "rimz.resolver.v1";

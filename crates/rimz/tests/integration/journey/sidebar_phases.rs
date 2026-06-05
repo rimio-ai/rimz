@@ -283,6 +283,71 @@ fn phase4_fleet_groups_and_tallies() {
     );
 }
 
+/// A fleet room end to end: the harness room root is a bare directory (class
+/// `directory`), holding one child git repo. The producer enumerates the child
+/// as a group root, so its agent renders under a `⑂` pod named for the repo,
+/// while the agent at the room root sits under the name-only root header.
+#[test]
+fn phase4_directory_room_groups_by_child_repo() {
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    let child = env.project_root.join("query-engine");
+    std::fs::create_dir_all(&child).expect("mkdir child repo");
+    let git_init = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&child)
+        .status();
+    if !git_init.map(|status| status.success()).unwrap_or(false) {
+        eprintln!("git unavailable; skipping fleet-room journey");
+        return;
+    }
+
+    let room = RoomHarness::launch(&env, MuxName::Tmux);
+    room.onboard(&["codex"]);
+    room.agent_hook(
+        "codex",
+        &session_start_at("c1", "GPT-5.5", "high", child.display().to_string(), None),
+    );
+    room.agent_hook(
+        "codex",
+        &session_start_at(
+            "r1",
+            "GPT-5.5",
+            "low",
+            env.project_root.display().to_string(),
+            None,
+        ),
+    );
+
+    let screen = room.wait_for(
+        |s| s.contains("⑂ query-engine") && s.matches("○ codex").count() == 2,
+        SETTLE,
+    );
+    assert!(
+        screen.contains("⑂ query-engine"),
+        "the child repo mints a fork-glyph pod named for the repo:\n{screen}"
+    );
+    assert!(
+        !screen.contains("⑂ project"),
+        "the room's own pod is name-only — no fork glyph on a plain directory:\n{screen}"
+    );
+    // The root header line: the pod label after the gutter/seal chrome, on a
+    // line that is neither the cockpit title (`⌘ project`) nor a `⑂` pod.
+    let root_header = screen.lines().any(|line| {
+        !line.contains('⌘')
+            && !line.contains('⑂')
+            && line
+                .trim_start_matches(|c: char| !c.is_alphanumeric())
+                .starts_with("project")
+    });
+    assert!(
+        root_header,
+        "the room root renders its name-only header:\n{screen}"
+    );
+}
+
 /// Within a worktree, the most attention-hungry rises: a `waiting` row sorts
 /// above a calm agent in the same group. (Implemented — independent of the
 /// idle/running mechanics, since both calm statuses outrank `waiting`.)

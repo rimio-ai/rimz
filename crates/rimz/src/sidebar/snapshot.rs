@@ -323,15 +323,25 @@ pub fn cached_worktree_roots(runtime: &RuntimePaths) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// The worktree path a group's rows share, if any. The group key may carry a
-/// branch suffix (a path that holds more than one branch), so the bare path is
-/// recovered from the rows — every row in a group shares it.
+/// The checkout path a group's git reads run against. A path-keyed group —
+/// per-path or root-keyed — carries it as the key's first line (the key may
+/// carry a `\n<branch>` suffix when one path holds two branches), which is
+/// stabler than any one row's cwd: a root-keyed pod's rows can sit in
+/// different subdirs of one checkout. A non-path key (`branch:…`, the
+/// `external` catch-all) falls back to the rows' shared path.
 fn worktree_group_path(group: &SidebarWorktreeGroup) -> Option<&str> {
     group
-        .rows
-        .iter()
-        .find_map(|row| row.worktree_path.as_deref())
-        .filter(|path| !path.is_empty())
+        .key
+        .split('\n')
+        .next()
+        .filter(|key| Path::new(key).is_absolute())
+        .or_else(|| {
+            group
+                .rows
+                .iter()
+                .find_map(|row| row.worktree_path.as_deref())
+                .filter(|path| !path.is_empty())
+        })
 }
 
 /// The live worktree paths this snapshot needs git facts for: a `Worktree`-kind

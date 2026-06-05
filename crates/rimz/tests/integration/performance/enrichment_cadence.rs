@@ -10,6 +10,8 @@
 //! its produce arm, where `enrich_pane_metrics` lives. Its skip/due behaviour
 //! is pinned by the unit gates in `cli::sidebar::tests` (`metrics_*`).
 
+#![allow(clippy::print_stderr)] // self-skip notices, like the sibling fixture
+
 use rimz::sidebar::snapshot::unix_now_ms;
 
 use super::sidebar_diff_stats::Fixture;
@@ -17,16 +19,22 @@ use super::sidebar_diff_stats::Fixture;
 /// `git worktree list` runs once per `WORKTREE_ROOTS_TTL`, except that a
 /// session boundary — a produce carrying the `--min-pane-cache-ms` freshness
 /// floor — refuses the cached enumeration even inside the TTL, so a brand-new
-/// checkout groups correctly on its first agent's first snapshot. The probe
-/// failing on the non-git project root is the documented degraded mode; the
-/// fork count is the cadence witness either way.
+/// checkout groups correctly on its first agent's first snapshot. The fork
+/// under witness is the repo room's enumeration, so the room root must be a
+/// repo: a bare root records as a directory room, whose enumeration is one
+/// `read_dir` and forks no git (pinned by
+/// `directory_room_enumeration_forks_no_git`).
 #[test]
 fn worktree_roots_reenumerate_on_session_boundary_only() {
     let Some(fixture) = Fixture::new() else {
         return;
     };
+    if !fixture.init_repo_room() {
+        eprintln!("git init failed; skipping enumeration-cadence test");
+        return;
+    }
     // The enumeration runs only for a recorded workspace (the snapshot's
-    // `project_root` feeds it).
+    // `project_root` feeds it), and the record carries the root class.
     fixture.env.record(&fixture.env.project_root);
 
     let cold = fixture.run_snapshot();
@@ -66,6 +74,37 @@ fn worktree_roots_reenumerate_on_session_boundary_only() {
         fixture.git_forks("worktree\tlist"),
         2,
         "the freshness floor refuses the cached enumeration and re-runs it:\n{}",
+        fixture.git_log_contents(),
+    );
+}
+
+/// A directory room's group-root enumeration is one `read_dir`: the cold
+/// produce discovers the depth-1 child repo and pays its diff-stats chain,
+/// but never forks `git worktree list` — the fixture's bare room root records
+/// as a directory room, and the child repo at `<root>/worktree` is its one
+/// depth-1 child.
+#[test]
+fn directory_room_enumeration_forks_no_git() {
+    let Some(fixture) = Fixture::new() else {
+        return;
+    };
+    fixture.env.record(&fixture.env.project_root);
+
+    let cold = fixture.run_snapshot();
+    assert!(
+        cold.status.success(),
+        "cold snapshot failed:\n{}",
+        String::from_utf8_lossy(&cold.stderr),
+    );
+    assert_eq!(
+        fixture.git_forks("worktree\tlist"),
+        0,
+        "a directory room enumerates by read_dir, never `git worktree list`:\n{}",
+        fixture.git_log_contents(),
+    );
+    assert!(
+        fixture.git_forks("rev-parse") >= 1,
+        "the child-repo pod still pays its diff-stats probes:\n{}",
         fixture.git_log_contents(),
     );
 }

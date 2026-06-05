@@ -25,6 +25,13 @@ use crate::ledger::agent_context::AgentContextRecord;
 use crate::ledger::event_log::{self};
 use crate::ledger::subagent_context::SubagentContextRecord;
 use crate::schema::event::EventEnvelope;
+use crate::workspace::RootClass;
+
+/// Serde default for [`SidebarSnapshot::root_class`]: `Repo` keeps a pre-class
+/// snapshot (and the pure reducer path) on the prior repo-room grouping.
+fn default_root_class() -> RootClass {
+    RootClass::Repo
+}
 
 /// Sidebar view-model. The worktree groups are the renderer contract:
 /// grouping, attention ranking, caps, status tallies, and row metadata are
@@ -111,6 +118,14 @@ pub struct SidebarSnapshot {
     /// it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub worktree_roots: Vec<PathBuf>,
+    /// The room root's class from the workspace record. Grouping reads it to
+    /// give a non-repo room's root pod the name-only [`SidebarWorktreeKind::Root`]
+    /// kind while a repo room's own checkout keeps per-path pods. Like
+    /// `project_root`, workspace identity the reducer can't read from the
+    /// ledger: the pure path and any pre-class snapshot default to `Repo`
+    /// (the prior behavior) and the producing reads fill it from the record.
+    #[serde(default = "default_root_class")]
+    pub root_class: RootClass,
     /// Per-machine sidebar display preferences (the attention-redden window and
     /// the per-provider dashboard styling). Like `project_root`, this is machine
     /// state the pure reducer can't read, so the reducer leaves it default and the
@@ -196,8 +211,15 @@ impl SidebarProviderPanel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SidebarWorktreeKind {
+    /// A group root with a git story: a repo room's worktree checkout or a
+    /// directory room's child repo. Carries the header's diff/commit cluster.
     Worktree,
-    Workspace,
+    /// A non-repo room's own pod — panes at the root and in non-repo subdirs.
+    /// Name-only header; excluded from every git read.
+    Root,
+    /// The out-of-project catch-all: untethered scripts/CI and shells whose
+    /// cwd is outside every group root. Renders as the dim `external` divider.
+    External,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -590,11 +612,19 @@ impl SidebarSnapshot {
         }
 
         let display_name = workspace_id.as_str().to_owned();
-        // The pure reducer has no project root or worktree set, so every cwd
-        // keeps per-path grouping here; callers that know them re-fold via
-        // `with_project_root` / `with_worktree_roots`.
-        let worktree_groups =
-            build_worktree_groups(&agents, &needs_attention, &resolver_working, None, &[], now);
+        // The pure reducer has no project root, worktree set, or root class,
+        // so every cwd keeps per-path grouping here; callers that know them
+        // re-fold via `with_project_root` / `with_worktree_roots` /
+        // `with_root_class`.
+        let worktree_groups = build_worktree_groups(
+            &agents,
+            &needs_attention,
+            &resolver_working,
+            None,
+            &[],
+            default_root_class(),
+            now,
+        );
 
         Self {
             workspace_id,
@@ -611,6 +641,7 @@ impl SidebarSnapshot {
             only_daemon_view_remains: false,
             project_root: None,
             worktree_roots: Vec::new(),
+            root_class: default_root_class(),
             sidebar: crate::config::SidebarConfig::default(),
             providers: Vec::new(),
             value_tally: None,
@@ -627,6 +658,7 @@ impl SidebarSnapshot {
             &self.resolver_working,
             self.project_root.as_deref(),
             &self.worktree_roots,
+            self.root_class,
             self.now,
         );
     }
@@ -649,6 +681,17 @@ impl SidebarSnapshot {
     /// construction; the pure path leaves it empty.
     pub fn with_worktree_roots(mut self, worktree_roots: Vec<PathBuf>) -> Self {
         self.worktree_roots = worktree_roots;
+        self.rebuild_groups();
+        self
+    }
+
+    /// Record the room root's class and re-fold groups so a non-repo room's
+    /// root pod takes the name-only [`SidebarWorktreeKind::Root`] kind. Like
+    /// `with_project_root`, filled from the workspace record after
+    /// construction (the reducer can't read it); the pure path keeps the
+    /// `Repo` default.
+    pub fn with_root_class(mut self, root_class: RootClass) -> Self {
+        self.root_class = root_class;
         self.rebuild_groups();
         self
     }
@@ -942,6 +985,7 @@ impl SidebarSnapshot {
             &self.agents,
             self.project_root.as_deref(),
             &self.worktree_roots,
+            self.root_class,
             self.now,
         );
         self
@@ -1353,10 +1397,11 @@ fn build_worktree_groups(
     resolver_working: &[FeedItem],
     project_root: Option<&Path>,
     worktree_roots: &[PathBuf],
+    root_class: RootClass,
     now: Timestamp,
 ) -> Vec<SidebarWorktreeGroup> {
     let rows = rows_from_ledger(agents, needs_attention, resolver_working, now);
-    build_worktree_groups_from_rows(rows, agents, project_root, worktree_roots, now)
+    build_worktree_groups_from_rows(rows, agents, project_root, worktree_roots, root_class, now)
 }
 
 /// One pane = one row, by construction. Every live pane anchors exactly one
@@ -1584,6 +1629,7 @@ fn build_worktree_groups_from_rows(
     agents: &[AgentState],
     project_root: Option<&Path>,
     worktree_roots: &[PathBuf],
+    root_class: RootClass,
     now: Timestamp,
 ) -> Vec<SidebarWorktreeGroup> {
     // Nest each subagent under its parent root row before grouping. This is the
@@ -1634,6 +1680,7 @@ fn build_worktree_groups_from_rows(
             split_by_branch,
             project_root,
             worktree_roots,
+            root_class,
         );
         by_group
             .entry(key)
@@ -1649,8 +1696,13 @@ fn build_worktree_groups_from_rows(
             // a branched agent row with a branchless process/attention row, and
             // every branched row in a group shares one branch (a path with two
             // is split above), so any branch is the right, order-independent
-            // label.
-            let label = group_branch_label(&rows).unwrap_or(label);
+            // label. The root pod keeps its directory name — a non-repo root
+            // has no branch, so a stale branched row must not rename the room.
+            let label = if kind == SidebarWorktreeKind::Root {
+                label
+            } else {
+                group_branch_label(&rows).unwrap_or(label)
+            };
             let status_counts = status_counts(&rows);
             let total = rows.len();
             rows = capped_rows(rows);
@@ -2192,37 +2244,61 @@ fn worktree_group_key(
     split_by_branch: bool,
     project_root: Option<&Path>,
     worktree_roots: &[PathBuf],
+    root_class: RootClass,
 ) -> (SidebarWorktreeKind, String, String) {
     let branch = branch.filter(|branch| !branch.is_empty());
     if let Some(path) = path.filter(|path| !path.is_empty()) {
-        // A cwd is one of the project's worktrees when it is under the main
-        // checkout *or* inside any worktree `git worktree list` reported —
-        // including a worktree parked outside `project_root`. Only a cwd that is
-        // neither (a home shell, `/tmp`, CI) folds into the `external` catch-all
-        // rather than minting its own pod. With no known root and no enumerated
-        // worktrees, every path keeps per-path grouping.
+        // A cwd belongs to the *deepest* group root that contains it: the room
+        // root or any enumerated group root — a repo room's worktree checkouts
+        // (`git worktree list`, including one parked outside `project_root`)
+        // or a directory room's child repos. Keying on the matched root is
+        // what folds every pane of one checkout into one pod. Two cases keep
+        // per-path pods: a repo room's own checkout (so a nested worktree the
+        // enumeration hasn't caught up with never folds into the main pod),
+        // and a snapshot with no known root and no enumerated roots. A cwd
+        // outside every root (a home shell, `/tmp`, CI) falls through to the
+        // `external` catch-all.
         let cwd = Path::new(path);
-        let in_project = match project_root {
-            Some(root) => is_within(root, cwd) || worktree_roots.iter().any(|w| is_within(w, cwd)),
-            None => worktree_roots.is_empty() || worktree_roots.iter().any(|w| is_within(w, cwd)),
+        let matched = worktree_roots
+            .iter()
+            .map(PathBuf::as_path)
+            .chain(project_root)
+            .filter(|root| is_within(root, cwd))
+            .max_by_key(|root| root.components().count());
+        let per_path = match matched {
+            Some(root) => project_root == Some(root) && root_class == RootClass::Repo,
+            None => project_root.is_none() && worktree_roots.is_empty(),
         };
-        if in_project {
-            let label = branch.map(ToOwned::to_owned).unwrap_or_else(|| {
-                Path::new(path)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or(path)
-                    .to_owned()
-            });
+        if per_path {
+            let label = branch
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| path_basename(cwd));
             // Disambiguate the key by branch only for a path that holds more
             // than one — a newline can appear in neither a path nor a branch, so
             // it is an unambiguous separator. `enrich_worktree_groups` recovers
-            // the bare path from the rows, not the key, so the split never
+            // the bare path from the key's first line, so the split never
             // breaks git reads.
             let key = match branch.filter(|_| split_by_branch) {
                 Some(branch) => format!("{path}\n{branch}"),
                 None => path.to_owned(),
+            };
+            return (SidebarWorktreeKind::Worktree, key, label);
+        }
+        if let Some(root) = matched {
+            let root_key = root.to_string_lossy().into_owned();
+            // The room root of a non-repo room: one name-only pod for panes at
+            // the root and in non-repo subdirs. Branches never split or label
+            // it — a non-repo root has no git story to disagree about.
+            if project_root == Some(root) {
+                let label = path_basename(root);
+                return (SidebarWorktreeKind::Root, root_key, label);
+            }
+            let label = branch
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| path_basename(root));
+            let key = match branch.filter(|_| split_by_branch) {
+                Some(branch) => format!("{root_key}\n{branch}"),
+                None => root_key,
             };
             return (SidebarWorktreeKind::Worktree, key, label);
         }
@@ -2234,14 +2310,24 @@ fn worktree_group_key(
             branch.to_owned(),
         );
     }
-    // Catch-all: untethered scripts/CI and out-of-project shells. The stable
-    // grouping key stays `workspace`; the header reads `external` so it reads
-    // as "outside the project."
+    // Catch-all: untethered scripts/CI and out-of-project shells. `external`
+    // is both the stable grouping key and the header label, so it reads as
+    // "outside the project."
     (
-        SidebarWorktreeKind::Workspace,
-        "workspace".to_owned(),
+        SidebarWorktreeKind::External,
+        "external".to_owned(),
         "external".to_owned(),
     )
+}
+
+/// The display basename of a group root, falling back to the full path for a
+/// root with no final component (`/`).
+fn path_basename(root: &Path) -> String {
+    root.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| root.to_string_lossy().into_owned())
 }
 
 /// True when `path` is `root` itself or nested under it, compared by path
@@ -2389,7 +2475,7 @@ fn group_tier(group: &SidebarWorktreeGroup) -> u8 {
 }
 
 fn group_is_external(group: &SidebarWorktreeGroup) -> bool {
-    group.kind == SidebarWorktreeKind::Workspace
+    group.kind == SidebarWorktreeKind::External
 }
 
 /// The group's earliest member [`spawn_key`] — the same durable key the

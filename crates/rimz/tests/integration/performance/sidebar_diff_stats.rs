@@ -127,6 +127,21 @@ impl Fixture {
             .expect("spawn rimz sidebar snapshot")
     }
 
+    /// Make the room root itself a git repo, so a subsequent
+    /// [`Env::record`](crate::common::Env::record) classifies the workspace as
+    /// a repo room and the produce enumerates checkouts with `git worktree
+    /// list`. The bare root records as a directory room, whose enumeration is
+    /// one `read_dir` and forks no git at all.
+    pub(crate) fn init_repo_room(&self) -> bool {
+        Command::new(&self.real_git)
+            .arg("-C")
+            .arg(&self.env.project_root)
+            .args(["init", "-q", "-b", "main"])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
     /// A read-only consumer snapshot: the same command plus `--no-produce`, the
     /// flag a younger per-tab renderer passes so it renders from the elder's
     /// published cache and never forks `list-panes`/git.

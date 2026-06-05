@@ -100,6 +100,10 @@ That's the loop. Every other feature in Rimz is a variation on those primitives.
 
 Rimz groups panes by worktree, so a fleet spread across `../query-engine` (main), `../query-engine-feature-migration`, and `../query-engine-feature-frontend` renders as three groups inside one room. Agents in the same worktree share file space; sibling worktrees keep their own. The sidebar shows you which worktree each agent is in. Two write-capable agents in the *same* worktree trigger a one-time advisory; running them in *sibling* worktrees is the recommended pattern.
 
+## Many repos, one room — the fleet room
+
+A room doesn't need a repo. Run `rimz start` in any directory — `~/code` holding a dozen clones, or a headless server with agents and no source control at all — and that directory is the room ([directory workspace](../reference/cli.md#start-and-attach-a-workspace)). Each child repo renders as its own pod with its own branch label and per-repo churn, exactly like a worktree pod; panes at the root sit under a name-only header; a scratch directory with no repos is simply one flat group. One sidebar triages the whole machine: an agent blocking in `~/code/query-engine` surfaces in the `~/code` room's feed, and the jump takes you to its pane.
+
 ## Survive overnight, survive reboot
 
 The workspace and its ledger outlive the terminal session. Two things a long-running agent run depends on:

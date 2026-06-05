@@ -181,6 +181,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         only_daemon_view_remains: false,
         project_root: Some(std::path::PathBuf::from("/repo")),
         worktree_roots: Vec::new(),
+        root_class: rimz::workspace::RootClass::Repo,
         sidebar: rimz::config::SidebarConfig::default(),
         providers: (0..providers).map(provider_panel).collect(),
         value_tally: None,

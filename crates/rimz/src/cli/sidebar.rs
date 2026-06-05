@@ -21,7 +21,7 @@ use rimz::sidebar::snapshot::{
     hot_worktree_paths, needed_worktree_paths, project_diff_stats, read_diff_stats_cache,
     read_published_snapshot, read_snapshot_cache, unix_now_ms,
 };
-use rimz::workspace::WorkspaceResolver;
+use rimz::workspace::{RootClass, WorkspaceResolver};
 use rimz::{Ledger, RuntimePaths, StatePaths};
 
 #[derive(Debug, Args)]
@@ -212,14 +212,17 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 (None, _) => (ledger.snapshot()?, None),
             };
 
-            // Enumerate the repo's worktrees so a checkout parked outside the
-            // project root still earns its own pod instead of folding into
-            // `external`. The git probe is cached under WORKTREE_ROOTS_TTL —
-            // refused below the session-boundary freshness floor, so a new
-            // worktree's first agent re-enumerates immediately — and runs on
-            // this fetch worker, never the render thread.
+            // Enumerate the room's group roots — a repo room's worktree
+            // checkouts (so one parked outside the project root still earns
+            // its own pod instead of folding into `external`), a directory
+            // room's depth-1 child repos. The probe is cached under
+            // WORKTREE_ROOTS_TTL — refused below the session-boundary
+            // freshness floor, so a new checkout's first agent re-enumerates
+            // immediately — and runs on this fetch worker, never the render
+            // thread.
             if let Some(root) = snapshot.project_root.clone() {
-                let roots = project_worktree_roots(&root, runtime, min_pane_cache_ms);
+                let roots =
+                    project_group_roots(&root, snapshot.root_class, runtime, min_pane_cache_ms);
                 snapshot = snapshot.with_worktree_roots(roots);
             }
 
@@ -988,14 +991,20 @@ fn trunk_ref(worktree: &Path, configured: Option<&str>) -> Option<String> {
     )
 }
 
-/// The repo's worktree checkout roots, so a worktree parked outside the project
-/// root still groups as project-related instead of folding into `external`.
-/// Cached under the diff-stats TTL: the worktree set changes only on `git
-/// worktree add/remove`, so re-forking `git worktree list` every tick would be
-/// pure overhead. Empty on a non-git project or a git probe failure, which
+/// The room's group roots, so a checkout parked outside the project root still
+/// groups as project-related instead of folding into `external` and a fleet
+/// room's child repos each earn their own pod. Cached under
+/// `WORKTREE_ROOTS_TTL`: the set changes only on `git worktree add/remove` or
+/// a repo appearing under the room, so re-probing every tick would be pure
+/// overhead. The cache slot is shared across root classes, and that is sound:
+/// the persisted class flips only with a workspace re-record — a session
+/// boundary, whose freshness floor refuses the cached set — so a stale
+/// other-class enumeration never outlives the produce that learns the new
+/// class. Empty on a marker-less scratch room or a probe failure, which
 /// leaves the reducer's `project_root` prefix test to stand alone.
-fn project_worktree_roots(
+fn project_group_roots(
     project_root: &Path,
+    root_class: RootClass,
     runtime: &RuntimePaths,
     min_refreshed_at_ms: Option<u64>,
 ) -> Vec<PathBuf> {
@@ -1016,7 +1025,7 @@ fn project_worktree_roots(
     {
         return cached.roots.clone();
     }
-    let roots = list_worktree_roots(project_root);
+    let roots = list_group_roots(project_root, root_class);
     cache.worktrees = Some(WorktreeRootsCache {
         refreshed_at_ms: now_ms,
         roots: roots.clone(),
@@ -1025,6 +1034,24 @@ fn project_worktree_roots(
         tracing::warn!(path = %cache_path.display(), error = %err, "sidebar worktree-roots cache write failed");
     }
     roots
+}
+
+/// Enumerate group roots by the room root's class: a repo room reports its
+/// worktree checkouts, a directory room its depth-1 child repos. A marker room
+/// follows whichever its root actually is — `.git` at the root means repo
+/// semantics (the persisted class lags one re-record behind a `git init`).
+fn list_group_roots(project_root: &Path, root_class: RootClass) -> Vec<PathBuf> {
+    match root_class {
+        RootClass::Repo => list_worktree_roots(project_root),
+        RootClass::Directory => list_child_repo_roots(project_root),
+        RootClass::Marker => {
+            if project_root.join(".git").exists() {
+                list_worktree_roots(project_root)
+            } else {
+                list_child_repo_roots(project_root)
+            }
+        }
+    }
 }
 
 /// Parse `git -C <root> worktree list --porcelain` into the absolute checkout
@@ -1047,6 +1074,25 @@ fn list_worktree_roots(project_root: &Path) -> Vec<PathBuf> {
         .filter_map(|line| line.strip_prefix("worktree "))
         .map(|path| PathBuf::from(path.trim()))
         .collect()
+}
+
+/// A directory room's depth-1 child repos: one `read_dir`, a child qualifies
+/// when `<child>/.git` exists as a directory or a file (a linked worktree or
+/// submodule checkout writes a `.git` pointer file). Deeper repos fold into
+/// the room's root pod — the v1 depth rule. Best-effort: an unreadable room
+/// root yields no child pods rather than an error, and the result is sorted
+/// so the cache and the reducer see a stable set.
+fn list_child_repo_roots(project_root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(project_root) else {
+        return Vec::new();
+    };
+    let mut roots: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|child| child.join(".git").exists())
+        .collect();
+    roots.sort();
+    roots
 }
 
 /// Run `git -C <worktree> <args>` and return its stdout's first non-empty line,

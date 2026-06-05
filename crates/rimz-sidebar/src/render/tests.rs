@@ -661,6 +661,49 @@ fn process_rows_dim_a_step_below_agent_cards() {
 }
 
 #[test]
+fn render_directory_room_root_pod_is_name_only() {
+    // A directory room: the child repo keeps the full `⑂` pod header with its
+    // git cluster, while the room's own pod renders name-only — no fork
+    // glyph, no git story — and still anchors its rows.
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/srv/agents/query-engine"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    let stamped = pane("%1", "claude", "/srv/agents/query-engine");
+    claude.pane = Some(stamped.clone());
+    let shell = pane("%2", "zsh", "/srv/agents");
+    let mut snapshot = snapshot_with(Vec::new(), vec![claude])
+        .with_root_class(rimz::workspace::RootClass::Directory)
+        .with_project_root(Some("/srv/agents".into()))
+        .with_worktree_roots(vec!["/srv/agents/query-engine".into()])
+        .with_live_panes(vec![stamped, shell], None);
+    let child = snapshot
+        .worktree_groups
+        .iter_mut()
+        .find(|group| group.kind == rimz::SidebarWorktreeKind::Worktree)
+        .expect("the child repo pod");
+    child.diff_added = Some(12);
+    child.diff_removed = Some(3);
+    child.commits_ahead = Some(2);
+
+    let rendered = snapshot_to_screen(&snapshot, 44, 18);
+
+    assert!(
+        rendered.contains("⑂ main"),
+        "the child repo keeps the fork-glyph pod header:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("agents") && !rendered.contains("⑂ agents"),
+        "the room's own pod is name-only:\n{rendered}"
+    );
+    assert_snapshot("directory_room_root_pod", rendered);
+}
+
+#[test]
 fn render_worktree_equal_to_trunk() {
     // A fully-landed worktree — zero commits ahead, zero diff against the
     // fork point — collapses the header's git cluster to `≡ <trunk>`:

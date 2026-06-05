@@ -1,0 +1,23 @@
+---
+source: crates/rimz-sidebar/src/render/tests.rs
+assertion_line: 83
+expression: screen
+---
+ ⌘ query-engine                 /srv/agents
+
+ ◎ 0
+ ¤ 1
+ ──────────────────────────────────────────
+ ? 0   ! 0   ○ 0   ⏸︎ 0           ⢿ 1   ✓ 0
+
+▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡2  +12 -3
+▌⣾ claude
+▌  db migrate
+▌  ▢ ────────────────────────────────    0%
+
+ agents
+ ○ zsh
+
+
+
+                 ? for help

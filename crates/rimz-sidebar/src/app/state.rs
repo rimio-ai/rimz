@@ -70,6 +70,7 @@ pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot
         only_daemon_view_remains: false,
         project_root: None,
         worktree_roots: Vec::new(),
+        root_class: rimz::workspace::RootClass::Repo,
         sidebar: rimz::config::SidebarConfig::default(),
         providers: Vec::new(),
         value_tally: None,

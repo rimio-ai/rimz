@@ -266,7 +266,7 @@ mod tests {
     fn ledger_delta_envelope_decodes_to_ledger() {
         // The real wire shape `wake_sidebars` posts is a JSON object.
         let envelope =
-            br#"{"kind":"ledger_delta","workspace_id":"ws_x","protocol_version":"rimz.plugin.v3"}"#;
+            br#"{"kind":"ledger_delta","workspace_id":"ws_x","protocol_version":"rimz.plugin.v4"}"#;
         assert_eq!(
             decode_wakeup(envelope),
             Wakeup::Ledger { fresh_panes: false }
@@ -276,10 +276,10 @@ mod tests {
 
     #[test]
     fn agent_session_boundary_ledger_delta_requests_fresh_panes() {
-        let start = br#"{"kind":"ledger_delta","event_method":"agent.lifecycle","agent_event_name":"SessionStart","protocol_version":"rimz.plugin.v3"}"#;
+        let start = br#"{"kind":"ledger_delta","event_method":"agent.lifecycle","agent_event_name":"SessionStart","protocol_version":"rimz.plugin.v4"}"#;
         assert_eq!(decode_wakeup(start), Wakeup::Ledger { fresh_panes: true });
 
-        let status = br#"{"kind":"ledger_delta","event_method":"agent.lifecycle","agent_event_name":"UserPromptSubmit","protocol_version":"rimz.plugin.v3"}"#;
+        let status = br#"{"kind":"ledger_delta","event_method":"agent.lifecycle","agent_event_name":"UserPromptSubmit","protocol_version":"rimz.plugin.v4"}"#;
         assert_eq!(decode_wakeup(status), Wakeup::Ledger { fresh_panes: false });
     }
 

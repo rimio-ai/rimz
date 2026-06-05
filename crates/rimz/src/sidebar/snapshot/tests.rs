@@ -1058,7 +1058,7 @@ fn worktree_group(path: &Path, rows: Vec<crate::SidebarRow>) -> crate::SidebarWo
 
 /// The hot set, boundary-exact at `GIT_ACTIVITY_WINDOW`: running rows are hot
 /// regardless of activity age, recent activity is hot through exactly the
-/// window, process-only and `Workspace`-kind groups are cold, and a dead dir
+/// window, process-only and `External`-kind groups are cold, and a dead dir
 /// is excluded just as `needed_worktree_paths` excludes it.
 #[test]
 fn hot_worktree_paths_keys_on_running_or_recent_agent_rows() {
@@ -1077,7 +1077,7 @@ fn hot_worktree_paths_keys_on_running_or_recent_agent_rows() {
     let boundary = wt("boundary");
     let idle = wt("idle");
     let procs = wt("procs");
-    let workspace_kind = wt("workspace-kind");
+    let external_kind = wt("external-kind");
     let dead = dir.path().join("dead-dir");
 
     let mut snapshot = SidebarSnapshot::build(
@@ -1135,18 +1135,18 @@ fn hot_worktree_paths_keys_on_running_or_recent_agent_rows() {
                 &procs,
             )],
         ),
-        // A Workspace-kind group never reaches the git refresh.
+        // An External-kind group never reaches the git refresh.
         {
             let mut group = worktree_group(
-                &workspace_kind,
+                &external_kind,
                 vec![activity_row(
                     crate::SidebarRowKind::Agent,
                     Some(AgentStatus::Running),
                     now,
-                    &workspace_kind,
+                    &external_kind,
                 )],
             );
-            group.kind = crate::SidebarWorktreeKind::Workspace;
+            group.kind = crate::SidebarWorktreeKind::External;
             group
         },
         // A running agent in a since-removed dir: hot ⊆ needed, so excluded.
@@ -1175,7 +1175,7 @@ fn hot_worktree_paths_keys_on_running_or_recent_agent_rows() {
         !hot.contains(&path_of(&procs)),
         "process rows carry no heat"
     );
-    assert!(!hot.contains(&path_of(&workspace_kind)));
+    assert!(!hot.contains(&path_of(&external_kind)));
     assert!(!hot.contains(&path_of(&dead)), "hot is a subset of needed");
     assert_eq!(hot.len(), 3);
 }
@@ -1203,4 +1203,39 @@ fn hot_worktree_paths_treats_future_activity_as_hot() {
     )];
 
     assert!(hot_worktree_paths(&snapshot).contains(&dir.path().display().to_string()));
+}
+
+#[test]
+fn root_pod_is_excluded_from_git_reads() {
+    // The root pod of a non-repo room is a known non-repo: it never enters
+    // the producer's git fan-out, while child-repo pods do.
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let child = dir.path().join("query-engine");
+    std::fs::create_dir_all(&child).unwrap();
+    let root_cwd = dir.path().to_string_lossy().into_owned();
+    let child_cwd = child.to_string_lossy().into_owned();
+
+    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now())
+        .with_root_class(crate::workspace::RootClass::Directory)
+        .with_project_root(Some(dir.path().to_path_buf()))
+        .with_worktree_roots(vec![child.clone()])
+        .with_live_panes(
+            vec![
+                pane("terminal_0", "zsh", &root_cwd),
+                pane("terminal_1", "claude", &child_cwd),
+            ],
+            None,
+        );
+
+    let kinds: Vec<SidebarWorktreeKind> = snapshot
+        .worktree_groups
+        .iter()
+        .map(|group| group.kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![SidebarWorktreeKind::Root, SidebarWorktreeKind::Worktree]
+    );
+    assert_eq!(needed_worktree_paths(&snapshot), vec![child_cwd]);
 }

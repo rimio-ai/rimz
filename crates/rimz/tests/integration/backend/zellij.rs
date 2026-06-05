@@ -1796,7 +1796,7 @@ fn wake_sidebar_pipe_invocation_succeeds() {
     let name = unique_session_name("pipe");
     let session = ZellijSession::spawn(&name);
 
-    let payload = br#"{"kind":"ledger_delta","workspace_id":"ws_test","request_id":"req_test","protocol_version":"rimz.plugin.v3"}"#;
+    let payload = br#"{"kind":"ledger_delta","workspace_id":"ws_test","request_id":"req_test","protocol_version":"rimz.plugin.v4"}"#;
     ZellijBackend::with_runtime_dir(session.xdg.path())
         .wake_sidebar(&name, payload)
         .expect("wake_sidebar succeeds against a live zellij session");

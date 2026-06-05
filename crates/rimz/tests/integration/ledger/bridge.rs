@@ -234,7 +234,10 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
         parsed["workspace_id"],
         serde_json::to_value(&h.workspace_id).expect("ws json"),
     );
-    assert_eq!(parsed["protocol_version"], "rimz.plugin.v3");
+    assert_eq!(
+        parsed["protocol_version"],
+        rimz::schema::SIDEBAR_PROTOCOL_VERSION
+    );
 
     let mut buf2 = [0u8; 4096];
     let stale_result = stale_recv.recv_from(&mut buf2);
