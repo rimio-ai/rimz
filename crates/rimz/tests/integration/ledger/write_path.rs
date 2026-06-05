@@ -55,6 +55,13 @@ fn log_len(h: &crate::common::Harness) -> u64 {
         .unwrap_or(0)
 }
 
+/// Drop the checkpoint cadence stamp so the next write tail publishes —
+/// the test-side lever for asserting what a due publish reflects, the same
+/// way tests age `abandon-sweep.stamp` to force the sweep.
+fn force_next_publish(h: &crate::common::Harness) {
+    let _ = std::fs::remove_file(h.ledger.paths().locks_dir.join("publish.stamp"));
+}
+
 #[test]
 fn resolve_leaves_latest_reflecting_the_resolve_event() {
     // Stage A regression: the publish must reflect the resolve's own event
@@ -70,6 +77,9 @@ fn resolve_leaves_latest_reflecting_the_resolve_event() {
     );
     let request_id = item.request_id.clone();
     h.ledger.push_feed_item(&item, "rimz-test").expect("push");
+    // Make the resolve's tail due (the push seeded the cadence stamp): the
+    // subject is what a publish reflects when it runs, not the cadence.
+    force_next_publish(&h);
     h.ledger
         .resolve_feed_item(
             &request_id,
@@ -80,7 +90,7 @@ fn resolve_leaves_latest_reflecting_the_resolve_event() {
         .expect("resolve");
 
     let latest = snapshot::read_fresh_latest(h.ledger.paths())
-        .expect("latest.json reflects the full log right after a resolve");
+        .expect("latest.json reflects the full log right after a due resolve");
     assert_eq!(
         latest.reflects_log.expect("stamped").offset,
         log_len(&h),
@@ -175,6 +185,9 @@ fn superseding_push_expires_priors_then_pushes_in_one_cycle() {
     h.ledger.push_feed_item(&stale, "rimz-test").expect("push");
 
     let fresh = native_ask(&h, "fresh ask", "live");
+    // Make the combined cycle's tail due; the assertion below is about what
+    // its one publish covers.
+    force_next_publish(&h);
     h.ledger
         .push_feed_item_superseding(&fresh, Some(("claude", "live")), "rimz-test")
         .expect("superseding push");
@@ -280,12 +293,27 @@ fn concurrent_writers_group_commit_the_newest_state() {
         WRITERS * PUSHES_EACH,
         "every concurrent push landed durably"
     );
-    let latest = snapshot::read_fresh_latest(h.ledger.paths())
-        .expect("after the last writer, the published view is current");
+    // Freshness is the fold's job: the lock-free read reaches the log's end
+    // no matter which tails the cadence gate skipped.
+    let snapshot = h.ledger.snapshot().expect("lock-free read");
     assert_eq!(
-        latest.reflects_log.expect("stamped").offset,
+        snapshot.reflects_log.expect("stamped").offset,
         log_len(&h),
-        "group commit: the last publisher folded to the log's end"
+        "the reader folds to the log's end regardless of checkpoint cadence"
+    );
+    // The checkpoint trails by less than the byte budget: any tail that
+    // skipped saw a smaller unpublished tail, and any that crossed the
+    // budget published (PUBLISH_BYTE_BUDGET, writer.rs).
+    let checkpoint: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&h.ledger.paths().latest_snapshot).expect("checkpoint exists"),
+    )
+    .expect("checkpoint parses");
+    let published_offset = checkpoint["reflects_log"]["offset"]
+        .as_u64()
+        .expect("stamped");
+    assert!(
+        log_len(&h) - published_offset < 64 * 1024,
+        "the unpublished tail stays under the byte budget"
     );
 }
 
@@ -604,9 +632,11 @@ fn publish_tail_self_heals_a_corrupt_event_log() {
     let hole = usize::try_from(corrupted - committed - 1).expect("hole len");
     file.write_all(&vec![0u8; hole]).expect("zero the frame");
     drop(file);
-    // Drop the fold bases so the next publish must fold the corrupt region.
+    // Drop the fold bases so the next publish must fold the corrupt region,
+    // and the cadence stamp so that publish runs in the next tail.
     let _ = std::fs::remove_file(&h.ledger.paths().rollup_cache);
     let _ = std::fs::remove_file(&h.ledger.paths().latest_snapshot);
+    force_next_publish(&h);
     assert!(
         h.ledger.runtime_projection(RuntimeScope::Runtime).is_err(),
         "a torn middle frame fails reads loudly before the heal"
@@ -635,4 +665,73 @@ fn publish_tail_self_heals_a_corrupt_event_log() {
         .append_event(&lifecycle(&h, "SessionStart", "after-the-heal"))
         .expect("post-heal append");
     assert_eq!(h.ledger.read_events().expect("post-heal read").len(), 2);
+}
+
+#[test]
+fn checkpoint_publish_is_debounced_and_reads_stay_event_fresh() {
+    // The checkpoint cadence contract: under sustained writes the publish
+    // runs at most once per interval (or per byte budget of unpublished
+    // tail), and the skips cost readers nothing — the wakeup-then-fold path
+    // is the freshness channel, the checkpoint a catch-up accelerator.
+    let h = crate::common::Harness::new();
+    let stamp = h.ledger.paths().locks_dir.join("publish.stamp");
+
+    // First mutation on a quiet workspace: no cadence stamp, so the tail
+    // publishes and seeds it.
+    h.ledger
+        .append_event(&lifecycle(&h, "SessionStart", "first"))
+        .expect("first append");
+    let first_checkpoint = log_len(&h);
+    let latest = snapshot::read_fresh_latest(h.ledger.paths()).expect("first publish lands");
+    assert_eq!(
+        latest.reflects_log.expect("stamped").offset,
+        first_checkpoint
+    );
+
+    // Pin the stamp fresh so the next tail sits mid-interval even on a
+    // stalled runner (mtime only; the stamped extent stays truthful).
+    std::fs::File::options()
+        .write(true)
+        .open(&stamp)
+        .expect("stamp exists")
+        .set_modified(std::time::SystemTime::now())
+        .expect("refresh stamp");
+    h.ledger
+        .append_event(&lifecycle(&h, "SessionStart", "second"))
+        .expect("second append");
+    assert!(
+        snapshot::read_fresh_latest(h.ledger.paths()).is_none(),
+        "inside the interval the checkpoint stays put"
+    );
+    // …while reads stay event-fresh by folding the unpublished tail.
+    let folded = h.ledger.snapshot_cached().expect("fold read");
+    assert_eq!(folded.reflects_log.expect("stamped").offset, log_len(&h));
+    let ids: Vec<&str> = folded.agents.iter().map(|a| a.agent_id.as_str()).collect();
+    assert!(
+        ids.contains(&"second"),
+        "the skipped checkpoint hides nothing: {ids:?}"
+    );
+
+    // Age the stamp past the interval: the next tail publishes.
+    std::fs::File::options()
+        .write(true)
+        .open(&stamp)
+        .expect("stamp exists")
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(2))
+        .expect("age stamp");
+    h.ledger
+        .append_event(&lifecycle(&h, "SessionStart", "third"))
+        .expect("third append");
+    let latest = snapshot::read_fresh_latest(h.ledger.paths())
+        .expect("an aged stamp makes the next tail publish");
+    assert_eq!(latest.reflects_log.expect("stamped").offset, log_len(&h));
+
+    // Crossing the byte budget escapes the interval early, bounding a cold
+    // reader's catch-up fold whatever the stamp's age.
+    let mut big = lifecycle(&h, "SessionStart", "big");
+    big.params["blob"] = serde_json::Value::String("x".repeat(70 * 1024));
+    h.ledger.append_event(&big).expect("big append");
+    let latest = snapshot::read_fresh_latest(h.ledger.paths())
+        .expect("crossing the byte budget forces an early checkpoint");
+    assert_eq!(latest.reflects_log.expect("stamped").offset, log_len(&h));
 }

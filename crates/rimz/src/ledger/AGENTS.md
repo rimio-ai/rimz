@@ -8,7 +8,7 @@ Local contract for `crates/rimz/src/ledger/` — durable workspace state. Extend
 - Cross-process serialization is the workspace lock's job: every writer is a short-lived CLI process serialized through `workspace.lock`; there is no in-process actor.
 - The helpers in [`atomic.rs`](./atomic.rs) cover every durable write — `write_temp_then_rename` for whole files, `append_record_bytes` (one `write()`, no fsync) for the event log; appended frames become durable through the write tail's debounced group fdatasync and rotation's pre-rename sync. Every fsync syscall lives in `atomic.rs` (CI grep). No module hand-rolls its own atomic dance; the event-log frame encoding lives beside its decoder in [`event_log.rs`](./event_log.rs).
 - The pending/terminal feed split is load-bearing: a terminal write lands beside the pending file, then an atomic rename moves it into `terminal/` — no crash window resurrects a decided ask, and decision-path scans stay O(pending).
-- The dead-owner abandon sweep and the event-log group sync are debounced through stamps beside the workspace lock, keeping the write path O(1) over feed history; the stamps live outside the feed dir so item scans never see them.
+- The dead-owner abandon sweep, the event-log group sync, and the checkpoint publish are debounced through stamps beside the workspace lock, keeping the write path O(1) over feed history; the stamps live outside the feed dir so item scans never see them. Wakeups fire before the publish — consumers fold the log tail themselves, so checkpoint cadence is latency tuning, never truth.
 
 ## Read path
 

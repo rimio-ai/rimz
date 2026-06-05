@@ -111,6 +111,82 @@ fn publish_hit_corruption(err: &LedgerErr) -> bool {
     )
 }
 
+/// Ceiling on how stale the published checkpoint may grow under sustained
+/// writes. Consumers are woken per event and fold the log tail from their
+/// own cursor, so the checkpoint is a cold-start accelerator, not the
+/// freshness path; once per second bounds the writers' JSON work while
+/// keeping a cold reader's catch-up fold short.
+const PUBLISH_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Byte ceiling on the unpublished log tail: the gate forces an early
+/// checkpoint once a cold reader would have to fold this much past the
+/// stamp, whatever the stamp's age.
+const PUBLISH_BYTE_BUDGET: u64 = 64 * 1024;
+
+/// Stamp recording the last published checkpoint: the `LogExtent` the
+/// publish reflected as content, the publish instant as mtime. Written with
+/// a plain `fs::write` under the publish lock — a torn or unparseable stamp
+/// reads as due, erring toward a redundant publish, never a stale skip.
+fn publish_stamp(paths: &StatePaths) -> PathBuf {
+    paths.locks_dir.join("publish.stamp")
+}
+
+fn write_publish_stamp(paths: &StatePaths, extent: Option<event_log::LogExtent>) {
+    let Some(extent) = extent else {
+        return;
+    };
+    if let Ok(bytes) = serde_json::to_vec(&extent) {
+        let _ = std::fs::write(publish_stamp(paths), bytes);
+    }
+}
+
+/// The cheap pre-lock cadence gate: one stat pair and a ~40-byte read
+/// decide whether this tail pays the checkpoint. The stamp gates cadence
+/// alone — freshness truth stays in `latest.json`'s own extent stamp, which
+/// readers verify against the live log — so the worst a wrong verdict costs
+/// is one redundant publish or one bounded catch-up fold.
+fn publish_due(paths: &StatePaths) -> bool {
+    let stamp_path = publish_stamp(paths);
+    let Some(age) = std::fs::metadata(&stamp_path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        // Stamp mtime in the future (clock skew): treat the publish as due.
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+    else {
+        return true;
+    };
+    let Ok(extent) = std::fs::read(&stamp_path)
+        .map_err(|_| ())
+        .and_then(|bytes| serde_json::from_slice::<event_log::LogExtent>(&bytes).map_err(|_| ()))
+    else {
+        return true;
+    };
+    let log_len = std::fs::metadata(&paths.events_log)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    should_publish(age, extent.offset, log_len)
+}
+
+/// Pure gate core over the stamp's age and offset beside the live log
+/// length. Due when the interval elapsed, the log shrank (a rotation or
+/// rewrite swapped the file), or the unpublished tail crossed the byte
+/// budget.
+fn should_publish(age: Duration, stamp_offset: u64, log_len: u64) -> bool {
+    age >= PUBLISH_INTERVAL
+        || log_len < stamp_offset
+        || log_len - stamp_offset >= PUBLISH_BYTE_BUDGET
+}
+
+/// Drop the publish stamp when the log it describes was swapped or cut —
+/// rotation, identity rewrite, repair — so the next mutation's gate reads
+/// "never published" instead of comparing offsets across two different
+/// files. Best-effort: a surviving stamp risks at most one deferred
+/// checkpoint (≤ the interval), never a stale read, because freshness truth
+/// stays in `latest.json`'s own extent stamp.
+fn retract_publish_stamp(paths: &StatePaths) {
+    let _ = std::fs::remove_file(publish_stamp(paths));
+}
+
 /// Run the dead-owner sweep at most once per [`ABANDON_SWEEP_INTERVAL`].
 /// Caller holds the workspace lock. The common case is one stamp stat —
 /// the write path itself stays O(1) regardless of feed history.
@@ -270,6 +346,7 @@ impl Ledger {
             workspace_record::write(&self.inner.paths, &record)?;
             // The log was wholesale-replaced: every byte offset in the fold
             // base is void. Reseed it as a new generation before rebuilding.
+            retract_publish_stamp(&self.inner.paths);
             snapshot::reseed_rollup_cache_for_rotation(&self.inner.paths)?;
             snapshot::rebuild(&self.inner.paths)?;
 
@@ -386,7 +463,8 @@ impl Ledger {
             self.wake_sidebars_best_effort(workspace_id, request_id);
         }
         if !abandoned.is_empty() {
-            self.publish_snapshot_best_effort();
+            // Forced: gc reports from the checkpoint right after the sweep.
+            self.publish_snapshot_forced();
         }
         Ok(abandoned.len())
     }
@@ -836,7 +914,9 @@ impl Ledger {
             self.wake_sidebars_best_effort(workspace_id, request_id);
         }
         if !expired.is_empty() {
-            self.publish_snapshot_best_effort();
+            // Forced: the standalone expiry's caller reads the checkpoint
+            // right after its verdict.
+            self.publish_snapshot_forced();
         }
         Ok(expired.len())
     }
@@ -903,6 +983,7 @@ impl Ledger {
                 // The fresh log is a new generation: reseed the fold base at
                 // offset zero with the generation bumped, so a reader's
                 // pre-rotation extent can never alias into the new log.
+                retract_publish_stamp(&self.inner.paths);
                 snapshot::reseed_rollup_cache_for_rotation(&self.inner.paths)?;
                 snapshot::rebuild(&self.inner.paths)?;
             }
@@ -967,31 +1048,54 @@ impl Ledger {
                     }
                 }
             }
+            retract_publish_stamp(&self.inner.paths);
             snapshot::rebuild(&self.inner.paths)?;
         }
         Ok(outcome)
     }
 
-    /// Catch the snapshot caches up to the live log, after the workspace
-    /// lock released and the wakeups went out. Serialized on its own
-    /// advisory lock so concurrent writers group-commit: each holder folds
-    /// to the log's *current* end, so the last queued publisher always lands
-    /// the newest state regardless of arrival order, and a queued no-op pays
-    /// only an O(0-delta) fold. Best-effort: the mutation is already
-    /// committed to the event log and feed files, and a reader self-serves
-    /// any missing delta through the same incremental fold — a failed or
-    /// skipped publish costs the next reader latency, never truth.
-    ///
-    /// Also the write path's deferred-durability tail: the debounced group
-    /// fdatasync runs here, and a fold that hits a corrupt frame — a
-    /// post-power-cut corpse — self-heals through
-    /// [`Self::repair_event_log`] instead of failing every future publish
-    /// until an operator runs `rimz gc`.
+    /// The off-lock tail every high-cadence mutator runs: the debounced
+    /// group fdatasync, then the checkpoint publish when [`publish_due`]
+    /// says the stamp aged out, the unpublished tail crossed the byte
+    /// budget, or the log was swapped. The wakeup already went out, and
+    /// consumers fold the log tail from their own cursor, so the checkpoint
+    /// is a catch-up accelerator, never the freshness path — a skip costs a
+    /// cold reader a bounded fold, not staleness.
     fn publish_snapshot_best_effort(&self) {
         sync_log_debounced(&self.inner.paths);
+        if !publish_due(&self.inner.paths) {
+            return;
+        }
+        self.publish_snapshot_now();
+    }
+
+    /// [`Self::publish_snapshot_best_effort`] without the cadence gate, for
+    /// mutators that run rarely and whose callers read the checkpoint right
+    /// after (gc's abandon sweep, standalone ask expiry). Rotation, identity
+    /// rewrite, and repair rebuild inline under both locks instead.
+    fn publish_snapshot_forced(&self) {
+        sync_log_debounced(&self.inner.paths);
+        self.publish_snapshot_now();
+    }
+
+    /// Catch the snapshot caches up to the live log, after the workspace
+    /// lock released and the wakeups went out. Serialized on its own
+    /// advisory lock so concurrent publishers group-commit: each holder
+    /// folds to the log's *current* end, so the last queued publisher always
+    /// lands the newest state regardless of arrival order, and a queued
+    /// no-op pays only an O(0-delta) fold. Best-effort: the mutation is
+    /// already committed to the event log and feed files, and a reader
+    /// self-serves any missing delta through the same incremental fold — a
+    /// failed or skipped publish costs the next reader latency, never truth.
+    ///
+    /// A fold that hits a corrupt frame — a post-power-cut corpse —
+    /// self-heals through [`Self::repair_event_log`] instead of failing
+    /// every future publish until an operator runs `rimz gc`.
+    fn publish_snapshot_now(&self) {
         let publish = || -> Result<()> {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
-            snapshot::rebuild(&self.inner.paths)?;
+            let snapshot = snapshot::rebuild(&self.inner.paths)?;
+            write_publish_stamp(&self.inner.paths, snapshot.reflects_log);
             Ok(())
         };
         let Err(err) = publish() else {
@@ -1043,5 +1147,44 @@ impl Ledger {
                 "sidebar wakeup failed after ledger event commit"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publish_gate_is_boundary_exact_on_the_interval() {
+        let just_inside = PUBLISH_INTERVAL - Duration::from_millis(1);
+        assert!(
+            !should_publish(just_inside, 100, 100),
+            "mid-interval with nothing unpublished: skip"
+        );
+        assert!(
+            should_publish(PUBLISH_INTERVAL, 100, 100),
+            "due exactly at the interval"
+        );
+    }
+
+    #[test]
+    fn publish_gate_is_boundary_exact_on_the_byte_budget() {
+        let fresh = Duration::ZERO;
+        assert!(
+            !should_publish(fresh, 100, 100 + PUBLISH_BYTE_BUDGET - 1),
+            "an unpublished tail under the budget rides the next interval"
+        );
+        assert!(
+            should_publish(fresh, 100, 100 + PUBLISH_BYTE_BUDGET),
+            "due exactly at the byte budget, whatever the stamp's age"
+        );
+    }
+
+    #[test]
+    fn publish_gate_forces_on_a_shrunken_log() {
+        // A log shorter than the stamped offset means rotation or an
+        // identity rewrite swapped the file underneath the stamp.
+        assert!(should_publish(Duration::ZERO, 100, 99));
+        assert!(!should_publish(Duration::ZERO, 100, 101));
     }
 }

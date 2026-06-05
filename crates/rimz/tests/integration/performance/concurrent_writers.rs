@@ -14,7 +14,6 @@
 
 use std::time::{Duration, Instant};
 
-use rimz::ledger::snapshot;
 use rimz::{FeedItem, FeedKind, FeedStatus, Surface};
 
 use crate::common::Harness;
@@ -83,15 +82,34 @@ fn assert_burst_landed(h: &Harness, label: &str) {
         WRITERS * PUSHES_EACH,
         "{label}: every concurrent push lands durably"
     );
-    let latest = snapshot::read_fresh_latest(h.ledger.paths())
-        .unwrap_or_else(|| panic!("{label}: the published view is current after the last writer"));
     let log_len = std::fs::metadata(&h.ledger.paths().events_log)
         .expect("log meta")
         .len();
+    // Freshness is the fold's job: the lock-free read reaches the log's end
+    // no matter which tails the checkpoint cadence gate skipped.
+    let snapshot = h
+        .ledger
+        .snapshot()
+        .unwrap_or_else(|err| panic!("{label}: lock-free read after the burst: {err}"));
     assert_eq!(
-        latest.reflects_log.expect("stamped").offset,
+        snapshot.reflects_log.expect("stamped").offset,
         log_len,
-        "{label}: the group-committed stamp claims the full log"
+        "{label}: the reader folds to the log's end"
+    );
+    // The checkpoint trails by less than the byte budget: a tail that
+    // skipped saw a smaller unpublished tail, and one that crossed the
+    // budget published (PUBLISH_BYTE_BUDGET, writer.rs).
+    let checkpoint: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&h.ledger.paths().latest_snapshot)
+            .unwrap_or_else(|err| panic!("{label}: checkpoint exists: {err}")),
+    )
+    .expect("checkpoint parses");
+    let published_offset = checkpoint["reflects_log"]["offset"]
+        .as_u64()
+        .expect("stamped");
+    assert!(
+        log_len - published_offset < 64 * 1024,
+        "{label}: the unpublished tail stays under the byte budget"
     );
 }
 
