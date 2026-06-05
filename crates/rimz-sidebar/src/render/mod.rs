@@ -34,11 +34,12 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use rimz::config::ScrollbarMode;
+use rimz::feed::AgentStatus;
 use rimz::ids::PaneId;
-use rimz::{SidebarRowKind, SidebarSnapshot};
+use rimz::{SidebarRow, SidebarRowKind, SidebarSnapshot};
 
 use self::fmt::age_short;
-pub(crate) use self::sections::ProviderTabHit;
+pub(crate) use self::sections::{MakeUpHit, ProviderTabHit, status_total};
 use self::sections::{
     cockpit_spend_line, cockpit_summary_line, content_width, first_run_hint_lines,
     fleet_header_lines, fleet_ledger_lines, fleet_size, provider_panel_lines, worktree_group_lines,
@@ -120,6 +121,20 @@ pub struct UiState {
     /// cap-to-cap footprint, written as a byproduct of every draw like
     /// `line_map`. Empty when no rail is on screen.
     pub(crate) tab_hits: Vec<ProviderTabHit>,
+    /// The cockpit make-up bucket the user clicked to filter the agent-card
+    /// body to one status, or `None` for the resting show-all view.
+    /// Renderer-local display state — the producer, the ledger, and the
+    /// cockpit counts (always the full fleet) are untouched; only the body
+    /// iteration narrows, through the one shared [`row_passes_filter`]
+    /// predicate. A pure toggle: a click on the active bucket clears it, and
+    /// it auto-clears when its bucket's count drops to zero — the make-up
+    /// twin of a dashboard tab pick ending when its panel leaves.
+    pub(crate) make_up_filter: Option<AgentStatus>,
+    /// Hit-test map of the cockpit make-up line in the most recently drawn
+    /// frame: the absolute screen line and column range of each non-zero
+    /// bucket's footprint, written as a byproduct of every draw like
+    /// `line_map` and `tab_hits`. Empty when no make-up line is on screen.
+    pub(crate) make_up_hits: Vec<MakeUpHit>,
 }
 
 /// The manual dashboard-tab pick: the provider kind to show, plus the
@@ -211,8 +226,10 @@ pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {
     animation_cadence(snapshot) != AnimationCadence::None
 }
 
+// Deliberately unfiltered by the make-up filter: the cockpit's attention
+// buckets still breathe (and the counts still tick) for rows a filter hides,
+// so the gate must track the whole room, not the narrowed body.
 pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
-    use rimz::feed::AgentStatus;
     let mut slow = false;
     for row in snapshot
         .worktree_groups
@@ -261,13 +278,14 @@ pub fn draw_with_ui(
     // The composed maps and the resolved scroll offset are byproducts of the
     // draw: store them so the mouse hit-test and the next frame's viewport read
     // the geometry of the frame the user is actually looking at.
-    let (lines, map, tab_hits, scroll_offset) =
-        compose_lines(snapshot, alert, ui, area.width, area.height);
-    ui.line_map = map;
-    ui.tab_hits = tab_hits;
-    ui.scrollbar.observe(scroll_offset, ui.animation_phase);
-    ui.scroll_offset = scroll_offset;
-    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+    let composed = compose_lines(snapshot, alert, ui, area.width, area.height);
+    ui.line_map = composed.line_map;
+    ui.tab_hits = composed.tab_hits;
+    ui.make_up_hits = composed.make_up_hits;
+    ui.scrollbar
+        .observe(composed.scroll_offset, ui.animation_phase);
+    ui.scroll_offset = composed.scroll_offset;
+    let paragraph = Paragraph::new(Text::from(composed.lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
     // The truecolor garnish tier: a color-only effects pass over the buffer the
     // paragraph just rendered, geometry-locked to the line map this draw wrote.
@@ -279,6 +297,7 @@ pub fn draw_with_ui(
         ui.effects.apply(
             snapshot,
             &theme,
+            ui.make_up_filter,
             &ui.line_map,
             ui.selected_pane.as_ref(),
             ui.animation_phase,
@@ -288,15 +307,28 @@ pub fn draw_with_ui(
     }
 }
 
+/// The one row-visibility predicate the make-up filter narrows the body by —
+/// the single authority the body composer ([`worktree_group_lines`]) and the
+/// selection model (`app::visible_rows` and friends) share, so the row
+/// ordinals in `line_map` can never drift from the indices selection counts.
+/// With no filter every row passes; with a bucket active only agent rows of
+/// that status pass, so process rows (status `None`) drop out entirely.
+pub(crate) fn row_passes_filter(row: &SidebarRow, filter: Option<AgentStatus>) -> bool {
+    filter.is_none_or(|status| row.status == Some(status))
+}
+
 /// The provider kind the dashboard's tab focus derives from the selection: the
 /// selected row's agent kind (agent rows carry the kind in `SidebarRow::name`),
 /// or `None` for a process row or an empty room — the caller falls back to the
-/// first tab.
+/// first tab. Reads the same filtered universe `selected_index` is an ordinal
+/// of, so the dashboard's follow-the-selection stays honest under a make-up
+/// filter.
 pub(crate) fn selected_agent_kind(snapshot: &SidebarSnapshot, ui: &UiState) -> Option<String> {
     snapshot
         .worktree_groups
         .iter()
         .flat_map(|group| &group.rows)
+        .filter(|row| row_passes_filter(row, ui.make_up_filter))
         .nth(ui.selected_index)
         .filter(|row| row.row_kind == SidebarRowKind::Agent)
         .map(|row| row.name.clone())
@@ -342,27 +374,23 @@ pub(crate) fn active_provider_kind(snapshot: &SidebarSnapshot, ui: &UiState) -> 
 /// carries a track/thumb glyph in the right-margin column the content leaves
 /// free — part of the composed line, so every consumer of the frame sees it.
 ///
-/// Returns the composed frame, two parallel hit-test maps, and the effective
-/// scroll offset. Row-map entry `i` is the visible row index that on-screen
-/// content line `i` belongs to (`app::visible_rows()` order), or `None` for
-/// structural lines (cockpit header, gaps, the external divider, `+K more`,
-/// help, footer, alert); a worktree header routes to the row it jumps into.
-/// The dashboard tab hits ride beside it in absolute screen coordinates. The
-/// maps are the single authority on hit geometry — built from the same final
-/// line vector that is rendered, so they stay 1:1 with what the user sees
-/// through every clip and every scroll position.
+/// Returns the composed frame with its hit-test maps and the effective scroll
+/// offset ([`ComposedFrame`]). Row-map entry `i` is the visible row index that
+/// on-screen content line `i` belongs to (`app::visible_rows()` order), or
+/// `None` for structural lines (cockpit header, gaps, the external divider,
+/// `+K more`, help, footer, alert); a worktree header routes to the row it
+/// jumps into. The dashboard tab and make-up bucket hits ride beside it in
+/// absolute screen coordinates. The maps are the single authority on hit
+/// geometry — built from the same final line vector that is rendered, so they
+/// stay 1:1 with what the user sees through every clip and every scroll
+/// position.
 pub(crate) fn compose_lines(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
     ui: &UiState,
     width: u16,
     height: u16,
-) -> (
-    Vec<Line<'static>>,
-    Vec<Option<usize>>,
-    Vec<ProviderTabHit>,
-    usize,
-) {
+) -> ComposedFrame {
     // One `Theme` per frame, handed to the body and the bottom chrome alike:
     // the cached `NO_COLOR` reading plus the palette and glow mode the
     // producer resolved from `[sidebar]` onto the snapshot — so a re-themed
@@ -374,7 +402,7 @@ pub(crate) fn compose_lines(
     // width and opened with a blank gutter, leaving the trailing column as the
     // matching right margin — the same frame the cards carry (see `with_gutter`).
     let inner = content_width(cells);
-    let (mut lines, mut map) = top_lines(snapshot, ui, cells, &theme);
+    let (mut lines, mut map, mut make_up_hits) = top_lines(snapshot, ui, cells, &theme);
     let (scroll, scroll_map) = scroll_lines(snapshot, alert, ui, cells, &theme);
 
     // Bottom-pinned chrome, top to bottom: the per-provider dashboard (account-
@@ -466,6 +494,11 @@ pub(crate) fn compose_lines(
     let viewport = after_bottom - top_shown;
     lines.truncate(top_shown);
     map.truncate(top_shown);
+    // The make-up hits arrive from `top_lines` already absolute — the cockpit
+    // starts at screen row 0, so unlike the bottom-block tab hits there is no
+    // base to add — but a degenerate-height frame can truncate the cockpit, so
+    // a hit on a clipped line is dropped rather than left aimed at the body.
+    make_up_hits.retain(|hit| hit.line < top_shown);
 
     // Resolve the viewport offset: clamp to the zone, then — unless a manual
     // wheel pin or the open help overlay holds the window — minimally
@@ -531,7 +564,25 @@ pub(crate) fn compose_lines(
     // targets, carried by `tab_hits` rather than the row map.
     map.extend(std::iter::repeat_n(None, bottom.len()));
     lines.extend(bottom);
-    (lines, map, tab_hits, offset)
+    ComposedFrame {
+        lines,
+        line_map: map,
+        tab_hits,
+        make_up_hits,
+        scroll_offset: offset,
+    }
+}
+
+/// One draw's composed output: the final line vector plus the byproducts the
+/// caller writes back onto [`UiState`] — the row hit-test map, the dashboard
+/// tab and make-up bucket hit maps (absolute screen coordinates), and the
+/// resolved viewport offset.
+pub(crate) struct ComposedFrame {
+    pub(crate) lines: Vec<Line<'static>>,
+    pub(crate) line_map: Vec<Option<usize>>,
+    pub(crate) tab_hits: Vec<ProviderTabHit>,
+    pub(crate) make_up_hits: Vec<MakeUpHit>,
+    pub(crate) scroll_offset: usize,
 }
 
 /// Minimally nudge the viewport so the selected row's full line range — its
@@ -651,16 +702,18 @@ pub fn render_fixed<W: Write>(
     Ok(())
 }
 
-/// Compose the top-pinned cockpit zone and, in lockstep, its hit-test map. All
-/// inert chrome — identity, summary, the make-up line — so every entry is
-/// `None`. Fixed height for a given room population, never windowed, so the
-/// scroll zone below starts at a stable row.
+/// Compose the top-pinned cockpit zone and, in lockstep, its hit-test maps.
+/// Every row-map entry is `None` — identity, summary, and the make-up line are
+/// never jump targets — but the make-up line's status buckets are *filter*
+/// targets, returned as [`MakeUpHit`]s already translated to this zone's line
+/// indices and the chrome-gutter column space. Fixed height for a given room
+/// population, never windowed, so the scroll zone below starts at a stable row.
 fn top_lines(
     snapshot: &SidebarSnapshot,
     ui: &UiState,
     width: usize,
     theme: &Theme,
-) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
+) -> (Vec<Line<'static>>, Vec<Option<usize>>, Vec<MakeUpHit>) {
     let mut lines = Vec::new();
     let mut map: Vec<Option<usize>> = Vec::new();
 
@@ -702,13 +755,19 @@ fn top_lines(
     // The fleet header (the cockpit make-up line) is always present and a fixed
     // height — one line for a populated room, none for an empty one — so the body
     // below never shifts vertically as agents change state. It is chrome, never a
-    // jump target, so every header line maps to `None`.
-    extend_inert(
-        &mut lines,
-        &mut map,
-        fleet_header_lines(theme, &snapshot.worktree_groups, inner),
-    );
-    (lines, map)
+    // jump target, so every header line maps to `None` in the row map; its
+    // status buckets carry their own hit map instead, translated here onto the
+    // zone's line index and into the `pad_chrome` gutter's column space.
+    let make_up_base = lines.len();
+    let (fleet_lines, mut make_up_hits) =
+        fleet_header_lines(theme, &snapshot.worktree_groups, ui.make_up_filter, inner);
+    for hit in &mut make_up_hits {
+        hit.line += make_up_base;
+        hit.col_start += 1;
+        hit.col_end += 1;
+    }
+    extend_inert(&mut lines, &mut map, fleet_lines);
+    (lines, map, make_up_hits)
 }
 
 /// Compose the scrollable agent-cards zone and, in lockstep, its hit-test map:
@@ -747,17 +806,30 @@ fn scroll_lines(
         lines.push(Line::from(""));
         map.push(None);
         let mut row_index = 0;
-        for (index, group) in snapshot.worktree_groups.iter().enumerate() {
-            if index > 0 {
+        // A group the make-up filter empties is skipped whole — header,
+        // rows, and separator — so the filtered body holds only worktrees
+        // with a matching row; the external catch-all is just another group.
+        let mut emitted = false;
+        for group in &snapshot.worktree_groups {
+            let has_visible = group
+                .rows
+                .iter()
+                .any(|row| row_passes_filter(row, ui.make_up_filter));
+            if !has_visible {
+                continue;
+            }
+            if emitted {
                 lines.push(Line::from(""));
                 map.push(None);
             }
+            emitted = true;
             worktree_group_lines(
                 theme,
                 group,
                 &snapshot.providers,
                 width,
                 &snapshot.sidebar.context,
+                ui.make_up_filter,
                 &mut row_index,
                 ui.selected_index,
                 ui.animation_phase,
@@ -988,6 +1060,7 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
         Line::styled("↑/↓ select   1-9 jump   ↵ jump", faint),
         Line::styled("␣ next ?!   ←/→ provider tab", faint),
         Line::styled("x dismiss   r reload   ? close", faint),
+        Line::styled("click a status count to filter", faint),
         Line::styled("⢿ working   ✽ thinking   ? waiting", faint),
         Line::styled("! attention   ○ idle   ✓ done", faint),
     ]

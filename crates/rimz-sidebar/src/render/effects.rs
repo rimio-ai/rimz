@@ -37,6 +37,7 @@ use tachyonfx::{CellFilter, Effect, EffectTimer, Interpolation, fx};
 
 use super::fmt::age_secs;
 use super::labels::age_heat;
+use super::row_passes_filter;
 use super::theme::{ORANGE, Theme};
 
 /// The glow's peak lightness lift (HSL points over the painted tone). Strong
@@ -145,11 +146,21 @@ impl EffectState {
     /// paint every live effect onto the freshly composed buffer. Runs after
     /// the paragraph render inside the same draw, with the line map that draw
     /// just wrote — so geometry and content can never disagree.
+    ///
+    /// Two row universes, deliberately split: transitions observe the *whole*
+    /// room, so toggling the make-up filter never reads as a wave of
+    /// evictions and arrivals (no flash storm, and a hidden row's real
+    /// transition still fires the moment the filter clears it); geometry
+    /// resolves against the *filtered* rows, whose ordinals are what
+    /// `line_map` carries — an unfiltered index would land a cue on a
+    /// stranger's card. A cue for a row the filter hides finds no run and
+    /// ends, exactly like a row scrolled off.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply(
         &mut self,
         snapshot: &SidebarSnapshot,
         theme: &Theme,
+        filter: Option<AgentStatus>,
         line_map: &[Option<usize>],
         selected_pane: Option<&PaneId>,
         phase: u64,
@@ -167,10 +178,16 @@ impl EffectState {
 
         self.observe(&rows, selected_pane, theme);
 
+        let visible: Vec<&SidebarRow> = rows
+            .iter()
+            .copied()
+            .filter(|row| row_passes_filter(row, filter))
+            .collect();
+
         // One-shots first, glyph glow second, so a card-wide flash never
         // flattens the breath on the attention glyph it overlaps.
         self.oneshots.retain_mut(|shot| {
-            let Some(rect) = target_rect(&rows, line_map, area, &shot.key, shot.target) else {
+            let Some(rect) = target_rect(&visible, line_map, area, &shot.key, shot.target) else {
                 // The row left the screen (scrolled out, evicted, reranked
                 // off); a cue with nothing to paint on is over, not pending.
                 return false;
@@ -181,7 +198,7 @@ impl EffectState {
             shot.fx.running()
         });
 
-        for (index, row) in rows.iter().enumerate() {
+        for (index, row) in visible.iter().enumerate() {
             let Some(delta) = glow_delta(row, phase) else {
                 continue;
             };
@@ -549,6 +566,7 @@ mod tests {
         state.apply(
             snapshot,
             &Theme::fixed(false),
+            None,
             &line_map,
             selected,
             phase,

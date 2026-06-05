@@ -15,7 +15,7 @@ use crate::render::labels::{
 };
 use crate::render::theme::Theme;
 
-use super::{SESSIONS_GLYPH, pin_right, trim_spans_to_width};
+use super::{SESSIONS_GLYPH, TAB_CAP_LEFT, TAB_CAP_RIGHT, TAB_INK, pin_right, trim_spans_to_width};
 
 /// The provider dashboard's fixed art column width: the brand emblem is padded
 /// to this many cells so the stats/bar column to its right starts at one shared
@@ -306,21 +306,10 @@ fn provider_tab_rail(
     (Line::from(spans), hits)
 }
 
-/// The active tab's `NO_COLOR` caps — when the chip fill drops with the
-/// colors, these notch the pick into the rail by shape instead. With color
-/// they never paint, so a click moves no glyph.
-const TAB_CAP_LEFT: char = '┤';
-const TAB_CAP_RIGHT: char = '├';
-
 /// The rail's fill glyph — the same `─` the plain hairline draws — and the
 /// width of its leading stub and inter-tab gaps.
 const RAIL_FILL: char = '─';
 const RAIL_STUB: usize = 2;
-
-/// The active chip's ink: near-black, crisp on every mid-brightness brand
-/// fill. A brand-tone pass-through like the theme's `ORANGE`, not a palette
-/// slot.
-const TAB_INK: Color = Color::Indexed(16);
 
 /// A tab's display label: the registry kind slug with its first ASCII char
 /// capitalized (`claude` → `Claude`) — the rail names the product, so the

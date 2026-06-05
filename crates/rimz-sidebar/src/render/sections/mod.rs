@@ -27,6 +27,7 @@ mod worktree;
 
 pub(super) use agent_card::shows_loading_dots;
 pub(super) use cockpit::{cockpit_spend_line, cockpit_summary_line};
+pub(crate) use fleet::{MakeUpHit, status_total};
 pub(super) use fleet::{first_run_hint_lines, fleet_header_lines, fleet_size};
 #[cfg(test)]
 pub(super) use process::proc_stats_spans;
@@ -44,6 +45,20 @@ const SESSIONS_GLYPH: &str = "◎";
 /// cockpit headline and the agent cards' `$cost`, so every settle brightens the
 /// same; drops to plain bold under `NO_COLOR` like every other tone.
 const VALUE_FLASH: Color = Color::Indexed(150);
+
+/// An active pick's `NO_COLOR` caps — when a chip fill drops with the colors,
+/// these notch the pick by shape instead. Shared by the provider tab rail
+/// (painted into its reserved rail cells) and the cockpit make-up line
+/// (wrapped around the picked bucket), so the pick reads as one shape
+/// everywhere.
+const TAB_CAP_LEFT: char = '┤';
+const TAB_CAP_RIGHT: char = '├';
+
+/// The active chip's ink: near-black, crisp on every mid-brightness fill — the
+/// provider tab rail's brand fill and the make-up bucket's semantic fill
+/// alike. A brand-tone pass-through like the theme's `ORANGE`, not a palette
+/// slot.
+const TAB_INK: Color = Color::Indexed(16);
 
 /// The selected card's left accent: a bold half-block `▌` running the card's
 /// full height — the one loud lane marker on screen.

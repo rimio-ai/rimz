@@ -3,10 +3,12 @@
 //! act on it, and the hit-test reader over the render-built line map.
 
 use rimz::SidebarSnapshot;
+use rimz::feed::AgentStatus;
 use rimz::ids::PaneId;
 
 use crate::render::{
-    Browse, DashboardTab, ManualScroll, UiState, active_provider_kind, selected_agent_kind,
+    Browse, DashboardTab, ManualScroll, UiState, active_provider_kind, row_passes_filter,
+    selected_agent_kind, status_total,
 };
 
 use super::input::KeyAction;
@@ -67,7 +69,7 @@ pub(super) fn handle_key(
             InputOutcome::default()
         }
         KeyAction::Down => {
-            let len = visible_row_count(snapshot);
+            let len = visible_row_count(snapshot, ui.make_up_filter);
             if ui.selected_index + 1 < len {
                 select_row(ui, snapshot, ui.selected_index + 1);
                 begin_or_continue_browse(ui);
@@ -85,8 +87,9 @@ pub(super) fn handle_key(
             }
         }
         KeyAction::Space => {
-            if let Some(index) = next_attention_index(snapshot, ui.selected_index)
-                && let Some(pane) = pane_at_row(snapshot, index)
+            if let Some(index) =
+                next_attention_index(snapshot, ui.make_up_filter, ui.selected_index)
+                && let Some(pane) = pane_at_row(snapshot, ui.make_up_filter, index)
             {
                 return InputOutcome::focus(pane);
             }
@@ -112,7 +115,7 @@ pub(super) fn handle_key(
         KeyAction::Dismiss => InputOutcome::dismiss(),
         KeyAction::Digit(digit) => {
             let index = usize::from(digit.saturating_sub(1));
-            if let Some(pane) = pane_at_row(snapshot, index) {
+            if let Some(pane) = pane_at_row(snapshot, ui.make_up_filter, index) {
                 return InputOutcome::focus(pane);
             }
             InputOutcome::default()
@@ -167,8 +170,14 @@ pub(super) fn handle_mouse_click(
         pick_dashboard_tab(ui, snapshot, kind);
         return InputOutcome::redraw();
     }
+    // The cockpit's make-up buckets are the top block's only hit targets — a
+    // click on one toggles the body's status filter in place, never a jump.
+    if let Some(status) = make_up_status_at(ui, column, row) {
+        toggle_make_up_filter(ui, snapshot, status);
+        return InputOutcome::redraw();
+    }
     if let Some(index) = row_index_at_screen_position(ui, row)
-        && let Some(pane) = pane_at_row(snapshot, index)
+        && let Some(pane) = pane_at_row(snapshot, ui.make_up_filter, index)
     {
         return InputOutcome::focus(pane);
     }
@@ -210,6 +219,34 @@ fn tab_kind_at(ui: &UiState, column: u16, row: u16) -> Option<String> {
         .map(|hit| hit.kind.clone())
 }
 
+/// The status whose make-up bucket sits under a click, from the make-up hit
+/// map the renderer emitted in lockstep with the frame (`UiState::make_up_hits`,
+/// the cockpit's twin of `tab_hits`). A zero bucket emitted no hit, so it can
+/// never match — inert, as if not a tab.
+fn make_up_status_at(ui: &UiState, column: u16, row: u16) -> Option<AgentStatus> {
+    ui.make_up_hits
+        .iter()
+        .find(|hit| hit.line == usize::from(row) && column >= hit.col_start && column < hit.col_end)
+        .map(|hit| hit.status)
+}
+
+/// Flip the make-up filter a bucket click asked for: the active bucket clears
+/// back to show-all, any other becomes the pick. A pure toggle — no captured
+/// baseline, unlike [`DashboardTab`], because there is no derived default to
+/// fall back to. The body reshapes, so the explicit pick ends any wheel pin
+/// (the [`select_row`] discipline) and the selection re-anchors at once: a
+/// highlight whose row the filter hides drops to a clamped index, re-seated by
+/// the held baseline when the filter clears.
+fn toggle_make_up_filter(ui: &mut UiState, snapshot: &SidebarSnapshot, status: AgentStatus) {
+    ui.make_up_filter = if ui.make_up_filter == Some(status) {
+        None
+    } else {
+        Some(status)
+    };
+    ui.manual_scroll = None;
+    anchor_selection(ui, snapshot);
+}
+
 /// Point the highlight at a visible row by index — the identity-keyed selection
 /// (`selected_pane`) plus its derived render index. A pure positioner for the
 /// arrow-key browse; the jump actions resolve their target through
@@ -217,14 +254,18 @@ fn tab_kind_at(ui: &UiState, column: u16, row: u16) -> Option<String> {
 /// any wheel pin, so the viewport snaps back to following the selection.
 fn select_row(ui: &mut UiState, snapshot: &SidebarSnapshot, index: usize) {
     ui.selected_index = index;
-    ui.selected_pane = pane_at_row(snapshot, index);
+    ui.selected_pane = pane_at_row(snapshot, ui.make_up_filter, index);
     ui.manual_scroll = None;
 }
 
 /// The pane backing visible row `index`, or `None` for a pane-less row or an
 /// out-of-range index.
-fn pane_at_row(snapshot: &SidebarSnapshot, index: usize) -> Option<PaneId> {
-    visible_rows(snapshot)
+fn pane_at_row(
+    snapshot: &SidebarSnapshot,
+    filter: Option<AgentStatus>,
+    index: usize,
+) -> Option<PaneId> {
+    visible_rows(snapshot, filter)
         .nth(index)
         .and_then(|row| row.pane.as_ref())
         .map(|pane| pane.pane_id.clone())
@@ -249,7 +290,7 @@ fn begin_or_continue_browse(ui: &mut UiState) {
 }
 
 fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
-    let len = visible_row_count(snapshot);
+    let len = visible_row_count(snapshot, ui.make_up_filter);
     if len == 0 {
         ui.selected_index = 0;
     } else if ui.selected_index >= len {
@@ -270,6 +311,10 @@ fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
 /// active pane is a row in this snapshot; `None` otherwise.
 ///
 /// Ordered rules:
+/// 0. **Make-up filter.** The status filter clears when its bucket's
+///    full-fleet count drops to zero — the body's twin of a dashboard-tab
+///    pick ending when its panel leaves. First, because every rule below
+///    walks the filtered universe.
 /// 1. **Hold-last baseline.** A `Some` derivation advances `baseline_pane`; a
 ///    `None` holds it, so a momentary "no active row" gap (the sidebar itself
 ///    focused) never blanks or moves the highlight.
@@ -286,6 +331,16 @@ pub(super) fn reconcile_selection(
     snapshot: &SidebarSnapshot,
     derived: Option<PaneId>,
 ) {
+    // 0. The make-up filter ends when its bucket empties. The check reads the
+    //    full-fleet `status_counts` sum — exactly the figure the make-up line
+    //    displays — so the filter clears in the same fold its bucket reads 0,
+    //    and a click-then-fold race self-heals here.
+    if let Some(status) = ui.make_up_filter
+        && status_total(&snapshot.worktree_groups, status) == 0
+    {
+        ui.make_up_filter = None;
+    }
+
     // 1. Hold-last baseline: a Some derivation advances it, a None holds it.
     if let Some(pane) = derived {
         ui.baseline_pane = Some(pane);
@@ -309,14 +364,19 @@ pub(super) fn reconcile_selection(
     }
 
     // 4. Drop state whose pane left the room — so a pick whose pane closed
-    //    stops shadowing the baseline — then re-anchor by identity.
+    //    stops shadowing the baseline — then re-anchor by identity. The
+    //    baseline check is deliberately unfiltered: the mux's active pane is
+    //    real regardless of the cosmetic make-up filter, so a hidden baseline
+    //    holds and re-seats the highlight the moment the filter clears. The
+    //    browse pick *is* filtered — it roams the visible rows, so a pick the
+    //    filter hides has nothing to render and drops.
     if let Some(pane) = ui.baseline_pane.clone()
-        && row_index_of_pane(snapshot, &pane).is_none()
+        && row_index_of_pane(snapshot, None, &pane).is_none()
     {
         ui.baseline_pane = None;
     }
     if let Some(browse) = &ui.browse
-        && row_index_of_pane(snapshot, &browse.pane).is_none()
+        && row_index_of_pane(snapshot, ui.make_up_filter, &browse.pane).is_none()
     {
         ui.browse = None;
     }
@@ -351,11 +411,12 @@ pub(super) fn reconcile_selection(
 }
 
 /// Re-derive `selected_index` from the identity-keyed `selected_pane`. When the
-/// selected pane has left the room its row is gone, so drop the dangling
-/// identity and clamp the index — the next mirror report or pick re-seats it.
+/// selected pane has left the room — or the make-up filter hides its row — drop
+/// the dangling identity and clamp the index; the held baseline or the next
+/// pick re-seats it.
 fn anchor_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
     if let Some(pane) = ui.selected_pane.clone() {
-        if let Some(index) = row_index_of_pane(snapshot, &pane) {
+        if let Some(index) = row_index_of_pane(snapshot, ui.make_up_filter, &pane) {
             ui.selected_index = index;
             return;
         }
@@ -364,9 +425,16 @@ fn anchor_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
     clamp_selection(ui, snapshot);
 }
 
-/// The visible-row index backing `pane_id`, in `visible_rows` order.
-pub(super) fn row_index_of_pane(snapshot: &SidebarSnapshot, pane_id: &PaneId) -> Option<usize> {
-    visible_rows(snapshot).position(|row| {
+/// The visible-row index backing `pane_id`, in `visible_rows` order under
+/// `filter`. Pass `None` to ask about room membership regardless of the
+/// make-up filter (the baseline's question), the active filter to ask about
+/// the rendered body (the highlight's).
+pub(super) fn row_index_of_pane(
+    snapshot: &SidebarSnapshot,
+    filter: Option<AgentStatus>,
+    pane_id: &PaneId,
+) -> Option<usize> {
+    visible_rows(snapshot, filter).position(|row| {
         row.pane
             .as_ref()
             .is_some_and(|pane| pane.pane_id == *pane_id)
@@ -385,23 +453,30 @@ fn row_index_at_screen_position(ui: &UiState, row: u16) -> Option<usize> {
     ui.line_map.get(usize::from(row)).copied().flatten()
 }
 
-fn visible_row_count(snapshot: &SidebarSnapshot) -> usize {
-    snapshot
-        .worktree_groups
-        .iter()
-        .map(|group| group.rows.len())
-        .sum()
+fn visible_row_count(snapshot: &SidebarSnapshot, filter: Option<AgentStatus>) -> usize {
+    visible_rows(snapshot, filter).count()
 }
 
-fn visible_rows(snapshot: &SidebarSnapshot) -> impl Iterator<Item = &rimz::SidebarRow> {
+/// Every rendered row in body order — the snapshot's groups flattened through
+/// the one shared [`row_passes_filter`] predicate, so these ordinals are
+/// exactly the `line_map` ordinals the renderer builds.
+fn visible_rows(
+    snapshot: &SidebarSnapshot,
+    filter: Option<AgentStatus>,
+) -> impl Iterator<Item = &rimz::SidebarRow> {
     snapshot
         .worktree_groups
         .iter()
         .flat_map(|group| group.rows.iter())
+        .filter(move |row| row_passes_filter(row, filter))
 }
 
-fn next_attention_index(snapshot: &SidebarSnapshot, selected: usize) -> Option<usize> {
-    let rows = visible_rows(snapshot).collect::<Vec<_>>();
+fn next_attention_index(
+    snapshot: &SidebarSnapshot,
+    filter: Option<AgentStatus>,
+    selected: usize,
+) -> Option<usize> {
+    let rows = visible_rows(snapshot, filter).collect::<Vec<_>>();
     if rows.is_empty() {
         return None;
     }
@@ -410,7 +485,7 @@ fn next_attention_index(snapshot: &SidebarSnapshot, selected: usize) -> Option<u
         let index = (start + offset) % rows.len();
         rows[index]
             .status
-            .is_some_and(rimz::feed::AgentStatus::is_actionable)
+            .is_some_and(AgentStatus::is_actionable)
             .then_some(index)
     })
 }

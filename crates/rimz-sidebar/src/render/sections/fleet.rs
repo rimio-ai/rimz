@@ -10,7 +10,23 @@ use crate::render::fmt::age_secs;
 use crate::render::labels::{age_heat, agent_style, status_glyph, status_style};
 use crate::render::theme::{ORANGE, Theme};
 
-use super::{pin_right, spans_width, trim_spans_to_width};
+use super::{TAB_CAP_LEFT, TAB_CAP_RIGHT, TAB_INK, pin_right, trim_spans_to_width};
+
+/// One clickable status bucket in the cockpit make-up line: the line index
+/// within [`fleet_header_lines`]'s returned lines (always 0 — the make-up is
+/// one row), the half-open column range the bucket's footprint occupies
+/// relative to the unpadded content, and the status it filters the body to.
+/// `compose_lines` translates the position to absolute screen coordinates
+/// (the cockpit base and the one-cell chrome gutter) before storing it on
+/// `UiState::make_up_hits` for the mouse hit-test. A zero-count bucket emits
+/// no hit — inert, as if not a tab.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MakeUpHit {
+    pub(crate) line: usize,
+    pub(crate) col_start: u16,
+    pub(crate) col_end: u16,
+    pub(crate) status: AgentStatus,
+}
 
 /// The fixed fleet header — the cockpit's make-up line, below the repo
 /// dashboard's identity and `¤`/`◎`/spend lines. One line when the room has
@@ -33,11 +49,22 @@ use super::{pin_right, spans_width, trim_spans_to_width};
 /// (`status_counts`). The
 /// fleet's live time / token / commit totals are gone — the summary line's
 /// today-accumulated breakdown carries the fleet's resource read.
+///
+/// Every non-zero bucket is also a click-to-filter target, so the line returns
+/// its [`MakeUpHit`]s alongside — emitted in lockstep with the spans, columns
+/// relative to the unpadded content. The `filter` is the active pick: that
+/// bucket paints as a chip (ink on its semantic fill, bold) with color on —
+/// fill and weight alone, never a glyph — and under `NO_COLOR`, where the fill
+/// drops, `┤ ├` caps wrap it as the pick's shape instead (the gaps have no
+/// reserved cells the provider rail has, so the caps extend the bucket rather
+/// than repaint a neighbour). The resting line is byte-identical with or
+/// without the feature.
 pub(in crate::render) fn fleet_header_lines(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
+    filter: Option<AgentStatus>,
     width: usize,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Vec<MakeUpHit>) {
     let working = status_total(groups, AgentStatus::Running);
     let waiting = status_total(groups, AgentStatus::Waiting);
     let failed = status_total(groups, AgentStatus::Failed);
@@ -50,7 +77,7 @@ pub(in crate::render) fn fleet_header_lines(
     // lives on the dashboard above. The make-up line is reserved for a room that
     // has agents to summarize.
     if total == 0 {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
     // Top line — the make-up split by who might want you. The left cluster gathers
@@ -59,27 +86,21 @@ pub(in crate::render) fn fleet_header_lines(
     // left because a free agent wants work — then a parked `rate-limited` `⏸`
     // closing the cluster. The right cluster is the busy/done tail: working,
     // then success. Every bucket shows its count.
-    let mut left: Vec<Span<'static>> = Vec::new();
-    push_count(
-        theme,
-        &mut left,
-        status_glyph(AgentStatus::Waiting),
+    let mut left = Cluster::new(theme, filter);
+    left.push_count(
+        AgentStatus::Waiting,
         Color::Yellow,
         waiting,
         attention_bucket_style(theme, groups, AgentStatus::Waiting),
     );
-    push_count(
-        theme,
-        &mut left,
-        status_glyph(AgentStatus::Failed),
+    left.push_count(
+        AgentStatus::Failed,
         Color::Red,
         failed,
         attention_bucket_style(theme, groups, AgentStatus::Failed),
     );
-    push_count(
-        theme,
-        &mut left,
-        status_glyph(AgentStatus::Idle),
+    left.push_count(
+        AgentStatus::Idle,
         Color::Green,
         idle,
         status_style(theme, AgentStatus::Idle),
@@ -90,27 +111,21 @@ pub(in crate::render) fn fleet_header_lines(
     // dashboard, scannable by position. It takes the held-amber resting tone
     // (`status_style`), never the heating `attention_bucket_style`, since there
     // is nothing to do but wait for the window to reset.
-    push_count(
-        theme,
-        &mut left,
-        status_glyph(AgentStatus::RateLimited),
+    left.push_count(
+        AgentStatus::RateLimited,
         Color::Yellow,
         rate_limited,
         status_style(theme, AgentStatus::RateLimited),
     );
-    let mut right: Vec<Span<'static>> = Vec::new();
-    push_count(
-        theme,
-        &mut right,
-        status_glyph(AgentStatus::Running),
+    let mut right = Cluster::new(theme, filter);
+    right.push_count(
+        AgentStatus::Running,
         ORANGE,
         working,
         agent_style(theme, AgentStatus::Running),
     );
-    push_count(
-        theme,
-        &mut right,
-        status_glyph(AgentStatus::Success),
+    right.push_count(
+        AgentStatus::Success,
         Color::Green,
         success,
         status_style(theme, AgentStatus::Success),
@@ -119,18 +134,114 @@ pub(in crate::render) fn fleet_header_lines(
     // Split left / right when both clusters fit; on a narrow sidebar (the right
     // cluster alone can outrun the width) fall back to one left-packed line so the
     // attention buckets stay intact and the busy tail clips, rather than crushing
-    // `? 0  ! 0` down to a stub.
-    let buckets = if spans_width(&left) + 1 + spans_width(&right) <= width {
-        pin_right(left, right, width)
+    // `? 0  ! 0` down to a stub. The left hits are already content-absolute (the
+    // cluster starts at column 0); the right hits shift to wherever the layout
+    // lands their cluster — `pin_right` packs it against the right edge, the
+    // fallback appends it after the left cluster and its gap.
+    let mut hits = left.hits;
+    let buckets = if left.col + 1 + right.col <= width {
+        offset_hits(&mut hits, right.hits, width - right.col);
+        pin_right(left.spans, right.spans, width)
     } else {
-        if !left.is_empty() && !right.is_empty() {
-            left.push(Span::raw("   "));
+        let mut spans = left.spans;
+        let mut gap = 0;
+        if !spans.is_empty() && !right.spans.is_empty() {
+            spans.push(Span::raw("   "));
+            gap = 3;
         }
-        left.extend(right);
-        Line::from(trim_spans_to_width(left, width))
+        offset_hits(&mut hits, right.hits, left.col + gap);
+        spans.extend(right.spans);
+        Line::from(trim_spans_to_width(spans, width))
     };
+    // A bucket the width clipped keeps no hit — drop it whole rather than leave
+    // a target pointing past the visible edge, the rail's drop-whole-tab rule.
+    hits.retain(|hit| usize::from(hit.col_end) <= width);
 
-    vec![buckets]
+    (vec![buckets], hits)
+}
+
+/// Append a right-cluster hit run onto the absolute hit list, shifted by the
+/// column where the layout landed the cluster.
+fn offset_hits(hits: &mut Vec<MakeUpHit>, cluster: Vec<MakeUpHit>, offset: usize) {
+    hits.extend(cluster.into_iter().map(|hit| MakeUpHit {
+        col_start: hit.col_start + offset as u16,
+        col_end: hit.col_end + offset as u16,
+        ..hit
+    }));
+}
+
+/// One make-up cluster under construction: the spans, the running column the
+/// hit geometry is read from (`col` doubles as the cluster's width — every
+/// make-up glyph is single-cell), and one [`MakeUpHit`] per non-zero bucket,
+/// emitted in lockstep with the spans so the click targets can never drift
+/// from the paint.
+struct Cluster<'a> {
+    theme: &'a Theme,
+    filter: Option<AgentStatus>,
+    spans: Vec<Span<'static>>,
+    hits: Vec<MakeUpHit>,
+    col: usize,
+}
+
+impl<'a> Cluster<'a> {
+    fn new(theme: &'a Theme, filter: Option<AgentStatus>) -> Self {
+        Self {
+            theme,
+            filter,
+            spans: Vec::new(),
+            hits: Vec::new(),
+            col: 0,
+        }
+    }
+
+    /// Append a `glyph n` bucket, spaced from the previous one. The glyph and
+    /// its count are always separated by a single space (`? 2`, never `?2`);
+    /// successive buckets are separated by three. Every bucket renders, so a
+    /// zero reads `? 0` — the cockpit is a fixed dashboard, scannable by
+    /// position. The glyph always wears its semantic color, so the make-up
+    /// reads as a stable colored legend; a zero bucket rests the glyph (no
+    /// bold, no heat), reads its count at the soft stat tier, and emits no hit
+    /// — inert, as if not a tab. The active filter's bucket paints as a chip
+    /// (`TAB_INK` on the glyph's semantic fill, bold) over the same text, and
+    /// under `NO_COLOR` gains the wrapping `┤ ├` caps instead.
+    fn push_count(&mut self, status: AgentStatus, glyph_color: Color, count: usize, style: Style) {
+        if !self.spans.is_empty() {
+            self.spans.push(Span::raw("   "));
+            self.col += 3;
+        }
+        let glyph = status_glyph(status);
+        let start = self.col;
+        if self.filter == Some(status) && count > 0 {
+            let chip = self.theme.chip(TAB_INK, glyph_color, Modifier::BOLD);
+            if chip.bg.is_none() {
+                self.push_span(Span::styled(TAB_CAP_LEFT.to_string(), self.theme.soft()));
+                self.push_span(Span::styled(format!("{glyph} {count}"), chip));
+                self.push_span(Span::styled(TAB_CAP_RIGHT.to_string(), self.theme.soft()));
+            } else {
+                self.push_span(Span::styled(format!("{glyph} {count}"), chip));
+            }
+        } else if count == 0 {
+            self.push_span(Span::styled(
+                glyph.to_owned(),
+                self.theme.style(glyph_color, Modifier::empty()),
+            ));
+            self.push_span(Span::styled(format!(" {count}"), self.theme.soft()));
+            return;
+        } else {
+            self.push_span(Span::styled(format!("{glyph} {count}"), style));
+        }
+        self.hits.push(MakeUpHit {
+            line: 0,
+            col_start: start as u16,
+            col_end: self.col as u16,
+            status,
+        });
+    }
+
+    fn push_span(&mut self, span: Span<'static>) {
+        self.col += span.content.chars().count();
+        self.spans.push(span);
+    }
 }
 
 /// The fleet head-count read by the dashboard's L2: `(main, subs)` — the main
@@ -172,36 +283,11 @@ fn attention_bucket_style(
     theme.style(age_heat(oldest).unwrap_or(Color::Yellow), Modifier::BOLD)
 }
 
-/// Append a `glyph n` bucket to a header line, spaced from the previous one. The
-/// glyph and its count are always separated by a single space (`? 2`, never
-/// `?2`); successive buckets are separated by three. Every bucket renders, so a
-/// zero reads `? 0` — the cockpit is a fixed dashboard, scannable by position.
-/// The glyph always wears its semantic color, so the make-up reads as a stable
-/// colored legend; a zero bucket rests the glyph (no bold, no heat) and reads
-/// its count at the soft stat tier, so the eye still lands on the live counts.
-fn push_count(
-    theme: &Theme,
-    spans: &mut Vec<Span<'static>>,
-    glyph: &str,
-    glyph_color: Color,
-    count: usize,
-    style: Style,
-) {
-    if !spans.is_empty() {
-        spans.push(Span::raw("   "));
-    }
-    if count == 0 {
-        spans.push(Span::styled(
-            glyph.to_owned(),
-            theme.style(glyph_color, Modifier::empty()),
-        ));
-        spans.push(Span::styled(format!(" {count}"), theme.soft()));
-    } else {
-        spans.push(Span::styled(format!("{glyph} {count}"), style));
-    }
-}
-
-fn status_total(groups: &[SidebarWorktreeGroup], status: AgentStatus) -> usize {
+/// The full-fleet count for one make-up bucket — the sum of every group's
+/// `status_counts` entry for `status`, exactly the figure the make-up line
+/// displays. The auto-clear in `app::reconcile_selection` reads the same sum,
+/// so a filter ends in the same fold its bucket reads zero.
+pub(crate) fn status_total(groups: &[SidebarWorktreeGroup], status: AgentStatus) -> usize {
     groups
         .iter()
         .flat_map(|group| &group.status_counts)

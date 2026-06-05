@@ -1,0 +1,24 @@
+---
+source: crates/rimz-sidebar/src/render/tests.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0
+ ¤ 2
+ ────────────────────────────────────
+ ? 0   ! 1   ○ 0   ⏸︎ 0     ⢿ 1   ✓ 0
+
+▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌! claude
+▌  db migrate
+▌  ▢ ──────────────────────────    0%
+
+
+
+
+
+
+
+
+        ␣ next ?!   ? for help

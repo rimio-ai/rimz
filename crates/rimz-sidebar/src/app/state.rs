@@ -145,13 +145,15 @@ pub(super) fn apply_fetch_outcome(
     // mux each fold and same-tab by construction — so an external tab switch or
     // focus move lands on the very next frame. The derivation is filtered to a
     // non-sidebar row: a sidebar-self-active or non-row active pane derives
-    // `None` and the baseline holds its last value.
+    // `None` and the baseline holds its last value. It is deliberately blind to
+    // the make-up filter — the active pane is real however the body is
+    // narrowed, so a hidden baseline holds rather than blanks.
     let derived = current
         .own_view
         .as_ref()
         .filter(|view| !view.own_is_active)
         .and_then(|view| view.active_pane_id.clone())
-        .filter(|pane| row_index_of_pane(current, pane).is_some());
+        .filter(|pane| row_index_of_pane(current, None, pane).is_some());
     reconcile_selection(ui, current, derived);
     ui.animation_phase = wall_clock_phase(anim_start);
     // Fold the fresh tally into the count-up: a higher figure starts a stepped

@@ -653,6 +653,7 @@ fn process_rows_dim_a_step_below_agent_cards() {
             &snapshot.providers,
             44,
             &snapshot.sidebar.context,
+            None,
             &mut row_index,
             0,
             0,
@@ -1270,6 +1271,7 @@ fn codex_calm_bar_splits_into_row_level_segments() {
         &snapshot.providers,
         44,
         &snapshot.sidebar.context,
+        None,
         &mut row_index,
         0,
         0,
@@ -1582,6 +1584,7 @@ fn effects_pass_never_changes_the_composed_text() {
                     effects.apply(
                         snapshot,
                         &Theme::fixed(false),
+                        None,
                         &ui.line_map,
                         None,
                         phase,
@@ -2105,6 +2108,7 @@ fn card_lines(selected_index: usize) -> Vec<String> {
         &snapshot.providers,
         54,
         &snapshot.sidebar.context,
+        None,
         &mut row_index,
         selected_index,
         0,
@@ -2205,6 +2209,7 @@ fn expanded_card_lists_subagents_only_when_selected() {
             &snapshot.providers,
             54,
             &snapshot.sidebar.context,
+            None,
             &mut row_index,
             selected_index,
             0,
@@ -2271,6 +2276,7 @@ fn group_lines(
         &snapshot.providers,
         54,
         &snapshot.sidebar.context,
+        None,
         &mut row_index,
         selected_index,
         0,
@@ -3290,7 +3296,8 @@ fn attention_bucket_wears_the_oldest_rows_age_heat() {
         );
         waiting.last_activity = fixed_now() - Duration::from_secs(idle_secs);
         let snapshot = snapshot_with(Vec::new(), vec![waiting]);
-        fleet_header_lines(&theme, &snapshot.worktree_groups, 60)
+        fleet_header_lines(&theme, &snapshot.worktree_groups, None, 60)
+            .0
             .iter()
             .flat_map(|line| line.spans.iter())
             .find(|span| span.content.contains('?'))
@@ -3328,7 +3335,7 @@ fn state_glyphs_never_dim() {
         Some("a"),
     );
     let snapshot = snapshot_with(Vec::new(), vec![working]);
-    let lines = fleet_header_lines(&theme, &snapshot.worktree_groups, 60);
+    let lines = fleet_header_lines(&theme, &snapshot.worktree_groups, None, 60).0;
     let spans: Vec<_> = lines.iter().flat_map(|line| line.spans.iter()).collect();
     let glyph_style = |glyph: &str| {
         spans
@@ -3365,6 +3372,232 @@ fn state_glyphs_never_dim() {
             "{status:?} leads at full strength"
         );
     }
+}
+
+/// One failed and one running agent across two worktrees — the make-up
+/// click-to-filter tests' fixture: two non-zero buckets, one in each cluster.
+fn make_up_snapshot() -> SidebarSnapshot {
+    let mut failed = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Failed,
+        Some("/home/me/query-engine"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    failed.last_activity = fixed_now() - Duration::from_secs(12 * 60);
+    let mut running = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Running,
+        Some("/home/me/query-engine-wt/feature-migration"),
+        Some("feature-migration"),
+        Some("add tests"),
+    );
+    running.last_activity = fixed_now() - Duration::from_secs(8);
+    snapshot_with(Vec::new(), vec![failed, running])
+}
+
+/// The make-up line's text, flattened from its single line's spans.
+fn make_up_text(lines: &[Line<'static>]) -> String {
+    lines[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+/// With color, a make-up pick is fill and weight alone: whichever bucket is
+/// active — or none — the line renders glyph-for-glyph identical text (no
+/// caps, no swap) and every hit covers the same footprint, so a click moves
+/// color without a single cell of glyph motion and the resting line stays
+/// byte-identical to the pre-filter frame.
+#[test]
+fn make_up_keeps_every_glyph_still_across_picks() {
+    let theme = Theme::fixed(false);
+    let snapshot = make_up_snapshot();
+    let compose = |filter| fleet_header_lines(&theme, &snapshot.worktree_groups, filter, 38);
+    let (resting_lines, resting_hits) = compose(None);
+    let (failed_lines, failed_hits) = compose(Some(AgentStatus::Failed));
+    let (running_lines, running_hits) = compose(Some(AgentStatus::Running));
+    let resting = make_up_text(&resting_lines);
+    assert_eq!(
+        resting,
+        make_up_text(&failed_lines),
+        "the line's text never changes with the pick — color carries it"
+    );
+    assert_eq!(resting, make_up_text(&running_lines));
+    assert_eq!(
+        resting_hits, failed_hits,
+        "the click targets hold still as the pick moves"
+    );
+    assert_eq!(failed_hits, running_hits);
+    assert!(
+        !resting.contains('┤'),
+        "with color, no caps paint:\n{resting}"
+    );
+}
+
+/// Under `NO_COLOR` the chip fill drops, so the `┤ ├` caps return as the
+/// pick's shape — wrapped around the picked bucket (the make-up gaps reserve
+/// no rail cells), and covered by the bucket's hit so the cap cells stay
+/// clickable.
+#[test]
+fn make_up_caps_mark_the_pick_under_no_color() {
+    let theme = Theme::fixed(true);
+    let snapshot = make_up_snapshot();
+    let (lines, hits) = fleet_header_lines(
+        &theme,
+        &snapshot.worktree_groups,
+        Some(AgentStatus::Failed),
+        38,
+    );
+    let text = make_up_text(&lines);
+    assert!(
+        text.contains("┤! 1├"),
+        "the caps wrap the picked bucket alone:\n{text}"
+    );
+    assert_eq!(text.matches('┤').count(), 1, "one pick, one cap pair");
+    let hit = hits
+        .iter()
+        .find(|hit| hit.status == AgentStatus::Failed)
+        .expect("the picked bucket keeps its hit");
+    let footprint: String = text
+        .chars()
+        .skip(usize::from(hit.col_start))
+        .take(usize::from(hit.col_end - hit.col_start))
+        .collect();
+    assert_eq!(footprint, "┤! 1├", "the hit covers the caps");
+}
+
+/// A zero bucket emits no hit — inert, as if not a tab — and every emitted
+/// hit's column range covers exactly its bucket's `glyph count` text, in the
+/// left cluster (content-absolute) and the right (offset to wherever
+/// `pin_right` landed it) alike.
+#[test]
+fn make_up_zero_buckets_emit_no_hit_and_hits_cover_their_text() {
+    let theme = Theme::fixed(false);
+    let snapshot = make_up_snapshot();
+    let (lines, hits) = fleet_header_lines(&theme, &snapshot.worktree_groups, None, 38);
+    let text = make_up_text(&lines);
+    assert_eq!(
+        hits.iter().map(|hit| hit.status).collect::<Vec<_>>(),
+        vec![AgentStatus::Failed, AgentStatus::Running],
+        "only the non-zero buckets are tabs"
+    );
+    for hit in &hits {
+        let footprint: String = text
+            .chars()
+            .skip(usize::from(hit.col_start))
+            .take(usize::from(hit.col_end - hit.col_start))
+            .collect();
+        assert_eq!(
+            footprint,
+            format!("{} 1", labels::status_glyph(hit.status)),
+            "the hit sits exactly on its bucket:\n{text}"
+        );
+    }
+}
+
+/// A bucket the width clips keeps no hit — dropped whole rather than left
+/// aimed past the visible edge, the tab rail's drop-whole-tab rule.
+#[test]
+fn make_up_clipped_bucket_drops_its_hit() {
+    let theme = Theme::fixed(false);
+    let snapshot = make_up_snapshot();
+    // 18 columns forces the left-packed fallback and clips the busy tail, so
+    // the right-cluster `⢿ 1` bucket falls past the edge.
+    let (_, hits) = fleet_header_lines(&theme, &snapshot.worktree_groups, None, 18);
+    assert!(
+        hits.iter().all(|hit| usize::from(hit.col_end) <= 18),
+        "no hit points past the visible edge: {hits:?}"
+    );
+    assert_eq!(
+        hits.iter().map(|hit| hit.status).collect::<Vec<_>>(),
+        vec![AgentStatus::Failed],
+        "the clipped working bucket keeps no hit"
+    );
+}
+
+/// A make-up bucket click narrows the body to that status: only the `!` card
+/// remains — the running agent's worktree is skipped whole (header included),
+/// the status-less process tail drops, and the `+K more` line is suppressed —
+/// while the cockpit make-up keeps the full-fleet counts (`⢿` still reads 1).
+/// With color on, the picked bucket is a chip — fill and weight, never a
+/// glyph — so the make-up line's text matches the resting frame exactly.
+#[test]
+fn render_make_up_filter_narrows_the_body() {
+    let mut snapshot = make_up_snapshot();
+    let main_group = snapshot
+        .worktree_groups
+        .iter_mut()
+        .find(|group| group.label == "main")
+        .expect("the fixture groups by worktree");
+    main_group.hidden_count = 2;
+    main_group.rows.push(rimz::SidebarRow {
+        row_kind: rimz::SidebarRowKind::Process,
+        id: "%9".to_owned(),
+        name: "zsh".to_owned(),
+        status: None,
+        phase: rimz::agents::TurnPhase::Idle,
+        pane: Some(pane("%9", "zsh", "/home/me/query-engine")),
+        request_id: None,
+        surface: None,
+        task: None,
+        prompt: None,
+        model: None,
+        effort: None,
+        context_pct: None,
+        context_window: None,
+        total_tokens: None,
+        cache_read_input_tokens: None,
+        fresh_input_tokens: None,
+        output_tokens: None,
+        todo_done: None,
+        todo_total: None,
+        context: None,
+        context_severity: None,
+        worktree_path: Some("/home/me/query-engine".to_owned()),
+        worktree_branch: Some("main".to_owned()),
+        last_activity: fixed_now(),
+        registered_at: None,
+        resolver: None,
+        options: Vec::new(),
+        sub_agents: Vec::new(),
+        process_active: false,
+        command_detail: None,
+        compacting: false,
+        turn_error_label: None,
+        rss_kb: None,
+        cpu_pct: None,
+        io_bps: None,
+    });
+    let ui = UiState {
+        make_up_filter: Some(rimz::feed::AgentStatus::Failed),
+        ..Default::default()
+    };
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
+    assert!(
+        screen.contains("! claude"),
+        "the failed card is the body:\n{screen}"
+    );
+    assert!(
+        !screen.contains("codex") && !screen.contains("feature-migration"),
+        "a group with no matching row is skipped whole:\n{screen}"
+    );
+    assert!(
+        !screen.contains("zsh"),
+        "a status-less process row drops under a filter:\n{screen}"
+    );
+    assert!(
+        !screen.contains("more"),
+        "the producer-capped +K line is suppressed under a filter:\n{screen}"
+    );
+    assert!(
+        screen.contains("⢿ 1"),
+        "the make-up still counts the full fleet:\n{screen}"
+    );
+    assert_snapshot("make_up_filter_failed", screen);
 }
 
 /// A compacting agent counts as **working** (`⢿`) in the cockpit — the

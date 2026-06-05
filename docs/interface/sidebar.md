@@ -131,6 +131,7 @@ The top block. Fixed height, so the rows below it never jump as agents change st
 - **Summary — who's here and what today burned.** Two lines, each a colored glyph and soft-tier count on the left with today's numbers pinned right. Line 1 is the day at a glance: `◎` (teal) the sessions (threads) that have run today, with today's accumulated token breakdown — `◇` total · `↘` input · `↗` output · `◍` cache-write · `◌` cache-read, each marker in its one color — pinned to the right edge in the coarse integer form (it drops when today recorded no tokens, leaving `◎ N` alone). Line 2: `¤` (the agents' working clay) the live agents in the room right now, with today's spend pinned right. The counts read from the live fleet and the JSONL `value_tally`'s today window. An empty room reads `◎ 0` over `¤ 0`.
 - **Today's spend.** The fleet's total spend for today, pinned to the right of the live-agents line, **counting up** in a stepped odometer tick as a turn lands — big steps a tenth of the remaining gap, decaying into penny-by-penny ticks onto the exact figure, with a brief brighten as it settles. It joins the line once today records spend.
 - **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (breathing, each wearing its oldest row's age heat over a yellow floor), then a free `○` idle agent — calm, but a free agent wants work — and a `⏸` rate-limited count closing the cluster (held amber, parked). The **right cluster** is the busy tail: `⢿` working (every running agent — the thinking sparkle and the compaction pulse are per-row heads, not buckets), then `✓` done. Every bucket always shows — the glyph in its semantic tone, a zero count at the soft stat tier beside it — so the line is scannable by position and reads as a stable colored legend.
+- **Each non-zero bucket is click-to-filter.** Clicking a bucket narrows the agent cards to that status; clicking it again — or answering the bucket down to zero — returns to all, and a zero bucket is inert. The picked bucket paints as a chip — dark ink on its semantic fill, bold, the dashboard tab's look — and under `NO_COLOR` `┤ ├` caps wrap the pick instead; the resting line never changes shape. The counts always span the full fleet, filtered or not, so the line stays the room's honest tally while the body narrows.
 
 An **empty room** has no make-up line at all — just identity and the `◎ 0` / `¤ 0` summary:
 
@@ -151,6 +152,8 @@ The first-run hint names the real next step: an un-wired room points at `rimz ho
 ## Zone 2 — the agent cards
 
 The body: one card per pane, grouped under the worktree it lives in. A worktree is total isolation — only same-worktree agents collaborate — so each group reads as one bounded block.
+
+While a [make-up bucket](#zone-1--the-cockpit) is picked, the body shows only the matching cards: non-matching rows, process rows, worktree groups left empty, and the `+K more` line all step aside until the pick clears.
 
 **The cards scroll between the pinned zones.** When the cards outgrow the pane, they scroll between the cockpit above and the provider dashboard below — both stay put — and a thin scrollbar rides the right margin while the viewport is moving: a solid `▐` thumb over a hairline `▕` track, the position carried by shape so it reads under `NO_COLOR`. The bar follows the motion — a wheel scroll or the selection-driven auto-follow — and settles away about a second after the view stops, so a resting column stays clean; `[sidebar] scrollbar = "always" | "never"` pins it up or removes it ([configuration](../reference/configuration.md#scrollbar)). The viewport follows the selection: picking any row — arrows, a click landing, `␣` — brings its card, expanded subagent list included, fully into view, and a card taller than the window pins its first line to the top. The mouse wheel scrolls the viewport freely without moving the selection — peek anywhere; the next selection change snaps the view back to the selected card. `?` reveals the help overlay at the zone's tail whatever the scroll position, and the view holds there while the overlay is open.
 
@@ -407,6 +410,7 @@ The renderer's golden tests in [`crates/rimz-sidebar/src/render/`](../../crates/
 | clear worktree header (`✓`) | `worktree_clear_safe_to_remove` |
 | dirty tree blocks the markers | `worktree_dirty_tree_keeps_the_cluster` |
 | per-worktree cap | `group_cap_with_overflow` |
+| make-up bucket picked, body filtered | `make_up_filter_failed` |
 | cards overflow, scrollbar mid-scroll | `scroll_overflow_shows_bar` |
 | selection-driven scroll to bottom, bar settled away | `scroll_offset_follows_selection_to_bottom` |
 | tall expanded card pinned to top | `scroll_pins_tall_expanded_card_top` |

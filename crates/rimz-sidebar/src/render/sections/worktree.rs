@@ -5,6 +5,7 @@
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 use rimz::config::ContextSeverityConfig;
+use rimz::feed::AgentStatus;
 use rimz::{SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};
 
 use crate::render::CostRolls;
@@ -12,6 +13,7 @@ use crate::render::fmt::clip;
 use crate::render::labels::{
     branch_delta_spans, diff_spans, status_glyph, trunk_clear_spans, trunk_equal_spans,
 };
+use crate::render::row_passes_filter;
 use crate::render::theme::Theme;
 
 use super::agent_card::row_lines;
@@ -22,7 +24,11 @@ use super::{Gutter, Tier, content_width, with_gutter};
 /// (or `None` for the group header and the `+K more` hidden-count line). `map`
 /// stays exactly as long as `lines`, so the hit-test can look a screen line up
 /// to a row with no separate geometry. The row index captured for a row's lines
-/// is the value *before* `row_index` advances, matching `app::visible_rows()`.
+/// is the value *before* `row_index` advances, matching `app::visible_rows()`:
+/// both walk the same [`row_passes_filter`] predicate, so the ordinals stay 1:1
+/// under a make-up filter too. The caller skips a group the filter empties; the
+/// `+K more` line is filter-suppressed here (it counts producer-capped calm
+/// rows, not filtered ones, so it would mislead under a narrowed body).
 #[allow(clippy::too_many_arguments)]
 pub(in crate::render) fn worktree_group_lines(
     theme: &Theme,
@@ -30,6 +36,7 @@ pub(in crate::render) fn worktree_group_lines(
     providers: &[SidebarProviderPanel],
     width: usize,
     bands: &ContextSeverityConfig,
+    filter: Option<AgentStatus>,
     row_index: &mut usize,
     selected_index: usize,
     animation_phase: u64,
@@ -42,8 +49,13 @@ pub(in crate::render) fn worktree_group_lines(
     // inter-card gaps, with the selected card itself lit bold `▌`. The `external`
     // catch-all is never a lane.
     let first_row = *row_index;
+    let passing = group
+        .rows
+        .iter()
+        .filter(|row| row_passes_filter(row, filter))
+        .count();
     let group_selected = group.kind != SidebarWorktreeKind::External
-        && (first_row..first_row + group.rows.len()).contains(&selected_index);
+        && (first_row..first_row + passing).contains(&selected_index);
     let lane = if group_selected {
         Gutter::Lane
     } else {
@@ -60,14 +72,19 @@ pub(in crate::render) fn worktree_group_lines(
     // row — the agent adjacent to the header — so clicking the pod name jumps
     // straight into it. The `external` divider is not a worktree name, so it
     // stays inert chrome.
-    let header_target = (group.kind != SidebarWorktreeKind::External && !group.rows.is_empty())
-        .then_some(*row_index);
+    let header_target =
+        (group.kind != SidebarWorktreeKind::External && passing > 0).then_some(*row_index);
     map.push(header_target);
     let tier = Tier::for_width(content_width(width));
     // A blank line separates consecutive cards; it carries the group's lane
     // gutter so a selected worktree's spine runs unbroken through the gap, and
     // maps to `None` as structural chrome (never a jump target).
-    for (index, row) in group.rows.iter().enumerate() {
+    for (index, row) in group
+        .rows
+        .iter()
+        .filter(|row| row_passes_filter(row, filter))
+        .enumerate()
+    {
         if index > 0 {
             lines.push(with_gutter(theme, Line::from(""), lane));
             map.push(None);
@@ -91,7 +108,7 @@ pub(in crate::render) fn worktree_group_lines(
         map.extend(std::iter::repeat_n(Some(this_row), row_lines.len()));
         lines.extend(row_lines);
     }
-    if group.hidden_count > 0 {
+    if filter.is_none() && group.hidden_count > 0 {
         lines.push(with_gutter(
             theme,
             Line::styled(format!("  +{} more", group.hidden_count), theme.dim()),
