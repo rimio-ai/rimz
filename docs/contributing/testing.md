@@ -12,7 +12,7 @@ Local runner: `cargo xtask test` (wraps `cargo nextest run`). Doctests run separ
 - **Integration tests** live under `crates/rimz/tests/integration/` and cover public CLI, ledger files, sockets, hooks, resolvers, and subprocess round trips through the shared harness.
 - **Journey tests** live under `crates/rimz/tests/integration/journey/` and assert rendered end-user flows through a real `rimz-sidebar serve` process and `vt100` screen capture.
 - **Live-backend tests** cover real tmux/Zellij behavior and self-skip when the backend binary or socket permissions are unavailable. They stay narrow and backend-specific.
-- **Performance tests** live under `crates/rimz/tests/integration/performance/` and assert bounded work, fork counts, cache behavior, or single-flight behavior. They do not duplicate product semantics already covered by unit or journey tests.
+- **Performance tests** live under `crates/rimz/tests/integration/performance/` and assert bounded work, fork counts, cache behavior, or single-flight behavior. They do not duplicate product semantics already covered by unit or journey tests. Syscall and IO budgets read the always-compiled testkit counters (`ledger::atomic::testkit::fsync_count`, `event_log::testkit::bytes_read`) — `cfg(test)` statics are invisible to the integration binary, and nextest's process-per-test isolation keeps readings exact.
 
 Do not land ignored tests for future product targets. Keep planned behaviour in the roadmap or design docs, then add the executable test when the implementation is ready to pass in the normal nextest suite.
 

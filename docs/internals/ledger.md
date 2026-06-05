@@ -49,17 +49,32 @@ snapshots/rollup.json
 feed/<request_id>.json
 feed/terminal/<request_id>.json
 locks/workspace.lock
+locks/publish.lock
+locks/abandon-sweep.stamp
+locks/log-sync.stamp
+locks/publish.stamp
 ```
+
+### Write classes
+
+Every disk write belongs to one of four classes, and the classification rule is stated once: fsync leaves the hot path; cold paths keep it even where the same-host argument would allow relaxing, because removing it there buys nothing. Every fsync syscall funnels through `ledger/atomic.rs` (CI grep), so the contract is enforced, not reviewed.
+
+| Class | Files | Write discipline | After a power cut |
+| --- | --- | --- | --- |
+| Event log | `events.log.jsonl` | one `write()` per CRC-framed record, no per-record fsync; the off-lock write tail issues a group fdatasync debounced to at most one per second (`locks/log-sync.stamp`), and rotation syncs the file before the rename | intact through the last group sync. The loss window is up to one debounce interval of trailing observational events under sustained load — and a final pre-quiescence tail additionally rides kernel writeback (~30s default) — with the frame CRC turning any lost writeback into deterministic corruption that repair truncates |
+| Coordination | `feed/*.json`, `feed/terminal/*.json` | temp file + atomic rename, no fsync | a lost item file costs at most the audit-completeness of its final window; the dead-owner expel abandons any ask whose waiter died with the machine |
+| Cache | `snapshots/latest.json`, `snapshots/rollup.json`, heartbeats, sidecars | temp file + atomic rename, no fsync (`write_temp_then_rename_cache`) | rebuilt from the log on the next read |
+| Cold path | `workspace.json`, `agents.carryover.json`, trust grants, resolver allowlists, hook installs | temp file, fsync, rename, parent-dir sync (`write_temp_then_rename`) | survives |
 
 Rules:
 
 - `workspace.json` records the last known project root and session name for maintenance commands; feed files and the event log remain the request source of truth. Launch reads the prior record before overwriting it: when the derived session name diverges from the recorded one and a session still answers to the recorded name, launch retires that session and rebirths the workspace under the new name, so a changed derivation never strands a live session or its sidebar.
-- Feed files are CAS coordination state, written temp-file + atomic rename with no fsync: the CAS re-checks under the workspace lock, same-host writers always read their own renames, and the event log carries the durable audit trail. After a power cut the dead-owner expel abandons any ask whose waiter died with the machine, so a lost item file costs at most the audit-completeness of its final window.
+- Feed files are CAS coordination state: the CAS re-checks under the workspace lock, same-host writers always read their own renames, and the event log carries the durable audit trail, so rename atomicity is the whole durability requirement (coordination class).
 - Resolutions take the workspace lock, then CAS on `status = pending`. First valid writer wins.
 - A feed item that reaches a terminal status (`resolved`, `timed_out`, `abandoned`) relocates into `feed/terminal/` with an atomic rename under the same lock, so decision-path scans stay O(pending). Audit reads (`feed list --audit`, `feed show`) span both directories.
-- `events.log.jsonl` uses length-plus-CRC framing (`<len> <crc32> <json>`), one `write()` per record with no per-record fsync: appended frames become durable through the write tail's group fdatasync, debounced to at most one per second, and rotation syncs the file before the rename publishes the archive. A power cut can cost up to that interval of trailing observational events (a final pre-quiescence tail rides kernel writeback); the CRC turns any lost writeback into deterministic corruption that repair truncates. The event log and the feed files are the crash-recoverable truth; everything under `snapshots/` is a reconstructible cache.
+- `events.log.jsonl` uses length-plus-CRC framing (`<len> <crc32> <json>`), the CRC computed over the JSON payload; pre-CRC frames still decode, so old logs fold cleanly. The event log and the feed files are the crash-recoverable truth; everything under `snapshots/` is a reconstructible cache.
 - A torn trailing record at SIGKILL is skipped on rebuild and logged. A corrupt frame *behind* later frames hard-errors every read; the next write tail (or `rimz gc`) repairs by truncating at the first invalid frame and republishing from the surviving prefix.
-- The workspace flock makes the log single-writer-at-a-time, and recovery is built on that: only the *trailing* frame can ever be in flight, so a torn frame anywhere earlier is corruption and rebuild fails loudly rather than silently dropping the events behind it. This is load-bearing — lock-free appends (`O_APPEND` from concurrent writers) would let writeback reordering tear a *middle* frame after a crash, and are unsafe until the framing grows per-frame magic + checksum resync. See the rejected-candidates list in [performance.md](./performance.md#deferred-candidates).
+- The workspace flock makes the log single-writer-at-a-time, and recovery is built on that: only the *trailing* frame can ever be in flight, so a torn frame anywhere earlier is corruption and rebuild fails loudly rather than silently dropping the events behind it. This is load-bearing — lock-free appends (`O_APPEND` from concurrent writers) would let writeback reordering tear a *middle* frame after a crash, and are unsafe until the framing grows per-frame magic for resync (the CRC validates a frame; it cannot relocate the next boundary past a torn middle). See the rejected-candidates list in [performance.md](./performance.md#deferred-candidates).
 - Rollup reads are lock-free. The snapshot resumes from the persisted fold base in `snapshots/rollup.json` and folds only the log bytes appended since, so a writer's half-written trailing frame is simply not folded until it completes — it can never drop a previously-folded event. The write that completes the frame posts the wakeup that folds it.
 - `rimz workspace rotate-events` archives the active log into `events.log.archive/events.<uuidv7>.jsonl` once it exceeds the operator-supplied byte threshold (default `64MiB`); UUIDv7 filenames sort chronologically. The same command prunes archives older than `--archive-older-than`.
 - Before rename, the agent rollup of the rotating log is merged into `agents.carryover.json`. The snapshot reducer loads carryover and lets newer in-log observations override; this keeps the sidebar's agent panel correct across rotations without rescanning archives. Rotation also bumps the rollup generation and reseeds `snapshots/rollup.json` from the carryover, so incremental readers detect the boundary and never fold across it.
@@ -154,5 +169,6 @@ It does not change agent behaviour, never surfaces as a sidebar attention item, 
 | Sidebar reload | yes | sidebar socket rebound on attach | yes |
 | Multiplexer server crash | yes | no | no |
 | Host reboot | yes | no | no — needs host supervisor (tmux-resurrect, Zellij resurrect, systemd) |
+| Host power cut | yes — through the last group fdatasync; up to ~1s of trailing observational events can be lost, and repair truncates any torn suffix (see [write classes](#write-classes)) | no | no — needs host supervisor |
 
-Rimz guarantees the ledger across all of these. The session and processes survive only what the host supervisor and the multiplexer server keep alive.
+Rimz guarantees the ledger across all of these — at a power cut, through the last group sync, with repair bounding the damage to the final window. The session and processes survive only what the host supervisor and the multiplexer server keep alive.
