@@ -96,13 +96,14 @@ impl WmColumns {
 }
 
 /// One ledger row — `W: ◎ {sessions}  ◇ {total} ↘ {in} ↗ {out} ◌ {cache_read}`
-/// left-clustered, the `$ {spend}` pinned to the right edge. The `W:`/`M:`
-/// window tag wears sky blue — distinct from the teal `◎` beside it — and each
-/// token marker its one shared color, with the figures at full strength
-/// ([`Theme::value`]). Every numeric field is right-aligned to the shared
-/// [`WmColumns`] width, so the `W:` and `M:` rows stack into one tidy grid. The
-/// `◍` cache-write field is intentionally omitted here — the ledger keeps to
-/// the four headline figures the all-time read needs.
+/// left-clustered, the `$ {spend}` pinned to the right edge. A one-cell lead
+/// pad sets the `W:`/`M:` tags a hair off the chrome edge. The window tag wears
+/// sky blue — distinct from the teal `◎` beside it — and each token marker its
+/// one shared color, with the figures at full strength ([`Theme::value`]).
+/// Every numeric field is right-aligned to the shared [`WmColumns`] width, so
+/// the `W:` and `M:` rows stack into one tidy grid. The `◍` cache-write field
+/// is intentionally omitted here — the ledger keeps to the four headline
+/// figures the all-time read needs.
 fn wm_row(
     theme: &Theme,
     label: &str,
@@ -113,6 +114,7 @@ fn wm_row(
     let value = theme.value();
     let marker = |color: Color| theme.style(color, Modifier::empty());
     let left = vec![
+        Span::raw(" "),
         Span::styled(format!("{label}: "), marker(Color::Blue)),
         Span::styled(SESSIONS_GLYPH, marker(Color::Cyan)),
         Span::styled(

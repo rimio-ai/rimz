@@ -33,8 +33,8 @@ A real room: one Claude agent working in `main`, its card selected, with the per
  ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ ↻ 2h06m    ← 5-hour budget left, until reset
    ▘▘ ▝▝   7d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h    ← 7-day budget left, until reset
 
- W: ◎  92  ◇ 16.5k ↘ 2.3k ↗ 14.2k ◌ 168k       $140.57  ← week ledger: sessions · tokens · spend
- M: ◎ 212  ◇ 76.5k ↘ 12.3k ↗ 64.2k ◌ 668k      $240.57  ← month ledger
+  W: ◎  92  ◇ 16.5k ↘  2.3k ↗ 14.2k ◌ 168k     $140.57  ← week ledger: sessions · tokens · spend
+  M: ◎ 212  ◇ 76.5k ↘ 12.3k ↗ 64.2k ◌ 668k     $240.57  ← month ledger
                       ? for help                         ← footer (pinned to the bottom edge)
 ```
 
@@ -327,11 +327,11 @@ Every bar shares one start column and one end column whichever tab is active, so
 The fleet's running totals seal the bottom of the dashboard, above the footer — a quiet two-row ledger you learn to glance at, never a cue that competes with the rows. A trailing-week (`W:`) row and a trailing-month (`M:`) row, fleet-wide across every provider.
 
 ```
- W: ◎  92  ◇ 16.5k ↘ 2.3k ↗ 14.2k ◌ 168k       $140.57
- M: ◎ 212  ◇ 76.5k ↘ 12.3k ↗ 64.2k ◌ 668k      $240.57
+  W: ◎  92  ◇ 16.5k ↘  2.3k ↗ 14.2k ◌ 168k     $140.57
+  M: ◎ 212  ◇ 76.5k ↘ 12.3k ↗ 64.2k ◌ 668k     $240.57
 ```
 
-- **The rows.** Each reads `◎ sessions  ◇ total ↘ input ↗ output ◌ cache-read  $spend`: the thread count, the precise one-decimal token figures (the exact record beside the cockpit's coarse live read) at full strength, and the spend pinned to the right edge in money-green. The `W:`/`M:` window tags wear sky blue, and each marker its one shared color — the teal `◎`, the soft-violet `◇`, the segment-toned `↘ ↗ ◌`. Every numeric field is right-aligned into one shared grid, so the `W:` / `M:` labels stack and each column lines up. The `◍` cache-write field is omitted here — the ledger keeps to the headline figures.
+- **The rows.** Each reads `◎ sessions  ◇ total ↘ input ↗ output ◌ cache-read  $spend`: the thread count, the precise one-decimal token figures (the exact record beside the cockpit's coarse live read) at full strength, and the spend pinned to the right edge in money-green. A one-cell lead pad sets the `W:`/`M:` tags a hair off the chrome edge; the tags wear sky blue, and each marker its one shared color — the teal `◎`, the soft-violet `◇`, the segment-toned `↘ ↗ ◌`. Every numeric field is right-aligned into one shared grid, so the `W:` / `M:` labels stack and each column lines up. The `◍` cache-write field is omitted here — the ledger keeps to the headline figures.
 - **No animation.** The ledger figures are static — only today's headline (the cockpit's `$`) counts up. The windows escalate `today → week → month`.
 
 Every figure is computed from the transcript JSONL — Codex's dollars priced from its token counts, every provider that logs usage counted, all of them fleet-wide. The ledger is dropped until something has been recorded.
