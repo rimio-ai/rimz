@@ -11,6 +11,7 @@
 //! lock keeps concurrent attaches from each spawning a daemon, and the orphan
 //! sweep reaps a SIGKILLed instance's runtime files.
 
+pub mod produce;
 pub mod snapshot;
 
 use std::collections::HashSet;

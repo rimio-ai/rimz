@@ -589,6 +589,31 @@ fn invariants(root: &Path) -> Result<()> {
         )?;
     }
 
+    // The sidebar library tree (the consumer read in `snapshot.rs` and the
+    // produce pipeline in `produce/`) is read-only on ledger truth: the rollup
+    // arrives through the cursor fold and every write is a cache-class runtime
+    // file. Ledger writers, the feed store, the decision bridge, and the Codex
+    // broker belong outside it.
+    let outside_sidebar_library = {
+        let sidebar_root = root.join("crates/rimz/src/sidebar");
+        move |path: &Path| !path.starts_with(&sidebar_root)
+    };
+    for needle in [
+        concat!("ledger", "::", "writer"),
+        concat!("feed_", "store"),
+        concat!("::", "bridge"),
+        concat!("bridge", "::"),
+        concat!("::", "broker"),
+        concat!("broker", "::"),
+    ] {
+        ensure_no_match(
+            &files,
+            needle,
+            &outside_sidebar_library,
+            "crates/rimz/src/sidebar is read-only on the ledger: no writer, feed-store, bridge, or broker imports",
+        )?;
+    }
+
     // Durability barriers live in one file: every fsync syscall goes through
     // `ledger/atomic.rs`, so the write-class contract is auditable in one
     // place and its testkit counter observes every sync.

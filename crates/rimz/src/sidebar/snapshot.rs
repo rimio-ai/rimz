@@ -10,8 +10,11 @@
 //! [`read_published_snapshot`] is that consumer read: it lives in the library so
 //! the native renderer calls it directly (no subprocess per tick) and the
 //! `rimz sidebar snapshot --no-produce` CLI path shares one implementation. The
-//! producer's write side (single-flight election, the git forks) stays in
-//! `cli::sidebar`, which constructs these same cache types.
+//! producer's write side — the single-flight elections, the pane/metrics/git
+//! production — is its sibling module [`super::produce`], which constructs
+//! these same cache types; both sit inside the sidebar's read-only-on-ledger-
+//! truth boundary, writing only cache-class runtime files (pinned by `cargo
+//! xtask invariants`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -241,8 +244,23 @@ pub fn snapshot_cache_is_fresh(
 /// pane-list cadence. `None` only when the ledger itself is unreadable, which
 /// the caller treats as a soft miss and holds the last good frame.
 fn consumer_rollup(state: &StatePaths, cursor: &mut RollupCursor) -> Option<SidebarSnapshot> {
-    crate::ledger::snapshot::read_fresh_latest(state)
-        .or_else(|| crate::ledger::snapshot::build_with_cursor(state, cursor).ok())
+    rollup_snapshot(state, cursor).ok()
+}
+
+/// [`consumer_rollup`] with the error chain preserved: the produce pipeline and
+/// one-shot CLI reads surface *why* the ledger was unreadable (a torn frame, a
+/// permissions failure) instead of folding it into a soft miss. One
+/// implementation under both shapes — the loop-shaped consumer read swallows
+/// the error because its recovery is "hold the last good frame", where a
+/// produce or inspection call reports it.
+pub fn rollup_snapshot(
+    state: &StatePaths,
+    cursor: &mut RollupCursor,
+) -> crate::ledger::snapshot::Result<SidebarSnapshot> {
+    match crate::ledger::snapshot::read_fresh_latest(state) {
+        Some(snapshot) => Ok(snapshot),
+        None => crate::ledger::snapshot::build_with_cursor(state, cursor),
+    }
 }
 
 /// Age of the producer's published same-session frame at `now_ms`, in
