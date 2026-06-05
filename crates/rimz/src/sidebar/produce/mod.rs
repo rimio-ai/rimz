@@ -24,10 +24,13 @@ mod metrics;
 mod panes;
 mod spending;
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::ids::{MuxName, PaneId};
-use crate::sidebar::snapshot::{RollupCursor, SnapshotCache, rollup_snapshot, unix_now_ms};
+use crate::sidebar::snapshot::{
+    EnrichMode, RollupCursor, SnapshotCache, enrich, live_row_costs, rollup_snapshot, unix_now_ms,
+};
 use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 
 #[derive(Debug, thiserror::Error)]
@@ -143,106 +146,53 @@ fn pane_list_fixture() -> Result<Option<Vec<crate::feed::PaneRef>>> {
     Ok(Some(panes))
 }
 
-/// Fold the producer enrichments onto a base snapshot, in the produce order
-/// the consumer's [`super::snapshot::enrich_consumer`] mirrors read-only.
+/// Assemble the producer's forked inputs and run the shared enrichment spine
+/// ([`crate::sidebar::snapshot::enrich`]) in [`EnrichMode::Producing`]. This
+/// owns only what forks or walks; the spine owns the fold order.
+///
+/// - Group roots: a repo room's worktree checkouts, a directory room's
+///   depth-1 child repos — cached under `WORKTREE_ROOTS_TTL`, refused below
+///   the session-boundary freshness floor (`min_pane_cache_ms`) so a new
+///   checkout's first agent re-enumerates immediately.
+/// - The fleet spending walk runs before the config fold so the dashboard
+///   panels are built, ranked, and capped with each provider's spend known.
+/// - The per-machine config loads once (best-effort — a read failure falls
+///   back to defaults, so display preference is enrichment, never a
+///   precondition): the spine's config fold consumes it, and the git refresh
+///   closure takes the preferred trunk from it.
 fn enrich_producing(
-    mut snapshot: SidebarSnapshot,
+    snapshot: SidebarSnapshot,
     frame: Option<SnapshotCache>,
     runtime: &RuntimePaths,
     exclude: Option<&PaneId>,
     min_pane_cache_ms: Option<u64>,
 ) -> SidebarSnapshot {
-    // Enumerate the room's group roots — a repo room's worktree checkouts (so
-    // one parked outside the project root still earns its own pod instead of
-    // folding into `external`), a directory room's depth-1 child repos. The
-    // probe is cached under WORKTREE_ROOTS_TTL — refused below the
-    // session-boundary freshness floor, so a new checkout's first agent
-    // re-enumerates immediately — and runs on the fetch worker, never the
-    // render thread.
-    if let Some(root) = snapshot.project_root.clone() {
-        let roots =
-            git::project_group_roots(&root, snapshot.root_class, runtime, min_pane_cache_ms);
-        snapshot = snapshot.with_worktree_roots(roots);
-    }
-
-    // Fold each session's rich statusline context onto its agent state
-    // (read-only; the feed process is the writer). Both the context sidecar
-    // and the per-tool activity heartbeats fold only onto existing agents, so
-    // an empty room skips both directory scans — the common idle case.
-    // Activity lands before the pane overlay so age, ranking, the ask-fold
-    // guard, and the stall window all see the truer per-tool value rather than
-    // the turn-grained event timestamp.
-    if !snapshot.agents.is_empty() {
-        snapshot = snapshot.with_agent_context(crate::ledger::agent_context::read_all(runtime));
-        snapshot =
-            snapshot.with_subagent_context(crate::ledger::subagent_context::read_all(runtime));
-        let activity = crate::agent_activity::read_for_keys(
-            runtime,
-            snapshot
-                .agents
-                .iter()
-                .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
-        );
-        snapshot = snapshot.with_agent_activity(&activity);
-    }
-
-    // Wiring state gates the live-pane fold (the idle-instance synthesis),
-    // so set it before folding panes, not after.
-    snapshot.wired_lazy_kinds = crate::sidebar::snapshot::wired_lazy_kinds();
-    // Reap daemon-mode Codex ghosts the app-server no longer holds: a
-    // remote-control conversation records the shared daemon's pid, which
-    // outlives it, so process liveness can never reap it. Gated on a
-    // pane-less root `codex` session actually being present, so the common
-    // room pays no proc scan or daemon probe. Best-effort and fail-safe —
-    // no daemon process or an untrusted loaded list keeps every session —
-    // and run before the pane fold so a ghost can neither render nor bind
-    // its stale stats to a live pane.
-    if snapshot.agents.iter().any(|agent| {
-        agent.kind == "codex" && agent.pane.is_none() && agent.parent_agent_id.is_none()
-    }) {
-        let daemon_pids = crate::remote_control::codex_daemon_pids();
-        if !daemon_pids.is_empty() {
-            let loaded = crate::agents::codex::loaded_daemon_threads();
-            snapshot.drop_dead_daemon_sessions(&daemon_pids, loaded.as_ref());
-        }
-    }
-    if let Some(frame) = frame {
-        let panes = frame.panes;
-        if let Some(own) = exclude {
-            snapshot.own_view = crate::SidebarOwnView::from_panes(own, &panes);
-        }
-        // Computed from the full session pane list (pre-exclusion), before
-        // `with_live_panes` consumes `panes`. The panes arrive with their
-        // `/proc`-derived process starts already stamped at frame
-        // production ([`panes::stamp_pane_process_starts`]), so the
-        // cwd-fallback guard fires here and in the consumer in-process fold
-        // alike.
-        snapshot.only_daemon_view_remains = SidebarSnapshot::only_daemon_view(&panes);
-        snapshot = snapshot.with_live_panes(panes, exclude);
-    }
-    snapshot.agent_hooks_ready = crate::sidebar::snapshot::agent_hooks_ready();
-    // Walk transcript history for the fleet + per-provider spend before
-    // the config fold, so the dashboard panels are built, ranked, and
-    // capped with each provider's spend already known.
-    let spending = spending::compute_fleet_spending(runtime);
-    // Fold the per-machine config onto the snapshot: the per-provider
-    // dashboard (account-scoped budgets, spend, emblem). The producer owns
-    // the out-of-band account probe (a subprocess) and publishes it to
-    // `accounts.json` for consumer tabs to read back. Best-effort — a config
-    // read failure falls back to defaults, so display preference is
-    // enrichment, never a precondition. Loaded once here: the fold consumes
-    // it and the git probe reads the preferred trunk from it.
+    let roots = snapshot.project_root.clone().map(|root| {
+        git::project_group_roots(&root, snapshot.root_class, runtime, min_pane_cache_ms)
+    });
     let config = crate::config::MachineConfig::load().unwrap_or_default();
     let trunk = config.sidebar.trunk.clone();
-    snapshot = crate::sidebar::snapshot::fold_machine_config_producing(
+    let compute_spending = |snapshot: &SidebarSnapshot| {
+        let live_costs: BTreeMap<String, f64> = live_row_costs(snapshot)
+            .map(|(id, usd, _)| (id.to_owned(), usd))
+            .collect();
+        spending::compute_fleet_spending(runtime, live_costs)
+    };
+    let refresh_git = |snapshot: &mut SidebarSnapshot| {
+        git::enrich_worktree_groups(snapshot, runtime, trunk.as_deref());
+    };
+    enrich(
         snapshot,
+        frame,
         runtime,
-        &spending.by_provider,
-        config,
-    );
-    git::enrich_worktree_groups(&mut snapshot, runtime, trunk.as_deref());
-    spending::apply_spending(&mut snapshot, &spending);
-    snapshot
+        exclude,
+        EnrichMode::Producing {
+            roots,
+            compute_spending: &compute_spending,
+            config: Box::new(config),
+            refresh_git: &refresh_git,
+        },
+    )
 }
 
 /// Test fixtures shared by the produce submodules' unit suites.

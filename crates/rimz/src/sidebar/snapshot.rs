@@ -638,27 +638,86 @@ pub fn read_published_snapshot(
     let cache_path = runtime.root.join("snapshot.json");
     let cache = read_snapshot_cache(&cache_path, session)?;
     let base = consumer_rollup(state, cursor)?;
-    Some(enrich_consumer(base, Some(cache), runtime, exclude))
+    Some(enrich(
+        base,
+        Some(cache),
+        runtime,
+        exclude,
+        EnrichMode::Cached,
+    ))
 }
 
-/// Fold the read-only enrichments onto a consumer's base snapshot: the cached
-/// worktree roots, each session/subagent statusline context and per-tool
-/// activity, the live-pane overlay with this renderer's own-pane exclusion, and
-/// the cached diff-stats projection. Every input is a runtime cache or sidecar read — no
-/// `list-panes`, no git, no ledger lock. `frame` is the producer's published
-/// pane frame (panes plus their `produced_at_ms` read stamp); `None` only on a
-/// cold start (no base published yet), where the bare rollup's groups stand
-/// until the producer's first publish, mirroring the producer's own pane-fold
-/// guard.
-pub fn enrich_consumer(
+/// How one [`enrich`] call resolves its producer-vs-consumer differences. The
+/// fold order is one spine; the mode names each insertion point.
+pub enum EnrichMode<'a> {
+    /// A consumer tab's read-only fold: every input is a published runtime
+    /// cache or sidecar — the cached worktree roots, the published accounts
+    /// and spending caches, the cached diff-stats projection. No `list-panes`,
+    /// no git, no subprocess, no ledger lock.
+    Cached,
+    /// The elected producer's fold. The caller forks and walks the producer
+    /// inputs up front — the fork code stays in [`super::produce`] — and the
+    /// spine sequences them into the shared order.
+    Producing {
+        /// The room's freshly enumerated group roots; `None` when the
+        /// snapshot carries no project root.
+        roots: Option<Vec<PathBuf>>,
+        /// The fleet spending walk at the point where live row costs are
+        /// available for the publish-time baselines.
+        compute_spending: &'a dyn Fn(&SidebarSnapshot) -> ProviderSpendingCache,
+        /// The per-machine config, loaded once by the caller — the config
+        /// fold consumes it here and the git refresh closure has already
+        /// taken the preferred trunk from it. Boxed to keep the enum the size
+        /// of its `Cached` common case.
+        config: Box<crate::config::MachineConfig>,
+        /// The per-worktree git refresh over the snapshot's groups.
+        refresh_git: &'a dyn Fn(&mut SidebarSnapshot),
+    },
+}
+
+/// Fold the enrichments onto a base snapshot — one ordered spine for the
+/// producer and every consumer, so the two paths can never drift. `frame` is
+/// the live pane frame (panes plus the `produced_at_ms` read stamp): the
+/// producer's freshly resolved list, or the published `snapshot.json` a
+/// consumer read back. `None` skips the pane overlay — a cold consumer start
+/// (no publish yet) or a producer call with no live session — and the bare
+/// rollup's groups stand until the next produce.
+///
+/// [`EnrichMode::Cached`] reads only runtime caches and sidecars;
+/// [`EnrichMode::Producing`] carries the forked inputs in the mode and inserts
+/// the daemon reap, the account probe, and the git refresh at their named
+/// points.
+pub fn enrich(
     mut snapshot: SidebarSnapshot,
     frame: Option<SnapshotCache>,
     runtime: &RuntimePaths,
     exclude: Option<&PaneId>,
+    mut mode: EnrichMode<'_>,
 ) -> SidebarSnapshot {
-    if snapshot.project_root.is_some() {
-        snapshot = snapshot.with_worktree_roots(cached_worktree_roots(runtime));
+    // The room's group roots — a repo room's worktree checkouts (so one parked
+    // outside the project root still earns its own pod instead of folding into
+    // `external`), a directory room's depth-1 child repos. The producer passes
+    // its fresh enumeration in; a consumer reads the cached one back.
+    match &mut mode {
+        EnrichMode::Cached => {
+            if snapshot.project_root.is_some() {
+                snapshot = snapshot.with_worktree_roots(cached_worktree_roots(runtime));
+            }
+        }
+        EnrichMode::Producing { roots, .. } => {
+            if let Some(roots) = roots.take() {
+                snapshot = snapshot.with_worktree_roots(roots);
+            }
+        }
     }
+
+    // Fold each session's rich statusline context onto its agent state
+    // (read-only; the feed process is the writer). Both the context sidecar
+    // and the per-tool activity heartbeats fold only onto existing agents, so
+    // an empty room skips both directory scans — the common idle case.
+    // Activity lands before the pane overlay so age, ranking, the ask-fold
+    // guard, and the stall window all see the truer per-tool value rather than
+    // the turn-grained event timestamp.
     if !snapshot.agents.is_empty() {
         snapshot = snapshot.with_agent_context(crate::ledger::agent_context::read_all(runtime));
         snapshot =
@@ -672,39 +731,89 @@ pub fn enrich_consumer(
         );
         snapshot = snapshot.with_agent_activity(&activity);
     }
-    // Wiring state gates the live-pane fold (the idle-instance synthesis), so set
-    // it before folding panes, not after.
+
+    // Wiring state gates the live-pane fold (the idle-instance synthesis), so
+    // set it before folding panes, not after.
     snapshot.wired_lazy_kinds = wired_lazy_kinds();
+
+    // Producer-only: reap daemon-mode Codex ghosts the app-server no longer
+    // holds. A remote-control conversation records the shared daemon's pid,
+    // which outlives it, so process liveness can never reap it. Gated on a
+    // pane-less root `codex` session actually being present, so the common
+    // room pays no proc scan or daemon probe. Best-effort and fail-safe — no
+    // daemon process or an untrusted loaded list keeps every session — and run
+    // before the pane fold so a ghost can neither render nor bind its stale
+    // stats to a live pane.
+    if matches!(mode, EnrichMode::Producing { .. })
+        && snapshot.agents.iter().any(|agent| {
+            agent.kind == "codex" && agent.pane.is_none() && agent.parent_agent_id.is_none()
+        })
+    {
+        let daemon_pids = crate::remote_control::codex_daemon_pids();
+        if !daemon_pids.is_empty() {
+            let loaded = crate::agents::codex::loaded_daemon_threads();
+            snapshot.drop_dead_daemon_sessions(&daemon_pids, loaded.as_ref());
+        }
+    }
+
     if let Some(frame) = frame {
         let panes = frame.panes;
         if let Some(own) = exclude {
             snapshot.own_view = SidebarOwnView::from_panes(own, &panes);
         }
-        // Recompute from the published pane list (pre-exclusion) rather than
-        // trusting the producer's base bit, for producer/consumer symmetry.
+        // Recomputed from the full pane list (pre-exclusion), before
+        // `with_live_panes` consumes `panes` — never trusted from the base,
+        // for producer/consumer symmetry. The panes arrive with their
+        // `/proc`-derived process starts already stamped at frame production
+        // (`produce` stamps before the publish), so the cwd-fallback guard
+        // fires identically on every path.
         snapshot.only_daemon_view_remains = SidebarSnapshot::only_daemon_view(&panes);
         snapshot = snapshot.with_live_panes(panes, exclude);
     }
     snapshot.agent_hooks_ready = agent_hooks_ready();
+
     // Per-machine display preferences and the per-provider dashboard are
-    // environment, not ledger, so the producer's published rollup carries
-    // neither. Fold them here so a consumer tab honours the user's preference
-    // and paints the same provider panel — a cheap config read plus
-    // the producer's published account and spending caches, never a per-tick
-    // fork or a ledger lock. The account probe and JSONL walk stay on the producer.
-    let spend_cache;
-    (snapshot, spend_cache) = fold_machine_config_cached(snapshot, runtime);
-    if !spend_cache.spending.total.is_zero() {
-        snapshot.value_tally = Some(spend_cache.spending.total.clone());
-    }
+    // environment, not ledger, so the rollup base carries neither. The
+    // producer probes accounts out of band and publishes them alongside its
+    // walked spending; a consumer reads both published caches back — never a
+    // per-tick fork or a ledger lock. Git rides the same split: the producer
+    // refreshes the per-worktree facts (single-flighted), a consumer projects
+    // the cached ones.
+    let spending_cache = match mode {
+        EnrichMode::Cached => {
+            let cache;
+            (snapshot, cache) = fold_machine_config_cached(snapshot, runtime);
+            let diff_cache = read_diff_stats_cache(&runtime.root.join("diff-stats.json"));
+            project_diff_stats(&mut snapshot, &diff_cache);
+            cache
+        }
+        EnrichMode::Producing {
+            compute_spending,
+            config,
+            refresh_git,
+            ..
+        } => {
+            let spending = compute_spending(&snapshot);
+            snapshot = fold_machine_config_producing(
+                snapshot,
+                runtime,
+                &spending.spending.by_provider,
+                *config,
+            );
+            refresh_git(&mut snapshot);
+            spending
+        }
+    };
+    // The fleet `value_tally` — the JSONL today / month / all-time pile read
+    // by the cockpit's today figure and the bottom value corner — attaches
+    // once, after every fold; `None` when nothing has ever been recorded.
+    snapshot.value_tally = (!spending_cache.spending.total.is_zero())
+        .then_some(spending_cache.spending.total.clone());
     // The live overlay rides the same fold: a context sidecar push wakes the
     // consumer, the refold lands the session's fresh cost on its row, and the
     // cockpit's headline retargets in the same frame — no waiting out the
     // walk's TTL.
-    apply_live_today_spend(&mut snapshot, &spend_cache);
-
-    let cache = read_diff_stats_cache(&runtime.root.join("diff-stats.json"));
-    project_diff_stats(&mut snapshot, &cache);
+    apply_live_today_spend(&mut snapshot, &spending_cache);
     snapshot
 }
 
@@ -717,7 +826,7 @@ pub fn enrich_consumer(
 /// read on every other tab. The caller loads the per-machine config once
 /// (best-effort, defaults on a read failure) and threads it here and to the git
 /// probe's trunk ladder; the probe is memoized so it stays off the hot path.
-pub fn fold_machine_config_producing(
+fn fold_machine_config_producing(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
     provider_spending: &BTreeMap<String, crate::agents::SpendTally>,
@@ -999,7 +1108,7 @@ fn produce_accounts(
 /// Returns the published spending cache whole — tally, baselines, and stamp —
 /// so the caller folds the value tally and the live today-spend overlay from
 /// one read.
-pub fn fold_machine_config_cached(
+fn fold_machine_config_cached(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
 ) -> (SidebarSnapshot, ProviderSpendingCache) {

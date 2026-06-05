@@ -19,7 +19,8 @@ use rimz::sidebar::produce::{
     ProduceOptions, pane_fixture_active, produce_rollup_snapshot, produce_snapshot,
 };
 use rimz::sidebar::snapshot::{
-    RollupCursor, enrich_consumer, read_published_snapshot, rollup_snapshot, write_presence_stamp,
+    EnrichMode, RollupCursor, enrich, read_published_snapshot, rollup_snapshot,
+    write_presence_stamp,
 };
 use rimz::workspace::WorkspaceResolver;
 use rimz::{RuntimePaths, StatePaths};
@@ -180,11 +181,12 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     Some(snapshot) => snapshot,
                     // Cold start: no published panes yet, so own-view is not
                     // computed — the bare rollup stands until the next tick.
-                    None => enrich_consumer(
+                    None => enrich(
                         rollup_snapshot(&state, &mut RollupCursor::new())?,
                         None,
                         &runtime,
                         exclude.as_ref(),
+                        EnrichMode::Cached,
                     ),
                 };
                 return emit(&snapshot);

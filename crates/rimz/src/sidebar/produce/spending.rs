@@ -1,6 +1,8 @@
 //! The fleet spending walk: the `SPENDING_TTL`-gated transcript-history walk
-//! and the `value_tally` fold it feeds.
+//! feeding the enrichment spine's `value_tally` and per-provider dashboard
+//! folds.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::sidebar::snapshot::unix_now_ms;
@@ -11,7 +13,11 @@ use crate::sidebar::snapshot::unix_now_ms;
 /// walking, and the producer's own gate: a stamp younger than
 /// [`SPENDING_TTL`](crate::agents::spending::SPENDING_TTL) serves the published
 /// totals with zero transcript IO — no adapter discovery, no `spending.json`
-/// cursor read, no price-book load.
+/// cursor read, no price-book load. Each fresh publish also stamps
+/// `live_costs` — the live sessions' statusline costs at this exact moment —
+/// as the baselines the cockpit's live overlay measures overshoot against
+/// until the next walk; a served-back cache keeps the baselines and stamp of
+/// the publish that captured them.
 ///
 /// The stale walk reads the per-workspace `spending.json` cache, refreshes only
 /// files whose mtime changed, then writes back if anything was updated, and
@@ -25,11 +31,12 @@ use crate::sidebar::snapshot::unix_now_ms;
 /// one provider's spend the same way regardless of which project it ran in.
 pub(super) fn compute_fleet_spending(
     runtime: &crate::RuntimePaths,
-) -> crate::agents::spending::Spending {
+    live_costs: BTreeMap<String, f64>,
+) -> crate::agents::spending::ProviderSpendingCache {
     use crate::agents::pricing;
     use crate::agents::spending::{
-        Spending, compute_spending, read_provider_spending_cache, read_spending_cache,
-        unix_secs_now, write_provider_spending_cache, write_spending_cache,
+        ProviderSpendingCache, Spending, compute_spending, read_provider_spending_cache,
+        read_spending_cache, unix_secs_now, write_provider_spending_cache, write_spending_cache,
     };
     use crate::agents::{ADAPTERS, AgentAdapter};
 
@@ -39,7 +46,7 @@ pub(super) fn compute_fleet_spending(
     // same single small read a consumer tab pays.
     let published = read_provider_spending_cache(&provider_path);
     if published.is_fresh(now_ms) {
-        return published.spending;
+        return published;
     }
 
     // Tag each file with its adapter at discovery — the source knows the kind,
@@ -56,8 +63,17 @@ pub(super) fn compute_fleet_spending(
     if files.is_empty() {
         // Stamp the empty result too: an agentless machine must not re-run the
         // (empty) discovery readdirs every tick.
-        write_provider_spending_cache(&provider_path, now_ms, &Spending::default());
-        return Spending::default();
+        write_provider_spending_cache(
+            &provider_path,
+            now_ms,
+            &Spending::default(),
+            live_costs.clone(),
+        );
+        return ProviderSpendingCache {
+            refreshed_at_ms: now_ms,
+            live_cost_baselines: live_costs,
+            spending: Spending::default(),
+        };
     }
 
     let cache_path = runtime.root.join("spending.json");
@@ -69,17 +85,10 @@ pub(super) fn compute_fleet_spending(
     if cache.dirty {
         write_spending_cache(&cache_path, &cache);
     }
-    write_provider_spending_cache(&provider_path, now_ms, &spending);
-    spending
-}
-
-/// Attach the fleet `value_tally` to the snapshot — the JSONL today / month /
-/// all-time pile read by both the cockpit's today figure and the bottom value
-/// corner; `None` when nothing has ever been recorded. The per-provider breakdown
-/// is folded into the dashboard panels separately (see `with_provider_aggregates`).
-pub(super) fn apply_spending(
-    snapshot: &mut crate::SidebarSnapshot,
-    spending: &crate::agents::spending::Spending,
-) {
-    snapshot.value_tally = (!spending.total.is_zero()).then(|| spending.total.clone());
+    write_provider_spending_cache(&provider_path, now_ms, &spending, live_costs.clone());
+    ProviderSpendingCache {
+        refreshed_at_ms: now_ms,
+        live_cost_baselines: live_costs,
+        spending,
+    }
 }
