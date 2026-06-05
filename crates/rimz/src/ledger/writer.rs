@@ -35,20 +35,24 @@ fn abandon_sweep_stamp(paths: &StatePaths) -> PathBuf {
     paths.locks_dir.join("abandon-sweep.stamp")
 }
 
-fn abandon_sweep_due(paths: &StatePaths) -> bool {
-    match std::fs::metadata(abandon_sweep_stamp(paths)).and_then(|meta| meta.modified()) {
-        Ok(modified) => match SystemTime::now().duration_since(modified) {
-            Ok(age) => age >= ABANDON_SWEEP_INTERVAL,
-            // Stamp mtime in the future (clock skew): treat the sweep as due.
-            Err(_) => true,
-        },
-        Err(_) => true,
-    }
+/// Age of a debounce stamp's mtime. `None` when the stamp is missing or
+/// unreadable, or its mtime sits in the future (clock skew) — every gate
+/// reads `None` as due, erring toward one redundant run, never a stale skip.
+fn stamp_age(path: &std::path::Path) -> Option<Duration> {
+    let modified = std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()?;
+    SystemTime::now().duration_since(modified).ok()
 }
 
-/// Best-effort: a failed touch only means the next write sweeps again.
-fn touch_abandon_sweep_stamp(paths: &StatePaths) {
-    let _ = std::fs::write(abandon_sweep_stamp(paths), b"");
+/// Best-effort: a failed touch only means the next write runs the gated
+/// task again.
+fn touch_stamp(path: &std::path::Path) {
+    let _ = std::fs::write(path, b"");
+}
+
+fn abandon_sweep_due(paths: &StatePaths) -> bool {
+    stamp_age(&abandon_sweep_stamp(paths)).is_none_or(|age| age >= ABANDON_SWEEP_INTERVAL)
 }
 
 /// How long appended event-log bytes may ride the page cache before a write
@@ -65,19 +69,7 @@ fn log_sync_stamp(paths: &StatePaths) -> PathBuf {
 }
 
 fn log_sync_due(paths: &StatePaths) -> bool {
-    match std::fs::metadata(log_sync_stamp(paths)).and_then(|meta| meta.modified()) {
-        Ok(modified) => match SystemTime::now().duration_since(modified) {
-            Ok(age) => age >= LOG_SYNC_INTERVAL,
-            // Stamp mtime in the future (clock skew): treat the sync as due.
-            Err(_) => true,
-        },
-        Err(_) => true,
-    }
-}
-
-/// Best-effort: a failed touch only means the next write syncs again.
-fn touch_log_sync_stamp(paths: &StatePaths) {
-    let _ = std::fs::write(log_sync_stamp(paths), b"");
+    stamp_age(&log_sync_stamp(paths)).is_none_or(|age| age >= LOG_SYNC_INTERVAL)
 }
 
 /// Group-commit the relaxed event-log appends at most once per
@@ -92,7 +84,7 @@ fn sync_log_debounced(paths: &StatePaths) {
         return;
     }
     match atomic::sync_file_data(&paths.events_log) {
-        Ok(()) => touch_log_sync_stamp(paths),
+        Ok(()) => touch_stamp(&log_sync_stamp(paths)),
         // A rotation can rename the log away between the append and this
         // tail; its pre-rename sync already made those bytes durable.
         Err(atomic::AtomicErr::Io { ref source, .. })
@@ -140,14 +132,19 @@ fn write_publish_stamp(paths: &StatePaths, extent: Option<event_log::LogExtent>)
     }
 }
 
-/// The cheap pre-lock cadence gate: one stat pair and a ~40-byte read
-/// decide whether this tail pays the checkpoint. The stamp gates cadence
-/// alone — freshness truth stays in `latest.json`'s own extent stamp, which
-/// readers verify against the live log — so the worst a wrong verdict costs
-/// is one redundant publish or one bounded catch-up fold.
+/// The cheap pre-lock cadence gate: one open of the ~40-byte stamp decides
+/// whether this tail pays the checkpoint. The stamp gates cadence alone —
+/// freshness truth stays in `latest.json`'s own extent stamp, which readers
+/// verify against the live log — so the worst a wrong verdict costs is one
+/// redundant publish or one bounded catch-up fold.
 fn publish_due(paths: &StatePaths) -> bool {
-    let stamp_path = publish_stamp(paths);
-    let Some(age) = std::fs::metadata(&stamp_path)
+    use std::io::Read;
+    // Missing or unreadable stamp: never published (or retracted) — due.
+    let Ok(mut stamp) = std::fs::File::open(publish_stamp(paths)) else {
+        return true;
+    };
+    let Some(age) = stamp
+        .metadata()
         .and_then(|meta| meta.modified())
         .ok()
         // Stamp mtime in the future (clock skew): treat the publish as due.
@@ -155,9 +152,16 @@ fn publish_due(paths: &StatePaths) -> bool {
     else {
         return true;
     };
-    let Ok(extent) = std::fs::read(&stamp_path)
-        .map_err(|_| ())
-        .and_then(|bytes| serde_json::from_slice::<event_log::LogExtent>(&bytes).map_err(|_| ()))
+    if age >= PUBLISH_INTERVAL {
+        // The interval alone decides the common due verdict — skip the
+        // stamp-body read and the log stat.
+        return true;
+    }
+    let mut bytes = Vec::with_capacity(64);
+    let Some(extent) = stamp
+        .read_to_end(&mut bytes)
+        .ok()
+        .and_then(|_| serde_json::from_slice::<event_log::LogExtent>(&bytes).ok())
     else {
         return true;
     };
@@ -198,7 +202,7 @@ fn sweep_dead_owned_items_debounced(
         return Ok(Vec::new());
     }
     let abandoned = abandon_dead_owned_items_locked(paths, session_name)?;
-    touch_abandon_sweep_stamp(paths);
+    touch_stamp(&abandon_sweep_stamp(paths));
     Ok(abandoned)
 }
 
@@ -456,7 +460,7 @@ impl Ledger {
         let abandoned = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             let abandoned = abandon_dead_owned_items_locked(&self.inner.paths, session_name)?;
-            touch_abandon_sweep_stamp(&self.inner.paths);
+            touch_stamp(&abandon_sweep_stamp(&self.inner.paths));
             abandoned
         };
         for (workspace_id, request_id) in &abandoned {
@@ -1062,11 +1066,7 @@ impl Ledger {
     /// is a catch-up accelerator, never the freshness path — a skip costs a
     /// cold reader a bounded fold, not staleness.
     fn publish_snapshot_best_effort(&self) {
-        sync_log_debounced(&self.inner.paths);
-        if !publish_due(&self.inner.paths) {
-            return;
-        }
-        self.publish_snapshot_now();
+        self.publish_tail(false);
     }
 
     /// [`Self::publish_snapshot_best_effort`] without the cadence gate, for
@@ -1074,8 +1074,17 @@ impl Ledger {
     /// after (gc's abandon sweep, standalone ask expiry). Rotation, identity
     /// rewrite, and repair rebuild inline under both locks instead.
     fn publish_snapshot_forced(&self) {
+        self.publish_tail(true);
+    }
+
+    /// The one off-lock tail body behind both publish entry points: the
+    /// debounced group fdatasync always runs; `force` decides whether the
+    /// checkpoint skips the cadence gate.
+    fn publish_tail(&self, force: bool) {
         sync_log_debounced(&self.inner.paths);
-        self.publish_snapshot_now();
+        if force || publish_due(&self.inner.paths) {
+            self.publish_snapshot_now();
+        }
     }
 
     /// Catch the snapshot caches up to the live log, after the workspace
