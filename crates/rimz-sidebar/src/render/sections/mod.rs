@@ -99,16 +99,24 @@ pub(super) enum Gutter {
 /// leaves free is the matching right margin. Applied to every line of a worktree
 /// group so the lane spans the whole selected worktree as one block, with the
 /// selected card lit `▌` inside it. Under `NO_COLOR` the `▏`/`▌` shapes carry the
-/// lane and the selection without color.
+/// lane and the selection without color. Rebuilding the line would drop a
+/// line-level style (`Line::styled` chrome like the `┄ commands ┄` seam), so the
+/// incoming style is patched onto each content span — the gutter cell keeps its
+/// own tone untouched.
 fn with_gutter(theme: &Theme, line: Line<'static>, gutter: Gutter) -> Line<'static> {
     let cell = match gutter {
         Gutter::Blank => Span::raw(" "),
         Gutter::Lane => Span::styled(LANE_SPINE, theme.style(Color::Cyan, Modifier::DIM)),
         Gutter::Selected => Span::styled(SELECTED_SPINE, theme.selection()),
     };
+    let base = line.style;
     let mut spans = Vec::with_capacity(line.spans.len() + 1);
     spans.push(cell);
-    spans.extend(line.spans);
+    spans.extend(
+        line.spans
+            .into_iter()
+            .map(|span| Span::styled(span.content, base.patch(span.style))),
+    );
     Line::from(spans)
 }
 

@@ -588,6 +588,55 @@ fn render_commands_divider_between_agents_and_processes() {
     assert_snapshot("commands_divider", rendered);
 }
 
+/// The seam keeps its faint tone through the gutter: `with_gutter` rebuilds the
+/// line to prepend the gutter cell, so it must carry a line-level style onto the
+/// content spans rather than dropping it — the drop painted the seam (and the
+/// dim `+K more`) at full strength.
+#[test]
+fn commands_divider_stays_faint_through_the_gutter() {
+    let theme = Theme::fixed(false);
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    let stamped = pane("%1", "claude", "/repo/main");
+    claude.pane = Some(stamped.clone());
+    let shell = pane("%2", "zsh", "/repo/main");
+    let snapshot =
+        snapshot_with(Vec::new(), vec![claude]).with_live_panes(vec![stamped, shell], None);
+
+    let mut lines = Vec::new();
+    let mut map = Vec::new();
+    let mut row_index = 0;
+    worktree_group_lines(
+        &theme,
+        &snapshot.worktree_groups[0],
+        &snapshot.providers,
+        44,
+        &snapshot.sidebar.context,
+        &mut row_index,
+        0,
+        0,
+        &mut lines,
+        &mut map,
+    );
+
+    let seam = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content.contains("┄ commands"))
+        .expect("the seam renders between agents and processes");
+    assert_eq!(
+        seam.style,
+        theme.faint(),
+        "the seam wears the faint chrome tone"
+    );
+}
+
 #[test]
 fn render_worktree_equal_to_trunk() {
     // A fully-landed worktree — zero commits ahead, zero diff against the
