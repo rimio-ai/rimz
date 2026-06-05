@@ -123,8 +123,14 @@ fn read_published_snapshot_folds_caches_without_forking() {
     atomic::write_temp_then_rename_cache(&runtime.root.join("diff-stats.json"), &diff).unwrap();
 
     let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
-    let snapshot =
-        read_published_snapshot(&state, &runtime, "rimz-test", Some(&own)).expect("published base");
+    let snapshot = read_published_snapshot(
+        &mut RollupCursor::new(),
+        &state,
+        &runtime,
+        "rimz-test",
+        Some(&own),
+    )
+    .expect("published base");
 
     // The worktree group carries the cached +7/-2 and the live branch label,
     // projected from the cache with no git fork.
@@ -212,8 +218,14 @@ fn read_published_snapshot_folds_subagent_context() {
     )
     .unwrap();
 
-    let snapshot =
-        read_published_snapshot(&state, &runtime, "rimz-test", None).expect("published base");
+    let snapshot = read_published_snapshot(
+        &mut RollupCursor::new(),
+        &state,
+        &runtime,
+        "rimz-test",
+        None,
+    )
+    .expect("published base");
     let parent = snapshot
         .worktree_groups
         .iter()
@@ -259,8 +271,14 @@ fn consumer_own_view_counts_siblings_in_its_own_tab() {
     atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
 
     let orphan_own = PaneId::from_parts(MuxName::Zellij, "orphan_sb");
-    let snapshot =
-        read_published_snapshot(&state, &runtime, "rimz-test", Some(&orphan_own)).expect("base");
+    let snapshot = read_published_snapshot(
+        &mut RollupCursor::new(),
+        &state,
+        &runtime,
+        "rimz-test",
+        Some(&orphan_own),
+    )
+    .expect("base");
     assert_eq!(
         snapshot.own_view.map(|view| view.sibling_count),
         Some(0),
@@ -277,7 +295,16 @@ fn read_published_snapshot_is_none_until_the_producer_publishes() {
     // No published pane set yet (the producer hasn't run), so the consumer
     // read is `None` regardless of the rollup — the caller holds last-good.
     let state = StatePaths::under(workspace, dir.path()).unwrap();
-    assert!(read_published_snapshot(&state, &runtime, "rimz-test", None).is_none());
+    assert!(
+        read_published_snapshot(
+            &mut RollupCursor::new(),
+            &state,
+            &runtime,
+            "rimz-test",
+            None
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -312,7 +339,14 @@ fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
     alpha.display_name = "alpha".to_owned();
     alpha.reflects_log = stamp;
     atomic::write_temp_then_rename(&state.latest_snapshot, &alpha).unwrap();
-    let first = read_published_snapshot(&state, &runtime, "rimz-test", None).expect("base");
+    let first = read_published_snapshot(
+        &mut RollupCursor::new(),
+        &state,
+        &runtime,
+        "rimz-test",
+        None,
+    )
+    .expect("base");
     assert_eq!(first.display_name, "alpha");
 
     // Republish ONLY `latest.json` (a different length so the parse cache
@@ -321,7 +355,14 @@ fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
     bravo.display_name = "bravo-the-second-rollup".to_owned();
     bravo.reflects_log = stamp;
     atomic::write_temp_then_rename(&state.latest_snapshot, &bravo).unwrap();
-    let second = read_published_snapshot(&state, &runtime, "rimz-test", None).expect("base");
+    let second = read_published_snapshot(
+        &mut RollupCursor::new(),
+        &state,
+        &runtime,
+        "rimz-test",
+        None,
+    )
+    .expect("base");
     assert_eq!(
         second.display_name, "bravo-the-second-rollup",
         "the consumer folds the fresh rollup, not a cached one"

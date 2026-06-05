@@ -16,8 +16,8 @@ use rimz::ledger::single_flight::{self, Coalesced};
 use rimz::ledger::workspace_record;
 use rimz::mux::PaneListOptions;
 use rimz::sidebar::snapshot::{
-    DiffStats, DiffStatsCache, DiffStatsCacheEntry, SNAPSHOT_CACHE_TTL, SnapshotCache,
-    WorktreeRootsCache, enrich_consumer, needed_worktree_paths, project_diff_stats,
+    DiffStats, DiffStatsCache, DiffStatsCacheEntry, RollupCursor, SNAPSHOT_CACHE_TTL,
+    SnapshotCache, WorktreeRootsCache, enrich_consumer, needed_worktree_paths, project_diff_stats,
     read_diff_stats_cache, read_published_snapshot, read_snapshot_cache, unix_now_ms,
 };
 use rimz::workspace::WorkspaceResolver;
@@ -145,8 +145,10 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             {
                 // Consumer: render the producer's published frame in process. A
                 // cold cache (no publish yet) falls back to the bare rollup with
-                // the same read-only enrichments until the next tick.
+                // the same read-only enrichments until the next tick. One-shot
+                // CLI process, so a fresh cursor (a cold fold) is the only kind.
                 let snapshot = match read_published_snapshot(
+                    &mut RollupCursor::new(),
                     ledger.paths(),
                     runtime,
                     session,

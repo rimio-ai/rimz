@@ -112,7 +112,7 @@ fn run_fetch_cycle(
     let fast = rimz::ledger::paths::StatePaths::for_workspace(config.workspace_id.clone())
         .ok()
         .and_then(|state| {
-            rimz::sidebar::snapshot::read_published_snapshot_with(
+            rimz::sidebar::snapshot::read_published_snapshot(
                 cursor,
                 &state,
                 runtime,

@@ -118,7 +118,7 @@ impl AccountsCache {
 /// It caches only the expensive `list-panes` round-trip. The ledger *rollup* is
 /// deliberately **not** stored here: it is cheap and per-event fresh in
 /// `latest.json`, so producer and consumer both read it fresh each fetch
-/// ([`consumer_rollup`] / `Ledger::snapshot_cached`) and fold these coalesced
+/// (`consumer_rollup` / `Ledger::snapshot_cached`) and fold these coalesced
 /// panes over it. Fusing the two would pin a status change to the slow pane
 /// cadence — the lag this split removes. Per-sidebar exclusion and own-view are
 /// applied by the reader, so the panes are pre-fold.
@@ -163,26 +163,17 @@ pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotC
 }
 
 /// The event-fresh ledger rollup for a consumer, read in process: `latest.json`
-/// when it reflects the log (lock-free, O(snapshot)), else a full re-projection
-/// (the cold/empty room, or a write that raced the freshness check). The
-/// read-only twin of the producer's `Ledger::snapshot_cached`, exposed so a
-/// consumer tab folds the freshest rollup over the producer's coalesced panes
-/// without holding a writer handle — the rollup is what makes a status change or
-/// a new agent in an existing pane repaint within one wakeup, independent of the
-/// slower pane-list cadence. `None` only when the ledger itself is unreadable,
-/// which the caller treats as a soft miss and holds the last good frame.
-pub fn consumer_rollup(state: &StatePaths) -> Option<SidebarSnapshot> {
-    consumer_rollup_with(state, &mut RollupCursor::new())
-}
-
-/// [`consumer_rollup`] for a long-lived reader: the racing-read fallback folds
-/// through the caller's [`RollupCursor`] — O(new log bytes) per delta from the
-/// in-memory base — instead of re-reading `rollup.json` per call. The fresh
-/// `latest.json` fast path still serves first when its stamp matches the log.
-pub fn consumer_rollup_with(
-    state: &StatePaths,
-    cursor: &mut RollupCursor,
-) -> Option<SidebarSnapshot> {
+/// when it reflects the log (lock-free, O(snapshot)), else a re-projection
+/// folded through the caller's [`RollupCursor`] — O(new log bytes) per delta
+/// from the in-memory base, and a fresh cursor folds cold, so a one-shot
+/// caller just passes `&mut RollupCursor::new()`. The read-only twin of the
+/// producer's `Ledger::snapshot_cached`, exposed so a consumer tab folds the
+/// freshest rollup over the producer's coalesced panes without holding a
+/// writer handle — the rollup is what makes a status change or a new agent in
+/// an existing pane repaint within one wakeup, independent of the slower
+/// pane-list cadence. `None` only when the ledger itself is unreadable, which
+/// the caller treats as a soft miss and holds the last good frame.
+fn consumer_rollup(state: &StatePaths, cursor: &mut RollupCursor) -> Option<SidebarSnapshot> {
     crate::ledger::snapshot::read_fresh_latest(state)
         .or_else(|| crate::ledger::snapshot::build_with_cursor(state, cursor).ok())
 }
@@ -405,7 +396,7 @@ pub fn wired_lazy_kinds() -> Vec<String> {
 /// Render the published snapshot for a consumer renderer, entirely from runtime
 /// caches and sidecars — no `list-panes`, no git. Reads the producer's coalesced
 /// pane list from `snapshot.json`, pairs it with the **event-fresh** rollup read
-/// in process from `latest.json` ([`consumer_rollup`]), folds the session and
+/// in process from `latest.json` (`consumer_rollup`), folds the session and
 /// subagent statusline context plus per-tool activity, overlays the panes with
 /// this renderer's own-pane exclusion, and projects the cached diff stats. `None`
 /// until the producer has published a pane set (or if the ledger is unreadable),
@@ -418,21 +409,12 @@ pub fn wired_lazy_kinds() -> Vec<String> {
 /// This is the in-process twin of the producer's `rimz sidebar snapshot`: the
 /// native renderer calls it directly each tick instead of forking, and the
 /// `--no-produce` CLI path (the plugin rail's read) shares it.
+///
+/// The rollup folds through the caller's [`RollupCursor`], so a long-lived
+/// reader (the sidebar fetch worker owns one across its loop) pays O(new log
+/// bytes) per wakeup instead of a full `rollup.json` re-read; a fresh cursor
+/// folds cold, so a one-shot caller passes `&mut RollupCursor::new()`.
 pub fn read_published_snapshot(
-    state: &StatePaths,
-    runtime: &RuntimePaths,
-    session: &str,
-    exclude: Option<&PaneId>,
-) -> Option<SidebarSnapshot> {
-    read_published_snapshot_with(&mut RollupCursor::new(), state, runtime, session, exclude)
-}
-
-/// [`read_published_snapshot`] for a long-lived reader: the rollup folds
-/// through the caller's [`RollupCursor`], so a delta storm costs O(new log
-/// bytes) per wakeup instead of a full `rollup.json` re-read. The sidebar
-/// fetch worker owns one cursor across its loop; one-shot callers (the CLI
-/// `--no-produce` read) stay on the fresh-cursor wrapper.
-pub fn read_published_snapshot_with(
     cursor: &mut RollupCursor,
     state: &StatePaths,
     runtime: &RuntimePaths,
@@ -441,7 +423,7 @@ pub fn read_published_snapshot_with(
 ) -> Option<SidebarSnapshot> {
     let cache_path = runtime.root.join("snapshot.json");
     let cache = read_snapshot_cache(&cache_path, session)?;
-    let base = consumer_rollup_with(state, cursor)?;
+    let base = consumer_rollup(state, cursor)?;
     Some(enrich_consumer(base, Some(cache), runtime, exclude))
 }
 
