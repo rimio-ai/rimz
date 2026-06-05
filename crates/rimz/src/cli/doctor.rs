@@ -74,6 +74,9 @@ pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
                 }
                 if let Ok(ws) = &workspace {
                     report_session_health(backend.as_ref(), &ws.session_name);
+                    if mux == MuxName::Zellij {
+                        report_presence_channel(ws);
+                    }
                 }
             }
             Err(err) => println!("  multiplexer   : unavailable ({err})"),
@@ -309,6 +312,63 @@ fn report_zellij_capabilities() {
             println!("  zellij floor  : {floor_status} (>= {maj}.{min}.{patch} required)");
         }
         Err(err) => println!("  zellij floor  : unavailable ({err})"),
+    }
+}
+
+/// One presence row for the workspace: the pane-discovery mode its producer
+/// is actually in — the verdict comes from the same stamp helpers the
+/// producer reads, so doctor and producer always agree — and, when degraded
+/// to the poll, the first failing precondition with its fix.
+#[expect(
+    clippy::print_stdout,
+    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
+)]
+fn report_presence_channel(ws: &rimz::ResolvedWorkspace) {
+    use rimz::sidebar::snapshot::{presence_event_mode, presence_stamp_age_ms};
+
+    let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            println!("  presence      : unavailable ({err})");
+            return;
+        }
+    };
+    let age = presence_stamp_age_ms(&runtime);
+    if presence_event_mode(age) {
+        let secs = age.unwrap_or(0) / 1000;
+        println!("  presence      : event mode (plugin poked {secs}s ago)");
+        return;
+    }
+    // Poll mode: name the first failing precondition in fix order.
+    if zellij_mod::presence_plugin_path().is_none() {
+        println!(
+            "  presence      : poll mode — plugin artifact missing (reinstall rimz so \
+             rimz-presence-zellij.wasm sits beside the binary)",
+        );
+        return;
+    }
+    let meets_floor = zellij_mod::capabilities().is_ok_and(|caps| {
+        caps.parsed_version
+            .is_some_and(|v| v >= zellij_mod::PRESENCE_PLUGIN_MIN_ZELLIJ)
+    });
+    if !meets_floor {
+        let (maj, min, patch) = zellij_mod::PRESENCE_PLUGIN_MIN_ZELLIJ;
+        println!(
+            "  presence      : poll mode — zellij below the plugin floor \
+             (>= {maj}.{min}.{patch} required)",
+        );
+        return;
+    }
+    match age {
+        Some(age) => println!(
+            "  presence      : poll mode — last plugin poke {}s ago (plugin gone or \
+             `rimz` not runnable from Zellij; reattach or run `rimz reload`)",
+            age / 1000,
+        ),
+        None => println!(
+            "  presence      : poll mode — no plugin poke yet (approve the one-time \
+             permission prompt in the Zellij session)",
+        ),
     }
 }
 

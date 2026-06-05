@@ -70,6 +70,24 @@ const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const TAB_NAMES_ATTEMPTS: u32 = 5;
 const TAB_NAMES_RETRY_DELAY: Duration = Duration::from_millis(50);
 
+/// Minimum Zellij that loads the presence plugin — the line `zellij-tile` is
+/// pinned to, so plugin and host speak one protocol version. Older hosts
+/// (down to [`MIN_ZELLIJ_VERSION`]) skip the load and keep today's pane poll;
+/// everything else about them is unaffected.
+pub const PRESENCE_PLUGIN_MIN_ZELLIJ: (u32, u32, u32) = (0, 44, 0);
+
+/// Pipe name the presence-plugin launch sends its boot message down. The
+/// plugin answers any pipe by unblocking it; the name only labels the launch
+/// in `zellij`'s own tooling.
+const PRESENCE_BOOT_PIPE: &str = "rimz_presence_boot";
+
+/// Deadline for the presence-plugin boot pipe. Granted-and-running, the
+/// plugin unblocks the CLI within milliseconds; permission-pending, the CLI
+/// blocks until the user answers the prompt — so the kill at this bound is
+/// the expected first-run path, and it reaps only the CLI client: the plugin
+/// launch is already delivered server-side (verified on 0.44.3).
+const PRESENCE_PIPE_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Ceiling on how long `create_session_with_sidebar` holds the temp layout file
 /// on disk while waiting for Zellij to parse it (Zellij reads `--default-layout`
 /// asynchronously, after the create call returns). A *ceiling*, not a fixed
@@ -126,6 +144,49 @@ fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
     let minor = parts.next()?.parse().ok()?;
     let patch = parts.next().unwrap_or("0").parse().ok()?;
     Some((major, minor, patch))
+}
+
+/// Locate the presence-plugin wasm: the `RIMZ_PRESENCE_PLUGIN` override, else
+/// `rimz-presence-zellij.wasm` beside the running executable — where
+/// `cargo xtask install` places it. `None` (not installed) leaves the session
+/// in poll mode; `rimz doctor` names the missing artifact and the fix.
+///
+/// Canonical, because Zellij keys the user's one-time permission grant on the
+/// exact path string it is handed: one real artifact must read as one string
+/// however rimz was invoked (symlinked bin dir, relative exe), or the user is
+/// re-prompted per spelling.
+pub fn presence_plugin_path() -> Option<PathBuf> {
+    let raw = match env::var_os("RIMZ_PRESENCE_PLUGIN") {
+        Some(path) => PathBuf::from(path),
+        None => env::current_exe()
+            .ok()?
+            .parent()?
+            .join("rimz-presence-zellij.wasm"),
+    };
+    raw.canonicalize().ok().filter(|path| path.is_file())
+}
+
+/// The `key=value,key=value` configuration the plugin reads at load. The
+/// parse is Zellij's — split on `,` then `=` — so a `rimz` path containing
+/// either separator cannot be expressed; it is omitted and the plugin falls
+/// back to `rimz` on the host PATH rather than poke a mis-parsed argv.
+/// Workspace ids are `ws_` + hex by construction, always expressible.
+fn presence_plugin_configuration(
+    workspace_id: &crate::ids::WorkspaceId,
+    rimz_bin: &std::path::Path,
+) -> String {
+    let mut configuration = format!("workspace_id={}", workspace_id.as_str());
+    let bin = rimz_bin.to_string_lossy();
+    if bin.contains([',', '=']) {
+        tracing::debug!(
+            rimz_bin = %bin,
+            "rimz path contains a plugin-configuration separator; the plugin resolves `rimz` from PATH instead",
+        );
+    } else {
+        configuration.push_str(",rimz_bin=");
+        configuration.push_str(&bin);
+    }
+    configuration
 }
 
 /// `options` flags that forward a single click through the sidebar pane to the
@@ -1273,6 +1334,71 @@ impl MuxBackend for ZellijBackend {
             ])
             .run()
             .map(|_| ())
+    }
+
+    fn ensure_presence_plugin(&self, opts: &super::PresencePluginOptions) -> Result<()> {
+        let parsed = self.version().ok().as_deref().and_then(parse_version);
+        if parsed.is_none_or(|v| v < PRESENCE_PLUGIN_MIN_ZELLIJ) {
+            tracing::debug!(
+                session = %opts.session_name,
+                version = ?parsed,
+                "zellij below the presence-plugin floor; the producer keeps its pane poll",
+            );
+            return Ok(());
+        }
+        let url = format!("file:{}", opts.wasm.display());
+        let configuration = presence_plugin_configuration(&opts.workspace_id, &opts.rimz_bin);
+        if opts.converge {
+            // Reload a *running* plugin in place onto the current wasm —
+            // `start-or-reload-plugin` converges a pipe-launched instance
+            // (verified on 0.44.3: one instance throughout). It needs a
+            // connected client; with none the server drops it silently (exit
+            // 0 regardless), and the pipe below still ensures a plugin is
+            // loaded — the upgrade then lands on the next attached reload.
+            self.zellij_action(&opts.session_name)
+                .args([
+                    "start-or-reload-plugin".to_owned(),
+                    url.clone(),
+                    "--configuration".to_owned(),
+                    configuration.clone(),
+                ])
+                .run()?;
+        }
+        // `zellij pipe --plugin` launches the plugin if absent — the one load
+        // verb that works on a clientless session (`start-or-reload-plugin`
+        // refuses without a connected client) — and routes a no-op message to
+        // it when running, so the call is idempotent per (url, configuration).
+        let result = self
+            .cmd()
+            .args([
+                "--session",
+                &opts.session_name,
+                "pipe",
+                "--plugin",
+                &url,
+                "--plugin-configuration",
+                &configuration,
+                "--name",
+                PRESENCE_BOOT_PIPE,
+                "--",
+                "load",
+            ])
+            .run_with_timeout(PRESENCE_PIPE_TIMEOUT);
+        match result {
+            Ok(_) => Ok(()),
+            // The held-CLI kill: the launch is delivered, the plugin is
+            // waiting on the user's one-time permission answer (or the
+            // session has no client yet to surface it). Expected, not an
+            // error — pokes start once the grant lands.
+            Err(MuxErr::Timeout { .. }) => {
+                tracing::debug!(
+                    session = %opts.session_name,
+                    "presence boot pipe held past its deadline (permission pending); launch delivered",
+                );
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
     }
 
     fn version(&self) -> Result<String> {

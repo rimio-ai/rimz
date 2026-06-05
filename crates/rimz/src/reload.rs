@@ -181,11 +181,29 @@ fn reconcile_live(
         }
     }
 
-    // 3. Reap orphan sidebar processes whose pane is gone — the mux cannot close a
+    // 3. Converge the session's presence plugin onto the current wasm — reload
+    //    is the explicit upgrade verb, so a running plugin re-loads in place
+    //    when a client is attached (a detached session converges on its next
+    //    attached reload; the plugin is at worst the prior build, and poll
+    //    mode backstops it regardless). Best-effort like every step here.
+    if let Some(wasm) = crate::mux::zellij::presence_plugin_path() {
+        let presence = crate::mux::PresencePluginOptions {
+            session_name: ws.session_name.clone(),
+            workspace_id: ws.workspace_id.clone(),
+            wasm,
+            rimz_bin: rimz_bin.to_path_buf(),
+            converge: true,
+        };
+        if let Err(err) = backend.ensure_presence_plugin(&presence) {
+            tracing::warn!(session = %ws.session_name, error = %err, "reload: presence plugin convergence failed");
+        }
+    }
+
+    // 4. Reap orphan sidebar processes whose pane is gone — the mux cannot close a
     //    pane that no longer exists, so a wedged renderer would otherwise linger.
     outcome.reaped += reap_orphan_sidebars(backend.as_ref(), mux, ws);
 
-    // 4. Sweep runtime files whose owner is gone — stale heartbeats and
+    // 5. Sweep runtime files whose owner is gone — stale heartbeats and
     //    ownerless sockets accumulate in a live session too (every SIGKILLed or
     //    reaped renderer leaves a pair), and the sweep already spares anything
     //    fresh or still starting.

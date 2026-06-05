@@ -587,3 +587,42 @@ fn mounted_sidebar_discovery_ignores_preexisting_and_non_sidebar_panes() {
     let before: std::collections::HashSet<u64> = [3, 4].into();
     assert_eq!(mounted_sidebar_pane(&panes, 0, &before, None), None);
 }
+
+#[test]
+fn presence_plugin_floor_admits_the_tile_line_only() {
+    // The floor is the `zellij-tile` pin: 0.44.x loads, anything older keeps
+    // the pane poll (and stays above MIN_ZELLIJ_VERSION for everything else).
+    assert!((0, 44, 0) >= PRESENCE_PLUGIN_MIN_ZELLIJ);
+    assert!((0, 44, 3) >= PRESENCE_PLUGIN_MIN_ZELLIJ);
+    assert!((0, 43, 9) < PRESENCE_PLUGIN_MIN_ZELLIJ);
+    assert!(PRESENCE_PLUGIN_MIN_ZELLIJ >= MIN_ZELLIJ_VERSION);
+}
+
+#[test]
+fn presence_plugin_configuration_pins_workspace_and_rimz() {
+    let workspace_id = crate::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
+    let configuration = presence_plugin_configuration(
+        &workspace_id,
+        std::path::Path::new("/home/user/.cargo/bin/rimz"),
+    );
+    assert_eq!(
+        configuration,
+        "workspace_id=ws_0123456789abcdef01234567,rimz_bin=/home/user/.cargo/bin/rimz",
+    );
+}
+
+#[test]
+fn presence_plugin_configuration_omits_an_inexpressible_rimz_path() {
+    // Zellij parses the configuration by splitting on `,` then `=`; a path
+    // containing either separator would mis-parse into a broken poke argv, so
+    // it is omitted and the plugin falls back to `rimz` on the host PATH.
+    let workspace_id = crate::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
+    for weird in ["/tmp/a,b/rimz", "/tmp/a=b/rimz"] {
+        let configuration =
+            presence_plugin_configuration(&workspace_id, std::path::Path::new(weird));
+        assert_eq!(
+            configuration, "workspace_id=ws_0123456789abcdef01234567",
+            "{weird} must be omitted, not shipped mis-parsable",
+        );
+    }
+}

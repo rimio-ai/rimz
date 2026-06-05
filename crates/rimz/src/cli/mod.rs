@@ -25,12 +25,12 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 
 use rimz::agents::{HookInstallPreview, StatusLineChange};
-use rimz::ids::MuxName;
+use rimz::ids::{MuxName, WorkspaceId};
 use rimz::ledger::paths::workspaces_dir;
 use rimz::ledger::workspace_record;
 use rimz::mux::{
-    BackgroundViewLaunch, BackgroundViewOptions, DaemonView, HostPane, MuxBackend, SessionHealth,
-    SessionOptions, SidebarPaneOptions, SidebarWidth,
+    BackgroundViewLaunch, BackgroundViewOptions, DaemonView, HostPane, MuxBackend,
+    PresencePluginOptions, SessionHealth, SessionOptions, SidebarPaneOptions, SidebarWidth,
 };
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, RuntimePaths, StatePaths, WorkspaceRecord};
@@ -557,6 +557,11 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // (non-interactive). The reborn room is seeded with the resume panes.
     gate_room_before_attach(backend.as_ref(), &room, daemon.as_ref(), &resume_plan.panes)?;
     report_resume(&resume_plan);
+    ensure_presence_plugin(
+        backend.as_ref(),
+        &workspace.session_name,
+        &workspace.workspace_id,
+    );
     let spec = backend.attach_command(&workspace.session_name, &mux_config);
     tracing::info!(
         workspace = %workspace.workspace_id,
@@ -565,6 +570,41 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         "workspace ready",
     );
     run_attach_action(&spec, args.attach.mode(), mux)
+}
+
+/// Best-effort load of the session's presence plugin — the Zellij push
+/// channel that retires the producer's steady-state pane poll (tmux is a
+/// no-op; its control-mode watch already pushes). Fired on every attach-shaped
+/// flow: the load verb is idempotent and clientless-safe, so a room born
+/// detached, a reattach, and a permission granted minutes after the first
+/// prompt all converge with no machinery of their own. Failure costs latency
+/// only — the producer keeps today's poll — so it never blocks an attach.
+fn ensure_presence_plugin(
+    backend: &dyn MuxBackend,
+    session_name: &str,
+    workspace_id: &WorkspaceId,
+) {
+    let Some(wasm) = rimz::mux::zellij::presence_plugin_path() else {
+        tracing::debug!(
+            session = %session_name,
+            "presence plugin artifact not installed; the producer keeps its pane poll",
+        );
+        return;
+    };
+    let opts = PresencePluginOptions {
+        session_name: session_name.to_owned(),
+        workspace_id: workspace_id.clone(),
+        wasm,
+        rimz_bin: sidebar::rimz_cli_program(),
+        converge: false,
+    };
+    if let Err(err) = backend.ensure_presence_plugin(&opts) {
+        tracing::debug!(
+            session = %session_name,
+            error = %err,
+            "presence plugin load failed; the producer keeps its pane poll",
+        );
+    }
 }
 
 fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
@@ -730,6 +770,11 @@ fn attach_cwd(mode: AttachMode, no_resume: bool, globals: &GlobalFlags) -> Resul
     launch_sidebar_for_workspace(backend.as_ref(), &room, None, &resume_plan.panes);
     gate_room_before_attach(backend.as_ref(), &room, None, &resume_plan.panes)?;
     report_resume(&resume_plan);
+    ensure_presence_plugin(
+        backend.as_ref(),
+        &workspace.session_name,
+        &workspace.workspace_id,
+    );
     let spec = backend.attach_command(&workspace.session_name, &mux_config);
     run_attach_action(&spec, mode, mux)
 }
@@ -788,6 +833,7 @@ fn attach_named(
             // external session by this name is never torn down.
             gate_room_before_attach(backend.as_ref(), &room, None, &resume_plan.panes)?;
             report_resume(&resume_plan);
+            ensure_presence_plugin(backend.as_ref(), &record.session_name, &record.workspace_id);
         }
         Ok(None) => {
             tracing::warn!(

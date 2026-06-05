@@ -175,6 +175,27 @@ pub struct SplitPaneOptions {
     pub env: BTreeMap<String, String>,
 }
 
+/// Inputs for [`MuxBackend::ensure_presence_plugin`] — one session's presence
+/// push channel. The caller resolves the artifact
+/// ([`zellij::presence_plugin_path`]) and the `rimz` the plugin pokes; the
+/// backend owns the load verbs and the version gate.
+#[derive(Clone, Debug)]
+pub struct PresencePluginOptions {
+    pub session_name: String,
+    /// The workspace the plugin pokes (`rimz sidebar wake --workspace-id …`),
+    /// pinned at load so the poke never depends on the plugin host's cwd.
+    pub workspace_id: WorkspaceId,
+    /// The presence-plugin wasm to load.
+    pub wasm: PathBuf,
+    /// Absolute `rimz` the plugin runs, insulating the poke from the host
+    /// PATH.
+    pub rimz_bin: PathBuf,
+    /// Also converge a *running* plugin onto the current wasm — the explicit
+    /// upgrade verb `rimz reload` passes; routine loads leave a healthy
+    /// running plugin untouched.
+    pub converge: bool,
+}
+
 /// One managed long-lived process the daemon view hosts beside the sidebar — the
 /// Claude remote-control host, or the Codex app-server broker. The view stacks
 /// every host to the right of the global sidebar.
@@ -332,6 +353,14 @@ pub trait MuxBackend: Send + Sync {
     fn open_background_view(&self, opts: &BackgroundViewOptions) -> Result<BackgroundViewLaunch>;
     /// Best-effort wakeup; sockets are the channel of record per the docs.
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()>;
+    /// Load the session's presence plugin — the push channel that nudges the
+    /// sidebar producer off its pane poll. A latency hint layered over the
+    /// poll truth, so failure costs freshness only and callers never block on
+    /// it. Zellij implements it; the default no-op covers tmux, whose
+    /// control-mode `PresenceWatch` already pushes.
+    fn ensure_presence_plugin(&self, _opts: &PresencePluginOptions) -> Result<()> {
+        Ok(())
+    }
     fn version(&self) -> Result<String>;
 }
 
