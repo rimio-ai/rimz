@@ -21,7 +21,9 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::agents::spending::{Spending, read_provider_spending_cache};
+use crate::agents::spending::{
+    ProviderSpendingCache, read_provider_spending_cache, today_spend_live_usd,
+};
 use crate::agents::{AgentRateLimits, RateLimitWindow};
 use crate::feed::{AgentStatus, PaneRef};
 use crate::ids::PaneId;
@@ -671,11 +673,16 @@ pub fn enrich_consumer(
     // and paints the same provider panel — a cheap config read plus
     // the producer's published account and spending caches, never a per-tick
     // fork or a ledger lock. The account probe and JSONL walk stay on the producer.
-    let spending;
-    (snapshot, spending) = fold_machine_config_cached(snapshot, runtime);
-    if !spending.total.is_zero() {
-        snapshot.value_tally = Some(spending.total);
+    let spend_cache;
+    (snapshot, spend_cache) = fold_machine_config_cached(snapshot, runtime);
+    if !spend_cache.spending.total.is_zero() {
+        snapshot.value_tally = Some(spend_cache.spending.total.clone());
     }
+    // The live overlay rides the same fold: a statusline push wakes the
+    // consumer, the refold lands the session's fresh cost on its row, and the
+    // cockpit's headline retargets in the same frame — no waiting out the
+    // walk's TTL.
+    apply_live_today_spend(&mut snapshot, &spend_cache);
 
     let cache = read_diff_stats_cache(&runtime.root.join("diff-stats.json"));
     project_diff_stats(&mut snapshot, &cache);
@@ -924,25 +931,68 @@ fn produce_accounts(
 /// zero subprocesses (the single-flight contract); a cold cache (no producer
 /// publish yet) carries no blocks until the elder's first publish. The cheap
 /// config read stays local so each tab honours its own display preferences.
+/// Returns the published spending cache whole — tally, baselines, and stamp —
+/// so the caller folds the value tally and the live today-spend overlay from
+/// one read.
 pub fn fold_machine_config_cached(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
-) -> (SidebarSnapshot, Spending) {
+) -> (SidebarSnapshot, ProviderSpendingCache) {
     let accounts = read_accounts_cache(&runtime.root.join("accounts.json")).accounts;
     // Consumers read the producer's published spending cache rather than
     // re-walking the JSONL transcript history themselves.
-    let spending =
-        read_provider_spending_cache(&runtime.root.join("provider-spending.json")).spending;
+    let cache = read_provider_spending_cache(&runtime.root.join("provider-spending.json"));
     let mut snapshot = fold_machine_config_with(
         snapshot,
         crate::config::MachineConfig::load().unwrap_or_default(),
         accounts,
-        &spending.by_provider,
+        &cache.spending.by_provider,
     );
     // A consumer reads the producer's published windows to fill idle gaps, but
     // never writes — the single-flight contract keeps the cache the producer's.
     apply_rate_limit_cache(&mut snapshot, runtime, false);
-    (snapshot, spending)
+    (snapshot, cache)
+}
+
+/// Stamp the cockpit's live today-spend onto the snapshot: the published
+/// walk's exact figure plus each live row's overshoot over its publish-time
+/// baseline ([`today_spend_live_usd`]), so the headline tracks every
+/// statusline push instead of waiting out the walk's TTL. Shared by the
+/// producing CLI and the consumer fold, so every tab paints the same figure;
+/// zero — an empty room on an unspent day — stays `None` and the cockpit
+/// keeps its bare `¤` line.
+pub fn apply_live_today_spend(snapshot: &mut SidebarSnapshot, cache: &ProviderSpendingCache) {
+    let live = today_spend_live_usd(
+        cache.spending.total.today.usd,
+        live_row_costs(snapshot),
+        &cache.live_cost_baselines,
+        cache.refreshed_at_ms,
+    );
+    snapshot.today_spend_live_usd = (live > 0.0).then_some(live);
+}
+
+/// Every agent row's live statusline cost: `(row id, total_cost_usd,
+/// registered-at ms)` triples — the overlay's per-session input, and
+/// (collected to a map) the baseline set the producer stamps at each walk
+/// publish.
+pub fn live_row_costs(
+    snapshot: &SidebarSnapshot,
+) -> impl Iterator<Item = (&str, f64, Option<u64>)> {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| group.rows.iter())
+        .filter_map(|row| {
+            let usd = row
+                .context
+                .as_ref()
+                .and_then(|context| context.cost.as_ref())
+                .and_then(|cost| cost.total_cost_usd)?;
+            let registered_ms = row
+                .registered_at
+                .map(|at| at.as_millisecond().max(0) as u64);
+            Some((row.id.as_str(), usd, registered_ms))
+        })
 }
 
 /// Apply the resolved config and already-resolved accounts onto the snapshot:

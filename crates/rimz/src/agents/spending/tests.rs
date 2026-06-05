@@ -719,12 +719,14 @@ fn provider_cache_round_trips_with_stamp() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("provider-spending.json");
     let spending = sample_spending();
+    let baselines = BTreeMap::from([("claude-1".to_owned(), 1.05)]);
 
-    write_provider_spending_cache(&path, 12_345, &spending);
+    write_provider_spending_cache(&path, 12_345, &spending, baselines.clone());
     let cache = read_provider_spending_cache(&path);
 
     assert_eq!(cache.refreshed_at_ms, 12_345);
     assert_eq!(cache.spending, spending);
+    assert_eq!(cache.live_cost_baselines, baselines);
 }
 
 #[test]
@@ -739,9 +741,12 @@ fn pre_stamp_provider_cache_reads_values_as_stale() {
 
     // Flatten tolerance: the values survive the upgrade; the missing stamp
     // defaults to 0, which any real wall clock reads as stale, so the gate
-    // refreshes once instead of serving the old shape forever.
+    // refreshes once instead of serving the old shape forever. The missing
+    // baselines read empty, so the live overlay degrades to the exact walked
+    // figure rather than a double count.
     assert_eq!(cache.refreshed_at_ms, 0);
     assert_eq!(cache.spending, spending);
+    assert!(cache.live_cost_baselines.is_empty());
     assert!(!cache.is_fresh(NOW_SECS * 1_000));
 }
 
@@ -761,7 +766,7 @@ fn provider_cache_missing_or_corrupt_reads_default() {
 fn provider_cache_expires_after_spending_ttl() {
     let cache = ProviderSpendingCache {
         refreshed_at_ms: 1_000,
-        spending: Spending::default(),
+        ..ProviderSpendingCache::default()
     };
     let ttl_ms = SPENDING_TTL.as_millis() as u64;
     // Boundary-exact: fresh at exactly the TTL, stale one ms past it.
@@ -769,4 +774,46 @@ fn provider_cache_expires_after_spending_ttl() {
     assert!(!cache.is_fresh(1_001 + ttl_ms));
     // A clock that ran backwards reads fresh (saturating), never a walk storm.
     assert!(cache.is_fresh(500));
+}
+
+// ── The cockpit's live today-spend overlay ──────────────────────────────────────
+
+#[test]
+fn overlay_adds_each_sessions_overshoot_over_its_baseline() {
+    let baselines = BTreeMap::from([("a".to_owned(), 1.00), ("b".to_owned(), 2.50)]);
+    // a overshoots by 0.30, b sits exactly on its baseline.
+    let live = vec![("a", 1.30, Some(5_000)), ("b", 2.50, Some(5_000))];
+    let blended = today_spend_live_usd(10.0, live.into_iter(), &baselines, 9_000);
+    assert!((blended - 10.30).abs() < 1e-9);
+}
+
+#[test]
+fn overlay_new_session_after_publish_contributes_its_whole_cost() {
+    let baselines = BTreeMap::new();
+    // Born after the publish stamp: the walk never saw it, so its whole cost
+    // is post-walk overshoot.
+    let live = vec![("fresh", 0.40, Some(9_500))];
+    let blended = today_spend_live_usd(1.00, live.into_iter(), &baselines, 9_000);
+    assert!((blended - 1.40).abs() < 1e-9);
+}
+
+#[test]
+fn overlay_unbaselined_old_session_fails_safe_to_zero() {
+    let baselines = BTreeMap::new();
+    // Registered before the publish but missing from the baselines (a race),
+    // or carrying no registration stamp at all: contribute nothing rather
+    // than double-count history the walk already priced.
+    let live = vec![("old", 3.00, Some(8_000)), ("unstamped", 2.00, None)];
+    let blended = today_spend_live_usd(5.00, live.into_iter(), &baselines, 9_000);
+    assert!((blended - 5.00).abs() < 1e-9);
+}
+
+#[test]
+fn overlay_negative_delta_clamps_to_zero() {
+    let baselines = BTreeMap::from([("a".to_owned(), 4.00)]);
+    // A resumed session re-counting below its baseline never rolls the
+    // headline backwards.
+    let live = vec![("a", 3.20, Some(5_000))];
+    let blended = today_spend_live_usd(6.00, live.into_iter(), &baselines, 9_000);
+    assert!((blended - 6.00).abs() < 1e-9);
 }

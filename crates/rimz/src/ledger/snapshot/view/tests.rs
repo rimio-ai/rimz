@@ -3349,3 +3349,25 @@ fn call_split_waits_for_a_known_input_side() {
     assert_eq!(projected.call_split(), None);
     assert_eq!(projected.context_used_tokens(), None);
 }
+
+/// The cockpit's live today-spend rides the published frame across every
+/// snapshot wire — `rimz sidebar snapshot` stdout, the plugin rail — so the
+/// field must survive a JSON round-trip, and a frame from a pre-overlay
+/// producer must read as `None` (version skew degrades to the walked tally,
+/// never an error).
+#[test]
+fn today_spend_live_usd_round_trips_and_defaults_absent() {
+    let mut snapshot = room(Vec::new(), Vec::new());
+    snapshot.today_spend_live_usd = Some(12.34);
+    let json = serde_json::to_string(&snapshot).unwrap();
+    let parsed: SidebarSnapshot = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.today_spend_live_usd, Some(12.34));
+
+    // An old producer's frame carries no field at all (`skip_serializing_if`
+    // keeps `None` off the wire symmetrically).
+    snapshot.today_spend_live_usd = None;
+    let bare = serde_json::to_string(&snapshot).unwrap();
+    assert!(!bare.contains("today_spend_live_usd"));
+    let parsed: SidebarSnapshot = serde_json::from_str(&bare).unwrap();
+    assert_eq!(parsed.today_spend_live_usd, None);
+}

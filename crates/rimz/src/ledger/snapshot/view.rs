@@ -152,6 +152,17 @@ pub struct SidebarSnapshot {
     /// trailing `week` and `month` rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_tally: Option<SpendTally>,
+    /// The cockpit's live today-spend: the walked `value_tally.today` figure
+    /// plus each live session's overshoot over the baseline captured at the
+    /// walk's publish ([`crate::agents::spending::today_spend_live_usd`]), so
+    /// the headline climbs the instant a session's statusline cost moves while
+    /// the tally stays the exact walked record the W/M ledger rows read.
+    /// Stamped where the spending cache folds onto the snapshot — the
+    /// producing CLI and the consumer fold alike; `None` on the pure-reducer
+    /// path and any pre-overlay snapshot, where the cockpit falls back to the
+    /// tally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub today_spend_live_usd: Option<f64>,
     /// The active event-log extent this rollup reflects — the freshness stamp
     /// `read_fresh_latest` compares against the live log. Stamped by
     /// `build_from` under the producing fold; `None` on the pure-reducer
@@ -654,6 +665,7 @@ impl SidebarSnapshot {
             sidebar: crate::config::SidebarConfig::default(),
             providers: Vec::new(),
             value_tally: None,
+            today_spend_live_usd: None,
             reflects_log: None,
         }
     }

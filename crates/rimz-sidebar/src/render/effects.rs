@@ -548,6 +548,7 @@ mod tests {
             sidebar: SidebarConfig::default(),
             providers: Vec::new(),
             value_tally: None,
+            today_spend_live_usd: None,
             reflects_log: None,
         }
     }

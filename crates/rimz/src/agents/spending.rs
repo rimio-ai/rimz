@@ -507,6 +507,14 @@ pub struct ProviderSpendingCache {
     /// When the producer last walked and published, for the TTL gate.
     #[serde(default)]
     pub refreshed_at_ms: u64,
+    /// Each live session's statusline cost (`total_cost_usd`, keyed by agent
+    /// id == sidebar row id) captured at the instant the walk published — the
+    /// baseline the cockpit's live overlay measures per-session overshoot
+    /// against until the next walk re-stamps it ([`today_spend_live_usd`]). A
+    /// pre-baseline file reads an empty map, so the overlay degrades to the
+    /// exact walked figure, never a double count.
+    #[serde(default)]
+    pub live_cost_baselines: BTreeMap<String, f64>,
     #[serde(flatten)]
     pub spending: Spending,
 }
@@ -520,14 +528,21 @@ impl ProviderSpendingCache {
     }
 }
 
-/// Atomic write of the aggregated `Spending`, stamped `refreshed_at_ms`, so
+/// Atomic write of the aggregated `Spending`, stamped `refreshed_at_ms` and
+/// carrying the live-session cost baselines captured at this publish, so
 /// consumer sidebar tabs read the fleet and per-provider totals — and the
 /// producer its own [`SPENDING_TTL`] gate — without re-walking the JSONL
 /// transcript history. Follows the same temp-then-rename durability contract
 /// as [`write_spending_cache`].
-pub fn write_provider_spending_cache(path: &Path, refreshed_at_ms: u64, spending: &Spending) {
+pub fn write_provider_spending_cache(
+    path: &Path,
+    refreshed_at_ms: u64,
+    spending: &Spending,
+    live_cost_baselines: BTreeMap<String, f64>,
+) {
     let cache = ProviderSpendingCache {
         refreshed_at_ms,
+        live_cost_baselines,
         spending: spending.clone(),
     };
     let Ok(bytes) = serde_json::to_vec(&cache) else {
@@ -548,6 +563,32 @@ pub fn read_provider_spending_cache(path: &Path) -> ProviderSpendingCache {
         .ok()
         .and_then(|bytes| serde_json::from_slice::<ProviderSpendingCache>(&bytes).ok())
         .unwrap_or_default()
+}
+
+/// Today's spend as the cockpit paints it: the walked tally's exact figure
+/// plus each live session's overshoot over the baseline captured when the
+/// walk published — so the headline climbs the instant a session's statusline
+/// cost moves, while the walk stays the truth it reconciles to on the next
+/// publish. Pure presentation over `(session id, cost now, registered-at ms)`
+/// triples: a baselined session adds `max(0, cost_now − baseline)` (a resumed
+/// or reset session clamps to zero rather than rolling the headline
+/// backwards); a session absent from the baselines adds its whole cost when
+/// it registered after the publish stamp — the walk never saw it — and
+/// nothing otherwise, the fail-safe undercount that heals on the next walk.
+pub fn today_spend_live_usd<'a>(
+    walked_today_usd: f64,
+    live_costs: impl Iterator<Item = (&'a str, f64, Option<u64>)>,
+    baselines: &BTreeMap<String, f64>,
+    published_at_ms: u64,
+) -> f64 {
+    let overshoot: f64 = live_costs
+        .map(|(id, cost_now, registered_at_ms)| match baselines.get(id) {
+            Some(baseline) => (cost_now - baseline).max(0.0),
+            None if registered_at_ms.is_some_and(|at| at > published_at_ms) => cost_now.max(0.0),
+            None => 0.0,
+        })
+        .sum();
+    walked_today_usd + overshoot
 }
 
 // ── Date utilities ────────────────────────────────────────────────────────────

@@ -21,7 +21,7 @@ mod sections;
 mod theme;
 
 pub(crate) use effects::EffectState;
-pub(crate) use odometer::{CostRolls, TallyAnim};
+pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
 pub(crate) use scrollbar::ScrollbarFade;
 
 use std::io::{self, Write};
@@ -738,9 +738,15 @@ fn top_lines(
     let sessions = today.map(|window| window.sessions).unwrap_or(0);
     header.push(cockpit_summary_line(theme, sessions, today, inner));
     // Line 2 is always present — an empty room reads `¤ 0` — with the spend
-    // joining the right edge and counting up as a turn lands.
+    // joining the right edge and counting up as a turn lands. The roll targets
+    // the live overlay when the snapshot carries one — the walked figure plus
+    // each session's post-publish overshoot, so the headline moves with every
+    // statusline push — and falls back to the tally on a pre-overlay snapshot.
     let live_agents = fleet_size(&snapshot.worktree_groups).0;
-    let today_usd = today.map(|window| window.usd).unwrap_or(0.0);
+    let today_usd = snapshot
+        .today_spend_live_usd
+        .or(today.map(|window| window.usd))
+        .unwrap_or(0.0);
     header.push(cockpit_spend_line(
         theme,
         live_agents,

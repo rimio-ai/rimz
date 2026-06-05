@@ -1947,11 +1947,12 @@ fn render_running_head_spins_with_the_phase() {
     );
 }
 
-/// A card's `$cost` counts up through its stepped roll: with a climb seeded
-/// from $1.00 toward the snapshot's $1.27, the first tick paints $1.02 (a
-/// tenth of the 27¢ gap, rounded down to cents) and a settled frame paints the
-/// exact target — never a value past it. The golden card snapshots stay on the
-/// unseeded path, where the painted cost is the target itself.
+/// A card's `$cost` counts up through its eased roll: with a climb seeded
+/// from $1.00 toward the snapshot's $1.27, the first click paints $1.11 (the
+/// ease-out curve's first point over the 27¢ gap, rounded to cents) and a
+/// settled frame paints the exact target — never a value past it. The golden
+/// card snapshots stay on the unseeded path, where the painted cost is the
+/// target itself.
 #[test]
 fn render_card_cost_ticks_toward_the_target() {
     let now = fixed_now();
@@ -1973,11 +1974,12 @@ fn render_card_cost_ticks_toward_the_target() {
     ui.cost_rolls
         .observe(vec![("claude-1".to_owned(), 1.27)].into_iter(), 0);
 
-    ui.animation_phase = 1;
+    // One full click in — the roll sweeps every second animation phase.
+    ui.animation_phase = 2;
     let mid = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 44, 20);
     assert!(
-        mid.contains("$1.02"),
-        "one tick in, the cost reads a tenth of the gap up:\n{mid}"
+        mid.contains("$1.11"),
+        "one click in, the cost reads the curve's first point:\n{mid}"
     );
 
     ui.animation_phase = 60;

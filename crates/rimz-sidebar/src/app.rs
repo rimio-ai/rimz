@@ -602,6 +602,14 @@ const ANIMATION_FRAME: Duration = Duration::from_millis(100);
 /// base phases, so redrawing them at 10fps wastes CPU in an idle or blocked room.
 const SLOW_ANIMATION_FRAME: Duration = Duration::from_millis(300);
 
+/// Money animation tick — one paint per roll click, derived from the odometer's
+/// [`render::CLICK_PHASES`] so the sampling grid and the click grid can never
+/// drift apart. A room where only money moves rides this 200ms grid; anything
+/// slower would skip clicks and could drop the one-click settle flash between
+/// samples.
+const MONEY_ANIMATION_FRAME: Duration =
+    Duration::from_millis(ANIMATION_FRAME.as_millis() as u64 * render::CLICK_PHASES);
+
 /// Floor for the frame-boundary recv timeout. When the loop is at or past the
 /// next frame boundary, the time-to-boundary is zero; a 1ms floor lets an
 /// already-queued datagram drain on this turn without a zero-timeout busy spin.
@@ -620,15 +628,21 @@ fn frame_interval(snapshot: &SidebarSnapshot, ui: &UiState) -> Duration {
     // brief and self-terminating, so the cost is bounded to the transition
     // window. The continuous attention glow deliberately rides the slow
     // cosmetic cadence below — the breath already keeps it warm.
-    if ui.tally.any_rolling(ui.animation_phase)
-        || ui.cost_rolls.any_rolling(ui.animation_phase)
-        || ui.scrollbar.fading(ui.animation_phase)
-        || ui.effects.any_active()
-    {
+    if ui.scrollbar.fading(ui.animation_phase) || ui.effects.any_active() {
         return ANIMATION_FRAME;
     }
+    // The money rolls click once per `CLICK_PHASES` phases, so a rolling room
+    // samples on the matching money grid — one paint per distinct click, and
+    // the one-click settle flash can never fall between samples. A fast room
+    // (a working spinner) keeps the fast grid; the roll's painted value simply
+    // holds across the extra frames. A slow-cadence room drops to the money
+    // grid while a climb is in flight — the cosmetic breath repaints
+    // idempotently, and the climb window bounds the extra paints.
+    let money_rolling =
+        ui.tally.any_rolling(ui.animation_phase) || ui.cost_rolls.any_rolling(ui.animation_phase);
     match render::animation_cadence(snapshot) {
         render::AnimationCadence::Fast => ANIMATION_FRAME,
+        _ if money_rolling => MONEY_ANIMATION_FRAME,
         render::AnimationCadence::Slow => SLOW_ANIMATION_FRAME,
         render::AnimationCadence::None => ANIMATION_FRAME,
     }

@@ -1,6 +1,6 @@
 //! `rimz sidebar` — `snapshot` renders the view-model (producer or `--no-produce` consumer read); `serve` runs the terminal renderer loop.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -305,8 +305,14 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             snapshot.agent_hooks_ready = rimz::sidebar::snapshot::agent_hooks_ready();
             // Walk transcript history for the fleet + per-provider spend before
             // the config fold, so the dashboard panels are built, ranked, and
-            // capped with each provider's spend already known.
-            let spending = compute_fleet_spending(runtime);
+            // capped with each provider's spend already known. The live rows'
+            // statusline costs — already folded above — ride in so a fresh
+            // publish stamps them as the cockpit overlay's baselines.
+            let live_costs: BTreeMap<String, f64> =
+                rimz::sidebar::snapshot::live_row_costs(&snapshot)
+                    .map(|(id, usd, _)| (id.to_owned(), usd))
+                    .collect();
+            let spending = compute_fleet_spending(runtime, live_costs);
             // Fold the per-machine config onto the snapshot: the per-provider
             // dashboard (account-scoped budgets, spend, emblem). The
             // producer owns the out-of-band account probe (a subprocess) and
@@ -320,7 +326,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             snapshot = rimz::sidebar::snapshot::fold_machine_config_producing(
                 snapshot,
                 runtime,
-                &spending.by_provider,
+                &spending.spending.by_provider,
                 config,
             );
             enrich_worktree_groups(&mut snapshot, runtime, trunk.as_deref());
@@ -749,7 +755,11 @@ fn enrich_worktree_groups(
 /// walking, and the producer's own gate: a stamp younger than
 /// [`SPENDING_TTL`](rimz::agents::spending::SPENDING_TTL) serves the published
 /// totals with zero transcript IO — no adapter discovery, no `spending.json`
-/// cursor read, no price-book load.
+/// cursor read, no price-book load. Each fresh publish also stamps
+/// `live_costs` — the live sessions' statusline costs at this exact moment —
+/// as the baselines the cockpit's live overlay measures overshoot against
+/// until the next walk; a served-back cache keeps the baselines (and the
+/// stamp) of the publish that captured them.
 ///
 /// The stale walk reads the per-workspace `spending.json` cache, refreshes only
 /// files whose mtime changed, then writes back if anything was updated, and
@@ -761,21 +771,25 @@ fn enrich_worktree_groups(
 /// ([`transcript_files`](rimz::agents::AgentAdapter::transcript_files)) so each
 /// counts on the same footing, and the dashboard panel and fleet ledger read
 /// one provider's spend the same way regardless of which project it ran in.
-fn compute_fleet_spending(runtime: &rimz::RuntimePaths) -> rimz::agents::spending::Spending {
+fn compute_fleet_spending(
+    runtime: &rimz::RuntimePaths,
+    live_costs: BTreeMap<String, f64>,
+) -> rimz::agents::spending::ProviderSpendingCache {
     use rimz::agents::pricing;
     use rimz::agents::spending::{
-        Spending, compute_spending, read_provider_spending_cache, read_spending_cache,
-        unix_secs_now, write_provider_spending_cache, write_spending_cache,
+        ProviderSpendingCache, Spending, compute_spending, read_provider_spending_cache,
+        read_spending_cache, unix_secs_now, write_provider_spending_cache, write_spending_cache,
     };
     use rimz::agents::{ADAPTERS, AgentAdapter};
 
     let provider_path = runtime.root.join("provider-spending.json");
     let now_ms = unix_now_ms();
     // Fresh stamp: the published walk is young enough — serve it back with the
-    // same single small read a consumer tab pays.
+    // same single small read a consumer tab pays, its baselines still anchored
+    // to the publish that captured them.
     let published = read_provider_spending_cache(&provider_path);
     if published.is_fresh(now_ms) {
-        return published.spending;
+        return published;
     }
 
     // Tag each file with its adapter at discovery — the source knows the kind,
@@ -792,8 +806,17 @@ fn compute_fleet_spending(runtime: &rimz::RuntimePaths) -> rimz::agents::spendin
     if files.is_empty() {
         // Stamp the empty result too: an agentless machine must not re-run the
         // (empty) discovery readdirs every tick.
-        write_provider_spending_cache(&provider_path, now_ms, &Spending::default());
-        return Spending::default();
+        write_provider_spending_cache(
+            &provider_path,
+            now_ms,
+            &Spending::default(),
+            live_costs.clone(),
+        );
+        return ProviderSpendingCache {
+            refreshed_at_ms: now_ms,
+            live_cost_baselines: live_costs,
+            spending: Spending::default(),
+        };
     }
 
     let cache_path = runtime.root.join("spending.json");
@@ -805,19 +828,26 @@ fn compute_fleet_spending(runtime: &rimz::RuntimePaths) -> rimz::agents::spendin
     if cache.dirty {
         write_spending_cache(&cache_path, &cache);
     }
-    write_provider_spending_cache(&provider_path, now_ms, &spending);
-    spending
+    write_provider_spending_cache(&provider_path, now_ms, &spending, live_costs.clone());
+    ProviderSpendingCache {
+        refreshed_at_ms: now_ms,
+        live_cost_baselines: live_costs,
+        spending,
+    }
 }
 
 /// Attach the fleet `value_tally` to the snapshot — the JSONL today / month /
 /// all-time pile read by both the cockpit's today figure and the bottom value
-/// corner; `None` when nothing has ever been recorded. The per-provider breakdown
-/// is folded into the dashboard panels separately (see `with_provider_aggregates`).
+/// corner; `None` when nothing has ever been recorded — and stamp the live
+/// today-spend overlay beside it, so the cockpit's headline tracks the
+/// statusline pushes between walks. The per-provider breakdown is folded into
+/// the dashboard panels separately (see `with_provider_aggregates`).
 fn apply_spending(
     snapshot: &mut rimz::SidebarSnapshot,
-    spending: &rimz::agents::spending::Spending,
+    cache: &rimz::agents::spending::ProviderSpendingCache,
 ) {
-    snapshot.value_tally = (!spending.total.is_zero()).then(|| spending.total.clone());
+    snapshot.value_tally = (!cache.spending.total.is_zero()).then(|| cache.spending.total.clone());
+    rimz::sidebar::snapshot::apply_live_today_spend(snapshot, cache);
 }
 
 /// Refresh the diff stats for `needed` worktree paths and return the cache map

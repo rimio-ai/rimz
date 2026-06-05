@@ -74,6 +74,7 @@ pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot
         sidebar: rimz::config::SidebarConfig::default(),
         providers: Vec::new(),
         value_tally: None,
+        today_spend_live_usd: None,
         reflects_log: None,
     }
 }
@@ -156,12 +157,19 @@ pub(super) fn apply_fetch_outcome(
         .filter(|pane| row_index_of_pane(current, None, pane).is_some());
     reconcile_selection(ui, current, derived);
     ui.animation_phase = wall_clock_phase(anim_start);
-    // Fold the fresh tally into the count-up: a higher figure starts a stepped
-    // roll that the next frames paint, a reset or first value snaps. A fetch
-    // without a tally leaves the rolls untouched. The serve loop paints the
+    // Fold the fresh today-spend into the count-up: a higher figure starts a
+    // stepped roll that the next frames paint, a reset or first value snaps,
+    // and an unchanged one is a no-op that leaves a climb in flight. The live
+    // overlay is the preferred target — it moves with every statusline push —
+    // falling back to the walked tally on a pre-overlay snapshot. A fetch
+    // carrying neither leaves the roll untouched, so a transient missing
+    // snapshot never snaps the figure to zero. The serve loop paints the
     // folded state on its next frame boundary; this path never draws.
-    if let Some(tally) = current.value_tally.as_ref() {
-        ui.tally.observe(tally, ui.animation_phase);
+    let today_usd = current
+        .today_spend_live_usd
+        .or(current.value_tally.as_ref().map(|tally| tally.today.usd));
+    if let Some(usd) = today_usd {
+        ui.tally.observe(usd, ui.animation_phase);
     }
     // The per-card cost rolls fold beside it: observe each agent row's session
     // cost under its durable row id (pruning rows the snapshot no longer
