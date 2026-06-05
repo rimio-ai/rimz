@@ -77,8 +77,8 @@ pub enum ThreadKey {
 /// Brand styling for the provider dashboard panel.
 #[derive(Debug)]
 pub struct Brand {
-    /// ASCII emblem lines, already split.
-    pub emblem: &'static [&'static str],
+    /// Multi-line ASCII emblem, written as drawn (one row per line).
+    pub emblem: &'static str,
     /// 256-color index.
     pub color: u8,
 }

@@ -68,7 +68,10 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "codex",
     display_name: "Codex",
     brand: Brand {
-        emblem: &[" ▗▛███▜▖", " ▜▌ ▚ ▐▛", " ▝▀▀▀▀▀▘"],
+        emblem: "\
+ ▗▛███▜▖
+▐▜▌ ▚ ▐▛▌
+ ▝▀▀▀▀▀▘",
         color: 38,
     },
     plan_label: PlanLabel::Prefixed { prefix: "ChatGPT" },

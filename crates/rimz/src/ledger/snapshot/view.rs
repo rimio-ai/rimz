@@ -1282,8 +1282,8 @@ fn default_provider_style(kind: &str) -> (String, Vec<String>, u8) {
             descriptor
                 .brand
                 .emblem
-                .iter()
-                .map(|line| (*line).to_owned())
+                .lines()
+                .map(ToOwned::to_owned)
                 .collect(),
             descriptor.brand.color,
         );

@@ -59,8 +59,11 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "pi",
     display_name: "Pi",
     brand: Brand {
-        emblem: &[" ▗▛████▜▖", "  ▐▌  ▐▌", "  ▝▘  ▝▘"],
-        color: 28,
+        emblem: "\
+ █▜███▛█
+▝▜▛▀▀▀▜▛▘
+ ▝▘   ▝▘",
+        color: 29,
     },
     // Pi sessions span whatever provider account the user wired, so no single
     // brand prefix is honest — the tier renders bare.
