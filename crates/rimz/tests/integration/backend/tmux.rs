@@ -230,10 +230,18 @@ fn ensure_and_list_sessions_round_trip() {
         listed.iter().any(|s| s == "rimz-test"),
         "expected `rimz-test` in {listed:?}",
     );
-    assert_eq!(
-        server.pane_current_path("rimz-test"),
-        cwd.path().display().to_string()
-    );
+    // `pane_current_path` reports the live shell process's cwd, and the
+    // pane's shell may still be mid-rc — oh-my-zsh, for one, chdirs into its
+    // cache dir transiently during startup — so poll briefly until the cwd
+    // settles back to the launch directory before pinning it.
+    let expected = cwd.path().display().to_string();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut current = server.pane_current_path("rimz-test");
+    while current != expected && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        current = server.pane_current_path("rimz-test");
+    }
+    assert_eq!(current, expected);
 
     // The identity pin landed in the session environment at birth, so every
     // pane — and every agent hook child — inherits the room it lives in.
