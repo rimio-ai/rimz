@@ -1,7 +1,7 @@
 //! The plugin's pure core: the stable-field manifest hash and the poke-policy
 //! state machine. Time is injected as Unix milliseconds and no `zellij-tile`
 //! type appears, so this module compiles and unit-tests on the host target;
-//! `lib.rs` is the thin wasm shell that projects Zellij events into it.
+//! `main.rs` is the thin wasm shell that projects Zellij events into it.
 
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
@@ -134,6 +134,43 @@ impl PokePolicy {
         match change_at {
             Some(at) => at.min(self.next_keepalive),
             None => self.next_keepalive,
+        }
+    }
+}
+
+/// Dedupes host timers over the policy's deadlines. Zellij timers are
+/// one-shot and anonymous — a fired timer does not say which deadline it was
+/// armed for — so the gate tracks the earliest armed deadline and lets a
+/// superseded timer's late fire read as stale instead of clearing the mark.
+/// Clearing on every fire would arm a duplicate for the still-outstanding
+/// deadline, and since every fire re-arms one successor, each duplicate is a
+/// chain that never collapses — wakeups would grow with every event burst
+/// over a session's lifetime.
+#[derive(Debug, Default)]
+pub struct TimerGate {
+    armed_for: Option<u64>,
+}
+
+impl TimerGate {
+    /// Record a host timer firing at `now_ms`. The mark clears only when the
+    /// armed-for deadline has arrived; an earlier fire is a stale timer from
+    /// a superseded chain, with the marked deadline still outstanding.
+    pub fn on_fire(&mut self, now_ms: u64) {
+        if self.armed_for.is_some_and(|at| at <= now_ms) {
+            self.armed_for = None;
+        }
+    }
+
+    /// Whether the shell should arm a host timer for deadline `at`: yes when
+    /// nothing is armed or `at` precedes the armed deadline (the superseded
+    /// later timer then fires as a harmless no-op). Marks `at` as armed when
+    /// answering yes.
+    pub fn should_arm(&mut self, at: u64) -> bool {
+        if self.armed_for.is_none_or(|armed| at < armed) {
+            self.armed_for = Some(at);
+            true
+        } else {
+            false
         }
     }
 }

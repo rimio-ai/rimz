@@ -77,15 +77,16 @@ const TAB_NAMES_RETRY_DELAY: Duration = Duration::from_millis(50);
 pub const PRESENCE_PLUGIN_MIN_ZELLIJ: (u32, u32, u32) = (0, 44, 0);
 
 /// Pipe name the presence-plugin launch sends its boot message down. The
-/// plugin answers any pipe by unblocking it; the name only labels the launch
-/// in `zellij`'s own tooling.
+/// message carries nothing — loading the plugin is the point, and delivery
+/// itself releases the CLI — so the name only labels the launch in
+/// `zellij`'s own tooling.
 const PRESENCE_BOOT_PIPE: &str = "rimz_presence_boot";
 
 /// Deadline for the presence-plugin boot pipe. Granted-and-running, the
-/// plugin unblocks the CLI within milliseconds; permission-pending, the CLI
-/// blocks until the user answers the prompt — so the kill at this bound is
-/// the expected first-run path, and it reaps only the CLI client: the plugin
-/// launch is already delivered server-side (verified on 0.44.3).
+/// pipe delivers and releases the CLI within milliseconds; permission-pending,
+/// the CLI blocks until the user answers the prompt — so the kill at this
+/// bound is the expected first-run path, and it reaps only the CLI client:
+/// the plugin launch is already delivered server-side (verified on 0.44.3).
 const PRESENCE_PIPE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Ceiling on how long `create_session_with_sidebar` holds the temp layout file

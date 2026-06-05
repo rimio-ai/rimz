@@ -61,7 +61,7 @@ fn command_change_changes_the_hash_and_exit_flag_too() {
 
 #[test]
 fn title_is_excluded_by_projection() {
-    // `PaneFields` carries no title at all — the projection in `lib.rs` drops
+    // `PaneFields` carries no title at all — the projection in `main.rs` drops
     // it before hashing, so a title-only change *cannot* alter the hash. This
     // test pins the contract by construction: the struct compiles without a
     // title field, and two manifests differing only in a dropped field are
@@ -169,5 +169,50 @@ fn next_wake_is_the_earlier_of_change_and_keepalive() {
         policy.next_wake_at(),
         40 + DEBOUNCE_MS,
         "a pending change wakes before the keepalive"
+    );
+}
+
+// --- TimerGate: host-timer dedup across superseded chains ---
+
+#[test]
+fn timer_gate_dedupes_equal_and_later_deadlines() {
+    let mut gate = TimerGate::default();
+    assert!(gate.should_arm(1_000), "nothing armed: arm");
+    assert!(!gate.should_arm(1_000), "same deadline: already covered");
+    assert!(
+        !gate.should_arm(5_000),
+        "later deadline: the armed timer wakes first"
+    );
+    assert!(gate.should_arm(500), "earlier deadline supersedes");
+}
+
+#[test]
+fn timer_gate_collapses_a_superseded_chain() {
+    // The load arms the keepalive, then a debounce supersedes it — two host
+    // timers are now outstanding, and Zellij fires both.
+    let mut gate = TimerGate::default();
+    assert!(gate.should_arm(60_000));
+    assert!(gate.should_arm(30_200));
+
+    gate.on_fire(30_200);
+    assert!(
+        gate.should_arm(60_000),
+        "after the debounce fire the keepalive re-arms"
+    );
+    gate.on_fire(60_000);
+    assert!(
+        gate.should_arm(120_000),
+        "the fired keepalive chains forward"
+    );
+
+    // The timer superseded at 30_200 fires late, while the 120s chain is
+    // outstanding: it must read as stale — clearing the mark here would arm
+    // a duplicate for a deadline already covered, and since every fire
+    // re-arms one successor, the duplicate would be a chain that never
+    // collapses.
+    gate.on_fire(60_005);
+    assert!(
+        !gate.should_arm(120_000),
+        "a stale fire arms no duplicate chain"
     );
 }

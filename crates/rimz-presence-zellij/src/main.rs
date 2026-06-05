@@ -10,7 +10,7 @@ mod shell {
     use std::collections::BTreeMap;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use rimz_presence_zellij::policy::{self, PaneFields, Poke, PokePolicy};
+    use rimz_presence_zellij::policy::{self, PaneFields, Poke, PokePolicy, TimerGate};
     use zellij_tile::prelude::*;
 
     #[derive(Default)]
@@ -30,9 +30,10 @@ mod shell {
         /// permission result or any application-state event arriving, which
         /// proves the cached grant already covers us.
         granted: bool,
-        /// The absolute deadline a host timer is already armed for, so a
-        /// burst of events arms one timer, not one per event.
-        armed_for: Option<u64>,
+        /// Deduplicates host timers over the policy's deadlines, so a burst
+        /// of events arms one timer, not one per event, and a superseded
+        /// timer's late fire never arms a duplicate chain.
+        timer_gate: TimerGate,
     }
 
     impl ZellijPlugin for State {
@@ -78,7 +79,7 @@ mod shell {
                     self.fold(now);
                 }
                 Event::Timer(_) => {
-                    self.armed_for = None;
+                    self.timer_gate.on_fire(now);
                 }
                 _ => {}
             }
@@ -132,17 +133,16 @@ mod shell {
             }
         }
 
-        /// Arm one host timer for the policy's next deadline. Tracking the
-        /// armed deadline dedupes timers under event bursts; an earlier
-        /// deadline supersedes (the stale timer fires as a harmless no-op).
+        /// Arm one host timer for the policy's next deadline, deduplicated by
+        /// the [`TimerGate`]: event bursts arm one timer, an earlier deadline
+        /// supersedes, and a superseded timer's fire is a harmless no-op.
         fn rearm(&mut self, now: u64) {
             let Some(policy) = self.policy.as_ref() else {
                 return;
             };
             let at = policy.next_wake_at();
-            if self.armed_for.is_none_or(|armed| at < armed) {
+            if self.timer_gate.should_arm(at) {
                 set_timeout(at.saturating_sub(now) as f64 / 1_000.0);
-                self.armed_for = Some(at);
             }
         }
 
