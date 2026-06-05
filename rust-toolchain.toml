@@ -1,3 +1,7 @@
 [toolchain]
 channel = "stable"
 components = ["rustfmt", "clippy", "llvm-tools-preview"]
+# The Zellij presence plugin (`crates/rimz-presence-zellij`) compiles to WASI;
+# rustup auto-installs the target from this list, so contributors and CI need
+# no extra provisioning step.
+targets = ["wasm32-wasip1"]

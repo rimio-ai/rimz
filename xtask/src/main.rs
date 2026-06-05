@@ -21,6 +21,7 @@ fn main() -> Result<()> {
     let root = workspace_root()?;
     match task.as_str() {
         "build" => build(&root),
+        "build-plugin" => build_plugin(&root),
         "install" => install(&root),
         "fmt" => fmt(&root),
         "lint" => lint(&root),
@@ -100,7 +101,55 @@ fn build(root: &Path) -> Result<()> {
         root,
         "cargo",
         ["build", "--workspace", "--all-features", "--locked"],
+    )?;
+    build_plugin(root)
+}
+
+/// Build the Zellij presence plugin for its real target. The host-target
+/// workspace build only compiles the crate's pure policy core and a stub bin;
+/// this produces the `.wasm` Zellij actually loads.
+fn build_plugin(root: &Path) -> Result<()> {
+    run(
+        root,
+        "cargo",
+        [
+            "build",
+            "-p",
+            "rimz-presence-zellij",
+            "--target",
+            "wasm32-wasip1",
+            "--release",
+            "--locked",
+        ],
     )
+}
+
+/// The built presence-plugin artifact, honoring a `CARGO_TARGET_DIR` override.
+fn plugin_artifact(root: &Path) -> PathBuf {
+    let target_dir = env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("target"));
+    target_dir
+        .join("wasm32-wasip1")
+        .join("release")
+        .join("rimz-presence-zellij.wasm")
+}
+
+/// Where `cargo install` lands binaries — the same ladder cargo itself walks —
+/// so the `.wasm` copied beside them is found by the sibling-file resolution
+/// in `rimz` (`presence_plugin_path`).
+fn cargo_install_bin_dir() -> PathBuf {
+    if let Some(install_root) = env::var_os("CARGO_INSTALL_ROOT") {
+        return PathBuf::from(install_root).join("bin");
+    }
+    if let Some(cargo_home) = env::var_os("CARGO_HOME") {
+        return PathBuf::from(cargo_home).join("bin");
+    }
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+        .join(".cargo")
+        .join("bin")
 }
 
 fn install(root: &Path) -> Result<()> {
@@ -116,6 +165,20 @@ fn install(root: &Path) -> Result<()> {
             ],
         )?;
     }
+    // The presence plugin is an artifact, not an executable — `cargo install`
+    // has no story for it, so build and place it beside the installed bins
+    // where `rimz` resolves it as a sibling file. Temp-then-rename so a
+    // running session never loads a half-copied wasm.
+    build_plugin(root)?;
+    let artifact = plugin_artifact(root);
+    let dest_dir = cargo_install_bin_dir();
+    fs::create_dir_all(&dest_dir).with_context(|| format!("creating {}", dest_dir.display()))?;
+    let dest = dest_dir.join("rimz-presence-zellij.wasm");
+    let staged = dest_dir.join("rimz-presence-zellij.wasm.tmp");
+    fs::copy(&artifact, &staged)
+        .with_context(|| format!("staging {} to {}", artifact.display(), staged.display()))?;
+    fs::rename(&staged, &dest)
+        .with_context(|| format!("installing plugin to {}", dest.display()))?;
     Ok(())
 }
 
@@ -162,7 +225,10 @@ fn ci(root: &Path) -> Result<()> {
     // instrumented test build; `coverage` is the single instrumented test run.
     let mut first_err: Option<anyhow::Error> = None;
     for (name, gate) in [
-        ("lint", lint as Gate),
+        // The wasm plugin compile is the cheapest compile gate; it fails fast
+        // before the host lint/coverage builds are paid for.
+        ("build-plugin", build_plugin as Gate),
+        ("lint", lint),
         ("coverage", coverage),
         ("doctest", doctest),
         ("semver", semver),

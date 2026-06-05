@@ -1,0 +1,32 @@
+[package]
+name = "rimz-presence-zellij"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The Zellij presence plugin: a headless wasm32-wasip1 plugin loaded by rimz
+# into every Zellij session it manages, poking `rimz sidebar wake` on pane
+# topology and focus changes. The lib (rlib) is the pure policy core
+# (`policy.rs`), host-tested inside the ordinary workspace test run; the bin
+# is the Zellij plugin entrypoint (`register_plugin!` defines `main`), built
+# for wasm by `cargo xtask build-plugin` and a stub on host targets so
+# `--workspace` builds and lints stay green without the wasm toolchain.
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "rimz-presence-zellij"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+# The official Zellij plugin API, wasm-only: its shims call extern host
+# functions that exist only inside Zellij's plugin host, so host targets must
+# not link it. Pinned to the 0.44 line — the plugin-load gate
+# (`PRESENCE_PLUGIN_MIN_ZELLIJ`) only attempts the load on hosts at or above
+# this line, and an older host that refuses the artifact degrades to poll
+# mode, byte-identical to a session with no plugin.
+[target.'cfg(target_family = "wasm")'.dependencies]
+zellij-tile = "0.44"

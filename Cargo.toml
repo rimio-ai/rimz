@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rimz", "crates/rimz-sidebar", "xtask"]
+members = ["crates/rimz", "crates/rimz-presence-zellij", "crates/rimz-sidebar", "xtask"]
 resolver = "2"
 
 [workspace.package]

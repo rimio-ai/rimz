@@ -1,5 +1,18 @@
 [graph]
 all-features = true
+# Audit what links into the artifacts rimz ships on its supported platforms.
+# wasm32 is deliberately absent: its only occupant is the presence plugin's
+# `zellij-tile` → `zellij-utils` subtree, which executes inside Zellij's wasm
+# sandbox — the same zellij-utils code every Zellij install already runs —
+# and is supply-chain-covered by cargo-vet at safe-to-run for that boundary
+# (see supply-chain/config.toml `[policy.rimz-presence-zellij]`). Revisit if
+# rimz ever ships a wasm artifact that runs outside a plugin sandbox.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
 
 [licenses]
 allow = [
@@ -25,13 +38,11 @@ deny = [
     { name = "fs2", reason = "unmaintained; use fs4 instead" },
 ]
 skip = [
-    { crate = "wit-bindgen@0.51.0", reason = "dev-only WASI split through getrandom/tempfile; revisit when uuid/proptest converge" },
-    { crate = "wit-bindgen@0.57.1", reason = "dev-only WASI split through getrandom/tempfile; revisit when uuid/proptest converge" },
     # The `ring` crypto backend reached via `ureq`/`rustls` pins older support
     # crates than the rest of the tree; isolated to the TLS stack, drop when ring
-    # catches up.
+    # catches up. (The former wit-bindgen and windows-sys skips left with the
+    # graph's target scoping — wasm and windows triples are no longer audited.)
     { crate = "getrandom@0.2.17", reason = "ring pins getrandom 0.2; workspace otherwise on 0.3/0.4" },
-    { crate = "windows-sys@0.52.0", reason = "ring pins windows-sys 0.52; workspace otherwise on 0.61" },
 ]
 
 [advisories]
