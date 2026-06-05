@@ -514,10 +514,12 @@ fn render_process_row_pins_resource_stats_at_l2() {
 
 #[test]
 fn proc_stats_hold_a_fixed_dim_grid() {
-    // The whole stats cluster stays in the dim process tone — markers
-    // included; the colored lead glyph carries the row's liveness — and each
+    // Each marker wears its own DIM-weighted tone — `C` sky, `M` sage, `⇅`
+    // violet — while figures and seams stay in the dim process tone, and each
     // figure right-aligns into its fixed slot so a changing magnitude never
     // walks the cluster sideways.
+    use ratatui::style::{Color, Modifier};
+
     let mut busy = pane("%1", "cargo build --release", "/repo/main");
     busy.cpu_pct = Some(34);
     busy.rss_kb = Some(512 * 1_024);
@@ -530,9 +532,28 @@ fn proc_stats_hold_a_fixed_dim_grid() {
     let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
     assert_eq!(text, "C  34%  M 512M  ⇅   8M/s");
     let dim = theme.dim();
+    let markers = [
+        ("C ", Color::Blue),
+        ("M ", Color::Green),
+        ("⇅ ", Color::Magenta),
+    ];
+    for (marker, tone) in markers {
+        let span = spans
+            .iter()
+            .find(|span| span.content.as_ref() == marker)
+            .unwrap_or_else(|| panic!("marker {marker:?} missing from the grid"));
+        assert_eq!(
+            span.style,
+            theme.style(tone, Modifier::DIM),
+            "marker {marker:?} wears its own DIM-weighted tone"
+        );
+    }
     assert!(
-        spans.iter().all(|span| span.style == dim),
-        "markers and figures alike stay in the dim process tone"
+        spans
+            .iter()
+            .filter(|span| markers.iter().all(|(marker, _)| span.content != *marker))
+            .all(|span| span.style == dim),
+        "figures and seams stay in the dim process tone"
     );
 
     // A figure changing magnitude re-aligns within its slot; the grid width
@@ -548,8 +569,9 @@ fn proc_stats_hold_a_fixed_dim_grid() {
     assert_eq!(shifted, "C 100%  M 1.1G  ⇅ 450k/s");
     assert_eq!(text.chars().count(), shifted.chars().count());
 
-    // A metric not yet sampled (rates on the first tick) blank-fills its
-    // slot, so the columns hold still from the first reading on.
+    // A metric not yet sampled (rates on the first tick) keeps its marker and
+    // holds a dim `--` in its figure slot, so the grid reads whole from the
+    // first reading on and the columns never move.
     let mut first_tick = row.clone();
     first_tick.cpu_pct = None;
     first_tick.io_bps = None;
@@ -557,7 +579,7 @@ fn proc_stats_hold_a_fixed_dim_grid() {
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
-    assert_eq!(blanked, "        M 512M          ");
+    assert_eq!(blanked, "C   --  M 512M  ⇅     --");
     assert_eq!(blanked.chars().count(), text.chars().count());
 
     // NO_COLOR keeps the shape and sheds every tone.
@@ -971,15 +993,19 @@ fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
         "a reasoning child wears the thinking head:\n{rendered}"
     );
     // Line 2: token spend, model, and effort left, elapsed work right-pinned.
-    // 12_400 → `12.4k`, the bare id prettified to `Opus 4.8`, the stop-reported
-    // effort after it, 60s frozen → ` 1m` right-aligned in the fixed slot.
+    // 12_400 → the whole-unit `12k`, the bare id prettified to `Opus 4.8` and
+    // padded to the widest sibling model (`Haiku 4.5`) so the effort column
+    // stacks, the stop-reported effort after it, 60s frozen → ` 1m`
+    // right-aligned in the fixed slot.
     assert!(
-        rendered.contains("◇ 12.4k · Opus 4.8 · high"),
+        rendered.contains("◇ 12k · Opus 4.8  · high"),
         "line 2 carries the token spend, model, and effort:\n{rendered}"
     );
+    // The narrower `3k` right-aligns under the sibling's `12k`, so the `·`
+    // seams and models stack into one column.
     assert!(
-        rendered.contains("◇ 3.1k · Haiku 4.5"),
-        "the sibling carries its own model:\n{rendered}"
+        rendered.contains("◇  3k · Haiku 4.5"),
+        "the sibling carries its own model, column-aligned:\n{rendered}"
     );
     assert!(
         rendered.contains("◔  1m"),
@@ -991,6 +1017,89 @@ fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
         "a sub-minute child reads `<1m`:\n{rendered}"
     );
     assert_snapshot("subagent_two_line_entry", rendered);
+}
+
+#[test]
+fn subagent_metadata_blank_fills_the_per_card_grid() {
+    // A child missing a field a sibling carries blank-fills that slot, so the
+    // card's metadata lines stay one column grid: the token-less child's model
+    // starts exactly under its sibling's, with no bare `◇` and no orphan `·`
+    // seam leading the line.
+    let mut parent = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    parent.context = Some(claude_context(fixed_now()));
+
+    let mut spender = agent(
+        "child-1",
+        "claude",
+        AgentStatus::Success,
+        None,
+        None,
+        Some("Explore"),
+    );
+    spender.parent_agent_id = Some("claude-1".into());
+    spender.subagent_started_at = Some(fixed_now() - Duration::from_secs(90));
+    spender.total_tokens = Some(12_400);
+    spender.model = Some("claude-opus-4-8".to_owned());
+    spender.effort = Some("high".to_owned());
+
+    // A sibling before its first `subagentStatusLine` report: no tokens yet,
+    // its model already known from its own lifecycle events.
+    let mut quiet = agent(
+        "child-2",
+        "claude",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("review"),
+    );
+    quiet.parent_agent_id = Some("claude-1".into());
+    quiet.model = Some("claude-haiku-4-5".to_owned());
+
+    let snapshot = snapshot_with(Vec::new(), vec![parent, spender, quiet]);
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            selected_index: 0,
+            ..Default::default()
+        },
+        54,
+        20,
+    );
+
+    // Anchor each lookup to the child's own metadata line — the parent's
+    // identity line also reads `Opus 4.8`.
+    let char_col = |line_needle: &str, col_needle: &str| {
+        let line = rendered
+            .lines()
+            .find(|line| line.contains(line_needle))
+            .unwrap_or_else(|| panic!("{line_needle:?} missing:\n{rendered}"));
+        line[..line.find(col_needle).unwrap()].chars().count()
+    };
+    assert_eq!(
+        char_col("◇ 12k", "Opus 4.8"),
+        char_col("Haiku 4.5", "Haiku 4.5"),
+        "the token-less child's model starts under its sibling's:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("· Haiku 4.5"),
+        "a blank-filled token slot carries no orphan seam:\n{rendered}"
+    );
+    let quiet_line = rendered
+        .lines()
+        .find(|line| line.contains("Haiku 4.5"))
+        .expect("the token-less child still renders its metadata line");
+    assert!(
+        !quiet_line.contains('◇'),
+        "no bare `◇` over a blank figure:\n{rendered}"
+    );
 }
 
 #[test]

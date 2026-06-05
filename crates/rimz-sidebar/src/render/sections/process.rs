@@ -1,7 +1,7 @@
 //! Bare process rows: the shell/build line, its right-pinned resource stats,
 //! the full-command detail line, and the resolver's composed row.
 
-use ratatui::style::Modifier;
+use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 use rimz::SidebarRow;
 use rimz::feed::AgentStatus;
@@ -61,32 +61,36 @@ const IO_SLOT: usize = 6;
 
 /// Build the right-pinned resource stats for a process row as one fixed grid —
 /// `C  34%  M 512M  ⇅   8M/s`. Each metric owns a fixed slot (marker, space,
-/// right-aligned figure); a metric not yet sampled (rates on the first tick)
-/// blank-fills its slot, so the columns hold still from the first reading on.
-/// The whole cluster is dim — the stats are secondary chrome, and the colored
+/// right-aligned figure); once any metric reports, all three markers paint —
+/// each in its own tone (`C` sky, `M` sage, `⇅` violet, DIM-weighted like the
+/// clay lead so the row stays a step below the agent cards) — and a metric not
+/// yet sampled (rates on the first tick) holds a dim `--` in its figure slot,
+/// so the grid reads whole from the first reading on and the columns never
+/// move. Figures and seams stay dim — the stats are secondary chrome, and the
 /// lead glyph carries the row's liveness. Empty when no metric has reported at
 /// all (non-Linux).
 pub(in crate::render) fn proc_stats_spans(theme: &Theme, row: &SidebarRow) -> Vec<Span<'static>> {
-    let slots: [(&str, usize, Option<String>); 3] = [
-        ("C", CPU_SLOT, row.cpu_pct.map(fmt_cpu)),
-        ("M", RSS_SLOT, row.rss_kb.map(fmt_rss)),
-        ("⇅", IO_SLOT, row.io_bps.map(fmt_io)),
+    let slots: [(&str, Color, usize, Option<String>); 3] = [
+        ("C", Color::Blue, CPU_SLOT, row.cpu_pct.map(fmt_cpu)),
+        ("M", Color::Green, RSS_SLOT, row.rss_kb.map(fmt_rss)),
+        ("⇅", Color::Magenta, IO_SLOT, row.io_bps.map(fmt_io)),
     ];
-    if slots.iter().all(|(_, _, figure)| figure.is_none()) {
+    if slots.iter().all(|(_, _, _, figure)| figure.is_none()) {
         return Vec::new();
     }
-    let mut text = String::new();
-    for (i, (marker, width, figure)) in slots.into_iter().enumerate() {
+    let mut spans = Vec::with_capacity(3 * slots.len());
+    for (i, (marker, tone, width, figure)) in slots.into_iter().enumerate() {
         if i > 0 {
-            text.push_str("  ");
+            spans.push(Span::styled("  ", theme.dim()));
         }
-        match figure {
-            Some(figure) => text.push_str(&format!("{marker} {figure:>width$}")),
-            // Marker cell + space + figure slot, all blank.
-            None => text.extend(std::iter::repeat_n(' ', 2 + width)),
-        }
+        spans.push(Span::styled(
+            format!("{marker} "),
+            theme.style(tone, Modifier::DIM),
+        ));
+        let figure = figure.unwrap_or_else(|| "--".to_owned());
+        spans.push(Span::styled(format!("{figure:>width$}"), theme.dim()));
     }
-    vec![Span::styled(text, theme.dim())]
+    spans
 }
 
 /// Line 2 for an *active* process row: the full foreground command in the

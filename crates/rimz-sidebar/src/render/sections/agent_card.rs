@@ -13,14 +13,14 @@ use rimz::{SidebarProviderPanel, SidebarRow, SidebarRowKind, SidebarSubAgent};
 use crate::render::CostRolls;
 use crate::render::fmt::{
     activity_short, age_secs, clip, dollars2, elapsed_label, model_label, pct_label,
-    time_remaining, tokens_int, tokens_short, window_short,
+    time_remaining, tokens_int, window_short,
 };
 use crate::render::labels::{
-    SEGMENT_CACHE_READ, SEGMENT_CACHE_WRITE, SEGMENT_INPUT, activity_age_style, agent_glyph,
-    agent_style, attention_glyph_style, compacting_glyph, compacting_style,
+    SEGMENT_CACHE_READ, SEGMENT_CACHE_WRITE, SEGMENT_INPUT, TOKENS_TOTAL, activity_age_style,
+    agent_glyph, agent_style, attention_glyph_style, compacting_glyph, compacting_style,
     context_breakdown_spans, context_total_spans, elapsed_glyph, gauge_spans, loading_dots,
     resolver_glyph, segmented_gauge_spans, severity_color, status_style, subagent_glyph,
-    subagent_style, todo_spans, tokens_total_spans, window_style,
+    subagent_style, todo_spans, window_style,
 };
 use crate::render::theme::Theme;
 
@@ -126,9 +126,12 @@ pub(super) fn row_lines(
 /// thinking sparkle while the child reasons, the working fill while it acts,
 /// the static `✓`/`!` verdict once it finishes — then the type and the
 /// description of what the parent asked it to do; line 2 (deeper indent) is
-/// its token spend `◇`, model, and reasoning effort, with elapsed work (the
-/// clock-fill glyph over a fixed `<1m`/`9m`/`2h` label in the parent's age
-/// tone ramp) pinned right under the parent's own stats. Children are
+/// its token spend `◇` (the card's whole-unit figure, never a decimal), model,
+/// and reasoning effort — one per-card column grid, each slot sized to its
+/// widest sibling so the figures, models, and efforts stack — with elapsed
+/// work (the clock-fill glyph over a fixed `<1m`/`9m`/`2h` label in the
+/// parent's age tone ramp) pinned right under the parent's own stats. Children
+/// are
 /// subordinate to the parent card, so their text stays at the soft middle
 /// weight — the model/effort metadata a step deeper at the dim chrome, like
 /// the parent's capability tokens — and indented past the parent's stat
@@ -156,6 +159,25 @@ fn sub_agent_lines(
         ],
         width,
     ))];
+    // The metadata lines below form one per-card grid: the token figure
+    // right-aligns to the widest sibling and the model pads to the widest
+    // sibling, so the `·` seams, the models, and the efforts stack into
+    // columns across children (the elapsed cluster already stacks via its
+    // fixed right-pinned slot). A column exists only while some child carries
+    // the field; a child missing a carried field blank-fills the slot.
+    let child_tokens = |sub: &SidebarSubAgent| sub.total_tokens.filter(|total| *total > 0);
+    let token_col = sub_agents
+        .iter()
+        .filter_map(child_tokens)
+        .map(|total| tokens_int(total).chars().count())
+        .max()
+        .unwrap_or(0);
+    let model_col = sub_agents
+        .iter()
+        .filter_map(|sub| sub.model.as_deref())
+        .map(|model| model_label(model).chars().count())
+        .max()
+        .unwrap_or(0);
     for sub in sub_agents {
         // The leading cell is the agent-row vocabulary verbatim: a running
         // child sparkles (reasoning) or fills (acting) in the live clay, a
@@ -187,32 +209,67 @@ fn sub_agent_lines(
         // (right-pinned). A deeper indent sets it below the type line; the
         // clock-fill glyph lands under the parent's age and fills with the
         // child's worked span.
-        let tokens = sub.total_tokens.filter(|total| *total > 0);
+        let tokens = child_tokens(sub);
         let elapsed = sub.elapsed_secs;
         let model = sub.model.as_deref();
         let effort = sub.effort.as_deref();
         if tokens.is_some() || elapsed.is_some() || model.is_some() || effort.is_some() {
             let mut left = vec![Span::raw("      ")];
-            if let Some(total) = tokens {
-                // Children stay subordinate to the parent card, so the figure
-                // keeps the soft weight the rest of the subagent list wears.
-                left.extend(tokens_total_spans(theme, total, tokens_short));
-            }
-            if let Some(model) = model {
-                // The model rides after the spend at the parent's dim
-                // capability weight, joined by the `·` seam when a figure
-                // precedes it; bare otherwise, so the indent never carries an
-                // orphan separator.
-                if tokens.is_some() {
-                    left.push(Span::styled(" · ", theme.dim()));
+            // Walks token → model → effort; a `·` seam paints only between two
+            // fields this child actually renders, and blank-fills its three
+            // cells otherwise, so the indent never carries an orphan separator
+            // and the columns hold across siblings.
+            let mut prev_rendered = false;
+            if token_col > 0 {
+                match tokens {
+                    Some(total) => {
+                        // Children stay subordinate to the parent card, so the
+                        // figure keeps the soft weight the rest of the subagent
+                        // list wears, the `◇` its violet.
+                        left.push(Span::styled(
+                            TOKENS_TOTAL,
+                            theme.style(Color::Magenta, Modifier::empty()),
+                        ));
+                        left.push(Span::styled(
+                            format!(" {:>token_col$}", tokens_int(total)),
+                            theme.soft(),
+                        ));
+                        prev_rendered = true;
+                    }
+                    // Marker cell + space + figure slot, all blank.
+                    None => left.push(Span::raw(" ".repeat(2 + token_col))),
                 }
-                left.push(Span::styled(model_label(model), theme.dim()));
+            }
+            if model_col > 0 {
+                // The model rides after the spend at the parent's dim
+                // capability weight, left-padded to the widest sibling so the
+                // effort column stacks.
+                let seam = if token_col > 0 { 3 } else { 0 };
+                match model {
+                    Some(model) => {
+                        if prev_rendered {
+                            left.push(Span::styled(" · ", theme.dim()));
+                        } else {
+                            left.push(Span::raw(" ".repeat(seam)));
+                        }
+                        left.push(Span::styled(
+                            format!("{:<model_col$}", model_label(model)),
+                            theme.dim(),
+                        ));
+                        prev_rendered = true;
+                    }
+                    None => left.push(Span::raw(" ".repeat(seam + model_col))),
+                }
             }
             if let Some(effort) = effort {
-                // Effort keeps the parent line's `model · effort` adjacency
-                // and weight, with the same orphan-seam rule as the model.
-                if tokens.is_some() || model.is_some() {
+                // Effort keeps the parent line's `model · effort` adjacency and
+                // weight. The last left field pads nothing — nothing aligns
+                // after it — but still blanks its seam when this child renders
+                // no field before it, so sibling efforts stay stacked.
+                if prev_rendered {
                     left.push(Span::styled(" · ", theme.dim()));
+                } else if token_col > 0 || model_col > 0 {
+                    left.push(Span::raw("   "));
                 }
                 left.push(Span::styled(effort.to_owned(), theme.dim()));
             }
