@@ -634,6 +634,7 @@ fn process_rows_dim_a_step_below_agent_cards() {
             &mut row_index,
             0,
             0,
+            &CostRolls::default(),
             &mut lines,
             &mut map,
         );
@@ -1163,6 +1164,7 @@ fn codex_calm_bar_splits_into_row_level_segments() {
         &mut row_index,
         0,
         0,
+        &CostRolls::default(),
         &mut lines,
         &mut map,
     );
@@ -1833,6 +1835,47 @@ fn render_running_head_spins_with_the_phase() {
     );
 }
 
+/// A card's `$cost` counts up through its stepped roll: with a climb seeded
+/// from $1.00 toward the snapshot's $1.27, the first tick paints $1.02 (a
+/// tenth of the 27¢ gap, rounded down to cents) and a settled frame paints the
+/// exact target — never a value past it. The golden card snapshots stay on the
+/// unseeded path, where the painted cost is the target itself.
+#[test]
+fn render_card_cost_ticks_toward_the_target() {
+    let now = fixed_now();
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("compiling"),
+    );
+    claude.last_activity = now;
+    claude.context = Some(claude_context(now));
+    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+
+    let mut ui = ui_at_phase(0);
+    ui.cost_rolls
+        .observe(vec![("claude-1".to_owned(), 1.0)].into_iter(), 0);
+    ui.cost_rolls
+        .observe(vec![("claude-1".to_owned(), 1.27)].into_iter(), 0);
+
+    ui.animation_phase = 1;
+    let mid = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 44, 20);
+    assert!(
+        mid.contains("$1.02"),
+        "one tick in, the cost reads a tenth of the gap up:\n{mid}"
+    );
+
+    ui.animation_phase = 60;
+    let settled = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 44, 20);
+    assert!(
+        settled.contains("$1.27"),
+        "settled, the cost reads the exact target:\n{settled}"
+    );
+}
+
 /// An idle agent on a spent account projects to rate-limited: the row leads
 /// with the `⏸` pause and the cockpit gains an `⏸` bucket. It is static —
 /// parked, with nothing to do but wait for the reset.
@@ -1956,6 +1999,7 @@ fn card_lines(selected_index: usize) -> Vec<String> {
         &mut row_index,
         selected_index,
         0,
+        &CostRolls::default(),
         &mut lines,
         &mut map,
     );
@@ -2055,6 +2099,7 @@ fn expanded_card_lists_subagents_only_when_selected() {
             &mut row_index,
             selected_index,
             0,
+            &CostRolls::default(),
             &mut lines,
             &mut map,
         );
@@ -2120,6 +2165,7 @@ fn group_lines(
         &mut row_index,
         selected_index,
         0,
+        &CostRolls::default(),
         &mut lines,
         &mut map,
     );

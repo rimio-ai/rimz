@@ -21,7 +21,7 @@ mod sections;
 mod theme;
 
 pub(crate) use effects::EffectState;
-pub(crate) use odometer::TallyAnim;
+pub(crate) use odometer::{CostRolls, TallyAnim};
 pub(crate) use scrollbar::ScrollbarFade;
 
 use std::io::{self, Write};
@@ -53,12 +53,19 @@ pub struct UiState {
     /// animation tick. The renderer derives the running-agent spin frame from
     /// it; freshness gating (per row) keeps a quiet agent frozen.
     pub animation_phase: u64,
-    /// The cockpit spend's count-up state — one eased roll for today's `$`.
+    /// The cockpit spend's count-up state — one stepped roll for today's `$`.
     /// Folded forward on each data refresh (`TallyAnim::observe`) and read by the
     /// renderer at `animation_phase`; the serve loop keeps the fast tick alive
     /// while a roll is in flight. Crate-internal: an implementation detail of the
     /// renderer, not part of the public `UiState` surface.
     pub(crate) tally: TallyAnim,
+    /// The agent cards' `$cost` count-up state — one stepped roll per row,
+    /// keyed by the row's durable id so a reorder or refresh re-anchors a
+    /// climb to its agent. Folded next to `tally` on each data refresh
+    /// (`CostRolls::observe`, which also prunes departed rows) and read by the
+    /// card at `animation_phase`; ORed into the serve loop's animation gate
+    /// beside the tally. Crate-internal, like `tally`.
+    pub(crate) cost_rolls: CostRolls,
     /// The post-render effects pass's memory — the transition detector's diff
     /// base and the live one-shot flashes ([`effects::EffectState`]). Observed
     /// and painted as a byproduct of every draw, after the paragraph render;
@@ -754,6 +761,7 @@ fn scroll_lines(
                 &mut row_index,
                 ui.selected_index,
                 ui.animation_phase,
+                &ui.cost_rolls,
                 &mut lines,
                 &mut map,
             );

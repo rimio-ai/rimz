@@ -10,6 +10,7 @@ use rimz::config::ContextSeverityConfig;
 use rimz::feed::{AgentStatus, ContextSeverity};
 use rimz::{SidebarProviderPanel, SidebarRow, SidebarRowKind, SidebarSubAgent};
 
+use crate::render::CostRolls;
 use crate::render::fmt::{
     activity_short, age_secs, clip, dollars2, elapsed_label, model_label, pct_label,
     time_remaining, tokens_int, tokens_short, window_short,
@@ -24,7 +25,9 @@ use crate::render::labels::{
 use crate::render::theme::Theme;
 
 use super::process::{composed_row, process_detail_line, process_row_line};
-use super::{Gutter, Tier, content_width, pin_right, trim_spans_to_width, with_gutter};
+use super::{
+    Gutter, Tier, VALUE_FLASH, content_width, pin_right, trim_spans_to_width, with_gutter,
+};
 
 /// The context-meter label — a framed square reading as "the window", replacing
 /// the `ctx` word now that it is the row's one bar (the account-scoped budget
@@ -62,6 +65,7 @@ pub(super) fn row_lines(
     tier: Tier,
     selected: bool,
     animation_phase: u64,
+    cost_rolls: &CostRolls,
     bands: &ContextSeverityConfig,
     gutter: Gutter,
 ) -> Vec<Line<'static>> {
@@ -78,6 +82,7 @@ pub(super) fn row_lines(
         tier,
         cw,
         animation_phase,
+        cost_rolls,
     )];
     // An active process row carries its full command on a dim second line under
     // the shell anchor — the build or `sudo` install reads in full while line 1
@@ -249,6 +254,7 @@ fn identity_line(
     tier: Tier,
     width: usize,
     animation_phase: u64,
+    cost_rolls: &CostRolls,
 ) -> Line<'static> {
     if row.row_kind == SidebarRowKind::Process {
         return process_row_line(theme, row, width, animation_phase);
@@ -280,7 +286,16 @@ fn identity_line(
     }
 
     let status = row.status.unwrap_or(AgentStatus::Idle);
-    agent_identity_line(theme, row, providers, status, tier, width, animation_phase)
+    agent_identity_line(
+        theme,
+        row,
+        providers,
+        status,
+        tier,
+        width,
+        animation_phase,
+        cost_rolls,
+    )
 }
 
 /// The leading status cell for an agent row, applying the two transient render
@@ -320,13 +335,16 @@ fn agent_lead_cell(
 /// Line 1 for an agent: the leading cell (the working fill or thinking sparkle
 /// while active; a blocked `?`/`!` breathes a slow brightness pulse), the agent
 /// name, then the dim capability tokens (`· model · effort · window`) with the
-/// bold `$cost` (money-green) pinned right. The window token is the model's
-/// context window (`258k`, `1M`) — the statusline/app-server reading first, the
-/// hook-derived fallback second, omitted when neither has named it. Capability
-/// tokens degrade by width tier: L2 carries model + effort + window, L1 drops
-/// effort, L0 keeps just the name — cost always pins right. A blocked `?`/`!`
-/// glyph heats through amber to red on the age clock's quarter-hour ramp, so a
-/// long-ignored ask escalates without a timestamp.
+/// bold `$cost` (money-green) pinned right — counting up through the row's
+/// stepped [`CostRolls`] roll as a turn lands, with the shared settle brighten.
+/// The window token is the model's context window (`258k`, `1M`) — the
+/// statusline/app-server reading first, the hook-derived fallback second,
+/// omitted when neither has named it. Capability tokens degrade by width tier:
+/// L2 carries model + effort + window, L1 drops effort, L0 keeps just the name
+/// — cost always pins right. A blocked `?`/`!` glyph heats through amber to
+/// red on the age clock's quarter-hour ramp, so a long-ignored ask escalates
+/// without a timestamp.
+#[allow(clippy::too_many_arguments)]
 fn agent_identity_line(
     theme: &Theme,
     row: &SidebarRow,
@@ -335,21 +353,26 @@ fn agent_identity_line(
     tier: Tier,
     width: usize,
     animation_phase: u64,
+    cost_rolls: &CostRolls,
 ) -> Line<'static> {
     // Right cluster, built first so the left trims to whatever's left: the
-    // session cost, bold in money-green. A cost that rounds to $0.00 — an idle
-    // agent that has spent nothing yet — is omitted, not printed as zero.
+    // session cost, bold in money-green, read through the row's stepped roll so
+    // an increase ticks up rather than jumps. A cost that rounds to $0.00 — an
+    // idle agent that has spent nothing yet — is omitted, not printed as zero
+    // (the filter reads the authoritative target, never a mid-climb value).
     let mut right: Vec<Span<'static>> = Vec::new();
-    if let Some(cost) = ctx(row)
+    if let Some(target) = ctx(row)
         .and_then(|context| context.cost.as_ref())
         .and_then(|cost| cost.total_cost_usd)
         .filter(|usd| *usd >= 0.005)
-        .map(dollars2)
     {
-        right.push(Span::styled(
-            cost,
-            theme.style(Color::Green, Modifier::BOLD),
-        ));
+        let usd = cost_rolls.display(&row.id, target, animation_phase);
+        let style = if cost_rolls.flashing(&row.id, animation_phase) {
+            theme.style(VALUE_FLASH, Modifier::BOLD)
+        } else {
+            theme.style(Color::Green, Modifier::BOLD)
+        };
+        right.push(Span::styled(dollars2(usd), style));
     }
 
     // Left cluster: glyph + name + the capability tokens at the dim chrome —

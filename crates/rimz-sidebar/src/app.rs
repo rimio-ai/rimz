@@ -231,6 +231,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         let phase = wall_clock_phase(anim_start);
         let animating = render::has_live_animation(&current)
             || ui.tally.any_rolling(phase)
+            || ui.cost_rolls.any_rolling(phase)
             || ui.scrollbar.fading(phase)
             || ui.effects.any_active();
         let active = animating || dirty;
@@ -558,6 +559,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             ui.animation_phase = wall_clock_phase(anim_start);
             let animating = render::animation_cadence(&current) != render::AnimationCadence::None
                 || ui.tally.any_rolling(ui.animation_phase)
+                || ui.cost_rolls.any_rolling(ui.animation_phase)
                 || ui.scrollbar.fading(ui.animation_phase)
                 || ui.effects.any_active();
             if dirty || animating {
@@ -619,6 +621,7 @@ fn frame_interval(snapshot: &SidebarSnapshot, ui: &UiState) -> Duration {
     // window. The continuous attention glow deliberately rides the slow
     // cosmetic cadence below — the breath already keeps it warm.
     if ui.tally.any_rolling(ui.animation_phase)
+        || ui.cost_rolls.any_rolling(ui.animation_phase)
         || ui.scrollbar.fading(ui.animation_phase)
         || ui.effects.any_active()
     {

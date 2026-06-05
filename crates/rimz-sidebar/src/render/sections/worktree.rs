@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span};
 use rimz::config::ContextSeverityConfig;
 use rimz::{SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};
 
+use crate::render::CostRolls;
 use crate::render::fmt::clip;
 use crate::render::labels::{
     branch_delta_spans, diff_spans, status_glyph, trunk_clear_spans, trunk_equal_spans,
@@ -32,6 +33,7 @@ pub(in crate::render) fn worktree_group_lines(
     row_index: &mut usize,
     selected_index: usize,
     animation_phase: u64,
+    cost_rolls: &CostRolls,
     lines: &mut Vec<Line<'static>>,
     map: &mut Vec<Option<usize>>,
 ) {
@@ -82,6 +84,7 @@ pub(in crate::render) fn worktree_group_lines(
             tier,
             selected,
             animation_phase,
+            cost_rolls,
             bands,
             gutter,
         );

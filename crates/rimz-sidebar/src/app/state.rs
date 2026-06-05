@@ -154,13 +154,32 @@ pub(super) fn apply_fetch_outcome(
         .filter(|pane| row_index_of_pane(current, pane).is_some());
     reconcile_selection(ui, current, derived);
     ui.animation_phase = wall_clock_phase(anim_start);
-    // Fold the fresh tally into the count-up: a higher figure starts an eased
+    // Fold the fresh tally into the count-up: a higher figure starts a stepped
     // roll that the next frames paint, a reset or first value snaps. A fetch
     // without a tally leaves the rolls untouched. The serve loop paints the
     // folded state on its next frame boundary; this path never draws.
     if let Some(tally) = current.value_tally.as_ref() {
         ui.tally.observe(tally, ui.animation_phase);
     }
+    // The per-card cost rolls fold beside it: observe each agent row's session
+    // cost under its durable row id (pruning rows the snapshot no longer
+    // carries), so a card's `$cost` ticks up on the next frames the same way.
+    // A row without the cost enrichment is simply not observed; when its first
+    // cost lands, the first observation snaps — never a `0 → cost` boot roll.
+    ui.cost_rolls.observe(
+        current
+            .worktree_groups
+            .iter()
+            .flat_map(|group| group.rows.iter())
+            .filter_map(|row| {
+                row.context
+                    .as_ref()
+                    .and_then(|context| context.cost.as_ref())
+                    .and_then(|cost| cost.total_cost_usd)
+                    .map(|usd| (row.id.clone(), usd))
+            }),
+        ui.animation_phase,
+    );
 
     // A renderer degraded this long is non-functional and, with a now-stale
     // heartbeat, unreachable by `rimz reload` — so it gives up rather than
