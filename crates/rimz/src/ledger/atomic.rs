@@ -3,9 +3,11 @@
 //! Two helpers cover every durable write in the project:
 //!
 //! - [`write_temp_then_rename`] for feed files, snapshots, and heartbeats.
-//! - [`append_framed_record`] for the event log, with `fsync` per record.
+//! - [`append_record_bytes`] for the event log, with `fsync` per record.
 //!
-//! No module hand-rolls its own atomic dance.
+//! No module hand-rolls its own atomic dance. Frame *encoding* lives with its
+//! decoder in [`crate::ledger::event_log`]; this module owns the syscall
+//! discipline alone.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -126,14 +128,17 @@ fn write_temp_then_rename_with<T: Serialize>(path: &Path, value: &T, fsync: Fsyn
     Ok(())
 }
 
-/// Append a single length-prefixed JSON record to `path`, fsync, return.
+/// Append one pre-encoded record to `path`, fsync, return.
 ///
-/// Wire format per record: `<decimal byte length> <space> <json>\n`. Recovery
+/// The frame encoding (and its decoder) live in
+/// [`crate::ledger::event_log`]; this owns only the append discipline: one
+/// `write()` call per record so a partial write doesn't fragment, fsync per
+/// record, and a parent-dir sync when the append creates the file. Recovery
 /// in [`crate::ledger::event_log::read_all`] tolerates a torn trailing
 /// record, since that's what a SIGKILL between write and fsync leaves
 /// behind.
 #[must_use = "durability barrier; check the result"]
-pub fn append_framed_record<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+pub fn append_record_bytes(path: &Path, line: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| AtomicErr::Io {
             path: parent.to_path_buf(),
@@ -141,7 +146,6 @@ pub fn append_framed_record<T: Serialize>(path: &Path, value: &T) -> Result<()> 
         })?;
     }
     let first_create = !path.exists();
-    let bytes = serde_json::to_vec(value)?;
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -150,13 +154,7 @@ pub fn append_framed_record<T: Serialize>(path: &Path, value: &T) -> Result<()> 
             path: path.to_path_buf(),
             source: e,
         })?;
-    // One write() call per record so EWOULDBLOCK on partial doesn't fragment.
-    let mut line = Vec::with_capacity(bytes.len() + 16);
-    line.extend_from_slice(bytes.len().to_string().as_bytes());
-    line.push(b' ');
-    line.extend_from_slice(&bytes);
-    line.push(b'\n');
-    file.write_all(&line).map_err(|e| AtomicErr::Io {
+    file.write_all(line).map_err(|e| AtomicErr::Io {
         path: path.to_path_buf(),
         source: e,
     })?;
@@ -167,6 +165,29 @@ pub fn append_framed_record<T: Serialize>(path: &Path, value: &T) -> Result<()> 
     if first_create {
         sync_parent_dir(path)?;
     }
+    Ok(())
+}
+
+/// Truncate `path` to `len` bytes and fsync — the event-log repair
+/// primitive, cutting a corrupt suffix at a frame boundary. Caller owns the
+/// write serialization point (the workspace lock).
+#[must_use = "durability barrier; check the result"]
+pub fn truncate_file(path: &Path, len: u64) -> Result<()> {
+    let file = OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|e| AtomicErr::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+    file.set_len(len).map_err(|e| AtomicErr::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    file.sync_data().map_err(|e| AtomicErr::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
     Ok(())
 }
 
@@ -219,19 +240,20 @@ mod tests {
     }
 
     #[test]
-    fn appended_records_round_trip_framing() {
+    fn append_record_bytes_appends_verbatim() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("log.jsonl");
-        append_framed_record(&path, &json!({ "a": 1 })).unwrap();
-        append_framed_record(&path, &json!({ "b": 2 })).unwrap();
-        let bytes = std::fs::read(&path).unwrap();
-        let text = std::str::from_utf8(&bytes).unwrap();
-        let mut lines = text.lines();
-        let first = lines.next().unwrap();
-        let (len_str, rest) = first.split_once(' ').unwrap();
-        let len: usize = len_str.parse().unwrap();
-        assert_eq!(rest.len(), len);
-        let second = lines.next().unwrap();
-        assert!(second.contains("\"b\""));
+        append_record_bytes(&path, b"first\n").unwrap();
+        append_record_bytes(&path, b"second\n").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"first\nsecond\n");
+    }
+
+    #[test]
+    fn truncate_file_cuts_to_the_requested_length() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        append_record_bytes(&path, b"keep\ncut\n").unwrap();
+        truncate_file(&path, 5).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"keep\n");
     }
 }

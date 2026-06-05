@@ -510,3 +510,62 @@ fn rotation_serializes_with_writers_and_drops_no_append() {
         .runtime_projection(RuntimeScope::Runtime)
         .expect("projection after the race");
 }
+
+#[test]
+fn repair_event_log_heals_a_mid_file_corpse_and_republishes() {
+    // The post-power-cut recovery path end-to-end: a zeroed mid-file frame
+    // hard-errors every cold read, `repair_event_log` truncates at the first
+    // invalid frame under the canonical workspace → publish lock order, and
+    // the republished caches reflect exactly the surviving prefix.
+    use std::io::{Seek, SeekFrom, Write};
+
+    let h = crate::common::Harness::new();
+    h.ledger
+        .append_event(&lifecycle(&h, "SessionStart", "kept"))
+        .expect("first event");
+    let committed = log_len(&h);
+    h.ledger
+        .append_event(&lifecycle(&h, "SessionStart", "zeroed"))
+        .expect("second event");
+    let corrupted = log_len(&h);
+    h.ledger
+        .append_event(&lifecycle(&h, "SessionStart", "behind-the-hole"))
+        .expect("third event");
+    let total = log_len(&h);
+
+    // Zero the middle frame's bytes (keeping its newline) — writeback loss.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&h.ledger.paths().events_log)
+        .expect("open log");
+    file.seek(SeekFrom::Start(committed)).expect("seek");
+    let hole = usize::try_from(corrupted - committed - 1).expect("hole len");
+    file.write_all(&vec![0u8; hole]).expect("zero the frame");
+    drop(file);
+    // Drop the fold bases so reads must fold the corrupt region.
+    let _ = std::fs::remove_file(&h.ledger.paths().rollup_cache);
+    let _ = std::fs::remove_file(&h.ledger.paths().latest_snapshot);
+    assert!(
+        h.ledger.runtime_projection(RuntimeScope::Runtime).is_err(),
+        "a torn middle frame fails reads loudly before the repair"
+    );
+
+    let outcome = h.ledger.repair_event_log().expect("repair");
+    assert_eq!(outcome.truncated_at, Some(committed));
+    assert_eq!(outcome.frames_kept, 1);
+    assert_eq!(outcome.bytes_truncated, total - committed);
+
+    // Reads recover, and the republished snapshot reflects the survivor.
+    let snapshot = h.ledger.snapshot_cached().expect("snapshot after repair");
+    let ids: Vec<&str> = snapshot
+        .agents
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect();
+    assert_eq!(ids, ["kept"], "frames behind the hole are cut, not folded");
+
+    // Idempotent: a second repair is a read-only no-op.
+    let again = h.ledger.repair_event_log().expect("repair again");
+    assert_eq!(again.truncated_at, None);
+    assert_eq!(again.frames_kept, 1);
+}

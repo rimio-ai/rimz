@@ -67,6 +67,7 @@ workspace = true
 
 [dependencies]
 clap.workspace = true
+crc32fast.workspace = true
 fs4.workspace = true
 hex.workspace = true
 jiff.workspace = true

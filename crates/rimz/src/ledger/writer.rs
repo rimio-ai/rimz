@@ -871,6 +871,47 @@ impl Ledger {
         Ok(outcome)
     }
 
+    /// Truncate the event log at its first invalid frame and republish the
+    /// snapshot caches from what survives — the answer to a post-power-cut
+    /// corpse (`rimz gc`, and the publish tail's self-heal). Locks in the
+    /// canonical workspace → publish order, the same nesting rotation uses;
+    /// an intact log is a read-only no-op.
+    ///
+    /// After a cut, both persisted fold bases are retracted before the
+    /// rebuild: their extents describe bytes the truncation removed, and once
+    /// the log regrows an offset-only stamp could alias into fresh frames —
+    /// the same hazard rotation answers by retract-and-reseed. The rebuild
+    /// re-folds the repaired log from zero and republishes both. An
+    /// in-memory cursor heals itself: its offset either regresses (a
+    /// reload), or its warm fold lands mid-frame in regrown bytes, fails the
+    /// frame CRC, and retries cold.
+    #[must_use = "durability barrier; check the result"]
+    pub fn repair_event_log(&self) -> Result<event_log::RepairOutcome> {
+        let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+        let _publish_guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
+        let outcome = event_log::repair(&self.inner.paths.events_log)?;
+        if outcome.truncated_at.is_some() {
+            for stale in [
+                &self.inner.paths.latest_snapshot,
+                &self.inner.paths.rollup_cache,
+            ] {
+                match std::fs::remove_file(stale) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(source) => {
+                        return Err(event_log::EventLogErr::Io {
+                            path: (*stale).clone(),
+                            source,
+                        }
+                        .into());
+                    }
+                }
+            }
+            snapshot::rebuild(&self.inner.paths)?;
+        }
+        Ok(outcome)
+    }
+
     /// Catch the snapshot caches up to the live log, after the workspace
     /// lock released and the wakeups went out. Serialized on its own
     /// advisory lock so concurrent writers group-commit: each holder folds

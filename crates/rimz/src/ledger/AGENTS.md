@@ -6,7 +6,7 @@ Local contract for `crates/rimz/src/ledger/` — durable workspace state. Extend
 
 - Every mutator lives in [`writer.rs`](./writer.rs) and runs its critical section under the workspace lock — lock → feed-write → event-append; the wakeup and snapshot-publish tail run off-lock. Reads on the `Ledger` handle are lock-free.
 - Cross-process serialization is the workspace lock's job: every writer is a short-lived CLI process serialized through `workspace.lock`; there is no in-process actor.
-- The two helpers in [`atomic.rs`](./atomic.rs) cover every durable write — `write_temp_then_rename` for whole files, `append_framed_record` (fsync per record) for the event log. No module hand-rolls its own atomic dance.
+- The two helpers in [`atomic.rs`](./atomic.rs) cover every durable write — `write_temp_then_rename` for whole files, `append_record_bytes` (fsync per record) for the event log. No module hand-rolls its own atomic dance; the event-log frame encoding lives beside its decoder in [`event_log.rs`](./event_log.rs).
 - The pending/terminal feed split is load-bearing: a terminal write lands beside the pending file, then an atomic rename moves it into `terminal/` — no crash window resurrects a decided ask, and decision-path scans stay O(pending).
 - The dead-owner abandon sweep is debounced through a stamp beside the workspace lock, keeping the write path O(1) over feed history; the stamp lives outside the feed dir so item scans never see it.
 

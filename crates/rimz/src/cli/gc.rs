@@ -21,14 +21,18 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         bail!("--older-than must be greater than zero");
     }
     let report = gc::collect_runtime(args.older_than).context("collecting runtime garbage")?;
-    let abandoned = match WorkspaceResolver::resolve(".", globals.root.clone()) {
+    let (abandoned, repaired) = match WorkspaceResolver::resolve(".", globals.root.clone()) {
         Ok(workspace) => {
             let ledger = open_ledger(&workspace)?;
-            ledger
+            let abandoned = ledger
                 .abandon_dead_owned_items(&workspace.session_name)
-                .context("abandoning dead owned feed items")?
+                .context("abandoning dead owned feed items")?;
+            let repaired = ledger
+                .repair_event_log()
+                .context("repairing the event log")?;
+            (abandoned, Some(repaired))
         }
-        Err(_) => 0,
+        Err(_) => (0, None),
     };
     let prune = gc::prune_dead_workspaces().context("pruning dead workspaces")?;
     #[expect(clippy::print_stdout, reason = "user-facing maintenance report")]
@@ -36,6 +40,12 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         println!("gc complete");
         println!("  older than    : {}s", args.older_than.as_secs());
         println!("  feed abandoned: {abandoned}");
+        if let Some(repair) = repaired.filter(|repair| repair.truncated_at.is_some()) {
+            println!(
+                "  log repaired  : {} bytes cut ({} frames kept)",
+                repair.bytes_truncated, repair.frames_kept
+            );
+        }
         println!("  runtime roots : {}", report.runtime_roots_scanned);
         println!("  heartbeats    : {}", report.heartbeat_files_removed);
         println!("  sidebar socks : {}", report.sidebar_sockets_removed);

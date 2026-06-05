@@ -117,6 +117,12 @@ fn report_event_schema_versions(ws: &rimz::ResolvedWorkspace) {
     };
     let events = match event_log::read_all(&paths.events_log) {
         Ok(events) => events,
+        // Mid-file corruption — the post-power-cut corpse. Doctor stays
+        // read-only; the truncating repair is gc's job.
+        Err(err) if err.is_corruption() => {
+            println!("  protocol warn : event log needs repair ({err}); run `rimz gc`");
+            return;
+        }
         Err(err) => {
             println!("  protocol warn : event log unavailable ({err})");
             return;

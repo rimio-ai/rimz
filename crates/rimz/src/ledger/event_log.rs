@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use crate::ledger::atomic::{self, append_framed_record, sync_dir};
+use crate::ledger::atomic::{self, sync_dir};
 use crate::schema::event::EventEnvelope;
 
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +27,12 @@ pub enum EventLogErr {
         claimed: u64,
         available: u64,
     },
+    #[error("crc mismatch at offset {offset}: claimed {claimed:08x}, computed {computed:08x}")]
+    Crc {
+        offset: u64,
+        claimed: u32,
+        computed: u32,
+    },
     #[error(transparent)]
     Atomic(#[from] atomic::AtomicErr),
     #[error("io error on {path}: {source}")]
@@ -35,6 +41,17 @@ pub enum EventLogErr {
         #[source]
         source: io::Error,
     },
+}
+
+impl EventLogErr {
+    /// A frame-level corruption a [`repair`] truncation heals — distinct from
+    /// an environment failure (io, serialization) repair cannot help.
+    pub fn is_corruption(&self) -> bool {
+        matches!(
+            self,
+            Self::Torn { .. } | Self::FrameLength { .. } | Self::Crc { .. }
+        )
+    }
 }
 
 pub type Result<T> = std::result::Result<T, EventLogErr>;
@@ -52,7 +69,27 @@ pub struct LogExtent {
 
 #[must_use = "durability barrier; check the result"]
 pub fn append<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    Ok(append_framed_record(path, value)?)
+    let payload = serde_json::to_vec(value).map_err(atomic::AtomicErr::Json)?;
+    Ok(atomic::append_record_bytes(path, &encode_frame(&payload))?)
+}
+
+/// Encode one frame: `<decimal payload length> <crc32 of the payload,
+/// 8 lowercase hex chars> <payload>\n`. The CRC covers the payload bytes
+/// alone — the length is validated structurally on read — and makes
+/// post-power-cut recovery deterministic: a frame whose content writeback
+/// was lost reads as `Crc`, never as a JSON parse coin-flip. One encoder for
+/// the per-record append and the wholesale rewrite, beside its decoder
+/// ([`decode_line`]), so the format cannot drift. The decoder also accepts
+/// the pre-CRC two-field form; rotation ages legacy frames out.
+fn encode_frame(payload: &[u8]) -> Vec<u8> {
+    let mut line = Vec::with_capacity(payload.len() + 24);
+    line.extend_from_slice(payload.len().to_string().as_bytes());
+    line.push(b' ');
+    line.extend_from_slice(format!("{:08x}", crc32fast::hash(payload)).as_bytes());
+    line.push(b' ');
+    line.extend_from_slice(payload);
+    line.push(b'\n');
+    line
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,10 +233,7 @@ pub fn replace_all(path: &Path, events: &[EventEnvelope]) -> Result<()> {
     let mut bytes = Vec::new();
     for event in events {
         let payload = serde_json::to_vec(event).map_err(atomic::AtomicErr::Json)?;
-        bytes.extend_from_slice(payload.len().to_string().as_bytes());
-        bytes.push(b' ');
-        bytes.extend_from_slice(&payload);
-        bytes.push(b'\n');
+        bytes.extend_from_slice(&encode_frame(&payload));
     }
     atomic::write_bytes_atomically(path, &bytes)?;
     Ok(())
@@ -225,7 +259,41 @@ pub fn read_all(path: &Path) -> Result<Vec<EventEnvelope>> {
 /// hard error.
 pub fn read_from_offset(path: &Path, start: u64) -> Result<(Vec<EventEnvelope>, u64)> {
     if !path.exists() {
+        // No log, no extent — a fresh workspace folds nothing.
         return Ok((Vec::new(), 0));
+    }
+    let rows = read_rows(path, start)?;
+    let mut events = Vec::new();
+    let mut end = start;
+    let last_index = rows.len().saturating_sub(1);
+    for (idx, (at, terminated, bytes)) in rows.into_iter().enumerate() {
+        let frame_len = bytes.len() as u64 + u64::from(terminated);
+        match decode_row(at, terminated, &bytes) {
+            Ok(event) => {
+                events.push(event);
+                end = at + frame_len;
+            }
+            Err(err) if err.is_corruption() && idx == last_index => {
+                if terminated {
+                    warn!(offset = at, error = %err, "skipping torn trailing event-log record");
+                } else {
+                    // An in-flight append a lock-free reader raced — folded by
+                    // the wakeup that follows its completion. Routine, not noise.
+                    debug!(offset = at, "stopping before an in-flight tail frame");
+                }
+                break;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Ok((events, end))
+}
+
+/// Split the log into raw `(offset, terminated, line bytes)` rows from byte
+/// `start` — the scan [`read_from_offset`] folds and [`repair`] validates.
+fn read_rows(path: &Path, start: u64) -> Result<Vec<(u64, bool, Vec<u8>)>> {
+    if !path.exists() {
+        return Ok(Vec::new());
     }
     let mut file = File::open(path).map_err(|e| EventLogErr::Io {
         path: path.to_path_buf(),
@@ -257,51 +325,29 @@ pub fn read_from_offset(path: &Path, start: u64) -> Result<(Vec<EventEnvelope>, 
         rows.push((offset, terminated, buf));
         offset += read as u64;
     }
+    Ok(rows)
+}
 
-    let mut events = Vec::new();
-    let mut end = start;
-    let last_index = rows.len().saturating_sub(1);
-    for (idx, (at, terminated, bytes)) in rows.into_iter().enumerate() {
-        let frame_len = bytes.len() as u64 + u64::from(terminated);
-        let decoded = if !terminated {
-            Err(EventLogErr::Torn {
-                offset: at,
-                reason: "unterminated frame".into(),
-            })
-        } else {
-            match std::str::from_utf8(&bytes) {
-                Ok(line) => decode_line(line, at),
-                Err(err) => Err(EventLogErr::Torn {
-                    offset: at,
-                    reason: format!("utf8: {err}"),
-                }),
-            }
-        };
-        match decoded {
-            Ok(event) => {
-                events.push(event);
-                end = at + frame_len;
-            }
-            Err(err @ (EventLogErr::Torn { .. } | EventLogErr::FrameLength { .. }))
-                if idx == last_index =>
-            {
-                if terminated {
-                    warn!(offset = at, error = %err, "skipping torn trailing event-log record");
-                } else {
-                    // An in-flight append a lock-free reader raced — folded by
-                    // the wakeup that follows its completion. Routine, not noise.
-                    debug!(offset = at, "stopping before an in-flight tail frame");
-                }
-                break;
-            }
-            Err(err) => return Err(err),
-        }
+/// Decode one raw row into its event: unterminated and non-UTF-8 rows read
+/// as torn, terminated ones go through the frame decoder.
+fn decode_row(at: u64, terminated: bool, bytes: &[u8]) -> Result<EventEnvelope> {
+    if !terminated {
+        return Err(EventLogErr::Torn {
+            offset: at,
+            reason: "unterminated frame".into(),
+        });
     }
-    Ok((events, end))
+    match std::str::from_utf8(bytes) {
+        Ok(line) => decode_line(line, at),
+        Err(err) => Err(EventLogErr::Torn {
+            offset: at,
+            reason: format!("utf8: {err}"),
+        }),
+    }
 }
 
 fn decode_line(line: &str, offset: u64) -> Result<EventEnvelope> {
-    let (len, payload) = line.split_once(' ').ok_or_else(|| EventLogErr::Torn {
+    let (len, rest) = line.split_once(' ').ok_or_else(|| EventLogErr::Torn {
         offset,
         reason: "no length prefix".into(),
     })?;
@@ -309,6 +355,22 @@ fn decode_line(line: &str, offset: u64) -> Result<EventEnvelope> {
         offset,
         reason: format!("bad length `{len}`"),
     })?;
+    // CRC form `<len> <crc> <json>` vs the pre-CRC `<len> <json>`: an 8-char
+    // lowercase-hex second token is the CRC — a JSON payload always opens
+    // with `{`, so the forms cannot be confused. A mis-split would shift the
+    // payload by nine bytes and fail the length check below, erring safe.
+    let (crc, payload) = match rest.split_once(' ') {
+        Some((token, payload))
+            if token.len() == 8
+                && token
+                    .bytes()
+                    .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) =>
+        {
+            // The guard admits only 8 lowercase-hex bytes, so the parse holds.
+            (u32::from_str_radix(token, 16).ok(), payload)
+        }
+        _ => (None, rest),
+    };
     let available = payload.len() as u64;
     if claimed != available {
         return Err(EventLogErr::FrameLength {
@@ -317,9 +379,79 @@ fn decode_line(line: &str, offset: u64) -> Result<EventEnvelope> {
             available,
         });
     }
+    if let Some(claimed_crc) = crc {
+        let computed = crc32fast::hash(payload.as_bytes());
+        if claimed_crc != computed {
+            return Err(EventLogErr::Crc {
+                offset,
+                claimed: claimed_crc,
+                computed,
+            });
+        }
+    }
     serde_json::from_str(payload).map_err(|e| EventLogErr::Torn {
         offset,
         reason: format!("json: {e}"),
+    })
+}
+
+/// What [`repair`] found and cut.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RepairOutcome {
+    /// Valid frames surviving ahead of the cut (the whole log when intact).
+    pub frames_kept: usize,
+    /// Bytes removed from the first invalid frame to end of file.
+    pub bytes_truncated: u64,
+    /// Offset the log was cut at; `None` when the log was already intact.
+    pub truncated_at: Option<u64>,
+}
+
+/// Truncate the log at its first invalid frame — the post-power-cut corpse a
+/// mid-file framing/CRC error indicates — keeping the valid prefix. Frames
+/// behind the cut are lost; resyncing past a hole would need frame magic the
+/// format deliberately omits (see the rejected `O_APPEND` candidate in
+/// performance.md). An intact, empty, or missing log is a no-op.
+///
+/// Stricter than [`read_from_offset`]: an invalid *tail* frame is cut too.
+/// Caller holds the workspace lock, so no append can be in flight — under
+/// the lock an incomplete tail is always a corpse, never a race.
+#[must_use = "durability barrier; check the result"]
+pub fn repair(path: &Path) -> Result<RepairOutcome> {
+    let rows = read_rows(path, 0)?;
+    let mut frames_kept = 0usize;
+    let mut valid_end = 0u64;
+    let mut invalid_at: Option<u64> = None;
+    for (at, terminated, bytes) in rows {
+        match decode_row(at, terminated, &bytes) {
+            Ok(_) => {
+                frames_kept += 1;
+                valid_end = at + bytes.len() as u64 + u64::from(terminated);
+            }
+            Err(err) if err.is_corruption() => {
+                invalid_at = Some(at);
+                break;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    let Some(at) = invalid_at else {
+        return Ok(RepairOutcome {
+            frames_kept,
+            ..RepairOutcome::default()
+        });
+    };
+    debug_assert_eq!(at, valid_end, "frames are contiguous");
+    let total = fs::metadata(path)
+        .map_err(|source| EventLogErr::Io {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .len();
+    atomic::truncate_file(path, at)?;
+    Ok(RepairOutcome {
+        frames_kept,
+        bytes_truncated: total.saturating_sub(at),
+        truncated_at: Some(at),
     })
 }
 
@@ -592,6 +724,151 @@ mod tests {
         let (events, end) = read_from_offset(&path, 0).unwrap();
         assert_eq!(events.len(), 1, "torn trailing record skipped");
         assert_eq!(end, committed, "extent stops at the last complete frame");
+    }
+
+    #[test]
+    fn frame_wire_format_is_len_crc_payload() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.log.jsonl");
+        append(&path, &test_event("event.emit")).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        let line = text.strip_suffix('\n').unwrap();
+        let (len, rest) = line.split_once(' ').unwrap();
+        let (crc, payload) = rest.split_once(' ').unwrap();
+        assert_eq!(len.parse::<usize>().unwrap(), payload.len());
+        assert_eq!(crc.len(), 8);
+        assert_eq!(
+            u32::from_str_radix(crc, 16).unwrap(),
+            crc32fast::hash(payload.as_bytes()),
+            "the crc token is the payload's crc32 in lowercase hex"
+        );
+    }
+
+    #[test]
+    fn legacy_two_field_frames_still_decode() {
+        // A log written before the CRC field: `<len> <json>` frames decode
+        // unchanged, and a mixed log (legacy prefix, CRC suffix) folds whole.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.log.jsonl");
+        let payload = serde_json::to_vec(&test_event("event.legacy")).unwrap();
+        let mut legacy = Vec::new();
+        legacy.extend_from_slice(payload.len().to_string().as_bytes());
+        legacy.push(b' ');
+        legacy.extend_from_slice(&payload);
+        legacy.push(b'\n');
+        std::fs::write(&path, &legacy).unwrap();
+        append(&path, &test_event("event.new")).unwrap();
+
+        let events = read_all(&path).unwrap();
+        assert_eq!(
+            events.iter().map(|e| e.method.as_str()).collect::<Vec<_>>(),
+            ["event.legacy", "event.new"],
+        );
+    }
+
+    #[test]
+    fn crc_mismatch_is_a_skipped_tail_and_a_hard_middle_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.log.jsonl");
+        append(&path, &test_event("event.first")).unwrap();
+        let committed = fs::metadata(&path).unwrap().len();
+        append(&path, &test_event("event.second")).unwrap();
+
+        // Flip one payload byte of the trailing frame in place — the length
+        // still matches, only the CRC catches it.
+        let mut bytes = std::fs::read(&path).unwrap();
+        let len = bytes.len();
+        let flip = len - 3; // inside the tail frame's JSON payload
+        bytes[flip] = if bytes[flip] == b'x' { b'y' } else { b'x' };
+        std::fs::write(&path, &bytes).unwrap();
+
+        let (events, end) = read_from_offset(&path, 0).unwrap();
+        assert_eq!(events.len(), 1, "the corrupt tail frame is skipped");
+        assert_eq!(end, committed);
+
+        // The same corruption mid-file is a hard error.
+        append(&path, &test_event("event.third")).unwrap();
+        let err = read_all(&path).unwrap_err();
+        assert!(matches!(err, EventLogErr::Crc { .. }), "got {err:?}");
+        assert!(err.is_corruption());
+    }
+
+    #[test]
+    fn repair_keeps_the_valid_prefix_and_cuts_the_corpse() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.log.jsonl");
+        append(&path, &test_event("event.first")).unwrap();
+        append(&path, &test_event("event.second")).unwrap();
+        let committed = fs::metadata(&path).unwrap().len();
+        // A power-cut corpse mid-file: a zeroed frame followed by a valid one.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"999 deadbeef {\"oops\":true}\n")
+            .unwrap();
+        append(&path, &test_event("event.third")).unwrap();
+        let total = fs::metadata(&path).unwrap().len();
+        assert!(read_all(&path).is_err(), "pre-repair reads hard-error");
+
+        let outcome = repair(&path).unwrap();
+        assert_eq!(
+            outcome,
+            RepairOutcome {
+                frames_kept: 2,
+                bytes_truncated: total - committed,
+                truncated_at: Some(committed),
+            }
+        );
+        let events = read_all(&path).unwrap();
+        assert_eq!(
+            events.iter().map(|e| e.method.as_str()).collect::<Vec<_>>(),
+            ["event.first", "event.second"],
+            "the valid prefix survives; frames behind the hole are cut"
+        );
+    }
+
+    #[test]
+    fn repair_cuts_an_invalid_tail_frame_too() {
+        // Under the workspace lock no append can be in flight, so an
+        // unterminated tail is always a corpse — repair is stricter than the
+        // tolerant read.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.log.jsonl");
+        append(&path, &test_event("event.first")).unwrap();
+        let committed = fs::metadata(&path).unwrap().len();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"47 {\"half\":")
+            .unwrap();
+
+        let outcome = repair(&path).unwrap();
+        assert_eq!(outcome.frames_kept, 1);
+        assert_eq!(outcome.truncated_at, Some(committed));
+        assert_eq!(fs::metadata(&path).unwrap().len(), committed);
+    }
+
+    #[test]
+    fn repair_of_an_intact_or_missing_log_is_a_noop() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.log.jsonl");
+        assert_eq!(repair(&path).unwrap(), RepairOutcome::default());
+
+        append(&path, &test_event("event.first")).unwrap();
+        let len = fs::metadata(&path).unwrap().len();
+        let outcome = repair(&path).unwrap();
+        assert_eq!(
+            outcome,
+            RepairOutcome {
+                frames_kept: 1,
+                bytes_truncated: 0,
+                truncated_at: None,
+            }
+        );
+        assert_eq!(fs::metadata(&path).unwrap().len(), len, "log untouched");
     }
 
     #[test]

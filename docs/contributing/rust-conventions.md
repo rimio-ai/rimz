@@ -167,9 +167,9 @@ When a long-lived process *does* arrive (resolver host, watcher daemon), it gets
 Two helper functions in `ledger/atomic.rs` cover every disk write in the project:
 
 - `write_temp_then_rename(path, bytes) -> Result<()>` — feed files, snapshot files, heartbeats.
-- `append_framed_record(file, bytes) -> Result<()>` — length-prefixed framing for `events.log.jsonl`, with `fsync` per record.
+- `append_record_bytes(path, line) -> Result<()>` — the event-log append discipline (one `write()` per record, `fsync` per record); the frame encoding itself lives beside its decoder in `ledger/event_log.rs`.
 
-Both helpers live next to the durability contract they enforce. No module hand-rolls its own temp-file dance. See [ledger.md](../internals/ledger.md) for torn-record recovery and rotation rules.
+Both helpers live next to the durability contract they enforce. No module hand-rolls its own temp-file dance. See [ledger.md](../internals/ledger.md) for the frame format, torn-record recovery, and rotation rules.
 
 ## Tests
 
@@ -191,7 +191,7 @@ Current snapshot — entries move when a better-designed alternative wins on des
 | Tier | Crates |
 | --- | --- |
 | **Runtime — core** | `clap`, `serde`, `serde_json`, `tokio`, `tracing`, `tracing-subscriber`, `thiserror`, `uuid`, `jiff` |
-| **Runtime — utility** | `tempfile`, `fs4`, `which`, `sha2`, `hex`, `nix` (Unix sockets, sigaction) on `cfg(unix)`, `ureq` (rustls; the runtime pricing-refresh HTTP client, also used by `xtask pricing-refresh`), `terminal_size` (the launch-path terminal probe behind the sidebar birth size; already transitive via clap's `wrap_help`) |
+| **Runtime — utility** | `tempfile`, `fs4`, `which`, `sha2`, `hex`, `crc32fast` (event-log frame checksum: hardware CRC32 on the per-frame validate and the repair scan; already transitive via `ureq` → `flate2` and already vet-exempted), `nix` (Unix sockets, sigaction) on `cfg(unix)`, `ureq` (rustls; the runtime pricing-refresh HTTP client, also used by `xtask pricing-refresh`), `terminal_size` (the launch-path terminal probe behind the sidebar birth size; already transitive via clap's `wrap_help`) |
 | **Binary boundary only** | `anyhow` — permitted in `crates/rimz/src/main.rs`, the private `cli/` module tree, `crates/rimz-sidebar/src/main.rs`, and `xtask/` |
 | **Sidebar runtime** | `ratatui` (via its `crossterm_0_29` feature); direct `crossterm` only when sidebar I/O actually requires it |
 | **Tests** | `insta`, `proptest`, `assert_cmd`, `predicates`, `vt100`, `tempfile`, `portable-pty` |

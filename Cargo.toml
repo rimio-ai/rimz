@@ -58,6 +58,10 @@ tempfile = "3"
 # Hashing
 sha2 = "0.11"
 hex = "0.4"
+# Event-log frame checksum: hardware CRC32 for the per-frame validate and the
+# repair scan. Already in the tree transitively (ureq -> flate2) and already
+# carries a supply-chain exemption, so the direct dep adds zero footprint.
+crc32fast = "1"
 
 # OS integration (cfg(unix))
 nix = { version = "0.31", features = ["feature", "fs", "signal", "socket", "user"] }
