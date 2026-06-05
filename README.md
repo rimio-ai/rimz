@@ -20,7 +20,7 @@ Rimz pins every repo to one durable room — a Zellij or tmux session with a sid
 ▏  add tests
 ▏  ▣ ━━━━━─────────────────────  18%
 ▏
-▏⢿ codex · GPT-5.5 · high
+▏⢿ codex · GPT 5.5 · high
 ▏  refactor api
 ▏  ▣ ━━━━━━━━━━━━━━━──────────── 63%
 
@@ -28,7 +28,7 @@ Rimz pins every repo to one durable room — a Zellij or tmux session with a sid
  ! claude · Opus · 1m
    db migrate
 
- ○ codex · GPT-5.5 · low
+ ○ codex · GPT 5.5 · low
    —
 
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1

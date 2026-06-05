@@ -242,7 +242,7 @@ The worktree header carries the worktree's git story on the right: the `⇡`/`�
 ▌? claude
 ▌  permission
 ▌  ▢ ──────────────────────────    0%
-▏⣾ codex · GPT-5.5
+▏⣾ codex · GPT 5.5
 ▏  add tests
 ▏  ▢ ──────────────────────────    0%
 

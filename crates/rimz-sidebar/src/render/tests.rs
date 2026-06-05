@@ -1018,9 +1018,10 @@ fn codex_app_server_context_links_to_rich_card() {
         14,
     );
 
-    // The app-server display name supersedes the raw catalog id, and effort
-    // surfaces — neither was on the rollout-only row.
-    assert!(rendered.contains("GPT-5.5 Codex"));
+    // The app-server display name supersedes the raw catalog id (its hyphen
+    // traded for a space, matching `Opus 4.8`), and effort surfaces — neither
+    // was on the rollout-only row.
+    assert!(rendered.contains("GPT 5.5 Codex"));
     assert!(!rendered.contains("gpt-5.5-codex"));
     assert!(rendered.contains("xhigh"));
     // The 5h/7d windows are account-scoped now: they leave the row for the

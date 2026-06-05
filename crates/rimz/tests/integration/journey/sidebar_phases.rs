@@ -54,7 +54,7 @@ fn phase0_onboarding_hint_then_wire_then_agent_appears() {
     // process row and the first-run hint steps aside — but with no installed hook
     // nothing reaches the ledger, so the row carries no agent enrichment. The
     // idle process row and an idle agent row share the hollow `○`, so the model
-    // (`GPT-5.5`), which only an enriched agent row shows, is what tells them
+    // (`GPT 5.5`), which only an enriched agent row shows, is what tells them
     // apart here.
     room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
     let screen = room.wait_for(|s| s.contains("○ codex"), SETTLE);
@@ -63,7 +63,7 @@ fn phase0_onboarding_hint_then_wire_then_agent_appears() {
         "an un-onboarded codex is still a live pane, so it shows as a process row:\n{screen}"
     );
     assert!(
-        !screen.contains("GPT-5.5"),
+        !screen.contains("GPT 5.5"),
         "with no installed hook nothing reaches the ledger, so the process row carries no agent model:\n{screen}"
     );
 
@@ -95,7 +95,7 @@ fn phase1_to_3_agent_moves_from_idle_to_running_to_waiting() {
     // Wait for the lifecycle-backed agent row, not the bare substring "codex"
     // (the first-run hint contains it) or the synthesized idle Codex row that
     // can appear from live-pane presence before the event-fresh model folds in.
-    let screen = room.wait_for(|s| s.contains("○ codex") && s.contains("GPT-5.5"), SETTLE);
+    let screen = room.wait_for(|s| s.contains("○ codex") && s.contains("GPT 5.5"), SETTLE);
     assert!(
         screen.contains("main ┄"),
         "the agent groups under its worktree:\n{screen}"
@@ -105,7 +105,7 @@ fn phase1_to_3_agent_moves_from_idle_to_running_to_waiting() {
         "a launched-but-unprompted agent is idle:\n{screen}"
     );
     assert!(
-        screen.contains("GPT-5.5"),
+        screen.contains("GPT 5.5"),
         "the capability line shows the model:\n{screen}"
     );
     assert!(

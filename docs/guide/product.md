@@ -23,7 +23,7 @@ Rimz gives every project one room — a Zellij or tmux session with a sidebar �
 ▏  add tests
 ▏  ▣ ━━━━━─────────────────────  18%
 ▏
-▏⢿ codex · GPT-5.5 · high
+▏⢿ codex · GPT 5.5 · high
 ▏  refactor api
 ▏  ▣ ━━━━━━━━━━━━━━━──────────── 63%
 
@@ -31,7 +31,7 @@ Rimz gives every project one room — a Zellij or tmux session with a sidebar �
  ! claude · Opus · 1m
    db migrate
 
- ○ codex · GPT-5.5 · low
+ ○ codex · GPT 5.5 · low
    —
 
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1

@@ -250,7 +250,7 @@ The reader does exactly what they said they would: spins up four more agents acr
 ▏✽ claude · Sonnet · high · 200k
 ▏  add tests
 ▏  ▣ ━━━━━━────────────────────────────   18%
-▏⢿ codex · GPT-5.5 · high
+▏⢿ codex · GPT 5.5 · high
 ▏  refactor api
 ▏  ▣ ━━━━━━━━━━━━━━━━━━━━━─────────────   63%
 
@@ -258,7 +258,7 @@ The reader does exactly what they said they would: spins up four more agents acr
  ! claude · Opus · xhigh · 1m
    db migrate
    ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━─────   84%
- ○ codex · GPT-5.5 · low
+ ○ codex · GPT 5.5 · low
    —
    ▣ ──────────────────────────────────    0%
 

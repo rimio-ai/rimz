@@ -153,13 +153,15 @@ fn group_thousands(n: u64) -> String {
 /// that figure now, so the name never repeats it. Then, when the name is still
 /// a bare vendor *slug* (all lowercase, hyphenated, no spaces — the
 /// pre-enrichment fallback), prettifies it (`claude-opus-4-8` → `Opus 4.8`). A
-/// friendly name passes through.
+/// friendly name keeps its words but trades hyphens for spaces (`GPT-5.5
+/// Codex` → `GPT 5.5 Codex`), so every name on the line speaks the spaced
+/// `Opus 4.8` form whatever the vendor's catalog punctuation.
 pub(super) fn model_label(display: &str) -> String {
     let cleaned = strip_window_qualifier(display);
     if looks_like_slug(&cleaned) {
         prettify_model_slug(&cleaned)
     } else {
-        cleaned
+        cleaned.replace('-', " ")
     }
 }
 
@@ -185,8 +187,8 @@ fn strip_window_qualifier(display: &str) -> String {
 /// A name still reads as a raw model slug when it is hyphenated, carries no
 /// space, no parenthetical, and no uppercase letter — exactly the shape of a
 /// catalog id (`claude-opus-4-8`, `gpt-5.5-codex`) and never of a friendly
-/// display name (`Opus 4.8`, `GPT-5.5`), so the prettifier only fires on the
-/// fallback path.
+/// display name (`Opus 4.8`, `GPT-5.5 Codex`), so the prettifier only fires on
+/// the fallback path.
 fn looks_like_slug(value: &str) -> bool {
     value.contains('-')
         && !value.contains(' ')
@@ -397,7 +399,8 @@ mod tests {
         assert_eq!(model_label("Opus 4.8 (1M)"), "Opus 4.8");
         assert_eq!(model_label("Sonnet 4.6 (200K context)"), "Sonnet 4.6");
         assert_eq!(model_label("Opus 4.8"), "Opus 4.8");
-        assert_eq!(model_label("GPT-5.5"), "GPT-5.5");
+        // A friendly name's hyphen reads as a space, matching `Opus 4.8`.
+        assert_eq!(model_label("GPT-5.5"), "GPT 5.5");
         // A non-window parenthetical is a real name qualifier — kept.
         assert_eq!(model_label("Sonnet 3.5 (New)"), "Sonnet 3.5 (New)");
     }
@@ -409,8 +412,9 @@ mod tests {
         // title-cased.
         assert_eq!(model_label("claude-opus-4-8"), "Opus 4.8");
         assert_eq!(model_label("gpt-5.5-codex"), "GPT 5.5 Codex");
-        // A friendly name (space or uppercase) is never mistaken for a slug.
-        assert_eq!(model_label("GPT-5.5"), "GPT-5.5");
+        // A friendly name (space or uppercase) is never mistaken for a slug;
+        // it keeps its words and only trades hyphens for spaces.
+        assert_eq!(model_label("GPT-5.5 Codex"), "GPT 5.5 Codex");
         assert_eq!(model_label("Opus 4.8 Fast"), "Opus 4.8 Fast");
     }
 
