@@ -265,6 +265,32 @@ pub fn in_pane_agent_start(kind: &str, pane_cwd: &str) -> Option<jiff::Timestamp
         .min()
 }
 
+/// Start time of the in-pane agent CLI behind a pane's bound root process —
+/// the per-pane exact signal the frame stamp prefers over the cwd scan above.
+/// The root is the CLI itself when its cmdline reads as the bare `codex` TUI
+/// (a pane running it directly); a shell-hosted CLI is the root's single
+/// child, since the mux reports the *foreground* command while the root stays
+/// the shell. The cmdline check is load-bearing twice over: a shell outlives
+/// the agents it hosts, so stamping its older start would re-admit the very
+/// sessions `pane_start_allows_bind` refuses, and a re-run CLI is a fresh
+/// child pid even when the hosting shell survives, so re-tenancy stays
+/// visible. `None` for a non-Codex kind or when neither process reads as the
+/// CLI, so the caller falls back rather than guesses.
+pub fn in_pane_agent_start_for_root(kind: &str, root_pid: u32) -> Option<jiff::Timestamp> {
+    if kind != "codex" {
+        return None;
+    }
+    if crate::proc::cmdline(root_pid).is_some_and(|cmdline| is_codex_cli_cmdline(&cmdline)) {
+        return crate::proc::process_start(root_pid);
+    }
+    if let &[child] = crate::proc::children(root_pid).as_slice()
+        && crate::proc::cmdline(child).is_some_and(|cmdline| is_codex_cli_cmdline(&cmdline))
+    {
+        return crate::proc::process_start(child);
+    }
+    None
+}
+
 /// Whether a command line runs the in-pane Codex CLI — the bare `codex` TUI a
 /// user launches in a pane — rather than the daemon, the remote-control host, or
 /// Rimz's own `rimz codex app-server serve` broker. The inverse of

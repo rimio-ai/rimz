@@ -109,18 +109,33 @@ fn read_proc(pid: u32) -> Option<ProcInfo> {
             break;
         }
     }
-    // `cmdline` is NUL-separated argv; flatten to spaces for substring matching.
-    let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-    let cmdline = String::from_utf8_lossy(&raw)
-        .replace('\0', " ")
-        .trim()
-        .to_owned();
     Some(ProcInfo {
         pid,
         ppid: ppid?,
         real_uid: real_uid?,
-        cmdline,
+        cmdline: cmdline(pid)?,
     })
+}
+
+/// The flattened command line of `pid` — `/proc/<pid>/cmdline`'s NUL-separated
+/// argv joined by spaces for substring matching. The sidebar runs it through
+/// the agent-CLI classifiers to tell an in-pane agent from the shell hosting
+/// it. `None` on a non-Linux target or an unreadable entry — another user's
+/// process — so callers fall back rather than guess.
+#[cfg(target_os = "linux")]
+pub fn cmdline(pid: u32) -> Option<String> {
+    let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    Some(
+        String::from_utf8_lossy(&raw)
+            .replace('\0', " ")
+            .trim()
+            .to_owned(),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn cmdline(_pid: u32) -> Option<String> {
+    None
 }
 
 /// Wall-clock start time of `pid`, anchoring `/proc/<pid>/stat` field 22

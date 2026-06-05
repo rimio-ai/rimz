@@ -265,36 +265,16 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 }
             }
             if let Some(frame) = frame {
-                let mut panes = frame.panes;
+                let panes = frame.panes;
                 if let Some(own) = exclude.as_ref() {
                     snapshot.own_view = rimz::SidebarOwnView::from_panes(own, &panes);
                 }
                 // Computed from the full session pane list (pre-exclusion), before
-                // `with_live_panes` consumes `panes`.
+                // `with_live_panes` consumes `panes`. The panes arrive with their
+                // `/proc`-derived process starts already stamped at frame
+                // production ([`stamp_pane_process_starts`]), so the cwd-fallback
+                // guard fires here and in the consumer in-process fold alike.
                 snapshot.only_daemon_view_remains = rimz::SidebarSnapshot::only_daemon_view(&panes);
-                // Backends that report no per-pane process start (Zellij) leave the
-                // cwd-fallback guard (`pane_start_allows_bind`) blind, so a stale
-                // daemon-mode Codex session would latch onto a freshly-started pane
-                // in the same cwd. Derive the in-pane agent CLI's start from `/proc`
-                // and stamp it so the guard fires: a process newer than a session
-                // can't inherit it. Cheap — `in_pane_agent_start` scans `/proc` only
-                // for a Codex pane that lacks a native start (so tmux pays nothing).
-                for pane in &mut panes {
-                    if pane.pane_process_start.is_some() {
-                        continue;
-                    }
-                    let Some(cwd) = pane.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
-                        continue;
-                    };
-                    if let Some(kind) = pane
-                        .command
-                        .as_deref()
-                        .and_then(rimz::ledger::snapshot::command_agent_kind)
-                    {
-                        pane.pane_process_start =
-                            rimz::remote_control::in_pane_agent_start(kind, cwd);
-                    }
-                }
                 snapshot = snapshot.with_live_panes(panes, exclude.as_ref());
             }
             snapshot.agent_hooks_ready = rimz::sidebar::snapshot::agent_hooks_ready();
@@ -473,6 +453,76 @@ fn carry_forward_from_cache(panes: &mut [rimz::feed::PaneRef], cache_path: &Path
     }
 }
 
+/// The pane ids a fresh `list-panes` read left without a process start — the
+/// set the `/proc` stamp owns ([`stamp_pane_process_starts`]). Captured before
+/// [`carry_forward_from_cache`] backfills prior values, so a native (tmux)
+/// start — including one the carry restores after a raced read — is never
+/// confused with Rimz's own derived stamp and never overwritten by one.
+fn natively_unstamped(panes: &[rimz::feed::PaneRef]) -> HashSet<rimz::ids::PaneId> {
+    panes
+        .iter()
+        .filter(|pane| pane.pane_process_start.is_none())
+        .map(|pane| pane.pane_id.clone())
+        .collect()
+}
+
+/// Stamp the in-pane agent CLI's `/proc` start onto agent panes a backend left
+/// without one (Zellij; tmux reports a start natively and pays nothing).
+/// Backends that report no per-pane process start leave the cwd-fallback guard
+/// (`pane_start_allows_bind`) blind, so a stale daemon-mode Codex session would
+/// latch onto a freshly-started pane in the same cwd and project its old stats.
+/// Runs at frame production, in both produce arms, so the published pane frame
+/// carries the stamp and every reader — the produce fork *and* the consumer
+/// in-process fold (`read_published_snapshot`) — sees the guard fire; stamping
+/// after the fold's frame read would leave the consumer lane blind again.
+///
+/// Only panes in `unstamped` — left startless by the fresh read itself
+/// ([`natively_unstamped`]) — are touched; a native start is authoritative.
+/// For those, the derive ladder is freshest-first:
+/// 1. the agent CLI behind the pane's bound root process (`pane_pid`,
+///    established and starttime-revalidated by the metrics cadence in
+///    [`enrich_pane_metrics`]) — per-pane exact, re-derived each produce, so a
+///    re-tenanted pane (the agent exits and is re-run in place) sheds the
+///    prior tenant's stamp;
+/// 2. the stamp [`carry_forward_from_cache`] restored from the prior frame —
+///    bridges the windows where the binding is missing or its process is gone
+///    (a fresh-window re-tenancy, an exited pane) without rescanning;
+/// 3. the earliest in-pane agent CLI in the pane's cwd — the warmup path for a
+///    pane no prior frame has stamped and no binding has reached yet.
+///
+/// The derivers are injected for tests; production passes
+/// [`rimz::remote_control::in_pane_agent_start_for_root`] and
+/// [`rimz::remote_control::in_pane_agent_start`].
+fn stamp_pane_process_starts(
+    panes: &mut [rimz::feed::PaneRef],
+    unstamped: &HashSet<rimz::ids::PaneId>,
+    root_start: &dyn Fn(&str, u32) -> Option<jiff::Timestamp>,
+    cwd_start: &dyn Fn(&str, &str) -> Option<jiff::Timestamp>,
+) {
+    for pane in panes.iter_mut() {
+        if !unstamped.contains(&pane.pane_id) {
+            continue;
+        }
+        let Some(kind) = pane
+            .command
+            .as_deref()
+            .and_then(rimz::ledger::snapshot::command_agent_kind)
+        else {
+            continue;
+        };
+        if let Some(start) = pane.pane_pid.and_then(|pid| root_start(kind, pid)) {
+            pane.pane_process_start = Some(start);
+            continue;
+        }
+        if pane.pane_process_start.is_some() {
+            continue;
+        }
+        if let Some(cwd) = pane.cwd.as_deref().filter(|cwd| !cwd.is_empty()) {
+            pane.pane_process_start = cwd_start(kind, cwd);
+        }
+    }
+}
+
 /// Return the event-fresh ledger rollup + live pane list for `session`.
 ///
 /// The rollup is always read fresh from `latest.json` (`Ledger::snapshot_cached`,
@@ -538,13 +588,23 @@ fn cached_panes_or_produce(
         // on this one path folds the anonymous row the winner path guards against.
         Coalesced::ProduceLocal => {
             let mut cache = produce_local()?;
+            let unstamped = natively_unstamped(&cache.panes);
             carry_forward_from_cache(&mut cache.panes, &cache_path, session);
+            // This unpublished fallback frame feeds its own fold directly, so it
+            // needs the stamp the cwd-fallback guard reads just like a published one.
+            stamp_pane_process_starts(
+                &mut cache.panes,
+                &unstamped,
+                &rimz::remote_control::in_pane_agent_start_for_root,
+                &rimz::remote_control::in_pane_agent_start,
+            );
             Ok(cache)
         }
         // We won: fork `list-panes` and publish it. The guard holds the lock
         // until this arm returns.
         Coalesced::Produce(_guard) => {
             let mut cache = produce_local()?;
+            let unstamped = natively_unstamped(&cache.panes);
             // A mid-tick `list-panes` race can drop a live pane's command/cwd/
             // process-start; rather than fold an anonymous `external`/`process`
             // row that blinks out next tick, backfill the missing fields from
@@ -555,6 +615,16 @@ fn cached_panes_or_produce(
             // reads `/proc` per tick; the result is in the published pane cache,
             // so consumer tabs never fork their own reads.
             enrich_pane_metrics(&mut cache.panes, session, ledger.runtime_paths());
+            // Stamp the in-pane agent process starts before the publish — after
+            // the enrich, whose pane→root-pid bindings the stamp's first rung
+            // rides — so the cache carries them to every reader: the produce
+            // fork and the consumer in-process fold alike.
+            stamp_pane_process_starts(
+                &mut cache.panes,
+                &unstamped,
+                &rimz::remote_control::in_pane_agent_start_for_root,
+                &rimz::remote_control::in_pane_agent_start,
+            );
             if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &cache) {
                 tracing::warn!(path = %cache_path.display(), error = %err, "sidebar snapshot cache write failed");
             }

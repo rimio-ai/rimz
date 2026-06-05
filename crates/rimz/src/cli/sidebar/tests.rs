@@ -85,6 +85,106 @@ fn carry_forward_from_cache_is_noop_without_prior() {
     assert_eq!(panes[0].cwd, None);
 }
 
+#[test]
+fn stamp_pane_process_starts_stamps_a_codex_pane_lacking_a_native_start() {
+    // A Zellij codex pane arrives with no native process start and no pid
+    // binding yet; the warmup cwd scan derives one so the published frame
+    // carries it and the cwd-fallback guard fires on the consumer in-process
+    // fold, not just the produce fork.
+    let start: jiff::Timestamp = "2026-06-05T13:54:33Z".parse().unwrap();
+    let mut panes = vec![pane("terminal_30", Some("codex"), Some("/repo"))];
+    let unstamped = natively_unstamped(&panes);
+    stamp_pane_process_starts(&mut panes, &unstamped, &|_, _| None, &|kind, cwd| {
+        assert_eq!(kind, "codex");
+        assert_eq!(cwd, "/repo");
+        Some(start)
+    });
+    assert_eq!(panes[0].pane_process_start, Some(start));
+}
+
+#[test]
+fn stamp_pane_process_starts_never_touches_a_native_start() {
+    // A pane the backend stamped natively (tmux) is outside the set captured
+    // from the fresh read, so its start is authoritative — neither deriver is
+    // ever consulted, even when a pid binding exists.
+    let native: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
+    let mut panes = vec![pane("terminal_30", Some("codex"), Some("/repo"))];
+    panes[0].pane_process_start = Some(native);
+    panes[0].pane_pid = Some(100);
+    let unstamped = natively_unstamped(&panes);
+    stamp_pane_process_starts(
+        &mut panes,
+        &unstamped,
+        &|_, _| panic!("must not derive over a native start"),
+        &|_, _| panic!("must not scan over a native start"),
+    );
+    assert_eq!(panes[0].pane_process_start, Some(native));
+}
+
+#[test]
+fn stamp_pane_process_starts_rederives_from_the_bound_root_pid() {
+    // A re-tenanted pane — the agent exited and was re-run in place — carries
+    // the prior tenant's stamp forward; the agent CLI behind the bound root
+    // is the live process, so its start overwrites the carried one and the
+    // bind guard refuses the old tenant's session again.
+    let carried: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
+    let rebound: jiff::Timestamp = "2026-06-05T14:35:00Z".parse().unwrap();
+    let mut panes = vec![pane("terminal_30", Some("codex"), Some("/repo"))];
+    let unstamped = natively_unstamped(&panes);
+    panes[0].pane_process_start = Some(carried);
+    panes[0].pane_pid = Some(200);
+    stamp_pane_process_starts(
+        &mut panes,
+        &unstamped,
+        &|kind, pid| {
+            assert_eq!(kind, "codex");
+            assert_eq!(pid, 200);
+            Some(rebound)
+        },
+        &|_, _| panic!("the root rung resolved; the cwd scan must not run"),
+    );
+    assert_eq!(panes[0].pane_process_start, Some(rebound));
+}
+
+#[test]
+fn stamp_pane_process_starts_keeps_the_carried_stamp_when_the_pid_is_gone() {
+    // The binding's process is gone (a fresh-window re-tenancy, an exited
+    // pane): the carried stamp bridges the gap rather than rescanning — a cwd
+    // scan on an exited pane would erase the stamp and let a stale session
+    // bind again.
+    let carried: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
+    let mut panes = vec![pane("terminal_30", Some("codex"), Some("/repo"))];
+    let unstamped = natively_unstamped(&panes);
+    panes[0].pane_process_start = Some(carried);
+    panes[0].pane_pid = Some(100);
+    stamp_pane_process_starts(&mut panes, &unstamped, &|_, _| None, &|_, _| {
+        panic!("carried stamp present; the cwd scan must not run")
+    });
+    assert_eq!(panes[0].pane_process_start, Some(carried));
+}
+
+#[test]
+fn stamp_pane_process_starts_skips_non_agent_and_cwdless_panes() {
+    // The derivers are consulted only for an agent pane: a shell pane stays
+    // unstamped even with a pid binding, and a cwd-less agent pane skips the
+    // scan (the guard then falls back to most-recently-active, the documented
+    // other-user case).
+    let start: jiff::Timestamp = "2026-06-05T13:54:33Z".parse().unwrap();
+    let mut panes = vec![
+        pane("terminal_1", Some("zsh"), Some("/repo")),
+        pane("terminal_2", Some("codex"), None),
+        pane("terminal_3", Some("codex"), Some("")),
+    ];
+    panes[0].pane_pid = Some(100);
+    let unstamped = natively_unstamped(&panes);
+    stamp_pane_process_starts(&mut panes, &unstamped, &|_, _| Some(start), &|_, _| {
+        Some(start)
+    });
+    assert!(panes[0].pane_process_start.is_none());
+    assert!(panes[1].pane_process_start.is_none());
+    assert!(panes[2].pane_process_start.is_none());
+}
+
 /// A process-table entry for the pid-backfill matcher fixtures; everything
 /// runs as one uid (1000) unless a test says otherwise.
 fn proc_info(pid: u32, ppid: u32, cmdline: &str) -> rimz::proc::ProcInfo {
