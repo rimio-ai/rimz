@@ -1,5 +1,3 @@
-use rimz::config::ContextBand;
-
 use super::*;
 
 /// The commit delta spells only what's there: zero components drop rather
@@ -103,75 +101,16 @@ fn segmented_gauge_falls_back_with_zero_weights() {
     assert_eq!(text, "━━──");
 }
 
-/// The context tone climbs calm blue → yellow → amber → red, taking the
-/// worse of two axes — fill percentage and absolute tokens — with each tier
-/// entered at its inclusive lower bound. Defaults: yellow at 60% / 160k,
-/// amber at 80% / 258k, red at 95% / 420k.
+/// The renderer's one job on severity: map the domain's tier to its tone —
+/// calm blue, yellow, amber clay, red. The classification itself (the
+/// percent/token bands, the worst-first ordering) lives in
+/// `rimz::feed::ContextSeverity` and is tested beside it.
 #[test]
-fn context_severity_takes_the_worse_of_percent_and_tokens() {
-    let bands = ContextSeverityConfig::default();
-    let color = |percent, tokens| context_severity_color(percent, tokens, &bands);
-    // Low fill, low tokens: calm blue.
-    assert_eq!(color(20, Some(50_000)), Color::Blue);
-    // Just under both yellow bounds stays calm; the bound itself enters.
-    assert_eq!(color(59, Some(159_999)), Color::Blue);
-    assert_eq!(color(60, Some(10_000)), Color::Yellow);
-    assert_eq!(color(10, Some(160_000)), Color::Yellow);
-    // The percentage ramp alone climbs through all four tiers.
-    assert_eq!(color(80, Some(10_000)), ORANGE);
-    assert_eq!(color(95, Some(10_000)), Color::Red);
-    // Calm by percentage, but the token volume escalates it.
-    assert_eq!(color(20, Some(258_000)), ORANGE);
-    assert_eq!(color(20, Some(420_000)), Color::Red);
-    // The worse severity wins regardless of which axis it comes from.
-    assert_eq!(color(94, Some(419_999)), ORANGE);
-    // No token reading falls back to the percentage ramp alone.
-    assert_eq!(color(80, None), ORANGE);
-    assert_eq!(color(10, None), Color::Blue);
-    // An out-of-range percent clamps to full and reads red.
-    assert_eq!(color(200, None), Color::Red);
-}
-
-/// The bands come from `[sidebar.context]`, so a custom set moves every
-/// edge; a misordered set degrades to the highest matching tier (the red
-/// band is checked first), never to a calmer one.
-#[test]
-fn context_severity_honours_custom_and_misordered_bands() {
-    let tight = ContextSeverityConfig {
-        yellow: ContextBand {
-            percent: 10,
-            tokens: 1_000,
-        },
-        amber: ContextBand {
-            percent: 20,
-            tokens: 2_000,
-        },
-        red: ContextBand {
-            percent: 30,
-            tokens: 3_000,
-        },
-    };
-    assert_eq!(context_severity_color(5, Some(500), &tight), Color::Blue);
-    assert_eq!(context_severity_color(25, Some(0), &tight), ORANGE);
-    assert_eq!(context_severity_color(5, Some(3_000), &tight), Color::Red);
-
-    // Red configured *below* yellow: a mid fill reaches the red band even
-    // though the calmer tiers do not — worst-first keeps the warning loud.
-    let misordered = ContextSeverityConfig {
-        yellow: ContextBand {
-            percent: 90,
-            tokens: 900_000,
-        },
-        amber: ContextBand {
-            percent: 80,
-            tokens: 800_000,
-        },
-        red: ContextBand {
-            percent: 50,
-            tokens: 500_000,
-        },
-    };
-    assert_eq!(context_severity_color(60, None, &misordered), Color::Red);
+fn severity_color_maps_the_four_tiers() {
+    assert_eq!(severity_color(ContextSeverity::Calm), Color::Blue);
+    assert_eq!(severity_color(ContextSeverity::Yellow), Color::Yellow);
+    assert_eq!(severity_color(ContextSeverity::Amber), ORANGE);
+    assert_eq!(severity_color(ContextSeverity::Red), Color::Red);
 }
 
 /// The clock face fills a quarter per quarter hour and rings past the

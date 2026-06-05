@@ -62,6 +62,7 @@ pub(super) fn row_from_process(pane: &PaneRef) -> SidebarRow {
         todo_done: None,
         todo_total: None,
         context: None,
+        context_severity: None,
         worktree_path: pane.cwd.clone(),
         worktree_branch: None,
         last_activity: pane.pane_process_start.unwrap_or_else(Timestamp::now),

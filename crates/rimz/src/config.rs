@@ -324,6 +324,13 @@ pub struct SidebarConfig {
     /// detection alone.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trunk: Option<String>,
+    /// Palette overrides for the renderer's semantic color slots. Each slot is
+    /// a 256-color index; an omitted slot keeps the built-in tone, so an
+    /// absent section paints exactly the shipped palette. Resolved
+    /// producer-side onto the snapshot like `providers`, so every renderer of
+    /// the workspace paints the same tones.
+    #[serde(skip_serializing_if = "SidebarThemeConfig::is_unset")]
+    pub theme: SidebarThemeConfig,
 }
 
 impl Default for SidebarConfig {
@@ -334,7 +341,56 @@ impl Default for SidebarConfig {
             max_cols: default_sidebar_max_cols(),
             context: ContextSeverityConfig::default(),
             trunk: None,
+            theme: SidebarThemeConfig::default(),
         }
+    }
+}
+
+/// `[sidebar.theme]`: per-machine overrides for the renderer's semantic palette
+/// slots, each a 256-color index. Display-only — it tunes tones, never the
+/// glyph grammar (shape still carries every state under `NO_COLOR`), and never
+/// the ledger. Slot names follow the semantics, not the shipped hues, so a
+/// user re-theming to light terminals reads `good`/`warn`/`alarm` rather than
+/// `green`/`yellow`/`red`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SidebarThemeConfig {
+    /// Calm/positive: running tallies, low gauges, `+` additions, cache reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub good: Option<u8>,
+    /// Caution: waiting glyphs at rest, mid gauges, cache writes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warn: Option<u8>,
+    /// Alarm: failed glyphs, high gauges, `-` removals, fresh input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alarm: Option<u8>,
+    /// Structure accent: worktree headers and the selected lane spine.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent: Option<u8>,
+    /// Cool informational: the `plan` posture pill, window tags.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cool: Option<u8>,
+    /// Delegation/meta: the `⇅ rc` flag, the subagent `⧉` marker.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta: Option<u8>,
+    /// Dim chrome: labels, ages, subordinate values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dim: Option<u8>,
+    /// Faintest chrome: bar tracks, `·` separators, dotted dividers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub faint: Option<u8>,
+    /// Section hairline rules — a step below `faint`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule: Option<u8>,
+    /// The selected-row `▌` accent bar.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection: Option<u8>,
+}
+
+impl SidebarThemeConfig {
+    /// Whether every slot is unset — the serialized config omits the section.
+    pub fn is_unset(&self) -> bool {
+        *self == Self::default()
     }
 }
 
@@ -550,6 +606,24 @@ mod tests {
             None,
             "unset leaves the trunk ladder to detection alone",
         );
+    }
+
+    #[test]
+    fn sidebar_theme_parses_defaults_unset_and_rejects_out_of_range() {
+        let dir = tempdir().expect("tempdir");
+        let config = MachineConfig::load_from(&write(
+            &dir,
+            "[sidebar.theme]\ngood = 34\nselection = 25\n",
+        ))
+        .expect("load");
+        assert_eq!(config.sidebar.theme.good, Some(34));
+        assert_eq!(config.sidebar.theme.selection, Some(25));
+        assert_eq!(config.sidebar.theme.alarm, None, "unset slots stay builtin");
+        assert!(MachineConfig::default().sidebar.theme.is_unset());
+        // Slots are 256-color indices: a value past u8 fails at config load,
+        // with the parse error naming the field, rather than rendering with a
+        // silently-wrong palette.
+        assert!(MachineConfig::load_from(&write(&dir, "[sidebar.theme]\ngood = 300\n")).is_err());
     }
 
     #[test]

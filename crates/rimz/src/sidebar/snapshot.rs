@@ -105,16 +105,6 @@ impl AccountsCache {
     }
 }
 
-/// How long a consumer keeps trusting the elected producer's published frame
-/// before it stops holding it and produces locally instead. A healthy producer
-/// rewrites `snapshot.json` every backstop tick (~2s), so several ticks of slack
-/// never trips on a live fleet; but a producer that wedged, died without a
-/// taker, or was split off by a protocol bump stops advancing the file, and a
-/// consumer must not freeze on that last frame forever. Past this age the
-/// consumer self-heals by taking the producer path (single-flighted, so the
-/// fleet still elects one local producer rather than a fork storm).
-pub const PUBLISHED_FRAME_STALE_AFTER: Duration = Duration::from_secs(8);
-
 /// Shared, single-flight pane-list cache, keyed to one `(workspace, session)` —
 /// the per-workspace runtime root scopes the workspace; `session_name` guards
 /// against serving one session's panes (which the Zellij backend stamps from the
@@ -207,32 +197,12 @@ pub fn consumer_rollup(state: &StatePaths) -> Option<SidebarSnapshot> {
         .or_else(|| crate::ledger::snapshot::build_from(state).ok())
 }
 
-/// Whether the producer's published same-session frame has gone stale — older
-/// than [`PUBLISHED_FRAME_STALE_AFTER`] at `now_ms`. A consumer that sees this
-/// stops holding the frame and produces locally, so a stalled producer can never
-/// freeze a tab indefinitely. `false` when no same-session frame exists yet
-/// (cold start, or a session-handoff mismatch): that path is the producer
-/// election's job, not this self-heal's, and the renderer's degraded-exit safety
-/// still covers a consumer that can never read a frame at all.
-pub fn published_frame_is_stale(runtime: &RuntimePaths, session: &str, now_ms: u64) -> bool {
-    let cache_path = runtime.root.join("snapshot.json");
-    read_snapshot_cache(&cache_path, session)
-        .is_some_and(|cache| frame_age_exceeds(cache.produced_at_ms, now_ms))
-}
-
-/// Whether `produced_at_ms` is older than [`PUBLISHED_FRAME_STALE_AFTER`] at
-/// `now_ms`. Saturating, so a clock that ran backwards reads as fresh (age 0)
-/// rather than wrapping to a huge age and forcing a needless local produce.
-fn frame_age_exceeds(produced_at_ms: u64, now_ms: u64) -> bool {
-    now_ms.saturating_sub(produced_at_ms) > PUBLISHED_FRAME_STALE_AFTER.as_millis() as u64
-}
-
 /// Age of the producer's published same-session frame at `now_ms`, in
 /// milliseconds — the fork gate reads this to skip a fork while the frame is
 /// younger than one data tick. `None` when no same-session frame exists yet
 /// (cold start, or a session-handoff mismatch), which the gate reads as "no
-/// usable frame: produce". Saturating like [`frame_age_exceeds`], so a clock
-/// that ran backwards reads as fresh (age 0) rather than forcing a fork.
+/// usable frame: produce". The age saturates, so a clock that ran backwards
+/// reads as fresh (age 0) rather than forcing a fork.
 pub fn published_frame_age_ms(runtime: &RuntimePaths, session: &str, now_ms: u64) -> Option<u64> {
     let cache_path = runtime.root.join("snapshot.json");
     read_snapshot_cache(&cache_path, session)
@@ -795,7 +765,8 @@ pub fn fold_machine_config_cached(
 }
 
 /// Apply the resolved config and already-resolved accounts onto the snapshot:
-/// the per-provider `⇅ rc` flags and the dashboard aggregates.
+/// the per-provider `⇅ rc` flags, the dashboard aggregates, and each agent
+/// row's context-severity verdict.
 fn fold_machine_config_with(
     mut snapshot: SidebarSnapshot,
     config: crate::config::MachineConfig,
@@ -809,12 +780,40 @@ fn fold_machine_config_with(
     } = config;
     snapshot.sidebar = sidebar;
 
+    // Stamp each agent row's context-severity verdict now that the
+    // `[sidebar.context]` bands are known — classified once here, on both the
+    // producer and consumer fold, so the renderer's color ramp and any future
+    // signal emitter read one authority instead of re-deriving the tier.
+    let bands = snapshot.sidebar.context.clone();
+    stamp_context_severity(&mut snapshot.worktree_groups, &bands);
+
     // The `⇅ rc` flag per provider comes from the remote-control toggles.
     let mut remote_control_flags: BTreeMap<String, bool> = BTreeMap::new();
     remote_control_flags.insert("claude".to_owned(), remote_control.claude);
     remote_control_flags.insert("codex".to_owned(), remote_control.codex);
 
     snapshot.with_provider_aggregates(&accounts, &remote_control_flags, provider_spending)
+}
+
+/// Stamp [`SidebarRow::context_severity`] on every agent row from the
+/// `[sidebar.context]` bands: [`crate::feed::ContextSeverity::classify`] over
+/// the row's gauge inputs, the one verdict the renderer's color ramp and any
+/// future signal emitter read. Process rows carry no context and stay `None`.
+fn stamp_context_severity(
+    groups: &mut [crate::SidebarWorktreeGroup],
+    bands: &crate::config::ContextSeverityConfig,
+) {
+    for group in groups {
+        for row in &mut group.rows {
+            if row.row_kind == crate::SidebarRowKind::Agent {
+                row.context_severity = Some(crate::feed::ContextSeverity::classify(
+                    row.context_gauge_percent().unwrap_or(0),
+                    row.context_used_tokens(),
+                    bands,
+                ));
+            }
+        }
+    }
 }
 
 /// Probe out-of-band login/account facts for every known provider plus any

@@ -106,6 +106,24 @@ red    = { percent = 95, tokens = 420000 }   # amber escalates to red
 
 The agent card's context meter — the bar, the `▣` glyph, and the `▤` head — ramps calm blue → yellow → amber → red on these bands. Each tier names the inclusive lower bound where it begins, on two axes at once: the window's fill `percent` and the absolute `tokens` occupying it. The meter wears the worse of the two axes, so a large-window model calm by percentage still warms by sheer volume. The defaults above are the shipped values (the 258k amber edge matches Codex's effective GPT-5.5 window); a tier you omit keeps its default, and within a tier both fields are stated together.
 
+#### Theme
+
+```toml
+[sidebar.theme]
+good      = 108   # calm/positive — running tallies, low gauges, additions, cache reads
+warn      = 179   # caution — waiting glyphs at rest, mid gauges, cache writes
+alarm     = 167   # alarm — failed glyphs, high gauges, removals, fresh input
+accent    = 73    # structure — worktree headers and the selected lane spine
+cool      = 75    # cool informational — the plan posture pill, window tags
+meta      = 141   # delegation/meta — the ⇅ rc flag, the subagent ⧉ marker
+dim       = 244   # dim chrome — labels, ages, subordinate values
+faint     = 240   # faintest chrome — bar tracks, · separators, dotted dividers
+rule      = 237   # section hairline rules, a step below faint
+selection = 110   # the selected-row ▌ accent bar
+```
+
+Every renderer tone is a named semantic slot over a 256-color index; the values above are the shipped palette, and a slot you omit keeps its default — an absent section paints exactly the built-ins. Slots are semantic (`good`/`warn`/`alarm`), not hue names, so a light-terminal retheme stays readable. The overrides resolve producer-side onto the snapshot like `[sidebar.providers]`, so every renderer of the workspace paints the same tones, and a change lands with the next snapshot — no renderer restart. Provider brand colors stay with `[sidebar.providers.<kind>]`, and `NO_COLOR` still strips every tone while the glyph shapes carry the states.
+
 #### Trunk branch
 
 ```toml

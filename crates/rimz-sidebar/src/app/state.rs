@@ -1,0 +1,250 @@
+//! Folding a fetch outcome into what the loop renders: the pure
+//! [`compute_next_state`] reducer, the last-known-good gate overlay, the
+//! selection reconcile, and the exit/detach verdicts.
+
+use std::process::Command;
+use std::time::Instant;
+
+use jiff::Timestamp;
+use rimz::{SidebarSnapshot, WorkspaceId};
+use tracing::{debug, info, warn};
+
+use crate::render::UiState;
+
+use super::fetch::FetchOutcome;
+use super::gate::{GateState, apply_gate};
+use super::health::{Health, degraded_too_long, next_health};
+use super::lifecycle::{SelfCloseState, SessionExitState, self_close_decision};
+use super::reload::resolve_snapshot_bin;
+use super::selection::{reconcile_selection, row_index_of_pane};
+use super::{Result, ServeConfig, wall_clock_phase};
+
+/// Decide what to render next given the latest heartbeat + snapshot outcomes.
+/// Pure data, no I/O — extracted so the loop's recovery rules are testable.
+pub fn compute_next_state(
+    workspace_id: &WorkspaceId,
+    heartbeat_failure: Option<String>,
+    snapshot: std::result::Result<SidebarSnapshot, String>,
+    previous_snapshot: Option<SidebarSnapshot>,
+    previous_health: &Health,
+) -> RenderState {
+    let (last_snapshot, snapshot_failure) = match snapshot {
+        Ok(snapshot) => (Some(snapshot), None),
+        Err(reason) => (previous_snapshot, Some(reason)),
+    };
+
+    // A failed snapshot is the headline; a heartbeat-only failure still keeps
+    // the fresh snapshot but reports its own reason.
+    let failure = snapshot_failure
+        .map(|reason| format!("snapshot failed: {reason}"))
+        .or_else(|| heartbeat_failure.map(|reason| format!("heartbeat failed: {reason}")));
+
+    let health = next_health(previous_health, failure);
+
+    let snapshot_to_render = last_snapshot
+        .clone()
+        .unwrap_or_else(|| placeholder_snapshot(workspace_id.clone()));
+
+    RenderState {
+        snapshot: snapshot_to_render,
+        health,
+        last_snapshot,
+    }
+}
+
+pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
+    let display_name = workspace_id.as_str().to_owned();
+    SidebarSnapshot {
+        workspace_id,
+        display_name,
+        generated_at: Timestamp::now(),
+        worktree_groups: Vec::new(),
+        needs_attention: Vec::new(),
+        resolver_working: Vec::new(),
+        agents: Vec::new(),
+        agent_hooks_ready: false,
+        wired_lazy_kinds: Vec::new(),
+        own_view: None,
+        only_daemon_view_remains: false,
+        project_root: None,
+        worktree_roots: Vec::new(),
+        sidebar: rimz::config::SidebarConfig::default(),
+        providers: Vec::new(),
+        value_tally: None,
+        reflects_log: None,
+    }
+}
+
+/// Bundle returned by [`compute_next_state`]; the loop applies it verbatim.
+#[derive(Clone, Debug)]
+pub struct RenderState {
+    pub snapshot: SidebarSnapshot,
+    pub health: Health,
+    pub last_snapshot: Option<SidebarSnapshot>,
+}
+
+/// What [`apply_fetch_outcome`] reports back to the loop: whether to exit, and
+/// whether this fetch was held as a transient regression (the loop fires one
+/// self-heal refetch so the cache reaches the next good frame).
+pub(super) struct ApplyOutcome {
+    pub(super) should_exit: bool,
+    pub(super) rejected: bool,
+}
+
+/// Fold one fetch outcome into the render state: gate it against the
+/// last-known-good frame, update health, snapshot, and selection, draw the
+/// frame, and report whether the loop should exit — give up after sustained
+/// degradation, or self-close once the tab has emptied. Shared by the first
+/// synchronous frame and every background-fetch result so the recovery rules
+/// live in one place.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn apply_fetch_outcome(
+    config: &ServeConfig,
+    outcome: FetchOutcome,
+    last_snapshot: &mut Option<SidebarSnapshot>,
+    current: &mut SidebarSnapshot,
+    health: &mut Health,
+    gate: &mut GateState,
+    self_close: &mut SelfCloseState,
+    session_exit: &mut SessionExitState,
+    ui: &mut UiState,
+    anim_start: Instant,
+) -> Result<ApplyOutcome> {
+    // The gate compares the incoming snapshot against the last frame we actually
+    // committed; `current` still holds it until we overwrite it below.
+    let fetch_was_ok = outcome.snapshot.is_ok();
+    let prev_good = current.clone();
+    let computed = compute_next_state(
+        &config.workspace_id,
+        None,
+        outcome.snapshot,
+        last_snapshot.take(),
+        health,
+    );
+    let (state, next_gate, rejected) =
+        apply_gate(computed, fetch_was_ok, &prev_good, gate, Timestamp::now());
+    *gate = next_gate;
+    if let Some(alert) = state
+        .health
+        .alert
+        .as_ref()
+        .filter(|alert| alert.is_active())
+    {
+        warn!(reason = %alert.reason, "sidebar refresh degraded");
+    }
+    *last_snapshot = state.last_snapshot;
+    *health = state.health;
+    *current = state.snapshot;
+    // Reconcile the highlight as part of the fold, before the next frame paints:
+    // re-anchor the identity-keyed selection to its row (so a status-churn
+    // reorder never slides it onto a neighbour) and re-derive the baseline from
+    // the own view's active pane. Selection is derived state — queried from the
+    // mux each fold and same-tab by construction — so an external tab switch or
+    // focus move lands on the very next frame. The derivation is filtered to a
+    // non-sidebar row: a sidebar-self-active or non-row active pane derives
+    // `None` and the baseline holds its last value.
+    let derived = current
+        .own_view
+        .as_ref()
+        .filter(|view| !view.own_is_active)
+        .and_then(|view| view.active_pane_id.clone())
+        .filter(|pane| row_index_of_pane(current, pane).is_some());
+    reconcile_selection(ui, current, derived);
+    ui.animation_phase = wall_clock_phase(anim_start);
+    // Fold the fresh tally into the count-up: a higher figure starts an eased
+    // roll that the next frames paint, a reset or first value snaps. A fetch
+    // without a tally leaves the rolls untouched. The serve loop paints the
+    // folded state on its next frame boundary; this path never draws.
+    if let Some(tally) = current.value_tally.as_ref() {
+        ui.tally.observe(tally, ui.animation_phase);
+    }
+
+    // A renderer degraded this long is non-functional and, with a now-stale
+    // heartbeat, unreachable by `rimz reload` — so it gives up rather than
+    // lingering as a zombie showing a frozen frame. Exiting closes its
+    // `close_on_exit` pane; reload/attach recovery then rebuilds a current
+    // sidebar against the live panes.
+    if degraded_too_long(health, Timestamp::now()) {
+        warn!(
+            session = %config.session_name,
+            reason = health.alert.as_ref().map(|alert| alert.reason.as_str()),
+            "sidebar degraded too long; exiting so the pane closes and reload/attach can rebuild it",
+        );
+        return Ok(ApplyOutcome {
+            should_exit: true,
+            rejected,
+        });
+    }
+
+    // Own-view (sibling count) rides in on the snapshot — the CLI computes it
+    // from the same pane list it already enumerated. Resize events have their
+    // own metadata-only fast probe; this snapshot path stays the durable
+    // backstop. The focus-driven selection reconcile already ran in the fold
+    // above.
+    if self_close_decision(
+        self_close,
+        current.own_view.as_ref().map(|view| view.sibling_count),
+    ) {
+        debug!(
+            session = %config.session_name,
+            "sidebar tab emptied; exiting so the pane closes itself",
+        );
+        return Ok(ApplyOutcome {
+            should_exit: true,
+            rejected,
+        });
+    }
+    // The daemon-view sidebar detaches the client once the daemon tab is the
+    // only tab left — gated on our own view being the daemon view, then latched
+    // so it fires once after a working view has come and gone. Unlike
+    // self-close it does not exit: the daemon pane keeps running in the
+    // background session and resurrects on reattach.
+    let only_daemon = current.own_view.as_ref().and_then(|view| {
+        view.own_view_is_daemon
+            .then_some(current.only_daemon_view_remains)
+    });
+    if session_exit.should_detach(only_daemon) {
+        info!(
+            session = %config.session_name,
+            "only the daemon view remains; detaching the client",
+        );
+        request_detach(config);
+    }
+    Ok(ApplyOutcome {
+        should_exit: false,
+        rejected,
+    })
+}
+
+/// Detach the attached client from the session, best-effort, by shelling out to
+/// `rimz pane detach` (the same cached binary the snapshot fork uses, so no mux
+/// command knowledge leaks into the sidebar). The daemon-view sidebar calls this
+/// once the daemon tab is the only tab left; the background session and its
+/// daemons keep running and resurrect on the next attach. A failure is logged,
+/// never fatal — the session stays attached and the next tick retries.
+fn request_detach(config: &ServeConfig) {
+    let bin = resolve_snapshot_bin(&config.rimz_bin);
+    match Command::new(&bin)
+        .args(["pane", "detach", "--mux"])
+        .arg(config.mux.as_str())
+        .args(["--session-name", &config.session_name])
+        .status()
+    {
+        Ok(status) if status.success() => {
+            debug!(session = %config.session_name, "client detach requested");
+        }
+        Ok(status) => warn!(
+            session = %config.session_name,
+            code = ?status.code(),
+            "client detach exited non-zero",
+        ),
+        Err(err) => warn!(
+            session = %config.session_name,
+            error = %err,
+            "client detach spawn failed",
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests;

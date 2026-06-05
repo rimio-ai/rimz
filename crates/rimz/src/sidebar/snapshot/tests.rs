@@ -30,23 +30,7 @@ fn pane_in_tab(id: &str, view_id: &str) -> PaneRef {
 }
 
 #[test]
-fn frame_age_exceeds_is_saturating() {
-    let max = PUBLISHED_FRAME_STALE_AFTER.as_millis() as u64;
-    assert!(!frame_age_exceeds(100, 100), "age 0 is fresh");
-    assert!(
-        !frame_age_exceeds(100, 100 + max),
-        "exactly at the window is fresh"
-    );
-    assert!(
-        frame_age_exceeds(100, 100 + max + 1),
-        "one ms past is stale"
-    );
-    // A clock that ran backwards saturates to age 0 rather than wrapping huge.
-    assert!(!frame_age_exceeds(100, 50));
-}
-
-#[test]
-fn published_frame_is_stale_only_past_the_window_and_for_the_session() {
+fn published_frame_age_is_session_scoped_and_saturating() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
@@ -59,39 +43,33 @@ fn published_frame_is_stale_only_past_the_window_and_for_the_session() {
         panes: Vec::new(),
     };
     atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &cache).unwrap();
-    let max = PUBLISHED_FRAME_STALE_AFTER.as_millis() as u64;
 
-    // Fresh within the window, stale just past it.
-    assert!(!published_frame_is_stale(
-        &runtime,
-        "rimz-test",
-        produced_at_ms + max
-    ));
-    assert!(published_frame_is_stale(
-        &runtime,
-        "rimz-test",
-        produced_at_ms + max + 1
-    ));
-    // A frame stamped for another session never matches: the producer
-    // election owns the handoff, so this never forces a spurious local
-    // produce on a session mismatch.
-    assert!(!published_frame_is_stale(
-        &runtime,
-        "other-session",
-        produced_at_ms + max + 1
-    ));
+    assert_eq!(
+        published_frame_age_ms(&runtime, "rimz-test", produced_at_ms + 1_500),
+        Some(1_500)
+    );
+    // A clock that ran backwards saturates to age 0 rather than wrapping huge
+    // and forcing a needless fork.
+    assert_eq!(
+        published_frame_age_ms(&runtime, "rimz-test", produced_at_ms - 1),
+        Some(0)
+    );
+    // A frame stamped for another session never matches: the fork gate reads
+    // `None` as "no usable frame", which is the election's job to fill.
+    assert_eq!(
+        published_frame_age_ms(&runtime, "other-session", produced_at_ms),
+        None
+    );
 
-    // No published frame at all → not "stale" (cold start is the election's
-    // job; the renderer's degraded-exit safety covers a never-readable frame).
+    // No published frame at all → `None` (the cold start).
     let empty = tempfile::tempdir().unwrap();
     let empty_rt =
         RuntimePaths::under(WorkspaceId::from_project_root(empty.path()), empty.path()).unwrap();
     empty_rt.ensure_dirs().unwrap();
-    assert!(!published_frame_is_stale(
-        &empty_rt,
-        "rimz-test",
-        produced_at_ms + max + 1
-    ));
+    assert_eq!(
+        published_frame_age_ms(&empty_rt, "rimz-test", produced_at_ms),
+        None
+    );
 }
 
 #[test]
@@ -847,4 +825,82 @@ fn only_codex_has_an_out_of_band_window_read() {
     assert!(provider_has_out_of_band_windows("codex"));
     assert!(!provider_has_out_of_band_windows("claude"));
     assert!(!provider_has_out_of_band_windows("pi"));
+}
+
+/// The config fold stamps every *agent* row's context-severity verdict from
+/// the `[sidebar.context]` bands — the one classification the renderer's color
+/// ramp and any future signal emitter read — and leaves process rows `None`.
+#[test]
+fn config_fold_stamps_agent_context_severity() {
+    let row = |kind: crate::SidebarRowKind, pct: Option<u8>| crate::SidebarRow {
+        row_kind: kind,
+        id: "row".to_owned(),
+        name: "claude".to_owned(),
+        status: Some(AgentStatus::Running),
+        phase: TurnPhase::Idle,
+        pane: None,
+        request_id: None,
+        surface: None,
+        task: None,
+        prompt: None,
+        model: None,
+        effort: None,
+        context_pct: pct,
+        context_window: None,
+        total_tokens: None,
+        todo_done: None,
+        todo_total: None,
+        context: None,
+        context_severity: None,
+        worktree_path: None,
+        worktree_branch: None,
+        last_activity: jiff::Timestamp::now(),
+        resolver: None,
+        options: Vec::new(),
+        sub_agents: Vec::new(),
+        process_active: false,
+        command_detail: None,
+        compacting: false,
+        turn_error_label: None,
+        rss_kb: None,
+        cpu_pct: None,
+        io_bps: None,
+    };
+    let mut groups = vec![crate::SidebarWorktreeGroup {
+        key: "/repo/main".to_owned(),
+        label: "main".to_owned(),
+        kind: crate::SidebarWorktreeKind::Worktree,
+        status_counts: Vec::new(),
+        rows: vec![
+            row(crate::SidebarRowKind::Agent, Some(85)),
+            row(crate::SidebarRowKind::Agent, Some(5)),
+            row(crate::SidebarRowKind::Process, None),
+        ],
+        hidden_count: 0,
+        diff_added: None,
+        diff_removed: None,
+        commits_ahead: None,
+        commits_behind: None,
+        trunk: None,
+    }];
+
+    stamp_context_severity(
+        &mut groups,
+        &crate::config::ContextSeverityConfig::default(),
+    );
+
+    let rows = &groups[0].rows;
+    assert_eq!(
+        rows[0].context_severity,
+        Some(crate::feed::ContextSeverity::Amber),
+        "85% crosses the default amber band"
+    );
+    assert_eq!(
+        rows[1].context_severity,
+        Some(crate::feed::ContextSeverity::Calm)
+    );
+    assert_eq!(
+        rows[2].context_severity, None,
+        "a process row carries no context verdict"
+    );
 }

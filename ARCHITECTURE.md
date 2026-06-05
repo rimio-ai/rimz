@@ -147,8 +147,12 @@ Crate-local rules:
 
 Native terminal sidebar renderer — the default on both backends.
 
-- `app.rs` — snapshot model, tick loop, wakeup handling, `FetchStatus`/`RenderState` recovery logic for snapshot or heartbeat failure.
-- `render/` — projects the snapshot view-model into worktree-grouped, attention-ranked rows (agents, attention items, and bare process rows for non-agent panes).
+- `app.rs` — the fixed-timestep serve loop and its wiring; each concern the loop folds is its own one-responsibility submodule.
+- `app/fetch.rs` — the two-speed off-thread fetch cycle (in-process fast lane + forked produce), single-flight request coalescing, the self-close probe worker.
+- `app/state.rs` — the pure `compute_next_state` reducer and the fold integrator (`apply_fetch_outcome`).
+- `app/gate.rs` — the last-known-good regression hold; `app/health.rs` — failure debounce and the give-up rule; `app/lifecycle.rs` — self-close and daemon-detach latches; `app/reload.rs` — binary resolution and in-place re-exec; `app/selection.rs` — the identity-keyed highlight, browse layer, key/mouse handlers, and the hit-test reader.
+- `app/input.rs` — the wakeup wire codec; `app/tmux_watch.rs` — the elder's tmux control-mode presence stream.
+- `render/` — projects the snapshot view-model into the frame: one module per section under `render/sections/` (`cockpit`, `fleet`, `worktree`, `agent_card`, `process`, `provider`), the glyph vocabulary in `render/labels.rs`, and the config-driven semantic palette in `render/theme.rs` (`[sidebar.theme]`, resolved producer-side onto the snapshot).
 
 Crate-local rules:
 

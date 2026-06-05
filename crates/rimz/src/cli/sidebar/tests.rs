@@ -599,3 +599,99 @@ fn read_only_consumer_serves_a_stale_same_session_base() {
         "the consumer's read serves the stale entry as last-good"
     );
 }
+
+/// A cache entry binding `pane_pid` under `command` with `start_ticks`, as the
+/// prior tick records it.
+fn binding_entry(pane_pid: u32, command: &str, start_ticks: u64) -> MetricsSampleEntry {
+    MetricsSampleEntry {
+        stats_pid: pane_pid,
+        cpu_ticks: 0,
+        io_bytes: 0,
+        sampled_at_ms: 0,
+        pane_pid: Some(pane_pid),
+        pane_command: Some(command.to_owned()),
+        root_start_ticks: Some(start_ticks),
+    }
+}
+
+#[test]
+fn cached_root_pid_restores_only_a_live_unchanged_binding() {
+    let entry = binding_entry(42, "zsh", 777);
+    let alive = |pid: u32| (pid == 42).then_some(777);
+    // Hit: same foreground command, pid alive with the recorded starttime.
+    assert_eq!(cached_root_pid(&entry, "zsh", &alive), Some(42));
+    // The foreground changed: possible re-tenancy, re-derive through the walk.
+    assert_eq!(cached_root_pid(&entry, "cargo build", &alive), None);
+    // Pid gone.
+    assert_eq!(cached_root_pid(&entry, "zsh", &|_| None), None);
+    // Pid recycled: alive, but a different starttime — never a stranger's pid.
+    assert_eq!(cached_root_pid(&entry, "zsh", &|_| Some(778)), None);
+    // An old cache shape with no binding recorded re-derives.
+    let unbound = MetricsSampleEntry {
+        pane_pid: None,
+        root_start_ticks: None,
+        ..binding_entry(42, "zsh", 777)
+    };
+    assert_eq!(cached_root_pid(&unbound, "zsh", &alive), None);
+}
+
+#[test]
+fn stable_panes_restore_their_bindings_and_skip_the_walk() {
+    // The steady-state contract: every pidless pane hits its guarded binding,
+    // so the tick walks zero processes.
+    let mut panes = vec![
+        pane("terminal_1", Some("zsh"), Some("/repo")),
+        pane("terminal_2", Some("node claude"), Some("/repo")),
+    ];
+    let mut prior = MetricsSampleCache::default();
+    prior
+        .entries
+        .insert(panes[0].pane_id.to_string(), binding_entry(42, "zsh", 700));
+    prior.entries.insert(
+        panes[1].pane_id.to_string(),
+        binding_entry(43, "node claude", 701),
+    );
+    let starts = |pid: u32| match pid {
+        42 => Some(700),
+        43 => Some(701),
+        _ => None,
+    };
+
+    let needs_walk = restore_cached_bindings(&mut panes, &prior, &starts);
+
+    assert!(!needs_walk, "an all-hit room never walks the process table");
+    assert_eq!(panes[0].pane_pid, Some(42));
+    assert_eq!(panes[1].pane_pid, Some(43));
+}
+
+#[test]
+fn binding_misses_drive_the_walk_and_unbindable_panes_do_not() {
+    // A pidless pane with no usable binding needs the walk…
+    let mut missing = vec![pane("terminal_2", Some("zsh"), None)];
+    assert!(restore_cached_bindings(
+        &mut missing,
+        &MetricsSampleCache::default(),
+        &|_| None,
+    ));
+    assert_eq!(missing[0].pane_pid, None, "a miss restores nothing");
+
+    // …while panes the walk could never bind — no command, sidebar chrome —
+    // never trigger it, and a natively-pidded (tmux) pane is left alone.
+    let mut pidded = pane("terminal_9", Some("zsh"), None);
+    pidded.pane_pid = Some(9);
+    let mut inert = vec![
+        pane("terminal_3", None, None),
+        pane(
+            "terminal_4",
+            Some(rimz::mux::zellij::SIDEBAR_PANE_NAME),
+            None,
+        ),
+        pidded,
+    ];
+    assert!(!restore_cached_bindings(
+        &mut inert,
+        &MetricsSampleCache::default(),
+        &|_| None,
+    ));
+    assert_eq!(inert[2].pane_pid, Some(9));
+}

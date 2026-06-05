@@ -952,7 +952,10 @@ fn parse_numstat_cell(cell: Option<&str>) -> u32 {
 }
 
 /// Per-pane CPU and IO tick counters sampled by the producer on the previous
-/// tick. Two consecutive readings plus the elapsed wall time give rates.
+/// tick, plus the pane's root-pid binding. Two consecutive readings plus the
+/// elapsed wall time give rates; the binding lets the next tick restore a
+/// Zellij pane's root pid for one guarded stat read instead of the full
+/// `/proc` table walk that re-deriving it costs.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct MetricsSampleEntry {
     /// The PID the metrics were read from (shell or its single foreground child).
@@ -963,6 +966,22 @@ struct MetricsSampleEntry {
     io_bytes: u64,
     /// Unix milliseconds when this sample was taken.
     sampled_at_ms: u64,
+    /// The pane's root pid (tmux semantics: the direct child of the mux
+    /// server), recorded so the next tick restores the binding instead of
+    /// re-matching the pane against the whole process table.
+    #[serde(default)]
+    pane_pid: Option<u32>,
+    /// The pane's foreground command when the binding was recorded. A changed
+    /// foreground invalidates it: re-tenancy is exactly when the original
+    /// cmdline match could have gone stale, and a transition is when
+    /// `list-panes` already paid for fresh topology anyway.
+    #[serde(default)]
+    pane_command: Option<String>,
+    /// `starttime` ticks (stat field 22) of the root pid at record time — the
+    /// exact pid-reuse guard: a recycled pid carries a different start time,
+    /// so a stale binding can never latch onto a stranger's process.
+    #[serde(default)]
+    root_start_ticks: Option<u64>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -981,34 +1000,47 @@ fn read_metrics_sample_cache(path: &Path) -> MetricsSampleCache {
 /// prior sample cache to compute two-sample rates (CPU%, IO bytes/s); writes a
 /// fresh sample for the next tick. Linux-only; on other platforms every pane's
 /// metric fields stay `None`.
+///
+/// The steady-state tick is O(panes) small `/proc` reads: each Zellij pane's
+/// root pid restores from the prior tick's guarded binding
+/// ([`restore_cached_bindings`]) and each shell's foreground child comes from
+/// its own `/proc/<pid>/task/<pid>/children` file. The full process-table walk
+/// runs only while some pane's binding is unknown — pane churn or a foreground
+/// change, exactly the moments a fresh `list-panes` was already paid for.
 fn enrich_pane_metrics(
     panes: &mut [rimz::feed::PaneRef],
     session_name: &str,
     runtime: &rimz::RuntimePaths,
 ) {
-    // Build a ppid → [child pids] map from the current process list so we can
-    // find the foreground command the shell is running (the interesting process).
-    let all_procs = rimz::proc::list_processes();
-    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
-    for p in &all_procs {
-        children.entry(p.ppid).or_default().push(p.pid);
-    }
-
-    // Zellij's `list-panes` reports no per-pane pid, so on that backend every
-    // pane arrives pidless and the loop below would skip the whole room.
-    // Backfill the root pid from the session server's process forest first,
-    // so the metrics (and the process row's shell anchor) work on both backends.
-    backfill_zellij_pane_pids(
-        panes,
-        &all_procs,
-        &children,
-        session_name,
-        rimz::proc::own_uid(),
-        &|pid| rimz::proc::cwd(pid),
-    );
-
     let cache_path = runtime.root.join("metrics-sample.json");
     let prior = read_metrics_sample_cache(&cache_path);
+
+    // Zellij's `list-panes` reports no per-pane pid (tmux fills `#{pane_pid}`
+    // natively), so first restore each pidless pane's root pid from the prior
+    // tick's binding — command-stable and starttime-guarded, one stat read per
+    // pane instead of the table walk below.
+    let needs_walk = restore_cached_bindings(panes, &prior, &|pid| {
+        rimz::proc::stat_metrics(pid).map(|stat| stat.start_ticks)
+    });
+
+    // The walk's ppid→children map also serves the shell→single-child descent;
+    // a walk-free tick reads each shell's direct children file instead.
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    if needs_walk {
+        let all_procs = rimz::proc::list_processes();
+        for p in &all_procs {
+            children.entry(p.ppid).or_default().push(p.pid);
+        }
+        backfill_zellij_pane_pids(
+            panes,
+            &all_procs,
+            &children,
+            session_name,
+            rimz::proc::own_uid(),
+            &|pid| rimz::proc::cwd(pid),
+        );
+    }
+
     let now_ms = unix_now_ms();
     let clk_tck = rimz::proc::clk_tck() as f64;
     let mut new_entries: HashMap<String, MetricsSampleEntry> = HashMap::new();
@@ -1020,14 +1052,21 @@ fn enrich_pane_metrics(
         // If the shell has exactly one child, its stats are more informative
         // than the shell's own (which idles while the child runs). Fall back to
         // the shell when there are zero or multiple children.
-        let stats_pid = match children.get(&shell_pid).map(Vec::as_slice) {
-            Some(&[child]) => child,
+        let kids = match children.get(&shell_pid) {
+            Some(kids) => kids.clone(),
+            None if !needs_walk => rimz::proc::children(shell_pid),
+            None => Vec::new(),
+        };
+        let stats_pid = match kids.as_slice() {
+            &[child] => child,
             _ => shell_pid,
         };
 
-        pane.rss_kb = rimz::proc::rss_kb(stats_pid);
-
-        let cpu_now = rimz::proc::cpu_ticks(stats_pid);
+        // One `stat` read serves both CPU ticks and RSS (the separate `status`
+        // read for VmRSS was a third file open per pane for one display figure).
+        let stat_now = rimz::proc::stat_metrics(stats_pid);
+        pane.rss_kb = stat_now.map(|stat| stat.rss_kb);
+        let cpu_now = stat_now.map(|stat| stat.cpu_ticks);
         let io_now = rimz::proc::io_bytes(stats_pid);
 
         let pane_key = pane.pane_id.to_string();
@@ -1051,6 +1090,14 @@ fn enrich_pane_metrics(
             }
         }
 
+        // The root binding recorded for the next tick's restore: the shell's
+        // own stat read covers it when it is also the stats pid; an active
+        // child costs one extra small read.
+        let root_start_ticks = if stats_pid == shell_pid {
+            stat_now.map(|stat| stat.start_ticks)
+        } else {
+            rimz::proc::stat_metrics(shell_pid).map(|stat| stat.start_ticks)
+        };
         new_entries.insert(
             pane_key,
             MetricsSampleEntry {
@@ -1058,6 +1105,9 @@ fn enrich_pane_metrics(
                 cpu_ticks: cpu_now.unwrap_or(0),
                 io_bytes: io_now.unwrap_or(0),
                 sampled_at_ms: now_ms,
+                pane_pid: Some(shell_pid),
+                pane_command: pane.command.clone(),
+                root_start_ticks,
             },
         );
     }
@@ -1068,6 +1118,60 @@ fn enrich_pane_metrics(
     if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &new_cache) {
         tracing::warn!(error = %err, "metrics sample cache write failed");
     }
+}
+
+/// Restore the cached pane→root-pid bindings for pidless (Zellij) panes, and
+/// report whether any pane still needs the full `/proc` table walk. A pane
+/// hits when its cached entry carries a binding, the foreground command is
+/// unchanged, and the root pid is alive with the same `starttime` ticks (the
+/// pid-reuse guard) — `read_start_ticks` is injected so the guard unit-tests
+/// over fixtures. Steady state — stable panes, stable foregrounds — restores
+/// every binding and walks nothing.
+fn restore_cached_bindings(
+    panes: &mut [rimz::feed::PaneRef],
+    prior: &MetricsSampleCache,
+    read_start_ticks: &dyn Fn(u32) -> Option<u64>,
+) -> bool {
+    let mut needs_walk = false;
+    for pane in panes.iter_mut() {
+        if pane.pane_pid.is_some() {
+            continue;
+        }
+        // The walk could not bind these either — no command to match, or the
+        // sidebar's own chrome — so a miss on them never triggers it.
+        let Some(command) = pane.command.as_deref() else {
+            continue;
+        };
+        if command == rimz::mux::zellij::SIDEBAR_PANE_NAME {
+            continue;
+        }
+        match prior
+            .entries
+            .get(&pane.pane_id.to_string())
+            .and_then(|entry| cached_root_pid(entry, command, read_start_ticks))
+        {
+            Some(pid) => pane.pane_pid = Some(pid),
+            None => needs_walk = true,
+        }
+    }
+    needs_walk
+}
+
+/// The still-valid root pid a cache entry binds, or `None` when the binding
+/// must be re-derived through the table walk: no binding recorded (an old
+/// cache shape), the foreground command changed (possible re-tenancy), the
+/// pid is gone, or the pid was recycled (`starttime` mismatch).
+fn cached_root_pid(
+    entry: &MetricsSampleEntry,
+    command: &str,
+    read_start_ticks: &dyn Fn(u32) -> Option<u64>,
+) -> Option<u32> {
+    let pid = entry.pane_pid?;
+    let recorded = entry.root_start_ticks?;
+    if entry.pane_command.as_deref() != Some(command) {
+        return None;
+    }
+    (read_start_ticks(pid) == Some(recorded)).then_some(pid)
 }
 
 /// Backfill `pane_pid` for panes whose backend reported none (Zellij emits no

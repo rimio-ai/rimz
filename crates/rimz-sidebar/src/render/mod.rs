@@ -164,7 +164,7 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
                 // 300ms by design so it samples cleanly on this grid — and the
                 // idle "waiting for a prompt" loading-dots cue cycles in
                 // place. None of it needs a 10fps full-frame redraw.
-                if matches!(row.status, Some(AgentStatus::Waiting | AgentStatus::Failed))
+                if row.status.is_some_and(AgentStatus::is_actionable)
                     || sections::shows_loading_dots(row)
                 {
                     slow = true;
@@ -223,9 +223,11 @@ pub(crate) fn compose_lines(
     width: u16,
     height: u16,
 ) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
-    // `NO_COLOR` can't change mid-process, so read the palette once per frame
-    // and hand the same `Theme` to the body and the bottom chrome.
-    let theme = Theme::from_env();
+    // One `Theme` per frame, handed to the body and the bottom chrome alike:
+    // the cached `NO_COLOR` reading plus the palette the producer resolved from
+    // `[sidebar.theme]` onto the snapshot — so a re-themed config lands with
+    // the next snapshot, identically on every renderer of the workspace.
+    let theme = Theme::for_sidebar(&snapshot.sidebar.theme);
     let cells = usize::from(width.max(1));
     // The whole sidebar sits inside a one-cell frame: chrome is built to the inner
     // width and opened with a blank gutter, leaving the trailing column as the
@@ -610,10 +612,8 @@ fn footer_lines(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> Vec<
         .iter()
         .flat_map(|group| &group.rows)
         .any(|row| {
-            matches!(
-                row.status,
-                Some(rimz::feed::AgentStatus::Waiting | rimz::feed::AgentStatus::Failed)
-            )
+            row.status
+                .is_some_and(rimz::feed::AgentStatus::is_actionable)
         });
     // The faintest chrome — quieter than the old dim footer. `? for help` is the
     // resting hint; the `␣ next ?!` triage key joins it only when something

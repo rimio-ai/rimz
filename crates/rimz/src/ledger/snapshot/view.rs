@@ -301,6 +301,16 @@ pub struct SidebarRow {
     /// `model`/`effort`/`context_pct`/`total_tokens` are the fallback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<AgentContext>,
+    /// The context meter's severity verdict —
+    /// [`ContextSeverity::classify`](crate::feed::ContextSeverity::classify)
+    /// over this row's gauge inputs and the `[sidebar.context]` bands — stamped
+    /// once where the machine config is folded onto the snapshot, so the
+    /// renderer's color ramp and any future signal emitter read one authority.
+    /// Display + signal; never a status bucket. `None` for process rows and on
+    /// a snapshot that predates the config fold (the renderer then classifies
+    /// locally from the same bands).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_severity: Option<crate::feed::ContextSeverity>,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
     pub last_activity: Timestamp,
@@ -357,6 +367,39 @@ pub struct SidebarRow {
     /// file was unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub io_bps: Option<u64>,
+}
+
+impl SidebarRow {
+    /// The context gauge's value (0..=100): the statusline's authoritative
+    /// `used_percentage` when present, else the transcript-derived scalar.
+    /// One of the two inputs `context_severity` is classified from; the
+    /// renderer also reads it for the bar fill.
+    pub fn context_gauge_percent(&self) -> Option<u8> {
+        self.context
+            .as_ref()
+            .and_then(|context| context.tokens.as_ref())
+            .and_then(|tokens| tokens.used_percentage)
+            .or(self.context_pct)
+    }
+
+    /// Tokens currently occupying the context window — the current message's
+    /// `input + cache_creation + cache_read`, exactly the numerator the gauge
+    /// percent scales. The severity classification's absolute-token axis.
+    /// `None` when no per-message breakdown was reported.
+    pub fn context_used_tokens(&self) -> Option<u64> {
+        let usage = self
+            .context
+            .as_ref()?
+            .tokens
+            .as_ref()?
+            .current_usage
+            .as_ref()?;
+        Some(
+            usage.input_tokens.unwrap_or(0)
+                + usage.cache_creation_input_tokens.unwrap_or(0)
+                + usage.cache_read_input_tokens.unwrap_or(0),
+        )
+    }
 }
 
 /// `skip_serializing_if` helper: the resting phase is the default and stays off
@@ -1830,6 +1873,7 @@ pub(super) fn row_from_agent(agent: &AgentState) -> SidebarRow {
         todo_done: agent.todo_done,
         todo_total: agent.todo_total,
         context: agent.context.clone(),
+        context_severity: None,
         worktree_path: agent.worktree_path.clone(),
         worktree_branch: agent.worktree_branch.clone(),
         last_activity: agent.last_activity,
@@ -1908,6 +1952,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         todo_done: matched.and_then(|agent| agent.todo_done),
         todo_total: matched.and_then(|agent| agent.todo_total),
         context: matched.and_then(|agent| agent.context.clone()),
+        context_severity: None,
         worktree_path: item
             .worktree_path
             .clone()
@@ -2106,8 +2151,7 @@ fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
 fn capped_rows(rows: Vec<SidebarRow>) -> Vec<SidebarRow> {
     let mut visible = Vec::new();
     for row in rows {
-        if row.status == Some(AgentStatus::Waiting)
-            || row.status == Some(AgentStatus::Failed)
+        if row.status.is_some_and(AgentStatus::is_actionable)
             || row.pane.as_ref().is_some_and(|pane| pane.is_focused)
             || visible.len() < WORKTREE_ROW_CAP
         {
@@ -2143,10 +2187,7 @@ fn within_bucket(left: &SidebarRow, right: &SidebarRow) -> Ordering {
 }
 
 fn is_attention(status: Option<AgentStatus>) -> bool {
-    matches!(
-        status,
-        Some(AgentStatus::Waiting | AgentStatus::Failed | AgentStatus::RateLimited)
-    )
+    status.is_some_and(AgentStatus::is_attention)
 }
 
 fn pane_start(row: &SidebarRow) -> Option<Timestamp> {

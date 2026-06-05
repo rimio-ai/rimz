@@ -8,8 +8,8 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use rimz::agents::TurnPhase;
-use rimz::config::ContextSeverityConfig;
 use rimz::feed::AgentStatus;
+use rimz::feed::ContextSeverity;
 
 use super::theme::{ORANGE, Theme};
 
@@ -263,7 +263,7 @@ pub(super) fn attention_glyph_style(
     age_secs: i64,
     animation_phase: u64,
 ) -> Style {
-    if matches!(status, AgentStatus::Waiting | AgentStatus::Failed) {
+    if status.is_actionable() {
         let color = age_heat(age_secs).unwrap_or(Color::Yellow);
         theme.style(color, attention_breath(animation_phase, age_secs))
     } else {
@@ -377,7 +377,7 @@ pub(super) fn context_breakdown_spans(
 
 /// The `▤ {filled}` head of the card's context line: the filled-square marker +
 /// the filled-window figure. The marker wears the caller's `severity` — the
-/// same [`context_severity_color`] the bar and the `▣` glyph paint — so the
+/// same [`severity_color`] tone the bar and the `▣` glyph paint — so the
 /// absolute figure and the meter above it read as one measurement at one
 /// urgency. A card whose context carries no per-call split (a Codex
 /// rollout-only total, or Claude before its first API call) uses it alone, with
@@ -449,42 +449,15 @@ fn two_tone_bar(
 /// red ramp shared by the bar, the `▣` glyph, and the `▤` context-line head,
 /// so every context read on the card speaks one urgency. Calm reads **blue**
 /// ("cold — plenty of headroom"), keeping the meter clear of the green running
-/// vocabulary and of the composition segments. For the bar it also decides
-/// composition-vs-solid: the segments (where the window went) paint only while
-/// calm; once the meter warms the bar goes one solid severity run.
-pub(super) fn context_severity_color(
-    percent: u8,
-    used_tokens: Option<u64>,
-    bands: &ContextSeverityConfig,
-) -> Color {
-    match severity_tier(percent, used_tokens, bands) {
-        0 => Color::Blue,
-        1 => Color::Yellow,
-        2 => ORANGE,
-        _ => Color::Red,
-    }
-}
-
-/// The shared usage tier (0 calm / 1 yellow / 2 amber / 3 red) behind every
-/// context tone: the worse of the fill-percentage ramp and the absolute-token
-/// overlay, each tier entered at its configured inclusive lower bound
-/// (`[sidebar.context]`, [`ContextSeverityConfig`]), so a large-window model
-/// calm by percentage still climbs by sheer volume. Checked worst-first, so a
-/// misordered user config degrades to the highest matching tier.
-fn severity_tier(percent: u8, used_tokens: Option<u64>, bands: &ContextSeverityConfig) -> u8 {
-    let percent = percent.min(100);
-    let tokens = used_tokens.unwrap_or(0);
-    let reaches = |band: &rimz::config::ContextBand| -> bool {
-        percent >= band.percent || tokens >= band.tokens
-    };
-    if reaches(&bands.red) {
-        3
-    } else if reaches(&bands.amber) {
-        2
-    } else if reaches(&bands.yellow) {
-        1
-    } else {
-        0
+/// vocabulary and of the composition segments. The *tier* is the domain's
+/// verdict ([`ContextSeverity`], classified on the producer and stamped on the
+/// row); the renderer only maps it to a tone here.
+pub(super) fn severity_color(severity: ContextSeverity) -> Color {
+    match severity {
+        ContextSeverity::Calm => Color::Blue,
+        ContextSeverity::Yellow => Color::Yellow,
+        ContextSeverity::Amber => ORANGE,
+        ContextSeverity::Red => Color::Red,
     }
 }
 
@@ -505,7 +478,7 @@ pub(super) fn window_style(theme: &Theme, window: u64) -> Style {
 }
 
 /// Context bar: a thin rule whose filled run grows left-to-right as the window
-/// fills, painted in `color` (the caller's [`context_severity_color`]). The label
+/// fills, painted in `color` (the caller's [`severity_color`]). The label
 /// and value columns live in the renderer's shared bar row; here we paint just
 /// the meter.
 pub(super) fn gauge_spans(

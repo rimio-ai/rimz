@@ -170,16 +170,72 @@ pub fn cwd(_pid: u32) -> Option<std::path::PathBuf> {
     None
 }
 
-/// Fields 14 (utime) + 15 (stime) from `/proc/<pid>/stat`. The same
-/// `rsplit_once(')')` anchor as `parse_starttime_ticks`; utime is index 11 and
-/// stime is index 12 after the closing paren.
+/// One process's resource metrics from a **single** `/proc/<pid>/stat` read:
+/// CPU ticks, resident set size, and the raw start time. One read serves the
+/// sidebar's CPU% delta, its `M` memory figure, and the pid-reuse guard —
+/// where a separate `status` read used to pay a second file open per pane for
+/// `VmRSS` alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StatMetrics {
+    /// utime + stime (fields 14 + 15), in clock ticks. Two readings diffed
+    /// over a known interval give CPU%.
+    pub cpu_ticks: u64,
+    /// Resident set size in KiB: field 24 (`rss`, in pages) × the page size.
+    /// `rss` is the kernel's resident-page counter and can run a few pages
+    /// apart from `status`'s `VmRSS`; invisible at the display's MiB
+    /// granularity, and the field is display-only by contract.
+    pub rss_kb: u64,
+    /// Raw `starttime` (field 22) in clock ticks since boot — an exact integer
+    /// identity for pid-reuse detection, with no `btime` anchoring round-trip.
+    pub start_ticks: u64,
+}
+
+/// Read [`StatMetrics`] for `pid`. `None` on a non-Linux target or an
+/// unreadable/garbled stat line, so callers abstain rather than guess.
 #[cfg(target_os = "linux")]
-fn parse_cpu_ticks(stat: &str) -> Option<u64> {
+pub fn stat_metrics(pid: u32) -> Option<StatMetrics> {
+    parse_stat_metrics(
+        &std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?,
+        page_size_kb(),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn stat_metrics(_pid: u32) -> Option<StatMetrics> {
+    None
+}
+
+/// Parse a `/proc/<pid>/stat` line into [`StatMetrics`]. The same
+/// `rsplit_once(')')` anchor as [`parse_starttime_ticks`] — `comm` may carry
+/// spaces and parens — then, indexed past the closing paren: utime 11,
+/// stime 12, starttime 19, rss 21.
+#[cfg(target_os = "linux")]
+fn parse_stat_metrics(stat: &str, page_kb: u64) -> Option<StatMetrics> {
     let tail = stat.rsplit_once(')')?.1;
     let mut fields = tail.split_whitespace();
     let utime: u64 = fields.nth(11)?.parse().ok()?;
     let stime: u64 = fields.next()?.parse().ok()?;
-    Some(utime.saturating_add(stime))
+    let start_ticks: u64 = fields.nth(6)?.parse().ok()?;
+    let rss_pages: u64 = fields.nth(1)?.parse().ok()?;
+    Some(StatMetrics {
+        cpu_ticks: utime.saturating_add(stime),
+        rss_kb: rss_pages.saturating_mul(page_kb),
+        start_ticks,
+    })
+}
+
+/// The system page size in KiB, for scaling stat's `rss` page count. An
+/// unavailable or nonsensical `sysconf` answer falls back to 4 KiB — the
+/// near-universal Linux default.
+#[cfg(target_os = "linux")]
+fn page_size_kb() -> u64 {
+    nix::unistd::sysconf(nix::unistd::SysconfVar::PAGE_SIZE)
+        .ok()
+        .flatten()
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .map(|bytes| bytes / 1024)
+        .filter(|&kb| kb > 0)
+        .unwrap_or(4)
 }
 
 /// `rchar` and `wchar` lines from `/proc/<pid>/io`, summed. Captures all VFS
@@ -228,40 +284,32 @@ fn parse_btime(stat: &str) -> Option<i64> {
         .ok()
 }
 
-/// Resident set size of `pid` in kibibytes from `VmRSS` in
-/// `/proc/<pid>/status`. A single-sample metric — no prior value needed. `None`
-/// on a non-Linux target, an unreadable file, or a missing field.
+/// Direct children of `pid`'s main thread, from
+/// `/proc/<pid>/task/<pid>/children` — the O(1) sibling of walking the whole
+/// process table to build a ppid map, for the sidebar's shell→single-child
+/// stats descent on a walk-free tick. Needs `CONFIG_PROC_CHILDREN` (mainstream
+/// kernels enable it); an unreadable file — exotic kernel, vanished pid —
+/// yields the empty list, so the descent falls back to the shell's own stats,
+/// exactly the fallback a zero- or multi-child shell already takes.
 #[cfg(target_os = "linux")]
-pub fn rss_kb(pid: u32) -> Option<u64> {
-    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
-    for line in status.lines() {
-        if let Some(rest) = line.strip_prefix("VmRSS:") {
-            // "VmRSS:\t  12345 kB"
-            return rest
-                .split_whitespace()
-                .next()
-                .and_then(|v| v.parse::<u64>().ok());
-        }
-    }
-    None
+pub fn children(pid: u32) -> Vec<u32> {
+    std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
+        .map(|raw| parse_children(&raw))
+        .unwrap_or_default()
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn rss_kb(_pid: u32) -> Option<u64> {
-    None
+pub fn children(_pid: u32) -> Vec<u32> {
+    Vec::new()
 }
 
-/// utime + stime CPU ticks for `pid` from fields 14 and 15 of
-/// `/proc/<pid>/stat`. Two readings diffed over a known interval give CPU%.
-/// `None` on a non-Linux target or an unreadable file.
+/// Parse the space-separated pid list of a `/proc/<pid>/task/<tid>/children`
+/// file (a trailing space and no newline, per procfs).
 #[cfg(target_os = "linux")]
-pub fn cpu_ticks(pid: u32) -> Option<u64> {
-    parse_cpu_ticks(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn cpu_ticks(_pid: u32) -> Option<u64> {
-    None
+fn parse_children(raw: &str) -> Vec<u32> {
+    raw.split_whitespace()
+        .filter_map(|pid| pid.parse().ok())
+        .collect()
 }
 
 /// Combined VFS I/O bytes (rchar + wchar) for `pid` from `/proc/<pid>/io`.
@@ -353,18 +401,54 @@ mod tests {
     }
 
     #[test]
-    fn parse_cpu_ticks_sums_utime_and_stime() {
-        // Fields 14 and 15 after `comm`; indices 11 and 12 past the closing `)`.
-        // state ppid pgrp session ttyno tpgid flags minflt cminflt majflt cmajflt utime stime …
+    fn parse_stat_metrics_reads_cpu_rss_and_start_from_one_line() {
+        // Indexed past the closing `)`:
+        // state ppid pgrp session ttyno tpgid flags minflt cminflt majflt cmajflt utime stime
         //   0    1    2    3       4     5     6     7      8       9      10      11    12
-        let stat = "1234 (codex) S 1 1234 1234 0 -1 0 0 0 0 0 42 17 0 0 20 0 1 0 646245020 …";
-        assert_eq!(parse_cpu_ticks(stat), Some(59)); // 42 + 17
+        // cutime cstime priority nice threads itreal starttime vsize rss
+        //   13     14      15     16    17      18      19       20   21
+        let stat =
+            "1234 (codex) S 1 1234 1234 0 -1 0 0 0 0 0 42 17 0 0 20 0 1 0 646245020 9000000 2048 …";
+        assert_eq!(
+            parse_stat_metrics(stat, 4),
+            Some(StatMetrics {
+                cpu_ticks: 59, // 42 + 17
+                rss_kb: 8192,  // 2048 pages × 4 KiB
+                start_ticks: 646_245_020,
+            })
+        );
     }
 
     #[test]
-    fn parse_cpu_ticks_handles_comm_with_spaces() {
-        let stat = "1 (rust (1)) S 1 1 1 0 -1 0 0 0 0 0 10 5 0 0 20 0 1 0 100 0";
-        assert_eq!(parse_cpu_ticks(stat), Some(15)); // 10 + 5
+    fn parse_stat_metrics_handles_comm_with_spaces_and_parens() {
+        // `comm` can carry spaces and nested parens; anchoring on the last `)`
+        // keeps every field index correct.
+        let stat = "1 (rust (1) :)) S 1 1 1 0 -1 0 0 0 0 0 10 5 0 0 20 0 1 0 100 500 3 0";
+        assert_eq!(
+            parse_stat_metrics(stat, 4),
+            Some(StatMetrics {
+                cpu_ticks: 15, // 10 + 5
+                rss_kb: 12,    // 3 pages × 4 KiB
+                start_ticks: 100,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_stat_metrics_rejects_truncated_lines() {
+        // Enough fields for CPU but not for rss: the whole read abstains
+        // rather than reporting a partial metric set.
+        let stat = "1 (sh) S 1 1 1 0 -1 0 0 0 0 0 10 5 0 0 20 0 1 0 100";
+        assert_eq!(parse_stat_metrics(stat, 4), None);
+        assert_eq!(parse_stat_metrics("no parens here", 4), None);
+    }
+
+    #[test]
+    fn parse_children_reads_the_space_separated_pid_list() {
+        assert_eq!(parse_children("123 456 789 "), vec![123, 456, 789]);
+        assert_eq!(parse_children(""), Vec::<u32>::new());
+        // Garbage tokens are skipped rather than poisoning the list.
+        assert_eq!(parse_children("12 x 34"), vec![12, 34]);
     }
 
     #[test]

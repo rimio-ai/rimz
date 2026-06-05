@@ -554,6 +554,93 @@ pub enum AgentStatus {
     RateLimited,
 }
 
+impl AgentStatus {
+    /// Attention-class: a human (or a resolver) may want this row. `Waiting`
+    /// and `Failed` are actionable; `RateLimited` is attention-class but
+    /// parked. The producer's ranking buckets use the full set; the renderer's
+    /// triage key and heat-breath use the actionable subset
+    /// ([`Self::is_actionable`]). The one authority behind both predicates —
+    /// every dispatch site delegates here rather than re-matching the enum.
+    pub fn is_attention(self) -> bool {
+        matches!(self, Self::Waiting | Self::Failed | Self::RateLimited)
+    }
+
+    /// The actionable subset of [`Self::is_attention`] — a `?`/`!` the `␣`
+    /// triage key jumps to, the heat-breath escalates, and the per-worktree
+    /// cap never hides. Excludes the parked `RateLimited`, which wants nothing
+    /// but its window reset.
+    pub fn is_actionable(self) -> bool {
+        matches!(self, Self::Waiting | Self::Failed)
+    }
+}
+
+/// The context meter's four-tier severity ramp — calm → yellow → amber → red.
+/// Classified once ([`ContextSeverity::classify`]) from the configured
+/// `[sidebar.context]` bands and stamped on each agent's sidebar row where the
+/// config is folded onto the snapshot, so the renderer's color ramp and a
+/// future hook flow (e.g. a resolver triggering `/compact` at amber) read one
+/// verdict instead of re-deriving it. Ordered, so a threshold reads
+/// `severity >= Amber`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextSeverity {
+    Calm,
+    Yellow,
+    Amber,
+    Red,
+}
+
+impl ContextSeverity {
+    /// The worse of the fill-percentage ramp and the absolute-token overlay,
+    /// each tier entered at its configured inclusive lower bound
+    /// ([`ContextSeverityConfig`](crate::config::ContextSeverityConfig)), so a
+    /// large-window model calm by percentage still climbs by sheer volume.
+    /// Checked worst-first, so a misordered user config degrades to the
+    /// highest matching tier.
+    pub fn classify(
+        percent: u8,
+        used_tokens: Option<u64>,
+        bands: &crate::config::ContextSeverityConfig,
+    ) -> Self {
+        let percent = percent.min(100);
+        let tokens = used_tokens.unwrap_or(0);
+        let reaches = |band: &crate::config::ContextBand| -> bool {
+            percent >= band.percent || tokens >= band.tokens
+        };
+        if reaches(&bands.red) {
+            Self::Red
+        } else if reaches(&bands.amber) {
+            Self::Amber
+        } else if reaches(&bands.yellow) {
+            Self::Yellow
+        } else {
+            Self::Calm
+        }
+    }
+}
+
+/// A threshold-crossing an agent's observed state can trip — the typed shape a
+/// future hook flow emits and a resolver acts on, riding the same feed the
+/// resolver chain already drains (an auto-compact policy matching
+/// `ContextSeverity { to: Amber, .. }` and answering with `rimz pane send
+/// /compact`, exactly as the rate-limit-resume resolver acts on the spent `⏸`
+/// window today). Defined now so the seam is typed against the verdicts the
+/// snapshot already stamps ([`ContextSeverity`] on each row,
+/// [`AgentStatus::is_attention`] on the buckets); emission and handling are
+/// deliberately unbuilt — see the hook-readiness note in
+/// docs/internals/sidebar.md.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentSignal {
+    /// The context meter crossed into a different severity tier.
+    ContextSeverity {
+        from: ContextSeverity,
+        to: ContextSeverity,
+    },
+    /// The agent entered an attention-class status.
+    Attention { status: AgentStatus },
+}
+
 /// How long a `running` agent may record no activity before the sidebar treats
 /// it as stalled — likely wedged on a hung tool or awaiting an off-screen
 /// prompt — and escalates it to an attention `!`. Mirrors Claude Code's default
@@ -789,6 +876,137 @@ mod tests {
         assert!(!FeedStatus::Resolved.allows_resolution());
         assert!(FeedStatus::Resolved.is_terminal());
         assert!(!FeedStatus::Pending.is_terminal());
+    }
+
+    /// The context tier climbs calm → yellow → amber → red, taking the worse
+    /// of two axes — fill percentage and absolute tokens — with each tier
+    /// entered at its inclusive lower bound. Defaults: yellow at 60% / 160k,
+    /// amber at 80% / 258k, red at 95% / 420k.
+    #[test]
+    fn context_severity_takes_the_worse_of_percent_and_tokens() {
+        let bands = crate::config::ContextSeverityConfig::default();
+        let tier = |percent, tokens| ContextSeverity::classify(percent, tokens, &bands);
+        // Low fill, low tokens: calm.
+        assert_eq!(tier(20, Some(50_000)), ContextSeverity::Calm);
+        // Just under both yellow bounds stays calm; the bound itself enters.
+        assert_eq!(tier(59, Some(159_999)), ContextSeverity::Calm);
+        assert_eq!(tier(60, Some(10_000)), ContextSeverity::Yellow);
+        assert_eq!(tier(10, Some(160_000)), ContextSeverity::Yellow);
+        // The percentage ramp alone climbs through all four tiers.
+        assert_eq!(tier(80, Some(10_000)), ContextSeverity::Amber);
+        assert_eq!(tier(95, Some(10_000)), ContextSeverity::Red);
+        // Calm by percentage, but the token volume escalates it.
+        assert_eq!(tier(20, Some(258_000)), ContextSeverity::Amber);
+        assert_eq!(tier(20, Some(420_000)), ContextSeverity::Red);
+        // The worse severity wins regardless of which axis it comes from.
+        assert_eq!(tier(94, Some(419_999)), ContextSeverity::Amber);
+        // No token reading falls back to the percentage ramp alone.
+        assert_eq!(tier(80, None), ContextSeverity::Amber);
+        assert_eq!(tier(10, None), ContextSeverity::Calm);
+        // An out-of-range percent clamps to full and reads red.
+        assert_eq!(tier(200, None), ContextSeverity::Red);
+        // The tiers order, so a future hook threshold reads naturally.
+        assert!(ContextSeverity::Amber > ContextSeverity::Yellow);
+    }
+
+    /// The bands come from `[sidebar.context]`, so a custom set moves every
+    /// edge; a misordered set degrades to the highest matching tier (the red
+    /// band is checked first), never to a calmer one.
+    #[test]
+    fn context_severity_honours_custom_and_misordered_bands() {
+        use crate::config::{ContextBand, ContextSeverityConfig};
+        let tight = ContextSeverityConfig {
+            yellow: ContextBand {
+                percent: 10,
+                tokens: 1_000,
+            },
+            amber: ContextBand {
+                percent: 20,
+                tokens: 2_000,
+            },
+            red: ContextBand {
+                percent: 30,
+                tokens: 3_000,
+            },
+        };
+        assert_eq!(
+            ContextSeverity::classify(5, Some(500), &tight),
+            ContextSeverity::Calm
+        );
+        assert_eq!(
+            ContextSeverity::classify(25, Some(0), &tight),
+            ContextSeverity::Amber
+        );
+        assert_eq!(
+            ContextSeverity::classify(5, Some(3_000), &tight),
+            ContextSeverity::Red
+        );
+
+        // Red configured *below* yellow: a mid fill reaches the red band even
+        // though the calmer tiers do not — worst-first keeps the warning loud.
+        let misordered = ContextSeverityConfig {
+            yellow: ContextBand {
+                percent: 90,
+                tokens: 900_000,
+            },
+            amber: ContextBand {
+                percent: 80,
+                tokens: 800_000,
+            },
+            red: ContextBand {
+                percent: 50,
+                tokens: 500_000,
+            },
+        };
+        assert_eq!(
+            ContextSeverity::classify(60, None, &misordered),
+            ContextSeverity::Red
+        );
+    }
+
+    /// Pins the signal's wire shape now, so the first emitter and handler
+    /// build against a stable contract rather than re-negotiating it.
+    #[test]
+    fn agent_signal_serializes_to_a_tagged_wire_shape() {
+        assert_eq!(
+            serde_json::to_value(AgentSignal::ContextSeverity {
+                from: ContextSeverity::Yellow,
+                to: ContextSeverity::Amber,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "kind": "context_severity",
+                "from": "yellow",
+                "to": "amber",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(AgentSignal::Attention {
+                status: AgentStatus::Waiting,
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "attention", "status": "waiting" })
+        );
+    }
+
+    #[test]
+    fn attention_predicates_split_actionable_from_parked() {
+        // The two intentional flavors: ranking spans the parked RateLimited,
+        // the triage/heat subset does not. Calm states are in neither.
+        for status in [AgentStatus::Waiting, AgentStatus::Failed] {
+            assert!(status.is_attention());
+            assert!(status.is_actionable());
+        }
+        assert!(AgentStatus::RateLimited.is_attention());
+        assert!(!AgentStatus::RateLimited.is_actionable());
+        for status in [
+            AgentStatus::Running,
+            AgentStatus::Idle,
+            AgentStatus::Success,
+        ] {
+            assert!(!status.is_attention());
+            assert!(!status.is_actionable());
+        }
     }
 
     #[test]
