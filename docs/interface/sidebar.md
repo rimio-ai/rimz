@@ -56,7 +56,7 @@ One vocabulary runs through the whole sidebar: a shape carries the meaning, colo
 | `⠙`   | resolving  | a resolver is answering on the bridge — braille spin | pending, being handled |
 | `○`   | idle       | alive, nothing to do | no |
 | `✓`   | done       | finished cleanly | no |
-| `○`/`⢿`   | process | a pane with no agent (shell, editor); idle shows the hollow `○` in the idle quiet green, real work the `⢿` spinner in the working clay — set apart from the agent cards by the `┄ commands ┄` seam, never a cockpit tally | no |
+| `○`/`⢿`   | process | a pane with no agent (shell, editor); idle shows the hollow `○` in the idle quiet green, real work the `⢿` spinner in the working clay — the whole row one dim step below the agent cards, never a cockpit tally | no |
 
 Three short-lived heads ride over the base status on the leading cell, so they never earn a cockpit bucket of their own:
 
@@ -107,7 +107,6 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `▏`             | the selection lane — the worktree you're in |
 | `▌`             | the selected card |
 | `┄ external ┄`  | out-of-project panes (scripts, CI, stray shells) |
-| `┄ commands ┄`  | the seam between a worktree's agent cards and its process rows |
 | `─`             | a section hairline |
 | `▐` / `▕`       | the cards' scrollbar — thumb / track, riding the right margin while the overflowing viewport is moving, settling away about a second after the scroll stops (`[sidebar] scrollbar` pins or removes it, [configuration](../reference/configuration.md#scrollbar)) |
 | `┤ Tab ├`       | the provider dashboard's active tab — a brand-colored chip notched into the panel's top hairline between `┤ ├` caps, so the pick reads by shape under `NO_COLOR` |
@@ -217,10 +216,9 @@ A `?` waiting row reads the same with a `?` glyph. The row carries *who* needs y
 
 ### Process rows
 
-A pane no agent has stamped reads like a slim agent card: a hollow `○` in the idle agent's quiet green for an idle shell or editor, the `⢿` spinner in the working clay for a pane doing real work like a build, test, or install, and the program name at full strength. Inside a worktree group the process rows settle below the agent cards behind a faint `┄ commands ┄┄┄` seam, so the command tail reads apart from the agents without dimming it. An active pane anchors its primary line on the shell that owns it, so the line stays put as commands come and go, and carries the live command in full on a second line. At wide (L2) widths the row pins `C  <n>%  M <n>[k/M/G]  ⇅  <n>[k/M/G]/s` right on line 1 — CPU, RAM, and combined VFS I/O rate as one dim fixed-width grid (each figure right-aligned in its slot, a metric not yet sampled blank-filling it, so the cluster never wanders as values change), in the same right slot an agent card gives its `$cost` — so resource load reads at a glance without leaving the sidebar. The stats are process-row vocabulary; an agent card keeps that line for its identity and cost:
+A pane no agent has stamped reads like a slim agent card, one dim step quieter: a hollow `○` in the idle agent's quiet green for an idle shell or editor, the `⢿` spinner in the working clay for a pane doing real work like a build, test, or install, and the program name in the same soft weight. That weight is the boundary: inside a worktree group the process rows settle below the agent cards, and the slight dim — carried as weight, so it survives `NO_COLOR` — reads them as the group's command tail rather than more agents. An active pane anchors its primary line on the shell that owns it, so the line stays put as commands come and go, and carries the live command in full on a second line. At wide (L2) widths the row pins `C  <n>%  M <n>[k/M/G]  ⇅  <n>[k/M/G]/s` right on line 1 — CPU, RAM, and combined VFS I/O rate as one dim fixed-width grid (each figure right-aligned in its slot, a metric not yet sampled blank-filling it, so the cluster never wanders as values change), in the same right slot an agent card gives its `$cost` — so resource load reads at a glance without leaving the sidebar. The stats are process-row vocabulary; an agent card keeps that line for its identity and cost:
 
 ```
-┄ commands ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ○ zsh
 ⢿ zsh                           C  34%  M 512M  ⇅   8M/s
     cargo build --release
@@ -357,7 +355,7 @@ Pinned to the bottom edge, below all three zones. The body is truncated before t
  ␣ next ?!   ←/→ provider tab
  x dismiss   r reload   ? close
  ⢿ working   ✽ thinking   ? waiting
- ! attention   ○ idle   ✓ done   ┄ commands ┄
+ ! attention   ○ idle   ✓ done
 ```
 
 **Health alert.** When the refresh loop can't read the room, a sticky line takes over the bottom and the footer steps aside — an empty body under a failed fetch is a missing snapshot, not an empty room:
@@ -388,7 +386,7 @@ The renderer's golden tests in [`crates/rimz-sidebar/src/render/`](../../crates/
 | card context line + age pin | `agent_card_context_age` |
 | codex card composition (no `◍`) | `codex_card_context_composition` |
 | process row + resource stats | `process_row_resource_stats` |
-| agents + commands seam | `commands_divider` |
+| agents + dimmed process tail | `agents_process_tail` |
 | subagent list + elapsed column | `subagent_two_line_entry` |
 | worktree grouping + external | `worktree_attention_map` |
 | landed worktree header (`≡`) | `worktree_equal_to_trunk` |

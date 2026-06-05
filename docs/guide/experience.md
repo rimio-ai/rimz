@@ -298,7 +298,7 @@ The footer advertises `?`. Pressing it overlays the legend and keys, so the glyp
  ␣ next ?!   ←/→ provider tab
  x dismiss   r reload   ? close
  ⢿ working   ✽ thinking   ? waiting
- ! attention   ○ idle   ✓ done   ┄ commands ┄
+ ! attention   ○ idle   ✓ done
 ```
 
 > **Design law — color reinforces, shape carries.** Every status is legible under `NO_COLOR` and to color-blind readers because the *glyph shape* carries the meaning; color is a second, redundant channel. The legend shows both.

@@ -5,10 +5,7 @@
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 use rimz::config::ContextSeverityConfig;
-use rimz::{
-    SidebarProviderPanel, SidebarRowKind, SidebarStatusCount, SidebarWorktreeGroup,
-    SidebarWorktreeKind,
-};
+use rimz::{SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};
 
 use crate::render::fmt::clip;
 use crate::render::labels::{branch_delta_spans, diff_spans, status_glyph, trunk_equal_spans};
@@ -69,20 +66,6 @@ pub(in crate::render) fn worktree_group_lines(
     for (index, row) in group.rows.iter().enumerate() {
         if index > 0 {
             lines.push(with_gutter(theme, Line::from(""), lane));
-            map.push(None);
-        }
-        // The first process row after the agent cards opens the group's command
-        // tail under a faint `┄ commands ┄┄┄` seam, so the full-strength process
-        // rows still read apart from the agents above. Rows sort agents-first,
-        // so the boundary occurs at most once; the `external` catch-all already
-        // leads with its own dotted divider, so it never doubles up. Structural
-        // chrome like the gap line: lane gutter, `None` in the hit-test map.
-        if group.kind != SidebarWorktreeKind::Workspace
-            && index > 0
-            && row.row_kind == SidebarRowKind::Process
-            && group.rows[index - 1].row_kind == SidebarRowKind::Agent
-        {
-            lines.push(with_gutter(theme, commands_divider(theme, width), lane));
             map.push(None);
         }
         let selected = *row_index == selected_index;
@@ -200,17 +183,6 @@ fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'sta
         spans.extend(diff_spans(theme, added, removed));
     }
     spans
-}
-
-/// The seam between a worktree group's agent cards and its bare process rows:
-/// a faint `┄ commands ┄┄┄` divider in the `external` divider's dotted voice.
-/// Process rows read at agent-card strength, so the seam — not a dim tone — is
-/// what marks them as the group's command tail rather than more agents.
-fn commands_divider(theme: &Theme, width: usize) -> Line<'static> {
-    let cw = content_width(width);
-    let head = "┄ commands ";
-    let fill = cw.saturating_sub(head.chars().count()).max(1);
-    Line::styled(format!("{head}{}", "┄".repeat(fill)), theme.faint())
 }
 
 /// The `workspace` catch-all (untethered scripts/CI and out-of-project shells)

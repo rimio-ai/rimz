@@ -100,7 +100,7 @@ pub(super) enum Gutter {
 /// group so the lane spans the whole selected worktree as one block, with the
 /// selected card lit `▌` inside it. Under `NO_COLOR` the `▏`/`▌` shapes carry the
 /// lane and the selection without color. Rebuilding the line would drop a
-/// line-level style (`Line::styled` chrome like the `┄ commands ┄` seam), so the
+/// line-level style (`Line::styled` chrome like the dim `+K more`), so the
 /// incoming style is patched onto each content span — the gutter cell keeps its
 /// own tone untouched.
 fn with_gutter(theme: &Theme, line: Line<'static>, gutter: Gutter) -> Line<'static> {

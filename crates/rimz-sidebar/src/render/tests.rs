@@ -559,11 +559,11 @@ fn proc_stats_hold_a_fixed_dim_grid() {
 }
 
 #[test]
-fn render_commands_divider_between_agents_and_processes() {
-    // A worktree group holding both agent cards and bare process rows seams
-    // the two with a faint `┄ commands ┄┄┄` divider: processes read at
-    // agent-card strength now, so the seam — not a dim tone — marks the
-    // group's command tail. Rows sort agents-first, so the seam lands once.
+fn render_process_rows_below_agents_without_a_seam() {
+    // A worktree group holding both agent cards and bare process rows spends
+    // no chrome line on the boundary: rows sort agents-first and the command
+    // tail reads apart by its DIM weight, so the gap line alone separates the
+    // last agent card from the first process row.
     let mut claude = agent(
         "claude-1",
         "claude",
@@ -581,63 +581,83 @@ fn render_commands_divider_between_agents_and_processes() {
     let rendered = snapshot_to_screen(&snapshot, 44, 18);
 
     assert!(
-        rendered.contains("┄ commands ┄"),
-        "the seam splits the agent cards from the process rows:\n{rendered}"
+        !rendered.contains("┄ commands"),
+        "no seam line spends a row on the agent/process boundary:\n{rendered}"
     );
     assert!(
         rendered.contains("○ zsh"),
-        "the process row renders below the seam:\n{rendered}"
+        "the process row renders below the agent card:\n{rendered}"
     );
-    assert_snapshot("commands_divider", rendered);
+    assert_snapshot("agents_process_tail", rendered);
 }
 
-/// The seam keeps its faint tone through the gutter: `with_gutter` rebuilds the
-/// line to prepend the gutter cell, so it must carry a line-level style onto the
-/// content spans rather than dropping it — the drop painted the seam (and the
-/// dim `+K more`) at full strength.
+/// The command tail reads one weight step below the agent cards: lead glyph and
+/// program name both carry the DIM modifier — the lead keeping its semantic
+/// tone (quiet-green idle, work-clay active), the name the default foreground —
+/// and the weight survives `NO_COLOR`, where the stripped color leaves DIM
+/// alone to set processes apart.
 #[test]
-fn commands_divider_stays_faint_through_the_gutter() {
-    let theme = Theme::fixed(false);
-    let mut claude = agent(
-        "claude-1",
-        "claude",
-        AgentStatus::Running,
-        Some("/repo/main"),
-        Some("main"),
-        Some("db migrate"),
-    );
-    let stamped = pane("%1", "claude", "/repo/main");
-    claude.pane = Some(stamped.clone());
-    let shell = pane("%2", "zsh", "/repo/main");
-    let snapshot =
-        snapshot_with(Vec::new(), vec![claude]).with_live_panes(vec![stamped, shell], None);
+fn process_rows_dim_a_step_below_agent_cards() {
+    for no_color in [false, true] {
+        let theme = Theme::fixed(no_color);
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            Some("/repo/main"),
+            Some("main"),
+            Some("db migrate"),
+        );
+        let stamped = pane("%1", "claude", "/repo/main");
+        claude.pane = Some(stamped.clone());
+        let shell = pane("%2", "zsh", "/repo/main");
+        let build = pane("%3", "cargo build --release", "/repo/main");
+        let snapshot = snapshot_with(Vec::new(), vec![claude])
+            .with_live_panes(vec![stamped, shell, build], None);
 
-    let mut lines = Vec::new();
-    let mut map = Vec::new();
-    let mut row_index = 0;
-    worktree_group_lines(
-        &theme,
-        &snapshot.worktree_groups[0],
-        &snapshot.providers,
-        44,
-        &snapshot.sidebar.context,
-        &mut row_index,
-        0,
-        0,
-        &mut lines,
-        &mut map,
-    );
+        let mut lines = Vec::new();
+        let mut map = Vec::new();
+        let mut row_index = 0;
+        worktree_group_lines(
+            &theme,
+            &snapshot.worktree_groups[0],
+            &snapshot.providers,
+            44,
+            &snapshot.sidebar.context,
+            &mut row_index,
+            0,
+            0,
+            &mut lines,
+            &mut map,
+        );
 
-    let seam = lines
-        .iter()
-        .flat_map(|line| line.spans.iter())
-        .find(|span| span.content.contains("┄ commands"))
-        .expect("the seam renders between agents and processes");
-    assert_eq!(
-        seam.style,
-        theme.faint(),
-        "the seam wears the faint chrome tone"
-    );
+        let span_style = |content: &str| {
+            lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .find(|span| span.content.as_ref() == content)
+                .map(|span| span.style)
+                .unwrap_or_else(|| panic!("the tail renders a {content} span"))
+        };
+        assert_eq!(
+            span_style("zsh"),
+            Style::default().add_modifier(Modifier::DIM),
+            "the program name drops one DIM step below full strength (no_color={no_color})"
+        );
+        assert_eq!(
+            span_style("○"),
+            labels::status_style(&theme, AgentStatus::Idle).add_modifier(Modifier::DIM),
+            "the idle lead keeps its quiet green one DIM step down (no_color={no_color})"
+        );
+        let active_lead = theme.style(theme::ORANGE, Modifier::DIM);
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .any(|span| span.style == active_lead),
+            "the active pane's spinner wears the dimmed work clay (no_color={no_color})"
+        );
+    }
 }
 
 #[test]
@@ -1449,7 +1469,10 @@ fn render_footer_and_help_overlay() {
     assert!(help.contains("keys & legend"));
     assert!(help.contains("? waiting"));
     assert!(help.contains("○ idle"));
-    assert!(help.contains("┄ commands ┄"));
+    assert!(
+        !help.contains("┄ commands"),
+        "the retired seam left the legend"
+    );
     assert!(!help.contains("posture"), "the posture legend is gone");
 }
 
