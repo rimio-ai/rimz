@@ -65,6 +65,7 @@ fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
         plan,
         metered: Some(metered),
         version: None,
+        sub_provider: None,
     })
 }
 

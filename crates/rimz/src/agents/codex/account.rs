@@ -61,6 +61,7 @@ fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
             plan: None,
             metered: Some(false),
             version: None,
+            sub_provider: None,
         });
     }
     if auth
@@ -72,6 +73,7 @@ fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
             plan: None,
             metered: Some(true),
             version: None,
+            sub_provider: None,
         });
     }
     AccountProbe::LoggedOut

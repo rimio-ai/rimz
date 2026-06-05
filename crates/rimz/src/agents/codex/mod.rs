@@ -72,6 +72,9 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         color: 38,
     },
     plan_label: PlanLabel::Prefixed { prefix: "ChatGPT" },
+    // An OpenAI OAuth subscription is the ChatGPT account Codex meters; Pi's
+    // auth file names it `openai` (legacy installs `openai-codex`).
+    sub_providers: &["openai", "openai-codex"],
     tools: ToolClassification {
         mutating: &["shell", "apply_patch", "exec_command", "local_shell"],
         editing: &["apply_patch"],

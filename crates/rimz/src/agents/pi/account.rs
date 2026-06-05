@@ -73,14 +73,19 @@ fn probe_auth(path: &Path, used: Option<String>, version: Option<String>) -> Acc
     AccountProbe::Found(AgentAccount {
         plan: Some(sub_label(provider, credential.kind.as_deref())),
         // The reference mapping: an OAuth credential is a metered
-        // subscription (Pi just exposes no window readings for its bars), an
-        // API key is unmetered; an unknown type stays unknown.
+        // subscription (Pi reads no window surface of its own — the dashboard
+        // borrows the metering sibling's, keyed by `sub_provider`), an API
+        // key is unmetered; an unknown type stays unknown.
         metered: match credential.kind.as_deref() {
             Some("oauth") => Some(true),
             Some("api_key") => Some(false),
             _ => None,
         },
         version,
+        // The raw credential key (`anthropic`, `openai`, …) — the dashboard
+        // maps it to the agent kind metering that account and reuses its
+        // budget windows.
+        sub_provider: Some(provider.clone()),
     })
 }
 
@@ -195,6 +200,9 @@ mod tests {
         assert_eq!(account.plan.as_deref(), Some("Anthropic OAuth"));
         assert_eq!(account.metered, Some(true));
         assert_eq!(account.version, None);
+        // The raw credential key rides along, so the dashboard can borrow the
+        // metering sibling's budget windows.
+        assert_eq!(account.sub_provider.as_deref(), Some("anthropic"));
     }
 
     #[test]
@@ -211,6 +219,7 @@ mod tests {
         assert_eq!(account.plan.as_deref(), Some("OpenAI API Key"));
         assert_eq!(account.metered, Some(false));
         assert_eq!(account.version.as_deref(), Some("0.78.0"));
+        assert_eq!(account.sub_provider.as_deref(), Some("openai"));
     }
 
     #[test]

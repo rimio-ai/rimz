@@ -67,6 +67,9 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         color: 173,
     },
     plan_label: PlanLabel::Prefixed { prefix: "Claude" },
+    // An Anthropic OAuth subscription is the account Claude meters, so a
+    // multi-provider client (Pi) on that sub shares this budget.
+    sub_providers: &["anthropic"],
     tools: ToolClassification {
         mutating: &["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"],
         editing: &["Edit", "Write", "MultiEdit", "NotebookEdit"],

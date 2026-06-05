@@ -503,6 +503,7 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
             metered: Some(true),
             plan,
             version: None,
+            sub_provider: None,
         });
         Ok((windows, account))
     }

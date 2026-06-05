@@ -985,6 +985,10 @@ impl SidebarSnapshot {
                         .get(&kind)
                         .and_then(|account| account.version.clone())
                 });
+            let account = freshest
+                .and_then(|context| context.account.clone())
+                .or_else(|| probed_accounts.get(&kind).cloned());
+
             // The budget windows are account-scoped too, but the *freshest*
             // session is not the truest reading: parallel sessions report the same
             // window at slightly different instants, so "freshest wins" flips
@@ -997,24 +1001,36 @@ impl SidebarSnapshot {
             // never grows budget bars even if a stray reading lands in a session
             // context; an unregistered kind keeps whatever it reports.
             let now = self.now;
-            let declares_windows = crate::agents::descriptor_by_kind(&kind)
-                .is_none_or(|descriptor| descriptor.capabilities.rate_limit_windows);
-            let windows = if declares_windows {
+            let windows_for = |of_kind: &str| {
                 stable_windows(
-                    sessions
+                    self.agents
                         .iter()
+                        .filter(|agent| agent.parent_agent_id.is_none() && agent.kind == *of_kind)
                         .filter_map(|agent| agent.context.as_ref()?.rate_limits.as_ref())
                         .flat_map(|limits| limits.windows.iter().cloned()),
                     now,
                 )
+            };
+            let declares_windows = crate::agents::descriptor_by_kind(&kind)
+                .is_none_or(|descriptor| descriptor.capabilities.rate_limit_windows);
+            let windows = if declares_windows {
+                windows_for(&kind)
             } else {
-                Vec::new()
+                // A provider with no window surface of its own (Pi) running on a
+                // metered sibling subscription shares that account's budget, so
+                // its block borrows the sibling kind's windows — same account,
+                // same bars. No metered sub, no mapped sibling, or no readings
+                // → bar-less, exactly as before.
+                account
+                    .as_ref()
+                    .filter(|account| account.metered == Some(true))
+                    .and_then(|account| account.sub_provider.as_deref())
+                    .and_then(crate::agents::kind_for_sub_provider)
+                    .map(windows_for)
+                    .unwrap_or_default()
             };
             let has_windows = !windows.is_empty();
 
-            let account = freshest
-                .and_then(|context| context.account.clone())
-                .or_else(|| probed_accounts.get(&kind).cloned());
             let metered = account
                 .as_ref()
                 .and_then(|account| account.metered)

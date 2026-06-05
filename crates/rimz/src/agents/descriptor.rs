@@ -24,6 +24,13 @@ pub struct AgentDescriptor {
     pub brand: Brand,
     /// How a raw plan tier becomes a brand label (`max` → `Claude Max`).
     pub plan_label: PlanLabel,
+    /// Subscription provider ids whose account budget this agent meters, as a
+    /// multi-provider client's auth file names them (Pi's `auth.json` keys:
+    /// `anthropic`, `openai`, …). A provider that exposes no window surface of
+    /// its own (Pi) but runs on one of these subscriptions shares that
+    /// account's budget, so the dashboard borrows the sibling kind's windows
+    /// — resolved through [`kind_for_sub_provider`](super::kind_for_sub_provider).
+    pub sub_providers: &'static [&'static str],
     /// Tool-name classification tables for the lifecycle `ToolUsed` bits.
     pub tools: ToolClassification,
     /// What this agent can and cannot do — consumed by the sidebar and doctor

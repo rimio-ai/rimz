@@ -65,6 +65,9 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // Pi sessions span whatever provider account the user wired, so no single
     // brand prefix is honest — the tier renders bare.
     plan_label: PlanLabel::TitleCaseOnly,
+    // Pi is the multi-provider client: it runs *on* other providers'
+    // subscriptions rather than metering one of its own.
+    sub_providers: &[],
     // Pi's built-in tool set: `edit`/`write` edit files; `bash` mutates
     // without editing, so the reasoning phase survives it.
     tools: ToolClassification {
