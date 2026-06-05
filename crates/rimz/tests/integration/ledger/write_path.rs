@@ -24,18 +24,7 @@ fn native_ask(h: &crate::common::Harness, title: &str, session_id: &str) -> Feed
 }
 
 fn lifecycle(h: &crate::common::Harness, event_name: &str, agent_id: &str) -> EventEnvelope {
-    EventEnvelope::new(
-        h.workspace_id.clone(),
-        "rimz-test",
-        "claude",
-        "agent-hook",
-        "agent.lifecycle",
-        json!({
-            "event_name": event_name,
-            "agent_id": agent_id,
-            "signal": { "signal": "registered" },
-        }),
-    )
+    crate::common::lifecycle_event(h, "rimz-test", event_name, agent_id)
 }
 
 /// A pid whose process has already exited and been reaped — `owner_is_live`

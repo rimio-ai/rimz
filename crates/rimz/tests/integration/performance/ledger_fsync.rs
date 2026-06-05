@@ -16,18 +16,7 @@ use serde_json::json;
 use crate::common::Harness;
 
 fn lifecycle(h: &Harness, agent_id: &str) -> EventEnvelope {
-    EventEnvelope::new(
-        h.workspace_id.clone(),
-        "rimz-perf",
-        "claude",
-        "agent-hook",
-        "agent.lifecycle",
-        json!({
-            "event_name": "SessionStart",
-            "agent_id": agent_id,
-            "signal": { "signal": "registered" },
-        }),
-    )
+    crate::common::lifecycle_event(h, "rimz-perf", "SessionStart", agent_id)
 }
 
 fn log_sync_stamp(h: &Harness) -> std::path::PathBuf {

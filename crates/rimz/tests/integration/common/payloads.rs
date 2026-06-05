@@ -6,10 +6,35 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
+use rimz::EventEnvelope;
 use rimz::schema::heartbeat::ResolverHeartbeat;
 use serde_json::json;
 
 use super::env::Env;
+use super::harness::Harness;
+
+/// One `agent.lifecycle` event envelope, registered-signal shaped — the
+/// fixture every ledger suite seeds agents with. One builder so the wire
+/// shape lives in one place; a shape change lands here, not per suite.
+pub fn lifecycle_event(
+    h: &Harness,
+    session: &str,
+    event_name: &str,
+    agent_id: &str,
+) -> EventEnvelope {
+    EventEnvelope::new(
+        h.workspace_id.clone(),
+        session,
+        "claude",
+        "agent-hook",
+        "agent.lifecycle",
+        json!({
+            "event_name": event_name,
+            "agent_id": agent_id,
+            "signal": { "signal": "registered" },
+        }),
+    )
+}
 
 /// Claude-shaped `PermissionRequest` hook payload for `tool_name`.
 pub fn permission_payload(tool_name: &str) -> String {

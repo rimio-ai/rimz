@@ -11,7 +11,6 @@
 use rimz::EventEnvelope;
 use rimz::ledger::event_log::{self, testkit::bytes_read};
 use rimz::ledger::snapshot::RollupCursor;
-use serde_json::json;
 
 use crate::common::Harness;
 
@@ -19,17 +18,11 @@ const HISTORY_EVENTS: usize = 3_000;
 const FLEET: usize = 30;
 
 fn lifecycle(h: &Harness, i: usize) -> EventEnvelope {
-    EventEnvelope::new(
-        h.workspace_id.clone(),
+    crate::common::lifecycle_event(
+        h,
         "rimz-perf",
-        "claude",
-        "agent-hook",
-        "agent.lifecycle",
-        json!({
-            "event_name": "SessionStart",
-            "agent_id": format!("agent-{}", i % FLEET),
-            "signal": { "signal": "registered" },
-        }),
+        "SessionStart",
+        &format!("agent-{}", i % FLEET),
     )
 }
 
