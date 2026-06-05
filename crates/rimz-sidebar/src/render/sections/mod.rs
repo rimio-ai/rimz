@@ -13,7 +13,7 @@
 //! This file owns only the shared layout primitives — the width tiers, the
 //! gutter, and the span-packing helpers every section composes with.
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
 use super::theme::Theme;
@@ -166,20 +166,12 @@ fn trim_spans_to_width(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'sta
 }
 
 /// A stats metric as a colored icon glyph + value (`◷ 2h34m`, `¤ 5`): the
-/// glyph carries a semantic accent (time teal, the live-agent `¤` clay; the
-/// `◇` token total goes violet via [`tokens_label`]) while the number stays
-/// neutral in `value_style` — full-strength on the cockpit counts, dim on the
-/// subordinate card lines — so the stats read as a tidy icon column instead of
-/// a wall of one tone.
-fn metric_spans(
-    theme: &Theme,
-    glyph: &str,
-    color: Color,
-    value: &str,
-    value_style: Style,
-) -> Vec<Span<'static>> {
+/// glyph carries a semantic accent (time teal, the live-agent `¤` clay) while
+/// the number reads at the soft tier like every stat figure — so the stats
+/// read as a tidy icon column instead of a wall of one tone.
+fn metric_spans(theme: &Theme, glyph: &str, color: Color, value: &str) -> Vec<Span<'static>> {
     vec![
         Span::styled(glyph.to_owned(), theme.style(color, Modifier::empty())),
-        Span::styled(format!(" {value}"), value_style),
+        Span::styled(format!(" {value}"), theme.soft()),
     ]
 }

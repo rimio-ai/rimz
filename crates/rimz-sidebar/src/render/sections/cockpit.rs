@@ -36,13 +36,7 @@ pub(in crate::render) fn cockpit_summary_line(
     today: Option<&SpendWindow>,
     width: usize,
 ) -> Line<'static> {
-    let left = metric_spans(
-        theme,
-        SESSIONS_GLYPH,
-        Color::Cyan,
-        &sessions.to_string(),
-        theme.value(),
-    );
+    let left = metric_spans(theme, SESSIONS_GLYPH, Color::Cyan, &sessions.to_string());
     let right = today
         .filter(|w| w.tokens > 0 || w.cache_write > 0 || w.cache_read > 0)
         .map(|window| {
@@ -77,13 +71,7 @@ pub(in crate::render) fn cockpit_spend_line(
     phase: u64,
     width: usize,
 ) -> Line<'static> {
-    let left = metric_spans(
-        theme,
-        ACTIVE_AGENTS_GLYPH,
-        ORANGE,
-        &live_agents.to_string(),
-        theme.value(),
-    );
+    let left = metric_spans(theme, ACTIVE_AGENTS_GLYPH, ORANGE, &live_agents.to_string());
     let right = if today_usd > 0.0 {
         let usd = anim.today_usd.display(today_usd, phase);
         let style = if anim.today_usd.flashing(phase) {

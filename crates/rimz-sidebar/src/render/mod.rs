@@ -770,7 +770,7 @@ fn scroll_lines(
         if ui.help_visible && !active {
             lines.push(Line::from(""));
             map.push(None);
-            extend_inert(&mut lines, &mut map, help_lines());
+            extend_inert(&mut lines, &mut map, help_lines(theme));
         }
     }
 
@@ -793,14 +793,22 @@ fn extend_inert(
 /// so the whole sidebar sits inside a one-cell frame — the trailing column the
 /// content leaves free is the matching right margin. A genuinely empty line (a
 /// blank separator, or the cockpit's reserved-but-empty totals slot) is left as
-/// is, so it stays zero-width and reads as a true blank row.
+/// is, so it stays zero-width and reads as a true blank row. A line-level style
+/// (a `Line::styled` hairline or help line) is patched into the rebuilt spans —
+/// the same carry the cards' `with_gutter` does — so the rebuild never silently
+/// strips a tone.
 fn pad_chrome(line: Line<'static>) -> Line<'static> {
     if line.spans.iter().all(|span| span.content.is_empty()) {
         return line;
     }
+    let base = line.style;
     let mut spans = Vec::with_capacity(line.spans.len() + 1);
     spans.push(Span::raw(" "));
-    spans.extend(line.spans);
+    spans.extend(
+        line.spans
+            .into_iter()
+            .map(|span| Span::styled(span.content, base.patch(span.style))),
+    );
     Line::from(spans)
 }
 
@@ -874,12 +882,12 @@ fn abbreviate_under(path: &str, home: Option<&str>) -> String {
     }
 }
 
-/// A very faint full-width `─` hairline rule (a step below the dim chrome, so it
-/// recedes to about the weight of the dotted `┄` divider). Seals the header from
+/// A full-width `─` hairline rule in the soft gray — the structural seams read
+/// at a glance rather than receding into the chrome. Seals the header from
 /// the cockpit and brackets the provider dashboard — the structure the dropped
 /// border once carried.
 fn hairline_rule(theme: &Theme, width: usize) -> Line<'static> {
-    Line::styled("─".repeat(width.max(1)), theme.rule())
+    Line::styled("─".repeat(width.max(1)), theme.soft())
 }
 
 fn alert_lines(theme: &Theme, alert: &Alert) -> Vec<Line<'static>> {
@@ -925,25 +933,26 @@ fn footer_lines(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> Vec<
             row.status
                 .is_some_and(rimz::feed::AgentStatus::is_actionable)
         });
-    // The darkest chrome — the hairline-rule tone, a step below even the faint
-    // separators, so the footer recedes to pure scaffolding. `? for help` is the
-    // resting hint; the `␣ next ?!` triage key joins it only when something
-    // actually needs you, so the signature key stays discoverable without
-    // shouting at rest. The full key model lives behind the `?` overlay.
+    // Faint chrome — the deepest legible gray, so the footer recedes to pure
+    // scaffolding without vanishing. `? for help` is the resting hint; the
+    // `␣ next ?!` triage key joins it only when something actually needs you,
+    // so the signature key stays discoverable without shouting at rest. The
+    // full key model lives behind the `?` overlay.
     let text = if needs_attention {
         "␣ next ?!   ? for help"
     } else {
         "? for help"
     };
     vec![center_line(
-        Line::styled(text.to_owned(), theme.rule()),
+        Line::styled(text.to_owned(), theme.faint()),
         width,
     )]
 }
 
 /// Center a single line within `width` by prepending padding — used to pin the
 /// navigation footer to the bottom edge, horizontally centered. A line already
-/// at or past the width is returned unchanged.
+/// at or past the width is returned unchanged. The line-level style survives
+/// the rebuild, so the footer's hairline tone reaches the screen.
 fn center_line(line: Line<'static>, width: usize) -> Line<'static> {
     let content_width: usize = line
         .spans
@@ -954,23 +963,25 @@ fn center_line(line: Line<'static>, width: usize) -> Line<'static> {
     if pad == 0 {
         return line;
     }
+    let style = line.style;
     let mut spans = Vec::with_capacity(line.spans.len() + 1);
     spans.push(Span::raw(" ".repeat(pad)));
     spans.extend(line.spans);
-    Line::from(spans)
+    Line::from(spans).style(style)
 }
 
-fn help_lines() -> Vec<Line<'static>> {
-    let dim = Style::default()
-        .fg(Color::Indexed(244))
-        .add_modifier(Modifier::DIM);
+/// The `?` overlay: keys and the glyph legend, every line in the faint chrome
+/// tier — reference material a reader summoned, not live state, so it recedes
+/// below the cards it sits under.
+fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
+    let faint = theme.faint();
     vec![
-        Line::styled("keys & legend", dim),
-        Line::styled("↑/↓ select   1-9 jump   ↵ jump", dim),
-        Line::styled("␣ next ?!   ←/→ provider tab", dim),
-        Line::styled("x dismiss   r reload   ? close", dim),
-        Line::styled("⢿ working   ✽ thinking   ? waiting", dim),
-        Line::styled("! attention   ○ idle   ✓ done", dim),
+        Line::styled("keys & legend", faint),
+        Line::styled("↑/↓ select   1-9 jump   ↵ jump", faint),
+        Line::styled("␣ next ?!   ←/→ provider tab", faint),
+        Line::styled("x dismiss   r reload   ? close", faint),
+        Line::styled("⢿ working   ✽ thinking   ? waiting", faint),
+        Line::styled("! attention   ○ idle   ✓ done", faint),
     ]
 }
 

@@ -130,11 +130,12 @@ fn elapsed_glyph_fills_by_the_quarter_hour() {
     assert_eq!(elapsed_glyph(48 * 3600), "◉");
 }
 
-/// The window token keeps its `DIM` weight at every size class while its
-/// tint steps by magnitude: gray below 128k, sky at 128k, gold at 258k,
-/// clay amber at 1m+. `NO_COLOR` collapses every band to the bare dim.
+/// The window token's tint steps by magnitude — the dim capability chrome
+/// below 128k, sky at 128k, gold at 258k, clay amber at 1m+ — with the tinted
+/// bands DIM-weighted so they never outshine the meter. `NO_COLOR`
+/// collapses every band to the bare DIM weight.
 #[test]
-fn window_style_tints_by_size_class_but_stays_dim() {
+fn window_style_tints_by_size_class_but_stays_subordinate() {
     let theme = Theme::fixed(false);
     let banded = |window| window_style(&theme, window);
     assert_eq!(banded(32_000), theme.dim());
@@ -166,11 +167,12 @@ fn apportion_sums_to_total() {
 }
 
 /// The mana bar drains (filled = remaining) in the segmented `▰`/`▱` style
-/// and reads by that fill/hollow shape under `NO_COLOR`; its color ramps
+/// and reads by that fill/hollow shape under `NO_COLOR`; the fill ramps
 /// green → yellow → amber → red by how much budget is left on the
 /// `[sidebar.budget]` zones — one ramp for both the 5-hour and weekly
 /// windows, speaking the same gold → clay-amber escalation as the age and
-/// context ramps.
+/// context ramps — over a dim `▱` track, a step up from the faint
+/// context-gauge track.
 #[test]
 fn mana_bar_drains_and_ramps() {
     let zones = BudgetZonesConfig::default();
@@ -200,27 +202,35 @@ fn mana_bar_drains_and_ramps() {
     assert_eq!(fg(10), Color::Indexed(173));
     assert_eq!(fg(9), Color::Indexed(167));
     assert_eq!(fg(1), Color::Indexed(167));
+    // The drained share rides the dim chrome, legible against the fill.
+    let track = &mana_bar_spans(&lit, 70, 10, &zones)[1];
+    assert_eq!(track.style, lit.dim());
 }
 
 /// The zones are config: a tuned `[sidebar.budget]` moves the band edges, so
 /// the same reading reclassifies — the ramp is driven by the snapshot-carried
 /// config, not a built-in table. Checked worst-first, so a misordered config
-/// degrades to the worse tier.
+/// degrades to the worse tier; a reading above every zone rests green.
 #[test]
-fn mana_color_honours_custom_and_misordered_zones() {
+fn mana_style_honours_custom_and_misordered_zones() {
+    let lit = Theme::fixed(false);
     let tuned = BudgetZonesConfig {
         yellow: 80,
         amber: 40,
         red: 20,
     };
-    assert_eq!(mana_color(70, &tuned), Color::Yellow);
-    assert_eq!(mana_color(80, &tuned), Color::Green);
-    assert_eq!(mana_color(39, &tuned), ORANGE);
-    assert_eq!(mana_color(19, &tuned), Color::Red);
+    let tone = |color| lit.style(color, Modifier::empty());
+    assert_eq!(mana_style(&lit, 70, &tuned), tone(Color::Yellow));
+    assert_eq!(
+        mana_style(&lit, 80, &tuned),
+        tone(Color::Green),
+        "healthy rests green"
+    );
+    assert_eq!(mana_style(&lit, 39, &tuned), tone(ORANGE));
+    assert_eq!(mana_style(&lit, 19, &tuned), tone(Color::Red));
 
-    // The bar fill delegates to the same tuned zones: 70% — green under the
-    // defaults — paints its first cell yellow here.
-    let lit = Theme::fixed(false);
+    // The bar fill delegates to the same tuned zones: 70% — resting green
+    // under the defaults — paints its first cell yellow here.
     let bar = mana_bar_spans(&lit, 70, 10, &tuned);
     assert_eq!(bar[0].style.fg, Some(Color::Indexed(179)));
 
@@ -230,12 +240,12 @@ fn mana_color_honours_custom_and_misordered_zones() {
         amber: 10,
         red: 50,
     };
-    assert_eq!(mana_color(30, &misordered), Color::Red);
-    assert_eq!(mana_color(50, &misordered), Color::Green);
+    assert_eq!(mana_style(&lit, 30, &misordered), tone(Color::Red));
+    assert_eq!(mana_style(&lit, 50, &misordered), tone(Color::Green));
 }
 
 /// A fully spent window (0% remaining) is a full-width *empty* `▱` track —
-/// never a `▰` fill — painted red, so "used up" never reads as the faint
+/// never a `▰` fill — painted red, so "used up" never reads as the quiet
 /// untouched track a plain absent-fill would leave. The reset-time text is a
 /// separate span the row owns, so it stays unalarmed; only the bar reddens.
 #[test]
@@ -251,11 +261,11 @@ fn mana_bar_spent_is_a_full_width_red_empty_track() {
     assert!(spans[0].style.fg.is_none());
 
     // With color on, the spent track shares the mana ramp's red — not the
-    // faint track tone a non-spent drain leaves behind.
+    // dim track tone a non-spent drain leaves behind.
     let lit = Theme::fixed(false);
     let spent = mana_bar_spans(&lit, 0, 10, &zones);
     assert_eq!(spent[0].style.fg, Some(Color::Indexed(167)));
-    assert_ne!(spent[0].style.fg, lit.faint().fg);
+    assert_ne!(spent[0].style.fg, lit.dim().fg);
 }
 
 /// Any nonzero remaining budget gets at least one filled cell, even on a
@@ -461,10 +471,10 @@ fn attention_breath_quickens_with_the_age_heat() {
     assert_eq!(attention_breath(6, red), Modifier::BOLD, "wraps");
 }
 
-/// The elapsed-age tone steps with the clock-fill quarters: dim through the
-/// first quarter (a resume still hits cache), yellow to the half hour,
-/// amber beyond it, red past the hour — when a resume would likely re-read
-/// the whole context uncached.
+/// The elapsed-age tone steps with the clock-fill quarters: the dim resting
+/// weight through the first quarter (a resume still hits cache), yellow to
+/// the half hour, amber beyond it, red past the hour — when a resume would
+/// likely re-read the whole context uncached.
 #[test]
 fn activity_age_style_steps_with_the_clock_quarters() {
     let theme = Theme::fixed(false);
@@ -493,9 +503,9 @@ fn activity_age_style_steps_with_the_clock_quarters() {
 }
 
 /// The token breakdown reads `◇ ↘ ↗ ◍ ◌`, each marker in its one color
-/// (`◇` violet, the rest their bar-segment tones) with full-strength
-/// figures; the `◍` cache-write field drops when excluded (the W/M rows).
-/// Under `NO_COLOR` the glyph shapes still spell the split.
+/// (`◇` violet, the rest their bar-segment tones) with soft-tier figures;
+/// the `◍` cache-write field drops when excluded (the W/M rows). Under
+/// `NO_COLOR` the glyph shapes still spell the split.
 #[test]
 fn token_breakdown_shape_and_optional_cache_write() {
     let theme = Theme::fixed(true);
@@ -528,7 +538,7 @@ fn token_breakdown_shape_and_optional_cache_write() {
 
 /// With color on, every breakdown marker wears its one tone — the same
 /// segment colors the card's context line legends — and the figures read
-/// at full strength (no `DIM`), so the fleet lines stop being dim chrome.
+/// at the soft tier like every stat figure across the sidebar.
 #[test]
 fn token_breakdown_markers_wear_their_segment_colors() {
     let lit = Theme::fixed(false);
@@ -574,8 +584,7 @@ fn token_breakdown_markers_wear_their_segment_colors() {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c.is_ascii_whitespace())
     }) {
-        assert!(span.style.fg.is_none(), "figure spans stay default-fg");
-        assert!(!span.style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(span.style, lit.soft(), "figure {:?}", span.content);
     }
 }
 
@@ -604,8 +613,8 @@ fn context_breakdown_shape_leads_with_the_filled_window() {
 
 /// With color on, the context line is the bar's legend: the `▤` head wears
 /// the caller's severity, each composition marker its bar-segment tone
-/// (`◌` blue, `◍` yellow, `↘` red, `↗` green), and every figure stays dim
-/// chrome.
+/// (`◌` blue, `◍` yellow, `↘` red, `↗` green), and every figure reads at the
+/// dim chrome weight — a step under the name line's soft tokens.
 #[test]
 fn context_breakdown_markers_wear_their_segment_colors() {
     let theme = Theme::fixed(false);
@@ -636,10 +645,19 @@ fn context_breakdown_markers_wear_their_segment_colors() {
     );
     assert_eq!(tone(TOKENS_IN), Some(Color::Indexed(167)), "fresh input");
     assert_eq!(tone(TOKENS_OUT), Some(Color::Indexed(108)), "output");
-    // Every figure stays dim chrome — only the markers carry tones.
+    // Every figure reads dim — only the markers carry tones — and the `·`
+    // seam shares the same dim gray chrome.
     for span in spans.iter().filter(|s| s.content.starts_with(' ')) {
-        assert_eq!(span.style.fg, theme.dim().fg, "figure {:?}", span.content);
+        if span.content.trim().is_empty() || span.content.trim() == "·" {
+            continue;
+        }
+        assert_eq!(span.style, theme.dim(), "figure {:?}", span.content);
     }
+    let seam = spans
+        .iter()
+        .find(|s| s.content.trim() == "·")
+        .expect("no seam span");
+    assert_eq!(seam.style, theme.dim(), "the seam stays dim chrome");
 }
 
 /// The rate-limited glyph is the media `pause` mark carrying the

@@ -29,7 +29,8 @@ use super::{pin_right, spans_width, trim_spans_to_width};
 /// cluster is the busy/done tail — working `⢿` (every running agent; the
 /// thinking sparkle is a per-row animation head, not a bucket), then `success`
 /// `✓`. Every bucket renders — the glyph always in its semantic color, a zero
-/// count faint beside it. Counts span the capped agents (`status_counts`). The
+/// count at the soft gray beside it. Counts span the capped agents
+/// (`status_counts`). The
 /// fleet's live time / token / commit totals are gone — the summary line's
 /// today-accumulated breakdown carries the fleet's resource read.
 pub(in crate::render) fn fleet_header_lines(
@@ -176,8 +177,8 @@ fn attention_bucket_style(
 /// `?2`); successive buckets are separated by three. Every bucket renders, so a
 /// zero reads `? 0` — the cockpit is a fixed dashboard, scannable by position.
 /// The glyph always wears its semantic color, so the make-up reads as a stable
-/// colored legend; a zero bucket rests the glyph (no bold, no heat) and drops
-/// only its count to faint chrome, so the eye still lands on the live counts.
+/// colored legend; a zero bucket rests the glyph (no bold, no heat) and reads
+/// its count at the soft stat tier, so the eye still lands on the live counts.
 fn push_count(
     theme: &Theme,
     spans: &mut Vec<Span<'static>>,
@@ -194,7 +195,7 @@ fn push_count(
             glyph.to_owned(),
             theme.style(glyph_color, Modifier::empty()),
         ));
-        spans.push(Span::styled(format!(" {count}"), theme.faint()));
+        spans.push(Span::styled(format!(" {count}"), theme.soft()));
     } else {
         spans.push(Span::styled(format!("{glyph} {count}"), style));
     }

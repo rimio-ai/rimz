@@ -53,11 +53,15 @@ pub(crate) struct Palette {
     cool: Color,
     /// soft purple — the provider `⇅ rc` flag and delegation family (`Color::Magenta`).
     meta: Color,
-    /// mid gray — labels, ages, values (`Color::DarkGray`/`Color::Gray`).
+    /// mid gray — the soft content tier: capability tokens, card figures,
+    /// subagent lines. A step above `dim`, below the default-fg `value`.
+    soft: Color,
+    /// deep gray — labels, ages, seams (`Color::DarkGray`/`Color::Gray`).
     dim: Color,
-    /// deep gray — recedes below `dim`: bar tracks, `·` separators, dividers.
+    /// deeper gray — recedes below `dim`: bar tracks, `·` separators, dividers.
     faint: Color,
-    /// darkest chrome — the borderless section hairlines, quieter than a dotted divider.
+    /// the darkest chrome — `faint`'s gray dropped a further step by the `DIM`
+    /// attenuation: the scrollbar's resting track.
     rule: Color,
     /// soft blue — the selected-row left bar, brighter than the chrome so the
     /// `▎` reads as "here you are" without inverting the whole row.
@@ -74,8 +78,9 @@ impl Palette {
         accent: Color::Indexed(73),
         cool: Color::Indexed(75),
         meta: Color::Indexed(141),
-        dim: Color::Indexed(246),
-        faint: Color::Indexed(242),
+        soft: Color::Indexed(246),
+        dim: Color::Indexed(242),
+        faint: Color::Indexed(238),
         rule: Color::Indexed(238),
         selection: Color::Indexed(110),
     };
@@ -91,6 +96,7 @@ impl Palette {
             accent: slot(theme.accent, Self::BUILTIN.accent),
             cool: slot(theme.cool, Self::BUILTIN.cool),
             meta: slot(theme.meta, Self::BUILTIN.meta),
+            soft: slot(theme.soft, Self::BUILTIN.soft),
             dim: slot(theme.dim, Self::BUILTIN.dim),
             faint: slot(theme.faint, Self::BUILTIN.faint),
             rule: slot(theme.rule, Self::BUILTIN.rule),
@@ -196,34 +202,47 @@ impl Theme {
         }
     }
 
-    /// Shared dim-chrome style — for ages, labels, and values that sit
-    /// alongside the active vocabulary glyphs.
-    pub(crate) fn dim(&self) -> Style {
-        self.style(Color::DarkGray, Modifier::DIM)
+    /// A plain palette gray at normal weight — the shared shape of the lit
+    /// gray ladder. The ladder steps by color index alone; a `DIM` modifier
+    /// would hand each tone back to the terminal's attenuation and collapse
+    /// the steps. Under `NO_COLOR` every rung falls to the bare `DIM`
+    /// modifier, so "a step below `value`" still carries as weight.
+    fn gray(&self, color: Color) -> Style {
+        if self.no_color {
+            Style::default().add_modifier(Modifier::DIM)
+        } else {
+            Style::default().fg(color)
+        }
     }
 
-    /// Full-strength value text — the terminal's default foreground, no
-    /// modifier. The colored marker beside it carries the semantics; the
-    /// figure reads at normal weight (the fleet token lines, the cockpit
-    /// counts, the W/M ledger figures).
-    pub(crate) fn value(&self) -> Style {
-        Style::default()
+    /// Shared dim-chrome style — for ages, labels, and seams that sit
+    /// alongside the active vocabulary glyphs. A step below
+    /// [`soft`](Self::soft) on the gray ladder.
+    pub(crate) fn dim(&self) -> Style {
+        self.gray(self.palette.dim)
+    }
+
+    /// The soft middle tier — between the default-fg full-strength text and
+    /// the gray [`dim`](Self::dim) chrome, for content a reader actually
+    /// reads: capability tokens, stat figures, subagent lines, the process
+    /// rows' program names.
+    pub(crate) fn soft(&self) -> Style {
+        self.gray(self.palette.soft)
     }
 
     /// The faintest chrome — a step below [`dim`](Self::dim) for the pure
     /// scaffolding that should recede furthest: bar tracks, `·` separators, and
-    /// dividers. Under `NO_COLOR` it collapses to the same dim modifier as
-    /// [`dim`](Self::dim); the shape (a light `─` track, a thin `·`) carries
+    /// dividers. Under `NO_COLOR` it collapses to the same dim modifier as the
+    /// rest of the ladder; the shape (a light `─` track, a thin `·`) carries
     /// the reading without the tone.
     pub(crate) fn faint(&self) -> Style {
-        self.style(self.palette.faint, Modifier::DIM)
+        self.gray(self.palette.faint)
     }
 
-    /// The faintest *solid* chrome — the borderless section hairline rules (`─`).
-    /// A step below [`faint`](Self::faint) so a full-width solid rule recedes to
-    /// about the apparent weight of the dotted `┄ external` divider instead of
-    /// reading as a bright bar. Under `NO_COLOR` it collapses to the dim
-    /// modifier like the rest.
+    /// The darkest chrome — [`faint`](Self::faint)'s gray under the `DIM`
+    /// attenuation, a step below it: the scrollbar's resting track (`▕`),
+    /// receding beside its `dim` thumb so the position reads without the rail
+    /// shouting.
     pub(crate) fn rule(&self) -> Style {
         self.style(self.palette.rule, Modifier::DIM)
     }
@@ -323,6 +342,42 @@ mod tests {
             theme.style(ORANGE, Modifier::empty()).fg,
             Some(Color::Indexed(173))
         );
+    }
+
+    /// The gray ladder steps by color index alone when lit — soft, dim, and
+    /// faint paint plain palette grays at *normal* weight (a `DIM` modifier
+    /// would hand each tone back to the terminal's attenuation and collapse
+    /// the steps); only the darkest rung `rule` keeps `DIM`, dropping the
+    /// faint gray one further step. Under `NO_COLOR` every rung collapses to
+    /// the bare `DIM` modifier, so the de-emphasis still carries as weight.
+    /// Each slot re-tunes from its `[sidebar.theme]` key.
+    #[test]
+    fn gray_ladder_is_plain_when_lit_and_a_dim_weight_under_no_color() {
+        let lit = Theme::fixed(false);
+        for (style, index) in [(lit.soft(), 246), (lit.dim(), 242), (lit.faint(), 238)] {
+            assert_eq!(style.fg, Some(Color::Indexed(index)));
+            assert!(style.add_modifier.is_empty(), "no DIM attenuation when lit");
+        }
+        assert_eq!(lit.rule().fg, Some(Color::Indexed(238)));
+        assert!(
+            lit.rule().add_modifier.contains(Modifier::DIM),
+            "rule rides faint's gray under the DIM attenuation"
+        );
+
+        let dark = Theme::fixed(true);
+        for style in [dark.soft(), dark.dim(), dark.faint(), dark.rule()] {
+            assert_eq!(style.fg, None);
+            assert!(style.add_modifier.contains(Modifier::DIM));
+        }
+
+        let themed = Theme {
+            palette: Palette::resolve(&SidebarThemeConfig {
+                soft: Some(252),
+                ..SidebarThemeConfig::default()
+            }),
+            ..Theme::default()
+        };
+        assert_eq!(themed.soft().fg, Some(Color::Indexed(252)));
     }
 
     #[test]

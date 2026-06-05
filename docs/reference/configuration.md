@@ -127,9 +127,10 @@ alarm     = 167   # alarm — failed glyphs, high gauges, removals, fresh input
 accent    = 73    # structure — worktree headers and the selected lane spine
 cool      = 75    # cool informational — the plan posture pill, window tags
 meta      = 141   # delegation/meta — the ⇅ rc flag, the subagent ⧉ marker
-dim       = 246   # dim chrome — labels, ages, subordinate values
-faint     = 242   # faintest chrome — bar tracks, · separators, dotted dividers
-rule      = 238   # section hairline rules, a step below faint
+soft      = 246   # soft content text — stat figures, capability tokens, subagent lines
+dim       = 242   # dim chrome — labels, ages, seams
+faint     = 238   # faintest chrome — bar tracks, · separators, dotted dividers
+rule      = 238   # darkest chrome (the scrollbar track) — faint's gray a DIM-weighted step deeper
 selection = 110   # the selected-row ▌ accent bar
 ```
 

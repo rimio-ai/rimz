@@ -83,7 +83,7 @@ pub(super) fn row_lines(
     // the shell anchor — the build or `sudo` install reads in full while line 1
     // stays the stable shell label. Idle process rows have no detail to add.
     if row.row_kind == SidebarRowKind::Process
-        && let Some(line) = process_detail_line(row, cw)
+        && let Some(line) = process_detail_line(theme, row, cw)
     {
         inner.push(line);
     }
@@ -124,8 +124,11 @@ pub(super) fn row_lines(
 /// its token spend `◇`, model, and reasoning effort, with elapsed work (the
 /// clock-fill glyph over a fixed `<1m`/`9m`/`2h` label in the parent's age
 /// tone ramp) pinned right under the parent's own stats. Children are
-/// subordinate to the parent card, so their text stays dim and indented past
-/// the parent's stat lines. The description, tokens, and elapsed ride in from
+/// subordinate to the parent card, so their text stays at the soft middle
+/// weight — the model/effort metadata a step deeper at the dim chrome, like
+/// the parent's capability tokens — and indented past the parent's stat
+/// lines. The description, tokens,
+/// and elapsed ride in from
 /// Claude's `subagentStatusLine`; the model, effort, and phase from the
 /// child's own lifecycle events. A child with none of them degrades to the
 /// bare type line, with line 2 dropped.
@@ -136,14 +139,15 @@ fn sub_agent_lines(
     animation_phase: u64,
 ) -> Vec<Line<'static>> {
     // The `⧉` marker wears the violet of the delegation/meta family (the
-    // compacting head, the `⇅ rc` flag); the label text stays dim chrome.
+    // compacting head, the `⇅ rc` flag); the label text reads at the soft
+    // middle weight like the children below it.
     let mut lines = vec![Line::from(trim_spans_to_width(
         vec![
             Span::styled(
                 format!("  {SUBAGENTS_GLYPH}"),
                 theme.style(Color::Magenta, Modifier::empty()),
             ),
-            Span::styled(format!(" subagents ({})", sub_agents.len()), theme.dim()),
+            Span::styled(format!(" subagents ({})", sub_agents.len()), theme.soft()),
         ],
         width,
     ))];
@@ -159,7 +163,7 @@ fn sub_agent_lines(
                 agent_style(theme, sub.status),
             ),
             Span::raw(" "),
-            Span::styled(sub.name.clone(), theme.dim()),
+            Span::styled(sub.name.clone(), theme.soft()),
         ];
         // Prefer the `subagentStatusLine` description; fall back to the task
         // descriptor, shown only when it differs from the name (the name already
@@ -170,7 +174,7 @@ fn sub_agent_lines(
             .as_deref()
             .or(sub.task.as_deref().filter(|task| *task != sub.name));
         if let Some(detail) = detail {
-            spans.push(Span::styled(format!(" — {detail}"), theme.dim()));
+            spans.push(Span::styled(format!(" — {detail}"), theme.soft()));
         }
         lines.push(Line::from(trim_spans_to_width(spans, width)));
 
@@ -186,28 +190,26 @@ fn sub_agent_lines(
             let mut left = vec![Span::raw("      ")];
             if let Some(total) = tokens {
                 // Children stay subordinate to the parent card, so the figure
-                // keeps the dim tone the rest of the subagent list wears.
-                left.extend(tokens_total_spans(theme, total, tokens_short, theme.dim()));
+                // keeps the soft weight the rest of the subagent list wears.
+                left.extend(tokens_total_spans(theme, total, tokens_short));
             }
             if let Some(model) = model {
-                // The model rides after the spend, joined by the `·` seam when
-                // a figure precedes it; bare otherwise, so the indent never
-                // carries an orphan separator.
-                let seam = if tokens.is_some() { " · " } else { "" };
-                left.push(Span::styled(
-                    format!("{seam}{}", model_label(model)),
-                    theme.dim(),
-                ));
+                // The model rides after the spend at the parent's dim
+                // capability weight, joined by the `·` seam when a figure
+                // precedes it; bare otherwise, so the indent never carries an
+                // orphan separator.
+                if tokens.is_some() {
+                    left.push(Span::styled(" · ", theme.dim()));
+                }
+                left.push(Span::styled(model_label(model), theme.dim()));
             }
             if let Some(effort) = effort {
-                // Effort keeps the parent line's `model · effort` adjacency,
-                // with the same orphan-seam rule as the model.
-                let seam = if tokens.is_some() || model.is_some() {
-                    " · "
-                } else {
-                    ""
-                };
-                left.push(Span::styled(format!("{seam}{effort}"), theme.dim()));
+                // Effort keeps the parent line's `model · effort` adjacency
+                // and weight, with the same orphan-seam rule as the model.
+                if tokens.is_some() || model.is_some() {
+                    left.push(Span::styled(" · ", theme.dim()));
+                }
+                left.push(Span::styled(effort.to_owned(), theme.dim()));
             }
             // Elapsed work in the parent's age vocabulary: the clock-fill glyph
             // and a fixed three-cell m/h label (`<1m`, ` 9m`, ` 2h`, `>1d`,
@@ -350,10 +352,12 @@ fn agent_identity_line(
         ));
     }
 
-    // Left cluster: glyph + name + dim capability tokens. The glyph heats with
-    // the age clock once a `waiting`/`failed` row sits unanswered. The kind name
-    // reads at normal weight in the provider's brand color (or mid-gray chrome
-    // for unknown kinds); the bright slot is saved for the task below.
+    // Left cluster: glyph + name + the capability tokens at the dim chrome —
+    // metadata, a step under the soft stat figures — over `·` seams of the
+    // same weight. The glyph heats with the age clock once a
+    // `waiting`/`failed` row sits unanswered. The kind name reads at normal
+    // weight in the provider's brand color (or mid-gray chrome for unknown
+    // kinds); the bright slot is saved for the task below.
     let mut left: Vec<Span<'static>> = vec![
         agent_lead_cell(theme, row, status, animation_phase),
         Span::raw(" "),
@@ -373,10 +377,10 @@ fn agent_identity_line(
             left.push(Span::styled(" · ", theme.dim()));
             left.push(Span::styled(effort.to_owned(), theme.dim()));
         }
-        // The window token stays dim-weight chrome — metadata, not a status
-        // signal — but tints by size class (`window_style`) so the magnitude
-        // reads at a glance; the context-meter severity ramp keeps the loud
-        // color slot.
+        // The window token keeps the capability tokens' DIM weight — metadata,
+        // not a status signal — but tints by size class (`window_style`) so
+        // the magnitude reads at a glance; the context-meter severity ramp
+        // keeps the loud color slot.
         if let Some(window) = display_context_window(row) {
             left.push(Span::styled(" · ", theme.dim()));
             left.push(Span::styled(
@@ -404,7 +408,7 @@ fn display_context_window(row: &SidebarRow) -> Option<u64> {
 /// else the prompt) on its own full-width line. An idle agent with nothing to
 /// show yet paints the animated loading-dots cue instead; any other empty
 /// description falls to an em dash. A turn that died on a provider API error
-/// takes the line over the fall-through — the dim upstream error text
+/// takes the line over the fall-through — the soft upstream error text
 /// (`turn_error_label`, quoted verbatim) is the row's most important fact while
 /// the `!` escalation holds, and the fall-through returns once it clears. At L2
 /// the todo progress (`●●●○○ 3/5`) pins to a right column, aligning under the
@@ -418,7 +422,7 @@ fn description_line(
     animation_phase: u64,
 ) -> Line<'static> {
     let body = if let Some(label) = row.turn_error_label.as_deref() {
-        Span::styled(label.to_owned(), theme.dim())
+        Span::styled(label.to_owned(), theme.soft())
     } else {
         match descriptor(row) {
             Some(text) => Span::raw(text.to_owned()),
@@ -531,7 +535,8 @@ const BAR_VALUE_WIDTH: usize = 5;
 /// bar's severity); this helper owns the indent, the fixed label and value
 /// columns, and the gaps — so every row built through it shares one bar-start
 /// column and one value-end column by construction, with no per-call alignment
-/// math. The value column stays dim chrome.
+/// math. The value column reads at the dim chrome weight, matching the token
+/// figures below it — the bar's fill carries the urgency.
 fn bar_row(
     theme: &Theme,
     label: &str,
@@ -693,8 +698,8 @@ fn gauge_segments(row: &SidebarRow) -> Option<[(u64, Color); 3]> {
 /// crosses a full minute
 /// — a just-active agent shows the breakdown alone, left-aligned, rather than
 /// a misleading `1m` — as the clock-fill glyph ([`elapsed_glyph`]) over the
-/// quarter-stepping age tone ([`activity_age_style`]): dim warm, yellow from
-/// the second quarter, amber past the half hour, red from the hour, when
+/// quarter-stepping age tone ([`activity_age_style`]): dim while warm, yellow
+/// from the second quarter, amber past the half hour, red from the hour, when
 /// resuming would likely re-read the whole context uncached.
 fn context_tokens_line(
     theme: &Theme,

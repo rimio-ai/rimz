@@ -598,11 +598,11 @@ fn render_process_rows_below_agents_without_a_seam() {
     assert_snapshot("agents_process_tail", rendered);
 }
 
-/// The command tail reads one weight step below the agent cards: lead glyph and
-/// program name both carry the DIM modifier — the lead keeping its semantic
-/// tone (quiet-green idle, work-clay active), the name the default foreground —
-/// and the weight survives `NO_COLOR`, where the stripped color leaves DIM
-/// alone to set processes apart.
+/// The command tail reads one step below the agent cards: the lead glyph
+/// carries the DIM modifier over its semantic tone (quiet-green idle,
+/// work-clay active) and the program name wears the soft middle tier — which
+/// itself falls back to the bare DIM weight under `NO_COLOR`, so the
+/// stripped color still sets processes apart.
 #[test]
 fn process_rows_dim_a_step_below_agent_cards() {
     for no_color in [false, true] {
@@ -648,8 +648,8 @@ fn process_rows_dim_a_step_below_agent_cards() {
         };
         assert_eq!(
             span_style("zsh"),
-            Style::default().add_modifier(Modifier::DIM),
-            "the program name drops one DIM step below full strength (no_color={no_color})"
+            theme.soft(),
+            "the program name drops to the soft tier below full strength (no_color={no_color})"
         );
         assert_eq!(
             span_style("○"),
@@ -1188,10 +1188,10 @@ fn codex_calm_bar_splits_into_row_level_segments() {
 }
 
 /// The card's age cluster pairs a clock-fill glyph (the face fills with the
-/// idle span) with a tone stepping the same quarters: dim while a resume
-/// would still hit cache, yellow from the second quarter, amber past the
-/// half hour, red past the hour — the cost warning that resuming will
-/// likely re-read the whole context uncached.
+/// idle span) with a tone stepping the same quarters: the dim resting
+/// weight while a resume would still hit cache, yellow from the second
+/// quarter, amber past the half hour, red past the hour — the cost warning
+/// that resuming will likely re-read the whole context uncached.
 #[test]
 fn context_line_age_tone_steps_with_the_clock_quarters() {
     let theme = Theme::fixed(false);
@@ -1218,7 +1218,7 @@ fn context_line_age_tone_steps_with_the_clock_quarters() {
     assert_eq!(
         age_style(4 * 60, '◔'),
         theme.dim(),
-        "warm cache stays chrome"
+        "warm cache rests at the dim weight"
     );
     assert_eq!(
         age_style(25 * 60, '◑'),
@@ -1662,6 +1662,26 @@ fn render_footer_and_help_overlay() {
         "the retired seam left the legend"
     );
     assert!(!help.contains("posture"), "the posture legend is gone");
+}
+
+/// The chrome rebuilds keep a line-level style on its way to the screen:
+/// `pad_chrome` patches it into the rebuilt spans and `center_line` carries it
+/// on the centered line — without the carry, every `Line::styled` chrome line
+/// (the hairlines, the footer hint, the help overlay) silently rendered at the
+/// default foreground. The help overlay itself reads in the faint tier.
+#[test]
+fn chrome_rebuilds_carry_line_level_styles() {
+    let theme = Theme::fixed(false);
+    let padded = pad_chrome(Line::styled("keys & legend", theme.faint()));
+    assert_eq!(padded.spans[0].content.as_ref(), " ", "gutter first");
+    assert_eq!(padded.spans[1].style, theme.faint());
+
+    let centered = center_line(Line::styled("? for help", theme.faint()), 30);
+    assert_eq!(centered.style, theme.faint());
+
+    for line in help_lines(&theme) {
+        assert_eq!(line.style, theme.faint());
+    }
 }
 
 #[test]
@@ -2656,14 +2676,14 @@ fn tab_rail_drops_whole_tabs_that_overflow_the_width() {
         provider_panel("codex", "Codex", 33, false, false, None),
         provider_panel("pi", "Pi", 28, false, false, None),
     ];
-    // Stub (2) + `┤ Claude ├` (10) + gap (2) + `─ Codex ─` (9, the cap cells
-    // reserved as fill) = 23 fits in 24; `─ Pi ─` would land at 31, so it
-    // drops whole and `─` fills the tail.
+    // Stub (2) + `─ Claude ─` (10) + gap (2) + `─ Codex ─` (9) = 23 fits in
+    // 28; `─ Pi ─` would land at 31, so it drops whole and `─` fills the
+    // tail.
     let (lines, hits) = provider_panel_lines(
         &theme,
         &panels,
         Some("claude"),
-        24,
+        28,
         &rimz::config::BudgetZonesConfig::default(),
     );
     let tab_line: String = lines[0]
@@ -2671,29 +2691,23 @@ fn tab_rail_drops_whole_tabs_that_overflow_the_width() {
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
-    assert_eq!(tab_line, "──┤ Claude ├─── Codex ──");
+    assert_eq!(tab_line, "─── Claude ──── Codex ──────");
     assert_eq!(
         hits.iter().map(|hit| hit.kind.as_str()).collect::<Vec<_>>(),
         vec!["claude", "codex"],
         "the dropped tab carries no hit"
     );
-    assert!(tab_line.chars().count() <= 24, "the rail never wraps");
+    assert!(tab_line.chars().count() <= 28, "the rail never wraps");
 }
 
-/// Every tab reserves its two cap cells, so re-notching the pick swaps `─` for
-/// `┤ ├` in place: whichever tab is active, every label rests at the same
-/// column and every hit covers the same cap-to-cap footprint.
+/// With color, the pick is fill and weight alone: whichever tab is active,
+/// the rail renders glyph-for-glyph identical text — no caps, no swap — and
+/// every hit covers the same edge-to-edge footprint, so a click moves color
+/// without a single cell of glyph motion.
 #[test]
-fn tab_rail_keeps_every_footprint_still_across_picks() {
+fn tab_rail_keeps_every_glyph_still_across_picks() {
     let theme = Theme::fixed(false);
     let panels = two_provider_panels();
-    let rail_text = |lines: &[Line<'static>]| -> String {
-        lines[0]
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect()
-    };
     let zones = rimz::config::BudgetZonesConfig::default();
     let (claude_lines, claude_hits) =
         provider_panel_lines(&theme, &panels, Some("claude"), 52, &zones);
@@ -2704,6 +2718,35 @@ fn tab_rail_keeps_every_footprint_still_across_picks() {
         "the click targets hold still as the pick moves"
     );
     let (claude_rail, codex_rail) = (rail_text(&claude_lines), rail_text(&codex_lines));
+    assert_eq!(
+        claude_rail, codex_rail,
+        "the rail's text never changes with the pick — color carries it"
+    );
+    assert!(
+        !claude_rail.contains('┤'),
+        "with color, no caps paint:\n{claude_rail}"
+    );
+}
+
+/// Under `NO_COLOR` the chip fill drops, so the `┤ ├` caps return as the
+/// pick's shape — painted into the rail cells every tab reserves, so the
+/// labels still rest at the same columns whichever tab is picked.
+#[test]
+fn tab_rail_caps_mark_the_pick_under_no_color() {
+    let theme = Theme::fixed(true);
+    let panels = two_provider_panels();
+    let zones = rimz::config::BudgetZonesConfig::default();
+    let (claude_lines, _) = provider_panel_lines(&theme, &panels, Some("claude"), 52, &zones);
+    let (codex_lines, _) = provider_panel_lines(&theme, &panels, Some("codex"), 52, &zones);
+    let (claude_rail, codex_rail) = (rail_text(&claude_lines), rail_text(&codex_lines));
+    assert!(
+        claude_rail.contains("┤ Claude ├") && !claude_rail.contains("┤ Codex ├"),
+        "the caps notch the active tab alone:\n{claude_rail}"
+    );
+    assert!(
+        codex_rail.contains("┤ Codex ├") && !codex_rail.contains("┤ Claude ├"),
+        "the caps follow the pick:\n{codex_rail}"
+    );
     for label in ["Claude", "Codex"] {
         assert_eq!(
             claude_rail.find(label),
@@ -2713,14 +2756,23 @@ fn tab_rail_keeps_every_footprint_still_across_picks() {
     }
 }
 
+/// The tab rail's text, flattened from its first line's spans.
+fn rail_text(lines: &[Line<'static>]) -> String {
+    lines[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
 /// The pinned per-provider dashboard, tabbed: the tab rail names every account
-/// (the active tab a `┤ … ├`-capped chip notched into the top hairline), and
-/// only the active provider's block paints — here the selection-derived Claude
-/// tab, a metered block (the de-named header with plan and version indented to
-/// the stats column, the `⇅ rc` flag pinned top-right; the brand emblem; the
-/// `◎` session count leading today's stats; 5h/7d "mana" bars draining toward
-/// their resets). The other account stays a dim label resting in the rail, its
-/// block off screen.
+/// (the active tab a brand-filled chip set into the top hairline — the pick is
+/// color, so the rail's glyphs never move), and only the active provider's
+/// block paints — here the selection-derived Claude tab, a metered block (the
+/// de-named header with plan and version indented to the stats column, the
+/// `⇅ rc` flag pinned top-right; the brand emblem; the `◎` session count
+/// leading today's stats; 5h/7d "mana" bars draining toward their resets). The
+/// other account stays a dim label resting in the rail, its block off screen.
 #[test]
 fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
     let mut claude = agent(
@@ -2736,13 +2788,16 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
     snapshot.providers = two_provider_panels();
     let rendered = snapshot_to_screen(&snapshot, 54, 34);
 
-    // The tab rail: the selected pane runs Claude, so its tab wears the
-    // `┤ … ├` caps and Codex rests in the line beside it.
+    // The tab rail names both accounts set into the line; the pick is the
+    // chip's fill and weight, so no cap glyphs paint in a colored frame.
     assert!(
-        rendered.contains("┤ Claude ├"),
-        "the selection-derived active tab:\n{rendered}"
+        rendered.contains("─ Claude ─") && rendered.contains("─ Codex ─"),
+        "both tabs rest in the rail:\n{rendered}"
     );
-    assert!(rendered.contains("Codex"), "the resting tab:\n{rendered}");
+    assert!(
+        !rendered.contains('┤'),
+        "with color, the pick paints no caps:\n{rendered}"
+    );
     // The metered Claude block: the rail names the account, so the header
     // drops the name and reads plan-first with the `⇅ rc` remote-control flag
     // pinned to the top-right corner, the stats line leads with today's `◎`
@@ -2771,9 +2826,10 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
 }
 
 /// A manual tab pick (`←`/`→` or a click on the label) swaps the dashboard to
-/// that provider's block: the `┤ … ├` caps re-notch onto `Codex` and the
-/// unmetered block (the `∞` icon at the front, an empty `▱` track, no
-/// countdown) paints where Claude's was, fleet ledger and footer untouched.
+/// that provider's block: the brand chip moves onto `Codex` — fill alone, no
+/// glyph moves in the rail — and the unmetered block (the `∞` icon at the
+/// front, an empty `▱` track, no countdown) paints where Claude's was, fleet
+/// ledger and footer untouched.
 #[test]
 fn render_provider_dashboard_manual_tab_shows_the_picked_block() {
     let mut claude = agent(
@@ -2796,10 +2852,6 @@ fn render_provider_dashboard_manual_tab_shows_the_picked_block() {
     };
     let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 34);
 
-    assert!(
-        rendered.contains("┤ Codex ├"),
-        "the picked tab wears the caps:\n{rendered}"
-    );
     assert!(rendered.contains("ChatGPT Pro · v0.135.0"), "{rendered}");
     assert!(rendered.contains('∞'), "infinity at the front:\n{rendered}");
     assert!(rendered.contains('▱'), "the empty ∞ track:\n{rendered}");
@@ -2811,8 +2863,8 @@ fn render_provider_dashboard_manual_tab_shows_the_picked_block() {
 }
 
 /// With no manual pick, the tab focus follows the selected pane's provider:
-/// a selected Codex row notches the `┤ … ├` caps onto the codex tab and
-/// paints its block, however the panels are ordered.
+/// a selected Codex row moves the brand chip onto the codex tab and paints
+/// its block, however the panels are ordered.
 #[test]
 fn render_provider_dashboard_tab_follows_the_selected_agent() {
     let codex = agent(
@@ -2827,10 +2879,6 @@ fn render_provider_dashboard_tab_follows_the_selected_agent() {
     snapshot.providers = two_provider_panels();
     let rendered = snapshot_to_screen(&snapshot, 54, 34);
 
-    assert!(
-        rendered.contains("┤ Codex ├"),
-        "the selected agent's tab is active:\n{rendered}"
-    );
     assert!(rendered.contains("ChatGPT Pro · v0.135.0"), "{rendered}");
     assert!(
         !rendered.contains("Claude Max"),
@@ -3109,8 +3157,8 @@ fn attention_bucket_wears_the_oldest_rows_age_heat() {
 }
 
 /// State glyphs never dim. A zero bucket keeps its glyph's semantic tone at
-/// rest weight — the make-up reads as a stable colored legend — and drops only
-/// its count to faint chrome; the calm `○`/`✓` card leads read at full
+/// rest weight — the make-up reads as a stable colored legend — and rests only
+/// its count at the soft stat tier; the calm `○`/`✓` card leads read at full
 /// strength in their quiet green.
 #[test]
 fn state_glyphs_never_dim() {
@@ -3150,8 +3198,8 @@ fn state_glyphs_never_dim() {
         .collect();
     assert!(!zero_counts.is_empty(), "zero buckets render their counts");
     assert!(
-        zero_counts.iter().all(|span| span.style == theme.faint()),
-        "only the zero count drops to faint chrome"
+        zero_counts.iter().all(|span| span.style == theme.soft()),
+        "only the zero count rests at the soft stat tier"
     );
     // The card leads share the same full-strength read: the calm states keep
     // their quiet green with no dim weight.

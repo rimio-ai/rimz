@@ -11,7 +11,7 @@ use rimz::{SidebarProviderPanel, SpendTally, SpendWindow};
 use crate::render::fmt::{dollars2, reset_countdown, tokens_int, tokens_short, window_label};
 use crate::render::labels::{
     SEGMENT_CACHE_READ, SEGMENT_INPUT, SEGMENT_OUTPUT, TOKENS_CACHED, TOKENS_IN, TOKENS_OUT,
-    TOKENS_TOTAL, infinite_bar_spans, mana_bar_spans, mana_color, token_breakdown_spans,
+    TOKENS_TOTAL, infinite_bar_spans, mana_bar_spans, mana_style, token_breakdown_spans,
 };
 use crate::render::theme::Theme;
 
@@ -46,7 +46,7 @@ const NOT_STARTED_GRACE: SignedDuration = SignedDuration::from_secs(120);
 /// week (`W:`) and month (`M:`), each reading `◎ sessions  ◇ ↘ ↗ ◌  $spend`
 /// across every provider (today's headline lives in the cockpit, so these climb
 /// `week → month`). The token figures read the precise one-decimal form (`16.5k`)
-/// at full strength — the ledger is the exact record next to the cockpit's
+/// at the soft tier — the ledger is the exact record next to the cockpit's
 /// coarse live read — each marker in its one shared color (the sky-blue window
 /// tag, the teal `◎`, the violet `◇`, the segment-toned arrows and ring) and
 /// the `$` bold money-green; the
@@ -100,7 +100,7 @@ impl WmColumns {
 /// left-clustered, the `$ {spend}` pinned to the right edge. A one-cell lead
 /// pad sets the `W:`/`M:` tags a hair off the chrome edge. The window tag wears
 /// sky blue — distinct from the teal `◎` beside it — and each token marker its
-/// one shared color, with the figures at full strength ([`Theme::value`]).
+/// one shared color, with the figures at the soft tier ([`Theme::soft`]).
 /// Every numeric field is right-aligned to the shared [`WmColumns`] width, so
 /// the `W:` and `M:` rows stack into one tidy grid. The `◍` cache-write field
 /// is intentionally omitted here — the ledger keeps to the four headline
@@ -112,7 +112,7 @@ fn wm_row(
     cols: &WmColumns,
     width: usize,
 ) -> Line<'static> {
-    let value = theme.value();
+    let value = theme.soft();
     let marker = |color: Color| theme.style(color, Modifier::empty());
     let left = vec![
         Span::raw(" "),
@@ -174,8 +174,8 @@ pub(crate) struct ProviderTabHit {
 /// block — a hairline rule, then a header line, then the brand emblem zipped
 /// against the aggregate stats and the account-scoped budget bars. With
 /// several it is **tabbed**: the top hairline becomes a [tab
-/// rail](provider_tab_rail) — each account set into the rule, the active one a
-/// `┤ … ├`-capped brand chip — over the active provider's block alone, so the
+/// rail](provider_tab_rail) — each account set into the rule, the active one
+/// a brand-filled bold chip — over the active provider's block alone, so the
 /// budgets read one account at a time instead of stacking; the header then
 /// drops the name the rail carries and indents to the stats column, sitting
 /// directly over the `◎` line as the right-column grid's title row. A metered
@@ -223,29 +223,30 @@ pub(in crate::render) fn provider_panel_lines(
 }
 
 /// The dashboard's tab rail — the top hairline with every account set into it:
-/// a leading `──` stub, then each tab in order, the active one a
-/// `┤ Claude ├`-capped chip (brand-color fill, dark ink) and the rest dim
-/// brand labels resting in the line, separated and trailed by `─` fill in the
-/// rule's own tone so the chips read as notched into the hairline. The caps
-/// are the pick's `NO_COLOR`-surviving shape (the chip fill drops with the
-/// colors). Every tab reserves its two cap cells — an inactive tab paints them
-/// as rail fill — so switching tabs swaps `─` for `┤ ├` in place and never
-/// shifts a label. Labels are the kind slugs first-char-capitalized — the rail
-/// carries the product-name role the tabbed header drops. Holds to one screen
-/// row: a tab that would overflow `width` is dropped whole (label and hit
-/// together), so the hit map stays in lockstep with the frame however many
-/// kinds register or however narrow the pane. Returns the line plus one
-/// [`ProviderTabHit`] per rendered tab (line index 0, columns over the full
-/// cap-to-cap footprint, so the click target holds still too) for the mouse
-/// hit-test.
+/// a leading `──` stub, then each tab in order, the active one a brand-filled
+/// bold chip (dark ink on the brand color) and the rest brand-colored labels
+/// at full strength resting in the line, separated and trailed by `─` fill in
+/// the hairline's soft gray. Every rail glyph is identical whichever tab is
+/// active — each tab reserves one rail cell and one pad space on each side of
+/// its name, and the pick moves as fill and weight alone — so a click changes
+/// color without a single cell of glyph motion. Under `NO_COLOR` the chip
+/// fill drops, and `┤ ├` caps paint into the active tab's reserved rail cells
+/// as the pick's shape instead. Labels are the kind slugs
+/// first-char-capitalized — the rail carries the product-name role the tabbed
+/// header drops. Holds to one screen row: a tab that would overflow `width` is
+/// dropped whole (label and hit together), so the hit map stays in lockstep
+/// with the frame however many kinds register or however narrow the pane.
+/// Returns the line plus one [`ProviderTabHit`] per rendered tab (line index
+/// 0, columns over the full edge-to-edge footprint, so the click target holds
+/// still too) for the mouse hit-test.
 fn provider_tab_rail(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
     active_kind: &str,
     width: usize,
 ) -> (Line<'static>, Vec<ProviderTabHit>) {
-    let rule = theme.rule();
-    let fill = |cells: usize| Span::styled(RAIL_FILL.to_string().repeat(cells), rule);
+    let rail = theme.soft();
+    let fill = |cells: usize| Span::styled(RAIL_FILL.to_string().repeat(cells), rail);
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut hits = Vec::new();
     let mut col: usize = 0;
@@ -256,7 +257,7 @@ fn provider_tab_rail(
         let gap = if index > 0 { RAIL_STUB } else { 0 };
         let active = panel.kind == active_kind;
         // Kind labels are registry-fixed ASCII slugs, so chars == cells; the
-        // footprint adds the two pad cells and the two reserved cap cells.
+        // footprint adds the two pad spaces and the two reserved rail cells.
         let label = tab_label(&panel.kind);
         let cells = label.chars().count() + 4;
         if col + gap + cells > width {
@@ -267,17 +268,27 @@ fn provider_tab_rail(
             col += gap;
         }
         if active {
-            spans.push(Span::styled(TAB_CAP_LEFT.to_string(), rule));
-            spans.push(Span::styled(
-                format!(" {label} "),
-                theme.chip(TAB_INK, Color::Indexed(panel.color), Modifier::BOLD),
-            ));
-            spans.push(Span::styled(TAB_CAP_RIGHT.to_string(), rule));
+            // The brand fill and bold are the pick; the reserved rail cells
+            // keep their `─` so a click moves color alone, never a glyph.
+            // When `NO_COLOR` drops the fill, the `┤ ├` caps paint into
+            // those cells instead as the pick's shape.
+            let chip = theme.chip(TAB_INK, Color::Indexed(panel.color), Modifier::BOLD);
+            let (left, right) = if chip.bg.is_none() {
+                (
+                    Span::styled(TAB_CAP_LEFT.to_string(), rail),
+                    Span::styled(TAB_CAP_RIGHT.to_string(), rail),
+                )
+            } else {
+                (fill(1), fill(1))
+            };
+            spans.push(left);
+            spans.push(Span::styled(format!(" {label} "), chip));
+            spans.push(right);
         } else {
             spans.push(fill(1));
             spans.push(Span::styled(
                 format!(" {label} "),
-                theme.style(Color::Indexed(panel.color), Modifier::DIM),
+                theme.style(Color::Indexed(panel.color), Modifier::empty()),
             ));
             spans.push(fill(1));
         }
@@ -295,8 +306,9 @@ fn provider_tab_rail(
     (Line::from(spans), hits)
 }
 
-/// The active tab's caps, notching its chip into the rail on either side —
-/// the pick's `NO_COLOR`-surviving shape.
+/// The active tab's `NO_COLOR` caps — when the chip fill drops with the
+/// colors, these notch the pick into the rail by shape instead. With color
+/// they never paint, so a click moves no glyph.
 const TAB_CAP_LEFT: char = '┤';
 const TAB_CAP_RIGHT: char = '├';
 
@@ -444,7 +456,7 @@ fn provider_stats_spans(
         .unwrap_or_default();
     let mut left = vec![
         Span::styled(SESSIONS_GLYPH, theme.style(Color::Cyan, Modifier::empty())),
-        Span::styled(format!(" {}", today.sessions), theme.value()),
+        Span::styled(format!(" {}", today.sessions), theme.soft()),
         Span::raw("  "),
     ];
     left.extend(token_breakdown_spans(
@@ -529,7 +541,8 @@ fn window_not_started(window: &RateLimitWindow) -> bool {
 
 /// One metered budget bar row: the window's label (`5h`/`7d`/`30d`), the draining
 /// mana bar (filled = remaining), and the `↻ <reset>` countdown right-aligned in
-/// the value column. The label mirrors its bar's severity color. `force_exhausted`
+/// the value column at the soft tier. The label mirrors its bar's tone — the
+/// resting green, or the severity it heats to. `force_exhausted`
 /// paints the row as fully spent — red, no countdown — regardless of the window's
 /// own reading (a longer spent window gates it). `None` when the window reported
 /// no usage percentage and is not force-exhausted.
@@ -577,7 +590,7 @@ fn metered_bar_row(
     let mut spans = vec![
         Span::styled(
             format!("{label:<PROVIDER_LABEL_WIDTH$}"),
-            theme.style(mana_color(remaining, zones), Modifier::empty()),
+            mana_style(theme, remaining, zones),
         ),
         Span::raw(" "),
     ];
@@ -585,7 +598,7 @@ fn metered_bar_row(
     spans.push(Span::raw(" "));
     spans.push(Span::styled(
         format!("{value:>PROVIDER_VALUE_WIDTH$}"),
-        theme.dim(),
+        theme.soft(),
     ));
     Some(spans)
 }

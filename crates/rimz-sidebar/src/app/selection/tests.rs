@@ -1068,8 +1068,8 @@ fn clicking_a_tab_label_picks_that_tab_in_place() {
     let ws = workspace();
     let snapshot = tabbed_snapshot(&ws);
     // The rail's geometry after the gutter translation: the active
-    // `┤ Claude ├` chip cap-to-cap, then the inactive `─ Codex ─` footprint
-    // (caps reserved as fill) past the 2-cell `──` gap.
+    // `─ Claude ─` chip footprint edge to edge, then the inactive
+    // `─ Codex ─` footprint past the 2-cell `──` gap.
     let mut ui = UiState {
         tab_hits: vec![
             crate::render::ProviderTabHit {

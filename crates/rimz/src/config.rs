@@ -430,13 +430,17 @@ pub struct SidebarThemeConfig {
     /// Delegation/meta: the `⇅ rc` flag, the subagent `⧉` marker.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<u8>,
+    /// Soft content text: stat figures, capability tokens, subagent lines —
+    /// a step above `dim`, just below full-strength text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub soft: Option<u8>,
     /// Dim chrome: labels, ages, subordinate values.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dim: Option<u8>,
     /// Faintest chrome: bar tracks, `·` separators, dotted dividers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub faint: Option<u8>,
-    /// Section hairline rules — a step below `faint`.
+    /// The darkest chrome (the scrollbar track) — a step below `faint`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule: Option<u8>,
     /// The selected-row `▌` accent bar.

@@ -163,9 +163,10 @@ pub(super) fn age_heat(age_secs: i64) -> Option<Color> {
 }
 
 /// Tone for the card's elapsed-age cluster at `age_secs` of inactivity: the
-/// shared [`age_heat`] over a dim resting tone, so a fresh age stays chrome
-/// and a red one reads as the cost warning it is. The figure itself still
-/// carries the magnitude under `NO_COLOR`.
+/// shared [`age_heat`] over the dim resting weight — metadata a step under
+/// the card's soft text — so a fresh age stays quiet and a red one reads as
+/// the cost warning it is. The figure itself still carries the magnitude
+/// under `NO_COLOR`.
 pub(super) fn activity_age_style(theme: &Theme, age_secs: i64) -> Style {
     age_heat(age_secs).map_or(theme.dim(), |color| theme.style(color, Modifier::empty()))
 }
@@ -308,13 +309,13 @@ pub(super) const SEGMENT_OUTPUT: Color = Color::Green;
 /// rows). Each marker wears its one color everywhere: the `◇` total its
 /// soft-violet, the rest the same bar-segment tones the card's context line
 /// legends ([`SEGMENT_INPUT`] and siblings, `↗` output in the segment green) —
-/// one glyph, one color, across the whole sidebar. The figures read at full
-/// strength ([`Theme::value`]); under `NO_COLOR` the glyph shapes still spell
-/// the split. `fmt` chooses the magnitude form (`tokens_int` live,
-/// `tokens_short` for the precise W/M rows); `include_cache_write` drops the
-/// `◍` field for the W/M rows, which omit it. `total` is the caller's `◇` value
-/// (input + output), passed in so a row can read it straight from its
-/// accumulated window.
+/// one glyph, one color, across the whole sidebar. The figures read at the
+/// soft tier ([`Theme::soft`]) like every stat figure; under `NO_COLOR` the
+/// glyph shapes still spell the split. `fmt` chooses the magnitude form
+/// (`tokens_int` live, `tokens_short` for the precise W/M rows);
+/// `include_cache_write` drops the `◍` field for the W/M rows, which omit it.
+/// `total` is the caller's `◇` value (input + output), passed in so a row can
+/// read it straight from its accumulated window.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn token_breakdown_spans(
     theme: &Theme,
@@ -326,13 +327,13 @@ pub(super) fn token_breakdown_spans(
     fmt: fn(u64) -> String,
     include_cache_write: bool,
 ) -> Vec<Span<'static>> {
-    let mut spans = tokens_total_spans(theme, total, fmt, theme.value());
+    let mut spans = tokens_total_spans(theme, total, fmt);
     let mut field = |glyph: &str, color: Color, value: u64| {
         spans.push(Span::styled(
             format!(" {glyph} "),
             theme.style(color, Modifier::empty()),
         ));
-        spans.push(Span::styled(fmt(value), theme.value()));
+        spans.push(Span::styled(fmt(value), theme.soft()));
     };
     field(TOKENS_IN, SEGMENT_INPUT, input);
     field(TOKENS_OUT, SEGMENT_OUTPUT, output);
@@ -353,7 +354,8 @@ pub(super) fn token_breakdown_spans(
 /// provider with no per-call cache-write (Codex) simply never grows a `◍`.
 /// The `▤` head wears the bar's `severity` tone and each composition marker its
 /// bar-segment color ([`SEGMENT_CACHE_READ`] and siblings), so the line is the
-/// bar's color-keyed legend; the figures stay dim chrome.
+/// bar's color-keyed legend; the figures read at the dim chrome weight — a step
+/// under the name line's soft tokens, so the colored markers carry the line.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn context_breakdown_spans(
     theme: &Theme,
@@ -430,16 +432,16 @@ fn filled_cells(percent: u8, width: usize) -> usize {
     ((percent.min(100) as usize) * width.max(1) + 50) / 100
 }
 
-/// A two-tone bar: `filled` cells of `filled_glyph` in `color`, then a faint
-/// `track_glyph` out to `width`. The shared shape behind every meter — the thin
-/// `━`/`─` context gauge and the heavy `█`/`░` dashboard bars — so they read as
-/// one family differing only in weight. Color and fill differ per meter; the
-/// shape does not.
+/// A two-tone bar: `filled` cells of `filled_glyph` in `filled_style`, then
+/// `track_glyph` in `track_style` out to `width`. The shared shape behind every
+/// meter — the thin `━`/`─` context gauge and the segmented `▰`/`▱` mana bars —
+/// so they read as one family differing only in weight. Styles and fill differ
+/// per meter; the shape does not.
 fn two_tone_bar(
-    theme: &Theme,
     filled: usize,
     width: usize,
-    color: Color,
+    filled_style: Style,
+    track_style: Style,
     filled_glyph: char,
     track_glyph: char,
 ) -> Vec<Span<'static>> {
@@ -449,13 +451,13 @@ fn two_tone_bar(
     if filled > 0 {
         spans.push(Span::styled(
             std::iter::repeat_n(filled_glyph, filled).collect::<String>(),
-            theme.style(color, Modifier::empty()),
+            filled_style,
         ));
     }
     if filled < width {
         spans.push(Span::styled(
             std::iter::repeat_n(track_glyph, width - filled).collect::<String>(),
-            theme.faint(),
+            track_style,
         ));
     }
     spans
@@ -477,26 +479,27 @@ pub(super) fn severity_color(severity: ContextSeverity) -> Color {
     }
 }
 
-/// The window token's tone: still dim — a capability label, not a status
-/// signal; the context-meter severity ramp owns the loud color slot — but
+/// The window token's tone: subordinate chrome — a capability label, not a
+/// status signal; the context-meter severity ramp owns the loud color slot —
 /// tinted by size class so the magnitude reads at a glance: clay amber for a
-/// 1m+ window, gold for the 258k tier, sky blue for 128k, and the plain dim
-/// gray below that. The `DIM` modifier rides every band, so the token never
-/// outshines the meter; under `NO_COLOR` all bands collapse to the same dim.
+/// 1m+ window, gold for the 258k tier, sky blue for 128k, and the dim chrome
+/// below that, level with the model/effort tokens beside it. The tinted bands
+/// ride the `DIM` modifier so the token never outshines the meter; under
+/// `NO_COLOR` every band collapses to the same bare DIM weight.
 pub(super) fn window_style(theme: &Theme, window: u64) -> Style {
     let color = match window {
         1_000_000.. => ORANGE,
         258_000.. => Color::Yellow,
         128_000.. => Color::Blue,
-        _ => Color::DarkGray,
+        _ => return theme.dim(),
     };
     theme.style(color, Modifier::DIM)
 }
 
 /// Context bar: a thin rule whose filled run grows left-to-right as the window
-/// fills, painted in `color` (the caller's [`severity_color`]). The label
-/// and value columns live in the renderer's shared bar row; here we paint just
-/// the meter.
+/// fills, painted in `color` (the caller's [`severity_color`]) over a faint
+/// track. The label and value columns live in the renderer's shared bar row;
+/// here we paint just the meter.
 pub(super) fn gauge_spans(
     theme: &Theme,
     color: Color,
@@ -504,10 +507,10 @@ pub(super) fn gauge_spans(
     width: usize,
 ) -> Vec<Span<'static>> {
     two_tone_bar(
-        theme,
         filled_cells(percent, width),
         width,
-        color,
+        theme.style(color, Modifier::empty()),
+        theme.faint(),
         BAR_FILLED,
         BAR_TRACK,
     )
@@ -587,11 +590,13 @@ fn apportion(weights: impl IntoIterator<Item = u64>, total: usize) -> Vec<usize>
 /// The provider dashboard's draining budget ("mana / stamina") bar:
 /// `remaining_pct` of the width in `▰`, the rest a `▱` track, with no brackets.
 /// A full bar means budget *left*: it shortens as the window is spent, and the
-/// reset countdown beside it says when it refills. Ramps green → yellow → amber
-/// → red by how much remains on the `[sidebar.budget]` zones ([`mana_color`]),
-/// so a near-spent window reddens regardless of which window it is. At 0%
-/// remaining — the budget fully spent — the whole empty track turns red; any
-/// nonzero remaining budget keeps at least one filled cell.
+/// reset countdown beside it says when it refills. Ramps green → gold →
+/// clay-amber → red by how much remains on the `[sidebar.budget]` zones
+/// ([`mana_style`]), so a near-spent window reddens regardless of which window
+/// it is. The drained `▱` run rides the dim chrome — a step up from the faint
+/// context-gauge track, so the spent share stays legible on the dashboard. At
+/// 0% remaining — the budget fully spent — the whole empty track turns red;
+/// any nonzero remaining budget keeps at least one filled cell.
 pub(super) fn mana_bar_spans(
     theme: &Theme,
     remaining_pct: u8,
@@ -599,10 +604,10 @@ pub(super) fn mana_bar_spans(
     zones: &BudgetZonesConfig,
 ) -> Vec<Span<'static>> {
     // A fully spent window (0% remaining) reads as a full-width *red* empty track,
-    // not the faint "no fill" track a plain drain leaves — `two_tone_bar` always
-    // paints the track faint, so an absent fill alone would read as the same calm
-    // gray as a barely-touched window. Alarm the track itself so "used up" is
-    // unmistakable; it stays the empty `▱` glyph (no fill), only its tone changes.
+    // not the gray "no fill" track a plain drain leaves — an absent fill alone
+    // would read as the same calm chrome as a barely-touched window. Alarm the
+    // track itself so "used up" is unmistakable; it stays the empty `▱` glyph
+    // (no fill), only its tone changes.
     if remaining_pct == 0 {
         return vec![Span::styled(
             std::iter::repeat_n(MANA_TRACK, width.max(1)).collect::<String>(),
@@ -611,32 +616,32 @@ pub(super) fn mana_bar_spans(
     }
     let filled = filled_cells(remaining_pct, width).max(1);
     two_tone_bar(
-        theme,
         filled,
         width,
-        mana_color(remaining_pct, zones),
+        mana_style(theme, remaining_pct, zones),
+        theme.dim(),
         MANA_FILLED,
         MANA_TRACK,
     )
 }
 
-/// The severity color for a mana bar at `remaining_pct` budget left: red when
-/// near-spent (or fully spent), then the same gold → clay-amber escalation the
-/// age and context ramps speak. Each `[sidebar.budget]` zone names the
-/// exclusive upper bound of remaining budget where its tier applies
-/// ([`BudgetZonesConfig`]); at or above `yellow` the bar stays green. Checked
+/// The mana bar's tone at `remaining_pct` budget left: red when near-spent (or
+/// fully spent), then the same gold → clay-amber escalation the age and
+/// context ramps speak, resting green while the budget sits above every
+/// warning zone. Each `[sidebar.budget]` zone names the exclusive upper bound
+/// of remaining budget where its tier applies ([`BudgetZonesConfig`]); checked
 /// worst-first, so a misordered user config degrades to the worse tier. Shared
 /// by the bar fill and the `5h`/`7d` label beside it so the label mirrors its
 /// bar's tone.
-pub(super) fn mana_color(remaining_pct: u8, zones: &BudgetZonesConfig) -> Color {
+pub(super) fn mana_style(theme: &Theme, remaining_pct: u8, zones: &BudgetZonesConfig) -> Style {
     if remaining_pct < zones.red {
-        Color::Red
+        theme.style(Color::Red, Modifier::empty())
     } else if remaining_pct < zones.amber {
-        ORANGE
+        theme.style(ORANGE, Modifier::empty())
     } else if remaining_pct < zones.yellow {
-        Color::Yellow
+        theme.style(Color::Yellow, Modifier::empty())
     } else {
-        Color::Green
+        theme.style(Color::Green, Modifier::empty())
     }
 }
 
@@ -654,7 +659,8 @@ pub(super) fn infinite_bar_spans(theme: &Theme, color: u8, width: usize) -> Vec<
 }
 
 /// Todo progress: filled dots for done, hollow dots for remaining, with the
-/// numeric ratio appended. The shape carries it; color stays dim chrome.
+/// numeric ratio appended. The shape carries it; the dots stay dim chrome and
+/// the ratio reads at the card's soft middle weight.
 pub(super) fn todo_spans(theme: &Theme, done: u32, total: u32) -> Vec<Span<'static>> {
     let total = total.max(done);
     let cap = 5_u32;
@@ -673,7 +679,7 @@ pub(super) fn todo_spans(theme: &Theme, done: u32, total: u32) -> Vec<Span<'stat
         .collect();
     vec![
         Span::styled(dots, theme.dim()),
-        Span::styled(format!(" {done}/{total}"), theme.dim()),
+        Span::styled(format!(" {done}/{total}"), theme.soft()),
     ]
 }
 
@@ -682,18 +688,16 @@ pub(super) fn todo_spans(theme: &Theme, done: u32, total: u32) -> Vec<Span<'stat
 /// on it, and a breakdown-less line (a Codex rollup-only total) uses it alone.
 /// `fmt` picks the magnitude form ([`tokens_int`](super::fmt::tokens_int) live,
 /// `tokens_short` for the precise W/M rows). The diamond is a colored marker;
-/// `value_style` sets the figure's weight — full-strength ([`Theme::value`]) on
-/// the fleet lines, dim on a subordinate card line (a subagent's spend).
+/// the figure reads at the soft tier ([`Theme::soft`]) like every stat figure.
 /// Display-only, never a decision driver.
 pub(super) fn tokens_total_spans(
     theme: &Theme,
     total: u64,
     fmt: fn(u64) -> String,
-    value_style: Style,
 ) -> Vec<Span<'static>> {
     vec![
         Span::styled(TOKENS_TOTAL, theme.style(Color::Magenta, Modifier::empty())),
-        Span::styled(format!(" {}", fmt(total)), value_style),
+        Span::styled(format!(" {}", fmt(total)), theme.soft()),
     ]
 }
 

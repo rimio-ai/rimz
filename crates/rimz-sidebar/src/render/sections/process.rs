@@ -1,7 +1,7 @@
 //! Bare process rows: the shell/build line, its right-pinned resource stats,
 //! the full-command detail line, and the resolver's composed row.
 
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use rimz::SidebarRow;
 use rimz::feed::AgentStatus;
@@ -18,13 +18,13 @@ pub(super) fn process_row_line(
     width: usize,
     animation_phase: u64,
 ) -> Line<'static> {
-    // The row speaks the agent cards' vocabulary one weight step down: an
-    // active pane (a build, a test, a script) gets the running braille spinner
-    // in the same work clay a running agent wears, an idle shell or a TUI
-    // rests on the quiet-green hollow `○` of an idle agent, and lead and name
-    // both carry the DIM weight. That slight dim — not a seam line — is what
+    // The row speaks the agent cards' vocabulary one step down: an active
+    // pane (a build, a test, a script) gets the running braille spinner in
+    // the same work clay a running agent wears, an idle shell or a TUI rests
+    // on the quiet-green hollow `○` of an idle agent — the lead DIM-weighted,
+    // the name at the soft tier. That slight step — not a seam line — is what
     // sets the group's command tail apart from the agent cards above it, and
-    // it survives `NO_COLOR` as weight alone.
+    // under `NO_COLOR` it survives as the soft tier's DIM weight.
     let (lead, lead_style) = if row.process_active {
         (
             working_glyph(animation_phase),
@@ -39,7 +39,7 @@ pub(super) fn process_row_line(
     let left = vec![
         Span::styled(lead, lead_style),
         Span::raw(" "),
-        Span::styled(row.name.clone(), soft()),
+        Span::styled(row.name.clone(), theme.soft()),
     ];
     // At L2 width, resource stats pin right: `C  11%  M 1.1G  ⇅   3M/s`.
     // The whole cluster drops at L0/L1, or when no metric has reported yet.
@@ -89,22 +89,21 @@ pub(in crate::render) fn proc_stats_spans(theme: &Theme, row: &SidebarRow) -> Ve
     vec![Span::styled(text, theme.dim())]
 }
 
-/// The process rows' soft tone: the default foreground one DIM step down —
-/// dimmer than an agent card's full-strength text, brighter than the gray
-/// [`Theme::dim`] label tier — so the command tail reads as quieter content,
-/// never as chrome.
-fn soft() -> Style {
-    Style::default().add_modifier(Modifier::DIM)
-}
-
 /// Line 2 for an *active* process row: the full foreground command in the
-/// row's [`soft`] tone, indented under the shell anchor, so a build or a
-/// `sudo` install reads in full while the primary line keeps the stable shell
-/// label. `None` when the producer left no detail (an idle pane, or a command
-/// already shown whole on line 1).
-pub(super) fn process_detail_line(row: &SidebarRow, width: usize) -> Option<Line<'static>> {
+/// row's [`Theme::soft`] tone, indented under the shell anchor, so a build or
+/// a `sudo` install reads in full while the primary line keeps the stable
+/// shell label. `None` when the producer left no detail (an idle pane, or a
+/// command already shown whole on line 1).
+pub(super) fn process_detail_line(
+    theme: &Theme,
+    row: &SidebarRow,
+    width: usize,
+) -> Option<Line<'static>> {
     let detail = row.command_detail.as_deref()?;
-    let left = vec![Span::raw("  "), Span::styled(detail.to_owned(), soft())];
+    let left = vec![
+        Span::raw("  "),
+        Span::styled(detail.to_owned(), theme.soft()),
+    ];
     Some(Line::from(trim_spans_to_width(left, width)))
 }
 
@@ -135,6 +134,6 @@ pub(super) fn composed_row(
         Span::raw(" "),
         Span::raw(task),
         Span::raw(" ".repeat(padding)),
-        Span::styled(age, theme.dim()),
+        Span::styled(age, theme.soft()),
     ])
 }
