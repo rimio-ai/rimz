@@ -704,6 +704,120 @@ fn codex_subagent_permission_request_replaces_child_agent_row() {
 }
 
 #[test]
+fn claude_in_subagent_tool_event_does_not_disturb_parent() {
+    // Claude stamps `agent_id` on every payload fired inside a subagent, so a
+    // backgrounded child's mutating tool arrives on the parent's session with a
+    // foreign id. It must fold to nothing: no lifecycle event appended, no
+    // phantom child row, and — the load-bearing part — the parent's
+    // `last_activity` stays its own (the child-keyed heartbeat carries the
+    // child's progress instead).
+    let env = Env::new();
+    let output = env.run_hook(
+        "claude",
+        &serde_json::to_string(&json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "sess-claude-parent",
+        }))
+        .expect("payload"),
+    );
+    assert!(output.status.success());
+    let lifecycle_events_before = env
+        .read_events()
+        .iter()
+        .filter(|event| event.method == "agent.lifecycle")
+        .count();
+
+    let output = env.run_hook(
+        "claude",
+        &serde_json::to_string(&json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "sess-claude-parent",
+            "agent_id": "child-1",
+            "tool_name": "Edit",
+        }))
+        .expect("payload"),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty(), "lifecycle hook is silent");
+
+    let lifecycle_events_after = env
+        .read_events()
+        .iter()
+        .filter(|event| event.method == "agent.lifecycle")
+        .count();
+    assert_eq!(
+        lifecycle_events_after, lifecycle_events_before,
+        "a foreign-child tool event appends no lifecycle event"
+    );
+    let parsed = env.snapshot_json();
+    let agents = parsed["agents"].as_array().expect("agents array");
+    assert_eq!(agents.len(), 1, "no phantom child row: {agents:?}");
+    assert_eq!(agents[0]["agent_id"], "sess-claude-parent");
+}
+
+#[test]
+fn pending_native_ui_ask_survives_backgrounded_child_tool() {
+    // The asking-while-running regression lock: a parent blocked on a native_ui
+    // ask must stay `waiting` while a backgrounded subagent works. Before the
+    // foreign-id drop, the child's mutating PostToolUse advanced the parent's
+    // `last_activity` past the ask and the `waiting` fold dropped.
+    let env = Env::new();
+    let run = |payload: &Value| {
+        let payload = serde_json::to_string(payload).expect("payload");
+        let output = env.run_hook("claude", &payload);
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+
+    run(&json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "sess-claude-parent",
+    }));
+    run(&json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "sess-claude-parent",
+        "prompt": "fix the sidebar reload bug",
+    }));
+
+    // No resolver enrolled, so the blocking ask lands native_ui and pending.
+    run(&json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "AskUserQuestion",
+        "tool_input": { "questions": [{ "question": "which fix shape?" }] },
+        "session_id": "sess-claude-parent",
+    }));
+    let items = env.feed_list_json();
+    assert_eq!(items[0]["surface"], "native_ui");
+    assert_eq!(items[0]["status"], "pending");
+    let request_id = items[0]["request_id"].as_str().expect("id").to_owned();
+
+    // The backgrounded child keeps working while the parent blocks.
+    run(&json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "sess-claude-parent",
+        "agent_id": "child-1",
+        "tool_name": "Bash",
+    }));
+
+    let parsed = env.snapshot_json();
+    let groups = parsed["worktree_groups"].as_array().expect("groups");
+    let rows: Vec<&Value> = groups
+        .iter()
+        .flat_map(|group| group["rows"].as_array().expect("rows"))
+        .collect();
+    assert_eq!(rows.len(), 1, "one waiting parent row expected: {rows:?}");
+    assert_eq!(rows[0]["status"], "waiting");
+    assert_eq!(rows[0]["request_id"], request_id.as_str());
+}
+
+#[test]
 fn codex_uninstall_cli_removes_legacy_config_block() {
     let env = Env::new();
     let codex_config = env.project_root.join(".codex").join("config.toml");

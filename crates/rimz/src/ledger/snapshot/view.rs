@@ -1406,6 +1406,11 @@ fn most_relevant_ask<'a>(
 /// heartbeat advances `last_activity` past the ask's `updated_at` as soon as the
 /// agent runs its next tool. A bridge ask keeps the hook blocked, so the agent
 /// emits no progress while it waits and this never fires for one mid-flight.
+/// Sound only because a blocked agent's `last_activity` is its *own*: a
+/// backgrounded subagent keeps emitting child-stamped events while the parent
+/// blocks, and the adapters drop those from the lifecycle channel
+/// (`resolve_root_identity`) — folded onto the parent they would advance it
+/// past a pending ask and misfire this recovery.
 fn agent_moved_past_ask(agent: &AgentState, ask: &FeedItem) -> bool {
     agent.last_activity > ask.updated_at
 }

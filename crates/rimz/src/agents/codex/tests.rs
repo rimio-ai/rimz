@@ -179,6 +179,36 @@ fn subagent_stop_observes_idle_child_id() {
 }
 
 #[test]
+fn foreign_child_mutating_post_tool_use_is_dropped() {
+    // A non-Subagent* event carrying a distinct `agent_id` fired inside a
+    // subagent: dropped rather than keyed as a parentless phantom root.
+    // Latent today — Codex stamps `agent_id` only on Subagent* — but the
+    // root arm shares Claude's rule so the door stays closed.
+    let obs = CodexAdapter.observe_lifecycle(
+        "PostToolUse",
+        &json!({
+            "session_id": "sess-parent",
+            "agent_id": "child-thread-1",
+            "tool_name": "shell",
+        }),
+    );
+    assert!(
+        obs.is_none(),
+        "a foreign-id tool event never creates a parentless root row"
+    );
+
+    // Without the foreign id the same payload is a normal root `ToolUsed`.
+    let root = CodexAdapter
+        .observe_lifecycle(
+            "PostToolUse",
+            &json!({ "session_id": "sess-parent", "tool_name": "shell" }),
+        )
+        .unwrap();
+    assert_eq!(root.agent_id.as_deref(), Some("sess-parent"));
+    assert_eq!(root.parent_agent_id, None);
+}
+
+#[test]
 fn clean_stop_observes_success() {
     let obs = CodexAdapter
         .observe_lifecycle("Stop", &json!({ "session_id": "sess-1" }))

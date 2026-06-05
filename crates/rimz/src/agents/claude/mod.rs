@@ -45,12 +45,12 @@ use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentContext, AgentErr, AgentLifecycleObservation, AgentTurnError,
     ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
-    StatusLineChange, SubagentIdentity, SubagentObservation, agent_config_path, choice_is_allow,
-    classify_agent_hook, optional_payload_string, read_optional_file, read_transcript_tail,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    RootIdentity, StatusLineChange, SubagentIdentity, SubagentObservation, agent_config_path,
+    choice_is_allow, classify_agent_hook, optional_payload_string, read_optional_file,
+    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
+    stop_payload_errored,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
-use crate::ids::AgentSessionId;
 use crate::ledger::atomic;
 
 /// Claude's effective hook cap. The upstream cap is ~125s; we leave a small
@@ -311,9 +311,14 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn moves_on(&self, event_name: &str) -> bool {
         // A new prompt starts a fresh turn; a Stop ends the current one. Either
-        // way the agent is past any native_ui ask it raised mid-turn — Claude
-        // blocks on its own prompt and emits no events until the human answers
-        // it, so by the time one of these arrives the ask is settled in its UI.
+        // way the agent is past any native_ui ask it raised mid-turn — Claude's
+        // *main thread* blocks on its own prompt and emits no events until the
+        // human answers it, so by the time one of these arrives the ask is
+        // settled in its UI. A backgrounded subagent does keep emitting while
+        // the main thread blocks, but every in-subagent payload carries the
+        // child `agent_id`, so expiry (keyed by `payload_agent_id`) scopes to
+        // the child and the lifecycle channel drops the event entirely
+        // (`resolve_root_identity`) — neither can settle the parent's ask.
         matches!(event_name, "Stop" | "UserPromptSubmit")
     }
 
@@ -376,7 +381,11 @@ impl AgentAdapter for ClaudeAdapter {
         // A subagent keys on its own child id under its parent root; a malformed
         // subagent event (no distinct child id) is quarantined — never folded
         // onto, and never corrupting, the parent's row. Root events key on the
-        // session id and carry no parent link.
+        // session id and carry no parent link — and Claude stamps `agent_id` on
+        // every payload fired inside a subagent, so a non-Subagent* event
+        // carrying a distinct one is the child's per-tool latency, dropped here
+        // rather than folded onto the parent (it would advance the parent past
+        // a pending ask; the child-keyed heartbeat carries the activity).
         let (agent_id, parent_agent_id) = match subagent_common {
             Some(c) => match resolve_subagent_identity(
                 self.descriptor().kind,
@@ -391,10 +400,15 @@ impl AgentAdapter for ClaudeAdapter {
                 } => (Some(agent_id), Some(parent_agent_id)),
                 SubagentIdentity::Quarantined => return None,
             },
-            None => (
-                optional_payload_string(payload, &["session_id"]).map(AgentSessionId::from),
-                None,
-            ),
+            None => match resolve_root_identity(
+                self.descriptor().kind,
+                event_name,
+                optional_payload_string(payload, &["agent_id"]).as_deref(),
+                optional_payload_string(payload, &["session_id"]).as_deref(),
+            ) {
+                RootIdentity::Root { agent_id } => (agent_id, None),
+                RootIdentity::ForeignChild => return None,
+            },
         };
         // Context budget lives in the transcript, not the payload — read its tail
         // on these low-frequency events. Resolve the model first: only the payload

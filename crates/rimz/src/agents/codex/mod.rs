@@ -49,12 +49,11 @@ use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, LifecycleRefreshCtx, RefreshSpawn, Result,
-    SubagentIdentity, agent_config_path, choice_is_allow, classify_agent_hook,
-    optional_payload_string, read_optional_file, read_transcript_tail, resolve_subagent_identity,
-    sanitize_user_prompt, stop_payload_errored,
+    RootIdentity, SubagentIdentity, agent_config_path, choice_is_allow, classify_agent_hook,
+    optional_payload_string, read_optional_file, read_transcript_tail, resolve_root_identity,
+    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
-use crate::ids::AgentSessionId;
 use crate::ledger::atomic;
 
 /// Codex's effective hook cap. Upstream's blocking-hook deadline is shorter
@@ -293,7 +292,10 @@ impl AgentAdapter for CodexAdapter {
         // A subagent keys on its own child id under its parent root; a malformed
         // subagent event (no distinct child id) is quarantined — never folded
         // onto, and never corrupting, the parent's row. Root events key on the
-        // session id and carry no parent link.
+        // session id and carry no parent link — a non-Subagent* event carrying
+        // a distinct `agent_id` fired inside a subagent and is dropped rather
+        // than keyed as a parentless phantom root (Codex stamps `agent_id` only
+        // on Subagent* today, so this is the same guard Claude needs, latent).
         let (agent_id, parent_agent_id) = match subagent {
             Some((child, _, parent)) => match resolve_subagent_identity(
                 self.descriptor().kind,
@@ -308,11 +310,15 @@ impl AgentAdapter for CodexAdapter {
                 } => (Some(agent_id), Some(parent_agent_id)),
                 SubagentIdentity::Quarantined => return None,
             },
-            None => (
-                optional_payload_string(payload, &["agent_id", "session_id"])
-                    .map(AgentSessionId::from),
-                None,
-            ),
+            None => match resolve_root_identity(
+                self.descriptor().kind,
+                event_name,
+                optional_payload_string(payload, &["agent_id"]).as_deref(),
+                optional_payload_string(payload, &["session_id"]).as_deref(),
+            ) {
+                RootIdentity::Root { agent_id } => (agent_id, None),
+                RootIdentity::ForeignChild => return None,
+            },
         };
         // Context budget lives in the rollout JSONL, not the payload — locate the
         // session's file by id and read its tail. The rollout carries a precomputed

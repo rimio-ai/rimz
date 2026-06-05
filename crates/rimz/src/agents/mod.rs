@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::Value;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ids::AgentSessionId;
@@ -575,6 +575,51 @@ pub(crate) fn resolve_subagent_identity(
             );
             SubagentIdentity::Quarantined
         }
+    }
+}
+
+/// The outcome of resolving a non-subagent (root-arm) event's identity.
+pub(crate) enum RootIdentity {
+    /// A normal root event: key on the session id, no parent link.
+    Root { agent_id: Option<AgentSessionId> },
+    /// The event is stamped with a distinct child `agent_id` — it fired inside
+    /// a subagent. The caller drops it: the lifecycle channel is bracket-grained
+    /// for children (only `Subagent*` folds to the child's rollup), per-tool
+    /// child activity rides the child-keyed heartbeat, and folding the event
+    /// onto the parent would advance the parent's `last_activity` past a
+    /// pending ask — un-folding its `waiting` row while it is still blocked.
+    ForeignChild,
+}
+
+/// Resolve a non-subagent event's identity. A payload whose `agent_id` is
+/// present, non-empty, and distinct from its `session_id` fired inside a
+/// subagent and is the child's, never the root's — the one place the rule
+/// lives, shared by the adapters whose providers stamp `agent_id` on every
+/// in-subagent payload. A missing or session-equal `agent_id` is a normal root;
+/// quarantine stays `Subagent*`-only.
+pub(crate) fn resolve_root_identity(
+    kind: &str,
+    event_name: &str,
+    agent_id: Option<&str>,
+    session_id: Option<&str>,
+) -> RootIdentity {
+    let agent = agent_id.map(str::trim).filter(|value| !value.is_empty());
+    let session = session_id.map(str::trim).filter(|value| !value.is_empty());
+    match (agent, session) {
+        (Some(agent), session) if session != Some(agent) => {
+            debug!(
+                target: "rimz::agent::lifecycle",
+                kind,
+                event = event_name,
+                agent_id = agent,
+                session_id = session.unwrap_or(""),
+                "foreign-child lifecycle event dropped (rides the child-keyed heartbeat)",
+            );
+            RootIdentity::ForeignChild
+        }
+        _ => RootIdentity::Root {
+            agent_id: session.map(AgentSessionId::from),
+        },
     }
 }
 

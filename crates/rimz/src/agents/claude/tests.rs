@@ -233,6 +233,56 @@ fn subagent_event_without_child_id_is_quarantined() {
 }
 
 #[test]
+fn foreign_child_mutating_post_tool_use_is_dropped() {
+    // Claude stamps `agent_id` on every payload fired inside a subagent, so
+    // a backgrounded child's mutating tool must not fold onto the parent's
+    // rollup — it would advance the parent's `last_activity` past a pending
+    // native_ui ask and un-fold its `waiting` row while still blocked. The
+    // child-keyed activity heartbeat carries this progress instead.
+    let obs = ClaudeAdapter.observe_lifecycle(
+        "PostToolUse",
+        &json!({
+            "session_id": "sess-parent",
+            "agent_id": "child-1",
+            "tool_name": "Edit",
+        }),
+    );
+    assert!(
+        obs.is_none(),
+        "a backgrounded child's mutating tool must not fold onto the parent"
+    );
+}
+
+#[test]
+fn foreign_child_pre_compact_is_dropped() {
+    // An in-subagent compaction must not stamp the *parent's* compacting
+    // head — same foreign-id family as the per-tool drop.
+    let obs = ClaudeAdapter.observe_lifecycle(
+        "PreCompact",
+        &json!({ "session_id": "sess-parent", "agent_id": "child-1" }),
+    );
+    assert!(obs.is_none(), "a child's compaction never marks the parent");
+}
+
+#[test]
+fn root_event_with_agent_id_equal_to_session_id_is_root() {
+    // A session-equal `agent_id` is the main thread, not a child — a normal
+    // root observation, never dropped.
+    let obs = ClaudeAdapter
+        .observe_lifecycle(
+            "PostToolUse",
+            &json!({
+                "session_id": "sess-1",
+                "agent_id": "sess-1",
+                "tool_name": "Edit",
+            }),
+        )
+        .unwrap();
+    assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
+    assert_eq!(obs.parent_agent_id, None);
+}
+
+#[test]
 fn harness_control_prompt_is_not_adopted_as_description() {
     // The harness injects synthetic user turns (a completed background task);
     // their raw text must never become the agent's description line.
