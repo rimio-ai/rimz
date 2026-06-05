@@ -483,6 +483,37 @@ fn invariants(root: &Path) -> Result<()> {
         )?;
     }
 
+    // Participant surfaces — hook entrypoints, event/feed publishers, the
+    // statusline sidecars, pane helpers, and the sidebar renderer — resolve
+    // identity through the session pin (`resolve_participant`); the
+    // create-mode resolver would re-derive identity from cwd and split-brain
+    // an agent working inside a nested repo.
+    let outside_participants = {
+        let cli_root = root.join("crates/rimz/src/cli");
+        let sidebar_main = root.join("crates/rimz-sidebar/src/main.rs");
+        move |path: &Path| {
+            let participant_cli = path.starts_with(&cli_root)
+                && matches!(
+                    path.file_name().and_then(OsStr::to_str),
+                    Some(
+                        "hooks.rs"
+                            | "event.rs"
+                            | "statusline.rs"
+                            | "feed.rs"
+                            | "pane.rs"
+                            | "sidebar.rs"
+                    )
+                );
+            !(participant_cli || path == sidebar_main)
+        }
+    };
+    ensure_no_match(
+        &files,
+        concat!("WorkspaceResolver::", "resolve("),
+        &outside_participants,
+        "participant surfaces resolve identity through the session pin — use resolve_participant",
+    )?;
+
     ensure_no_core_pane_auto_use(root, &files)?;
     ensure_inline_tests_stay_small(&files)?;
     Ok(())

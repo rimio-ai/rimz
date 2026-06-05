@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::ids::WorkspaceId;
 use crate::ledger::atomic::{self, write_temp_then_rename};
 use crate::ledger::paths::StatePaths;
-use crate::workspace::ResolvedWorkspace;
+use crate::workspace::{ResolvedWorkspace, RootClass};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceRecordErr {
@@ -42,7 +42,16 @@ pub struct WorkspaceRecord {
     pub workspace_id: WorkspaceId,
     pub project_root: PathBuf,
     pub session_name: String,
+    /// Which ladder tier the root is. Records predating the field decode as
+    /// [`RootClass::Repo`] — today's behavior — and self-heal on the next
+    /// start/attach re-record.
+    #[serde(default = "default_root_class")]
+    pub root_class: RootClass,
     pub updated_at: Timestamp,
+}
+
+fn default_root_class() -> RootClass {
+    RootClass::Repo
 }
 
 impl WorkspaceRecord {
@@ -51,6 +60,7 @@ impl WorkspaceRecord {
             workspace_id: workspace.workspace_id.clone(),
             project_root: workspace.project_root.clone(),
             session_name: workspace.session_name.clone(),
+            root_class: workspace.root_class,
             updated_at: Timestamp::now(),
         }
     }
@@ -84,6 +94,18 @@ mod tests {
     use super::*;
     use crate::workspace::WorkspaceResolver;
     use tempfile::tempdir;
+
+    #[test]
+    fn legacy_record_without_root_class_decodes_as_repo() {
+        let json = serde_json::json!({
+            "workspace_id": "ws_0123456789abcdef01234567",
+            "project_root": "/repo",
+            "session_name": "rimz-repo",
+            "updated_at": "2026-01-01T00:00:00Z",
+        });
+        let record: WorkspaceRecord = serde_json::from_value(json).expect("decode legacy record");
+        assert_eq!(record.root_class, RootClass::Repo);
+    }
 
     #[test]
     fn record_round_trips() {

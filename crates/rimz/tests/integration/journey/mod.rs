@@ -128,7 +128,7 @@ impl<'a> RoomHarness<'a> {
         cmd.env("XDG_STATE_HOME", env.state_root());
         cmd.env("XDG_CONFIG_HOME", env.config_root());
         cmd.env("XDG_RUNTIME_DIR", runtime.path());
-        cmd.env("HOME", &env.project_root);
+        cmd.env("HOME", &env.home_root);
         cmd.env("RIMZ_TEST_PANE_LIST", &pane_file);
         cmd.env_remove("RUST_LOG");
 

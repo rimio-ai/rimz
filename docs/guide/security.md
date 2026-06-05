@@ -62,6 +62,7 @@ The mechanics behind these guarantees — the decision channel, the neutral no-o
 - Feed resolution requires workspace ID, request ID, and nonce.
 - First valid CAS writer wins. Later writers are rejected, or recorded as `late audit` where the state machine allows.
 - PID identity is cleanup metadata only — never the basis for authorization.
+- The session identity pin (`RIMZ_WORKSPACE_ID`/`RIMZ_PROJECT_ROOT`) selects which ledger a participant writes to; it executes nothing and enters no trust hash. The pin is hash-verified against its root, and same-UID environment access sits inside the existing trust boundary — a forged pin can redirect a write only to a ledger the same user already owns.
 
 ## Privacy
 

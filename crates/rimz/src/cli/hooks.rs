@@ -138,7 +138,7 @@ fn log_lifecycle_transition(ledger: &Ledger, kind: &str, observation: &AgentLife
 }
 
 fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
     let mut buf = String::new();
     io::stdin()

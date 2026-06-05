@@ -22,7 +22,7 @@ All multiplexer-specific operations live behind one trait. Everything correctnes
 
 ```text
 name()
-ensure_session(session_name, cwd)
+ensure_session(session_name, workspace_id, project_root, cwd)
 attach_command(name, config) -> CommandSpec
 detach(name)
 list_sessions()
@@ -37,6 +37,15 @@ version()
 ```
 
 Backend-specific fast paths cannot become correctness requirements. If a feature exists only on Zellij, the tmux backend must still pass the same matrix without it.
+
+### The identity pin
+
+Session birth stamps the room's identity — `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT` ([`pin_env`](../../crates/rimz/src/workspace.rs)) — into the session environment, so every pane, and so every agent and its hook children, inherits the workspace it lives in ([hooks.md → participant resolution](./hooks.md#hooks-resolve-the-room-they-live-in)). Each backend pins at its birth seam:
+
+- **tmux** sets the pair with `new-session -e`, so the first window's panes already carry it, and re-asserts it idempotently with `set-environment -t` on every ensure — `-A` on a live session ignores `-e` (the same shape as the `-x`/`-y` caveat), and `set-environment` reaches only panes created after it runs.
+- **Zellij** carries the pair on the spawning client's environment: the per-session server forks from that command and every pane forks from the server, so inheritance is transitive. Zellij has no post-birth `set-environment`, so birth is the one stamping point — the honest asymmetry: a session born before the pin existed keeps its old environment, and its participants fall back to the static resolution ladder.
+
+Rebirth re-pins on both backends — tmux re-runs `ensure_session`, Zellij rebirths through the layout birth path — and resume panes are layout command panes, so a re-seeded agent inherits the pin like any other pane.
 
 ### Pane metadata
 

@@ -153,6 +153,7 @@ fn reconcile_live(
     let opts = SidebarPaneOptions {
         session_name: ws.session_name.clone(),
         workspace_id: ws.workspace_id.clone(),
+        project_root: ws.project_root.clone(),
         cwd: ws.project_root.clone(),
         width,
         // A reload can run from a terminal (or no terminal) unrelated to the

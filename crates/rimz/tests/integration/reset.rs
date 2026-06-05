@@ -21,7 +21,7 @@ fn reset_purges_the_resurrection_cache() {
     // (the harness pins HOME and leaves XDG_CACHE_HOME unset, so `cache_home()`
     // resolves there).
     let session_info = env
-        .project_root
+        .home_root
         .join(".cache/zellij/contract_version_1/session_info");
     fs::create_dir_all(&session_info).expect("mkdir cache");
     let cache_entry = session_info.join(&workspace.session_name);

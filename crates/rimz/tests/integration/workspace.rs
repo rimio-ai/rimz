@@ -155,3 +155,120 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
         .success()
         .stdout(contains("event-log rotation skipped"));
 }
+
+// --- session-pinned identity ---
+//
+// The split-brain regression this guards: a directory room at the harness
+// root with an agent pane cwd'd inside a nested git repo. Without the pin the
+// hook's static ladder resolves the *repo's* workspace, and its events land
+// in a ledger the room's sidebar never reads.
+
+/// `git init` a nested repo, or skip when git is absent (host-dependency
+/// self-skip, per the suite contract).
+fn init_nested_repo(env: &Env) -> Option<PathBuf> {
+    let nested = env.project_root.join("code").join("query-engine");
+    std::fs::create_dir_all(&nested).expect("mkdir nested repo");
+    let status = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&nested)
+        .status();
+    match status {
+        Ok(status) if status.success() => Some(nested),
+        _ => {
+            tracing::warn!("skipping: git unavailable");
+            None
+        }
+    }
+}
+
+#[test]
+fn hook_inside_a_nested_repo_lands_in_the_pinned_room() {
+    let env = Env::new();
+    let Some(nested) = init_nested_repo(&env) else {
+        return;
+    };
+
+    let mut cmd = env.hook_command("claude");
+    cmd.current_dir(&nested)
+        .env(rimz::workspace::ENV_WORKSPACE_ID, env.workspace_id.as_str())
+        .env(rimz::workspace::ENV_PROJECT_ROOT, &env.project_root);
+    let output = env
+        .spawn_payload(cmd, &crate::common::permission_payload("Read"))
+        .wait_with_output()
+        .expect("wait hook");
+    assert!(
+        output.status.success(),
+        "hook failed: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let pinned = env.state_path_for(&env.project_root);
+    let repo = env.state_path_for(&nested);
+    assert!(
+        pinned.events_log.exists(),
+        "the pinned room's ledger holds the hook's event",
+    );
+    assert!(
+        !repo.events_log.exists(),
+        "no split-brain ledger appears for the nested repo",
+    );
+}
+
+#[test]
+fn corrupt_pin_falls_back_to_the_repo_workspace() {
+    let env = Env::new();
+    let Some(nested) = init_nested_repo(&env) else {
+        return;
+    };
+
+    // An id that does not hash from the pinned root: the verified-pin read
+    // rejects it and the hook degrades to the static ladder — the repo's own
+    // workspace — rather than erroring on the agent's critical path.
+    let stale = WorkspaceId::from_project_root(&PathBuf::from("/somewhere/else"));
+    let mut cmd = env.hook_command("claude");
+    cmd.current_dir(&nested)
+        .env(rimz::workspace::ENV_WORKSPACE_ID, stale.as_str())
+        .env(rimz::workspace::ENV_PROJECT_ROOT, &env.project_root);
+    let output = env
+        .spawn_payload(cmd, &crate::common::permission_payload("Read"))
+        .wait_with_output()
+        .expect("wait hook");
+    assert!(
+        output.status.success(),
+        "hook failed: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let repo = env.state_path_for(&nested);
+    assert!(
+        repo.events_log.exists(),
+        "the static ladder resolves the nested repo's own workspace",
+    );
+}
+
+#[test]
+fn doctor_reports_the_room_tree_with_root_classes() {
+    let env = Env::new();
+    let nested = env.project_root.join("inner");
+    env.record(&env.project_root.clone());
+    env.record(&nested);
+
+    let output = env.rimz().arg("doctor").output().expect("run doctor");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("rooms         : 2 recorded"),
+        "doctor counts both rooms:\n{stdout}",
+    );
+    assert!(
+        stdout.contains(&format!("{} (directory)", env.project_root.display())),
+        "the bare harness root is a directory room:\n{stdout}",
+    );
+    assert!(
+        stdout.contains(&format!("{} (directory)", nested.display())),
+        "the bare nested dir is a directory room:\n{stdout}",
+    );
+    assert!(
+        stdout.contains("root class    :"),
+        "the workspace block names its root class:\n{stdout}",
+    );
+}

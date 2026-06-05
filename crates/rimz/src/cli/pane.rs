@@ -73,7 +73,9 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
         PaneSubcmd::List { json, session_name } => {
             let session_name = match session_name {
                 Some(name) => name,
-                None => WorkspaceResolver::resolve(".", globals.root.clone())?.session_name,
+                None => {
+                    WorkspaceResolver::resolve_participant(".", globals.root.clone())?.session_name
+                }
             };
             let panes = backend.list_panes(PaneListOptions {
                 session_name: Some(session_name),
@@ -144,7 +146,7 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
             backend.focus_pane(&pane).map_err(Into::into)
         }
         PaneSubcmd::Split => {
-            let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
+            let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
             let env = BTreeMap::from([
                 ("RIMZ".to_owned(), "1".to_owned()),
                 (
@@ -172,7 +174,9 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
         PaneSubcmd::Detach { session_name } => {
             let session_name = match session_name {
                 Some(name) => name,
-                None => WorkspaceResolver::resolve(".", globals.root.clone())?.session_name,
+                None => {
+                    WorkspaceResolver::resolve_participant(".", globals.root.clone())?.session_name
+                }
             };
             backend.detach(&session_name).map_err(Into::into)
         }

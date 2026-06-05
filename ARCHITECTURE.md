@@ -3,10 +3,10 @@
 Rimz is a Rust workspace built around one invariant:
 
 ```text
-project repo == Rimz workspace == multiplexer session
+workspace root == Rimz workspace == multiplexer session
 ```
 
-Worktrees of the same repo group inside that workspace. Zellij and tmux own panes, views, sessions, attach/detach, and scrollback. Rimz owns project identity, the feed, durable state, resolver trust, hook entrypoints, and the sidebar rendering contract.
+A root is the richest class its directory offers — a git repo (worktrees of the same repo group inside one workspace), a project-marker directory, or any directory at all, the first-class directory workspace a headless box of agents gets with no source control. A pane's workspace is the session it lives in: session birth stamps the identity pin into the mux environment, and participating commands honor it before re-deriving from cwd ([workspace.rs](./crates/rimz/src/workspace.rs)). Zellij and tmux own panes, views, sessions, attach/detach, and scrollback. Rimz owns project identity, the feed, durable state, resolver trust, hook entrypoints, and the sidebar rendering contract.
 
 Product invariant and operating paths live in [DESIGN.md](./DESIGN.md); they are not restated here.
 

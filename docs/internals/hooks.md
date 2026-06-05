@@ -42,6 +42,10 @@ This is the canonical statement of the rule the rest of the docs link to. A hook
 - **Hook helper children get fresh, fully-piped stdio — never inherited.** A wrapped statusline command's stderr, a notification helper's chatter, must never leak onto the decision channel. A CI grep rejects `Stdio::inherit` in hook paths.
 - **Every neutral and decision shape is golden-tested**, including the neutral no-op (see [Adding an agent](#adding-an-agent)).
 
+### Hooks resolve the room they live in
+
+A hook resolves its workspace as a **participant** ([`WorkspaceResolver::resolve_participant`](../../crates/rimz/src/workspace.rs)): the session's identity pin — `RIMZ_WORKSPACE_ID`/`RIMZ_PROJECT_ROOT`, stamped into the mux environment at birth ([multiplexers.md → The identity pin](./multiplexers.md#the-identity-pin)) — wins over re-deriving identity from cwd, so an agent working inside a nested repo in a directory room writes to the room its pane lives in, never to a ledger no sidebar reads. The pin is hash-verified (`workspace_id` must hash from the pinned root) and any mismatch falls through to the static ladder (git → marker → directory): a hook on the agent's critical path degrades on identity, never errors. Every participant surface resolves the same way — `rimz event`/`feed`, the statusline helpers, the pane verbs, the sidebar renderer — and a CI grep (`cargo xtask invariants`) keeps the create-mode resolver out of them; room-choosing commands (`rimz start`/`attach`, maintenance) resolve statically, so a deliberate per-repo room can still be created from inside a parent room.
+
 ## From native event to internals
 
 A lifecycle hook fires → `classify_hook` returns `Lifecycle` → `observe_lifecycle` maps the payload onto an `AgentLifecycleObservation` → the CLI records it as an `agent.lifecycle` event. The observation is the contract boundary; from here [agent.md](./agent.md) owns the rollup, the state machine, and liveness. A new agent that emits well-formed observations gets all of that for free.

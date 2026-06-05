@@ -325,6 +325,7 @@ mod tests {
         let opts = SidebarPaneOptions {
             session_name: "rimz-bar".to_owned(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bar")),
+            project_root: PathBuf::from("/tmp/rimz-bar"),
             cwd: PathBuf::from("/tmp/rimz-bar"),
             width: SidebarWidth::default(),
             birth_size: SidebarWidth::default().birth_size(None),
@@ -347,6 +348,7 @@ mod tests {
         let opts = SidebarPaneOptions {
             session_name: "rimz-focus".to_owned(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-focus")),
+            project_root: PathBuf::from("/tmp/rimz-focus"),
             cwd: PathBuf::from("/tmp/rimz-focus"),
             width: SidebarWidth::default(),
             birth_size: SidebarWidth::default().birth_size(None),
@@ -384,6 +386,7 @@ mod tests {
         let opts = SidebarPaneOptions {
             session_name: "rimz-width".to_owned(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-width")),
+            project_root: PathBuf::from("/tmp/rimz-width"),
             cwd: PathBuf::from("/tmp/rimz-width"),
             width: SidebarWidth::default(),
             // 30% of 120 is 36 ≤ the 72 cap — the under-cap verdict.
@@ -455,6 +458,7 @@ mod tests {
             sidebar: SidebarPaneOptions {
                 session_name: "rimz-bg".to_owned(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/proj/root")),
+                project_root: PathBuf::from("/proj/root"),
                 cwd: PathBuf::from("/proj/worktree"),
                 width: SidebarWidth::default(),
                 birth_size: SidebarWidth::default().birth_size(None),
@@ -643,6 +647,7 @@ mod tests {
         let opts = SidebarPaneOptions {
             session_name: "rimz-run".to_owned(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
+            project_root: PathBuf::from("/tmp/rimz-run"),
             cwd: PathBuf::from("/tmp/rimz-run"),
             width: SidebarWidth::default(),
             birth_size: SidebarWidth::default().birth_size(None),

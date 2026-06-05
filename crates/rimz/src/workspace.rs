@@ -1,8 +1,21 @@
 //! Project-root and worktree-root resolution.
 //!
-//! Workspace identity is keyed on the canonical *repo* (the parent of
-//! `git rev-parse --git-common-dir`). Every worktree of the same repo shares
-//! the same workspace; submodules get their own. See `docs/internals` and
+//! Workspace identity is keyed on the canonical root directory. The resolver
+//! ladder picks the richest root the starting path offers: the *repo* root for
+//! a git checkout (the parent of `git rev-parse --git-common-dir`, so every
+//! worktree of the same repo shares one workspace; submodules get their own),
+//! a marker directory ([`PROJECT_MARKERS`]) for a non-git project, and the
+//! directory itself as the last tier — a first-class directory workspace.
+//!
+//! Identity is then *pinned per session*: session birth stamps
+//! [`ENV_WORKSPACE_ID`]/[`ENV_PROJECT_ROOT`] into the mux environment, and
+//! participating commands (hooks, `rimz event`/`feed`, statusline helpers)
+//! resolve through [`WorkspaceResolver::resolve_participant`], which honors
+//! that pin before the static ladder — so an agent in a nested repo inside a
+//! directory workspace still writes to the room it lives in. Room-choosing
+//! commands (`rimz start`/`attach`) resolve statically via
+//! [`WorkspaceResolver::resolve`], keeping a deliberate per-repo room one
+//! `rimz start` away from inside a parent room. See `docs/internals` and
 //! `DESIGN.md` for the rules this implements.
 
 use std::collections::BTreeMap;
@@ -20,17 +33,65 @@ use crate::ledger::workspace_record::{self, WorkspaceRecord};
 pub enum WorkspaceErr {
     #[error("could not resolve workspace from {path}: {reason}")]
     Resolve { path: PathBuf, reason: String },
+    #[error(
+        "refusing a directory workspace rooted at {root} ({why}); cd into a project, or force it with --root {root}"
+    )]
+    RefusedRoot { root: PathBuf, why: &'static str },
     #[error("git probe failed: {0}")]
     GitProbe(#[from] io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, WorkspaceErr>;
 
+/// Environment key carrying the session's pinned workspace id.
+pub const ENV_WORKSPACE_ID: &str = "RIMZ_WORKSPACE_ID";
+/// Environment key carrying the session's pinned project root.
+pub const ENV_PROJECT_ROOT: &str = "RIMZ_PROJECT_ROOT";
+
+/// The identity pin a Rimz session stamps into the mux environment at birth,
+/// inherited by every pane and so by every agent and its hook children.
+pub fn pin_env(workspace_id: &WorkspaceId, project_root: &Path) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (ENV_WORKSPACE_ID.to_owned(), workspace_id.to_string()),
+        (
+            ENV_PROJECT_ROOT.to_owned(),
+            project_root.display().to_string(),
+        ),
+    ])
+}
+
+/// Which ladder tier produced a workspace root. The class describes the root
+/// itself, not how it was selected — an explicit `--root` into a git checkout
+/// still classifies as [`RootClass::Repo`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RootClass {
+    /// A git repository; worktrees of the repo collapse to one workspace.
+    Repo,
+    /// A directory carrying a project marker ([`PROJECT_MARKERS`]).
+    Marker,
+    /// Any other directory — a directory workspace.
+    Directory,
+}
+
+impl RootClass {
+    /// The user-facing class label `rimz start` notices and `rimz doctor`
+    /// speak — matching the serialized form.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Repo => "repo",
+            Self::Marker => "marker",
+            Self::Directory => "directory",
+        }
+    }
+}
+
 /// What resolution produces: the IDs the rest of the system uses.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResolvedWorkspace {
     pub workspace_id: WorkspaceId,
     pub project_root: PathBuf,
+    pub root_class: RootClass,
     pub worktree_root: PathBuf,
     pub worktree_branch: Option<String>,
     pub session_name: String,
@@ -46,6 +107,23 @@ pub struct KnownWorkspace {
     pub workspace_id: WorkspaceId,
     pub project_root: PathBuf,
     pub session_name: String,
+    pub root_class: RootClass,
+}
+
+/// True when `inner` is `outer` itself or nested under it, compared by path
+/// components so `/home/marvinX` is never read as under `/home/marvin`. A
+/// lexical test on recorded roots — no filesystem access — shared by the
+/// `rimz start` overlap notice and the doctor room tree.
+pub fn root_contains(outer: &Path, inner: &Path) -> bool {
+    let mut outer_components = outer.components();
+    let mut inner_components = inner.components();
+    loop {
+        match (outer_components.next(), inner_components.next()) {
+            (Some(o), Some(i)) if o == i => continue,
+            (Some(_), _) => return false,
+            (None, _) => return true,
+        }
+    }
 }
 
 /// Every workspace with a readable, current `workspace.json` under the state dir,
@@ -172,6 +250,7 @@ fn normalize_known_workspace_record(
             workspace_id,
             project_root: record.project_root,
             session_name: record.session_name,
+            root_class: record.root_class,
         },
         updated_at: record.updated_at,
     })
@@ -194,27 +273,90 @@ const PROJECT_MARKERS: &[&str] = &[
 
 pub struct WorkspaceResolver;
 
+/// Who is resolving: a command choosing a room, or one participating in the
+/// room it already lives in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResolveMode {
+    /// Room choice (`rimz start`/`attach`, maintenance): the static ladder
+    /// only, so a deliberate per-repo room can be created from inside a
+    /// parent room. The directory tier refuses pathological roots here.
+    Create,
+    /// Room participation (hooks, `rimz event`/`feed`, statusline): the
+    /// session's env pin wins over the static ladder, so a pane's writes land
+    /// in the room it lives in. Never refuses — a hook on the agent's
+    /// critical path degrades to the static ladder, never errors on identity.
+    Participate,
+}
+
+/// Process-environment lookup, injected so the pin and `$HOME` reads unit-test
+/// without mutating real env (which `forbid(unsafe_code)` rules out anyway).
+type EnvReader<'a> = &'a dyn Fn(&str) -> Option<std::ffi::OsString>;
+
 impl WorkspaceResolver {
-    /// Resolve from a starting path. `root_override` corresponds to the
-    /// `--root` CLI flag and `[workspace] root` in `.rimz/config.toml`.
+    /// Resolve a room choice from a starting path. `root_override` corresponds
+    /// to the `--root` CLI flag and `[workspace] root` in `.rimz/config.toml`.
     pub fn resolve(
         start: impl AsRef<Path>,
         root_override: Option<PathBuf>,
     ) -> Result<ResolvedWorkspace> {
-        let start_in = start.as_ref();
+        Self::resolve_with(
+            ResolveMode::Create,
+            start.as_ref(),
+            root_override,
+            &|key: &str| std::env::var_os(key),
+        )
+    }
+
+    /// Resolve on behalf of a participant in a live room: the session's
+    /// verified env pin ([`ENV_WORKSPACE_ID`]/[`ENV_PROJECT_ROOT`]) beats the
+    /// static ladder; an explicit `root_override` beats both.
+    pub fn resolve_participant(
+        start: impl AsRef<Path>,
+        root_override: Option<PathBuf>,
+    ) -> Result<ResolvedWorkspace> {
+        Self::resolve_with(
+            ResolveMode::Participate,
+            start.as_ref(),
+            root_override,
+            &|key: &str| std::env::var_os(key),
+        )
+    }
+
+    fn resolve_with(
+        mode: ResolveMode,
+        start_in: &Path,
+        root_override: Option<PathBuf>,
+        env: EnvReader,
+    ) -> Result<ResolvedWorkspace> {
         let start = start_in
             .canonicalize()
             .unwrap_or_else(|_| start_in.to_path_buf());
 
-        let (project_root, worktree_root) = if let Some(root) = root_override {
+        let (project_root, worktree_root, root_class) = if let Some(root) = root_override {
             let root = root.canonicalize().unwrap_or(root);
-            (root.clone(), root)
-        } else if let Some(git) = resolve_git(&start)? {
-            git
+            let class = classify_root(&root)?;
+            (root.clone(), root, class)
+        } else if let Some(pinned) = (mode == ResolveMode::Participate)
+            .then(|| read_verified_pin(env))
+            .flatten()
+        {
+            // The pane lives in a session that already chose a root; the cwd
+            // still names the worktree the participant works in, for grouping.
+            let worktree_root = match resolve_git(&start)? {
+                Some((_, worktree)) => worktree,
+                None => resolve_marker(&start).unwrap_or_else(|| start.clone()),
+            };
+            let class = classify_root(&pinned)?;
+            (pinned, worktree_root, class)
+        } else if let Some((project_root, worktree_root)) = resolve_git(&start)? {
+            (project_root, worktree_root, RootClass::Repo)
         } else if let Some(marker) = resolve_marker(&start) {
-            (marker.clone(), marker)
+            (marker.clone(), marker, RootClass::Marker)
         } else {
-            (start.clone(), start.clone())
+            if mode == ResolveMode::Create {
+                refuse_pathological_root(&start, env)?;
+            }
+            (start.clone(), start.clone(), RootClass::Directory)
         };
 
         let workspace_id = WorkspaceId::from_project_root(&project_root);
@@ -224,12 +366,71 @@ impl WorkspaceResolver {
         Ok(ResolvedWorkspace {
             workspace_id,
             project_root,
+            root_class,
             worktree_root,
             worktree_branch,
             session_name,
             mux_hint: None,
         })
     }
+}
+
+/// Read and verify the session's identity pin. `None` — silently falling
+/// through to the static ladder — unless the id parses, the root exists, and
+/// the id is the hash of that root, so a stale or corrupt env never misroutes
+/// a write into the wrong ledger.
+fn read_verified_pin(env: EnvReader) -> Option<PathBuf> {
+    let id = env(ENV_WORKSPACE_ID)?.to_string_lossy().into_owned();
+    let root = env(ENV_PROJECT_ROOT)?;
+    let Ok(id) = WorkspaceId::parse(&id) else {
+        tracing::warn!(pin = %id, "ignoring unparseable workspace pin");
+        return None;
+    };
+    let root = PathBuf::from(root);
+    let Ok(root) = root.canonicalize() else {
+        tracing::warn!(pin = %id, root = %root.display(), "ignoring workspace pin with a vanished root");
+        return None;
+    };
+    if WorkspaceId::from_project_root(&root) != id {
+        tracing::warn!(pin = %id, root = %root.display(), "ignoring workspace pin whose id does not hash from its root");
+        return None;
+    }
+    Some(root)
+}
+
+/// Classify a root that resolution did not derive itself (an explicit
+/// `--root`, the env pin): the richest tier the directory satisfies.
+fn classify_root(root: &Path) -> Result<RootClass> {
+    if git_output(root, ["rev-parse", "--show-toplevel"])?.is_some() {
+        return Ok(RootClass::Repo);
+    }
+    if PROJECT_MARKERS.iter().any(|m| root.join(m).exists()) {
+        return Ok(RootClass::Marker);
+    }
+    Ok(RootClass::Directory)
+}
+
+/// The directory tier refuses the two roots that are almost certainly an
+/// accident — `$HOME` and the filesystem root — with the fix in the error;
+/// `--root` bypasses by selecting a different ladder tier.
+fn refuse_pathological_root(start: &Path, env: EnvReader) -> Result<()> {
+    if start == Path::new("/") {
+        return Err(WorkspaceErr::RefusedRoot {
+            root: start.to_path_buf(),
+            why: "the filesystem root",
+        });
+    }
+    if let Some(home) = env("HOME") {
+        let home = PathBuf::from(home);
+        let home = home.canonicalize().unwrap_or(home);
+        if start == home {
+            return Err(WorkspaceErr::RefusedRoot {
+                root: start.to_path_buf(),
+                why: "your home directory",
+            });
+        }
+    }
+    Ok(())
 }
 
 fn resolve_git(start: &Path) -> Result<Option<(PathBuf, PathBuf)>> {
@@ -370,6 +571,7 @@ mod tests {
                     workspace_id,
                     project_root: project_root.clone(),
                     session_name: session_name_for(&project_root),
+                    root_class: RootClass::Repo,
                     updated_at: jiff::Timestamp::UNIX_EPOCH,
                 },
             )
@@ -415,6 +617,7 @@ mod tests {
                 workspace_id: workspace_id.clone(),
                 project_root: noncanonical_root,
                 session_name: "rimz-stale".to_owned(),
+                root_class: RootClass::Repo,
                 updated_at: jiff::Timestamp::UNIX_EPOCH,
             },
         )
@@ -453,6 +656,7 @@ mod tests {
                 workspace_id: canonical_id.clone(),
                 project_root: canonical_root.clone(),
                 session_name: session_name_for(&canonical_root),
+                root_class: RootClass::Repo,
                 updated_at: jiff::Timestamp::UNIX_EPOCH,
             },
         )
@@ -469,6 +673,7 @@ mod tests {
                 workspace_id: stale_id,
                 project_root: noncanonical_root,
                 session_name: session_name_for(&canonical_root),
+                root_class: RootClass::Repo,
                 updated_at: jiff::Timestamp::now(),
             },
         )
@@ -509,5 +714,221 @@ mod tests {
         let here = Path::new(env!("CARGO_MANIFEST_DIR"));
         let resolved = resolve_marker(here).expect("Cargo.toml above us");
         assert!(resolved.join("Cargo.toml").exists());
+    }
+
+    use std::ffi::OsString;
+
+    /// An injected env carrying the identity pin, the test-side twin of the
+    /// session environment a real pane inherits.
+    fn pin_of(workspace_id: String, project_root: PathBuf) -> impl Fn(&str) -> Option<OsString> {
+        move |key: &str| match key {
+            ENV_WORKSPACE_ID => Some(workspace_id.clone().into()),
+            ENV_PROJECT_ROOT => Some(project_root.clone().into_os_string()),
+            _ => None,
+        }
+    }
+
+    fn no_env(_key: &str) -> Option<OsString> {
+        None
+    }
+
+    /// A bare directory and a marker directory, the fixture every pin test
+    /// shares: the pin names the bare dir, the cwd sits in the marker dir.
+    fn pin_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let pinned_root = dir.path().join("room");
+        let marker_dir = dir.path().join("project");
+        std::fs::create_dir_all(&pinned_root).expect("mkdir room");
+        std::fs::create_dir_all(&marker_dir).expect("mkdir project");
+        std::fs::write(marker_dir.join("Cargo.toml"), "[package]\n").expect("marker");
+        (dir, pinned_root, marker_dir)
+    }
+
+    #[test]
+    fn participant_pin_beats_the_static_ladder() {
+        let (_dir, pinned_root, marker_dir) = pin_fixture();
+        let pinned_root = pinned_root.canonicalize().expect("canonical room");
+        let env = pin_of(
+            WorkspaceId::from_project_root(&pinned_root).to_string(),
+            pinned_root.clone(),
+        );
+
+        let resolved =
+            WorkspaceResolver::resolve_with(ResolveMode::Participate, &marker_dir, None, &env)
+                .expect("resolve");
+        assert_eq!(resolved.project_root, pinned_root);
+        assert_eq!(
+            resolved.workspace_id,
+            WorkspaceId::from_project_root(&pinned_root),
+        );
+        // The cwd still names the worktree the participant works in.
+        assert_eq!(
+            resolved.worktree_root,
+            marker_dir.canonicalize().expect("canonical project"),
+        );
+        assert_eq!(resolved.root_class, RootClass::Directory);
+    }
+
+    #[test]
+    fn create_mode_ignores_the_pin() {
+        let (_dir, pinned_root, marker_dir) = pin_fixture();
+        let pinned_root = pinned_root.canonicalize().expect("canonical room");
+        let env = pin_of(
+            WorkspaceId::from_project_root(&pinned_root).to_string(),
+            pinned_root,
+        );
+
+        let resolved =
+            WorkspaceResolver::resolve_with(ResolveMode::Create, &marker_dir, None, &env)
+                .expect("resolve");
+        assert_eq!(
+            resolved.project_root,
+            marker_dir.canonicalize().expect("canonical project"),
+        );
+        assert_eq!(resolved.root_class, RootClass::Marker);
+    }
+
+    #[test]
+    fn root_override_beats_the_pin() {
+        let (dir, pinned_root, marker_dir) = pin_fixture();
+        let pinned_root = pinned_root.canonicalize().expect("canonical room");
+        let env = pin_of(
+            WorkspaceId::from_project_root(&pinned_root).to_string(),
+            pinned_root,
+        );
+        let forced = dir.path().join("forced");
+        std::fs::create_dir_all(&forced).expect("mkdir forced");
+
+        let resolved = WorkspaceResolver::resolve_with(
+            ResolveMode::Participate,
+            &marker_dir,
+            Some(forced.clone()),
+            &env,
+        )
+        .expect("resolve");
+        assert_eq!(
+            resolved.project_root,
+            forced.canonicalize().expect("canonical forced"),
+        );
+    }
+
+    #[test]
+    fn mismatched_pin_falls_back_to_the_static_ladder() {
+        let (_dir, pinned_root, marker_dir) = pin_fixture();
+        // An id that does not hash from the pinned root: stale or corrupt env.
+        let env = pin_of(
+            WorkspaceId::from_project_root(Path::new("/somewhere/else")).to_string(),
+            pinned_root,
+        );
+
+        let resolved =
+            WorkspaceResolver::resolve_with(ResolveMode::Participate, &marker_dir, None, &env)
+                .expect("resolve");
+        assert_eq!(
+            resolved.project_root,
+            marker_dir.canonicalize().expect("canonical project"),
+        );
+        assert_eq!(resolved.root_class, RootClass::Marker);
+    }
+
+    #[test]
+    fn vanished_pin_root_falls_back_to_the_static_ladder() {
+        let (dir, pinned_root, marker_dir) = pin_fixture();
+        let gone = dir.path().join("gone");
+        let env = pin_of(
+            WorkspaceId::from_project_root(&pinned_root).to_string(),
+            gone,
+        );
+
+        let resolved =
+            WorkspaceResolver::resolve_with(ResolveMode::Participate, &marker_dir, None, &env)
+                .expect("resolve");
+        assert_eq!(resolved.root_class, RootClass::Marker);
+    }
+
+    #[test]
+    fn unparseable_pin_falls_back_to_the_static_ladder() {
+        let (_dir, pinned_root, marker_dir) = pin_fixture();
+        let env = pin_of("not-a-workspace-id".to_owned(), pinned_root);
+
+        let resolved =
+            WorkspaceResolver::resolve_with(ResolveMode::Participate, &marker_dir, None, &env)
+                .expect("resolve");
+        assert_eq!(resolved.root_class, RootClass::Marker);
+    }
+
+    #[test]
+    fn bare_directory_resolves_as_a_directory_workspace() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let scratch = dir.path().join("scratch");
+        std::fs::create_dir_all(&scratch).expect("mkdir scratch");
+
+        let resolved =
+            WorkspaceResolver::resolve_with(ResolveMode::Create, &scratch, None, &no_env)
+                .expect("resolve");
+        assert_eq!(resolved.root_class, RootClass::Directory);
+        assert_eq!(
+            resolved.project_root,
+            scratch.canonicalize().expect("canonical scratch"),
+        );
+        assert_eq!(resolved.project_root, resolved.worktree_root);
+    }
+
+    #[test]
+    fn create_mode_refuses_home_as_a_directory_root() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).expect("mkdir home");
+        let home_env = |key: &str| (key == "HOME").then(|| home.clone().into_os_string());
+
+        let err = WorkspaceResolver::resolve_with(ResolveMode::Create, &home, None, &home_env)
+            .expect_err("refused");
+        assert!(
+            matches!(err, WorkspaceErr::RefusedRoot { .. }),
+            "expected RefusedRoot, got: {err}",
+        );
+        assert!(err.to_string().contains("--root"), "error names the fix");
+
+        // `--root` selects the override tier, which never refuses.
+        let forced = WorkspaceResolver::resolve_with(
+            ResolveMode::Create,
+            &home,
+            Some(home.clone()),
+            &home_env,
+        )
+        .expect("forced via --root");
+        assert_eq!(forced.root_class, RootClass::Directory);
+    }
+
+    #[test]
+    fn participants_never_refuse_a_pathological_root() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).expect("mkdir home");
+        let home_env = |key: &str| (key == "HOME").then(|| home.clone().into_os_string());
+
+        // A hook on the agent's critical path degrades, never errors: the
+        // pinless fallback still resolves the directory tier at $HOME.
+        let resolved =
+            WorkspaceResolver::resolve_with(ResolveMode::Participate, &home, None, &home_env)
+                .expect("resolve");
+        assert_eq!(resolved.root_class, RootClass::Directory);
+    }
+
+    #[test]
+    fn refuses_the_filesystem_root() {
+        let err = refuse_pathological_root(Path::new("/"), &no_env).expect_err("refused");
+        assert!(matches!(err, WorkspaceErr::RefusedRoot { .. }));
+    }
+
+    #[test]
+    fn pin_env_carries_both_identity_keys() {
+        let root = Path::new("/repo");
+        let env = pin_env(&WorkspaceId::from_project_root(root), root);
+        assert_eq!(
+            env.get(ENV_WORKSPACE_ID),
+            Some(&WorkspaceId::from_project_root(root).to_string()),
+        );
+        assert_eq!(env.get(ENV_PROJECT_ROOT), Some(&"/repo".to_owned()));
     }
 }

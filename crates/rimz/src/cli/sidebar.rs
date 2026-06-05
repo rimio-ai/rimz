@@ -86,7 +86,8 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             let ledger = match workspace_id {
                 Some(raw) => open_ledger_by_workspace_id(raw.parse()?),
                 None => {
-                    let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
+                    let workspace =
+                        WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
                     resolved_session = Some(workspace.session_name.clone());
                     open_ledger(&workspace)
                 }
@@ -310,7 +311,10 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
         } => {
             let needs_workspace_resolve = workspace_id.is_none() || session_name.is_none();
             let resolved = if needs_workspace_resolve {
-                Some(WorkspaceResolver::resolve(".", globals.root.clone())?)
+                Some(WorkspaceResolver::resolve_participant(
+                    ".",
+                    globals.root.clone(),
+                )?)
             } else {
                 None
             };

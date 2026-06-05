@@ -89,7 +89,7 @@ fn serve(
     let (workspace_id, session_name) = match (workspace_id, session_name) {
         (Some(ws), Some(sess)) => (WorkspaceId::parse(&ws)?, sess),
         (ws_opt, sess_opt) => {
-            let resolved = WorkspaceResolver::resolve(".", None)?;
+            let resolved = WorkspaceResolver::resolve_participant(".", None)?;
             let ws = match ws_opt {
                 Some(raw) => WorkspaceId::parse(&raw)?,
                 None => resolved.workspace_id,

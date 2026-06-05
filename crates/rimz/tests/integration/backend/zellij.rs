@@ -405,6 +405,7 @@ fn open_sidebar_births_native_layout_and_template() {
             &SidebarPaneOptions {
                 session_name: name.clone(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-test")),
+                project_root: cwd.path().to_path_buf(),
                 cwd: cwd.path().to_path_buf(),
                 width: SidebarWidth::default(),
                 birth_size: SidebarWidth::default().birth_size(Some(120)),
@@ -477,6 +478,7 @@ fn open_sidebar_on_live_session_is_idempotent() {
     let opts = SidebarPaneOptions {
         session_name: name.clone(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-idem")),
+        project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
         width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(120)),
@@ -528,6 +530,7 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
     let opts = SidebarPaneOptions {
         session_name: name.clone(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-cleanroom")),
+        project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
         width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(120)),
@@ -626,6 +629,7 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
             &SidebarPaneOptions {
                 session_name: name.clone(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-nosb")),
+                project_root: cwd.path().to_path_buf(),
                 cwd: cwd.path().to_path_buf(),
                 width: SidebarWidth::default(),
                 birth_size: SidebarWidth::default().birth_size(Some(120)),
@@ -726,6 +730,7 @@ fn reconcile_defers_the_add_on_a_detached_session() {
             &SidebarPaneOptions {
                 session_name: name.clone(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-defer")),
+                project_root: cwd.path().to_path_buf(),
                 cwd: cwd.path().to_path_buf(),
                 width: SidebarWidth::default(),
                 birth_size: SidebarWidth::default().birth_size(Some(120)),
@@ -881,6 +886,7 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
             &SidebarPaneOptions {
                 session_name: name.clone(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-redock")),
+                project_root: std::env::temp_dir(),
                 cwd: std::env::temp_dir(),
                 width: SidebarWidth::default(),
                 birth_size: SidebarWidth::default().birth_size(Some(240)),
@@ -1436,6 +1442,7 @@ fn capped_birth_size_lands_the_cap_in_every_tab() {
             &SidebarPaneOptions {
                 session_name: name.clone(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-fixed-width")),
+                project_root: cwd.path().to_path_buf(),
                 cwd: cwd.path().to_path_buf(),
                 width,
                 // The launch path's decision on a 340-column terminal: 30%
@@ -1502,6 +1509,7 @@ fn under_cap_birth_pins_the_start_verdict_in_new_tabs() {
             &SidebarPaneOptions {
                 session_name: name.clone(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-under-cap")),
+                project_root: cwd.path().to_path_buf(),
                 cwd: cwd.path().to_path_buf(),
                 width,
                 // The verdict on a 200-column terminal: 30% is 60 ≤ the 72
@@ -1551,6 +1559,7 @@ fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundView
         sidebar: SidebarPaneOptions {
             session_name: session.to_owned(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgview")),
+            project_root: std::env::temp_dir(),
             cwd: std::env::temp_dir(),
             width: SidebarWidth::default(),
             birth_size: SidebarWidth::default().birth_size(Some(120)),
@@ -1650,6 +1659,7 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
             &SidebarPaneOptions {
                 session_name: name.clone(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgfirst")),
+                project_root: cwd.path().to_path_buf(),
                 cwd: cwd.path().to_path_buf(),
                 width: SidebarWidth::default(),
                 birth_size: SidebarWidth::default().birth_size(Some(120)),

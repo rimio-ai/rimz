@@ -47,6 +47,7 @@ pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
             Ok(ws) => {
                 println!("  workspace id  : {}", ws.workspace_id);
                 println!("  project root  : {}", ws.project_root.display());
+                println!("  root class    : {}", ws.root_class.label());
                 println!("  worktree root : {}", ws.worktree_root.display());
                 println!(
                     "  worktree branch: {}",
@@ -80,6 +81,7 @@ pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
         report_sidebar_renderer();
         report_agent_hooks();
         report_remote_control();
+        report_room_tree(workspace.as_ref().ok());
 
         if let Ok(ws) = &workspace {
             report_protocol_versions(ws);
@@ -487,6 +489,72 @@ fn report_socket_headroom(ws: &rimz::ResolvedWorkspace) {
         "  sock headroom : {status} ({total}/{AF_UNIX_PATH_LIMIT} bytes for {})",
         runtime.sock_dir.display(),
     );
+}
+
+/// The machine's room tree: every recorded workspace with its root, root
+/// class, and liveness, the current directory's room starred. Live rooms
+/// whose roots nest earn an overlap line — legal by design (an agent belongs
+/// to the room its pane lives in), surfaced so the human always sees it.
+#[expect(
+    clippy::print_stdout,
+    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
+)]
+fn report_room_tree(current: Option<&rimz::ResolvedWorkspace>) {
+    let known = match rimz::workspace::known_workspaces() {
+        Ok(known) => known,
+        Err(err) => {
+            println!("  rooms         : unavailable ({err})");
+            return;
+        }
+    };
+    if known.is_empty() {
+        println!("  rooms         : none recorded");
+        return;
+    }
+    let live = super::live_session_names();
+    let live_count = known
+        .iter()
+        .filter(|ws| live.contains(&ws.session_name))
+        .count();
+    println!(
+        "  rooms         : {} recorded, {live_count} live",
+        known.len()
+    );
+    let mut rooms: Vec<_> = known.iter().collect();
+    rooms.sort_by(|a, b| a.project_root.cmp(&b.project_root));
+    for ws in &rooms {
+        let liveness = if live.contains(&ws.session_name) {
+            "live"
+        } else {
+            "idle"
+        };
+        let here = if current.is_some_and(|cur| cur.workspace_id == ws.workspace_id) {
+            "* "
+        } else {
+            "  "
+        };
+        println!(
+            "    {here}{session}  {root} ({class}) · {liveness}",
+            session = ws.session_name,
+            root = ws.project_root.display(),
+            class = ws.root_class.label(),
+        );
+    }
+    for (i, a) in rooms.iter().enumerate() {
+        for b in rooms.iter().skip(i + 1) {
+            if !(live.contains(&a.session_name) && live.contains(&b.session_name)) {
+                continue;
+            }
+            if rimz::workspace::root_contains(&a.project_root, &b.project_root)
+                || rimz::workspace::root_contains(&b.project_root, &a.project_root)
+            {
+                println!(
+                    "  rooms overlap : `{}` and `{}` nest; an agent belongs to the room its pane lives in",
+                    a.session_name, b.session_name,
+                );
+            }
+        }
+    }
 }
 
 /// Surface the project-trust state. Stale is the case worth seeing in

@@ -22,10 +22,17 @@ pub fn canonical(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// Out-of-process CLI harness: a tempdir holding `state/runtime/config`, the
-/// workspace rooted at the tempdir, and a configured `rimz` command builder.
+/// Out-of-process CLI harness: a tempdir `HOME` holding `state/runtime/config`
+/// plus a `project/` workspace root under it — the shape a real machine has,
+/// so per-user agent config and the workspace never share a directory — and a
+/// configured `rimz` command builder.
 pub struct Env {
     _home: TempDir,
+    /// The harness `$HOME`: per-user agent config (`.claude/`, `.codex/`) and
+    /// the XDG roots live here.
+    pub home_root: PathBuf,
+    /// The workspace root — a bare `project/` directory under `home_root`, so
+    /// the harness exercises the directory-workspace class by default.
     pub project_root: PathBuf,
     pub workspace_id: WorkspaceId,
     pub runtime_root: PathBuf,
@@ -34,14 +41,17 @@ pub struct Env {
 impl Env {
     pub fn new() -> Self {
         let home = TempDir::new().expect("tempdir");
-        let project_root = canonical(home.path());
+        let home_root = canonical(home.path());
+        let project_root = home_root.join("project");
+        std::fs::create_dir_all(&project_root).expect("mkdir project root");
         let workspace_id = WorkspaceId::from_project_root(&project_root);
-        let runtime_root = project_root.join("runtime");
+        let runtime_root = home_root.join("runtime");
         for dir in ["state", "runtime", "config"] {
-            std::fs::create_dir_all(project_root.join(dir)).expect("mkdir env root");
+            std::fs::create_dir_all(home_root.join(dir)).expect("mkdir env root");
         }
         let env = Env {
             _home: home,
+            home_root,
             project_root,
             workspace_id,
             runtime_root,
@@ -55,11 +65,11 @@ impl Env {
     // --- paths ---
 
     pub fn state_root(&self) -> PathBuf {
-        self.project_root.join("state")
+        self.home_root.join("state")
     }
 
     pub fn config_root(&self) -> PathBuf {
-        self.project_root.join("config")
+        self.home_root.join("config")
     }
 
     pub fn heartbeat_dir(&self) -> PathBuf {
@@ -93,8 +103,12 @@ impl Env {
         cmd.env("XDG_STATE_HOME", self.state_root())
             .env("XDG_RUNTIME_DIR", &self.runtime_root)
             .env("XDG_CONFIG_HOME", self.config_root())
-            .env("HOME", &self.project_root)
+            .env("HOME", &self.home_root)
             .env_remove("RUST_LOG")
+            // Scrub any real session's identity pin so a developer running the
+            // suite inside a Rimz room never leaks their workspace into a test.
+            .env_remove(rimz::workspace::ENV_WORKSPACE_ID)
+            .env_remove(rimz::workspace::ENV_PROJECT_ROOT)
             .current_dir(&self.project_root);
         cmd
     }
@@ -179,10 +193,10 @@ impl Env {
     /// project root, and the sidebar's snapshot subprocess reads the same path.
     pub fn agent_config_path(&self, source: &str) -> PathBuf {
         match source {
-            "codex" => self.project_root.join(".codex").join("config.toml"),
-            "claude" => self.project_root.join(".claude").join("settings.json"),
+            "codex" => self.home_root.join(".codex").join("config.toml"),
+            "claude" => self.home_root.join(".claude").join("settings.json"),
             "pi" => self
-                .project_root
+                .home_root
                 .join(".pi")
                 .join("agent")
                 .join("extensions")

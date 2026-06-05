@@ -110,7 +110,7 @@ impl From<MethodArg> for ResolutionMethod {
 }
 
 pub fn run(args: FeedArgs, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
     match args.command {
         FeedSubcmd::Push { kind, title, body } => {

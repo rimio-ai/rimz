@@ -217,6 +217,8 @@ fn ensure_and_list_sessions_round_trip() {
         .backend
         .ensure_session(&SessionOptions {
             session_name: "rimz-test".to_owned(),
+            workspace_id: WorkspaceId::from_project_root(cwd.path()),
+            project_root: cwd.path().to_path_buf(),
             cwd: cwd.path().to_path_buf(),
             config: rimz::config::MultiplexerConfig::default(),
             detected_size: None,
@@ -232,6 +234,43 @@ fn ensure_and_list_sessions_round_trip() {
         server.pane_current_path("rimz-test"),
         cwd.path().display().to_string()
     );
+
+    // The identity pin landed in the session environment at birth, so every
+    // pane — and every agent hook child — inherits the room it lives in.
+    let pin = show_session_environment(&server, "rimz-test", rimz::workspace::ENV_WORKSPACE_ID);
+    assert_eq!(
+        pin,
+        format!(
+            "{}={}",
+            rimz::workspace::ENV_WORKSPACE_ID,
+            WorkspaceId::from_project_root(cwd.path()),
+        ),
+    );
+    let root = show_session_environment(&server, "rimz-test", rimz::workspace::ENV_PROJECT_ROOT);
+    assert_eq!(
+        root,
+        format!(
+            "{}={}",
+            rimz::workspace::ENV_PROJECT_ROOT,
+            cwd.path().display(),
+        ),
+    );
+}
+
+/// `tmux show-environment -t <session> <name>` — the session-scoped env the
+/// identity pin is stamped into.
+fn show_session_environment(server: &TmuxServer, session: &str, name: &str) -> String {
+    let output = Command::new("tmux")
+        .args(["-S", server.socket.to_str().expect("utf8 socket")])
+        .args(["show-environment", "-t", session, name])
+        .output()
+        .expect("spawn tmux show-environment");
+    assert!(
+        output.status.success(),
+        "show-environment {name} failed: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
 /// `ensure_session` applies the room options in one batched client invocation
@@ -250,6 +289,8 @@ fn ensure_session_applies_room_options_in_one_batch() {
         .backend
         .ensure_session(&SessionOptions {
             session_name: "rimz-options".to_owned(),
+            workspace_id: WorkspaceId::from_project_root(cwd.path()),
+            project_root: cwd.path().to_path_buf(),
             cwd: cwd.path().to_path_buf(),
             config: rimz::config::MultiplexerConfig::default(),
             detected_size: None,
@@ -281,6 +322,8 @@ fn sidebar_split_is_born_at_the_birth_size() {
             .backend
             .ensure_session(&SessionOptions {
                 session_name: session.to_owned(),
+                workspace_id: WorkspaceId::from_project_root(&std::env::temp_dir()),
+                project_root: std::env::temp_dir(),
                 cwd: std::env::temp_dir(),
                 config: rimz::config::MultiplexerConfig::default(),
                 detected_size: Some((cols, 80)),
@@ -309,6 +352,7 @@ fn sidebar_split_is_born_at_the_birth_size() {
                 &SidebarPaneOptions {
                     session_name: session.to_owned(),
                     workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-birth")),
+                    project_root: std::env::temp_dir(),
                     cwd: std::env::temp_dir(),
                     width,
                     birth_size: width.birth_size(Some(cols)),
@@ -357,6 +401,8 @@ fn new_window_pins_the_start_verdict_after_a_resize() {
         .backend
         .ensure_session(&SessionOptions {
             session_name: "verdict".to_owned(),
+            workspace_id: WorkspaceId::from_project_root(&std::env::temp_dir()),
+            project_root: std::env::temp_dir(),
             cwd: std::env::temp_dir(),
             config: rimz::config::MultiplexerConfig::default(),
             detected_size: Some((200, 50)),
@@ -369,6 +415,7 @@ fn new_window_pins_the_start_verdict_after_a_resize() {
             &SidebarPaneOptions {
                 session_name: "verdict".to_owned(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-verdict")),
+                project_root: std::env::temp_dir(),
                 cwd: std::env::temp_dir(),
                 width,
                 // The verdict on a 200-column terminal: 30% is 60 ≤ the 72
@@ -510,6 +557,7 @@ fn open_background_view_creates_named_window_idempotently() {
     let sidebar = SidebarPaneOptions {
         session_name: "rimz-bgview".to_owned(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgview")),
+        project_root: std::env::temp_dir(),
         cwd: std::env::temp_dir(),
         width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(80)),
@@ -595,6 +643,7 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
     let sidebar = SidebarPaneOptions {
         session_name: "rimz-resume".to_owned(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-resume")),
+        project_root: std::env::temp_dir(),
         cwd: std::env::temp_dir(),
         width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(80)),
@@ -760,6 +809,7 @@ fn open_sidebar_split_window_succeeds() {
             &SidebarPaneOptions {
                 session_name: "sidebar".to_owned(),
                 workspace_id,
+                project_root: std::env::current_dir().expect("cwd"),
                 cwd: std::env::current_dir().expect("cwd"),
                 width: SidebarWidth::default(),
                 birth_size: SidebarWidth::default().birth_size(Some(80)),
@@ -815,6 +865,7 @@ fn reconcile_sidebars_adds_one_to_a_sidebarless_window() {
             &SidebarPaneOptions {
                 session_name: "room".to_owned(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-recover")),
+                project_root: std::env::current_dir().expect("cwd"),
                 cwd: std::env::current_dir().expect("cwd"),
                 width: SidebarWidth::default(),
                 birth_size: SidebarWidth::default().birth_size(Some(80)),
@@ -887,6 +938,7 @@ fn reconcile_sidebars_collapses_an_orphan_sidebar_only_window() {
             &SidebarPaneOptions {
                 session_name: "multi".to_owned(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-orphan")),
+                project_root: std::env::current_dir().expect("cwd"),
                 cwd: std::env::current_dir().expect("cwd"),
                 width: SidebarWidth::default(),
                 birth_size: SidebarWidth::default().birth_size(Some(80)),
@@ -988,6 +1040,7 @@ fn new_window_is_born_with_a_sidebar_and_focused_terminal() {
             &SidebarPaneOptions {
                 session_name: "room".to_owned(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-newwindow")),
+                project_root: std::env::current_dir().expect("cwd"),
                 cwd: std::env::current_dir().expect("cwd"),
                 width: SidebarWidth::default(),
                 birth_size: SidebarWidth::default().birth_size(Some(80)),

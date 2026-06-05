@@ -84,6 +84,11 @@ pub struct PaneListOptions {
 #[derive(Clone, Debug)]
 pub struct SessionOptions {
     pub session_name: String,
+    /// The room's identity, stamped into the session environment at birth
+    /// ([`crate::workspace::pin_env`]) so every pane — and so every agent and
+    /// its hook children — inherits the workspace it lives in.
+    pub workspace_id: WorkspaceId,
+    pub project_root: PathBuf,
     pub cwd: PathBuf,
     pub config: crate::config::MultiplexerConfig,
     /// The invoking terminal's `(cols, rows)`, when launch ran in one
@@ -120,6 +125,10 @@ pub fn own_pane_id(mux: MuxName) -> Option<PaneId> {
 pub struct SidebarPaneOptions {
     pub session_name: String,
     pub workspace_id: WorkspaceId,
+    /// The workspace root behind `workspace_id` — with it, the identity pin a
+    /// Zellij birth stamps on the spawned server so every pane inherits it
+    /// (tmux pins through [`SessionOptions`] at `new-session` instead).
+    pub project_root: PathBuf,
     pub cwd: PathBuf,
     /// The configured width — the reconcile heal path still steps a recovered
     /// pane toward [`SidebarWidth::target_cols`] from live geometry.

@@ -364,7 +364,17 @@ impl ZellijBackend {
             "--default-layout".to_owned(),
             layout.path().to_string_lossy().into_owned(),
         ]);
-        let spec = self.cmd().args(option_args);
+        let mut spec = self.cmd().args(option_args);
+        // The identity pin rides the spawning client's environment: the
+        // per-session server is forked from this command, and every pane is
+        // forked from the server, so panes — and the agents and hook children
+        // inside them — inherit the room's workspace transitively. Zellij has
+        // no post-birth `set-environment`, so birth is the one stamping point;
+        // a pre-pin server keeps its env and its participants fall back to
+        // the static ladder.
+        for (key, value) in crate::workspace::pin_env(&opts.workspace_id, &opts.project_root) {
+            spec = spec.env(key, value);
+        }
         let spawn = || -> Result<bool> {
             let mut command = spec.to_command();
             command.current_dir(&opts.cwd);

@@ -302,7 +302,7 @@ fn codex_session_start_writes_agent_lifecycle_event() {
 #[test]
 fn codex_install_uninstall_cli_round_trips_into_codex_config() {
     let env = Env::new();
-    let codex_config = env.project_root.join(".codex").join("config.toml");
+    let codex_config = env.home_root.join(".codex").join("config.toml");
 
     let install = env
         .rimz()
@@ -822,7 +822,7 @@ fn pending_native_ui_ask_survives_backgrounded_child_tool() {
 #[test]
 fn codex_uninstall_cli_removes_legacy_config_block() {
     let env = Env::new();
-    let codex_config = env.project_root.join(".codex").join("config.toml");
+    let codex_config = env.home_root.join(".codex").join("config.toml");
     std::fs::create_dir_all(codex_config.parent().unwrap()).expect("mkdir codex config dir");
     std::fs::write(
         &codex_config,
@@ -1137,7 +1137,7 @@ fn claude_turn_opens_reasoning_until_the_first_file_edit() {
 #[test]
 fn claude_install_uninstall_cli_round_trips_into_settings_json() {
     let env = Env::new();
-    let claude_settings = env.project_root.join(".claude").join("settings.json");
+    let claude_settings = env.home_root.join(".claude").join("settings.json");
     // Seed pre-existing user statusLine and subagentStatusLine commands so the
     // round-trip also proves the wrap-then-restore contract for both render
     // commands, not just hooks.

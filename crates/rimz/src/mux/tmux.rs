@@ -459,6 +459,7 @@ impl MuxBackend for TmuxBackend {
     }
 
     fn ensure_session(&self, opts: &SessionOptions) -> Result<()> {
+        let pin = crate::workspace::pin_env(&opts.workspace_id, &opts.project_root);
         // `-A` attaches if the session exists; `-d` keeps us from grabbing
         // the terminal in the background.
         let mut spec = self.cmd().args([
@@ -470,6 +471,12 @@ impl MuxBackend for TmuxBackend {
             "-c".to_owned(),
             opts.cwd.to_string_lossy().into_owned(),
         ]);
+        // The identity pin lands in the session environment at birth (`-e`),
+        // so the first window's panes already inherit it — `set-environment`
+        // below would only reach panes created after it runs.
+        for (key, value) in &pin {
+            spec = spec.args(["-e".to_owned(), format!("{key}={value}")]);
+        }
         // Birth the detached session at the launching terminal's geometry
         // (instead of tmux's 80×24 default), so a fixed-column sidebar split
         // is already correct before the client attaches. `-A` on an existing
@@ -483,6 +490,15 @@ impl MuxBackend for TmuxBackend {
             ]);
         }
         spec.run().map(|_| ())?;
+        // `-A` on an existing session ignores `-e` (same shape as `-x`/`-y`
+        // above), so the pin is re-asserted idempotently: future panes of a
+        // pre-pin room inherit it; existing panes keep the env they were born
+        // with and their participants fall back to the static ladder.
+        for (key, value) in &pin {
+            self.cmd()
+                .args(["set-environment", "-t", &opts.session_name, key, value])
+                .run()?;
+        }
         self.apply_room_options(&opts.session_name, &opts.config.tmux)
     }
 

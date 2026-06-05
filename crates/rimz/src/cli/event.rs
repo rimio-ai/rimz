@@ -41,7 +41,7 @@ pub fn run(args: EventArgs, globals: &GlobalFlags) -> Result<()> {
             body,
             json: payload,
         } => {
-            let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
+            let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
             let ledger = open_ledger(&workspace)?;
             let payload: Value = match payload {
                 Some(raw) => serde_json::from_str(&raw).context("parsing --json")?,

@@ -129,7 +129,7 @@ pub fn spawn_example_resolver(
         .env("XDG_STATE_HOME", env.state_root())
         .env("XDG_RUNTIME_DIR", &env.runtime_root)
         .env("XDG_CONFIG_HOME", env.config_root())
-        .env("HOME", &env.project_root)
+        .env("HOME", &env.home_root)
         .env_remove("RUST_LOG")
         .current_dir(&env.project_root);
     if let Some(pane) = tmux_pane {
