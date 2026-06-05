@@ -61,7 +61,7 @@ Every disk write belongs to one of four classes, and the classification rule is 
 
 | Class | Files | Write discipline | After a power cut |
 | --- | --- | --- | --- |
-| Event log | `events.log.jsonl` | one `write()` per CRC-framed record, no per-record fsync; the off-lock write tail issues a group fdatasync debounced to at most one per second (`locks/log-sync.stamp`), and rotation syncs the file before the rename | intact through the last group sync. The loss window is up to one debounce interval of trailing observational events under sustained load — and a final pre-quiescence tail additionally rides kernel writeback (~30s default) — with the frame CRC turning any lost writeback into deterministic corruption that repair truncates |
+| Event log | `events.log.jsonl` | one `write()` per CRC-framed record, no per-record fsync; the off-lock write tail issues a group fdatasync debounced to at most one per second (`locks/log-sync.stamp`), and rotation syncs the file before the rename | intact through the last group sync. The loss window is up to one debounce interval of trailing events under sustained load — decision events (`feed.resolve`) included, not just observational ones — and a final pre-quiescence tail additionally rides kernel writeback (~30s default), with the frame CRC turning any lost writeback into deterministic corruption that repair truncates. A lost resolution is benign by construction: the power cut killed its waiter too, so the resurrected pending ask is expelled at read time and durably abandoned by the sweep |
 | Coordination | `feed/*.json`, `feed/terminal/*.json` | temp file + atomic rename, no fsync | a lost item file costs at most the audit-completeness of its final window; the dead-owner expel abandons any ask whose waiter died with the machine |
 | Cache | `snapshots/latest.json`, `snapshots/rollup.json`, heartbeats, sidecars | temp file + atomic rename, no fsync (`write_temp_then_rename_cache`) | rebuilt from the log on the next read |
 | Cold path | `workspace.json`, `agents.carryover.json`, trust grants, resolver allowlists, hook installs | temp file, fsync, rename, parent-dir sync (`write_temp_then_rename`) | survives |
@@ -169,6 +169,6 @@ It does not change agent behaviour, never surfaces as a sidebar attention item, 
 | Sidebar reload | yes | sidebar socket rebound on attach | yes |
 | Multiplexer server crash | yes | no | no |
 | Host reboot | yes | no | no — needs host supervisor (tmux-resurrect, Zellij resurrect, systemd) |
-| Host power cut | yes — through the last group fdatasync; up to ~1s of trailing observational events can be lost, and repair truncates any torn suffix (see [write classes](#write-classes)) | no | no — needs host supervisor |
+| Host power cut | yes — through the last group fdatasync; up to ~1s of trailing events (decisions included) can be lost, and repair truncates any torn suffix (see [write classes](#write-classes)) | no | no — needs host supervisor |
 
 Rimz guarantees the ledger across all of these — at a power cut, through the last group sync, with repair bounding the damage to the final window. The session and processes survive only what the host supervisor and the multiplexer server keep alive.

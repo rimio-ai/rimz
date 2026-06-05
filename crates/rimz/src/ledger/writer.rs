@@ -57,9 +57,12 @@ fn abandon_sweep_due(paths: &StatePaths) -> bool {
 
 /// How long appended event-log bytes may ride the page cache before a write
 /// tail forces them down. Bounds power-cut loss to about a second of
-/// observational events under sustained load; per-record fsyncs were the
-/// write path's dominant latency, and the product reconstructs attention
-/// state from live agents on restart, so a short tail is recoverable noise.
+/// trailing events under sustained load — decisions included, not just
+/// observational ones; a lost resolution is benign because the cut killed
+/// its waiter too, so the resurrected ask is expelled and abandoned.
+/// Per-record fsyncs were the write path's dominant latency, and the
+/// product reconstructs attention state from live agents on restart, so a
+/// short tail is recoverable noise.
 const LOG_SYNC_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Stamp recording the last event-log group sync. Lives beside the workspace
