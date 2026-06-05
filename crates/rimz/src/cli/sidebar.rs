@@ -1091,7 +1091,8 @@ fn read_metrics_sample_cache(path: &Path) -> MetricsSampleCache {
 
 /// Enrich each pane with per-process resource metrics from `/proc`, on the
 /// sampling cadence's own clock: within [`METRICS_SAMPLE_TTL`] of the last
-/// sample the stored display values carry forward with zero `/proc` IO; a due
+/// sample the stored display values — and the pane→root-pid binding the
+/// process-row name anchors on — carry forward with zero `/proc` IO; a due
 /// produce reads the prior sample cache to compute two-sample rates (CPU%, IO
 /// bytes/s) and writes a fresh stamped sample for the next window. Linux-only;
 /// on other platforms every pane's metric fields stay `None`.
@@ -1112,18 +1113,29 @@ fn enrich_pane_metrics(
     let now_ms = unix_now_ms();
 
     // Within the sampling window: carry the stored display values forward onto
-    // the matching panes and return — zero `/proc` IO (no binding restore, no
-    // table walk, no stat/io reads) and no cache write. The carry is keyed by
-    // pane id and guarded by the foreground command, so a pane id re-tenanted
-    // inside one window never wears its predecessor's stats; a pane absent
-    // from the cache (or re-tenanted) keeps `None`s — the same warmup it has
-    // today, one window wider.
+    // the matching panes and return — zero `/proc` IO (no stat-validated
+    // binding restore, no table walk, no stat/io reads) and no cache write.
+    // The carry is keyed by pane id and guarded by the foreground command, so
+    // a pane id re-tenanted inside one window never wears its predecessor's
+    // stats; a pane absent from the cache (or re-tenanted) keeps `None`s —
+    // the same warmup it has today, one window wider.
     if prior.is_fresh(now_ms) {
         for pane in panes.iter_mut() {
             let Some(entry) = prior.entries.get(&pane.pane_id.to_string()) else {
                 continue;
             };
             if entry.pane_command == pane.command {
+                // The root-pid binding rides with the values: the reducer
+                // anchors an active process row's name on the root's comm, so
+                // a pidless (Zellij) pane left unbound here would flip its
+                // label between shell and program across windows. The command
+                // guard stands in for the due path's starttime revalidation —
+                // a live pane with an unchanged foreground inside one ~3s
+                // window is the same process, and the cost of the rare miss
+                // is a cosmetic label, not an attributed sample.
+                if pane.pane_pid.is_none() {
+                    pane.pane_pid = entry.pane_pid;
+                }
                 pane.cpu_pct = entry.cpu_pct;
                 pane.io_bps = entry.io_bps;
                 pane.rss_kb = entry.rss_kb;

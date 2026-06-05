@@ -718,9 +718,11 @@ fn metrics_cache_expires_after_sample_ttl() {
     assert!(!MetricsSampleCache::default().is_fresh(unix_now_ms()));
 }
 
-/// The within-TTL skip path: stored display values carry forward onto the
-/// matching pane, the re-tenancy guard blanks a reused pane id, an uncached
-/// pane keeps its `None`s, and the cache file is left unwritten.
+/// The within-TTL skip path: stored display values — and the root-pid binding
+/// the process-row name anchors on — carry forward onto the matching pane, the
+/// re-tenancy guard blanks a reused pane id, an uncached pane keeps its
+/// `None`s, a natively-pidded pane keeps its own pid, and the cache file is
+/// left unwritten.
 #[test]
 fn metrics_within_ttl_carries_display_values_forward() {
     let dir = tempfile::TempDir::new().unwrap();
@@ -735,7 +737,11 @@ fn metrics_within_ttl_carries_display_values_forward() {
         pane("terminal_1", Some("zsh"), Some("/repo")),
         pane("terminal_2", Some("cargo build"), Some("/repo")),
         pane("terminal_3", Some("zsh"), Some("/repo")),
+        pane("terminal_4", Some("zsh"), Some("/repo")),
     ];
+    // terminal_4 reports its pid natively (the tmux case): the carry must
+    // never overwrite a live read with a cached binding.
+    panes[3].pane_pid = Some(7);
     let mut cache = MetricsSampleCache {
         sampled_at_ms: unix_now_ms(),
         entries: HashMap::new(),
@@ -760,6 +766,9 @@ fn metrics_within_ttl_carries_display_values_forward() {
             ..binding_entry(43, "zsh", 701)
         },
     );
+    cache
+        .entries
+        .insert(panes[3].pane_id.to_string(), binding_entry(44, "zsh", 702));
     let cache_path = runtime.root.join("metrics-sample.json");
     std::fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
     let written = std::fs::read(&cache_path).unwrap();
@@ -770,10 +779,25 @@ fn metrics_within_ttl_carries_display_values_forward() {
     assert_eq!(panes[0].io_bps, Some(1_024));
     assert_eq!(panes[0].rss_kb, Some(2_048));
     assert_eq!(
+        panes[0].pane_pid,
+        Some(42),
+        "the root-pid binding rides with the values — the process-row name \
+         anchor must not flip between windows"
+    );
+    assert_eq!(
         panes[1].cpu_pct, None,
         "re-tenanted pane id carries nothing"
     );
+    assert_eq!(
+        panes[1].pane_pid, None,
+        "a re-tenanted pane id carries no binding either"
+    );
     assert_eq!(panes[2].cpu_pct, None, "uncached pane warms up next window");
+    assert_eq!(
+        panes[3].pane_pid,
+        Some(7),
+        "a natively-reported pid is never overwritten by the cached binding"
+    );
     assert_eq!(
         std::fs::read(&cache_path).unwrap(),
         written,

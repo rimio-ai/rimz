@@ -200,7 +200,7 @@ The display enrichments run on their own clocks, each gated by a persisted stamp
 | per-session `$`, context meter, tokens | statusline push | near-real-time — **unchanged** | the sole near-real-time cost channel stays push-driven |
 | worktree header `+`/`-`, `⇡`/`⇣`, `≡` | git probes | ≤ `DIFF_STATS_TTL` (5s) while the worktree is hot (a running agent row, or one active within `GIT_ACTIVITY_WINDOW`); ≤ `DIFF_STATS_IDLE_TTL` (60s) idle | a human hand-editing a worktree no agent is working |
 | grouping of a brand-new checkout | `git worktree list` | immediate on a session boundary (the `--min-pane-cache-ms` floor); ≤ `WORKTREE_ROOTS_TTL` (60s) otherwise | a worktree added with no agent started in it |
-| process-row `C`/`M`/`⇅` | `/proc` sampling | ~3s rates (`METRICS_SAMPLE_TTL`), values carried forward between samples | a new pane warms up in ≤3s instead of ≤1s |
+| process-row `C`/`M`/`⇅` | `/proc` sampling | ~3s rates (`METRICS_SAMPLE_TTL`), values carried forward between samples | a new pane's first figures land within one window, its two-sample rates one window later |
 | provider budgets, plan, login | accounts probe / broker | 10min success / 10s retry — **unchanged** | — |
 
 ### Self-close
