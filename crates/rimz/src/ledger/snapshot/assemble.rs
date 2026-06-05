@@ -3,7 +3,6 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::time::SystemTime;
 
 use jiff::Timestamp;
 
@@ -14,6 +13,7 @@ use crate::feed::AgentState;
 use crate::ledger::atomic::{self};
 use crate::ledger::event_log::{self};
 use crate::ledger::feed_store::{self};
+use crate::ledger::parse_cache::ParseCache;
 use crate::ledger::paths::StatePaths;
 use crate::ledger::runtime::{RuntimeProjection, RuntimeScope};
 use crate::ledger::workspace_record;
@@ -106,13 +106,9 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
     let log_len = fs::metadata(&paths.events_log)
         .map(|meta| meta.len())
         .unwrap_or(0);
-    // The freshness-vs-log check ran above on the live mtimes; only the *parse*
-    // is cached. A consumer tab folds `latest.json` on every ledger delta, so
-    // skipping the 100–500 KB deserialize when the file is byte-identical to this
-    // thread's last read (same path, mtime, len) keeps the rollup off the CPU on a
-    // delta storm — the read itself is page-cache-hot. Same (path, mtime, len)
-    // trade-off the `snapshot.json` parse cache accepts; an atomic-rename republish
-    // changes both mtime and len, so a stale parse cannot be served.
+    // The freshness-vs-log check runs below on the live mtimes; only the
+    // *parse* is cached ([`ParseCache`]), keeping the 100–500 KB deserialize
+    // off the CPU on a delta storm — the read itself is page-cache-hot.
     // Offset-only comparison is sound across rotations because the writer
     // retracts `latest.json` before reseeding the new generation (see
     // `rotate_event_log`), and every publish re-stamps it — so a readable
@@ -124,13 +120,8 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
     };
     let len = meta.len();
     let path = paths.latest_snapshot.as_path();
-    let cached = LATEST_PARSE_CACHE.with_borrow(|slot| {
-        slot.as_ref().and_then(|entry| {
-            (entry.path == path && entry.mtime == latest_mtime && entry.len == len)
-                .then(|| entry.snapshot.clone())
-        })
-    });
-    if let Some(mut snapshot) = cached {
+    if let Some(mut snapshot) = LATEST_PARSE_CACHE.with(|cache| cache.get(path, latest_mtime, len))
+    {
         // Re-stamp the projection clock at the *read* instant: the parse cache
         // can serve a clone for minutes in a quiet room, and the enrichment
         // rebuilds (stall, compaction, reset windows) must fold against the
@@ -141,33 +132,17 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
     let bytes = fs::read(&paths.latest_snapshot).ok()?;
     let mut snapshot: SidebarSnapshot = serde_json::from_slice(&bytes).ok()?;
     snapshot.now = Timestamp::now();
-    // The parse cache is identity-keyed (path, mtime, len), not a freshness
-    // verdict — a stale-stamped snapshot is still worth caching so the next
-    // delta skips the re-parse.
-    LATEST_PARSE_CACHE.with_borrow_mut(|slot| {
-        *slot = Some(ParsedLatest {
-            path: path.to_path_buf(),
-            mtime: latest_mtime,
-            len,
-            snapshot: snapshot.clone(),
-        });
-    });
+    // The parse cache is identity-keyed, not a freshness verdict — a
+    // stale-stamped snapshot is still worth caching so the next delta skips
+    // the re-parse.
+    LATEST_PARSE_CACHE.with(|cache| cache.store(path, latest_mtime, len, snapshot.clone()));
     stamp_is_current(&snapshot).then_some(snapshot)
 }
 
-/// One thread's last parse of `latest.json`, keyed by path + identity (mtime,
-/// len) — the read-side twin of `sidebar::snapshot`'s `snapshot.json` parse
-/// cache, for the rollup a long-lived consumer thread re-reads each delta.
-struct ParsedLatest {
-    path: PathBuf,
-    mtime: SystemTime,
-    len: u64,
-    snapshot: SidebarSnapshot,
-}
-
 thread_local! {
-    static LATEST_PARSE_CACHE: std::cell::RefCell<Option<ParsedLatest>> =
-        const { std::cell::RefCell::new(None) };
+    /// This thread's last `latest.json` parse — the rollup a long-lived
+    /// consumer thread re-reads on every ledger delta.
+    static LATEST_PARSE_CACHE: ParseCache<SidebarSnapshot> = const { ParseCache::new() };
 }
 
 pub(crate) fn display_name_for(paths: &StatePaths) -> String {
@@ -192,6 +167,7 @@ pub(crate) fn project_root_for(paths: &StatePaths) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
 
     use super::*;
 

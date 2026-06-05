@@ -4,8 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +15,7 @@ use crate::feed::AgentState;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::ledger::atomic::{self, write_temp_then_rename};
 use crate::ledger::event_log::{self};
+use crate::ledger::parse_cache::ParseCache;
 use crate::ledger::paths::StatePaths;
 use crate::schema::event::EventEnvelope;
 
@@ -133,48 +133,22 @@ fn read_rollup_cache(path: &Path) -> Option<RollupCache> {
     let mtime = meta.modified().ok()?;
     let len = meta.len();
     // Only the *parse* is cached; every caller still folds against the live
-    // log. The base is byte-stable between checkpoint publishes, so a
-    // long-lived reader that races the checkpoint (`build_from` per delta)
-    // skips the 100–500 KB deserialize when the file is byte-identical to this
-    // thread's last read. Same (path, mtime, len) identity trade-off as the
-    // `latest.json` parse cache; an atomic-rename republish changes both
-    // mtime and len, so a stale parse cannot be served.
-    let cached = ROLLUP_PARSE_CACHE.with_borrow(|slot| {
-        slot.as_ref().and_then(|entry| {
-            (entry.path == path && entry.mtime == mtime && entry.len == len)
-                .then(|| entry.cache.clone())
-        })
-    });
-    if let Some(cache) = cached {
+    // log from the cached extent, so even a stale serve costs a larger fold,
+    // never a wrong rollup (the [`ParseCache`] contract).
+    if let Some(cache) = ROLLUP_PARSE_CACHE.with(|cache| cache.get(path, mtime, len)) {
         return Some(cache);
     }
     let bytes = fs::read(path).ok()?;
     let cache: RollupCache = serde_json::from_slice(&bytes).ok()?;
     let cache = (cache.version == ROLLUP_CACHE_VERSION).then_some(cache)?;
-    ROLLUP_PARSE_CACHE.with_borrow_mut(|slot| {
-        *slot = Some(ParsedRollup {
-            path: path.to_path_buf(),
-            mtime,
-            len,
-            cache: cache.clone(),
-        });
-    });
+    ROLLUP_PARSE_CACHE.with(|slot| slot.store(path, mtime, len, cache.clone()));
     Some(cache)
 }
 
-/// One thread's last parse of `rollup.json`, keyed by path + identity (mtime,
-/// len) — the fold-base twin of `assemble`'s `latest.json` parse cache, for
-/// the base a long-lived reader re-reads on every catch-up fold.
-struct ParsedRollup {
-    path: PathBuf,
-    mtime: SystemTime,
-    len: u64,
-    cache: RollupCache,
-}
-
 thread_local! {
-    static ROLLUP_PARSE_CACHE: std::cell::RefCell<Option<ParsedRollup>> =
-        const { std::cell::RefCell::new(None) };
+    /// This thread's last `rollup.json` parse — the fold base a long-lived
+    /// reader re-reads on every catch-up fold.
+    static ROLLUP_PARSE_CACHE: ParseCache<RollupCache> = const { ParseCache::new() };
 }
 
 #[must_use = "atomicity barrier; check the result"]

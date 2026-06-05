@@ -25,6 +25,7 @@ use crate::agents::spending::{Spending, read_provider_spending_cache};
 use crate::agents::{AgentRateLimits, RateLimitWindow};
 use crate::feed::PaneRef;
 use crate::ids::PaneId;
+use crate::ledger::parse_cache::ParseCache;
 /// Re-exported for long-lived consumers (the sidebar fetch worker), which sit
 /// behind this module's read-only boundary and never import `crate::ledger`.
 pub use crate::ledger::snapshot::RollupCursor;
@@ -128,23 +129,12 @@ pub struct SnapshotCache {
     pub panes: Vec<PaneRef>,
 }
 
-/// One thread's last parse of a snapshot cache file, keyed by path + identity
-/// (mtime, len). The consumer fetch worker is a long-lived thread that calls
-/// [`read_snapshot_cache`] every fetch (~0.75–2s), but the producer only
-/// republishes `snapshot.json` when something changed — so most reads hit an
-/// unchanged file. Caching the parse lets a hit return a clone of the in-memory
-/// value (a bulk copy) instead of re-deserializing 100–500 KB of JSON. Thread-
-/// local so it needs no lock and cannot be shared across the process's threads.
-struct ParsedSnapshotCache {
-    path: PathBuf,
-    mtime: SystemTime,
-    len: u64,
-    cache: SnapshotCache,
-}
-
 thread_local! {
-    static SNAPSHOT_PARSE_CACHE: std::cell::RefCell<Option<ParsedSnapshotCache>> =
-        const { std::cell::RefCell::new(None) };
+    /// This thread's last `snapshot.json` parse ([`ParseCache`]). The consumer
+    /// fetch worker calls [`read_snapshot_cache`] every fetch (~0.75–2s), but
+    /// the producer only republishes when something changed — so most reads
+    /// hit an unchanged file and skip the 100–500 KB deserialize.
+    static SNAPSHOT_PARSE_CACHE: ParseCache<SnapshotCache> = const { ParseCache::new() };
 }
 
 /// Read a same-session cache entry regardless of coalescing freshness. `None`
@@ -160,26 +150,12 @@ pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotC
     let mtime = meta.modified().ok()?;
     let len = meta.len();
 
-    let cached = SNAPSHOT_PARSE_CACHE.with_borrow(|slot| {
-        slot.as_ref().and_then(|entry| {
-            (entry.path == cache_path && entry.mtime == mtime && entry.len == len)
-                .then(|| entry.cache.clone())
-        })
-    });
-
-    let cache = match cached {
+    let cache = match SNAPSHOT_PARSE_CACHE.with(|cache| cache.get(cache_path, mtime, len)) {
         Some(cache) => cache,
         None => {
             let bytes = std::fs::read(cache_path).ok()?;
             let parsed: SnapshotCache = serde_json::from_slice(&bytes).ok()?;
-            SNAPSHOT_PARSE_CACHE.with_borrow_mut(|slot| {
-                *slot = Some(ParsedSnapshotCache {
-                    path: cache_path.to_path_buf(),
-                    mtime,
-                    len,
-                    cache: parsed.clone(),
-                });
-            });
+            SNAPSHOT_PARSE_CACHE.with(|cache| cache.store(cache_path, mtime, len, parsed.clone()));
             parsed
         }
     };

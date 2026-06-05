@@ -33,6 +33,7 @@ pub mod event_log;
 pub mod feed_store;
 pub mod gc;
 pub mod lock;
+pub(crate) mod parse_cache;
 pub mod paths;
 pub mod runtime;
 pub mod single_flight;
