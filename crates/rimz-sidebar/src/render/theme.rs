@@ -59,9 +59,8 @@ pub(crate) struct Palette {
 }
 
 impl Palette {
-    /// The shipped tones — exactly the palette the sidebar has always painted.
-    /// Every `[sidebar.theme]` slot a user leaves unset falls back here, so an
-    /// absent section renders byte-identically to the built-ins.
+    /// The shipped tones. Every `[sidebar.theme]` slot a user leaves unset
+    /// falls back here, so an absent section renders the built-ins.
     pub(crate) const BUILTIN: Palette = Palette {
         good: Color::Indexed(108),
         warn: Color::Indexed(179),
@@ -69,9 +68,9 @@ impl Palette {
         accent: Color::Indexed(73),
         cool: Color::Indexed(75),
         meta: Color::Indexed(141),
-        dim: Color::Indexed(244),
-        faint: Color::Indexed(240),
-        rule: Color::Indexed(237),
+        dim: Color::Indexed(246),
+        faint: Color::Indexed(242),
+        rule: Color::Indexed(238),
         selection: Color::Indexed(110),
     };
 
