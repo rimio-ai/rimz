@@ -291,15 +291,7 @@ fn render_neutral_prints_nothing() {
 }
 
 fn permission_item() -> FeedItem {
-    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/rimz-test"));
-    FeedItem::new(
-        workspace,
-        Surface::Bridge,
-        FeedKind::Permission,
-        "allow?",
-        "pi",
-        "agent-hook",
-    )
+    crate::agents::testkit::feed_item(FeedKind::Permission, "pi")
 }
 
 #[test]

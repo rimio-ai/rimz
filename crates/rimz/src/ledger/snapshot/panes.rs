@@ -179,6 +179,7 @@ pub(super) fn lazy_agent_for_pane<'a>(
     agents: &'a [AgentState],
     bound: &BTreeSet<(AgentKind, AgentSessionId)>,
     wired_lazy_kinds: &[String],
+    now: Timestamp,
 ) -> Option<LazyAgentRow<'a>> {
     let kind = command_agent_kind(pane.command.as_deref()?)?;
     let registers_lazily = crate::agents::descriptor_by_kind(kind)
@@ -200,7 +201,7 @@ pub(super) fn lazy_agent_for_pane<'a>(
     wired_lazy_kinds
         .iter()
         .any(|wired| wired == kind)
-        .then(|| LazyAgentRow::Idle(Box::new(idle_agent_row(pane, kind))))
+        .then(|| LazyAgentRow::Idle(Box::new(idle_agent_row(pane, kind, now))))
 }
 
 /// Defensive guard for the cwd fallback: when the pane's process start is known,
@@ -222,7 +223,7 @@ pub(super) fn pane_start_allows_bind(agent: &AgentState, pane: &PaneRef) -> bool
 /// with no model or context yet (the first turn swaps in the real bound agent
 /// row). Keyed on the pane id — no session id exists, and pane ids and agent ids
 /// are disjoint, so `attach_sub_agents` can never mis-nest a child onto it.
-fn idle_agent_row(pane: &PaneRef, kind: &str) -> SidebarRow {
+fn idle_agent_row(pane: &PaneRef, kind: &str, now: Timestamp) -> SidebarRow {
     SidebarRow {
         row_kind: SidebarRowKind::Agent,
         id: pane.pane_id.to_string(),
@@ -247,7 +248,7 @@ fn idle_agent_row(pane: &PaneRef, kind: &str) -> SidebarRow {
         context_severity: None,
         worktree_path: pane.cwd.clone(),
         worktree_branch: None,
-        last_activity: pane.pane_process_start.unwrap_or_else(Timestamp::now),
+        last_activity: pane.pane_process_start.unwrap_or(now),
         resolver: None,
         options: Vec::new(),
         sub_agents: Vec::new(),

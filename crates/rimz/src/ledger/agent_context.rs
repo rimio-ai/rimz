@@ -37,8 +37,9 @@ pub struct AgentContextRecord {
 
 /// Drop a sidecar older than this even if its `SessionEnd` tombstone was
 /// missed — matched to the snapshot's ghost-session TTL so stale cost or
-/// rate-limit data cannot pin a vanished pidless session.
-const CONTEXT_TTL_SECS: i64 = 3 * 60 * 60;
+/// rate-limit data cannot pin a vanished pidless session (parity pinned by
+/// `context_sidecar_ttl_matches_the_ghost_session_ttl` in the view tests).
+pub(crate) const CONTEXT_TTL_SECS: i64 = 3 * 60 * 60;
 
 /// Persist (latest-wins) one session's context. WRITER = the feed process.
 /// Atomic temp+rename (no fsync — disposable sidecar) via
@@ -216,6 +217,24 @@ mod tests {
         let stale = Timestamp::from_second(1_700_000_000 - CONTEXT_TTL_SECS - 60).unwrap();
         write(&runtime, "claude", "sess-1", &ctx(stale)).unwrap();
         assert!(read_all_at(&runtime, now).is_empty());
+    }
+
+    #[test]
+    fn ttl_cutoff_is_boundary_exact() {
+        // A missed tombstone ages out on the TTL exactly: a record *at* the
+        // cutoff is still served, one second past it is gone — an off-by-one
+        // in either direction fails one arm.
+        let (_dir, runtime) = runtime();
+        let now = Timestamp::from_second(1_700_000_000).unwrap();
+        let at_cutoff = Timestamp::from_second(1_700_000_000 - CONTEXT_TTL_SECS).unwrap();
+        let past_cutoff = Timestamp::from_second(1_700_000_000 - CONTEXT_TTL_SECS - 1).unwrap();
+        write(&runtime, "claude", "sess-at", &ctx(at_cutoff)).unwrap();
+        write(&runtime, "claude", "sess-past", &ctx(past_cutoff)).unwrap();
+        let ids: Vec<_> = read_all_at(&runtime, now)
+            .into_iter()
+            .map(|r| r.agent_id)
+            .collect();
+        assert_eq!(ids, vec!["sess-at".to_owned()]);
     }
 
     #[test]

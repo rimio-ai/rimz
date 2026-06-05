@@ -604,7 +604,7 @@ fn enrich_worktree_groups(
 fn compute_fleet_spending(runtime: &rimz::RuntimePaths) -> rimz::agents::spending::Spending {
     use rimz::agents::pricing;
     use rimz::agents::spending::{
-        Spending, compute_spending, read_spending_cache, write_spending_cache,
+        Spending, compute_spending, read_spending_cache, unix_secs_now, write_spending_cache,
     };
     use rimz::agents::{ADAPTERS, AgentAdapter};
 
@@ -626,7 +626,7 @@ fn compute_fleet_spending(runtime: &rimz::RuntimePaths) -> rimz::agents::spendin
     let cache_path = runtime.root.join("spending.json");
     let mut cache = read_spending_cache(&cache_path);
     let prices = pricing::load_for_spending(&runtime.root.join("pricing-cache.json"));
-    let spending = compute_spending(&files, &mut cache, &prices);
+    let spending = compute_spending(&files, &mut cache, &prices, unix_secs_now());
     if cache.dirty {
         write_spending_cache(&cache_path, &cache);
     }

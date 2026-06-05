@@ -1,7 +1,6 @@
 use super::*;
 use crate::agents::AgentHookClass;
-use crate::feed::{ResolutionMethod, Surface};
-use crate::ids::WorkspaceId;
+use crate::feed::ResolutionMethod;
 use serde_json::json;
 use std::path::Path;
 
@@ -14,15 +13,7 @@ fn resume_command_is_claude_resume_with_the_session_id() {
 }
 
 fn fixture(kind: FeedKind) -> FeedItem {
-    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/rimz-test"));
-    FeedItem::new(
-        workspace,
-        Surface::Bridge,
-        kind,
-        "allow?",
-        "claude",
-        "agent-hook",
-    )
+    crate::agents::testkit::feed_item(kind, "claude")
 }
 
 #[test]

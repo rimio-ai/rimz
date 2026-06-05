@@ -92,8 +92,13 @@ fn subagent_activity_does_not_change_parent_phase() {
         agent_id: "sess-1.sub".into(),
         at: last_seen + std::time::Duration::from_secs(15),
     };
-    let snap = SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![parent, subagent])
-        .with_agent_activity(&[subagent_touch]);
+    let snap = SidebarSnapshot::build_with_agents(
+        workspace,
+        Vec::new(),
+        vec![parent, subagent],
+        Timestamp::now(),
+    )
+    .with_agent_activity(&[subagent_touch]);
     let parent_phase = snap
         .agents
         .iter()
@@ -339,9 +344,14 @@ fn subagent_stop_without_start_keeps_parent_link_and_spares_the_parent() {
         .expect("child row");
     assert_eq!(child.parent_agent_id.as_deref(), Some("sess-root"));
 
-    let mut snapshot =
-        SidebarSnapshot::build_with_carryover(workspace, Vec::new(), Vec::new(), agents);
-    snapshot.reap_stale_sessions(Timestamp::now());
+    let mut snapshot = SidebarSnapshot::build_with_carryover(
+        workspace,
+        Vec::new(),
+        Vec::new(),
+        agents,
+        Timestamp::now(),
+    );
+    snapshot.reap_stale_sessions();
     assert!(
         snapshot.agents.iter().any(|a| a.agent_id == "sess-root"),
         "a Stop-only child must not reap its live parent",
@@ -401,6 +411,7 @@ fn typeless_subagent_stop_without_start_is_ignored() {
             .iter()
             .find(|a| a.agent_id == "sess-root")
             .expect("root row"),
+        Timestamp::now(),
     )];
     attach_sub_agents(&mut rows, &agents, Timestamp::now());
     assert_eq!(rows[0].sub_agents.len(), 1);

@@ -2,5 +2,6 @@
 //! single-flight behavior, not product semantics already covered elsewhere.
 
 mod concurrent_writers;
+mod consumer_enrichment;
 mod sidebar_diff_stats;
 mod spending_incremental;

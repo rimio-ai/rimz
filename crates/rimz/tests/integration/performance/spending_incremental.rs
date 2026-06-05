@@ -19,6 +19,10 @@ use rimz::agents::{AgentAdapter, ClaudeAdapter, PriceBook};
 
 const HISTORY_LINES: usize = 30_000;
 
+/// 2026-06-02T10:00:00Z — one day past the fixture stamp, so the trailing
+/// windows hold the same verdict on any wall-clock day the suite runs.
+const NOW_SECS: u64 = 1_780_394_400;
+
 fn claude_adapter() -> &'static dyn AgentAdapter {
     &ClaudeAdapter
 }
@@ -47,7 +51,7 @@ fn spending_walk_io_is_history_independent() {
 
     let mut cache = SpendingDiskCache::default();
     let cold_start = Instant::now();
-    let cold = compute_spending(&files, &mut cache, &prices);
+    let cold = compute_spending(&files, &mut cache, &prices, NOW_SECS);
     let cold_elapsed = cold_start.elapsed();
     let baseline_entries = cache
         .files
@@ -70,7 +74,7 @@ fn spending_walk_io_is_history_independent() {
     drop(f);
 
     let warm_start = Instant::now();
-    let warm = compute_spending(&files, &mut cache, &prices);
+    let warm = compute_spending(&files, &mut cache, &prices, NOW_SECS);
     let warm_elapsed = warm_start.elapsed();
 
     // Work proxy: the cache grew by exactly the appended entry — the history

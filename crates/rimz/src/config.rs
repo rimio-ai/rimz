@@ -611,11 +611,9 @@ mod tests {
     #[test]
     fn sidebar_theme_parses_defaults_unset_and_rejects_out_of_range() {
         let dir = tempdir().expect("tempdir");
-        let config = MachineConfig::load_from(&write(
-            &dir,
-            "[sidebar.theme]\ngood = 34\nselection = 25\n",
-        ))
-        .expect("load");
+        let config =
+            MachineConfig::load_from(&write(&dir, "[sidebar.theme]\ngood = 34\nselection = 25\n"))
+                .expect("load");
         assert_eq!(config.sidebar.theme.good, Some(34));
         assert_eq!(config.sidebar.theme.selection, Some(25));
         assert_eq!(config.sidebar.theme.alarm, None, "unset slots stay builtin");

@@ -270,6 +270,8 @@ pub(crate) fn signal_from_event_params(params: &Value) -> Option<LifecycleSignal
 mod tests {
     use super::*;
 
+    use crate::agents::testkit::all_signals;
+
     fn state(status: AgentStatus, phase: TurnPhase, compacting: bool) -> LifecycleState {
         LifecycleState {
             status,
@@ -528,31 +530,6 @@ mod tests {
         for signal in all_signals() {
             let _ = step(None, &signal);
         }
-    }
-
-    fn all_signals() -> Vec<LifecycleSignal> {
-        let mut signals = vec![
-            LifecycleSignal::Registered,
-            LifecycleSignal::TurnStarted,
-            LifecycleSignal::SubagentStarted,
-            LifecycleSignal::SubagentStopped,
-            LifecycleSignal::Compacting,
-            LifecycleSignal::Ended,
-        ];
-        for errored in [false, true] {
-            for parked_on_background in [false, true] {
-                signals.push(LifecycleSignal::TurnEnded {
-                    errored,
-                    parked_on_background,
-                });
-            }
-        }
-        for mutates in [false, true] {
-            for edits in [false, true] {
-                signals.push(LifecycleSignal::ToolUsed { mutates, edits });
-            }
-        }
-        signals
     }
 
     #[test]

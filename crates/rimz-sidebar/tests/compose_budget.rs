@@ -139,10 +139,12 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
 /// measured work rather than short-circuiting on empty fixtures.
 fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
+    let now = Timestamp::now();
     SidebarSnapshot {
         workspace_id,
         display_name: "query-engine".to_owned(),
-        generated_at: Timestamp::now(),
+        generated_at: now,
+        now,
         worktree_groups: (0..groups)
             .map(|group| SidebarWorktreeGroup {
                 key: format!("/repo/wt{group}"),

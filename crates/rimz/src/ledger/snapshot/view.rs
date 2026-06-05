@@ -39,6 +39,14 @@ pub struct SidebarSnapshot {
     pub workspace_id: WorkspaceId,
     pub display_name: String,
     pub generated_at: Timestamp,
+    /// The single instant every time-window verdict in this projection reads —
+    /// the compaction head, the stall escalation, rate-limit resets, and
+    /// subagent retention all agree on one clock, captured once at
+    /// construction. Never serialized: a reader re-stamps it at its own read
+    /// instant (`read_fresh_latest`), so a deserialized snapshot's enrichment
+    /// rebuilds against the read, not the long-gone produce.
+    #[serde(skip, default = "Timestamp::now")]
+    pub now: Timestamp,
     pub worktree_groups: Vec<SidebarWorktreeGroup>,
     pub needs_attention: Vec<FeedItem>,
     pub resolver_working: Vec<FeedItem>,
@@ -456,8 +464,9 @@ impl SidebarSnapshot {
         workspace_id: WorkspaceId,
         items: Vec<FeedItem>,
         events: Vec<EventEnvelope>,
+        now: Timestamp,
     ) -> Self {
-        Self::build_with_carryover(workspace_id, items, events, Vec::new())
+        Self::build_with_carryover(workspace_id, items, events, Vec::new(), now)
     }
 
     /// Build a snapshot, folding `carryover_agents` into the agent rollup so
@@ -468,15 +477,17 @@ impl SidebarSnapshot {
         items: Vec<FeedItem>,
         events: Vec<EventEnvelope>,
         carryover_agents: Vec<AgentState>,
+        now: Timestamp,
     ) -> Self {
         let agents = agent_rollup_with_carryover(&events, carryover_agents);
-        Self::build_with_agents(workspace_id, items, agents)
+        Self::build_with_agents(workspace_id, items, agents, now)
     }
 
     pub fn build_with_agents(
         workspace_id: WorkspaceId,
         mut items: Vec<FeedItem>,
         agents: Vec<AgentState>,
+        now: Timestamp,
     ) -> Self {
         items.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
 
@@ -512,12 +523,13 @@ impl SidebarSnapshot {
         // keeps per-path grouping here; callers that know them re-fold via
         // `with_project_root` / `with_worktree_roots`.
         let worktree_groups =
-            build_worktree_groups(&agents, &needs_attention, &resolver_working, None, &[]);
+            build_worktree_groups(&agents, &needs_attention, &resolver_working, None, &[], now);
 
         Self {
             workspace_id,
             display_name,
-            generated_at: Timestamp::now(),
+            generated_at: now,
+            now,
             worktree_groups,
             needs_attention,
             resolver_working,
@@ -544,6 +556,7 @@ impl SidebarSnapshot {
             &self.resolver_working,
             self.project_root.as_deref(),
             &self.worktree_roots,
+            self.now,
         );
     }
 
@@ -726,7 +739,8 @@ impl SidebarSnapshot {
     ///     older holds no live pane the newer doesn't already occupy. This
     ///     collapses relaunch-in-place and shared-pid ghosts to the newest
     ///     while never dropping a concurrent agent that owns its own pane.
-    pub fn reap_stale_sessions(&mut self, now: Timestamp) {
+    pub fn reap_stale_sessions(&mut self) {
+        let now = self.now;
         let previous_len = self.agents.len();
         // Mark each superseded older session by position, borrowing `agents`
         // read-only. Runs on every snapshot rebuild, so the old approach — a
@@ -845,14 +859,19 @@ impl SidebarSnapshot {
             // on the provider dashboard block instead, so drop its pane here.
             .filter(|pane| !crate::remote_control::pane_is_host(pane))
             .collect::<Vec<_>>();
-        self.worktree_groups = build_worktree_groups_with_panes(
+        self.worktree_groups = build_worktree_groups_from_rows(
+            rows_from_panes(
+                &self.agents,
+                &self.needs_attention,
+                &self.resolver_working,
+                &panes,
+                &self.wired_lazy_kinds,
+                self.now,
+            ),
             &self.agents,
-            &self.needs_attention,
-            &self.resolver_working,
-            &panes,
             self.project_root.as_deref(),
             &self.worktree_roots,
-            &self.wired_lazy_kinds,
+            self.now,
         );
         self
     }
@@ -977,7 +996,7 @@ impl SidebarSnapshot {
             // rate-limit windows renders the absence deliberately — its panel
             // never grows budget bars even if a stray reading lands in a session
             // context; an unregistered kind keeps whatever it reports.
-            let now = Timestamp::now();
+            let now = self.now;
             let declares_windows = crate::agents::descriptor_by_kind(&kind)
                 .is_none_or(|descriptor| descriptor.capabilities.rate_limit_windows);
             let windows = if declares_windows {
@@ -1249,9 +1268,10 @@ fn build_worktree_groups(
     resolver_working: &[FeedItem],
     project_root: Option<&Path>,
     worktree_roots: &[PathBuf],
+    now: Timestamp,
 ) -> Vec<SidebarWorktreeGroup> {
-    let rows = rows_from_ledger(agents, needs_attention, resolver_working);
-    build_worktree_groups_from_rows(rows, agents, project_root, worktree_roots)
+    let rows = rows_from_ledger(agents, needs_attention, resolver_working, now);
+    build_worktree_groups_from_rows(rows, agents, project_root, worktree_roots, now)
 }
 
 /// One pane = one row, by construction. Every live pane anchors exactly one
@@ -1266,35 +1286,13 @@ fn build_worktree_groups(
 /// yet renders idle rather than as a process row. The only truly paneless rows are
 /// standalone script/bridge asks, which no agent session raised. `wired_lazy_kinds`
 /// gates the idle-instance synthesis (see `lazy_agent_for_pane`).
-fn build_worktree_groups_with_panes(
-    agents: &[AgentState],
-    needs_attention: &[FeedItem],
-    resolver_working: &[FeedItem],
-    panes: &[PaneRef],
-    project_root: Option<&Path>,
-    worktree_roots: &[PathBuf],
-    wired_lazy_kinds: &[String],
-) -> Vec<SidebarWorktreeGroup> {
-    build_worktree_groups_from_rows(
-        rows_from_panes(
-            agents,
-            needs_attention,
-            resolver_working,
-            panes,
-            wired_lazy_kinds,
-        ),
-        agents,
-        project_root,
-        worktree_roots,
-    )
-}
-
 fn rows_from_panes(
     agents: &[AgentState],
     needs_attention: &[FeedItem],
     resolver_working: &[FeedItem],
     panes: &[PaneRef],
     wired_lazy_kinds: &[String],
+    now: Timestamp,
 ) -> Vec<SidebarRow> {
     let mut rows = Vec::new();
     let mut bound_agents: BTreeSet<(AgentKind, AgentSessionId)> = BTreeSet::new();
@@ -1308,9 +1306,10 @@ fn rows_from_panes(
                 pane,
                 needs_attention,
                 resolver_working,
+                now,
             );
         } else if let Some(bind) =
-            lazy_agent_for_pane(pane, agents, &bound_agents, wired_lazy_kinds)
+            lazy_agent_for_pane(pane, agents, &bound_agents, wired_lazy_kinds, now)
         {
             // The lazy-agent relaxation of stamped-id binding. A lazy-registering
             // agent (Codex) can be present without a stamped session — it registers
@@ -1329,11 +1328,12 @@ fn rows_from_panes(
                     pane,
                     needs_attention,
                     resolver_working,
+                    now,
                 ),
                 LazyAgentRow::Idle(row) => rows.push(*row),
             }
         } else if pane_command_is_known(pane) {
-            rows.push(row_from_process(pane));
+            rows.push(row_from_process(pane, now));
         }
         // else: a brand-new or raced pane whose command is still unknown after
         // carry-forward — the third honest-read guard. Presence without identity
@@ -1366,9 +1366,10 @@ fn push_agent_row(
     pane: &PaneRef,
     needs_attention: &[FeedItem],
     resolver_working: &[FeedItem],
+    now: Timestamp,
 ) {
     bound.insert((agent.kind.clone(), agent.agent_id.clone()));
-    let mut row = row_from_agent(agent);
+    let mut row = row_from_agent(agent, now);
     row.worktree_path = row.worktree_path.or_else(|| pane.cwd.clone());
     row.pane = Some(pane.clone());
     if let Some(ask) = most_relevant_ask(agent, needs_attention, resolver_working) {
@@ -1431,6 +1432,7 @@ fn rows_from_ledger(
     agents: &[AgentState],
     needs_attention: &[FeedItem],
     resolver_working: &[FeedItem],
+    now: Timestamp,
 ) -> Vec<SidebarRow> {
     let mut rows = Vec::new();
     let mut replaced_agents = BTreeSet::new();
@@ -1481,7 +1483,7 @@ fn rows_from_ledger(
         if replaced_agents.contains(&key) {
             continue;
         }
-        rows.push(row_from_agent(agent));
+        rows.push(row_from_agent(agent, now));
     }
 
     rows
@@ -1492,12 +1494,12 @@ fn build_worktree_groups_from_rows(
     agents: &[AgentState],
     project_root: Option<&Path>,
     worktree_roots: &[PathBuf],
+    now: Timestamp,
 ) -> Vec<SidebarWorktreeGroup> {
     // Nest each subagent under its parent root row before grouping. This is the
     // one chokepoint both the live (`rows_from_panes`) and no-pane
     // (`rows_from_ledger`) builders share, so nesting behaves identically on
     // either path.
-    let now = Timestamp::now();
     attach_sub_agents(&mut rows, agents, now);
     // Project the displayed status now that each row knows its subagents (the
     // delegated-wait exemption) and the full agent set is in hand (the account
@@ -1848,7 +1850,7 @@ fn degraded_subagent_label(agent_id: &str) -> String {
     }
 }
 
-pub(super) fn row_from_agent(agent: &AgentState) -> SidebarRow {
+pub(super) fn row_from_agent(agent: &AgentState, now: Timestamp) -> SidebarRow {
     // `SidebarRow.status` is the *displayed* status. It starts as the raw rollup
     // value and is projected in `project_display_status` once the row knows its
     // subagents and its account's rate-limit budget (stall → `failed`,
@@ -1882,7 +1884,7 @@ pub(super) fn row_from_agent(agent: &AgentState) -> SidebarRow {
         sub_agents: Vec::new(),
         process_active: false,
         command_detail: None,
-        compacting: is_compacting(agent, Timestamp::now()),
+        compacting: is_compacting(agent, now),
         // Filled by the turn-death projection (`project_display_status`) when
         // the escalation holds; never carried from the rollup.
         turn_error_label: None,

@@ -121,8 +121,13 @@ fn remote_control_host_pane_is_filtered_not_rendered() {
 }
 
 fn snapshot_with(items: Vec<FeedItem>, agents: Vec<AgentState>) -> SidebarSnapshot {
-    let mut snapshot =
-        SidebarSnapshot::build_with_carryover(fixed_workspace(), items, Vec::new(), agents);
+    let mut snapshot = SidebarSnapshot::build_with_carryover(
+        fixed_workspace(),
+        items,
+        Vec::new(),
+        agents,
+        Timestamp::now(),
+    );
     snapshot.display_name = "query-engine".to_owned();
     snapshot
 }
@@ -913,8 +918,13 @@ fn render_omits_history_sections() {
         "event.emit",
         json!({ "kind": "build.started", "title": "Building web" }),
     );
-    let mut snapshot =
-        SidebarSnapshot::build_with_carryover(workspace, vec![answered], vec![event], vec![]);
+    let mut snapshot = SidebarSnapshot::build_with_carryover(
+        workspace,
+        vec![answered],
+        vec![event],
+        vec![],
+        Timestamp::now(),
+    );
     snapshot.display_name = "query-engine".to_owned();
     let rendered = snapshot_to_screen(&snapshot, 38, 10);
 

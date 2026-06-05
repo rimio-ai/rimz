@@ -968,7 +968,9 @@ fn apply_rate_limit_cache(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths
 
     let path = runtime.root.join("rate_limits.json");
     let cached = read_rate_limits_cache(&path);
-    let now = Timestamp::now();
+    // The snapshot's single projection clock, so the idle-window reset
+    // projection agrees with the dashboard windows resolved on the same frame.
+    let now = snapshot.now;
     let mut next = RateLimitsCache {
         refreshed_at_ms: unix_now_ms(),
         windows: BTreeMap::new(),

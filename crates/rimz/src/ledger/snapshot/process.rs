@@ -17,7 +17,7 @@ pub(super) fn pane_command_is_known(pane: &PaneRef) -> bool {
         .is_some_and(|command| !command.is_empty())
 }
 
-pub(super) fn row_from_process(pane: &PaneRef) -> SidebarRow {
+pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
     let command = pane
         .command
         .as_deref()
@@ -65,7 +65,7 @@ pub(super) fn row_from_process(pane: &PaneRef) -> SidebarRow {
         context_severity: None,
         worktree_path: pane.cwd.clone(),
         worktree_branch: None,
-        last_activity: pane.pane_process_start.unwrap_or_else(Timestamp::now),
+        last_activity: pane.pane_process_start.unwrap_or(now),
         resolver: None,
         options: Vec::new(),
         sub_agents: Vec::new(),
@@ -255,7 +255,10 @@ mod tests {
     fn process_row_carries_the_full_command_only_when_active() {
         // Active: line 2 shows the full command; line 1 falls back to the program
         // when `/proc` can't name the owning shell (no pid in tests).
-        let active = row_from_process(&pane("%1", "sudo npm install -g @openai/codex", "/repo"));
+        let active = row_from_process(
+            &pane("%1", "sudo npm install -g @openai/codex", "/repo"),
+            Timestamp::now(),
+        );
         assert_eq!(active.row_kind, SidebarRowKind::Process);
         assert_eq!(active.name, "npm");
         assert!(active.process_active);
@@ -265,13 +268,13 @@ mod tests {
         );
 
         // Idle shell: one clean line, no detail.
-        let idle = row_from_process(&pane("%2", "zsh", "/repo"));
+        let idle = row_from_process(&pane("%2", "zsh", "/repo"), Timestamp::now());
         assert_eq!(idle.name, "zsh");
         assert!(!idle.process_active);
         assert_eq!(idle.command_detail, None);
 
         // An active command already equal to its label adds no redundant line.
-        let bare = row_from_process(&pane("%3", "cargo", "/repo"));
+        let bare = row_from_process(&pane("%3", "cargo", "/repo"), Timestamp::now());
         assert!(bare.process_active);
         assert_eq!(bare.command_detail, None);
     }

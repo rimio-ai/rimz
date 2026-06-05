@@ -53,6 +53,9 @@ fn assemble_snapshot(
     extent: event_log::LogExtent,
     agents: Vec<AgentState>,
 ) -> Result<SidebarSnapshot> {
+    // The one clock read this projection makes: every window verdict below
+    // (reap TTLs, stall, compaction) folds against this single instant.
+    let now = Timestamp::now();
     // Pending items only: the view folds nothing else, and the pending scan
     // stays O(pending) regardless of feed history.
     let items = feed_store::list_pending(&paths.feed_dir)?;
@@ -65,8 +68,9 @@ fn assemble_snapshot(
         paths.workspace_id.clone(),
         projection.items,
         projection.agents,
+        now,
     );
-    snapshot.reap_stale_sessions(Timestamp::now());
+    snapshot.reap_stale_sessions();
     snapshot.display_name = display_name_for(paths);
     let mut snapshot = snapshot.with_project_root(project_root_for(paths));
     // Stamp the extent the fold consumed. The freshness gate compares it
@@ -118,11 +122,17 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
                 .then(|| entry.snapshot.clone())
         })
     });
-    if let Some(snapshot) = cached {
+    if let Some(mut snapshot) = cached {
+        // Re-stamp the projection clock at the *read* instant: the parse cache
+        // can serve a clone for minutes in a quiet room, and the enrichment
+        // rebuilds (stall, compaction, reset windows) must fold against the
+        // reader's now, not the long-gone parse.
+        snapshot.now = Timestamp::now();
         return stamp_is_current(&snapshot).then_some(snapshot);
     }
     let bytes = fs::read(&paths.latest_snapshot).ok()?;
-    let snapshot: SidebarSnapshot = serde_json::from_slice(&bytes).ok()?;
+    let mut snapshot: SidebarSnapshot = serde_json::from_slice(&bytes).ok()?;
+    snapshot.now = Timestamp::now();
     // The parse cache is identity-keyed (path, mtime, len), not a freshness
     // verdict — a stale-stamped snapshot is still worth caching so the next
     // delta skips the re-parse.

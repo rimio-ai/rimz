@@ -54,10 +54,12 @@ pub fn compute_next_state(
 
 pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
     let display_name = workspace_id.as_str().to_owned();
+    let now = Timestamp::now();
     SidebarSnapshot {
         workspace_id,
         display_name,
-        generated_at: Timestamp::now(),
+        generated_at: now,
+        now,
         worktree_groups: Vec::new(),
         needs_attention: Vec::new(),
         resolver_working: Vec::new(),

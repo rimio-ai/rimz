@@ -25,6 +25,8 @@ pub mod pi;
 pub mod pricing;
 pub mod registry;
 pub mod spending;
+#[cfg(test)]
+pub(crate) mod testkit;
 pub(crate) mod transcript_fs;
 
 use std::io::{Read, Seek, SeekFrom};

@@ -16,6 +16,15 @@ Local runner: `cargo xtask test` (wraps `cargo nextest run`). Doctests run separ
 
 Do not land ignored tests for future product targets. Keep planned behaviour in the roadmap or design docs, then add the executable test when the implementation is ready to pass in the normal nextest suite.
 
+## Deterministic time
+
+Time is data in the unit suites: every window verdict — stall, compaction expiry, ghost TTLs, rate-limit resets, spend buckets — is asserted against a fixed epoch, boundary-exact on any day the suite runs. The production seam that enables it: `now` is captured once per read entry point (`assemble_snapshot`, the re-stamp in `read_fresh_latest`, the CLI producer) and threaded through the projection and the spend aggregation, so the pure core never reads the wall clock.
+
+- The snapshot testkit (`crates/rimz/src/ledger/snapshot/testkit.rs`) owns the fixtures: `epoch()`/`ago()` anchor instants, `room()` builds the projection at the epoch, `rows()`/`row()` read the result, and the `AgentStateFx` chain sets the fields scenarios vary (`agent(..).worktree(..).in_pane(..).active_ago(..)`).
+- Adapter fixtures shared across providers live in `crates/rimz/src/agents/testkit.rs` (`feed_item`, the exhaustive `all_signals()` sweep).
+- Reusable hook wire envelopes live in `tests/integration/common/payloads.rs`; an integration test exercising one specific flow builds its payload inline, and adapter unit tests assert mapping logic over inline `json!` literals, never re-pinning the envelope. Spend-parser fixtures are parametric line generators beside their parser.
+- Time tests pin both sides of a window boundary with one arm exactly on the cutoff value, so a shifted constant and a flipped comparison operator each fail an arm.
+
 ## M0 synthetic matrix
 
 **M0a** runs without Zellij or tmux:

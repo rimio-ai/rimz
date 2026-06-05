@@ -86,7 +86,8 @@ fn read_published_snapshot_folds_caches_without_forking() {
     // Publish the rollup (project root = the worktree) to `latest.json`, where
     // the consumer reads it fresh, and the live panes to `snapshot.json`. `own`
     // is excluded; a sibling pane becomes a row.
-    let mut rollup = SidebarSnapshot::build(workspace.clone(), Vec::new(), Vec::new());
+    let mut rollup =
+        SidebarSnapshot::build(workspace.clone(), Vec::new(), Vec::new(), Timestamp::now());
     rollup = rollup.with_project_root(Some(worktree.clone()));
     let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     state.ensure_dirs().unwrap();
@@ -177,8 +178,12 @@ fn read_published_snapshot_folds_subagent_context() {
     child.worktree_path = Some(wt.clone());
     child.pane = Some(live_pane.clone());
     child.task = None;
-    let mut rollup =
-        SidebarSnapshot::build_with_agents(workspace.clone(), Vec::new(), vec![parent, child]);
+    let mut rollup = SidebarSnapshot::build_with_agents(
+        workspace.clone(),
+        Vec::new(),
+        vec![parent, child],
+        Timestamp::now(),
+    );
     rollup = rollup.with_project_root(Some(worktree));
     rollup.reflects_log = Some(crate::ledger::event_log::LogExtent {
         generation: 0,
@@ -250,7 +255,7 @@ fn consumer_own_view_counts_siblings_in_its_own_tab() {
     // to `latest.json` where the consumer reads it fresh.
     let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     state.ensure_dirs().unwrap();
-    let rollup = SidebarSnapshot::build(workspace, Vec::new(), Vec::new());
+    let rollup = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
     atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
 
     let orphan_own = PaneId::from_parts(MuxName::Zellij, "orphan_sb");
@@ -302,7 +307,8 @@ fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
         generation: 0,
         offset: 0,
     });
-    let mut alpha = SidebarSnapshot::build(workspace.clone(), Vec::new(), Vec::new());
+    let mut alpha =
+        SidebarSnapshot::build(workspace.clone(), Vec::new(), Vec::new(), Timestamp::now());
     alpha.display_name = "alpha".to_owned();
     alpha.reflects_log = stamp;
     atomic::write_temp_then_rename(&state.latest_snapshot, &alpha).unwrap();
@@ -311,7 +317,7 @@ fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
 
     // Republish ONLY `latest.json` (a different length so the parse cache
     // cannot mask the change); the pane cache is untouched.
-    let mut bravo = SidebarSnapshot::build(workspace, Vec::new(), Vec::new());
+    let mut bravo = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
     bravo.display_name = "bravo-the-second-rollup".to_owned();
     bravo.reflects_log = stamp;
     atomic::write_temp_then_rename(&state.latest_snapshot, &bravo).unwrap();
@@ -430,7 +436,7 @@ fn snapshot_with_panels(
     workspace: WorkspaceId,
     panels: Vec<crate::SidebarProviderPanel>,
 ) -> SidebarSnapshot {
-    let mut snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new());
+    let mut snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
     snapshot.providers = panels;
     snapshot
 }

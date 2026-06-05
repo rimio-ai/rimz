@@ -1,4 +1,8 @@
 use super::*;
+
+/// The suite's fixed "now" (matches the snapshot testkit epoch), so the
+/// trailing-window bucketing is exact on any wall-clock day.
+const NOW_SECS: u64 = 1_750_000_000;
 use std::io::Write as _;
 use tempfile::TempDir;
 
@@ -17,7 +21,7 @@ fn compute_total(files: &[PathBuf], cache: &mut SpendingDiskCache) -> SpendTally
         .iter()
         .map(|file| (claude_adapter(), file.clone()))
         .collect();
-    compute_spending(&tagged, cache, &PriceBook::default()).total
+    compute_spending(&tagged, cache, &PriceBook::default(), NOW_SECS).total
 }
 
 /// ISO-8601 UTC timestamp for a Unix-seconds instant — round-trips through
@@ -47,7 +51,7 @@ fn claude_line(date: &str, cost: f64, msg_id: &str, req_id: &str) -> String {
 /// A Claude line stamped `secs_ago` before now — for trailing-window tests.
 fn claude_line_ago(secs_ago: u64, cost: f64, msg_id: &str, req_id: &str) -> String {
     claude_line_ts(
-        &iso_at(unix_secs_now().saturating_sub(secs_ago)),
+        &iso_at(NOW_SECS.saturating_sub(secs_ago)),
         cost,
         msg_id,
         req_id,
@@ -105,7 +109,7 @@ fn iso_to_unix_secs_parses_known_instants() {
 #[test]
 fn mtime_cache_hit_skips_io() {
     let dir = TempDir::new().unwrap();
-    let now_secs = unix_secs_now();
+    let now_secs = NOW_SECS;
     let today = utc_date(now_secs);
 
     let file = write_jsonl(
@@ -206,7 +210,7 @@ fn stale_version_cache_is_discarded_so_files_reparse() {
 #[test]
 fn token_split_and_session_counts_populate_windows() {
     let dir = TempDir::new().unwrap();
-    let now_secs = unix_secs_now();
+    let now_secs = NOW_SECS;
     let today = utc_date(now_secs);
     // One Claude thread spread across its `session_id` dir: a main chat file
     // plus a subagent file. Both fold under the one thread for session counts.
@@ -298,7 +302,7 @@ fn empty_file_list_returns_zero() {
 #[test]
 fn zero_and_negative_costs_ignored() {
     let dir = TempDir::new().unwrap();
-    let now_secs = unix_secs_now();
+    let now_secs = NOW_SECS;
     let today = utc_date(now_secs);
 
     let file = write_jsonl(
@@ -327,7 +331,7 @@ fn zero_and_negative_costs_ignored() {
 #[test]
 fn claude_exact_dedup_drops_repeated_message_request_pair() {
     let dir = TempDir::new().unwrap();
-    let now_secs = unix_secs_now();
+    let now_secs = NOW_SECS;
     let today = utc_date(now_secs);
     let line = claude_line(&today, 1.0, "msg-a", "req-a");
 
@@ -350,7 +354,7 @@ fn claude_exact_dedup_drops_repeated_message_request_pair() {
 #[test]
 fn sidechain_replay_does_not_double_count() {
     let dir = TempDir::new().unwrap();
-    let now_secs = unix_secs_now();
+    let now_secs = NOW_SECS;
     let today = utc_date(now_secs);
 
     // Main-chain entry for msg-parent in session file.
@@ -387,7 +391,7 @@ fn sidechain_replay_does_not_double_count() {
 #[test]
 fn sidechain_only_kept_when_no_main_chain_exists() {
     let dir = TempDir::new().unwrap();
-    let now_secs = unix_secs_now();
+    let now_secs = NOW_SECS;
     let today = utc_date(now_secs);
 
     let file = write_jsonl(
@@ -417,7 +421,7 @@ fn append_line(path: &Path, line: &str) {
 #[test]
 fn grown_file_parses_only_the_appended_suffix() {
     let dir = TempDir::new().unwrap();
-    let today = utc_date(unix_secs_now());
+    let today = utc_date(NOW_SECS);
     let file = write_jsonl(
         dir.path(),
         "chat.jsonl",
@@ -428,6 +432,7 @@ fn grown_file_parses_only_the_appended_suffix() {
         &[(claude_adapter(), file.clone())],
         &mut cache,
         &PriceBook::default(),
+        NOW_SECS,
     );
     assert!((first.total.today.usd - 1.0).abs() < 1e-9);
 
@@ -448,6 +453,7 @@ fn grown_file_parses_only_the_appended_suffix() {
         &[(claude_adapter(), file)],
         &mut cache,
         &PriceBook::default(),
+        NOW_SECS,
     );
     assert!(
         (second.total.today.usd - 1.25).abs() < 1e-9,
@@ -459,7 +465,7 @@ fn grown_file_parses_only_the_appended_suffix() {
 #[test]
 fn truncated_file_reparses_cold() {
     let dir = TempDir::new().unwrap();
-    let today = utc_date(unix_secs_now());
+    let today = utc_date(NOW_SECS);
     let line_a = claude_line(&today, 1.0, "msg-a", "req-a");
     let line_b = claude_line(&today, 0.5, "msg-b", "req-b");
     let file = write_jsonl(dir.path(), "chat.jsonl", &[&line_a, &line_b]);
@@ -468,6 +474,7 @@ fn truncated_file_reparses_cold() {
         &[(claude_adapter(), file.clone())],
         &mut cache,
         &PriceBook::default(),
+        NOW_SECS,
     );
     assert!((first.total.today.usd - 1.5).abs() < 1e-9);
 
@@ -478,6 +485,7 @@ fn truncated_file_reparses_cold() {
         &[(claude_adapter(), file)],
         &mut cache,
         &PriceBook::default(),
+        NOW_SECS,
     );
     assert!(
         (second.total.today.usd - 1.0).abs() < 1e-9,
@@ -489,7 +497,7 @@ fn truncated_file_reparses_cold() {
 #[test]
 fn same_length_rewrite_with_a_new_mtime_reparses_cold() {
     let dir = TempDir::new().unwrap();
-    let today = utc_date(unix_secs_now());
+    let today = utc_date(NOW_SECS);
     // `1.0` and `3.0` format to the same byte length, so the rewrite
     // changes content but not size — only the mtime can reveal it.
     let file = write_jsonl(
@@ -502,6 +510,7 @@ fn same_length_rewrite_with_a_new_mtime_reparses_cold() {
         &[(claude_adapter(), file.clone())],
         &mut cache,
         &PriceBook::default(),
+        NOW_SECS,
     );
 
     write_jsonl(
@@ -517,6 +526,7 @@ fn same_length_rewrite_with_a_new_mtime_reparses_cold() {
         &[(claude_adapter(), file)],
         &mut cache,
         &PriceBook::default(),
+        NOW_SECS,
     );
     assert!(
         (second.total.today.usd - 3.0).abs() < 1e-9,
@@ -528,7 +538,7 @@ fn same_length_rewrite_with_a_new_mtime_reparses_cold() {
 #[test]
 fn codex_resume_state_survives_the_suffix_parse() {
     let dir = TempDir::new().unwrap();
-    let today = utc_date(unix_secs_now());
+    let today = utc_date(NOW_SECS);
     // Cumulative-only token counts plus a model declared once up front:
     // both halves of the resume state are exercised — the appended event
     // must subtract the stored totals AND price under the remembered
@@ -546,12 +556,18 @@ fn codex_resume_state_survives_the_suffix_parse() {
         &[(codex_adapter(), file.clone())],
         &mut cache,
         &gpt4o_book(),
+        NOW_SECS,
     );
     assert_eq!(first.total.today.input, 1000);
     assert_eq!(first.total.today.output, 500);
 
     append_line(&file, &codex_total_line(&today, 1600, 800));
-    let second = compute_spending(&[(codex_adapter(), file)], &mut cache, &gpt4o_book());
+    let second = compute_spending(
+        &[(codex_adapter(), file)],
+        &mut cache,
+        &gpt4o_book(),
+        NOW_SECS,
+    );
     assert_eq!(
         second.total.today.input, 1600,
         "the resumed fold subtracts the stored cumulative totals"
@@ -591,7 +607,7 @@ fn codex_token_line(date: &str, input: u64, cached: u64, output: u64) -> String 
 #[test]
 fn codex_tokens_priced_through_book() {
     let dir = TempDir::new().unwrap();
-    let today = utc_date(unix_secs_now());
+    let today = utc_date(NOW_SECS);
     let file = write_codex(
         dir.path(),
         &[
@@ -601,7 +617,12 @@ fn codex_tokens_priced_through_book() {
     );
 
     let mut cache = SpendingDiskCache::default();
-    let spending = compute_spending(&[(codex_adapter(), file)], &mut cache, &gpt4o_book());
+    let spending = compute_spending(
+        &[(codex_adapter(), file)],
+        &mut cache,
+        &gpt4o_book(),
+        NOW_SECS,
+    );
 
     // uncached 600 * 1e-6 + cached 400 * 1e-7 + output 500 * 2e-6
     //   = 0.0006 + 0.00004 + 0.001 = 0.00164
@@ -625,7 +646,7 @@ fn codex_tokens_priced_through_book() {
 #[test]
 fn unpriced_codex_model_contributes_nothing() {
     let dir = TempDir::new().unwrap();
-    let today = utc_date(unix_secs_now());
+    let today = utc_date(NOW_SECS);
     let file = write_codex(
         dir.path(),
         &[
@@ -640,6 +661,7 @@ fn unpriced_codex_model_contributes_nothing() {
         &[(codex_adapter(), file)],
         &mut cache,
         &PriceBook::from_litellm_json("{}"),
+        NOW_SECS,
     );
     assert!(spending.total.is_zero());
 }
@@ -647,7 +669,7 @@ fn unpriced_codex_model_contributes_nothing() {
 #[test]
 fn per_provider_breakdown_splits_claude_and_codex() {
     let dir = TempDir::new().unwrap();
-    let today = utc_date(unix_secs_now());
+    let today = utc_date(NOW_SECS);
 
     let claude_file = write_jsonl(
         dir.path(),
@@ -670,6 +692,7 @@ fn per_provider_breakdown_splits_claude_and_codex() {
         ],
         &mut cache,
         &gpt4o_book(),
+        NOW_SECS,
     );
 
     assert!((spending.by_provider["claude"].today.usd - 0.5).abs() < 1e-9);

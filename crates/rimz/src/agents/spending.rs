@@ -242,9 +242,8 @@ pub fn compute_spending(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &mut SpendingDiskCache,
     prices: &PriceBook,
+    now_secs: u64,
 ) -> Spending {
-    let now_secs = unix_secs_now();
-
     // First pass: refresh stale cache entries — pure hit, suffix parse, or
     // cold parse, decided from one stat per file.
     for (adapter, file) in files {
@@ -511,7 +510,9 @@ pub fn read_provider_spending_cache(path: &Path) -> Spending {
 
 // ── Date utilities ────────────────────────────────────────────────────────────
 
-fn unix_secs_now() -> u64 {
+/// The wall clock as Unix seconds — the `now_secs` a caller captures once and
+/// threads into [`compute_spending`], which stays pure over it.
+pub fn unix_secs_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
