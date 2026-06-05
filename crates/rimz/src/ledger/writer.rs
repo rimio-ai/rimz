@@ -1035,7 +1035,7 @@ impl Ledger {
         let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
         let _publish_guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
         let outcome = event_log::repair(&self.inner.paths.events_log)?;
-        if outcome.truncated_at.is_some() {
+        if outcome.truncated() {
             for stale in [
                 &self.inner.paths.latest_snapshot,
                 &self.inner.paths.rollup_cache,

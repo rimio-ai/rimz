@@ -44,7 +44,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         println!("gc complete");
         println!("  older than    : {}s", args.older_than.as_secs());
         println!("  feed abandoned: {abandoned}");
-        if let Some(repair) = repaired.filter(|repair| repair.truncated_at.is_some()) {
+        if let Some(repair) = repaired.filter(rimz::ledger::event_log::RepairOutcome::truncated) {
             println!(
                 "  log repaired  : {} bytes cut ({} frames kept)",
                 repair.bytes_truncated, repair.frames_kept

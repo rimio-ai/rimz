@@ -579,7 +579,7 @@ fn repair_event_log_heals_a_mid_file_corpse_and_republishes() {
     );
 
     let outcome = h.ledger.repair_event_log().expect("repair");
-    assert_eq!(outcome.truncated_at, Some(committed));
+    assert!(outcome.truncated(), "the corpse was cut");
     assert_eq!(outcome.frames_kept, 1);
     assert_eq!(outcome.bytes_truncated, total - committed);
 
@@ -594,7 +594,7 @@ fn repair_event_log_heals_a_mid_file_corpse_and_republishes() {
 
     // Idempotent: a second repair is a read-only no-op.
     let again = h.ledger.repair_event_log().expect("repair again");
-    assert_eq!(again.truncated_at, None);
+    assert!(!again.truncated(), "second repair found an intact log");
     assert_eq!(again.frames_kept, 1);
 }
 

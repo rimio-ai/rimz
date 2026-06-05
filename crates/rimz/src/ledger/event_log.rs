@@ -424,10 +424,18 @@ fn decode_line(line: &str, offset: u64) -> Result<EventEnvelope> {
 pub struct RepairOutcome {
     /// Valid frames surviving ahead of the cut (the whole log when intact).
     pub frames_kept: usize,
-    /// Bytes removed from the first invalid frame to end of file.
+    /// Bytes removed from the first invalid frame to end of file; `0` when
+    /// the log was already intact. The cut offset is the surviving log's
+    /// length — derivable, so not carried as a third field.
     pub bytes_truncated: u64,
-    /// Offset the log was cut at; `None` when the log was already intact.
-    pub truncated_at: Option<u64>,
+}
+
+impl RepairOutcome {
+    /// Whether the repair cut anything. An invalid frame always has bytes,
+    /// so a cut is exactly a non-zero truncation.
+    pub fn truncated(&self) -> bool {
+        self.bytes_truncated > 0
+    }
 }
 
 /// Truncate the log at its first invalid frame — the post-power-cut corpse a
@@ -475,7 +483,6 @@ pub fn repair(path: &Path) -> Result<RepairOutcome> {
     Ok(RepairOutcome {
         frames_kept,
         bytes_truncated: total.saturating_sub(at),
-        truncated_at: Some(at),
     })
 }
 
@@ -871,8 +878,12 @@ mod tests {
             RepairOutcome {
                 frames_kept: 2,
                 bytes_truncated: total - committed,
-                truncated_at: Some(committed),
             }
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().len(),
+            committed,
+            "cut lands exactly at the last valid frame"
         );
         let events = read_all(&path).unwrap();
         assert_eq!(
@@ -900,7 +911,7 @@ mod tests {
 
         let outcome = repair(&path).unwrap();
         assert_eq!(outcome.frames_kept, 1);
-        assert_eq!(outcome.truncated_at, Some(committed));
+        assert!(outcome.truncated());
         assert_eq!(fs::metadata(&path).unwrap().len(), committed);
     }
 
@@ -918,7 +929,6 @@ mod tests {
             RepairOutcome {
                 frames_kept: 1,
                 bytes_truncated: 0,
-                truncated_at: None,
             }
         );
         assert_eq!(fs::metadata(&path).unwrap().len(), len, "log untouched");
