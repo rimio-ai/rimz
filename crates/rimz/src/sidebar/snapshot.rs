@@ -34,13 +34,36 @@ use crate::{
     StatePaths,
 };
 
-/// Coalescing window for the shared snapshot cache. Well under the default 2s
-/// data tick: when one ledger-delta wakeup wakes every sidebar at once, the
-/// first produces the heavy snapshot and the rest read it back within this
-/// window instead of each spawning their own `list-panes`. Short enough that
-/// live pane/git drift (which fires no ledger delta) still surfaces inside one
-/// tick — the same staleness budget the diff-stats cache already accepts.
+/// Coalescing window for the shared snapshot cache — the **poll-mode** pane
+/// TTL, in effect whenever the presence push channel is dead or absent. Just
+/// under the default 1s data tick: when one ledger-delta wakeup wakes every
+/// sidebar at once, the first produces the heavy snapshot and the rest read it
+/// back within this window instead of each spawning their own `list-panes`.
+/// Short enough that live pane/git drift (which fires no ledger delta) still
+/// surfaces inside one tick — the same staleness budget the diff-stats cache
+/// already accepts. While the presence stamp is fresh the producer uses
+/// [`EVENT_PANE_TTL`] instead ([`effective_pane_ttl`]).
 pub const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
+
+/// Pane-cache TTL while the Zellij presence push channel is alive (the
+/// presence stamp is fresh). Topology and focus changes arrive as
+/// `panes_changed` pokes that force a fresh pane list, so the poll is only the
+/// backstop for a *lost* poke — pane truth can stale at most this long before
+/// it heals, comfortably inside the documented handoff tolerance ("only pane
+/// presence ages by a few seconds"), while steady-state `list-panes` action
+/// clients drop ~10× versus [`SNAPSHOT_CACHE_TTL`]. One knob to raise later
+/// with field confidence. Forced freshness (`min_pane_cache_ms`) overrides it,
+/// so lifecycle/resize floors still pull a fresh pane list in event mode.
+pub const EVENT_PANE_TTL: Duration = Duration::from_secs(10);
+
+/// How young the presence stamp must be for the producer to trust the push
+/// channel and use [`EVENT_PANE_TTL`]. 2.5× the plugin's 60s keepalive — two
+/// missed keepalives of slack, the same ratio the sidebar heartbeat TTL keeps
+/// over its write cadence. Past this the channel reads as dead and the
+/// producer reverts to [`SNAPSHOT_CACHE_TTL`] poll mode, byte-identical to a
+/// session with no plugin. tmux never writes the stamp, so tmux is always
+/// poll mode by construction.
+pub const PRESENCE_STAMP_FRESH: Duration = Duration::from_secs(150);
 
 /// How long a *hot* worktree's git diff-stats stay cached before the
 /// per-worktree `git` forks behind them are re-run. A working-tree edit fires
@@ -183,6 +206,26 @@ pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotC
     (cache.session_name == session).then_some(cache)
 }
 
+/// Whether a same-session cache entry is young enough to serve without a
+/// produce: younger than `ttl` *and* at or past the caller's forced-freshness
+/// floor. The floor clause is load-bearing for event mode — a lifecycle or
+/// resize signal carries `min_produced_at_ms`, which rejects any pre-signal
+/// cache regardless of which TTL is in effect, so agent birth/death never
+/// waits out [`EVENT_PANE_TTL`]. The age saturates, so a cache stamped by a
+/// clock ahead of this reader serves (age 0) rather than re-producing every
+/// call. Pure over its inputs so every caller — the fast path, the
+/// single-flight `fresh` closure, the loser re-check — applies one verdict.
+pub fn snapshot_cache_is_fresh(
+    cache: &SnapshotCache,
+    now_ms: u64,
+    min_produced_at_ms: Option<u64>,
+    ttl: Duration,
+) -> bool {
+    let fresh = now_ms.saturating_sub(cache.produced_at_ms) <= ttl.as_millis() as u64;
+    let new_enough = min_produced_at_ms.is_none_or(|min| cache.produced_at_ms >= min);
+    fresh && new_enough
+}
+
 /// The event-fresh ledger rollup for a consumer, read in process: `latest.json`
 /// when it reflects the log (lock-free, O(snapshot)), else a re-projection
 /// folded through the caller's [`RollupCursor`] — O(new log bytes) per delta
@@ -209,6 +252,67 @@ pub fn published_frame_age_ms(runtime: &RuntimePaths, session: &str, now_ms: u64
     let cache_path = runtime.root.join("snapshot.json");
     read_snapshot_cache(&cache_path, session)
         .map(|cache| now_ms.saturating_sub(cache.produced_at_ms))
+}
+
+/// The presence liveness stamp the Zellij presence plugin refreshes through
+/// `rimz sidebar wake`. Its freshness gates the producer's pane TTL: fresh →
+/// event mode ([`EVENT_PANE_TTL`]), stale or absent → poll mode
+/// ([`SNAPSHOT_CACHE_TTL`]). Cache-class JSON in the workspace runtime root;
+/// the explicit millisecond field (over a bare mtime stamp) lets `rimz doctor`
+/// render a stamp age from the same value the producer's verdict reads.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PresenceStamp {
+    pub written_at_ms: u64,
+}
+
+/// Path of the presence stamp, beside the pane cache it gates.
+pub fn presence_stamp_path(runtime: &RuntimePaths) -> PathBuf {
+    runtime.root.join("presence.stamp")
+}
+
+/// Refresh the presence stamp. Best-effort and cache-class (rename atomicity,
+/// no fsync — it is rewritten every poke and survives no power cut by design);
+/// a failed write only delays the channel reading as alive by one poke.
+pub fn write_presence_stamp(runtime: &RuntimePaths) {
+    let stamp = PresenceStamp {
+        written_at_ms: unix_now_ms(),
+    };
+    let path = presence_stamp_path(runtime);
+    if let Err(err) = crate::ledger::atomic::write_temp_then_rename_cache(&path, &stamp) {
+        tracing::debug!(path = %path.display(), error = %err, "presence stamp write failed");
+    }
+}
+
+/// Age of the presence stamp in milliseconds, or `None` when it is absent or
+/// unreadable (read as poll mode). One small read per produce — the producer
+/// is a cold fork per tick, so the stamp lives in the file, never process
+/// memory. Saturating, so a stamp written by a clock ahead of this reader
+/// reads as age 0 (fresh) rather than wrapping into poll mode.
+pub fn presence_stamp_age_ms(runtime: &RuntimePaths) -> Option<u64> {
+    let bytes = std::fs::read(presence_stamp_path(runtime)).ok()?;
+    let stamp: PresenceStamp = serde_json::from_slice(&bytes).ok()?;
+    Some(unix_now_ms().saturating_sub(stamp.written_at_ms))
+}
+
+/// Whether the presence push channel is alive: the stamp exists and is younger
+/// than [`PRESENCE_STAMP_FRESH`]. Pure over the age so the boundary is
+/// unit-testable without touching disk; `None` (absent stamp) is poll mode.
+pub fn presence_event_mode(stamp_age_ms: Option<u64>) -> bool {
+    stamp_age_ms.is_some_and(|age| age <= PRESENCE_STAMP_FRESH.as_millis() as u64)
+}
+
+/// The effective pane-cache TTL for one produce: the event-mode TTL while the
+/// presence channel is alive, else the poll-mode TTL. Computed once per
+/// `cached_panes_or_produce` call and threaded through every freshness check —
+/// the fast path, the single-flight `fresh` closure, and the loser re-check —
+/// so they agree on one verdict and a loser never produces what the winner
+/// skipped (the diff-stats "one shared stale() closure" rule).
+pub fn effective_pane_ttl(stamp_age_ms: Option<u64>) -> Duration {
+    if presence_event_mode(stamp_age_ms) {
+        EVENT_PANE_TTL
+    } else {
+        SNAPSHOT_CACHE_TTL
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -17,9 +17,10 @@ use rimz::ledger::workspace_record;
 use rimz::mux::PaneListOptions;
 use rimz::sidebar::snapshot::{
     DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, DiffStats, DiffStatsCache, DiffStatsCacheEntry,
-    RollupCursor, SNAPSHOT_CACHE_TTL, SnapshotCache, WorktreeRootsCache, enrich_consumer,
-    hot_worktree_paths, needed_worktree_paths, project_diff_stats, read_diff_stats_cache,
-    read_published_snapshot, read_snapshot_cache, unix_now_ms,
+    RollupCursor, SnapshotCache, WorktreeRootsCache, effective_pane_ttl, enrich_consumer,
+    hot_worktree_paths, needed_worktree_paths, presence_stamp_age_ms, project_diff_stats,
+    read_diff_stats_cache, read_published_snapshot, read_snapshot_cache, snapshot_cache_is_fresh,
+    unix_now_ms,
 };
 use rimz::workspace::{RootClass, WorkspaceResolver};
 use rimz::{Ledger, RuntimePaths, StatePaths};
@@ -395,18 +396,21 @@ fn pane_list_fixture() -> Result<Option<Vec<rimz::feed::PaneRef>>> {
 const SNAPSHOT_CACHE_WAIT_STEP: Duration = Duration::from_millis(20);
 const SNAPSHOT_CACHE_WAIT_STEPS: u32 = 10;
 
-/// Return a same-session cache entry younger than [`SNAPSHOT_CACHE_TTL`], or
-/// `None` when it is absent, stale, for another session, or unreadable.
+/// Return a same-session cache entry younger than `ttl`, or `None` when it is
+/// absent, stale, for another session, or unreadable. The caller picks the TTL
+/// once per produce ([`effective_pane_ttl`]) — [`SNAPSHOT_CACHE_TTL`] in poll
+/// mode, the stretched event-mode TTL while the presence stamp is fresh — and
+/// the freshness verdict itself is the library's
+/// ([`snapshot_cache_is_fresh`]), so the forced-freshness floor keeps
+/// overriding in both modes.
 fn fresh_snapshot_cache(
     cache_path: &Path,
     session: &str,
     min_produced_at_ms: Option<u64>,
+    ttl: Duration,
 ) -> Option<SnapshotCache> {
     let cache = read_snapshot_cache(cache_path, session)?;
-    let fresh =
-        unix_now_ms().saturating_sub(cache.produced_at_ms) <= SNAPSHOT_CACHE_TTL.as_millis() as u64;
-    let new_enough = min_produced_at_ms.is_none_or(|min| cache.produced_at_ms >= min);
-    (fresh && new_enough).then_some(cache)
+    snapshot_cache_is_fresh(&cache, unix_now_ms(), min_produced_at_ms, ttl).then_some(cache)
 }
 
 /// The session's live panes from the mux — the `list-panes` round-trip the
@@ -566,8 +570,16 @@ fn cached_panes_or_produce(
     let runtime = ledger.runtime_paths();
     let cache_path = runtime.root.join("snapshot.json");
 
+    // Select the pane TTL once per call from the presence stamp: event mode
+    // (EVENT_PANE_TTL) while the Zellij push channel is alive, else poll-mode
+    // SNAPSHOT_CACHE_TTL. One small stamp read per produce; the fast path, the
+    // single-flight `fresh` closure, and the loser re-check all read this one
+    // Duration, so a loser never produces what the winner skipped. tmux never
+    // writes the stamp, so tmux is always poll mode by construction.
+    let pane_ttl = effective_pane_ttl(presence_stamp_age_ms(runtime));
+
     // Fast path: a fresh same-session entry needs no mux work.
-    if let Some(cache) = fresh_snapshot_cache(&cache_path, session, min_pane_cache_ms) {
+    if let Some(cache) = fresh_snapshot_cache(&cache_path, session, min_pane_cache_ms, pane_ttl) {
         return Ok(cache);
     }
 
@@ -575,7 +587,7 @@ fn cached_panes_or_produce(
     // Losers read its write back; if it wedges, they fall back to an uncached
     // local produce rather than block.
     let lock_path = runtime.root.join("snapshot.lock");
-    let fresh = || fresh_snapshot_cache(&cache_path, session, min_pane_cache_ms);
+    let fresh = || fresh_snapshot_cache(&cache_path, session, min_pane_cache_ms, pane_ttl);
     let produce_local = || -> Result<SnapshotCache> {
         Ok(SnapshotCache {
             produced_at_ms: unix_now_ms(),

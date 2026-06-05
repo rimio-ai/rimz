@@ -1,4 +1,5 @@
 use super::*;
+use rimz::sidebar::snapshot::SNAPSHOT_CACHE_TTL;
 
 /// A pane with the given id, command, and cwd; other fields are irrelevant
 /// to the carry-forward logic under test.
@@ -756,7 +757,7 @@ fn snapshot_cache_serves_a_fresh_same_session_entry() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("snapshot.json");
     write_snapshot_cache(&path, "rimz-query-engine", unix_now_ms());
-    assert!(fresh_snapshot_cache(&path, "rimz-query-engine", None).is_some());
+    assert!(fresh_snapshot_cache(&path, "rimz-query-engine", None, SNAPSHOT_CACHE_TTL).is_some());
 }
 
 #[test]
@@ -767,7 +768,7 @@ fn snapshot_cache_misses_a_different_session() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("snapshot.json");
     write_snapshot_cache(&path, "rimz-query-engine", unix_now_ms());
-    assert!(fresh_snapshot_cache(&path, "rimz-other", None).is_none());
+    assert!(fresh_snapshot_cache(&path, "rimz-other", None, SNAPSHOT_CACHE_TTL).is_none());
 }
 
 #[test]
@@ -776,7 +777,7 @@ fn snapshot_cache_misses_a_stale_entry() {
     let path = dir.path().join("snapshot.json");
     let stale = unix_now_ms().saturating_sub(SNAPSHOT_CACHE_TTL.as_millis() as u64 + 1);
     write_snapshot_cache(&path, "rimz-query-engine", stale);
-    assert!(fresh_snapshot_cache(&path, "rimz-query-engine", None).is_none());
+    assert!(fresh_snapshot_cache(&path, "rimz-query-engine", None, SNAPSHOT_CACHE_TTL).is_none());
 }
 
 #[test]
@@ -787,7 +788,13 @@ fn snapshot_cache_misses_before_requested_pane_freshness_floor() {
     write_snapshot_cache(&path, "rimz-query-engine", produced_at_ms);
 
     assert!(
-        fresh_snapshot_cache(&path, "rimz-query-engine", Some(produced_at_ms)).is_some(),
+        fresh_snapshot_cache(
+            &path,
+            "rimz-query-engine",
+            Some(produced_at_ms),
+            SNAPSHOT_CACHE_TTL
+        )
+        .is_some(),
         "a cache produced at the requested floor is usable"
     );
     assert!(
@@ -795,6 +802,7 @@ fn snapshot_cache_misses_before_requested_pane_freshness_floor() {
             &path,
             "rimz-query-engine",
             Some(produced_at_ms.saturating_add(1)),
+            SNAPSHOT_CACHE_TTL,
         )
         .is_none(),
         "a pane-sensitive wakeup rejects the pre-signal pane cache"
@@ -805,9 +813,9 @@ fn snapshot_cache_misses_before_requested_pane_freshness_floor() {
 fn snapshot_cache_misses_when_absent_or_unreadable() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("snapshot.json");
-    assert!(fresh_snapshot_cache(&path, "rimz-query-engine", None).is_none());
+    assert!(fresh_snapshot_cache(&path, "rimz-query-engine", None, SNAPSHOT_CACHE_TTL).is_none());
     std::fs::write(&path, b"{ not json").unwrap();
-    assert!(fresh_snapshot_cache(&path, "rimz-query-engine", None).is_none());
+    assert!(fresh_snapshot_cache(&path, "rimz-query-engine", None, SNAPSHOT_CACHE_TTL).is_none());
 }
 
 #[test]
@@ -821,7 +829,7 @@ fn read_only_consumer_serves_a_stale_same_session_base() {
     let stale = unix_now_ms().saturating_sub(SNAPSHOT_CACHE_TTL.as_millis() as u64 + 1);
     write_snapshot_cache(&path, "rimz-query-engine", stale);
     assert!(
-        fresh_snapshot_cache(&path, "rimz-query-engine", None).is_none(),
+        fresh_snapshot_cache(&path, "rimz-query-engine", None, SNAPSHOT_CACHE_TTL).is_none(),
         "the producer's fresh-only fast path skips a stale entry"
     );
     assert!(
