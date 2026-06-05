@@ -414,8 +414,9 @@ fn phase6_reattach_reconstructs_from_ledger() {
     );
 }
 
-/// Phase 9 — degraded refresh. The renderer keeps running when its public
-/// `rimz sidebar snapshot` subprocess fails, labels the frame as degraded, and
+/// Phase 9 — degraded refresh. The renderer keeps running when its in-process
+/// produce fails every cycle (here: an unreadable pane fixture, the same
+/// degraded outcome a dead mux feeds), labels the frame as degraded, and
 /// suppresses the healthy empty-room hint.
 #[test]
 fn phase9_degraded_loop_shows_banner_not_first_run_hint() {
@@ -423,28 +424,12 @@ fn phase9_degraded_loop_shows_banner_not_first_run_hint() {
     if env.skip_if_sandboxed() {
         return;
     }
-    // A present-but-failing `rimz`: the renderer resolves the snapshot binary
-    // per tick and keeps a launch path that still exists (so it never heals to
-    // the installed `rimz` on PATH), then forks it and sees every snapshot
-    // fail — the degraded loop a *vanished* binary now heals out of.
-    let broken_rimz = env.project_root.join("broken-rimz");
-    std::fs::write(&broken_rimz, "#!/bin/sh\nexit 1\n").expect("write broken rimz stub");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut perms = std::fs::metadata(&broken_rimz)
-            .expect("broken rimz metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&broken_rimz, perms).expect("chmod broken rimz stub");
-    }
-    let room = RoomHarness::launch_with_rimz_bin(&env, MuxName::Tmux, broken_rimz);
+    let room = RoomHarness::launch_degraded(&env, MuxName::Tmux);
 
     let screen = room.wait_for(|s| s.contains("Sidebar degraded"), SETTLE);
     assert!(
         screen.contains("Sidebar degraded"),
-        "a failed snapshot command should surface a degraded banner:\n{screen}"
+        "a failed produce should surface a degraded banner:\n{screen}"
     );
     assert!(
         !screen.contains("rimz hooks install") && !screen.contains("run claude or codex"),

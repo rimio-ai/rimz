@@ -72,21 +72,24 @@ impl<'a> RoomHarness<'a> {
     /// latch never trips (the renderer never sees a sibling pane), so the
     /// column renders deterministically off the ledger and the tick.
     pub fn launch(env: &'a Env, mux: MuxName) -> Self {
-        Self::launch_with_rimz_bin(env, mux, env.rimz_bin())
+        Self::launch_inner(env, mux, false)
     }
 
-    /// Spawn the renderer while overriding the `RIMZ_BIN` it shells out to for
-    /// snapshots and heartbeats. This keeps degraded-loop tests blackbox: the
-    /// real sidebar process runs, but its public subprocess dependency fails
-    /// the same way it would for a moved or missing binary.
-    pub fn launch_with_rimz_bin(env: &'a Env, mux: MuxName, rimz_bin: impl Into<PathBuf>) -> Self {
+    /// Spawn the renderer with its pane fixture unreadable, so every
+    /// in-process produce fails from the very first cycle — the degraded loop
+    /// a dead mux or moved workspace would feed. Blackbox: the real sidebar
+    /// process runs; only its produce input is broken.
+    pub fn launch_degraded(env: &'a Env, mux: MuxName) -> Self {
+        Self::launch_inner(env, mux, true)
+    }
+
+    fn launch_inner(env: &'a Env, mux: MuxName, broken_pane_fixture: bool) -> Self {
         let bin = cargo_bin("rimz-sidebar");
         assert!(
             bin.exists(),
             "rimz-sidebar binary missing: {}",
             bin.display()
         );
-        let rimz_bin = rimz_bin.into();
 
         // Materialize the workspace ledger so a never-used room answers
         // `sidebar snapshot` with an empty-but-valid snapshot (Phase 0), not a
@@ -100,7 +103,13 @@ impl<'a> RoomHarness<'a> {
             .expect("short runtime tempdir");
         let pane_file = runtime.path().join("panes.json");
         let initial_roster = PaneRoster::from_ledger(env);
-        write_panes(&pane_file, initial_roster.panes(mux, &env.project_root));
+        if broken_pane_fixture {
+            // Unparseable on purpose: the produce's fixture read errors every
+            // cycle, exercising the degraded outcome path end to end.
+            std::fs::write(&pane_file, b"not json").expect("write broken pane fixture");
+        } else {
+            write_panes(&pane_file, initial_roster.panes(mux, &env.project_root));
+        }
         let pane_roster = Arc::new(Mutex::new(initial_roster));
 
         let pair = native_pty_system()
@@ -124,7 +133,7 @@ impl<'a> RoomHarness<'a> {
             "--tick-seconds",
             "1",
         ]);
-        cmd.env("RIMZ_BIN", &rimz_bin);
+        cmd.env("RIMZ_BIN", env.rimz_bin());
         cmd.env("XDG_STATE_HOME", env.state_root());
         cmd.env("XDG_CONFIG_HOME", env.config_root());
         cmd.env("XDG_RUNTIME_DIR", runtime.path());

@@ -1,6 +1,116 @@
 use super::*;
-use crate::app::fixtures::workspace;
-use rimz::SidebarInstanceId;
+use crate::app::fixtures::{pane, workspace};
+use rimz::{MuxName, SidebarInstanceId};
+
+#[test]
+fn produce_guard_maps_an_error_to_a_degraded_outcome() {
+    let mut cursor = RollupCursor::new();
+    let result = run_produce_guarded(&mut cursor, |_| {
+        Err(rimz::sidebar::produce::ProduceErr::Fixture {
+            path: PathBuf::from("/nonexistent/panes.json"),
+            reason: "injected failure".to_owned(),
+        })
+    });
+    assert!(result.unwrap_err().contains("injected failure"));
+}
+
+#[test]
+fn produce_guard_maps_a_panic_to_a_degraded_outcome() {
+    // Silence the default hook's backtrace spew; the guard catches the unwind.
+    std::panic::set_hook(Box::new(|_| {}));
+    let mut cursor = RollupCursor::new();
+    let result = run_produce_guarded(&mut cursor, |_| panic!("boom"));
+    let _ = std::panic::take_hook();
+    assert_eq!(result.unwrap_err(), "sidebar produce panicked");
+}
+
+/// One forced cycle over a tempdir workspace, end to end and entirely in
+/// process: the fast lane folds the published frame and posts a non-final
+/// outcome, then the produce arm runs [`produce_snapshot`] on the same warm
+/// cursor and posts the final reconciling outcome. Every forked enrichment is
+/// pre-published fresh — the pane frame (the single-flight cache's fast path,
+/// so no mux), the provider-spending stamp, and the accounts stamp — so the
+/// cycle pays no subprocess and the test is hermetic.
+#[test]
+fn forced_cycle_posts_fast_then_inprocess_produce() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = workspace();
+    let state = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
+    let runtime = RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap();
+    state.ensure_dirs().unwrap();
+    runtime.ensure_dirs().unwrap();
+
+    let now_ms = rimz::sidebar::snapshot::unix_now_ms();
+    let frame = rimz::sidebar::snapshot::SnapshotCache {
+        produced_at_ms: now_ms,
+        session_name: "rimz-test".to_owned(),
+        panes: vec![pane("terminal_7", "tab_1", false)],
+    };
+    std::fs::write(
+        runtime.root.join("snapshot.json"),
+        serde_json::to_vec(&frame).unwrap(),
+    )
+    .unwrap();
+    rimz::agents::spending::write_provider_spending_cache(
+        &runtime.root.join("provider-spending.json"),
+        now_ms,
+        &rimz::agents::spending::Spending::default(),
+    );
+    let accounts = rimz::sidebar::snapshot::AccountsCache {
+        refreshed_at_ms: now_ms,
+        accounts: Default::default(),
+        ok: true,
+    };
+    std::fs::write(
+        runtime.root.join("accounts.json"),
+        serde_json::to_vec(&accounts).unwrap(),
+    )
+    .unwrap();
+
+    let config = ServeConfig {
+        workspace_id,
+        mux: MuxName::Zellij,
+        session_name: "rimz-test".to_owned(),
+        instance_id: SidebarInstanceId::new(),
+        tick_seconds: 2,
+        rimz_bin: PathBuf::from("rimz"),
+    };
+    let request = FetchRequest {
+        force_produce: true,
+        min_pane_cache_ms: None,
+    };
+    let mut cursor = RollupCursor::new();
+    let mut outcomes = Vec::new();
+    run_fetch_cycle(&config, &runtime, &state, request, &mut cursor, &mut |o| {
+        outcomes.push(o)
+    });
+
+    assert_eq!(
+        outcomes.len(),
+        2,
+        "fast paint, then the reconciling produce"
+    );
+    let fast = &outcomes[0];
+    assert!(
+        !fast.final_for_request,
+        "the fast post leaves the cycle open for the produce"
+    );
+    let fast_snapshot = fast.snapshot.as_ref().expect("fast lane folds in process");
+    assert!(
+        !fast_snapshot.worktree_groups.is_empty(),
+        "the fast fold renders the published pane"
+    );
+    let produced = &outcomes[1];
+    assert!(produced.final_for_request, "the produce closes the cycle");
+    let produced_snapshot = produced
+        .snapshot
+        .as_ref()
+        .expect("the in-process produce succeeds on the published frame");
+    assert!(
+        !produced_snapshot.worktree_groups.is_empty(),
+        "the produce folds the same pane frame"
+    );
+}
 
 #[test]
 fn producer_skips_the_fork_while_its_frame_is_within_one_tick() {

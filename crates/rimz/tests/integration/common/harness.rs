@@ -44,4 +44,39 @@ impl Harness {
         }
         false
     }
+
+    /// Publish every fork-bearing produce input fresh, so an in-process
+    /// [`rimz::sidebar::produce::produce_snapshot`] call pays no mux, no
+    /// subprocess, and no transcript walk: the pane frame (the single-flight
+    /// cache's fast path serves it), the provider-spending stamp, and the
+    /// accounts stamp. Re-call right before each produce under test — the
+    /// pane frame rides the short poll-mode TTL.
+    pub fn publish_fresh_produce_inputs(&self, session: &str, panes: Vec<rimz::feed::PaneRef>) {
+        let now_ms = rimz::sidebar::snapshot::unix_now_ms();
+        let frame = rimz::sidebar::snapshot::SnapshotCache {
+            produced_at_ms: now_ms,
+            session_name: session.to_owned(),
+            panes,
+        };
+        std::fs::write(
+            self.runtime_paths.root.join("snapshot.json"),
+            serde_json::to_vec(&frame).expect("serialize pane frame"),
+        )
+        .expect("publish pane frame");
+        rimz::agents::spending::write_provider_spending_cache(
+            &self.runtime_paths.root.join("provider-spending.json"),
+            now_ms,
+            &rimz::agents::spending::Spending::default(),
+        );
+        let accounts = rimz::sidebar::snapshot::AccountsCache {
+            refreshed_at_ms: now_ms,
+            accounts: Default::default(),
+            ok: true,
+        };
+        std::fs::write(
+            self.runtime_paths.root.join("accounts.json"),
+            serde_json::to_vec(&accounts).expect("serialize accounts"),
+        )
+        .expect("publish accounts");
+    }
 }

@@ -3,7 +3,9 @@
 //! The snapshot arm is a thin delegate over the library produce pipeline
 //! ([`rimz::sidebar::produce`]): it resolves workspace/session/mux, calls
 //! `produce_snapshot` (or the in-process consumer read for `--no-produce`),
-//! and emits — the CLI owns argv, fallback intent, and stdout alone.
+//! and emits — the CLI owns argv, fallback intent, and stdout alone. The
+//! elder renderer produces in process on its fetch worker, so this arm serves
+//! inspection, scripting, and the plugin rail's `--no-produce` read.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -103,10 +105,6 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             // a non-producer renders read-only from that cache. Default is to
             // produce, so bare CLI calls and the plugin rail are unchanged.
             let produce = !no_produce;
-            // The serve loop names its session explicitly; a bare CLI/inspection
-            // call resolves it from the record. Only the former treats a
-            // pane-discovery failure as fatal (see the match below).
-            let explicit_session = session_name.is_some();
             let mut resolved_session = None;
             let workspace_id = match workspace_id {
                 Some(raw) => raw.parse::<WorkspaceId>()?,
@@ -224,16 +222,9 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                     };
                     match produce_snapshot(&mut RollupCursor::new(), &state, &runtime, &opts) {
                         Ok(snapshot) => emit(&snapshot),
-                        // The serve loop owns a live session, so a discovery
-                        // failure there is real: fail hard and let the loop
-                        // hold its last good frame via the degraded path,
-                        // rather than flashing the raw ledger rollup (every
-                        // agent the log ever saw).
-                        Err(err) if explicit_session => {
-                            Err(err).context("sidebar snapshot pane discovery")
-                        }
-                        // A bare inspection call has no live session to
-                        // trust; fall back to the ledger rollup.
+                        // An inspection call has no live frame to hold (the
+                        // serve loop produces in process and owns its own
+                        // degraded path); fall back to the ledger rollup.
                         Err(err) => rollup_only(Some(&err)),
                     }
                 }

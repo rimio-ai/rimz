@@ -69,8 +69,6 @@ pub enum SidebarAppErr {
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
-    Json(#[from] serde_json::Error),
-    #[error(transparent)]
     Paths(#[from] PathErr),
     #[error("running `{program}`: {source}")]
     CommandIo {
@@ -78,8 +76,6 @@ pub enum SidebarAppErr {
         #[source]
         source: io::Error,
     },
-    #[error("snapshot command failed: {stderr}")]
-    SnapshotCommand { stderr: String },
     #[error("heartbeat write failed: {0}")]
     Heartbeat(String),
 }

@@ -15,7 +15,7 @@ use super::fetch::FetchOutcome;
 use super::gate::{GateState, apply_gate};
 use super::health::{Health, degraded_too_long, next_health};
 use super::lifecycle::{SelfCloseState, SessionExitState, self_close_decision};
-use super::reload::resolve_snapshot_bin;
+use super::reload::resolve_rimz_bin;
 use super::selection::{reconcile_selection, row_index_of_pane};
 use super::{Result, ServeConfig, wall_clock_phase};
 
@@ -249,13 +249,13 @@ pub(super) fn apply_fetch_outcome(
 }
 
 /// Detach the attached client from the session, best-effort, by shelling out to
-/// `rimz pane detach` (the same cached binary the snapshot fork uses, so no mux
-/// command knowledge leaks into the sidebar). The daemon-view sidebar calls this
-/// once the daemon tab is the only tab left; the background session and its
-/// daemons keep running and resurrect on the next attach. A failure is logged,
-/// never fatal — the session stays attached and the next tick retries.
+/// `rimz pane detach` (the cached `rimz` binary, so no mux command knowledge
+/// leaks into the sidebar). The daemon-view sidebar calls this once the daemon
+/// tab is the only tab left; the background session and its daemons keep
+/// running and resurrect on the next attach. A failure is logged, never fatal —
+/// the session stays attached and the next tick retries.
 fn request_detach(config: &ServeConfig) {
-    let bin = resolve_snapshot_bin(&config.rimz_bin);
+    let bin = resolve_rimz_bin(&config.rimz_bin);
     match Command::new(&bin)
         .args(["pane", "detach", "--mux"])
         .arg(config.mux.as_str())
