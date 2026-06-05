@@ -166,13 +166,15 @@ fn apportion_sums_to_total() {
 
 /// The mana bar drains (filled = remaining) in the segmented `▰`/`▱` style
 /// and reads by that fill/hollow shape under `NO_COLOR`; its color ramps
-/// green → yellow → amber → red by how much budget is left — one ramp for
-/// both the 5-hour and weekly windows, speaking the same gold → clay-amber
-/// escalation as the age and context ramps.
+/// green → yellow → amber → red by how much budget is left on the
+/// `[sidebar.budget]` zones — one ramp for both the 5-hour and weekly
+/// windows, speaking the same gold → clay-amber escalation as the age and
+/// context ramps.
 #[test]
 fn mana_bar_drains_and_ramps() {
+    let zones = BudgetZonesConfig::default();
     let plain = Theme::fixed(true);
-    let spans = mana_bar_spans(&plain, 70, 10);
+    let spans = mana_bar_spans(&plain, 70, 10, &zones);
     let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(text, "▰▰▰▰▰▰▰▱▱▱");
     for span in &spans {
@@ -180,18 +182,55 @@ fn mana_bar_drains_and_ramps() {
     }
 
     let lit = Theme::fixed(false);
-    let fg = |remaining| mana_bar_spans(&lit, remaining, 10)[0].style.fg.unwrap();
-    // Green with a clear majority left, yellow mid-drain, amber under a third,
-    // red under a tenth — band edges pinned on both sides.
+    let fg = |remaining| {
+        mana_bar_spans(&lit, remaining, 10, &zones)[0]
+            .style
+            .fg
+            .unwrap()
+    };
+    // Green at half or more left, yellow below half, amber below a quarter,
+    // red below a tenth — band edges pinned on both sides.
     assert_eq!(fg(80), Color::Indexed(108));
-    assert_eq!(fg(61), Color::Indexed(108));
-    assert_eq!(fg(60), Color::Indexed(179));
+    assert_eq!(fg(50), Color::Indexed(108));
+    assert_eq!(fg(49), Color::Indexed(179));
     assert_eq!(fg(40), Color::Indexed(179));
-    assert_eq!(fg(31), Color::Indexed(179));
-    assert_eq!(fg(30), Color::Indexed(173));
+    assert_eq!(fg(25), Color::Indexed(179));
+    assert_eq!(fg(24), Color::Indexed(173));
     assert_eq!(fg(10), Color::Indexed(173));
     assert_eq!(fg(9), Color::Indexed(167));
     assert_eq!(fg(1), Color::Indexed(167));
+}
+
+/// The zones are config: a tuned `[sidebar.budget]` moves the band edges, so
+/// the same reading reclassifies — the ramp is driven by the snapshot-carried
+/// config, not a built-in table. Checked worst-first, so a misordered config
+/// degrades to the worse tier.
+#[test]
+fn mana_color_honours_custom_and_misordered_zones() {
+    let tuned = BudgetZonesConfig {
+        yellow: 80,
+        amber: 40,
+        red: 20,
+    };
+    assert_eq!(mana_color(70, &tuned), Color::Yellow);
+    assert_eq!(mana_color(80, &tuned), Color::Green);
+    assert_eq!(mana_color(39, &tuned), ORANGE);
+    assert_eq!(mana_color(19, &tuned), Color::Red);
+
+    // The bar fill delegates to the same tuned zones: 70% — green under the
+    // defaults — paints its first cell yellow here.
+    let lit = Theme::fixed(false);
+    let bar = mana_bar_spans(&lit, 70, 10, &tuned);
+    assert_eq!(bar[0].style.fg, Some(Color::Indexed(179)));
+
+    // Misordered (red bound above amber/yellow): the worst tier wins.
+    let misordered = BudgetZonesConfig {
+        yellow: 25,
+        amber: 10,
+        red: 50,
+    };
+    assert_eq!(mana_color(30, &misordered), Color::Red);
+    assert_eq!(mana_color(50, &misordered), Color::Green);
 }
 
 /// A fully spent window (0% remaining) is a full-width *empty* `▱` track —
@@ -200,8 +239,9 @@ fn mana_bar_drains_and_ramps() {
 /// separate span the row owns, so it stays unalarmed; only the bar reddens.
 #[test]
 fn mana_bar_spent_is_a_full_width_red_empty_track() {
+    let zones = BudgetZonesConfig::default();
     let plain = Theme::fixed(true);
-    let spans = mana_bar_spans(&plain, 0, 10);
+    let spans = mana_bar_spans(&plain, 0, 10, &zones);
     let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
     // Still an empty track (no `▰`), spanning the full width as one run.
     assert_eq!(text, "▱▱▱▱▱▱▱▱▱▱");
@@ -212,7 +252,7 @@ fn mana_bar_spent_is_a_full_width_red_empty_track() {
     // With color on, the spent track shares the mana ramp's red — not the
     // faint track tone a non-spent drain leaves behind.
     let lit = Theme::fixed(false);
-    let spent = mana_bar_spans(&lit, 0, 10);
+    let spent = mana_bar_spans(&lit, 0, 10, &zones);
     assert_eq!(spent[0].style.fg, Some(Color::Indexed(167)));
     assert_ne!(spent[0].style.fg, lit.faint().fg);
 }
@@ -224,7 +264,7 @@ fn mana_bar_spent_is_a_full_width_red_empty_track() {
 #[test]
 fn mana_bar_nonzero_remaining_keeps_one_filled_cell() {
     let plain = Theme::fixed(true);
-    let spans = mana_bar_spans(&plain, 1, 10);
+    let spans = mana_bar_spans(&plain, 1, 10, &BudgetZonesConfig::default());
     let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(text, "▰▱▱▱▱▱▱▱▱▱");
 }

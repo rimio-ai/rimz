@@ -389,8 +389,13 @@ pub(crate) fn compose_lines(
         // register), so its line 0 lands directly at the block base.
         let panel_base = bottom.len();
         let active_kind = active_provider_kind(snapshot, ui);
-        let (panel_lines, panel_hits) =
-            provider_panel_lines(&theme, &snapshot.providers, active_kind.as_deref(), inner);
+        let (panel_lines, panel_hits) = provider_panel_lines(
+            &theme,
+            &snapshot.providers,
+            active_kind.as_deref(),
+            inner,
+            &snapshot.sidebar.budget,
+        );
         tab_hits = panel_hits
             .into_iter()
             .map(|hit| ProviderTabHit {

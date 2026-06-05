@@ -5,6 +5,7 @@ use jiff::{SignedDuration, Timestamp};
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 use rimz::agents::RateLimitWindow;
+use rimz::config::BudgetZonesConfig;
 use rimz::{SidebarProviderPanel, SpendTally, SpendWindow};
 
 use crate::render::fmt::{dollars2, reset_countdown, tokens_int, tokens_short, window_label};
@@ -188,6 +189,7 @@ pub(in crate::render) fn provider_panel_lines(
     providers: &[SidebarProviderPanel],
     active_kind: Option<&str>,
     width: usize,
+    zones: &BudgetZonesConfig,
 ) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
     let mut lines = Vec::new();
     let Some(first) = providers.first() else {
@@ -216,7 +218,7 @@ pub(in crate::render) fn provider_panel_lines(
         // the emblem + stats body, matching the cockpit's breathing room.
         lines.push(Line::from(""));
     }
-    lines.extend(provider_body_lines(theme, active, width));
+    lines.extend(provider_body_lines(theme, active, width, zones));
     (lines, hits)
 }
 
@@ -385,6 +387,7 @@ fn provider_body_lines(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     width: usize,
+    zones: &BudgetZonesConfig,
 ) -> Vec<Line<'static>> {
     let show_art = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
     let art_column = if show_art { PROVIDER_ART_WIDTH + 1 } else { 0 };
@@ -394,7 +397,7 @@ fn provider_body_lines(
     // packed directly so the three rows line up against the three-line emblem and
     // the bars sit right under the numbers (no separator row).
     let mut rights: Vec<Vec<Span<'static>>> = vec![provider_stats_spans(theme, panel, bar_region)];
-    rights.extend(provider_bar_rows(theme, panel, bar_region));
+    rights.extend(provider_bar_rows(theme, panel, bar_region, zones));
 
     let rows = panel.art.len().max(rights.len());
     let mut lines = Vec::with_capacity(rows);
@@ -470,6 +473,7 @@ fn provider_bar_rows(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     region: usize,
+    zones: &BudgetZonesConfig,
 ) -> Vec<Vec<Span<'static>>> {
     if !panel.metered {
         return vec![infinite_bar_row(theme, panel.color, region)];
@@ -478,7 +482,13 @@ fn provider_bar_rows(
         .windows
         .iter()
         .filter_map(|window| {
-            metered_bar_row(theme, window, region, longer_window_spent(panel, window))
+            metered_bar_row(
+                theme,
+                window,
+                region,
+                longer_window_spent(panel, window),
+                zones,
+            )
         })
         .collect()
 }
@@ -537,6 +547,7 @@ fn metered_bar_row(
     window: &RateLimitWindow,
     region: usize,
     force_exhausted: bool,
+    zones: &BudgetZonesConfig,
 ) -> Option<Vec<Span<'static>>> {
     let not_started = !force_exhausted && window_not_started(window);
     let remaining = if force_exhausted {
@@ -566,11 +577,11 @@ fn metered_bar_row(
     let mut spans = vec![
         Span::styled(
             format!("{label:<PROVIDER_LABEL_WIDTH$}"),
-            theme.style(mana_color(remaining), Modifier::empty()),
+            theme.style(mana_color(remaining, zones), Modifier::empty()),
         ),
         Span::raw(" "),
     ];
-    spans.extend(mana_bar_spans(theme, remaining, bar_width));
+    spans.extend(mana_bar_spans(theme, remaining, bar_width, zones));
     spans.push(Span::raw(" "));
     spans.push(Span::styled(
         format!("{value:>PROVIDER_VALUE_WIDTH$}"),

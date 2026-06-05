@@ -106,6 +106,17 @@ red    = { percent = 95, tokens = 420000 }   # amber escalates to red
 
 The agent card's context meter — the bar, the `▣` glyph, and the `▤` head — ramps calm blue → yellow → amber → red on these bands. Each tier names the inclusive lower bound where it begins, on two axes at once: the window's fill `percent` and the absolute `tokens` occupying it. The meter wears the worse of the two axes, so a large-window model calm by percentage still warms by sheer volume. The defaults above are the shipped values (the 258k amber edge matches Codex's effective GPT-5.5 window); a tier you omit keeps its default, and within a tier both fields are stated together.
 
+#### Budget bars
+
+```toml
+[sidebar.budget]
+yellow = 50   # remaining % below which the bar leaves green
+amber  = 25   # remaining % below which yellow deepens to amber
+red    = 10   # remaining % below which the bar goes red
+```
+
+The provider dashboard's budget bars — and the `5h`/`7d` labels that mirror them — drain green → yellow → amber → red on these zones. Each tier names the exclusive upper bound of *remaining* budget where it applies, so the bar crosses into the tier as what's left drops below the bound — the mirror of the context meter's bands above, which bound a rising fill from below; at or above `yellow` the bar stays green, and a tier you omit keeps its default. A fully-spent window's full-width red track is shape, independent of the zones, and the tones themselves stay `[sidebar.theme]`'s job. Resolved producer-side onto the snapshot like the rest of `[sidebar]`, so every renderer of the workspace agrees and a change lands with the next snapshot.
+
 #### Theme
 
 ```toml

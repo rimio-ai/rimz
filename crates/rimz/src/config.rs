@@ -332,6 +332,11 @@ pub struct SidebarConfig {
     /// leaves calm blue for yellow, amber, and red. Display-only; it tunes the
     /// colour ramp, never the ledger.
     pub context: ContextSeverityConfig,
+    /// The provider dashboard's budget-bar color zones — where the draining
+    /// mana bar leaves green for yellow, amber, and red as the remaining
+    /// budget shrinks. Display-only; it tunes the colour ramp, never the
+    /// ledger.
+    pub budget: BudgetZonesConfig,
     /// Preferred comparison target for the worktree header's git stats (the
     /// `+/-` diff, the `⇡`/`⇣` commit delta, and the `≡` landed marker). Tried
     /// first in the trunk ladder, per repo: a repo where the branch doesn't
@@ -368,6 +373,7 @@ impl Default for SidebarConfig {
             max_provider_blocks: default_max_provider_blocks(),
             max_cols: default_sidebar_max_cols(),
             context: ContextSeverityConfig::default(),
+            budget: BudgetZonesConfig::default(),
             trunk: None,
             theme: SidebarThemeConfig::default(),
             scrollbar: ScrollbarMode::default(),
@@ -470,6 +476,34 @@ pub struct ContextBand {
     pub percent: u8,
     /// Absolute tokens occupying the window.
     pub tokens: u64,
+}
+
+/// The provider dashboard's budget-bar color zones: each tier names the
+/// exclusive upper bound of *remaining* budget (in percent) where it applies,
+/// so the draining bar crosses into the tier as the remaining figure drops
+/// below the bound. At or above `yellow` the bar stays green. The mirror of
+/// [`ContextSeverityConfig`], whose bands bound a *rising* fill from below —
+/// here a *draining* figure is bounded from above. A fully spent window's
+/// full-width red track is a shape rule independent of these zones.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct BudgetZonesConfig {
+    /// Remaining % below which the bar leaves green for yellow.
+    pub yellow: u8,
+    /// Remaining % below which yellow deepens to amber.
+    pub amber: u8,
+    /// Remaining % below which the bar goes red.
+    pub red: u8,
+}
+
+impl Default for BudgetZonesConfig {
+    fn default() -> Self {
+        Self {
+            yellow: 50,
+            amber: 25,
+            red: 10,
+        }
+    }
 }
 
 /// Default column cap on the sidebar pane width: comfortably past the widest
@@ -813,6 +847,27 @@ mod tests {
         );
         assert_eq!(tuned.sidebar.context.yellow, defaults.yellow);
         assert_eq!(tuned.sidebar.context.amber, defaults.amber);
+    }
+
+    #[test]
+    fn budget_zones_default_and_parse() {
+        let dir = tempdir().expect("tempdir");
+        // The shipped zones: green at/above 50% remaining, yellow below 50,
+        // amber below 25, red below 10.
+        let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+        let defaults = BudgetZonesConfig::default();
+        assert_eq!(config.sidebar.budget, defaults);
+        assert_eq!(defaults.yellow, 50);
+        assert_eq!(defaults.amber, 25);
+        assert_eq!(defaults.red, 10);
+
+        // A tuned tier overrides just its bound; an omitted tier keeps its
+        // default.
+        let tuned =
+            MachineConfig::load_from(&write(&dir, "[sidebar.budget]\nred = 20\n")).expect("load");
+        assert_eq!(tuned.sidebar.budget.red, 20);
+        assert_eq!(tuned.sidebar.budget.amber, defaults.amber);
+        assert_eq!(tuned.sidebar.budget.yellow, defaults.yellow);
     }
 
     #[test]

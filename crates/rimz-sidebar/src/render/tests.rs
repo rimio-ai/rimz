@@ -2141,7 +2141,16 @@ fn provider_bars_share_one_front_and_end_column() {
     // as its own active tab and the grid is asserted across those frames.
     let lines: Vec<String> = panels
         .iter()
-        .flat_map(|panel| provider_panel_lines(&theme, &panels, Some(panel.kind.as_str()), 30).0)
+        .flat_map(|panel| {
+            provider_panel_lines(
+                &theme,
+                &panels,
+                Some(panel.kind.as_str()),
+                30,
+                &rimz::config::BudgetZonesConfig::default(),
+            )
+            .0
+        })
         .map(|line| {
             line.spans
                 .iter()
@@ -2180,15 +2189,21 @@ fn provider_bars_share_one_front_and_end_column() {
 /// column drops and each row's first span is its label. Filters to the lines
 /// carrying bar glyphs.
 fn metered_bar_rows(theme: &Theme, panel: &rimz::SidebarProviderPanel) -> Vec<Line<'static>> {
-    provider_panel_lines(theme, std::slice::from_ref(panel), None, 30)
-        .0
-        .into_iter()
-        .filter(|line| {
-            line.spans
-                .iter()
-                .any(|span| span.content.contains('▰') || span.content.contains('▱'))
-        })
-        .collect()
+    provider_panel_lines(
+        theme,
+        std::slice::from_ref(panel),
+        None,
+        30,
+        &rimz::config::BudgetZonesConfig::default(),
+    )
+    .0
+    .into_iter()
+    .filter(|line| {
+        line.spans
+            .iter()
+            .any(|span| span.content.contains('▰') || span.content.contains('▱'))
+    })
+    .collect()
 }
 
 /// The label foreground, the first bar-glyph foreground, and whether the row
@@ -2327,12 +2342,18 @@ fn codex_not_started_shows_full_bar() {
 
 /// The full provider stats line (all spans joined) of one rendered panel.
 fn stats_line(theme: &Theme, panel: &rimz::SidebarProviderPanel) -> String {
-    provider_panel_lines(theme, std::slice::from_ref(panel), None, 40)
-        .0
-        .into_iter()
-        .flat_map(|line| line.spans)
-        .map(|span| span.content.into_owned())
-        .collect()
+    provider_panel_lines(
+        theme,
+        std::slice::from_ref(panel),
+        None,
+        40,
+        &rimz::config::BudgetZonesConfig::default(),
+    )
+    .0
+    .into_iter()
+    .flat_map(|line| line.spans)
+    .map(|span| span.content.into_owned())
+    .collect()
 }
 
 /// The provider stats line reads today's transcript-history spend *and* token
@@ -2450,7 +2471,13 @@ fn tab_rail_drops_whole_tabs_that_overflow_the_width() {
     // Stub (2) + `┤ Claude ├` (10) + gap (2) + `─ Codex ─` (9, the cap cells
     // reserved as fill) = 23 fits in 24; `─ Pi ─` would land at 31, so it
     // drops whole and `─` fills the tail.
-    let (lines, hits) = provider_panel_lines(&theme, &panels, Some("claude"), 24);
+    let (lines, hits) = provider_panel_lines(
+        &theme,
+        &panels,
+        Some("claude"),
+        24,
+        &rimz::config::BudgetZonesConfig::default(),
+    );
     let tab_line: String = lines[0]
         .spans
         .iter()
@@ -2479,8 +2506,11 @@ fn tab_rail_keeps_every_footprint_still_across_picks() {
             .map(|span| span.content.as_ref())
             .collect()
     };
-    let (claude_lines, claude_hits) = provider_panel_lines(&theme, &panels, Some("claude"), 52);
-    let (codex_lines, codex_hits) = provider_panel_lines(&theme, &panels, Some("codex"), 52);
+    let zones = rimz::config::BudgetZonesConfig::default();
+    let (claude_lines, claude_hits) =
+        provider_panel_lines(&theme, &panels, Some("claude"), 52, &zones);
+    let (codex_lines, codex_hits) =
+        provider_panel_lines(&theme, &panels, Some("codex"), 52, &zones);
     assert_eq!(
         claude_hits, codex_hits,
         "the click targets hold still as the pick moves"
