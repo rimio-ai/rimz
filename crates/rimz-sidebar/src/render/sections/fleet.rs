@@ -8,7 +8,7 @@ use rimz::feed::AgentStatus;
 
 use crate::render::fmt::age_secs;
 use crate::render::labels::{age_heat, agent_style, status_glyph, status_style};
-use crate::render::theme::Theme;
+use crate::render::theme::{ORANGE, Theme};
 
 use super::{pin_right, spans_width, trim_spans_to_width};
 
@@ -28,10 +28,10 @@ use super::{pin_right, spans_width, trim_spans_to_width};
 /// `rate-limited` `⏸` (held amber, never heating) closing the cluster. The right
 /// cluster is the busy/done tail — working `⢿` (every running agent; the
 /// thinking sparkle is a per-row animation head, not a bucket), then `success`
-/// `✓`. Every bucket renders, so a zero reads a faint `? 0`. Counts span the
-/// capped agents (`status_counts`). The fleet's live time / token / commit
-/// totals are gone — the summary line's today-accumulated breakdown carries the
-/// fleet's resource read.
+/// `✓`. Every bucket renders — the glyph always in its semantic color, a zero
+/// count faint beside it. Counts span the capped agents (`status_counts`). The
+/// fleet's live time / token / commit totals are gone — the summary line's
+/// today-accumulated breakdown carries the fleet's resource read.
 pub(in crate::render) fn fleet_header_lines(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
@@ -63,6 +63,7 @@ pub(in crate::render) fn fleet_header_lines(
         theme,
         &mut left,
         status_glyph(AgentStatus::Waiting),
+        Color::Yellow,
         waiting,
         attention_bucket_style(theme, groups, AgentStatus::Waiting),
     );
@@ -70,6 +71,7 @@ pub(in crate::render) fn fleet_header_lines(
         theme,
         &mut left,
         status_glyph(AgentStatus::Failed),
+        Color::Red,
         failed,
         attention_bucket_style(theme, groups, AgentStatus::Failed),
     );
@@ -77,19 +79,21 @@ pub(in crate::render) fn fleet_header_lines(
         theme,
         &mut left,
         status_glyph(AgentStatus::Idle),
+        Color::Green,
         idle,
         status_style(theme, AgentStatus::Idle),
     );
     // Rate-limited closes the left cluster, after the free `○` idle agent:
-    // attention-class but parked. It renders like every other bucket — a faint
-    // `⏸ 0` when empty — so the make-up stays a fixed dashboard, scannable by
-    // position. It takes the held-amber resting tone (`status_style`), never the
-    // heating `attention_bucket_style`, since there is nothing to do but wait
-    // for the window to reset.
+    // attention-class but parked. It renders like every other bucket — the
+    // amber glyph with a faint `0` when empty — so the make-up stays a fixed
+    // dashboard, scannable by position. It takes the held-amber resting tone
+    // (`status_style`), never the heating `attention_bucket_style`, since there
+    // is nothing to do but wait for the window to reset.
     push_count(
         theme,
         &mut left,
         status_glyph(AgentStatus::RateLimited),
+        Color::Yellow,
         rate_limited,
         status_style(theme, AgentStatus::RateLimited),
     );
@@ -98,6 +102,7 @@ pub(in crate::render) fn fleet_header_lines(
         theme,
         &mut right,
         status_glyph(AgentStatus::Running),
+        ORANGE,
         working,
         agent_style(theme, AgentStatus::Running),
     );
@@ -105,6 +110,7 @@ pub(in crate::render) fn fleet_header_lines(
         theme,
         &mut right,
         status_glyph(AgentStatus::Success),
+        Color::Green,
         success,
         status_style(theme, AgentStatus::Success),
     );
@@ -168,21 +174,30 @@ fn attention_bucket_style(
 /// Append a `glyph n` bucket to a header line, spaced from the previous one. The
 /// glyph and its count are always separated by a single space (`? 2`, never
 /// `?2`); successive buckets are separated by three. Every bucket renders, so a
-/// zero reads `? 0` — the cockpit is a fixed dashboard, scannable by position —
-/// but a zero bucket drops to faint chrome so the eye lands on the live counts,
-/// not the empty ones.
+/// zero reads `? 0` — the cockpit is a fixed dashboard, scannable by position.
+/// The glyph always wears its semantic color, so the make-up reads as a stable
+/// colored legend; a zero bucket rests the glyph (no bold, no heat) and drops
+/// only its count to faint chrome, so the eye still lands on the live counts.
 fn push_count(
     theme: &Theme,
     spans: &mut Vec<Span<'static>>,
     glyph: &str,
+    glyph_color: Color,
     count: usize,
     style: Style,
 ) {
     if !spans.is_empty() {
         spans.push(Span::raw("   "));
     }
-    let style = if count == 0 { theme.faint() } else { style };
-    spans.push(Span::styled(format!("{glyph} {count}"), style));
+    if count == 0 {
+        spans.push(Span::styled(
+            glyph.to_owned(),
+            theme.style(glyph_color, Modifier::empty()),
+        ));
+        spans.push(Span::styled(format!(" {count}"), theme.faint()));
+    } else {
+        spans.push(Span::styled(format!("{glyph} {count}"), style));
+    }
 }
 
 fn status_total(groups: &[SidebarWorktreeGroup], status: AgentStatus) -> usize {

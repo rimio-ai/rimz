@@ -2638,6 +2638,62 @@ fn attention_bucket_wears_the_oldest_rows_age_heat() {
     );
 }
 
+/// State glyphs never dim. A zero bucket keeps its glyph's semantic tone at
+/// rest weight — the make-up reads as a stable colored legend — and drops only
+/// its count to faint chrome; the calm `○`/`✓` card leads read at full
+/// strength in their quiet green.
+#[test]
+fn state_glyphs_never_dim() {
+    let theme = Theme::fixed(false);
+    // A room with one working agent: every bucket but `⢿` is zero.
+    let working = agent(
+        "w",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("a"),
+    );
+    let snapshot = snapshot_with(Vec::new(), vec![working]);
+    let lines = fleet_header_lines(&theme, &snapshot.worktree_groups, 60);
+    let spans: Vec<_> = lines.iter().flat_map(|line| line.spans.iter()).collect();
+    let glyph_style = |glyph: &str| {
+        spans
+            .iter()
+            .find(|span| span.content.as_ref() == glyph)
+            .map(|span| span.style)
+            .unwrap_or_else(|| panic!("a zero bucket splits the {glyph} glyph from its count"))
+    };
+    assert_eq!(
+        glyph_style("?"),
+        theme.style(Color::Yellow, Modifier::empty()),
+        "a zero ? bucket rests at its yellow floor, unbolded"
+    );
+    assert_eq!(
+        glyph_style("✓"),
+        theme.style(Color::Green, Modifier::empty()),
+        "a zero ✓ bucket keeps the quiet green at full strength"
+    );
+    let zero_counts: Vec<_> = spans
+        .iter()
+        .filter(|span| span.content.as_ref() == " 0")
+        .collect();
+    assert!(!zero_counts.is_empty(), "zero buckets render their counts");
+    assert!(
+        zero_counts.iter().all(|span| span.style == theme.faint()),
+        "only the zero count drops to faint chrome"
+    );
+    // The card leads share the same full-strength read: the calm states keep
+    // their quiet green with no dim weight.
+    for status in [AgentStatus::Idle, AgentStatus::Success] {
+        assert_eq!(
+            labels::status_style(&theme, status),
+            theme.style(Color::Green, Modifier::empty()),
+            "{status:?} leads at full strength"
+        );
+    }
+}
+
 /// A compacting agent counts as **working** (`⢿`) in the cockpit — the
 /// compaction pulse, like the thinking sparkle, is a per-row head and never
 /// a bucket.

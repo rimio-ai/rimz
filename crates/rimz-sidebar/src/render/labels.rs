@@ -212,10 +212,11 @@ pub(super) fn status_style(theme: &Theme, status: AgentStatus) -> Style {
         AgentStatus::Failed => theme.style(Color::Red, Modifier::BOLD),
         AgentStatus::Running => theme.style(Color::Green, Modifier::empty()),
         // Idle and success are the two calm "nothing needs you" states, so both
-        // read in a quiet green — the hollow `○` and the `✓` carry the meaning,
-        // the dim weight keeps them from competing with live attention.
-        AgentStatus::Idle => theme.style(Color::Green, Modifier::DIM),
-        AgentStatus::Success => theme.style(Color::Green, Modifier::DIM),
+        // read in a quiet green at full strength — the hollow `○` and the `✓`
+        // carry the meaning, and the rest weight (no bold, no breath) already
+        // keeps them below the live attention states.
+        AgentStatus::Idle => theme.style(Color::Green, Modifier::empty()),
+        AgentStatus::Success => theme.style(Color::Green, Modifier::empty()),
         // Rate-limited stays in the amber attention family but at rest weight
         // (not bold, and `attention_glyph_style` never heats it): it is
         // attention-class, but parked with nothing to do but wait — the held
