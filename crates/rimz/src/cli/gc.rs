@@ -24,12 +24,16 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     let (abandoned, repaired) = match WorkspaceResolver::resolve(".", globals.root.clone()) {
         Ok(workspace) => {
             let ledger = open_ledger(&workspace)?;
-            let abandoned = ledger
-                .abandon_dead_owned_items(&workspace.session_name)
-                .context("abandoning dead owned feed items")?;
+            // Repair before the sweep: the sweep's forced publish folds the
+            // log and would self-heal a corpse itself, leaving this explicit
+            // repair nothing to find — and the report below silent about a
+            // cut this very run made.
             let repaired = ledger
                 .repair_event_log()
                 .context("repairing the event log")?;
+            let abandoned = ledger
+                .abandon_dead_owned_items(&workspace.session_name)
+                .context("abandoning dead owned feed items")?;
             (abandoned, Some(repaired))
         }
         Err(_) => (0, None),
