@@ -12,6 +12,7 @@
 //! reload-recovery contract documented in
 //! [`docs/internals/sidebar.md`](../../docs/internals/sidebar.md).
 
+mod effects;
 mod fmt;
 mod labels;
 mod odometer;
@@ -19,6 +20,7 @@ mod scrollbar;
 mod sections;
 mod theme;
 
+pub(crate) use effects::EffectState;
 pub(crate) use odometer::TallyAnim;
 pub(crate) use scrollbar::ScrollbarFade;
 
@@ -57,6 +59,13 @@ pub struct UiState {
     /// while a roll is in flight. Crate-internal: an implementation detail of the
     /// renderer, not part of the public `UiState` surface.
     pub(crate) tally: TallyAnim,
+    /// The post-render effects pass's memory — the transition detector's diff
+    /// base and the live one-shot flashes ([`effects::EffectState`]). Observed
+    /// and painted as a byproduct of every draw, after the paragraph render;
+    /// the serve loop keeps the fast tick alive while a flash decays
+    /// (`EffectState::any_active`), the tally's twin — and like the tally,
+    /// crate-internal, not part of the public `UiState` surface.
+    pub(crate) effects: EffectState,
     /// Hit-test map of the most recently drawn frame: one entry per inner-area
     /// content line, `Some(row)` for a jump-target row line (in
     /// `app::visible_rows()` order) and `None` for chrome. The renderer writes
@@ -253,6 +262,23 @@ pub fn draw_with_ui(
     ui.scroll_offset = scroll_offset;
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
+    // The truecolor garnish tier: a color-only effects pass over the buffer the
+    // paragraph just rendered, geometry-locked to the line map this draw wrote.
+    // Gated here rather than inside the pass so a non-truecolor terminal — or a
+    // `[sidebar] glow = false` opt-out — pays nothing, not even the
+    // transition observation.
+    let theme = Theme::for_sidebar(&snapshot.sidebar);
+    if theme.effects_enabled() {
+        ui.effects.apply(
+            snapshot,
+            &theme,
+            &ui.line_map,
+            ui.selected_pane.as_ref(),
+            ui.animation_phase,
+            frame.buffer_mut(),
+            area,
+        );
+    }
 }
 
 /// The provider kind the dashboard's tab focus derives from the selection: the
@@ -331,10 +357,11 @@ pub(crate) fn compose_lines(
     usize,
 ) {
     // One `Theme` per frame, handed to the body and the bottom chrome alike:
-    // the cached `NO_COLOR` reading plus the palette the producer resolved from
-    // `[sidebar.theme]` onto the snapshot — so a re-themed config lands with
-    // the next snapshot, identically on every renderer of the workspace.
-    let theme = Theme::for_sidebar(&snapshot.sidebar.theme);
+    // the cached `NO_COLOR` reading plus the palette and glow flag the
+    // producer resolved from `[sidebar]` onto the snapshot — so a re-themed
+    // config lands with the next snapshot, identically on every renderer of
+    // the workspace.
+    let theme = Theme::for_sidebar(&snapshot.sidebar);
     let cells = usize::from(width.max(1));
     // The whole sidebar sits inside a one-cell frame: chrome is built to the inner
     // width and opened with a blank gutter, leaving the trailing column as the

@@ -231,7 +231,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         let phase = wall_clock_phase(anim_start);
         let animating = render::has_live_animation(&current)
             || ui.tally.any_rolling(phase)
-            || ui.scrollbar.fading(phase);
+            || ui.scrollbar.fading(phase)
+            || ui.effects.any_active();
         let active = animating || dirty;
         let timeout = if active {
             next_frame
@@ -557,7 +558,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             ui.animation_phase = wall_clock_phase(anim_start);
             let animating = render::animation_cadence(&current) != render::AnimationCadence::None
                 || ui.tally.any_rolling(ui.animation_phase)
-                || ui.scrollbar.fading(ui.animation_phase);
+                || ui.scrollbar.fading(ui.animation_phase)
+                || ui.effects.any_active();
             if dirty || animating {
                 render::draw_to_terminal_with_ui(
                     &mut terminal,
@@ -612,7 +614,14 @@ fn wall_clock_phase(start: Instant) -> u64 {
 }
 
 fn frame_interval(snapshot: &SidebarSnapshot, ui: &UiState) -> Duration {
-    if ui.tally.any_rolling(ui.animation_phase) || ui.scrollbar.fading(ui.animation_phase) {
+    // A decaying one-shot flash needs the fast grid to read as motion; it is
+    // brief and self-terminating, so the cost is bounded to the transition
+    // window. The continuous attention glow deliberately rides the slow
+    // cosmetic cadence below — the breath already keeps it warm.
+    if ui.tally.any_rolling(ui.animation_phase)
+        || ui.scrollbar.fading(ui.animation_phase)
+        || ui.effects.any_active()
+    {
         return ANIMATION_FRAME;
     }
     match render::animation_cadence(snapshot) {

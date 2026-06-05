@@ -352,6 +352,13 @@ pub struct SidebarConfig {
     /// view settles; `always` keeps it up; `never` removes it. Resolved
     /// producer-side onto the snapshot like the rest of `[sidebar]`.
     pub scrollbar: ScrollbarMode,
+    /// Whether the truecolor glow tier runs — the attention glow and the
+    /// brief transition flashes the renderer layers over the composed frame on
+    /// a 24-bit terminal. On by default; `glow = false` keeps the plain
+    /// 256-color render with the modifier-based attention breath. Terminal
+    /// capability still gates the pass: without `COLORTERM` truecolor, or
+    /// under `NO_COLOR`, it never runs regardless.
+    pub glow: bool,
 }
 
 impl Default for SidebarConfig {
@@ -364,6 +371,7 @@ impl Default for SidebarConfig {
             trunk: None,
             theme: SidebarThemeConfig::default(),
             scrollbar: ScrollbarMode::default(),
+            glow: true,
         }
     }
 }
@@ -662,6 +670,18 @@ mod tests {
         // with the parse error naming the field, rather than rendering with a
         // silently-wrong palette.
         assert!(MachineConfig::load_from(&write(&dir, "[sidebar.theme]\ngood = 300\n")).is_err());
+    }
+
+    #[test]
+    fn sidebar_glow_defaults_on_and_parses_an_opt_out() {
+        let dir = tempdir().expect("tempdir");
+        assert!(
+            MachineConfig::default().sidebar.glow,
+            "the truecolor glow tier ships enabled",
+        );
+        let config =
+            MachineConfig::load_from(&write(&dir, "[sidebar]\nglow = false\n")).expect("load");
+        assert!(!config.sidebar.glow);
     }
 
     #[test]

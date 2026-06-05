@@ -124,6 +124,15 @@ selection = 110   # the selected-row ▌ accent bar
 
 Every renderer tone is a named semantic slot over a 256-color index; the values above are the shipped palette, and a slot you omit keeps its default — an absent section paints exactly the built-ins. Slots are semantic (`good`/`warn`/`alarm`), not hue names, so a light-terminal retheme stays readable. The overrides resolve producer-side onto the snapshot like `[sidebar.providers]`, so every renderer of the workspace paints the same tones, and a change lands with the next snapshot — no renderer restart. Provider brand colors stay with `[sidebar.providers.<kind>]`, and `NO_COLOR` still strips every tone while the glyph shapes carry the states.
 
+#### Glow
+
+```toml
+[sidebar]
+glow = true    # the truecolor glow-and-flash tier (default on)
+```
+
+On a 24-bit terminal (`COLORTERM=truecolor`) the renderer layers smooth color motion over the composed frame — the attention glow and the brief transition flashes ([interface/sidebar.md](../interface/sidebar.md)). `glow = false` switches the tier off, keeping the plain 256-color render with the modifier-based attention breath. The flag resolves onto the snapshot like the theme, so a change lands with the next snapshot — no renderer restart — and the capability gate still stands on its own: a terminal without truecolor, or with `NO_COLOR`, never runs the pass whatever the flag says.
+
 #### Trunk branch
 
 ```toml

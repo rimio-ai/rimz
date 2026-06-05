@@ -72,6 +72,10 @@ which = "8"
 # Sidebar terminal UI — `crossterm` is supplied transitively by ratatui's
 # `crossterm_0_29` feature; no direct dep needed.
 ratatui = "0.30"
+# Post-render color effects on the ratatui buffer — the attention glow and the
+# one-shot transition cues. Default features off drops the effect-DSL parser
+# tree; the runtime pass is truecolor-gated in the renderer.
+tachyonfx = { version = "0.25", default-features = false, features = ["std-duration"] }
 
 # Test-time
 insta = { version = "1", features = ["json", "yaml", "filters"] }

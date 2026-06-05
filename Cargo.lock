@@ -182,6 +182,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "bon"
+version = "3.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f47dbe92550676ee653353c310dfb9cf6ba17ee70396e1f7cf0a2020ad49b2fe"
+dependencies = [
+ "bon-macros",
+ "rustversion",
+]
+
+[[package]]
+name = "bon-macros"
+version = "3.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "519bd3116aeeb42d5372c29d982d16d0170d3d4a5ed85fc7dd91642ffff3c67c"
+dependencies = [
+ "darling",
+ "ident_case",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "bstr"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1047,6 +1072,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "micromath"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3c8dda44ff03a2f238717214da50f65d5a53b45cd213a7370424ffdb6fae815"
+
+[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1690,6 +1721,7 @@ dependencies = [
  "rimz",
  "serde",
  "serde_json",
+ "tachyonfx",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
@@ -2050,6 +2082,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tachyonfx"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c144c687e9f3628c06add1b6db585a68d3cd285a9d7213b9bca836771e337592"
+dependencies = [
+ "bon",
+ "compact_str",
+ "micromath",
+ "ratatui-core",
+ "thiserror 2.0.18",
+ "unicode-width",
 ]
 
 [[package]]

@@ -94,7 +94,7 @@ Top-level domain modules are one file each, their `//!` headers carrying the det
 
 ### `crates/rimz-sidebar` — [local contract](./crates/rimz-sidebar/AGENTS.md)
 
-Native terminal sidebar renderer, the default on both backends: the fixed-timestep serve loop (`app.rs`, one one-responsibility submodule per folded concern) and frame composition (`render/`, one module per section, the glyph vocabulary in `render/labels.rs`, the config-driven semantic palette in `render/theme.rs`). A pure projection of the snapshot view-model; the local contract holds the boundary.
+Native terminal sidebar renderer, the default on both backends: the fixed-timestep serve loop (`app.rs`, one one-responsibility submodule per folded concern) and frame composition (`render/`, one module per section, the glyph vocabulary in `render/labels.rs`, the config-driven semantic palette in `render/theme.rs`, the truecolor-gated color-effects pass in `render/effects.rs`). A pure projection of the snapshot view-model; the local contract holds the boundary.
 
 ### `examples/resolvers`
 

@@ -1292,6 +1292,87 @@ fn active_process_row_keeps_the_animation_tick_alive() {
 }
 
 #[test]
+fn effects_pass_never_changes_the_composed_text() {
+    // The color-only invariant behind every golden frame: the truecolor
+    // effects pass at its busiest — a fresh `waiting` transition flash decaying
+    // over its card plus the attention glow mid-swell — must leave the composed
+    // text byte-identical to a render without it. A tachyonfx effect that
+    // mutated a glyph (dissolve, char evolution) would fail here.
+    let make = |status: AgentStatus| {
+        snapshot_with(
+            Vec::new(),
+            vec![agent(
+                "claude-1",
+                "claude",
+                status,
+                Some("/repo/main"),
+                Some("main"),
+                Some("db migrate"),
+            )],
+        )
+    };
+    let idle = make(AgentStatus::Idle);
+    let waiting = make(AgentStatus::Waiting);
+
+    let with_effects = {
+        let mut bytes = Vec::new();
+        let backend = CrosstermBackend::new(&mut bytes);
+        let viewport = Viewport::Fixed(Rect::new(0, 0, 44, 18));
+        let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
+        terminal.clear().unwrap();
+        let mut ui = UiState::default();
+        // Frame 1 records the room; frame 2 flips the agent to `waiting`,
+        // spawning the flash at full tone; frame 3 paints it mid-decay with
+        // the glow at the breath's half-swell. The pass is driven directly so
+        // the guard holds whatever `COLORTERM` the test shell has.
+        for (snapshot, phase) in [(&idle, 0), (&waiting, 6), (&waiting, 7)] {
+            let mut effects = std::mem::take(&mut ui.effects);
+            ui.animation_phase = phase;
+            terminal
+                .draw(|frame| {
+                    draw_with_ui(frame, snapshot, None, &mut ui);
+                    let area = frame.area();
+                    effects.apply(
+                        snapshot,
+                        &Theme::fixed(false),
+                        &ui.line_map,
+                        None,
+                        phase,
+                        frame.buffer_mut(),
+                        area,
+                    );
+                })
+                .unwrap();
+            ui.effects = effects;
+        }
+        assert!(
+            ui.effects.any_active(),
+            "the guard must exercise a live, mid-decay flash"
+        );
+        drop(terminal);
+        let mut parser = vt100::Parser::new(18, 44, 0);
+        parser.process(&bytes);
+        parser.screen().contents()
+    };
+
+    let without_effects = snapshot_to_screen_with_alert_and_ui(
+        &waiting,
+        None,
+        &UiState {
+            animation_phase: 7,
+            ..UiState::default()
+        },
+        44,
+        18,
+    );
+    assert_eq!(
+        snapshot_text(&with_effects),
+        snapshot_text(&without_effects),
+        "effects are color-only; the composed text may never drift"
+    );
+}
+
+#[test]
 fn animation_cadence_separates_fast_work_from_slow_cosmetic_motion() {
     let running = snapshot_with(
         Vec::new(),

@@ -92,6 +92,14 @@ criteria = "safe-to-deploy"
 version = "0.12.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.bon]]
+version = "3.9.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.bon-macros]]
+version = "3.9.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.bstr]]
 version = "1.12.1"
 criteria = "safe-to-run"
@@ -492,6 +500,10 @@ criteria = "safe-to-deploy"
 version = "0.9.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.micromath]]
+version = "2.1.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.minimal-lexical]]
 version = "0.2.1"
 criteria = "safe-to-deploy"
@@ -886,6 +898,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.syn]]
 version = "2.0.117"
+criteria = "safe-to-deploy"
+
+[[exemptions.tachyonfx]]
+version = "0.25.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.tempfile]]
