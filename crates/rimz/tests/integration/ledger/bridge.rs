@@ -281,7 +281,6 @@ fn wake_sidebars_restat_skips_when_mtime_aged_past_ttl() {
     let hb_path = h.runtime_paths.heartbeat_dir.join("sidebar.toctou.json");
     let file = std::fs::File::create(&hb_path).expect("create hb");
     serde_json::to_writer(&file, &hb).expect("write hb");
-    file.sync_all().expect("sync hb");
     // Backdate mtime 60s into the past so the re-stat trips even though
     // `last_seen` inside the JSON is current.
     let aged = SystemTime::now() - Duration::from_secs(60);

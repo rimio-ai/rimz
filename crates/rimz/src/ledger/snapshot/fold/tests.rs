@@ -593,7 +593,6 @@ fn catch_up_rollup_rejects_a_zeroed_middle_frame() {
     file.seek(SeekFrom::Start(frame_ends[0])).unwrap();
     let hole = usize::try_from(frame_ends[1] - frame_ends[0] - 1).unwrap();
     file.write_all(&vec![0u8; hole]).unwrap();
-    file.sync_all().unwrap();
     drop(file);
 
     let err = catch_up_rollup(&paths).expect_err("a zeroed middle frame must fail the fold");

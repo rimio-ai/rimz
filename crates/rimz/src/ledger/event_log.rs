@@ -150,6 +150,9 @@ pub fn rotate(events_log: &Path, archive_dir: &Path, min_bytes: u64) -> Result<R
         source,
     })?;
 
+    // Relaxed appends leave the newest frames riding the page cache; flush
+    // them before the rename publishes this file as the immutable archive.
+    atomic::sync_file_data(events_log)?;
     let name = format!("events.{}.jsonl", Uuid::now_v7().simple());
     let archive_path = archive_dir.join(&name);
     fs::rename(events_log, &archive_path).map_err(|source| EventLogErr::Io {
@@ -325,7 +328,28 @@ fn read_rows(path: &Path, start: u64) -> Result<Vec<(u64, bool, Vec<u8>)>> {
         rows.push((offset, terminated, buf));
         offset += read as u64;
     }
+    testkit::count_bytes_read(offset - start);
     Ok(rows)
+}
+
+/// Test-only observability seam: bytes the row scan actually read, so the
+/// performance tier can prove a warm fold is O(new bytes) rather than
+/// O(log) from the integration binary. Per-process and relaxed, like
+/// [`crate::ledger::atomic::testkit`].
+#[doc(hidden)]
+pub mod testkit {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static BYTES_READ: AtomicU64 = AtomicU64::new(0);
+
+    /// Event-log bytes scanned since process start.
+    pub fn bytes_read() -> u64 {
+        BYTES_READ.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn count_bytes_read(n: u64) {
+        BYTES_READ.fetch_add(n, Ordering::Relaxed);
+    }
 }
 
 /// Decode one raw row into its event: unterminated and non-UTF-8 rows read
@@ -572,6 +596,35 @@ mod tests {
         let archived = read_all(&archive_path).unwrap();
         assert_eq!(archived.len(), 1);
         assert_eq!(archived[0].method, "event.emit");
+    }
+
+    #[test]
+    fn rotate_syncs_the_log_before_renaming() {
+        // The per-record fsync is gone, so the rotation owns making the
+        // archive complete: exactly one fdatasync of the log ahead of the
+        // rename, then the two directory syncs that make the rename durable.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.log.jsonl");
+        let archive_dir = dir.path().join("events.log.archive");
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/z"));
+        let event = EventEnvelope::new(
+            workspace,
+            "session",
+            "rimz",
+            "cli",
+            "event.emit",
+            json!({ "a": 1 }),
+        );
+        append(&path, &event).unwrap();
+
+        let before = atomic::testkit::fsync_count();
+        let outcome = rotate(&path, &archive_dir, 1).unwrap();
+        assert!(outcome.is_rotated());
+        assert_eq!(
+            atomic::testkit::fsync_count() - before,
+            3,
+            "one log fdatasync before the rename plus the two directory syncs"
+        );
     }
 
     #[test]

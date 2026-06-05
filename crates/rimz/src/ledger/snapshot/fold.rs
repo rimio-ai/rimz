@@ -340,10 +340,7 @@ impl RollupCursor {
     /// Catch the held rollup up to the live log and return the extent it
     /// reflects beside the carryover-merged agents. The cursor twin of
     /// [`catch_up_rollup`]; see the type docs for the staleness guards.
-    pub(crate) fn fold(
-        &mut self,
-        paths: &StatePaths,
-    ) -> Result<(event_log::LogExtent, Vec<AgentState>)> {
+    pub fn fold(&mut self, paths: &StatePaths) -> Result<(event_log::LogExtent, Vec<AgentState>)> {
         let meta = fs::metadata(&paths.events_log).ok();
         let file_id = meta.as_ref().map(LogFileId::of);
         let log_len = meta.map(|meta| meta.len()).unwrap_or(0);

@@ -469,6 +469,20 @@ fn invariants(root: &Path) -> Result<()> {
         )?;
     }
 
+    // Durability barriers live in one file: every fsync syscall goes through
+    // `ledger/atomic.rs`, so the write-class contract is auditable in one
+    // place and its testkit counter observes every sync.
+    for needle in [concat!(".sync_", "all("), concat!(".sync_", "data(")] {
+        ensure_no_match(
+            &files,
+            needle,
+            |path: &Path| {
+                path.ends_with("crates/rimz/src/ledger/atomic.rs") || is_docs_or_xtask(path)
+            },
+            "fsync syscalls live in ledger/atomic.rs alone — route through its helpers",
+        )?;
+    }
+
     ensure_no_core_pane_auto_use(root, &files)?;
     ensure_inline_tests_stay_small(&files)?;
     Ok(())

@@ -569,3 +569,70 @@ fn repair_event_log_heals_a_mid_file_corpse_and_republishes() {
     assert_eq!(again.truncated_at, None);
     assert_eq!(again.frames_kept, 1);
 }
+
+#[test]
+fn publish_tail_self_heals_a_corrupt_event_log() {
+    // The same corpse, healed without an operator: the next mutation's
+    // off-lock publish tail hits the corrupt frame, repairs, and republishes
+    // the surviving prefix — `rimz gc` is the fallback, not the only way
+    // back. Frames behind the cut are gone, including the very append whose
+    // tail healed the log: truncate-at-first-invalid is the documented
+    // semantic, and resyncing past a hole would need frame magic the format
+    // deliberately omits.
+    use std::io::{Seek, SeekFrom, Write};
+
+    let h = crate::common::Harness::new();
+    h.ledger
+        .append_event(&lifecycle(&h, "SessionStart", "kept"))
+        .expect("first event");
+    let committed = log_len(&h);
+    h.ledger
+        .append_event(&lifecycle(&h, "SessionStart", "zeroed"))
+        .expect("second event");
+    let corrupted = log_len(&h);
+    // A third frame puts the corpse mid-file — a corrupt *tail* frame is
+    // tolerated as in-flight, never repaired.
+    h.ledger
+        .append_event(&lifecycle(&h, "SessionStart", "behind-the-hole"))
+        .expect("third event");
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&h.ledger.paths().events_log)
+        .expect("open log");
+    file.seek(SeekFrom::Start(committed)).expect("seek");
+    let hole = usize::try_from(corrupted - committed - 1).expect("hole len");
+    file.write_all(&vec![0u8; hole]).expect("zero the frame");
+    drop(file);
+    // Drop the fold bases so the next publish must fold the corrupt region.
+    let _ = std::fs::remove_file(&h.ledger.paths().rollup_cache);
+    let _ = std::fs::remove_file(&h.ledger.paths().latest_snapshot);
+    assert!(
+        h.ledger.runtime_projection(RuntimeScope::Runtime).is_err(),
+        "a torn middle frame fails reads loudly before the heal"
+    );
+
+    // The next mutation commits blind, then its tail repairs and republishes.
+    h.ledger
+        .append_event(&lifecycle(&h, "SessionStart", "behind-the-cut"))
+        .expect("a mutation on a corrupt log still commits");
+
+    let events = h
+        .ledger
+        .read_events()
+        .expect("reads recover after the heal");
+    assert_eq!(events.len(), 1, "the log is the surviving prefix");
+    let snapshot = h.ledger.snapshot_cached().expect("snapshot after the heal");
+    let ids: Vec<&str> = snapshot
+        .agents
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect();
+    assert_eq!(ids, ["kept"], "the republished view reflects the survivor");
+
+    // The workspace is healthy again: the next mutation lands and folds.
+    h.ledger
+        .append_event(&lifecycle(&h, "SessionStart", "after-the-heal"))
+        .expect("post-heal append");
+    assert_eq!(h.ledger.read_events().expect("post-heal read").len(), 2);
+}

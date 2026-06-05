@@ -19,9 +19,9 @@ use crate::workspace::ResolvedWorkspace;
 
 use super::feed_store::FeedStoreErr;
 use super::{
-    AbstainOutcome, AskExpiry, ElapseOutcome, EventLogRotationOutcome, Ledger, ResolveOutcome,
-    Result, StatePaths, TimeoutOutcome, WorkspaceRewriteOutcome, event_log, feed_store, lock,
-    runtime, snapshot, wakeup, workspace_record,
+    AbstainOutcome, AskExpiry, ElapseOutcome, EventLogRotationOutcome, Ledger, LedgerErr,
+    ResolveOutcome, Result, StatePaths, TimeoutOutcome, WorkspaceRewriteOutcome, atomic, event_log,
+    feed_store, lock, runtime, snapshot, wakeup, workspace_record,
 };
 
 /// How often the write path is willing to pay the dead-owner sweep. Read-side
@@ -49,6 +49,66 @@ fn abandon_sweep_due(paths: &StatePaths) -> bool {
 /// Best-effort: a failed touch only means the next write sweeps again.
 fn touch_abandon_sweep_stamp(paths: &StatePaths) {
     let _ = std::fs::write(abandon_sweep_stamp(paths), b"");
+}
+
+/// How long appended event-log bytes may ride the page cache before a write
+/// tail forces them down. Bounds power-cut loss to about a second of
+/// observational events under sustained load; per-record fsyncs were the
+/// write path's dominant latency, and the product reconstructs attention
+/// state from live agents on restart, so a short tail is recoverable noise.
+const LOG_SYNC_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Stamp recording the last event-log group sync. Lives beside the workspace
+/// lock with the other write-path debounce stamps.
+fn log_sync_stamp(paths: &StatePaths) -> PathBuf {
+    paths.locks_dir.join("log-sync.stamp")
+}
+
+fn log_sync_due(paths: &StatePaths) -> bool {
+    match std::fs::metadata(log_sync_stamp(paths)).and_then(|meta| meta.modified()) {
+        Ok(modified) => match SystemTime::now().duration_since(modified) {
+            Ok(age) => age >= LOG_SYNC_INTERVAL,
+            // Stamp mtime in the future (clock skew): treat the sync as due.
+            Err(_) => true,
+        },
+        Err(_) => true,
+    }
+}
+
+/// Best-effort: a failed touch only means the next write syncs again.
+fn touch_log_sync_stamp(paths: &StatePaths) {
+    let _ = std::fs::write(log_sync_stamp(paths), b"");
+}
+
+/// Group-commit the relaxed event-log appends at most once per
+/// [`LOG_SYNC_INTERVAL`]. One fdatasync flushes the inode's dirty pages
+/// regardless of which process wrote them, so a single writer per interval
+/// makes the whole fleet's appends durable — headless loss stays bounded
+/// without an elected syncer. A stamp race costs one redundant sync, so the
+/// stamp goes unlocked. Runs off every lock: the sync is durability
+/// housekeeping, never a commit or publish precondition.
+fn sync_log_debounced(paths: &StatePaths) {
+    if !log_sync_due(paths) {
+        return;
+    }
+    match atomic::sync_file_data(&paths.events_log) {
+        Ok(()) => touch_log_sync_stamp(paths),
+        // A rotation can rename the log away between the append and this
+        // tail; its pre-rename sync already made those bytes durable.
+        Err(atomic::AtomicErr::Io { ref source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => warn!(error = %err, "event-log group sync failed; the next write retries"),
+    }
+}
+
+/// A publish failure caused by a corrupt event-log frame — the one failure
+/// [`Ledger::repair_event_log`] heals, distinct from environment errors it
+/// cannot.
+fn publish_hit_corruption(err: &LedgerErr) -> bool {
+    matches!(
+        err,
+        LedgerErr::Snapshot(snapshot::SnapshotErr::EventLog(log_err)) if log_err.is_corruption()
+    )
 }
 
 /// Run the dead-owner sweep at most once per [`ABANDON_SWEEP_INTERVAL`].
@@ -917,18 +977,41 @@ impl Ledger {
     /// advisory lock so concurrent writers group-commit: each holder folds
     /// to the log's *current* end, so the last queued publisher always lands
     /// the newest state regardless of arrival order, and a queued no-op pays
-    /// only an O(0-delta) fold. Best-effort: the mutation is already durable
-    /// in the event log and feed files, and a reader self-serves any missing
-    /// delta through the same incremental fold — a failed or skipped publish
-    /// costs the next reader latency, never truth.
+    /// only an O(0-delta) fold. Best-effort: the mutation is already
+    /// committed to the event log and feed files, and a reader self-serves
+    /// any missing delta through the same incremental fold — a failed or
+    /// skipped publish costs the next reader latency, never truth.
+    ///
+    /// Also the write path's deferred-durability tail: the debounced group
+    /// fdatasync runs here, and a fold that hits a corrupt frame — a
+    /// post-power-cut corpse — self-heals through
+    /// [`Self::repair_event_log`] instead of failing every future publish
+    /// until an operator runs `rimz gc`.
     fn publish_snapshot_best_effort(&self) {
+        sync_log_debounced(&self.inner.paths);
         let publish = || -> Result<()> {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
             snapshot::rebuild(&self.inner.paths)?;
             Ok(())
         };
-        if let Err(err) = publish() {
+        let Err(err) = publish() else {
+            return;
+        };
+        if !publish_hit_corruption(&err) {
             warn!(error = %err, "snapshot publish failed after ledger commit");
+            return;
+        }
+        // The publish closure released its lock above, so the repair's
+        // workspace → publish acquisition nests in the canonical order.
+        warn!(error = %err, "publish fold hit a corrupt event-log frame; repairing");
+        if let Err(err) = self.repair_event_log() {
+            warn!(error = %err, "event-log repair failed; run `rimz gc`");
+            return;
+        }
+        // The repair republished when it cut; re-running covers the
+        // found-intact race for the cost of an O(0-delta) fold.
+        if let Err(err) = publish() {
+            warn!(error = %err, "snapshot publish failed after event-log repair");
         }
     }
 

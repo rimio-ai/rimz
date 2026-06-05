@@ -3,11 +3,14 @@
 //! Two helpers cover every durable write in the project:
 //!
 //! - [`write_temp_then_rename`] for feed files, snapshots, and heartbeats.
-//! - [`append_record_bytes`] for the event log, with `fsync` per record.
+//! - [`append_record_bytes`] for the event log — one `write()` per record,
+//!   no fsync; durability rides the write tail's debounced [`sync_file_data`]
+//!   group barrier and the pre-rotation sync.
 //!
-//! No module hand-rolls its own atomic dance. Frame *encoding* lives with its
-//! decoder in [`crate::ledger::event_log`]; this module owns the syscall
-//! discipline alone.
+//! No module hand-rolls its own atomic dance, and every fsync syscall in the
+//! project lives in this file (CI grep), counted through [`testkit`]. Frame
+//! *encoding* lives with its decoder in [`crate::ledger::event_log`]; this
+//! module owns the syscall discipline alone.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -51,6 +54,7 @@ pub fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
             path: tmp.clone(),
             source: e,
         })?;
+        testkit::count_fsync();
         file.sync_all().map_err(|e| AtomicErr::Io {
             path: tmp.clone(),
             source: e,
@@ -112,6 +116,7 @@ fn write_temp_then_rename_with<T: Serialize>(path: &Path, value: &T, fsync: Fsyn
             source: e,
         })?;
         if fsync == Fsync::Durable {
+            testkit::count_fsync();
             file.sync_all().map_err(|e| AtomicErr::Io {
                 path: tmp.clone(),
                 source: e,
@@ -128,15 +133,18 @@ fn write_temp_then_rename_with<T: Serialize>(path: &Path, value: &T, fsync: Fsyn
     Ok(())
 }
 
-/// Append one pre-encoded record to `path`, fsync, return.
+/// Append one pre-encoded record to `path` with a single `write()` call.
 ///
 /// The frame encoding (and its decoder) live in
 /// [`crate::ledger::event_log`]; this owns only the append discipline: one
-/// `write()` call per record so a partial write doesn't fragment, fsync per
-/// record, and a parent-dir sync when the append creates the file. Recovery
-/// in [`crate::ledger::event_log::read_all`] tolerates a torn trailing
-/// record, since that's what a SIGKILL between write and fsync leaves
-/// behind.
+/// `write()` call per record so a partial write doesn't fragment, and a
+/// parent-dir sync when the append creates the file (file *existence* stays
+/// durable). The record itself carries no fsync — appended bytes ride the
+/// page cache until the write tail's debounced [`sync_file_data`] group
+/// barrier, or the pre-rename sync in [`crate::ledger::event_log::rotate`].
+/// Recovery in [`crate::ledger::event_log::read_all`] tolerates a torn
+/// trailing record, and the frame CRC makes a power-cut's lost writeback
+/// read as deterministic corruption for `repair` to truncate.
 #[must_use = "durability barrier; check the result"]
 pub fn append_record_bytes(path: &Path, line: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -158,13 +166,30 @@ pub fn append_record_bytes(path: &Path, line: &[u8]) -> Result<()> {
         path: path.to_path_buf(),
         source: e,
     })?;
+    if first_create {
+        sync_parent_dir(path)?;
+    }
+    Ok(())
+}
+
+/// fdatasync `path` — the group-commit barrier for relaxed appends. One call
+/// flushes every dirty page on the inode regardless of which process wrote
+/// them, so a single caller per interval makes the whole fleet's appends
+/// durable.
+#[must_use = "durability barrier; check the result"]
+pub fn sync_file_data(path: &Path) -> Result<()> {
+    let file = OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|e| AtomicErr::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+    testkit::count_fsync();
     file.sync_data().map_err(|e| AtomicErr::Io {
         path: path.to_path_buf(),
         source: e,
     })?;
-    if first_create {
-        sync_parent_dir(path)?;
-    }
     Ok(())
 }
 
@@ -184,6 +209,7 @@ pub fn truncate_file(path: &Path, len: u64) -> Result<()> {
         path: path.to_path_buf(),
         source: e,
     })?;
+    testkit::count_fsync();
     file.sync_data().map_err(|e| AtomicErr::Io {
         path: path.to_path_buf(),
         source: e,
@@ -204,11 +230,35 @@ pub fn sync_dir(dir: &Path) -> Result<()> {
         path: dir.to_path_buf(),
         source: e,
     })?;
+    testkit::count_fsync();
     handle.sync_all().map_err(|e| AtomicErr::Io {
         path: dir.to_path_buf(),
         source: e,
     })?;
     Ok(())
+}
+
+/// Test-only observability seam. Every fsync syscall in the project funnels
+/// through this module (CI grep), so one relaxed counter beside each sync
+/// site lets the performance tier prove "zero fsyncs on the hot path" from
+/// the integration binary, where `cfg(test)` statics in this crate are
+/// invisible. An uncontended relaxed `fetch_add` beside a syscall costs
+/// nothing; the counter is per-process, and nextest's process-per-test model
+/// keeps readings isolated.
+#[doc(hidden)]
+pub mod testkit {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static FSYNCS: AtomicU64 = AtomicU64::new(0);
+
+    /// File and directory fsync syscalls issued since process start.
+    pub fn fsync_count() -> u64 {
+        FSYNCS.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn count_fsync() {
+        FSYNCS.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 fn temp_sibling(path: &Path) -> PathBuf {

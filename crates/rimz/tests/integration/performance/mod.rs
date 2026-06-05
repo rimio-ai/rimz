@@ -3,5 +3,7 @@
 
 mod concurrent_writers;
 mod consumer_enrichment;
+mod fold_incremental;
+mod ledger_fsync;
 mod sidebar_diff_stats;
 mod spending_incremental;
