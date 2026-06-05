@@ -291,6 +291,22 @@ impl TmuxPaneBorderLines {
     }
 }
 
+/// `[sidebar] scrollbar`: when the agent cards overflow their viewport, how
+/// the right-margin scrollbar shows. Display-only.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ScrollbarMode {
+    /// Show the bar only while the viewport is moving — a wheel scroll or the
+    /// selection-driven auto-follow — then hide it about a second after the
+    /// view settles.
+    #[default]
+    Auto,
+    /// Keep the bar up whenever the cards overflow.
+    Always,
+    /// Never paint the bar.
+    Never,
+}
+
 /// Sidebar display preferences. A personal, machine-wide tuning of how the
 /// renderer paints; it never affects ledger correctness.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -331,6 +347,11 @@ pub struct SidebarConfig {
     /// the workspace paints the same tones.
     #[serde(skip_serializing_if = "SidebarThemeConfig::is_unset")]
     pub theme: SidebarThemeConfig,
+    /// How the agent-cards scrollbar shows when the cards overflow. `auto`
+    /// (default) paints it only while the viewport moves and hides it once the
+    /// view settles; `always` keeps it up; `never` removes it. Resolved
+    /// producer-side onto the snapshot like the rest of `[sidebar]`.
+    pub scrollbar: ScrollbarMode,
 }
 
 impl Default for SidebarConfig {
@@ -342,6 +363,7 @@ impl Default for SidebarConfig {
             context: ContextSeverityConfig::default(),
             trunk: None,
             theme: SidebarThemeConfig::default(),
+            scrollbar: ScrollbarMode::default(),
         }
     }
 }
@@ -605,6 +627,24 @@ mod tests {
             MachineConfig::default().sidebar.trunk,
             None,
             "unset leaves the trunk ladder to detection alone",
+        );
+    }
+
+    #[test]
+    fn sidebar_scrollbar_parses_and_defaults_auto() {
+        let dir = tempdir().expect("tempdir");
+        let config = MachineConfig::load_from(&write(&dir, "[sidebar]\nscrollbar = \"never\"\n"))
+            .expect("load");
+        assert_eq!(config.sidebar.scrollbar, ScrollbarMode::Never);
+        assert_eq!(
+            MachineConfig::default().sidebar.scrollbar,
+            ScrollbarMode::Auto,
+            "unset auto-hides: the bar shows only while the viewport moves",
+        );
+        // A typo'd mode fails at config load, with the parse error naming the
+        // field, rather than silently painting the default.
+        assert!(
+            MachineConfig::load_from(&write(&dir, "[sidebar]\nscrollbar = \"bogus\"\n")).is_err()
         );
     }
 

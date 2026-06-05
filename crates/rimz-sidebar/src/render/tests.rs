@@ -2937,16 +2937,31 @@ fn overflowing_fleet() -> SidebarSnapshot {
     snapshot_with(Vec::new(), agents)
 }
 
+/// A fade in the mid-scroll state — its last draw resolved `offset` with the
+/// move stamped at `phase` — built through the real observe path, since the
+/// fade's fields are the scrollbar module's own.
+fn scrolled_fade(offset: usize, phase: u64) -> ScrollbarFade {
+    let mut fade = ScrollbarFade::default();
+    fade.observe(offset + 1, phase);
+    fade.observe(offset, phase);
+    fade
+}
+
 #[test]
 fn render_scroll_overflow_shows_bar() {
-    // More cards than the frame holds: the cockpit stays pinned at the top,
-    // the footer at the bottom, and the cards scroll between them behind a
-    // right-margin scrollbar — the thumb at the top of the track, since the
-    // selection (row 0) holds the window at the zone's start.
+    // More cards than the frame holds, mid-scroll: the cockpit stays pinned at
+    // the top, the footer at the bottom, and the cards scroll between them
+    // behind a right-margin scrollbar — the thumb at the top of the track,
+    // since the selection (row 0) holds the window at the zone's start. The
+    // freshly-stamped fade is what shows the bar: `auto` mode paints it only
+    // while the viewport moves.
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &overflowing_fleet(),
         None,
-        &UiState::default(),
+        &UiState {
+            scrollbar: scrolled_fade(0, 0),
+            ..Default::default()
+        },
         38,
         18,
     );
@@ -2967,8 +2982,9 @@ fn render_scroll_overflow_shows_bar() {
 
 #[test]
 fn render_scroll_offset_follows_selection_to_bottom() {
-    // Selecting the last row auto-scrolls its card fully into view and the
-    // thumb pins to the bottom of the track.
+    // Selecting the last row auto-scrolls its card fully into view. The first
+    // draw establishes the fade's baseline rather than reading as a move, so
+    // this frame doubles as the settled witness: no scroll activity, no bar.
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &overflowing_fleet(),
         None,
@@ -2986,6 +3002,10 @@ fn render_scroll_offset_follows_selection_to_bottom() {
     assert!(
         !rendered.contains("task-0"),
         "the zone's head scrolled off:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains('▐') && !rendered.contains('▕'),
+        "a settled viewport carries no bar:\n{rendered}"
     );
     assert_snapshot("scroll_offset_follows_selection_to_bottom", rendered);
 }
@@ -3042,7 +3062,9 @@ fn render_scroll_pins_tall_expanded_card_top() {
 #[test]
 fn render_scroll_manual_offset_holds() {
     // A wheel pin holds the user's window even though the selection (row 0)
-    // sits above the fold — the peek wins until the selection changes.
+    // sits above the fold — the peek wins until the selection changes. The
+    // bar follows movement, not the pin: a held window past the settle delay
+    // is bar-less even while pinned.
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &overflowing_fleet(),
         None,
@@ -3061,4 +3083,74 @@ fn render_scroll_manual_offset_holds() {
         "the selected card stays beyond the fold while pinned:\n{rendered}"
     );
     assert_snapshot("scroll_manual_offset_holds", rendered);
+}
+
+#[test]
+fn render_scrollbar_hides_after_settle() {
+    // The same mid-scroll fade as `render_scroll_overflow_shows_bar`, read a
+    // settle window later: the stamp has aged out, so the bar is gone while
+    // the cards still overflow.
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &overflowing_fleet(),
+        None,
+        &UiState {
+            scrollbar: scrolled_fade(0, 0),
+            animation_phase: 11,
+            ..Default::default()
+        },
+        38,
+        18,
+    );
+    assert!(
+        !rendered.contains('▐') && !rendered.contains('▕'),
+        "the settle window has passed — no bar:\n{rendered}"
+    );
+    assert_snapshot("scrollbar_hides_after_settle", rendered);
+}
+
+#[test]
+fn render_scrollbar_always_mode() {
+    // `[sidebar] scrollbar = "always"`: the bar is up whenever the cards
+    // overflow, no scroll activity required.
+    let mut snapshot = overflowing_fleet();
+    snapshot.sidebar.scrollbar = ScrollbarMode::Always;
+    let rendered =
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 38, 18);
+    assert!(
+        rendered.contains('▐') && rendered.contains('▕'),
+        "always mode pins the bar with no activity:\n{rendered}"
+    );
+    assert_snapshot("scrollbar_always_mode", rendered);
+}
+
+#[test]
+fn render_scrollbar_never_mode() {
+    // `[sidebar] scrollbar = "never"` wins over live scroll activity — a
+    // freshly-stamped fade and a held wheel pin paint no bar, and the cards
+    // keep their geometry (the right-margin column is reserved either way).
+    let mut snapshot = overflowing_fleet();
+    snapshot.sidebar.scrollbar = ScrollbarMode::Never;
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            scroll_offset: 6,
+            manual_scroll: Some(ManualScroll {
+                selection_at_start: None,
+            }),
+            scrollbar: scrolled_fade(6, 0),
+            ..Default::default()
+        },
+        38,
+        18,
+    );
+    assert!(
+        !rendered.contains('▐') && !rendered.contains('▕'),
+        "never mode paints no bar even mid-scroll:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("task-3") && !rendered.contains("task-0"),
+        "the pinned window still renders its cards:\n{rendered}"
+    );
+    assert_snapshot("scrollbar_never_mode", rendered);
 }

@@ -15,10 +15,12 @@
 mod fmt;
 mod labels;
 mod odometer;
+mod scrollbar;
 mod sections;
 mod theme;
 
 pub(crate) use odometer::TallyAnim;
+pub(crate) use scrollbar::ScrollbarFade;
 
 use std::io::{self, Write};
 
@@ -29,6 +31,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
+use rimz::config::ScrollbarMode;
 use rimz::ids::PaneId;
 use rimz::{SidebarRowKind, SidebarSnapshot};
 
@@ -85,6 +88,11 @@ pub struct UiState {
     /// The transient wheel-scroll pin riding above the auto-follow, or `None`
     /// while the viewport follows the selection (see [`ManualScroll`]).
     pub(crate) manual_scroll: Option<ManualScroll>,
+    /// The agent-cards scrollbar's auto-hide fade: every draw folds the
+    /// resolved viewport offset into it as a write-back byproduct, and the
+    /// `auto` scrollbar mode reads it to paint the bar only while the viewport
+    /// moves plus a short settle window. Crate-internal, like `tally`.
+    pub(crate) scrollbar: ScrollbarFade,
     /// The dashboard tab the user picked by hand (`←`/`→` or a click on a tab
     /// label), riding above the selection-derived default. Ends like a browse:
     /// it clears when the selection-derived provider kind *genuinely* changes
@@ -241,6 +249,7 @@ pub fn draw_with_ui(
         compose_lines(snapshot, alert, ui, area.width, area.height);
     ui.line_map = map;
     ui.tab_hits = tab_hits;
+    ui.scrollbar.observe(scroll_offset, ui.animation_phase);
     ui.scroll_offset = scroll_offset;
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
@@ -434,7 +443,18 @@ pub(crate) fn compose_lines(
     }
 
     // Window the scroll zone, riding the scrollbar glyph on each visible line's
-    // right-margin column when the cards overflow the viewport.
+    // right-margin column when the cards overflow the viewport — gated by the
+    // `[sidebar] scrollbar` mode. `auto` paints the bar on the very frame the
+    // viewport moves (the fade's baseline still holds the pre-move offset; the
+    // caller stamps it at the write-back) and through the settle window after.
+    // The column is reserved in every mode, so the gate reflows nothing.
+    let show_bar = match snapshot.sidebar.scrollbar {
+        ScrollbarMode::Always => true,
+        ScrollbarMode::Never => false,
+        ScrollbarMode::Auto => {
+            ui.scrollbar.moved_from(offset) || ui.scrollbar.visible(ui.animation_phase)
+        }
+    };
     let end = (offset + viewport).min(scroll_len);
     let overflow = scroll_len > viewport && viewport > 0;
     for (index, line) in scroll
@@ -443,7 +463,7 @@ pub(crate) fn compose_lines(
         .skip(offset)
         .take(end - offset)
     {
-        lines.push(if overflow {
+        lines.push(if overflow && show_bar {
             with_scrollbar(
                 line,
                 &theme,

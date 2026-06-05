@@ -133,6 +133,15 @@ trunk = "develop"   # preferred comparison target for the worktree header's git 
 
 The worktree header's git stats — the `+/-` diff, the `⇡`/`⇣` commit delta, and the `≡` landed marker — compare against the repo's trunk. `trunk` names the preferred target, tried first per repo: a repo without that branch falls back to the auto-detection (`main` → `master` → the remote's advertised default), so one machine-wide value never costs another project its stats.
 
+#### Scrollbar
+
+```toml
+[sidebar]
+scrollbar = "auto"   # the agent cards' scrollbar: "auto" (default) | "always" | "never"
+```
+
+When the agent cards overflow their viewport, a thin `▐`/`▕` scrollbar rides the right margin. `auto` (the default) shows it only while the viewport is moving — a wheel scroll or the selection-driven auto-follow — and hides it about a second after the view settles; `always` keeps it up whenever the cards overflow; `never` removes it. Resolved producer-side onto the snapshot like the rest of `[sidebar]`, so every renderer of the workspace agrees and a change lands with the next snapshot.
+
 #### Provider dashboard
 
 ```toml

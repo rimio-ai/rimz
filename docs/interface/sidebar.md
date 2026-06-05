@@ -107,7 +107,7 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `┄ external ┄`  | out-of-project panes (scripts, CI, stray shells) |
 | `┄ commands ┄`  | the seam between a worktree's agent cards and its process rows |
 | `─`             | a section hairline |
-| `▐` / `▕`       | the cards' scrollbar — thumb / track, riding the right margin when the cards overflow the viewport |
+| `▐` / `▕`       | the cards' scrollbar — thumb / track, riding the right margin while the overflowing viewport is moving, settling away about a second after the scroll stops (`[sidebar] scrollbar` pins or removes it, [configuration](../reference/configuration.md#scrollbar)) |
 | `┤ Tab ├`       | the provider dashboard's active tab — a brand-colored chip notched into the panel's top hairline between `┤ ├` caps, so the pick reads by shape under `NO_COLOR` |
 | `⇅ rc`          | remote control is on for that provider |
 
@@ -149,7 +149,7 @@ The first-run hint names the real next step: an un-wired room points at `rimz ho
 
 The body: one card per pane, grouped under the worktree it lives in. A worktree is total isolation — only same-worktree agents collaborate — so each group reads as one bounded block.
 
-**The cards scroll between the pinned zones.** When the cards outgrow the pane, they scroll between the cockpit above and the provider dashboard below — both stay put — and a thin scrollbar rides the right margin: a solid `▐` thumb over a hairline `▕` track, the position carried by shape so it reads under `NO_COLOR`. The viewport follows the selection: picking any row — arrows, a click landing, `␣` — brings its card, expanded subagent list included, fully into view, and a card taller than the window pins its first line to the top. The mouse wheel scrolls the viewport freely without moving the selection — peek anywhere; the next selection change snaps the view back to the selected card. `?` reveals the help overlay at the zone's tail whatever the scroll position, and the view holds there while the overlay is open.
+**The cards scroll between the pinned zones.** When the cards outgrow the pane, they scroll between the cockpit above and the provider dashboard below — both stay put — and a thin scrollbar rides the right margin while the viewport is moving: a solid `▐` thumb over a hairline `▕` track, the position carried by shape so it reads under `NO_COLOR`. The bar follows the motion — a wheel scroll or the selection-driven auto-follow — and settles away about a second after the view stops, so a resting column stays clean; `[sidebar] scrollbar = "always" | "never"` pins it up or removes it ([configuration](../reference/configuration.md#scrollbar)). The viewport follows the selection: picking any row — arrows, a click landing, `␣` — brings its card, expanded subagent list included, fully into view, and a card taller than the window pins its first line to the top. The mouse wheel scrolls the viewport freely without moving the selection — peek anywhere; the next selection change snaps the view back to the selected card. `?` reveals the help overlay at the zone's tail whatever the scroll position, and the view holds there while the overlay is open.
 
 ### The card
 
@@ -391,10 +391,13 @@ The renderer's golden tests in [`crates/rimz-sidebar/src/render/`](../../crates/
 | worktree grouping + external | `worktree_attention_map` |
 | landed worktree header (`≡`) | `worktree_equal_to_trunk` |
 | per-worktree cap | `group_cap_with_overflow` |
-| cards overflow + scrollbar | `scroll_overflow_shows_bar` |
-| selection-driven scroll to bottom | `scroll_offset_follows_selection_to_bottom` |
+| cards overflow, scrollbar mid-scroll | `scroll_overflow_shows_bar` |
+| selection-driven scroll to bottom, bar settled away | `scroll_offset_follows_selection_to_bottom` |
 | tall expanded card pinned to top | `scroll_pins_tall_expanded_card_top` |
 | wheel pin holds the viewport | `scroll_manual_offset_holds` |
+| scrollbar hidden once settled | `scrollbar_hides_after_settle` |
+| scrollbar pinned (`always`) | `scrollbar_always_mode` |
+| scrollbar removed (`never`) | `scrollbar_never_mode` |
 | provider dashboard, tabbed (derived tab) | `provider_dashboard` |
 | provider dashboard, manual tab pick | `provider_dashboard_codex_tab` |
 | fleet ledger (week/month) | `fleet_ledger` |

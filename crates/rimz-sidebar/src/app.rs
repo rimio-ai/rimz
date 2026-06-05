@@ -229,7 +229,9 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         // warm; a pending fold (`dirty`) does too. With neither, drop to the
         // slow data backstop until the next wakeup re-arms the grid.
         let phase = wall_clock_phase(anim_start);
-        let animating = render::has_live_animation(&current) || ui.tally.any_rolling(phase);
+        let animating = render::has_live_animation(&current)
+            || ui.tally.any_rolling(phase)
+            || ui.scrollbar.fading(phase);
         let active = animating || dirty;
         let timeout = if active {
             next_frame
@@ -554,7 +556,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         if !should_exit && !paint_held && active && now >= next_frame {
             ui.animation_phase = wall_clock_phase(anim_start);
             let animating = render::animation_cadence(&current) != render::AnimationCadence::None
-                || ui.tally.any_rolling(ui.animation_phase);
+                || ui.tally.any_rolling(ui.animation_phase)
+                || ui.scrollbar.fading(ui.animation_phase);
             if dirty || animating {
                 render::draw_to_terminal_with_ui(
                     &mut terminal,
@@ -609,7 +612,7 @@ fn wall_clock_phase(start: Instant) -> u64 {
 }
 
 fn frame_interval(snapshot: &SidebarSnapshot, ui: &UiState) -> Duration {
-    if ui.tally.any_rolling(ui.animation_phase) {
+    if ui.tally.any_rolling(ui.animation_phase) || ui.scrollbar.fading(ui.animation_phase) {
         return ANIMATION_FRAME;
     }
     match render::animation_cadence(snapshot) {
