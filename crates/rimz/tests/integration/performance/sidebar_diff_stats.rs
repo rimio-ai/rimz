@@ -28,9 +28,11 @@ use crate::common::Env;
 const SESSION: &str = "rimz-diff-stats";
 
 /// One snapshot process's worktree, pane fixture, and git-shim wiring, layered
-/// over the shared [`Env`] (XDG roots + workspace id).
-struct Fixture {
-    env: Env,
+/// over the shared [`Env`] (XDG roots + workspace id). Shared with the
+/// enrichment-cadence guards (`performance/enrichment_cadence.rs`), which
+/// drive the same produce path against the same shim.
+pub(crate) struct Fixture {
+    pub(crate) env: Env,
     panes_path: PathBuf,
     git_log: PathBuf,
     real_git: PathBuf,
@@ -40,7 +42,7 @@ struct Fixture {
 impl Fixture {
     /// Build the fixture, or `None` when git is unavailable (the test self-skips
     /// like the mux-binary suites).
-    fn new() -> Option<Self> {
+    pub(crate) fn new() -> Option<Self> {
         let env = Env::new();
         let real_git = find_git()?;
 
@@ -95,7 +97,7 @@ impl Fixture {
 
     /// A `rimz sidebar snapshot --json` command wired to the fixture: the pane
     /// list, the git shim on PATH, and the trace log.
-    fn snapshot_command(&self) -> Command {
+    pub(crate) fn snapshot_command(&self) -> Command {
         let mut cmd = self.env.rimz();
         cmd.args([
             "sidebar",
@@ -119,7 +121,7 @@ impl Fixture {
         cmd
     }
 
-    fn run_snapshot(&self) -> Output {
+    pub(crate) fn run_snapshot(&self) -> Output {
         self.snapshot_command()
             .output()
             .expect("spawn rimz sidebar snapshot")
@@ -136,7 +138,7 @@ impl Fixture {
     }
 
     /// Trace-log lines mentioning the per-worktree `git` forks, by marker.
-    fn git_forks(&self, marker: &str) -> usize {
+    pub(crate) fn git_forks(&self, marker: &str) -> usize {
         std::fs::read_to_string(&self.git_log)
             .unwrap_or_default()
             .lines()
@@ -144,12 +146,16 @@ impl Fixture {
             .count()
     }
 
-    fn git_log_len(&self) -> usize {
-        std::fs::read_to_string(&self.git_log)
-            .unwrap_or_default()
+    pub(crate) fn git_log_len(&self) -> usize {
+        self.git_log_contents()
             .lines()
             .filter(|line| !line.is_empty())
             .count()
+    }
+
+    /// The raw trace log, for assertion diagnostics.
+    pub(crate) fn git_log_contents(&self) -> String {
+        std::fs::read_to_string(&self.git_log).unwrap_or_default()
     }
 }
 

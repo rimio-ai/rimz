@@ -1,6 +1,6 @@
 //! `rimz sidebar` — `snapshot` renders the view-model (producer or `--no-produce` consumer read); `serve` runs the terminal renderer loop.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -16,9 +16,10 @@ use rimz::ledger::single_flight::{self, Coalesced};
 use rimz::ledger::workspace_record;
 use rimz::mux::PaneListOptions;
 use rimz::sidebar::snapshot::{
-    DiffStats, DiffStatsCache, DiffStatsCacheEntry, RollupCursor, SNAPSHOT_CACHE_TTL,
-    SnapshotCache, WorktreeRootsCache, enrich_consumer, needed_worktree_paths, project_diff_stats,
-    read_diff_stats_cache, read_published_snapshot, read_snapshot_cache, unix_now_ms,
+    DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, DiffStats, DiffStatsCache, DiffStatsCacheEntry,
+    RollupCursor, SNAPSHOT_CACHE_TTL, SnapshotCache, WorktreeRootsCache, enrich_consumer,
+    hot_worktree_paths, needed_worktree_paths, project_diff_stats, read_diff_stats_cache,
+    read_published_snapshot, read_snapshot_cache, unix_now_ms,
 };
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, RuntimePaths, StatePaths};
@@ -212,10 +213,12 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
 
             // Enumerate the repo's worktrees so a checkout parked outside the
             // project root still earns its own pod instead of folding into
-            // `external`. The git probe is cached under the diff-stats TTL and
-            // runs on this fetch worker, never the render thread.
+            // `external`. The git probe is cached under WORKTREE_ROOTS_TTL —
+            // refused below the session-boundary freshness floor, so a new
+            // worktree's first agent re-enumerates immediately — and runs on
+            // this fetch worker, never the render thread.
             if let Some(root) = snapshot.project_root.clone() {
-                let roots = project_worktree_roots(&root, runtime);
+                let roots = project_worktree_roots(&root, runtime, min_pane_cache_ms);
                 snapshot = snapshot.with_worktree_roots(roots);
             }
 
@@ -583,8 +586,19 @@ fn enrich_worktree_groups(
     // The producer refreshes the live worktrees' diff stats (single-flighted,
     // git forks parallel across worktrees), then the shared projection folds the
     // resulting cache onto the groups — the same projection a consumer applies.
+    // Activity tiers the refresh: a hot worktree (running or recently-active
+    // agent rows) rides the fast TTL, the rest decay to the idle TTL, so a
+    // mostly-idle fleet forks git only for the worktrees being worked.
     let needed = needed_worktree_paths(snapshot);
-    let cache = refresh_diff_stats(&cache_path, runtime, &needed, now_ms, configured_trunk);
+    let hot = hot_worktree_paths(snapshot);
+    let cache = refresh_diff_stats(
+        &cache_path,
+        runtime,
+        &needed,
+        &hot,
+        now_ms,
+        configured_trunk,
+    );
     project_diff_stats(snapshot, &cache);
 }
 
@@ -676,17 +690,27 @@ fn refresh_diff_stats(
     cache_path: &Path,
     runtime: &rimz::RuntimePaths,
     needed: &[String],
+    hot: &BTreeSet<String>,
     now_ms: u64,
     configured_trunk: Option<&str>,
 ) -> DiffStatsCache {
+    // One closure carries the activity tiering, and every freshness verdict —
+    // the no-lock fast path, the single-flight loser's probe, and both produce
+    // arms — goes through it, so the tiers cannot disagree and a loser never
+    // spin-produces what the winner correctly skipped.
     let stale = |cache: &DiffStatsCache| -> Vec<String> {
         needed
             .iter()
             .filter(|path| {
+                let ttl = if hot.contains(path.as_str()) {
+                    DIFF_STATS_TTL
+                } else {
+                    DIFF_STATS_IDLE_TTL
+                };
                 !cache
                     .entries
                     .get(path.as_str())
-                    .is_some_and(|entry| entry.is_fresh(now_ms))
+                    .is_some_and(|entry| entry.is_fresh_for(now_ms, ttl))
             })
             .cloned()
             .collect()
@@ -896,11 +920,26 @@ fn trunk_ref(worktree: &Path, configured: Option<&str>) -> Option<String> {
 /// worktree add/remove`, so re-forking `git worktree list` every tick would be
 /// pure overhead. Empty on a non-git project or a git probe failure, which
 /// leaves the reducer's `project_root` prefix test to stand alone.
-fn project_worktree_roots(project_root: &Path, runtime: &RuntimePaths) -> Vec<PathBuf> {
+fn project_worktree_roots(
+    project_root: &Path,
+    runtime: &RuntimePaths,
+    min_refreshed_at_ms: Option<u64>,
+) -> Vec<PathBuf> {
     let cache_path = runtime.root.join("diff-stats.json");
     let mut cache = read_diff_stats_cache(&cache_path);
     let now_ms = unix_now_ms();
-    if let Some(cached) = cache.worktrees.as_ref().filter(|w| w.is_fresh(now_ms)) {
+    // The freshness floor mirrors the pane cache's: a session boundary sends
+    // its wakeup with `--min-pane-cache-ms`, and an enumeration older than
+    // that instant is refused even inside the TTL — a brand-new checkout
+    // groups correctly on its first agent's first snapshot.
+    let floor_ok =
+        |w: &&WorktreeRootsCache| min_refreshed_at_ms.is_none_or(|min| w.refreshed_at_ms >= min);
+    if let Some(cached) = cache
+        .worktrees
+        .as_ref()
+        .filter(|w| w.is_fresh(now_ms))
+        .filter(floor_ok)
+    {
         return cached.roots.clone();
     }
     let roots = list_worktree_roots(project_root);

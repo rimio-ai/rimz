@@ -23,7 +23,7 @@ use sha2::{Digest, Sha256};
 
 use crate::agents::spending::{Spending, read_provider_spending_cache};
 use crate::agents::{AgentRateLimits, RateLimitWindow};
-use crate::feed::PaneRef;
+use crate::feed::{AgentStatus, PaneRef};
 use crate::ids::PaneId;
 use crate::ledger::parse_cache::ParseCache;
 /// Re-exported for long-lived consumers (the sidebar fetch worker), which sit
@@ -42,11 +42,32 @@ use crate::{
 /// tick — the same staleness budget the diff-stats cache already accepts.
 pub const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
 
-/// How long a worktree's git diff-stats stay cached before the per-worktree
-/// `git` forks behind them are re-run. A working-tree edit fires no ledger
-/// delta, so this column is never push-refreshed — it rides this TTL plus the
-/// sidebar's backstop poll.
+/// How long a *hot* worktree's git diff-stats stay cached before the
+/// per-worktree `git` forks behind them are re-run. A working-tree edit fires
+/// no ledger delta, so this column is never push-refreshed — it rides this TTL
+/// plus the sidebar's backstop poll.
 pub const DIFF_STATS_TTL: Duration = Duration::from_secs(5);
+
+/// How long an *idle* worktree's diff stats stay cached. A worktree with no
+/// running or recently-active agent ([`hot_worktree_paths`]) decays to this
+/// slow cadence — almost all of a large fleet's git forks were measuring
+/// worktrees nothing had touched. A human hand-editing an idle worktree sees
+/// header stats lag up to this bound; accepted, the headers track fleet
+/// progress, not keystrokes.
+pub const DIFF_STATS_IDLE_TTL: Duration = Duration::from_secs(60);
+
+/// How recently one of a worktree's agent rows must have been active for the
+/// worktree to count as hot — refreshed on [`DIFF_STATS_TTL`] rather than
+/// decaying to [`DIFF_STATS_IDLE_TTL`]. Generous against the fast TTL so a
+/// worktree stays hot across an agent's think pauses, not just its tool calls.
+pub const GIT_ACTIVITY_WINDOW: Duration = Duration::from_secs(60);
+
+/// How long the producer trusts the cached `git worktree list` enumeration.
+/// The set changes only on `git worktree add/remove`, so a coarse TTL keeps
+/// the fork off the per-tick path; a session boundary forces re-enumeration
+/// through the same `min_pane_cache_ms` floor the pane cache honours, so a new
+/// worktree's first agent groups correctly on its first snapshot.
+pub const WORKTREE_ROOTS_TTL: Duration = Duration::from_secs(60);
 
 /// How long the producer trusts a *successful* provider-account map before it
 /// re-probes. A subscription tier and login state change about never, so a
@@ -199,10 +220,10 @@ pub struct DiffStats {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DiffStatsCache {
     pub entries: BTreeMap<String, DiffStatsCacheEntry>,
-    /// The repo's worktree checkout roots, cached under the same TTL as the
-    /// per-worktree diff stats. The set changes only on `git worktree
-    /// add/remove`, so grouping reuses it across ticks instead of forking
-    /// `git worktree list` every snapshot.
+    /// The repo's worktree checkout roots, cached under [`WORKTREE_ROOTS_TTL`]
+    /// (with a session-boundary refresh floor). The set changes only on
+    /// `git worktree add/remove`, so grouping reuses it across ticks instead
+    /// of forking `git worktree list` every snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktrees: Option<WorktreeRootsCache>,
 }
@@ -214,8 +235,10 @@ pub struct WorktreeRootsCache {
 }
 
 impl WorktreeRootsCache {
+    /// Saturating, so a clock that ran backwards reads fresh rather than
+    /// re-enumerating every tick.
     pub fn is_fresh(&self, now_ms: u64) -> bool {
-        now_ms.saturating_sub(self.refreshed_at_ms) <= DIFF_STATS_TTL.as_millis() as u64
+        now_ms.saturating_sub(self.refreshed_at_ms) <= WORKTREE_ROOTS_TTL.as_millis() as u64
     }
 }
 
@@ -264,8 +287,15 @@ impl DiffStatsCacheEntry {
         }
     }
 
+    /// Freshness under the caller's tier: [`DIFF_STATS_TTL`] for a hot
+    /// worktree, [`DIFF_STATS_IDLE_TTL`] for the rest. Saturating, so a clock
+    /// that ran backwards reads fresh rather than re-forking every tick.
+    pub fn is_fresh_for(&self, now_ms: u64, ttl: Duration) -> bool {
+        now_ms.saturating_sub(self.refreshed_at_ms) <= ttl.as_millis() as u64
+    }
+
     pub fn is_fresh(&self, now_ms: u64) -> bool {
-        now_ms.saturating_sub(self.refreshed_at_ms) <= DIFF_STATS_TTL.as_millis() as u64
+        self.is_fresh_for(now_ms, DIFF_STATS_TTL)
     }
 
     pub fn stats(&self) -> Option<DiffStats> {
@@ -323,6 +353,42 @@ pub fn needed_worktree_paths(snapshot: &SidebarSnapshot) -> Vec<String> {
         }
     }
     needed
+}
+
+/// The worktree paths whose git facts refresh on the fast [`DIFF_STATS_TTL`]:
+/// a `Worktree`-kind group is hot when any of its agent rows is `Running` or
+/// was active within [`GIT_ACTIVITY_WINDOW`] of `snapshot.now`. Derived from
+/// the group's own rows with the same path recovery and live-dir gate as
+/// [`needed_worktree_paths`], so the hot set is a subset of the needed set by
+/// construction — no equality-vs-containment mismatch is possible, whatever
+/// raw path an agent's payload carried. A group with only process rows is
+/// cold; subagents fold under their parent's row, whose activity covers them.
+/// Pure over the view-model and its one `now`.
+pub fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
+    let window = SignedDuration::try_from(GIT_ACTIVITY_WINDOW).unwrap_or(SignedDuration::MAX);
+    let mut hot = BTreeSet::new();
+    for group in &snapshot.worktree_groups {
+        if group.kind != SidebarWorktreeKind::Worktree {
+            continue;
+        }
+        let Some(path) = worktree_group_path(group) else {
+            continue;
+        };
+        if !Path::new(path).is_dir() {
+            continue;
+        }
+        // A future-stamped row reads as a negative age — within the window,
+        // the safe (hot) direction, matching the saturating TTL convention.
+        let any_hot = group.rows.iter().any(|row| {
+            row.row_kind == crate::SidebarRowKind::Agent
+                && (row.status == Some(AgentStatus::Running)
+                    || snapshot.now.duration_since(row.last_activity) <= window)
+        });
+        if any_hot {
+            hot.insert(path.to_owned());
+        }
+    }
+    hot
 }
 
 /// Project the cached git facts onto each worktree group: the diff stats shown
