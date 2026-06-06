@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
 use crate::feed::PaneRef;
+use crate::ids::{MuxName, PaneId};
 use crate::ledger::parse_cache::ParseCache;
 
 /// Coalescing window for the shared snapshot cache — the **poll-mode** pane
@@ -27,14 +28,16 @@ use crate::ledger::parse_cache::ParseCache;
 pub const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
 
 /// Pane-cache TTL while the Zellij presence push channel is alive (the
-/// presence stamp is fresh). Topology and focus changes arrive as
-/// `panes_changed` pokes that force a fresh pane list, so the poll is only the
-/// backstop for a *lost* poke — pane truth can stale at most this long before
-/// it heals, comfortably inside the documented handoff tolerance ("only pane
-/// presence ages by a few seconds"), while steady-state `list-panes` action
-/// clients drop ~10× versus [`SNAPSHOT_CACHE_TTL`]. One knob to raise later
-/// with field confidence. Forced freshness (`min_pane_cache_ms`) overrides it,
-/// so lifecycle/resize floors still pull a fresh pane list in event mode.
+/// presence stamp is fresh). Topology changes arrive as `panes_changed` pokes
+/// that force a fresh pane list, while exact command/focus shortcuts patch the
+/// shared frame and schedule a settled producer verification. The poll is only
+/// the backstop for a *lost* poke — pane truth can stale at most this long
+/// before it heals, comfortably inside the documented handoff tolerance ("only
+/// pane presence ages by a few seconds"), while steady-state `list-panes`
+/// action clients drop ~10× versus [`SNAPSHOT_CACHE_TTL`]. One knob to raise
+/// later with field confidence. Forced freshness (`min_pane_cache_ms`)
+/// overrides it, so lifecycle/resize floors still pull a fresh pane list in
+/// event mode.
 pub const EVENT_PANE_TTL: Duration = Duration::from_secs(10);
 
 /// How young the presence stamp must be for the producer to trust the push
@@ -178,6 +181,118 @@ pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotC
         }
     };
     (cache.session_name == session).then_some(cache)
+}
+
+/// Optimistically patch one known pane's command in the published pane frame.
+///
+/// Zellij's presence plugin receives `CommandChanged` before the next
+/// `list-panes` view is always settled. This cache-class shortcut lets the
+/// sidebar refold an already-known pane immediately, while keeping
+/// `produced_at_ms` unchanged so the scheduled settled `panes_changed` poke
+/// still forces a real mux read and verifies the optimistic frame.
+pub fn patch_snapshot_pane_command(
+    runtime: &RuntimePaths,
+    session: &str,
+    pane_id: &PaneId,
+    command: &str,
+) -> crate::ledger::atomic::Result<bool> {
+    let cache_path = runtime.root.join("snapshot.json");
+    let Some(mut cache) = read_snapshot_cache(&cache_path, session) else {
+        return Ok(false);
+    };
+    let Some(pane) = cache.panes.iter_mut().find(|pane| &pane.pane_id == pane_id) else {
+        return Ok(false);
+    };
+    if pane.command.as_deref() == Some(command) {
+        return Ok(false);
+    }
+    pane.command = Some(command.to_owned());
+    // A command handoff is re-tenancy: the previous process start belongs to
+    // the old occupant. Try to stamp the new in-pane agent now; the settled
+    // producer read repeats the authoritative stamp a beat later.
+    pane.pane_process_start = None;
+    if let Some(kind) = crate::ledger::snapshot::command_agent_kind(command) {
+        let root_start = pane
+            .pane_pid
+            .and_then(|pid| crate::remote_control::in_pane_agent_start_for_root(kind, pid));
+        pane.pane_process_start = root_start.or_else(|| {
+            pane.cwd
+                .as_deref()
+                .and_then(|cwd| crate::remote_control::in_pane_agent_start(kind, cwd))
+        });
+        if pane.pane_process_start.is_none()
+            && crate::agents::descriptor_by_kind(kind)
+                .is_some_and(|descriptor| descriptor.capabilities.registers_lazily)
+        {
+            pane.pane_process_start = Some(jiff::Timestamp::now());
+        }
+    }
+    crate::ledger::atomic::write_temp_then_rename_cache(&cache_path, &cache)?;
+    Ok(true)
+}
+
+/// Optimistically patch the focused flag for a complete known Zellij pane set.
+///
+/// Focus is display state, not ledger truth. The Zellij presence plugin already
+/// receives focus-only pane manifests; this shortcut lets the renderer update
+/// the selection baseline immediately while the scheduled settled producer read
+/// verifies the frame.
+pub fn patch_snapshot_pane_focus(
+    runtime: &RuntimePaths,
+    session: &str,
+    focused: &[PaneId],
+    unfocused: &[PaneId],
+) -> crate::ledger::atomic::Result<bool> {
+    if focused.is_empty() && unfocused.is_empty() {
+        return Ok(false);
+    }
+    let cache_path = runtime.root.join("snapshot.json");
+    let Some(mut cache) = read_snapshot_cache(&cache_path, session) else {
+        return Ok(false);
+    };
+    let mut desired = Vec::with_capacity(focused.len() + unfocused.len());
+    desired.extend(focused.iter().cloned().map(|pane_id| (pane_id, true)));
+    desired.extend(unfocused.iter().cloned().map(|pane_id| (pane_id, false)));
+
+    let selectable = cache
+        .panes
+        .iter()
+        .filter(|pane| pane.pane_id.mux() == MuxName::Zellij)
+        .filter(|pane| pane_is_focus_selectable(pane))
+        .collect::<Vec<_>>();
+    for pane in &selectable {
+        if !desired.iter().any(|(pane_id, _)| *pane_id == pane.pane_id) {
+            return Ok(false);
+        }
+    }
+    if desired
+        .iter()
+        .any(|(pane_id, _)| !selectable.iter().any(|pane| pane.pane_id == *pane_id))
+    {
+        return Ok(false);
+    }
+
+    let mut changed = false;
+    for pane in &mut cache.panes {
+        if let Some((_, is_focused)) = desired
+            .iter()
+            .rev()
+            .find(|(pane_id, _)| *pane_id == pane.pane_id)
+        {
+            if pane.is_focused != *is_focused {
+                pane.is_focused = *is_focused;
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        crate::ledger::atomic::write_temp_then_rename_cache(&cache_path, &cache)?;
+    }
+    Ok(true)
+}
+
+fn pane_is_focus_selectable(pane: &PaneRef) -> bool {
+    pane.command.as_deref() != Some("rimz-sidebar") && !crate::remote_control::pane_is_host(pane)
 }
 
 /// Whether a same-session cache entry is young enough to serve without a

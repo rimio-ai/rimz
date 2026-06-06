@@ -1,10 +1,11 @@
 //! Verifies the presence channel end to end at the CLI seam.
 //!
-//! The poke contract (`rimz sidebar wake`): both reasons refresh the presence
-//! stamp that flips the producer's pane TTL to event mode, and only
-//! `panes-changed` datagrams a sidebar — the **eldest** fresh heartbeat
-//! alone. That producer publishes the fresh pane frame and then broadcasts
-//! `pane_frame_published` so consumers refold from cache instead of producing.
+//! The poke contract (`rimz sidebar wake`): every reason refreshes the presence
+//! stamp that flips the producer's pane TTL to event mode. `panes-changed`
+//! datagrams the **eldest** fresh heartbeat alone; exact-cache shortcuts
+//! (`command-changed`, `focus-changed`) patch `snapshot.json` and broadcast
+//! `pane_frame_published` to every fresh sidebar. A producer publication uses
+//! the same broadcast so consumers refold from cache instead of producing.
 //!
 //! The producer contract (`rimz sidebar snapshot`): with a fresh stamp, a
 //! pane cache far past the poll TTL is served with **zero** mux forks — the
@@ -23,10 +24,13 @@ use std::process::Command;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
+use rimz::feed::PaneRef;
+use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::ledger::RuntimePaths;
 use rimz::schema::heartbeat::SidebarHeartbeat;
-use rimz::sidebar::snapshot::{PresenceStamp, SnapshotCache, presence_stamp_path, unix_now_ms};
+use rimz::sidebar::snapshot::{
+    PresenceStamp, SnapshotCache, presence_stamp_path, read_snapshot_cache, unix_now_ms,
+};
 use tempfile::TempDir;
 
 const SESSION_NAME: &str = "rimz-presence-wake-test";
@@ -108,11 +112,21 @@ impl WakeEnv {
     /// Run `rimz sidebar wake` with this environment's scoped XDG roots and
     /// the zellij-trace shim standing in for any (erroneous) mux fork.
     fn wake(&self, reason: &str, explicit_workspace: bool) -> std::process::Output {
+        self.wake_with(reason, explicit_workspace, &[])
+    }
+
+    fn wake_with(
+        &self,
+        reason: &str,
+        explicit_workspace: bool,
+        extra_args: &[&str],
+    ) -> std::process::Output {
         let mut command = Command::new(rimz_cli_path());
         command.args(["sidebar", "wake", "--reason", reason]);
         if explicit_workspace {
             command.args(["--workspace-id", self.workspace_id.as_str()]);
         }
+        command.args(extra_args);
         command
             .current_dir(&self.project_root)
             .env("HOME", &self.home_root)
@@ -140,6 +154,65 @@ impl WakeEnv {
             produced_at_ms: unix_now_ms().saturating_sub(age.as_millis() as u64),
             session_name: SESSION_NAME.to_owned(),
             panes: Vec::new(),
+        };
+        std::fs::write(
+            self.runtime.root.join("snapshot.json"),
+            serde_json::to_vec(&cache).expect("serialize pane cache"),
+        )
+        .expect("seed pane cache");
+    }
+
+    fn seed_pane_cache_with_shell(&self, pane_id: &str, produced_at_ms: u64) {
+        let cache = SnapshotCache {
+            produced_at_ms,
+            session_name: SESSION_NAME.to_owned(),
+            panes: vec![PaneRef {
+                pane_id: PaneId::from_parts(MuxName::Zellij, pane_id),
+                session_name: SESSION_NAME.to_owned(),
+                view_id: Some("tab_0".to_owned()),
+                view_kind: Some(rimz::ids::ViewKind::Tab),
+                view_name: None,
+                is_focused: true,
+                command: Some("zsh".to_owned()),
+                cwd: Some(self.project_root.to_string_lossy().into_owned()),
+                pane_pid: None,
+                pane_process_start: None,
+                rss_kb: None,
+                cpu_pct: None,
+                io_bps: None,
+            }],
+        };
+        std::fs::write(
+            self.runtime.root.join("snapshot.json"),
+            serde_json::to_vec(&cache).expect("serialize pane cache"),
+        )
+        .expect("seed pane cache");
+    }
+
+    fn seed_pane_cache_with_focus(&self, produced_at_ms: u64) {
+        let mk_pane = |raw: &str, command: &str, is_focused: bool| PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
+            session_name: SESSION_NAME.to_owned(),
+            view_id: Some("tab_0".to_owned()),
+            view_kind: Some(rimz::ids::ViewKind::Tab),
+            view_name: None,
+            is_focused,
+            command: Some(command.to_owned()),
+            cwd: Some(self.project_root.to_string_lossy().into_owned()),
+            pane_pid: None,
+            pane_process_start: None,
+            rss_kb: None,
+            cpu_pct: None,
+            io_bps: None,
+        };
+        let cache = SnapshotCache {
+            produced_at_ms,
+            session_name: SESSION_NAME.to_owned(),
+            panes: vec![
+                mk_pane("terminal_6", "rimz-sidebar", false),
+                mk_pane("terminal_7", "zsh", true),
+                mk_pane("terminal_8", "zsh", false),
+            ],
         };
         std::fs::write(
             self.runtime.root.join("snapshot.json"),
@@ -298,6 +371,128 @@ fn pane_frame_publication_broadcasts_to_all_fresh_sidebars() {
             rimz::ledger::wakeup::PANE_FRAME_PUBLISHED_WAKEUP
         );
     }
+}
+
+#[test]
+fn wake_command_changed_patches_existing_pane_frame_and_broadcasts() {
+    let env = WakeEnv::new();
+    if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
+        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        return;
+    }
+    let produced_at_ms = unix_now_ms().saturating_sub(5_000);
+    env.seed_pane_cache_with_shell("terminal_7", produced_at_ms);
+    let recv_eldest = env.bind_socket("sidebar.eldest.sock");
+    let recv_younger = env.bind_socket("sidebar.younger.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
+    env.plant_heartbeat("sidebar.younger.json", YOUNGER_ID, "sidebar.younger.sock");
+
+    let output = env.wake_with(
+        "command-changed",
+        true,
+        &[
+            "--session-name",
+            SESSION_NAME,
+            "--pane-id",
+            "terminal_7",
+            "--command-arg",
+            "codex",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "wake failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    for (name, recv) in [("eldest", recv_eldest), ("younger", recv_younger)] {
+        let mut buf = [0u8; 256];
+        let len = recv
+            .recv(&mut buf)
+            .unwrap_or_else(|err| panic!("{name} receives publication wakeup: {err}"));
+        assert_eq!(
+            &buf[..len],
+            rimz::ledger::wakeup::PANE_FRAME_PUBLISHED_WAKEUP
+        );
+    }
+    let patched = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
+        .expect("patched pane cache remains readable");
+    assert_eq!(
+        patched.produced_at_ms, produced_at_ms,
+        "optimistic patches must not masquerade as a fresh mux read",
+    );
+    assert_eq!(patched.panes[0].command.as_deref(), Some("codex"));
+    assert!(patched.panes[0].pane_process_start.is_some());
+    env.assert_no_mux_fork();
+}
+
+#[test]
+fn wake_focus_changed_patches_existing_pane_frame_and_broadcasts() {
+    let env = WakeEnv::new();
+    if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
+        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        return;
+    }
+    let produced_at_ms = unix_now_ms().saturating_sub(5_000);
+    env.seed_pane_cache_with_focus(produced_at_ms);
+    let recv_eldest = env.bind_socket("sidebar.eldest.sock");
+    let recv_younger = env.bind_socket("sidebar.younger.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
+    env.plant_heartbeat("sidebar.younger.json", YOUNGER_ID, "sidebar.younger.sock");
+
+    let output = env.wake_with(
+        "focus-changed",
+        true,
+        &[
+            "--session-name",
+            SESSION_NAME,
+            "--focused-pane-id",
+            "terminal_8",
+            "--unfocused-pane-id",
+            "terminal_7",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "wake failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    for (name, recv) in [("eldest", recv_eldest), ("younger", recv_younger)] {
+        let mut buf = [0u8; 256];
+        let len = recv
+            .recv(&mut buf)
+            .unwrap_or_else(|err| panic!("{name} receives publication wakeup: {err}"));
+        assert_eq!(
+            &buf[..len],
+            rimz::ledger::wakeup::PANE_FRAME_PUBLISHED_WAKEUP
+        );
+    }
+    let patched = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
+        .expect("patched pane cache remains readable");
+    assert_eq!(
+        patched.produced_at_ms, produced_at_ms,
+        "optimistic patches must not masquerade as a fresh mux read",
+    );
+    let terminal_7 = patched
+        .panes
+        .iter()
+        .find(|pane| pane.pane_id.raw() == "terminal_7")
+        .expect("terminal_7 remains present");
+    let terminal_8 = patched
+        .panes
+        .iter()
+        .find(|pane| pane.pane_id.raw() == "terminal_8")
+        .expect("terminal_8 remains present");
+    let sidebar = patched
+        .panes
+        .iter()
+        .find(|pane| pane.pane_id.raw() == "terminal_6")
+        .expect("sidebar remains present");
+    assert!(!sidebar.is_focused);
+    assert!(!terminal_7.is_focused);
+    assert!(terminal_8.is_focused);
+    env.assert_no_mux_fork();
 }
 
 #[test]

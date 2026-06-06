@@ -11,6 +11,12 @@ use std::hash::{Hash, Hasher};
 /// deferred, never dropped.
 pub const POKE_FLOOR_MS: u64 = 100;
 
+/// Follow-up after a pane-changing poke. Zellij can deliver `CommandChanged`
+/// before `list-panes` has converged on the new foreground command; this second
+/// poke forces one settled frame instead of letting the stretched event-mode
+/// pane TTL carry the pre-change command.
+pub const SETTLE_POKE_MS: u64 = 250;
+
 /// Keepalive cadence. One host fork per minute per session keeps an
 /// idle-but-healthy channel distinguishable from a dead one; the host's
 /// `PRESENCE_STAMP_FRESH` (150s) allows two missed keepalives of slack.
@@ -35,13 +41,31 @@ pub struct PaneFields {
     pub terminal_command: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FocusPatch {
+    pub id: u32,
+    pub is_focused: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FocusShortcut {
+    Patch(Vec<FocusPatch>),
+    Ignore,
+}
+
 impl PaneFields {
     fn is_live_terminal(&self) -> bool {
         !self.is_plugin && !self.is_suppressed && !self.exited && !self.is_held
     }
 
     fn is_sidebar(&self) -> bool {
-        self.is_live_terminal() && self.title == SIDEBAR_PANE_TITLE
+        self.is_live_terminal()
+            && (self.title == SIDEBAR_PANE_TITLE
+                || self.terminal_command.as_deref() == Some(SIDEBAR_PANE_TITLE))
+    }
+
+    fn is_card_pane(&self) -> bool {
+        self.is_live_terminal() && !self.is_sidebar()
     }
 }
 
@@ -67,6 +91,59 @@ pub fn manifest_hash(tabs: &BTreeMap<usize, Vec<PaneFields>>, _active_tab: Optio
         }
     }
     hasher.finish()
+}
+
+/// The focus values to publish when the only sidebar-relevant manifest change is
+/// a per-pane focus move onto a pane that can render as an agent/process card.
+/// Returns [`FocusShortcut::Ignore`] for focus-only moves onto sidebar/chrome so
+/// selection holds its last card, and `None` for topology, command, held/exited,
+/// or suppression changes so the caller falls back to an authoritative pane
+/// produce.
+pub fn focus_shortcut_if_only_focus_changed(
+    previous: &BTreeMap<usize, Vec<PaneFields>>,
+    next: &BTreeMap<usize, Vec<PaneFields>>,
+) -> Option<FocusShortcut> {
+    let mut changed = false;
+    let mut focused_card = false;
+    let mut patch = Vec::new();
+    if previous.len() != next.len() {
+        return None;
+    }
+    for (tab, previous_panes) in previous {
+        let next_panes = next.get(tab)?;
+        if previous_panes.len() != next_panes.len() {
+            return None;
+        }
+        for (previous, next) in previous_panes.iter().zip(next_panes) {
+            if previous.id != next.id
+                || previous.is_plugin != next.is_plugin
+                || previous.is_suppressed != next.is_suppressed
+                || previous.exited != next.exited
+                || previous.is_held != next.is_held
+                || previous.terminal_command != next.terminal_command
+            {
+                return None;
+            }
+            changed |= previous.is_focused != next.is_focused;
+            if next.is_focused && next.is_card_pane() {
+                focused_card = true;
+            }
+            if next.is_card_pane() {
+                patch.push(FocusPatch {
+                    id: next.id,
+                    is_focused: next.is_focused,
+                });
+            }
+        }
+    }
+    if !changed {
+        return None;
+    }
+    if focused_card {
+        Some(FocusShortcut::Patch(patch))
+    } else {
+        Some(FocusShortcut::Ignore)
+    }
 }
 
 /// The terminal pane that should take focus after switching to `active_tab`, if
@@ -108,6 +185,9 @@ pub struct PokePolicy {
     /// floor lifts and then pokes once for the burst.
     pending_since: Option<u64>,
     last_changed_poke: Option<u64>,
+    /// One post-change settle poke. A fresh real change before it fires
+    /// supersedes the old settle and arms a new one after that change's poke.
+    settle_due_at: Option<u64>,
     next_keepalive: u64,
 }
 
@@ -117,6 +197,7 @@ impl PokePolicy {
             last_hash: None,
             pending_since: None,
             last_changed_poke: None,
+            settle_due_at: None,
             next_keepalive: now_ms + KEEPALIVE_MS,
         }
     }
@@ -136,10 +217,26 @@ impl PokePolicy {
         self.queue_change(now_ms);
     }
 
+    /// Accept a manifest observation without queuing a producer poke. Used for a
+    /// focus-only move to sidebar/chrome: the renderer's baseline should hold
+    /// its last card, and no pane truth changed.
+    pub fn accept_manifest(&mut self, hash: u64) {
+        self.last_hash = Some(hash);
+    }
+
     /// Fold an explicit host signal that means the live pane frame should be
     /// refreshed even when no full manifest accompanies it.
     pub fn on_signal(&mut self, now_ms: u64) {
         self.queue_change(now_ms);
+    }
+
+    /// Fold an optimistic change that already published a command patch through
+    /// the host CLI. It skips the immediate `panes-changed` poke and arms only
+    /// the settled read that verifies the patch against Zellij's pane list.
+    pub fn on_optimistic_signal(&mut self, now_ms: u64) {
+        self.pending_since = None;
+        self.last_changed_poke = Some(now_ms);
+        self.settle_due_at = Some(now_ms + SETTLE_POKE_MS);
     }
 
     fn queue_change(&mut self, now_ms: u64) {
@@ -153,6 +250,7 @@ impl PokePolicy {
     /// fires on its own cadence regardless of change traffic.
     pub fn due(&mut self, now_ms: u64) -> Vec<Poke> {
         let mut pokes = Vec::new();
+        let mut fired_pending_change = false;
         if let Some(since) = self.pending_since {
             let due_at = match self.last_changed_poke {
                 Some(at) => since.max(at.saturating_add(POKE_FLOOR_MS)),
@@ -161,8 +259,15 @@ impl PokePolicy {
             if now_ms >= due_at {
                 self.pending_since = None;
                 self.last_changed_poke = Some(now_ms);
+                self.settle_due_at = Some(now_ms + SETTLE_POKE_MS);
+                fired_pending_change = true;
                 pokes.push(Poke::Changed);
             }
+        }
+        if !fired_pending_change && self.settle_due_at.is_some_and(|due_at| now_ms >= due_at) {
+            self.settle_due_at = None;
+            self.last_changed_poke = Some(now_ms);
+            pokes.push(Poke::Changed);
         }
         if now_ms >= self.next_keepalive {
             self.next_keepalive = now_ms + KEEPALIVE_MS;
@@ -180,10 +285,11 @@ impl PokePolicy {
                 Some(at) => since.max(at.saturating_add(POKE_FLOOR_MS)),
                 None => since,
             });
-        match change_at {
-            Some(at) => at.min(self.next_keepalive),
-            None => self.next_keepalive,
-        }
+        [change_at, self.settle_due_at, Some(self.next_keepalive)]
+            .into_iter()
+            .flatten()
+            .min()
+            .expect("keepalive deadline is always present")
     }
 }
 

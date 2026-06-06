@@ -10,7 +10,9 @@ mod shell {
     use std::collections::BTreeMap;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use rimz_presence_zellij::policy::{self, PaneFields, Poke, PokePolicy, TimerGate};
+    use rimz_presence_zellij::policy::{
+        self, FocusPatch, FocusShortcut, PaneFields, Poke, PokePolicy, TimerGate,
+    };
     use zellij_tile::prelude::*;
 
     #[derive(Default)]
@@ -28,6 +30,7 @@ mod shell {
         /// poke from the host PATH. Absent (a hand-loaded plugin), the wake
         /// CLI resolves the workspace from the host cwd ladder.
         workspace_id: Option<String>,
+        session_name: Option<String>,
         rimz_bin: Option<String>,
         /// Pokes are gated until a grant is observed — either the explicit
         /// permission result or any application-state event arriving, which
@@ -46,6 +49,7 @@ mod shell {
     impl ZellijPlugin for State {
         fn load(&mut self, configuration: BTreeMap<String, String>) {
             self.workspace_id = configuration.get("workspace_id").cloned();
+            self.session_name = configuration.get("session_name").cloned();
             self.rimz_bin = configuration.get("rimz_bin").cloned();
             request_permission(&[
                 PermissionType::ReadApplicationState,
@@ -80,8 +84,26 @@ mod shell {
                     // when the grant comes from the permission cache (verified
                     // live on 0.44.3), so this path is load-bearing.
                     self.mark_granted(now);
-                    self.tabs = project(&manifest);
-                    self.fold(now);
+                    let next_tabs = project(&manifest);
+                    let focus_patch =
+                        policy::focus_shortcut_if_only_focus_changed(&self.tabs, &next_tabs);
+                    self.tabs = next_tabs;
+                    match focus_patch {
+                        Some(FocusShortcut::Patch(patch)) if self.poke_focus_changed(&patch) => {
+                            let hash = policy::manifest_hash(&self.tabs, self.active_tab);
+                            if let Some(policy) = self.policy.as_mut() {
+                                policy.accept_manifest(hash);
+                                policy.on_optimistic_signal(now);
+                            }
+                        }
+                        Some(FocusShortcut::Ignore) => {
+                            let hash = policy::manifest_hash(&self.tabs, self.active_tab);
+                            if let Some(policy) = self.policy.as_mut() {
+                                policy.accept_manifest(hash);
+                            }
+                        }
+                        _ => self.fold(now),
+                    }
                     self.correct_switched_tab_focus();
                 }
                 Event::TabUpdate(tabs) => {
@@ -93,9 +115,15 @@ mod shell {
                     self.active_tab = next_active;
                     self.correct_switched_tab_focus();
                 }
-                Event::CommandChanged(_, _, is_foreground, _) => {
+                Event::CommandChanged(pane_id, command, is_foreground, _) => {
                     if is_foreground {
-                        self.signal_change(now);
+                        if self.poke_command_changed(&pane_id, &command) {
+                            if let Some(policy) = self.policy.as_mut() {
+                                policy.on_optimistic_signal(now);
+                            }
+                        } else {
+                            self.signal_change(now);
+                        }
                     }
                 }
                 Event::PaneClosed(_) => {
@@ -230,6 +258,93 @@ mod shell {
                 argv.extend(["--workspace-id", workspace_id]);
             }
             run_command(&argv, BTreeMap::new());
+        }
+
+        /// Publish an optimistic command patch for a terminal pane already
+        /// known to the native sidebar cache. Returns false when the exact-cache
+        /// shortcut is unavailable, so the caller can fall back to a normal
+        /// `panes-changed` poke.
+        fn poke_command_changed(&self, pane_id: &PaneId, command: &[String]) -> bool {
+            if !self.granted || command.is_empty() {
+                return false;
+            }
+            let PaneId::Terminal(_) = pane_id else {
+                return false;
+            };
+            let Some(session_name) = self.session_name.as_deref() else {
+                return false;
+            };
+            let program = self.rimz_bin.as_deref().unwrap_or("rimz");
+            let mut argv = vec![
+                program.to_owned(),
+                "sidebar".to_owned(),
+                "wake".to_owned(),
+                "--reason".to_owned(),
+                "command-changed".to_owned(),
+                "--session-name".to_owned(),
+                session_name.to_owned(),
+                "--pane-id".to_owned(),
+                pane_id.to_string(),
+            ];
+            if let Some(workspace_id) = self.workspace_id.as_deref() {
+                argv.push("--workspace-id".to_owned());
+                argv.push(workspace_id.to_owned());
+            }
+            let mut pushed_command_arg = false;
+            for arg in command {
+                if !arg.is_empty() {
+                    argv.push("--command-arg".to_owned());
+                    argv.push(arg.clone());
+                    pushed_command_arg = true;
+                }
+            }
+            if !pushed_command_arg {
+                return false;
+            }
+            let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+            run_command(&refs, BTreeMap::new());
+            true
+        }
+
+        /// Publish an optimistic focus patch for panes already known to the
+        /// native sidebar cache. Returns false when the exact-cache shortcut is
+        /// unavailable, so the caller can fall back to a normal `panes-changed`
+        /// poke.
+        fn poke_focus_changed(&self, patch: &[FocusPatch]) -> bool {
+            if !self.granted || patch.is_empty() {
+                return false;
+            }
+            let Some(session_name) = self.session_name.as_deref() else {
+                return false;
+            };
+            let program = self.rimz_bin.as_deref().unwrap_or("rimz");
+            let mut argv = vec![
+                program.to_owned(),
+                "sidebar".to_owned(),
+                "wake".to_owned(),
+                "--reason".to_owned(),
+                "focus-changed".to_owned(),
+                "--session-name".to_owned(),
+                session_name.to_owned(),
+            ];
+            if let Some(workspace_id) = self.workspace_id.as_deref() {
+                argv.push("--workspace-id".to_owned());
+                argv.push(workspace_id.to_owned());
+            }
+            for pane in patch {
+                argv.push(
+                    if pane.is_focused {
+                        "--focused-pane-id"
+                    } else {
+                        "--unfocused-pane-id"
+                    }
+                    .to_owned(),
+                );
+                argv.push(format!("terminal_{}", pane.id));
+            }
+            let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+            run_command(&refs, BTreeMap::new());
+            true
         }
     }
 

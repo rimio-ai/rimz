@@ -43,6 +43,80 @@ fn focus_move_changes_the_hash() {
 }
 
 #[test]
+fn focus_patch_reports_only_focus_moves() {
+    let mut previous_a = pane(1);
+    previous_a.is_focused = true;
+    let previous_b = pane(2);
+    let previous = tabs(vec![previous_a, previous_b]);
+
+    let next_a = pane(1);
+    let mut next_b = pane(2);
+    next_b.is_focused = true;
+    let next = tabs(vec![next_a, next_b]);
+
+    assert_eq!(
+        focus_shortcut_if_only_focus_changed(&previous, &next),
+        Some(FocusShortcut::Patch(vec![
+            FocusPatch {
+                id: 1,
+                is_focused: false,
+            },
+            FocusPatch {
+                id: 2,
+                is_focused: true,
+            },
+        ]))
+    );
+}
+
+#[test]
+fn focus_patch_ignores_focus_moves_to_sidebar() {
+    let mut work = pane(1);
+    work.is_focused = true;
+    let mut sidebar = pane(2);
+    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
+    let previous = tabs(vec![work, sidebar]);
+
+    let work = pane(1);
+    let mut sidebar = pane(2);
+    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
+    sidebar.is_focused = true;
+    let next = tabs(vec![work, sidebar]);
+
+    assert_eq!(
+        focus_shortcut_if_only_focus_changed(&previous, &next),
+        Some(FocusShortcut::Ignore)
+    );
+}
+
+#[test]
+fn focus_patch_rejects_non_focus_changes() {
+    let previous = tabs(vec![pane(1)]);
+
+    let mut command_changed = pane(1);
+    command_changed.terminal_command = Some("codex".to_owned());
+    assert_eq!(
+        focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![command_changed])),
+        None,
+    );
+
+    assert_eq!(
+        focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![pane(1), pane(2)])),
+        None,
+    );
+
+    let renamed = PaneFields {
+        title: "new title".to_owned(),
+        ..pane(1)
+    };
+    assert_eq!(
+        focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![renamed])),
+        None,
+        "title-only changes are not focus changes and do not need a shortcut"
+    );
+}
+
+#[test]
 fn active_tab_move_does_not_change_the_hash() {
     let on_zero = manifest_hash(&tabs(vec![pane(1)]), Some(0));
     let on_one = manifest_hash(&tabs(vec![pane(1)]), Some(1));
@@ -179,6 +253,32 @@ fn explicit_signal_pokes_immediately_without_a_manifest_baseline() {
 }
 
 #[test]
+fn change_pokes_once_more_after_the_settle_window() {
+    let mut policy = PokePolicy::new(0);
+    policy.on_signal(10);
+
+    assert_eq!(policy.due(10), vec![Poke::Changed]);
+    assert_eq!(
+        policy.next_wake_at(),
+        10 + SETTLE_POKE_MS,
+        "the post-change settle poke is armed after the immediate one"
+    );
+    assert_eq!(policy.due(10 + SETTLE_POKE_MS - 1), Vec::<Poke>::new());
+    assert_eq!(policy.due(10 + SETTLE_POKE_MS), vec![Poke::Changed]);
+    assert_eq!(policy.due(10 + SETTLE_POKE_MS + 1), Vec::<Poke>::new());
+}
+
+#[test]
+fn optimistic_signal_skips_immediate_poke_but_still_settles() {
+    let mut policy = PokePolicy::new(0);
+    policy.on_optimistic_signal(10);
+
+    assert_eq!(policy.due(10), Vec::<Poke>::new());
+    assert_eq!(policy.next_wake_at(), 10 + SETTLE_POKE_MS);
+    assert_eq!(policy.due(10 + SETTLE_POKE_MS), vec![Poke::Changed]);
+}
+
+#[test]
 fn duplicate_changes_inside_the_floor_defer_once() {
     let mut policy = PokePolicy::new(0);
     policy.on_signal(100);
@@ -196,6 +296,11 @@ fn duplicate_changes_inside_the_floor_defer_once() {
         "the follow-up is armed for the floor's end"
     );
     assert_eq!(policy.due(200), vec![Poke::Changed]);
+    assert_eq!(
+        policy.next_wake_at(),
+        200 + SETTLE_POKE_MS,
+        "the duplicate-burst poke gets its own settled read"
+    );
     assert_eq!(policy.due(201), Vec::<Poke>::new());
 }
 

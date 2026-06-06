@@ -75,24 +75,35 @@ enum SidebarSubcmd {
         height: u16,
     },
     /// Presence poke from the Zellij presence plugin: refresh the liveness
-    /// stamp and, on a topology change, datagram the eldest sidebar for a
-    /// fresh-panes refetch. Hidden — plugin infrastructure, not a human verb.
+    /// stamp and wake the sidebar fleet through either an exact-cache shortcut
+    /// or a producer refetch. Hidden — plugin infrastructure, not a human verb.
     #[command(hide = true)]
     Wake {
         #[arg(long)]
         workspace_id: Option<String>,
         #[arg(long, value_enum)]
         reason: WakeReason,
+        #[arg(long)]
+        session_name: Option<String>,
+        #[arg(long)]
+        pane_id: Option<String>,
+        #[arg(long = "command-arg")]
+        command_args: Vec<String>,
+        #[arg(long = "focused-pane-id")]
+        focused_pane_ids: Vec<String>,
+        #[arg(long = "unfocused-pane-id")]
+        unfocused_pane_ids: Vec<String>,
     },
 }
 
-/// Why a presence poke fired. Both reasons refresh the liveness stamp; only a
-/// topology change additionally datagrams the eldest sidebar. `alive` is the
-/// plugin's keepalive — stamp-only — so an idle-but-healthy channel stays
-/// distinguishable from a dead one.
+/// Why a presence poke fired. Every reason refreshes the liveness stamp;
+/// `alive` is the plugin's keepalive — stamp-only — so an idle-but-healthy
+/// channel stays distinguishable from a dead one.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 enum WakeReason {
     PanesChanged,
+    CommandChanged,
+    FocusChanged,
     Alive,
 }
 
@@ -299,11 +310,16 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
         SidebarSubcmd::Wake {
             workspace_id,
             reason,
+            session_name,
+            pane_id,
+            command_args,
+            focused_pane_ids,
+            unfocused_pane_ids,
         } => {
             // Feather-weight by design: the poke needs only the workspace
             // runtime dir — one stamp write plus at most one datagram — so it
             // never opens the ledger, never lists panes, never touches the
-            // mux. The plugin calls this per topology change.
+            // mux. The plugin calls this per presence event.
             let workspace_id = match workspace_id {
                 Some(raw) => raw.parse::<WorkspaceId>()?,
                 None => {
@@ -312,15 +328,82 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             };
             let runtime =
                 RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
-            // Both reasons refresh the stamp that flips the producer's pane
-            // TTL to event mode; the write is best-effort cache-class — a
-            // miss only means the channel reads as dead one poke longer.
+            // Every reason refreshes the stamp that flips the producer's pane
+            // TTL to event mode; the write is best-effort cache-class — a miss
+            // only means the channel reads as dead one poke longer.
             write_presence_stamp(&runtime);
-            if let WakeReason::PanesChanged = reason {
-                // Topology changed: nudge the eldest sidebar (the elected
-                // producer) into a producer-only fresh-panes fetch. The producer
-                // broadcasts after publication, so consumers fold from cache
-                // instead of turning the poke into N local produces.
+            if let WakeReason::CommandChanged = reason
+                && let (Some(session_name), Some(pane_id)) =
+                    (session_name.as_deref(), pane_id.as_deref())
+                && let Some(command) = command_from_args(&command_args)
+            {
+                let pane_id = rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, pane_id);
+                match rimz::sidebar::cache::patch_snapshot_pane_command(
+                    &runtime,
+                    session_name,
+                    &pane_id,
+                    &command,
+                ) {
+                    Ok(true) => {
+                        if let Err(err) =
+                            rimz::ledger::wakeup::wake_sidebars_pane_frame_published(&runtime)
+                        {
+                            tracing::debug!(
+                                error = %err,
+                                "presence command patch: publication datagram failed",
+                            );
+                        }
+                        return Ok(());
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        tracing::debug!(
+                            error = %err,
+                            "presence command patch: cache update failed",
+                        );
+                    }
+                }
+            }
+            if let WakeReason::FocusChanged = reason
+                && let Some(session_name) = session_name.as_deref()
+            {
+                let focused = zellij_pane_ids(&focused_pane_ids);
+                let unfocused = zellij_pane_ids(&unfocused_pane_ids);
+                match rimz::sidebar::cache::patch_snapshot_pane_focus(
+                    &runtime,
+                    session_name,
+                    &focused,
+                    &unfocused,
+                ) {
+                    Ok(true) => {
+                        if let Err(err) =
+                            rimz::ledger::wakeup::wake_sidebars_pane_frame_published(&runtime)
+                        {
+                            tracing::debug!(
+                                error = %err,
+                                "presence focus patch: publication datagram failed",
+                            );
+                        }
+                        return Ok(());
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        tracing::debug!(
+                            error = %err,
+                            "presence focus patch: cache update failed",
+                        );
+                    }
+                }
+            }
+            if matches!(
+                reason,
+                WakeReason::PanesChanged | WakeReason::CommandChanged | WakeReason::FocusChanged
+            ) {
+                // The exact-cache shortcut missed, or this is a topology
+                // signal: nudge the eldest sidebar (the elected producer) into
+                // a producer-only fresh-panes fetch. The producer broadcasts
+                // after publication, so consumers fold from cache instead of
+                // turning the poke into N local produces.
                 if let Err(err) = rimz::ledger::wakeup::wake_eldest_sidebar_panes_changed(&runtime)
                 {
                     tracing::debug!(error = %err, "presence poke: eldest datagram failed");
@@ -329,6 +412,23 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn zellij_pane_ids(raws: &[String]) -> Vec<rimz::ids::PaneId> {
+    raws.iter()
+        .filter(|raw| !raw.is_empty())
+        .map(|raw| rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, raw))
+        .collect()
+}
+
+fn command_from_args(args: &[String]) -> Option<String> {
+    let command = args
+        .iter()
+        .filter(|arg| !arg.is_empty())
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!command.is_empty()).then_some(command)
 }
 
 fn session_name_from_record(state: &StatePaths) -> Option<String> {

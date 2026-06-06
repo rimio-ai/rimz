@@ -686,14 +686,11 @@ fn presence_plugin_floor_admits_the_tile_line_only() {
 
 #[test]
 fn presence_plugin_configuration_pins_workspace_and_rimz() {
-    let workspace_id = crate::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
-    let configuration = presence_plugin_configuration(
-        &workspace_id,
-        std::path::Path::new("/home/user/.cargo/bin/rimz"),
-    );
+    let configuration =
+        presence_plugin_configuration(&presence_opts("rimz-test", "/home/user/.cargo/bin/rimz"));
     assert_eq!(
         configuration,
-        "workspace_id=ws_0123456789abcdef01234567,rimz_bin=/home/user/.cargo/bin/rimz",
+        "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz",
     );
 }
 
@@ -702,14 +699,35 @@ fn presence_plugin_configuration_omits_an_inexpressible_rimz_path() {
     // Zellij parses the configuration by splitting on `,` then `=`; a path
     // containing either separator would mis-parse into a broken poke argv, so
     // it is omitted and the plugin falls back to `rimz` on the host PATH.
-    let workspace_id = crate::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
     for weird in ["/tmp/a,b/rimz", "/tmp/a=b/rimz"] {
-        let configuration =
-            presence_plugin_configuration(&workspace_id, std::path::Path::new(weird));
+        let configuration = presence_plugin_configuration(&presence_opts("rimz-test", weird));
         assert_eq!(
-            configuration, "workspace_id=ws_0123456789abcdef01234567",
+            configuration, "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test",
             "{weird} must be omitted, not shipped mis-parsable",
         );
+    }
+}
+
+#[test]
+fn presence_plugin_configuration_omits_an_inexpressible_session_name() {
+    for weird in ["rimz,test", "rimz=test"] {
+        let configuration =
+            presence_plugin_configuration(&presence_opts(weird, "/home/user/.cargo/bin/rimz"));
+        assert_eq!(
+            configuration,
+            "workspace_id=ws_0123456789abcdef01234567,rimz_bin=/home/user/.cargo/bin/rimz",
+            "{weird} must be omitted, not shipped mis-parsable",
+        );
+    }
+}
+
+fn presence_opts(session_name: &str, rimz_bin: &str) -> crate::mux::PresencePluginOptions {
+    crate::mux::PresencePluginOptions {
+        session_name: session_name.to_owned(),
+        workspace_id: crate::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+        wasm: std::path::PathBuf::from("/tmp/rimz-presence-zellij.wasm"),
+        rimz_bin: std::path::PathBuf::from(rimz_bin),
+        converge: false,
     }
 }
 

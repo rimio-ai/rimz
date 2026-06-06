@@ -228,12 +228,18 @@ fn materialize_presence_plugin_bytes(
 /// either separator cannot be expressed; it is omitted and the plugin falls
 /// back to `rimz` on the host PATH rather than poke a mis-parsed argv.
 /// Workspace ids are `ws_` + hex by construction, always expressible.
-fn presence_plugin_configuration(
-    workspace_id: &crate::ids::WorkspaceId,
-    rimz_bin: &std::path::Path,
-) -> String {
-    let mut configuration = format!("workspace_id={}", workspace_id.as_str());
-    let bin = rimz_bin.to_string_lossy();
+fn presence_plugin_configuration(opts: &super::PresencePluginOptions) -> String {
+    let mut configuration = format!("workspace_id={}", opts.workspace_id.as_str());
+    if opts.session_name.contains([',', '=']) {
+        tracing::debug!(
+            session = %opts.session_name,
+            "session name contains a plugin-configuration separator; command-change shortcut is disabled",
+        );
+    } else {
+        configuration.push_str(",session_name=");
+        configuration.push_str(&opts.session_name);
+    }
+    let bin = opts.rimz_bin.to_string_lossy();
     if bin.contains([',', '=']) {
         tracing::debug!(
             rimz_bin = %bin,
@@ -1484,7 +1490,7 @@ impl MuxBackend for ZellijBackend {
             return Ok(());
         }
         let url = format!("file:{}", opts.wasm.display());
-        let configuration = presence_plugin_configuration(&opts.workspace_id, &opts.rimz_bin);
+        let configuration = presence_plugin_configuration(opts);
         if opts.converge {
             // Reload a *running* plugin in place onto the current wasm —
             // `start-or-reload-plugin` converges a pipe-launched instance
