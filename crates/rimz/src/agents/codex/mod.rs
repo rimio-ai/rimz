@@ -650,9 +650,7 @@ fn payload_reasoning_effort(payload: &Value) -> Option<String> {
 
 fn configured_reasoning_effort() -> Option<String> {
     #[cfg(test)]
-    if std::env::var_os("RIMZ_CODEX_CONFIG").is_none() {
-        return None;
-    }
+    std::env::var_os("RIMZ_CODEX_CONFIG")?;
     codex_config_path()
         .ok()
         .and_then(|path| configured_reasoning_effort_at(&path))
