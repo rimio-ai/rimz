@@ -108,14 +108,17 @@ fn agent_owner_pid(agent: &AgentState) -> Option<u32> {
         .or(agent.agent_pid)
 }
 
-/// The agent that stamped this exact pane id, if one is still unbound. Binding
-/// is by stamped pane id alone — never by foreground command or cwd — so a pane
-/// can only ever host the agent that ran in it (`agent_binds_only_by_stamped_
-/// pane_id` pins this). When a stale rollup holds more than one claimant for a
-/// pane id (a relaunch the reaper has not yet collapsed), the most-recently-
-/// active wins, keeping the bind deterministic. The one relaxation — a lazy-
-/// registering agent whose session arrives unstamped (Codex) — lives in the
-/// separate, tightly-scoped `lazy_agent_for_pane`, never here.
+/// The agent that stamped this exact pane id, if one is still unbound. Non-lazy
+/// agents bind by stamped pane id alone — never by foreground command or cwd —
+/// so a pane can only ever host the agent that ran in it (`agent_binds_only_by_
+/// stamped_pane_id` pins this). Lazy-registering agents additionally respect a
+/// known live foreground command: when it no longer classifies as that kind, the
+/// pane renders as its process row. A missing command is still treated as an
+/// unknown raced read and keeps the stamped row. When a stale rollup holds more
+/// than one claimant for a pane id (a relaunch the reaper has not yet collapsed),
+/// the most-recently-active wins, keeping the bind deterministic. The one
+/// relaxation — a lazy-registering agent whose session arrives unstamped (Codex)
+/// — lives in the separate, tightly-scoped `lazy_agent_for_pane`, never here.
 pub(super) fn agent_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
@@ -125,17 +128,31 @@ pub(super) fn agent_for_pane<'a>(
         .iter()
         // Cheap pane match first: only agents stamped on this exact pane reach
         // the allocating `bound` lookup, so the common miss costs no clones.
-        .filter(|agent| {
-            agent.pane.as_ref().is_some_and(|stamped| {
-                stamped.pane_id == pane.pane_id && pane_start_matches(stamped, pane)
-            })
-        })
+        .filter(|agent| agent.pane.as_ref().is_some_and(|stamped| {
+            stamped_agent_matches_live_pane(agent, stamped, pane)
+        }))
         // A subagent runs in its parent's pane and is stamped with the parent's
         // pane id; it nests under the parent via `attach_sub_agents` and must
         // never win the pane as a top-level row. Panes bind root agents only.
         .filter(|agent| agent.parent_agent_id.is_none())
         .filter(|agent| !bound.contains(&(agent.kind.clone(), agent.agent_id.clone())))
         .max_by_key(|agent| agent.last_activity)
+}
+
+fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: &PaneRef) -> bool {
+    if stamped.pane_id != pane.pane_id || !pane_start_matches(stamped, pane) {
+        return false;
+    }
+    let Some(descriptor) = crate::agents::descriptor_by_kind(agent.kind.as_str()) else {
+        return true;
+    };
+    if !descriptor.capabilities.registers_lazily {
+        return true;
+    }
+    match pane.command.as_deref() {
+        Some(command) => command_agent_kind(command) == Some(agent.kind.as_str()),
+        None => true,
+    }
 }
 
 /// What a live pane running a lazy-registering agent resolves to. Such an agent

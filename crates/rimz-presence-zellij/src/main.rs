@@ -33,6 +33,10 @@ mod shell {
         /// permission result or any application-state event arriving, which
         /// proves the cached grant already covers us.
         granted: bool,
+        /// `CommandChanged` requires no permission, so it can arrive before the
+        /// cached `RunCommands` grant is proven. Hold one topology signal until
+        /// a permission-bearing event or grant result lets us run the wake CLI.
+        pending_pregrant_change: bool,
         /// Deduplicates host timers over the policy's deadlines, so a burst
         /// of events arms one timer, not one per event, and a superseded
         /// timer's late fire never arms a duplicate chain.
@@ -51,6 +55,8 @@ mod shell {
             subscribe(&[
                 EventType::PaneUpdate,
                 EventType::TabUpdate,
+                EventType::CommandChanged,
+                EventType::PaneClosed,
                 EventType::Timer,
                 EventType::PermissionRequestResult,
             ]);
@@ -63,7 +69,7 @@ mod shell {
             let now = now_ms();
             match event {
                 Event::PermissionRequestResult(PermissionStatus::Granted) => {
-                    self.mark_granted();
+                    self.mark_granted(now);
                 }
                 Event::PermissionRequestResult(PermissionStatus::Denied) => {
                     self.granted = false;
@@ -73,13 +79,13 @@ mod shell {
                     // grant covers us: Zellij sends no PermissionRequestResult
                     // when the grant comes from the permission cache (verified
                     // live on 0.44.3), so this path is load-bearing.
-                    self.mark_granted();
+                    self.mark_granted(now);
                     self.tabs = project(&manifest);
                     self.fold(now);
                     self.correct_switched_tab_focus();
                 }
                 Event::TabUpdate(tabs) => {
-                    self.mark_granted();
+                    self.mark_granted(now);
                     let next_active = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
                     if next_active != self.active_tab {
                         self.pending_focus_tab = next_active;
@@ -87,6 +93,15 @@ mod shell {
                     self.active_tab = next_active;
                     self.fold(now);
                     self.correct_switched_tab_focus();
+                }
+                Event::CommandChanged(_, _, is_foreground, _) => {
+                    if is_foreground {
+                        self.signal_change(now);
+                    }
+                }
+                Event::PaneClosed(_) => {
+                    self.mark_granted(now);
+                    self.signal_change(now);
                 }
                 Event::Timer(_) => {
                     self.timer_gate.on_fire(now);
@@ -117,13 +132,34 @@ mod shell {
         /// cadence, and hide the pane Zellij surfaced for the permission
         /// prompt — the plugin is headless, so a visible pane is only ever
         /// that prompt's leftover. Idempotent; already-hidden panes no-op.
-        fn mark_granted(&mut self) {
+        fn mark_granted(&mut self, now: u64) {
             if self.granted {
+                self.flush_pregrant_change(now);
                 return;
             }
             self.granted = true;
             self.poke(Poke::Alive);
             hide_self();
+            self.flush_pregrant_change(now);
+        }
+
+        fn signal_change(&mut self, now: u64) {
+            if !self.granted {
+                self.pending_pregrant_change = true;
+                return;
+            }
+            if let Some(policy) = self.policy.as_mut() {
+                policy.on_signal(now);
+            }
+        }
+
+        fn flush_pregrant_change(&mut self, now: u64) {
+            if self.pending_pregrant_change {
+                self.pending_pregrant_change = false;
+                if let Some(policy) = self.policy.as_mut() {
+                    policy.on_signal(now);
+                }
+            }
         }
 
         /// Fold the current projected shape into the policy.

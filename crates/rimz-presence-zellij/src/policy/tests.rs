@@ -145,6 +145,31 @@ fn burst_coalesces_to_one_poke_after_the_debounce() {
 }
 
 #[test]
+fn explicit_signal_pokes_without_a_manifest_baseline() {
+    let mut policy = PokePolicy::new(0);
+    policy.on_signal(10);
+
+    assert_eq!(policy.due(10 + DEBOUNCE_MS - 1), Vec::<Poke>::new());
+    assert_eq!(policy.due(10 + DEBOUNCE_MS), vec![Poke::Changed]);
+}
+
+#[test]
+fn explicit_signals_coalesce_with_manifest_changes() {
+    let mut policy = PokePolicy::new(0);
+    policy.on_manifest(11, 0);
+    policy.on_signal(10);
+    policy.on_manifest(22, 50);
+    policy.on_signal(90);
+
+    assert_eq!(
+        policy.due(10 + DEBOUNCE_MS),
+        vec![Poke::Changed],
+        "the first signal anchors the burst"
+    );
+    assert_eq!(policy.due(10 + DEBOUNCE_MS + 1), Vec::<Poke>::new());
+}
+
+#[test]
 fn change_during_the_floor_is_deferred_never_dropped() {
     let mut policy = PokePolicy::new(0);
     policy.on_manifest(11, 0);

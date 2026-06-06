@@ -136,6 +136,16 @@ impl PokePolicy {
         if baseline {
             return;
         }
+        self.queue_change(now_ms);
+    }
+
+    /// Fold an explicit host signal that means the live pane frame should be
+    /// refreshed even when no full manifest accompanies it.
+    pub fn on_signal(&mut self, now_ms: u64) {
+        self.queue_change(now_ms);
+    }
+
+    fn queue_change(&mut self, now_ms: u64) {
         if self.pending_since.is_none() {
             self.pending_since = Some(now_ms);
         }

@@ -38,6 +38,22 @@ fn fresh_pane_field_wins_when_present() {
 }
 
 #[test]
+fn command_handoff_does_not_carry_forward_process_start() {
+    // A foreground handoff (codex → zsh) means the old in-pane agent process is
+    // gone. Carrying its start into the shell pane would let stale daemon-backed
+    // session state keep binding to the pane.
+    let old_start: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
+    let mut fresh = vec![pane("terminal_1", Some("zsh"), Some("/repo"))];
+    let mut prev = vec![pane("terminal_1", Some("codex"), Some("/repo"))];
+    prev[0].pane_process_start = Some(old_start);
+
+    carry_forward_pane_fields(&mut fresh, &prev);
+
+    assert_eq!(fresh[0].command.as_deref(), Some("zsh"));
+    assert_eq!(fresh[0].pane_process_start, None);
+}
+
+#[test]
 fn carry_forward_from_cache_backfills_from_disk() {
     // The shared repair both produce arms run: a raced read's dropped
     // fields backfill from the on-disk pane cache, so the wedged-producer

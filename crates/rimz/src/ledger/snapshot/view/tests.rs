@@ -1487,6 +1487,24 @@ fn live_panes_overlay_matching_agent_rows() {
 }
 
 #[test]
+fn stamped_codex_returned_to_shell_renders_process_row() {
+    // Codex records lifecycle through the shared app-server daemon, so the
+    // session can remain live after the in-pane CLI exits. When the same pane id
+    // now reports a shell foreground, the old Codex card must not stay attached.
+    let codex = agent("codex", "sess-1", AgentStatus::Success, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    let snapshot =
+        room(Vec::new(), vec![codex]).with_live_panes(vec![pane("%1", "zsh", "/repo/main")], None);
+
+    let rows = rows(&snapshot);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+    assert_eq!(rows[0].name, "zsh");
+    assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "%1");
+}
+
+#[test]
 fn live_panes_do_not_render_unmatched_ledger_agents() {
     let codex = agent("codex", "sess-1", AgentStatus::Running, 1_000).worktree("/repo/main");
 

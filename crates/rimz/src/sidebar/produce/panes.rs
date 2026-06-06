@@ -65,13 +65,17 @@ fn carry_forward_pane_fields(fresh: &mut [crate::feed::PaneRef], prev: &[crate::
         let Some(prior) = prev.iter().find(|prior| prior.pane_id == pane.pane_id) else {
             continue;
         };
+        let command_changed = match (pane.command.as_deref(), prior.command.as_deref()) {
+            (Some(current), Some(previous)) => current != previous,
+            _ => false,
+        };
         if pane.command.is_none() {
             pane.command = prior.command.clone();
         }
         if pane.cwd.is_none() {
             pane.cwd = prior.cwd.clone();
         }
-        if pane.pane_process_start.is_none() {
+        if pane.pane_process_start.is_none() && !command_changed {
             pane.pane_process_start = prior.pane_process_start;
         }
     }
