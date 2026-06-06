@@ -35,12 +35,10 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 ## Implementation rules
 
 - `AGENTS.md` and `CLAUDE.md` are the same file via symlink (`ln -s AGENTS.md CLAUDE.md`); edits to either land in both.
-- Pin the write root once per session: `git rev-parse --show-toplevel` of the working directory is the only root, and every file write resolves under it. Never address a file by a hard-coded absolute path — a worktree mirrors `main`'s tree, so an absolute path is exactly how a write meant for the worktree lands on `main`. A path a subagent reports — Explore, Plan, search — is a place to read, not where to write: re-resolve it under the pinned root before editing. A write that resolves outside the pinned root is a bug, not a shortcut.
 - Rust unless the task targets docs, tests, scripts, examples, or build glue.
 - Root docs stay short and authoritative; detail lives in `docs/` and is linked.
 - Update [ARCHITECTURE.md](./ARCHITECTURE.md) when modules move. Update [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes.
-- Reuse the canonical example in docs: `~/code/query-engine` with `main` + `feature-migration` worktrees.
-- `cargo xtask ci` is the single contributor entry point for every quality gate; new automation lands as an `xtask` task, not a shell script. Gate stack lives in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
+- Contributor automation lives in `xtask/`; command surface and gate stack live in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
 
 ## Testing requirements
 

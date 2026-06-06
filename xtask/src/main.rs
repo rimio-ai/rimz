@@ -1,4 +1,4 @@
-//! Contributor task runner — `cargo xtask <task>`; `ci` is the single entry point for every quality gate.
+//! Contributor task runner — `cargo xtask <task>`; `ci` composes the full quality-gate stack.
 
 #![deny(clippy::print_stdout)]
 #![deny(clippy::print_stderr)]

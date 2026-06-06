@@ -84,10 +84,10 @@ The Rust toolchain is pinned by [rust-toolchain.toml](./rust-toolchain.toml). Ze
 make build      # cargo xtask build
 make install    # install rimz, rimz-sidebar, and the presence plugin
 make test       # cargo xtask test
-make ci         # full quality gate
+make ci         # full CI gate
 ```
 
-`make` is a thin wrapper around `cargo xtask <task>`; `xtask` is the source of truth for automation. `make install` writes binaries to `${CARGO_HOME:-$HOME/.cargo}/bin`, so that directory must be on `PATH`. `sudo make install` builds as the invoking user and installs to `/usr/local/bin`; set `PREFIX=/opt/rimz` or `DESTDIR=...` to change the root-owned destination.
+`make` is a thin wrapper around `cargo xtask <task>`; `xtask` is the source of truth for automation. Use focused tasks for routine validation and the full CI gate when the change calls for it. `make install` writes binaries to `${CARGO_HOME:-$HOME/.cargo}/bin`, so that directory must be on `PATH`. `sudo make install` builds as the invoking user and installs to `/usr/local/bin`; set `PREFIX=/opt/rimz` or `DESTDIR=...` to change the root-owned destination.
 
 After installing, smoke-test the CLI:
 
@@ -109,4 +109,4 @@ Documentation-first. Implementation lands in milestones — M0 spikes the ledger
 - **See it.** [docs/interface/sidebar.md](./docs/interface/sidebar.md) — the sidebar on screen, zone by zone, with the frames it draws.
 - **CLI surface.** [docs/cli.md](./docs/reference/cli.md) — every command, grouped by intent.
 - **Understand the design.** [DESIGN.md](./DESIGN.md) — commitments and the three operating paths.
-- **Contribute.** [AGENTS.md](./AGENTS.md) — engineering rules and the docs map. `cargo xtask ci` runs every quality gate locally; the gate stack is in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
+- **Contribute.** [AGENTS.md](./AGENTS.md) — engineering rules and the docs map. Contributor commands and the gate stack live in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).

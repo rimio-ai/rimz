@@ -215,7 +215,7 @@ A fast linker is required and configured per target in `.cargo/config.toml`: `cl
 
 ### Quality gates
 
-Every gate runs in CI with warnings treated as errors. Local equivalent is `cargo xtask <task>`.
+Every gate runs in CI with warnings treated as errors. Local equivalents are `cargo xtask <task>`; `cargo xtask ci` composes the full stack when a change calls for full validation.
 
 - `cargo fmt --all -- --check` — formatting.
 - `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` — lint.
