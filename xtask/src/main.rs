@@ -8,6 +8,7 @@ use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process;
 use std::process::{Command, ExitStatus};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -23,6 +24,7 @@ fn main() -> Result<()> {
         "build" => build(&root),
         "build-plugin" => build_plugin(&root),
         "install" => install(&root),
+        "stage-install" => stage_install(&root).map(|_| ()),
         "fmt" => fmt(&root),
         "lint" => lint(&root),
         "test" => test(&root),
@@ -126,18 +128,38 @@ fn build_plugin(root: &Path) -> Result<()> {
 
 /// The built presence-plugin artifact, honoring a `CARGO_TARGET_DIR` override.
 fn plugin_artifact(root: &Path) -> PathBuf {
-    let target_dir = env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("target"));
-    target_dir
+    target_dir(root)
         .join("wasm32-wasip1")
         .join("release")
         .join("rimz-presence-zellij.wasm")
 }
 
-/// Where `cargo install` lands binaries — the same ladder cargo itself walks —
-/// so the `.wasm` copied beside them is found by the sibling-file resolution
-/// in `rimz` (`presence_plugin_path`).
+fn target_dir(root: &Path) -> PathBuf {
+    let dir = env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("target"));
+    if dir.is_absolute() {
+        dir
+    } else {
+        root.join(dir)
+    }
+}
+
+fn release_artifact(root: &Path, bin: &str) -> PathBuf {
+    let mut artifact = target_dir(root).join("release").join(bin);
+    if !env::consts::EXE_EXTENSION.is_empty() {
+        artifact.set_extension(env::consts::EXE_EXTENSION);
+    }
+    artifact
+}
+
+fn stage_bin_dir(root: &Path) -> PathBuf {
+    target_dir(root).join("xtask").join("install").join("bin")
+}
+
+/// Where a user install lands binaries — the same ladder `cargo install` walks —
+/// so the `.wasm` copied beside them is found by the sibling-file resolution in
+/// `rimz` (`presence_plugin_path`).
 fn cargo_install_bin_dir() -> PathBuf {
     if let Some(install_root) = env::var_os("CARGO_INSTALL_ROOT") {
         return PathBuf::from(install_root).join("bin");
@@ -153,32 +175,64 @@ fn cargo_install_bin_dir() -> PathBuf {
 }
 
 fn install(root: &Path) -> Result<()> {
-    for (path, bin) in [
-        ("crates/rimz", "rimz"),
-        ("crates/rimz-sidebar", "rimz-sidebar"),
-    ] {
+    let stage = stage_install(root)?;
+    let dest_dir = cargo_install_bin_dir();
+    fs::create_dir_all(&dest_dir).with_context(|| format!("creating {}", dest_dir.display()))?;
+    for artifact in INSTALL_ARTIFACTS {
+        copy_atomically(&stage.join(artifact), &dest_dir.join(artifact))?;
+    }
+    Ok(())
+}
+
+const INSTALL_ARTIFACTS: [&str; 3] = ["rimz", "rimz-sidebar", "rimz-presence-zellij.wasm"];
+
+fn stage_install(root: &Path) -> Result<PathBuf> {
+    for (package, bin) in [("rimz", "rimz"), ("rimz-sidebar", "rimz-sidebar")] {
         run(
             root,
             "cargo",
             [
-                "install", "--path", path, "--bin", bin, "--locked", "--force",
+                "build",
+                "-p",
+                package,
+                "--bin",
+                bin,
+                "--release",
+                "--locked",
             ],
         )?;
     }
-    // The presence plugin is an artifact, not an executable — `cargo install`
-    // has no story for it, so build and place it beside the installed bins
-    // where `rimz` resolves it as a sibling file. Temp-then-rename so a
-    // running session never loads a half-copied wasm.
     build_plugin(root)?;
+    let stage = stage_bin_dir(root);
+    fs::create_dir_all(&stage).with_context(|| format!("creating {}", stage.display()))?;
+    for bin in ["rimz", "rimz-sidebar"] {
+        copy_atomically(&release_artifact(root, bin), &stage.join(bin))?;
+    }
     let artifact = plugin_artifact(root);
-    let dest_dir = cargo_install_bin_dir();
-    fs::create_dir_all(&dest_dir).with_context(|| format!("creating {}", dest_dir.display()))?;
-    let dest = dest_dir.join("rimz-presence-zellij.wasm");
-    let staged = dest_dir.join("rimz-presence-zellij.wasm.tmp");
-    fs::copy(&artifact, &staged)
-        .with_context(|| format!("staging {} to {}", artifact.display(), staged.display()))?;
-    fs::rename(&staged, &dest)
-        .with_context(|| format!("installing plugin to {}", dest.display()))?;
+    copy_atomically(&artifact, &stage.join("rimz-presence-zellij.wasm"))?;
+    Ok(stage)
+}
+
+fn copy_atomically(source: &Path, dest: &Path) -> Result<()> {
+    let parent = dest
+        .parent()
+        .with_context(|| format!("{} has no parent directory", dest.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    let file_name = dest
+        .file_name()
+        .with_context(|| format!("{} has no file name", dest.display()))?
+        .to_string_lossy();
+    let staged = parent.join(format!(".{file_name}.tmp.{}", process::id()));
+    match fs::remove_file(&staged) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(err).with_context(|| format!("removing {}", staged.display()));
+        }
+    }
+    fs::copy(source, &staged)
+        .with_context(|| format!("staging {} to {}", source.display(), staged.display()))?;
+    fs::rename(&staged, dest).with_context(|| format!("installing {}", dest.display()))?;
     Ok(())
 }
 
