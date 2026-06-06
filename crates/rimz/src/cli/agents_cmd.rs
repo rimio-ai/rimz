@@ -69,11 +69,12 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     for kind in args.kinds {
         let adapter = rimz::agents::find_adapter(&kind)
             .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
-        let cwd = super::tab::resolve_cwd(
+        let launch = super::tab::resolve_cwd(
             &workspace,
             &machine_config.worktree,
             args.worktree.as_deref(),
         )?;
+        let cwd = launch.cwd;
         let layout = LayoutSpec::single(Cell::Agent(adapter.descriptor().kind_id()));
         let title = rimz::tab_layout::default_tab_title(&layout, &cwd);
         let room = RoomTarget {

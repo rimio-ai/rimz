@@ -35,14 +35,14 @@ pub fn run(args: TabArgs, globals: &GlobalFlags) -> Result<()> {
     let machine_config = super::machine_config();
     let layout =
         rimz::tab_layout::resolve_layout(args.layout.as_deref(), &machine_config.agents.layouts)?;
-    let cwd = resolve_cwd(
+    let launch = resolve_cwd(
         &workspace,
         &machine_config.worktree,
         args.worktree.as_deref(),
     )?;
     let title = args
         .name
-        .unwrap_or_else(|| rimz::tab_layout::default_tab_title(&layout, &cwd));
+        .unwrap_or_else(|| default_tab_title(&layout, &launch));
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
     ensure_live_session(backend.as_ref(), &workspace.session_name)?;
@@ -55,7 +55,7 @@ pub fn run(args: TabArgs, globals: &GlobalFlags) -> Result<()> {
         workspace_id: &workspace.workspace_id,
         project_root: &workspace.project_root,
         session_name: &workspace.session_name,
-        cwd: &cwd,
+        cwd: &launch.cwd,
         mux_config: &mux_config,
         width,
         detected_size,
@@ -63,14 +63,14 @@ pub fn run(args: TabArgs, globals: &GlobalFlags) -> Result<()> {
     let sidebar = super::build_sidebar_opts(&room, Vec::new())?;
     let panes = layout_panes(
         &layout,
-        &cwd,
+        &launch.cwd,
         args.prompt.as_deref(),
         args.worktree.is_some(),
     )?;
     backend.open_tab(&TabOptions {
         session_name: workspace.session_name,
         title,
-        cwd,
+        cwd: launch.cwd,
         panes,
         focus: !args.no_focus,
         sidebar,
@@ -82,9 +82,12 @@ pub(crate) fn resolve_cwd(
     workspace: &rimz::ResolvedWorkspace,
     config: &rimz::config::WorktreeConfig,
     worktree: Option<&str>,
-) -> Result<PathBuf> {
+) -> Result<ResolvedCwd> {
     let Some(raw_name) = worktree else {
-        return Ok(workspace.worktree_root.clone());
+        return Ok(ResolvedCwd {
+            cwd: workspace.worktree_root.clone(),
+            worktree_name: None,
+        });
     };
     if workspace.root_class != RootClass::Repo {
         bail!("--worktree requires a git repository-backed room");
@@ -98,7 +101,31 @@ pub(crate) fn resolve_cwd(
         None,
         !name.is_empty(),
     )?;
-    Ok(created.path)
+    Ok(ResolvedCwd {
+        cwd: created.path,
+        worktree_name: Some(created.name),
+    })
+}
+
+pub(crate) struct ResolvedCwd {
+    pub(crate) cwd: PathBuf,
+    pub(crate) worktree_name: Option<String>,
+}
+
+fn default_tab_title(layout: &LayoutSpec, launch: &ResolvedCwd) -> String {
+    if let Some(name) = launch.worktree_name.as_deref() {
+        format!("⑂ {name}")
+    } else {
+        tab_title_name(&launch.cwd)
+            .unwrap_or_else(|| rimz::tab_layout::default_tab_title(layout, &launch.cwd))
+    }
+}
+
+fn tab_title_name(cwd: &Path) -> Option<String> {
+    cwd.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 pub(crate) fn layout_panes(
@@ -187,5 +214,39 @@ mod tests {
         assert!(agent.iter().any(|arg| arg == "--worktree-path"));
         assert!(agent.iter().any(|arg| arg == "hi"));
         assert!(!panes.columns[0][1].argv.is_empty());
+    }
+
+    #[test]
+    fn worktree_tab_title_uses_resolved_worktree_name() {
+        let layout = LayoutSpec {
+            columns: vec![Column {
+                rows: vec![
+                    Cell::Agent(AgentKind::new_unchecked("claude")),
+                    Cell::Agent(AgentKind::new_unchecked("codex")),
+                    Cell::Term,
+                ],
+            }],
+        };
+        let launch = ResolvedCwd {
+            cwd: PathBuf::from("/repo-worktrees/worktree-name"),
+            worktree_name: Some("worktree-name".to_owned()),
+        };
+
+        assert_eq!(default_tab_title(&layout, &launch), "⑂ worktree-name");
+    }
+
+    #[test]
+    fn non_worktree_tab_title_uses_plain_directory_name() {
+        let layout = LayoutSpec {
+            columns: vec![Column {
+                rows: vec![Cell::Agent(AgentKind::new_unchecked("claude"))],
+            }],
+        };
+        let launch = ResolvedCwd {
+            cwd: PathBuf::from("/repo/main"),
+            worktree_name: None,
+        };
+
+        assert_eq!(default_tab_title(&layout, &launch), "main");
     }
 }

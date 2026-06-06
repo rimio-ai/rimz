@@ -66,7 +66,7 @@ rimz agents <KIND>... [--worktree [NAME]] [--prompt <text>] [--no-focus]
 
 `rimz tab` opens one Zellij tab or tmux window in the current room. `--layout` accepts a named `[agents.layouts]` entry or an inline spec: commas split columns, plus signs stack rows, and cells are agent kinds (`claude`, `codex`, `pi`) or `term`; the built-in `dual` layout is `claude,codex`, and no layout is one terminal.
 
-`--worktree` creates or reuses a Rimz-owned worktree and runs every cell in it. A bare `--worktree` creates a fresh generated name; `--worktree demo` reuses `demo` when marked or creates it. `--prompt` is passed to agent cells; `term` cells run your shell.
+`--worktree` creates or reuses a Rimz-owned worktree and runs every cell in it. A bare `--worktree` creates a fresh generated name; `--worktree demo` reuses `demo` when marked or creates it. New worktree branches use the worktree name directly unless `rimz worktree new --branch` overrides it. `rimz tab` defaults to the cwd basename as the view title; `rimz tab --worktree demo` defaults to `⑂ demo`; `--name` overrides the title. `--prompt` is passed to agent cells; `term` cells run your shell.
 
 `rimz agents` is launcher sugar: each positional kind opens its own single-agent tab. Repeating a kind opens a fleet. Bare `--worktree` creates one fresh worktree per agent; a named worktree is shared by all launched agents. Details and cleanup state machine: [internals/worktrees.md](../internals/worktrees.md).
 

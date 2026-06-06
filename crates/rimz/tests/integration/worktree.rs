@@ -27,7 +27,7 @@ fn worktree_new_list_and_remove_round_trip() {
     assert!(path.is_dir(), "worktree path exists");
     assert_eq!(
         git_stdout(&path, &["rev-parse", "--abbrev-ref", "HEAD"]),
-        "rimz/demo"
+        "demo"
     );
     assert!(
         rimz::worktree::marker_path(&path)

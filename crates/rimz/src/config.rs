@@ -107,8 +107,6 @@ pub struct WorktreeConfig {
     /// Base ref for new worktrees: local `HEAD`, remote `origin/HEAD`, or an
     /// explicit ref string.
     pub base: WorktreeBase,
-    /// Branch name prefix for auto-created worktree branches.
-    pub branch_prefix: String,
 }
 
 impl Default for WorktreeConfig {
@@ -116,7 +114,6 @@ impl Default for WorktreeConfig {
         Self {
             dir: "../{repo}-worktrees".to_owned(),
             base: WorktreeBase::Head,
-            branch_prefix: "rimz/".to_owned(),
         }
     }
 }
@@ -720,19 +717,16 @@ mod tests {
         let defaults = MachineConfig::load_from(&write(&dir, "")).expect("load");
         assert_eq!(defaults.worktree.dir, "../{repo}-worktrees");
         assert_eq!(defaults.worktree.base, WorktreeBase::Head);
-        assert_eq!(defaults.worktree.branch_prefix, "rimz/");
 
         let config = MachineConfig::load_from(&write(
             &dir,
             "[worktree]\n\
              dir = \"../wt-{repo}\"\n\
-             base = \"fresh\"\n\
-             branch_prefix = \"agents/\"\n",
+             base = \"fresh\"\n",
         ))
         .expect("load");
         assert_eq!(config.worktree.dir, "../wt-{repo}");
         assert_eq!(config.worktree.base, WorktreeBase::Fresh);
-        assert_eq!(config.worktree.branch_prefix, "agents/");
 
         let explicit =
             MachineConfig::load_from(&write(&dir, "[worktree]\nbase = \"main\"\n")).expect("load");

@@ -88,10 +88,9 @@ When a session is reborn — reboot, multiplexer crash, or a Rimz-initiated rebi
 [worktree]
 dir = "../{repo}-worktrees"   # relative to the repo root; {repo} expands to the root basename
 base = "head"                 # "head" | "fresh" | any git ref
-branch_prefix = "rimz/"
 ```
 
-`rimz worktree`, `rimz tab --worktree`, and `rimz agents --worktree` use this section when creating Rimz-owned Git worktrees. `head` branches from local `HEAD`; `fresh` branches from `origin/HEAD`; any other string is passed to Git as the base ref. The marker lives in the worktree's Git admin directory, not the checkout. Mechanics in [internals/worktrees.md](../internals/worktrees.md).
+`rimz worktree`, `rimz tab --worktree`, and `rimz agents --worktree` use this section when creating Rimz-owned Git worktrees. The branch name is the worktree name unless `rimz worktree new --branch` supplies an explicit name. `head` branches from local `HEAD`; `fresh` branches from `origin/HEAD`; any other string is passed to Git as the base ref. The marker lives in the worktree's Git admin directory, not the checkout. Mechanics in [internals/worktrees.md](../internals/worktrees.md).
 
 ### Agent tab layouts
 

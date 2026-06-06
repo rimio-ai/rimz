@@ -148,7 +148,7 @@ pub fn create(
     let base_ref = base.as_refspec().to_owned();
     let branch = branch
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("{}{}", config.branch_prefix, name));
+        .unwrap_or_else(|| name.clone());
     if branch.trim().is_empty() {
         return Err(WorktreeErr::Parse(
             "worktree branch cannot be empty".to_owned(),
@@ -515,7 +515,7 @@ branch refs/heads/main
 
 worktree /code/query-engine-worktrees/swift-otter
 HEAD def
-branch refs/heads/rimz/swift-otter
+branch refs/heads/swift-otter
 
 ";
         assert_eq!(
@@ -527,7 +527,7 @@ branch refs/heads/rimz/swift-otter
                 },
                 WorktreeRow {
                     path: PathBuf::from("/code/query-engine-worktrees/swift-otter"),
-                    branch: Some("rimz/swift-otter".to_owned())
+                    branch: Some("swift-otter".to_owned())
                 }
             ]
         );
@@ -540,11 +540,11 @@ branch refs/heads/rimz/swift-otter
         let rows = vec![
             WorktreeRow {
                 path: a.clone(),
-                branch: Some("rimz/a".to_owned()),
+                branch: Some("a".to_owned()),
             },
             WorktreeRow {
                 path: b.clone(),
-                branch: Some("rimz/b".to_owned()),
+                branch: Some("b".to_owned()),
             },
         ];
         let marked = BTreeSet::from([a.clone(), b.clone()]);

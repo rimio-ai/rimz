@@ -22,7 +22,7 @@ enum WorktreeSubcmd {
         /// Base ref: `head`, `fresh`, or any git ref.
         #[arg(long, value_parser = parse_base)]
         base: Option<WorktreeBase>,
-        /// Branch to create instead of `<branch_prefix><name>`.
+        /// Branch to create instead of `<name>`.
         #[arg(long)]
         branch: Option<String>,
     },
