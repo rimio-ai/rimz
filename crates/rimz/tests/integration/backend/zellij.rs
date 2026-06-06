@@ -21,8 +21,8 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{
-    DaemonView, HostPane, MuxBackend, PaneListOptions, SessionHealth, SidebarPaneOptions,
-    SidebarWidth, ZellijBackend, zellij,
+    DaemonView, HostPane, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, SessionHealth,
+    SidebarPaneOptions, SidebarWidth, TabOptions, ZellijBackend, zellij,
 };
 use tempfile::TempDir;
 
@@ -1544,6 +1544,82 @@ fn under_cap_birth_pins_the_start_verdict_in_new_tabs() {
         wait_for_sidebar_columns(xdg.path(), &name, &[100..=103, 60..=60]),
         "a tab opened after the terminal grew must be born at the start \
          verdict (60 columns), got {:?}",
+        sidebar_columns_by_tab(xdg.path(), &name),
+    );
+}
+
+/// `rimz tab --layout` renders its own `new-tab --layout`, so it bypasses
+/// Zellij's `new_tab_template`. It must still mirror that template's fixed
+/// sidebar width rather than using the invoking pane's terminal size. The
+/// simulated command probe here is 226 columns, which would produce a
+/// 67-column sidebar under the old code; the room template is 72.
+#[test]
+fn custom_tab_layout_uses_the_new_tab_template_sidebar_width() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("customw");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+    let width = SidebarWidth::default();
+    let sidebar = SidebarPaneOptions {
+        session_name: name.clone(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-custom-width")),
+        project_root: cwd.path().to_path_buf(),
+        cwd: cwd.path().to_path_buf(),
+        width,
+        birth_size: width.birth_size(Some(340)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_panes: Vec::new(),
+    };
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    backend.open_sidebar(&sidebar, None).expect("open_sidebar");
+    wait_for_pane_count(xdg.path(), &name, 2);
+
+    let _client = AttachedClient::attach(xdg.path(), &name, 340, 80);
+    assert!(
+        wait_for_sidebar_columns(xdg.path(), &name, &[69..=72]),
+        "the attached session must settle the birth sidebar, got {:?}",
+        sidebar_columns_by_tab(xdg.path(), &name),
+    );
+
+    open_new_tab(xdg.path(), &name);
+    wait_for_tab_count(xdg.path(), &name, 2);
+    assert!(
+        wait_for_sidebar_columns(xdg.path(), &name, &[69..=72, 72..=72]),
+        "the normal Zellij new tab must use the 72-column template, got {:?}",
+        sidebar_columns_by_tab(xdg.path(), &name),
+    );
+
+    let command_probe_sidebar = SidebarPaneOptions {
+        birth_size: width.birth_size(Some(226)),
+        ..sidebar
+    };
+    backend
+        .open_tab(&TabOptions {
+            session_name: name.clone(),
+            title: "custom".to_owned(),
+            cwd: cwd.path().to_path_buf(),
+            panes: LayoutPanes {
+                columns: vec![vec![PaneCmd {
+                    argv: vec!["sleep".to_owned(), "120".to_owned()],
+                }]],
+            },
+            focus: true,
+            sidebar: command_probe_sidebar,
+        })
+        .expect("open custom tab layout");
+    wait_for_tab_count(xdg.path(), &name, 3);
+    assert!(
+        wait_for_sidebar_columns(xdg.path(), &name, &[69..=72, 72..=72, 72..=72]),
+        "custom tab layouts must mirror the normal Zellij tab width, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
     );
 }

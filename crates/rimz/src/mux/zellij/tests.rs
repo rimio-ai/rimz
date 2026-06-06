@@ -409,6 +409,42 @@ fn live_session_name_excludes_exited_rows() {
 }
 
 #[test]
+fn new_tab_template_sidebar_cols_reads_the_fixed_width() {
+    let layout = r#"
+layout {
+    tab {
+        pane split_direction="vertical" {
+            pane name="rimz-sidebar" size="24%"
+            pane
+        }
+    }
+    new_tab_template {
+        pane split_direction="vertical" {
+            pane name="rimz-sidebar" size=72
+            pane focus=true
+        }
+    }
+}
+"#;
+    assert_eq!(new_tab_template_sidebar_cols(layout), NonZeroU16::new(72));
+}
+
+#[test]
+fn new_tab_template_sidebar_cols_ignores_percentage_sizes() {
+    let layout = r#"
+layout {
+    new_tab_template {
+        pane split_direction="vertical" {
+            pane name="rimz-sidebar" size="24%"
+            pane focus=true
+        }
+    }
+}
+"#;
+    assert_eq!(new_tab_template_sidebar_cols(layout), None);
+}
+
+#[test]
 fn raw_pane_deserializes_tab_name_and_geometry() {
     // The identity and geometry fields Zellij 0.44 actually emits per terminal
     // pane — no live command, cwd, or pid fields exist in its `list-panes -j`

@@ -3,6 +3,7 @@
 //! the RAII temp file the async `--default-layout` parse reads from. Pure
 //! `&options → String` renderers — no backend state, no subprocess.
 
+use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 
 use super::SIDEBAR_PANE_NAME;
@@ -69,6 +70,7 @@ fn sidebar_pane_kdl(
     opts: &SidebarPaneOptions,
     cwd: Option<&Path>,
     geometry: BirthGeometry,
+    fixed_cols: Option<NonZeroU16>,
 ) -> Result<String> {
     let rimz_bin = kdl_string(&opts.rimz_bin.to_string_lossy())?;
     let workspace_id = kdl_string(opts.workspace_id.as_str())?;
@@ -78,7 +80,7 @@ fn sidebar_pane_kdl(
     // verdict via `SidebarWidth::birth_size`, and `geometry` picks the
     // spelling that survives where the pane instantiates ([`BirthGeometry`]).
     let size = match geometry {
-        BirthGeometry::Attached => opts.birth_size.cols.to_string(),
+        BirthGeometry::Attached => fixed_cols.unwrap_or(opts.birth_size.cols).to_string(),
         BirthGeometry::Detached => kdl_string(&format!("{}%", opts.birth_size.percent))?,
     };
     let pane_name = kdl_string(SIDEBAR_PANE_NAME)?;
@@ -97,8 +99,8 @@ fn sidebar_pane_kdl(
 }
 
 pub(super) fn render_sidebar_layout(opts: &SidebarPaneOptions) -> Result<String> {
-    let sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Detached)?;
-    let new_tab_sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Attached)?;
+    let sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Detached, None)?;
+    let new_tab_sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Attached, None)?;
     // Every tab carries the same shape — the sidebar on the left and a focused
     // terminal on the right — in the spelling that fits where it instantiates:
     // the `default_tab_template` wraps the explicit birth tab on the detached
@@ -156,8 +158,8 @@ pub(super) fn render_session_layout(
 ) -> Result<String> {
     // The explicit tabs instantiate on the detached background session at
     // birth; only the `new_tab_template` waits for an attached client.
-    let sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Detached)?;
-    let new_tab_sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Attached)?;
+    let sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Detached, None)?;
+    let new_tab_sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Attached, None)?;
 
     // The daemon tab leads, when present.
     let daemon_tab = match daemon {
@@ -256,6 +258,7 @@ pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Res
         &opts.sidebar,
         Some(&opts.sidebar.cwd),
         BirthGeometry::Detached,
+        None,
     )?;
     let host_panes = opts
         .hosts
@@ -279,7 +282,10 @@ pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Res
 /// A user-opened tab born with the global sidebar docked on the left and the
 /// caller's columns to the right. Columns split vertically; rows inside a
 /// column split horizontally. Every command pane shares `opts.cwd`.
-pub(super) fn render_tab_layout(opts: &TabOptions) -> Result<String> {
+pub(super) fn render_tab_layout(
+    opts: &TabOptions,
+    template_sidebar_cols: Option<NonZeroU16>,
+) -> Result<String> {
     if opts.panes.columns.is_empty() {
         return Err(MuxErr::Output {
             program: "zellij".to_owned(),
@@ -290,6 +296,7 @@ pub(super) fn render_tab_layout(opts: &TabOptions) -> Result<String> {
         &opts.sidebar,
         Some(&opts.sidebar.cwd),
         BirthGeometry::Attached,
+        template_sidebar_cols,
     )?;
     let mut focused = false;
     let mut columns = String::new();
@@ -609,7 +616,7 @@ mod tests {
             focus: true,
             sidebar,
         };
-        let layout = render_tab_layout(&opts).expect("render tab layout");
+        let layout = render_tab_layout(&opts, None).expect("render tab layout");
         assert!(
             layout.contains(r#"pane size=72 name="rimz-sidebar""#),
             "custom tab layouts instantiate from a live client, so the \
@@ -627,6 +634,29 @@ mod tests {
         );
         assert!(layout.contains(r#"command "codex""#), "{layout}");
         assert_eq!(layout.matches("focus=true").count(), 1, "{layout}");
+    }
+
+    #[test]
+    fn tab_layout_can_mirror_the_new_tab_template_sidebar_width() {
+        let sidebar = background_view_opts(vec![]).sidebar;
+        let opts = TabOptions {
+            session_name: sidebar.session_name.clone(),
+            title: "review".to_owned(),
+            cwd: PathBuf::from("/proj/worktree"),
+            panes: crate::mux::LayoutPanes {
+                columns: vec![vec![PaneCmd {
+                    argv: vec!["/bin/sh".to_owned()],
+                }]],
+            },
+            focus: true,
+            sidebar,
+        };
+        let layout = render_tab_layout(&opts, NonZeroU16::new(60)).expect("render tab layout");
+        assert!(
+            layout.contains(r#"pane size=60 name="rimz-sidebar""#),
+            "custom tab layouts must be able to mirror the live \
+             new_tab_template instead of this command's pane-width probe:\n{layout}",
+        );
     }
 
     fn daemon_view(hosts: Vec<HostPane>) -> DaemonView {

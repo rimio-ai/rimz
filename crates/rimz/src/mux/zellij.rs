@@ -13,6 +13,7 @@
 mod layout;
 
 use std::env;
+use std::num::NonZeroU16;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -894,6 +895,16 @@ impl ZellijBackend {
     fn session_has_named_tab(&self, session: &str, tab_name: &str) -> Result<bool> {
         Ok(self.tab_names(session)?.iter().any(|name| name == tab_name))
     }
+
+    /// The fixed sidebar width carried by Zellij's `new_tab_template`.
+    /// `rimz tab --layout` supplies its own layout and therefore bypasses that
+    /// template, so it mirrors the template's width explicitly when Zellij can
+    /// report it. A failure falls back to this command's birth verdict.
+    fn new_tab_template_sidebar_cols(&self, session: &str) -> Result<Option<NonZeroU16>> {
+        let output = self.zellij_action(session).arg("dump-layout").run()?;
+        let layout = String::from_utf8_lossy(&output.stdout);
+        Ok(new_tab_template_sidebar_cols(&layout))
+    }
 }
 
 impl MuxBackend for ZellijBackend {
@@ -1319,7 +1330,11 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn open_tab(&self, opts: &TabOptions) -> Result<()> {
-        let layout = TempLayoutFile::new(render_tab_layout(opts)?)?;
+        let template_sidebar_cols = self
+            .new_tab_template_sidebar_cols(&opts.session_name)
+            .ok()
+            .flatten();
+        let layout = TempLayoutFile::new(render_tab_layout(opts, template_sidebar_cols)?)?;
         self.zellij_action(&opts.session_name)
             .args([
                 "new-tab".to_owned(),
@@ -1498,6 +1513,243 @@ fn live_session_name_from_line(line: &str) -> Option<String> {
         Some(SessionState::Live)
     )
     .then(|| name.to_owned())
+}
+
+fn new_tab_template_sidebar_cols(layout: &str) -> Option<NonZeroU16> {
+    let tokens = tokenize_zellij_layout(layout)?;
+    let template_open = tokens
+        .iter()
+        .enumerate()
+        .find_map(|(index, token)| match &token.kind {
+            KdlTokenKind::Ident(name) if name == "new_tab_template" => tokens[index + 1..]
+                .iter()
+                .position(|token| matches!(token.kind, KdlTokenKind::LBrace))
+                .map(|offset| index + 1 + offset),
+            _ => None,
+        })?;
+    let template_close = matching_brace(&tokens, template_open)?;
+    sidebar_cols_from_template_tokens(&tokens[template_open + 1..template_close])
+}
+
+fn sidebar_cols_from_template_tokens(tokens: &[KdlToken]) -> Option<NonZeroU16> {
+    for (index, token) in tokens.iter().enumerate() {
+        let KdlTokenKind::Ident(node) = &token.kind else {
+            continue;
+        };
+        if node != "pane" {
+            continue;
+        }
+
+        let line = token.line;
+        let mut name_is_sidebar = false;
+        let mut size = None;
+        let mut cursor = index + 1;
+        while let Some(token) = tokens.get(cursor) {
+            if token.line != line
+                || matches!(token.kind, KdlTokenKind::LBrace | KdlTokenKind::RBrace)
+            {
+                break;
+            }
+            let Some((key, value)) = kdl_property_on_line(tokens, cursor, line) else {
+                cursor += 1;
+                continue;
+            };
+            match (key, value) {
+                ("name", KdlTokenKind::String(value)) if value == SIDEBAR_PANE_NAME => {
+                    name_is_sidebar = true;
+                }
+                ("size", KdlTokenKind::Number(value)) => {
+                    size = u16::try_from(*value).ok().and_then(NonZeroU16::new);
+                }
+                _ => {}
+            }
+            cursor += 3;
+        }
+        if name_is_sidebar && let Some(size) = size {
+            return Some(size);
+        }
+    }
+    None
+}
+
+fn kdl_property_on_line(
+    tokens: &[KdlToken],
+    index: usize,
+    line: usize,
+) -> Option<(&str, &KdlTokenKind)> {
+    let key = match &tokens.get(index)?.kind {
+        KdlTokenKind::Ident(key) => key.as_str(),
+        _ => return None,
+    };
+    let equals = tokens.get(index + 1)?;
+    let value = tokens.get(index + 2)?;
+    (equals.line == line && value.line == line && matches!(equals.kind, KdlTokenKind::Equals))
+        .then_some((key, &value.kind))
+}
+
+fn matching_brace(tokens: &[KdlToken], open: usize) -> Option<usize> {
+    if !matches!(tokens.get(open)?.kind, KdlTokenKind::LBrace) {
+        return None;
+    }
+    let mut depth = 0_u32;
+    for (index, token) in tokens.iter().enumerate().skip(open) {
+        match token.kind {
+            KdlTokenKind::LBrace => depth += 1,
+            KdlTokenKind::RBrace => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct KdlToken {
+    kind: KdlTokenKind,
+    line: usize,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum KdlTokenKind {
+    Ident(String),
+    String(String),
+    Number(i64),
+    Equals,
+    LBrace,
+    RBrace,
+}
+
+/// Tokenize the subset of Zellij-generated KDL needed from `dump-layout`.
+/// Strings and braces are honored so the template walk never matches text
+/// inside argv, cwd, or command values; unsupported shapes degrade to `None`.
+fn tokenize_zellij_layout(input: &str) -> Option<Vec<KdlToken>> {
+    let mut tokens = Vec::new();
+    let mut chars = input.char_indices().peekable();
+    let mut line = 1;
+    while let Some((_, ch)) = chars.peek().copied() {
+        match ch {
+            '\n' => {
+                line += 1;
+                chars.next();
+            }
+            ch if ch.is_whitespace() => {
+                chars.next();
+            }
+            '/' => {
+                chars.next();
+                if chars.peek().is_some_and(|(_, next)| *next == '/') {
+                    for (_, skipped) in chars.by_ref() {
+                        if skipped == '\n' {
+                            line += 1;
+                            break;
+                        }
+                    }
+                } else {
+                    tokens.push(KdlToken {
+                        kind: KdlTokenKind::Ident("/".to_owned()),
+                        line,
+                    });
+                }
+            }
+            '{' => {
+                tokens.push(KdlToken {
+                    kind: KdlTokenKind::LBrace,
+                    line,
+                });
+                chars.next();
+            }
+            '}' => {
+                tokens.push(KdlToken {
+                    kind: KdlTokenKind::RBrace,
+                    line,
+                });
+                chars.next();
+            }
+            '=' => {
+                tokens.push(KdlToken {
+                    kind: KdlTokenKind::Equals,
+                    line,
+                });
+                chars.next();
+            }
+            '"' => {
+                tokens.push(KdlToken {
+                    kind: KdlTokenKind::String(read_kdl_string(&mut chars, &mut line)?),
+                    line,
+                });
+            }
+            '-' | '+' | '0'..='9' => {
+                tokens.push(KdlToken {
+                    kind: read_kdl_number_or_ident(&mut chars),
+                    line,
+                });
+            }
+            _ => {
+                tokens.push(KdlToken {
+                    kind: KdlTokenKind::Ident(read_kdl_ident(&mut chars)),
+                    line,
+                });
+            }
+        }
+    }
+    Some(tokens)
+}
+
+fn read_kdl_string(
+    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    line: &mut usize,
+) -> Option<String> {
+    let (_, quote) = chars.next()?;
+    if quote != '"' {
+        return None;
+    }
+    let mut value = String::new();
+    while let Some((_, ch)) = chars.next() {
+        match ch {
+            '"' => return Some(value),
+            '\\' => {
+                if let Some((_, escaped)) = chars.next() {
+                    if escaped == '\n' {
+                        *line += 1;
+                    }
+                    value.push(escaped);
+                } else {
+                    return None;
+                }
+            }
+            '\n' => {
+                *line += 1;
+                value.push(ch);
+            }
+            _ => value.push(ch),
+        }
+    }
+    None
+}
+
+fn read_kdl_number_or_ident(
+    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+) -> KdlTokenKind {
+    let raw = read_kdl_ident(chars);
+    raw.parse::<i64>()
+        .map(KdlTokenKind::Number)
+        .unwrap_or(KdlTokenKind::Ident(raw))
+}
+
+fn read_kdl_ident(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>) -> String {
+    let mut value = String::new();
+    while let Some((_, ch)) = chars.peek().copied() {
+        if ch.is_whitespace() || matches!(ch, '{' | '}' | '=' | '"') {
+            break;
+        }
+        value.push(ch);
+        chars.next();
+    }
+    value
 }
 
 /// A live, non-plugin sidebar pane is one Zellij still titles with the layout's
