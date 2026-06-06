@@ -52,12 +52,36 @@ fn zellij_options_render_room_defaults() {
         "`--mouse-mode true` disables mouse reporting on Zellij 0.44.3; \
              rely on Zellij's default enabled state"
     );
+    assert!(has("--default-mode", "locked"));
     assert!(has("--mouse-click-through", "true"));
+    assert!(has("--advanced-mouse-actions", "false"));
+    assert!(has("--mouse-hover-effects", "false"));
     assert!(has("--focus-follows-mouse", "false"));
     assert!(has("--pane-frames", "false"));
     assert!(has("--copy-clipboard", "system"));
     assert!(has("--support-kitty-keyboard-protocol", "true"));
     assert!(has("--session-serialization", "false"));
+}
+
+#[test]
+fn zellij_options_gate_newer_mouse_flags() {
+    let args = zellij_options_args(&ZellijConfig::default(), Some((0, 42, 9)));
+    assert!(
+        !args.iter().any(|arg| arg == "--advanced-mouse-actions"),
+        "Zellij before 0.43 rejects advanced mouse action options"
+    );
+    assert!(
+        !args.iter().any(|arg| arg == "--mouse-hover-effects"),
+        "Zellij before 0.44 rejects mouse hover effect options"
+    );
+
+    let args = zellij_options_args(&ZellijConfig::default(), Some((0, 43, 0)));
+    let has = |flag: &str, value: &str| {
+        args.windows(2)
+            .any(|pair| pair[0] == flag && pair[1] == value)
+    };
+    assert!(has("--advanced-mouse-actions", "false"));
+    assert!(!args.iter().any(|arg| arg == "--mouse-hover-effects"));
 }
 
 #[test]
@@ -85,6 +109,8 @@ fn session_serialization_is_not_version_gated() {
     assert!(has("--session-serialization", "false"));
     // And the gated option is correctly absent at an unknown version.
     assert!(!args.iter().any(|arg| arg == "--mouse-click-through"));
+    assert!(!args.iter().any(|arg| arg == "--advanced-mouse-actions"));
+    assert!(!args.iter().any(|arg| arg == "--mouse-hover-effects"));
 }
 
 #[test]

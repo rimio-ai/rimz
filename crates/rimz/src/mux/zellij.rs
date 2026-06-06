@@ -45,10 +45,18 @@ const PRESENCE_PLUGIN_FILE: &str = "rimz-presence-zellij.wasm";
 /// as a best-effort wakeup optimization.
 pub const MIN_ZELLIJ_VERSION: (u32, u32, u32) = (0, 41, 0);
 
+/// Minimum Zellij version that ships `advanced_mouse_actions`. Below this the
+/// flag is unknown, so Rimz omits it and accepts Zellij's older defaults.
+const MIN_ADVANCED_MOUSE_ACTIONS_VERSION: (u32, u32, u32) = (0, 43, 0);
+
 /// Minimum Zellij version that ships the `mouse_click_through` option. Below
 /// this the flag is unknown, so we omit it — a single click then focuses the
 /// sidebar without reaching the renderer (degrade, never error).
 const MIN_MOUSE_CLICK_THROUGH_VERSION: (u32, u32, u32) = (0, 44, 0);
+
+/// Minimum Zellij version that ships `mouse_hover_effects`, the narrower
+/// switch that suppresses hover chrome while leaving other mouse handling alone.
+const MIN_MOUSE_HOVER_EFFECTS_VERSION: (u32, u32, u32) = (0, 44, 0);
 
 /// Pane name the sidebar layout assigns, and the title Zellij reports back for
 /// it. The sole source of truth for both rendering the layout and detecting
@@ -251,6 +259,23 @@ fn mouse_click_through_args(enabled: bool, parsed: Option<(u32, u32, u32)>) -> V
     }
 }
 
+fn versioned_bool_arg(
+    flag: &str,
+    value: bool,
+    parsed: Option<(u32, u32, u32)>,
+    min_version: (u32, u32, u32),
+) -> Vec<String> {
+    if parsed.is_some_and(|v| v >= min_version) {
+        vec![flag.to_owned(), bool_value(value)]
+    } else {
+        Vec::new()
+    }
+}
+
+fn bool_value(value: bool) -> String {
+    if value { "true" } else { "false" }.to_owned()
+}
+
 /// Zellij `options` flags Rimz owns for its rooms. `mouse-click-through` is
 /// version-gated separately because older supported Zellij builds reject the
 /// unknown option; the rest are present at Rimz's Zellij floor.
@@ -258,8 +283,9 @@ fn zellij_options_args(
     config: &ZellijConfig,
     parsed_version: Option<(u32, u32, u32)>,
 ) -> Vec<String> {
-    let bool_value = |value: bool| if value { "true" } else { "false" }.to_owned();
     let mut args = vec![
+        "--default-mode".to_owned(),
+        config.default_mode.as_str().to_owned(),
         "--focus-follows-mouse".to_owned(),
         bool_value(config.focus_follows_mouse),
         "--pane-frames".to_owned(),
@@ -297,6 +323,18 @@ fn zellij_options_args(
     args.extend(mouse_click_through_args(
         config.mouse_click_through,
         parsed_version,
+    ));
+    args.extend(versioned_bool_arg(
+        "--advanced-mouse-actions",
+        config.advanced_mouse_actions,
+        parsed_version,
+        MIN_ADVANCED_MOUSE_ACTIONS_VERSION,
+    ));
+    args.extend(versioned_bool_arg(
+        "--mouse-hover-effects",
+        config.mouse_hover_effects,
+        parsed_version,
+        MIN_MOUSE_HOVER_EFFECTS_VERSION,
     ));
     args
 }

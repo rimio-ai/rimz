@@ -41,8 +41,11 @@ Rimz applies a small set of room defaults when it creates or reattaches a sessio
 
 ```toml
 [zellij]
+default_mode = "locked"                 # "locked" keeps Zellij keys inert until you enter a mode; set "normal" for Zellij's default
 mouse_mode = true
 mouse_click_through = true
+advanced_mouse_actions = false
+mouse_hover_effects = false
 focus_follows_mouse = false
 pane_frames = false
 on_force_close = "detach"              # "detach" | "quit"

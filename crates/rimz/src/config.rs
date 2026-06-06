@@ -172,8 +172,11 @@ pub struct LayoutsConfig(pub BTreeMap<String, String>);
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ZellijConfig {
+    pub default_mode: ZellijDefaultMode,
     pub mouse_mode: bool,
     pub mouse_click_through: bool,
+    pub advanced_mouse_actions: bool,
+    pub mouse_hover_effects: bool,
     pub focus_follows_mouse: bool,
     pub pane_frames: bool,
     pub on_force_close: ZellijForceClose,
@@ -196,8 +199,11 @@ pub struct ZellijConfig {
 impl Default for ZellijConfig {
     fn default() -> Self {
         Self {
+            default_mode: ZellijDefaultMode::locked(),
             mouse_mode: true,
             mouse_click_through: true,
+            advanced_mouse_actions: false,
+            mouse_hover_effects: false,
             focus_follows_mouse: false,
             pane_frames: false,
             on_force_close: ZellijForceClose::Detach,
@@ -210,6 +216,47 @@ impl Default for ZellijConfig {
             osc8_hyperlinks: true,
             session_serialization: false,
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct ZellijDefaultMode(String);
+
+impl ZellijDefaultMode {
+    pub fn locked() -> Self {
+        Self("locked".to_owned())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Default for ZellijDefaultMode {
+    fn default() -> Self {
+        Self::locked()
+    }
+}
+
+impl<'de> Deserialize<'de> for ZellijDefaultMode {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(serde::de::Error::custom(
+                "zellij default_mode cannot be empty",
+            ));
+        }
+        if trimmed.chars().any(char::is_whitespace) {
+            return Err(serde::de::Error::custom(
+                "zellij default_mode cannot contain whitespace",
+            ));
+        }
+        Ok(Self(trimmed.to_owned()))
     }
 }
 
@@ -868,8 +915,11 @@ mod tests {
     fn zellij_room_defaults_are_agent_friendly() {
         let dir = tempdir().expect("tempdir");
         let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+        assert_eq!(config.zellij.default_mode.as_str(), "locked");
         assert!(config.zellij.mouse_mode);
         assert!(config.zellij.mouse_click_through);
+        assert!(!config.zellij.advanced_mouse_actions);
+        assert!(!config.zellij.mouse_hover_effects);
         assert!(!config.zellij.focus_follows_mouse);
         assert!(!config.zellij.pane_frames);
         assert_eq!(config.zellij.on_force_close, ZellijForceClose::Detach);
@@ -889,16 +939,32 @@ mod tests {
         let config = MachineConfig::load_from(&write(
             &dir,
             "[zellij]\n\
+             default_mode = \"normal\"\n\
              pane_frames = true\n\
+             advanced_mouse_actions = true\n\
+             mouse_hover_effects = true\n\
              focus_follows_mouse = false\n\
              copy_clipboard = \"primary\"\n\
              on_force_close = \"quit\"\n",
         ))
         .expect("load");
+        assert_eq!(config.zellij.default_mode.as_str(), "normal");
         assert!(config.zellij.pane_frames);
+        assert!(config.zellij.advanced_mouse_actions);
+        assert!(config.zellij.mouse_hover_effects);
         assert!(!config.zellij.focus_follows_mouse);
         assert_eq!(config.zellij.copy_clipboard, ZellijClipboard::Primary);
         assert_eq!(config.zellij.on_force_close, ZellijForceClose::Quit);
+    }
+
+    #[test]
+    fn zellij_default_mode_rejects_empty_or_spaced_values() {
+        let dir = tempdir().expect("tempdir");
+        assert!(MachineConfig::load_from(&write(&dir, "[zellij]\ndefault_mode = \"\"\n")).is_err());
+        assert!(
+            MachineConfig::load_from(&write(&dir, "[zellij]\ndefault_mode = \"locked mode\"\n"))
+                .is_err()
+        );
     }
 
     #[test]
