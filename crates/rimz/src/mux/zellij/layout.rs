@@ -289,7 +289,7 @@ pub(super) fn render_tab_layout(opts: &TabOptions) -> Result<String> {
     let sidebar = sidebar_pane_kdl(
         &opts.sidebar,
         Some(&opts.sidebar.cwd),
-        BirthGeometry::Detached,
+        BirthGeometry::Attached,
     )?;
     let mut focused = false;
     let mut columns = String::new();
@@ -610,7 +610,16 @@ mod tests {
             sidebar,
         };
         let layout = render_tab_layout(&opts).expect("render tab layout");
-        assert!(layout.contains(r#"name="rimz-sidebar""#), "{layout}");
+        assert!(
+            layout.contains(r#"pane size=72 name="rimz-sidebar""#),
+            "custom tab layouts instantiate from a live client, so the \
+             sidebar must pin the fixed max-cols verdict instead of \
+             re-evaluating a percentage against wide terminals:\n{layout}",
+        );
+        assert!(
+            !layout.contains(r#"size="30%""#),
+            "custom tab layouts must not use detached percentage sizing:\n{layout}",
+        );
         assert!(layout.contains("compact-bar"), "{layout}");
         assert!(
             layout.contains(r#"pane split_direction="horizontal""#),
