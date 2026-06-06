@@ -251,11 +251,10 @@ fn claude_context(now: Timestamp) -> AgentContext {
     }
 }
 
-/// The Codex app-server enrichment: a 5-hour and a 7-day rate-limit window,
-/// the official model display name, effort, and version — but no token usage or
-/// cost (the app-server exposes neither read-only, so those stay `None` and
-/// the gauge falls back to the rollout scalars). The mirror of `claude_context`
-/// for the other transport.
+/// The Codex rich context sidecar: app-server-owned rate-limit windows, official
+/// model display name, and version, plus local config-owned actual effort — but
+/// no token usage or cost in this fixture. The gauge falls back to the rollout
+/// scalars.
 fn codex_context(now: Timestamp) -> AgentContext {
     AgentContext {
         source: "codex".to_owned(),
@@ -1352,12 +1351,11 @@ fn context_line_age_tone_steps_with_the_clock_quarters() {
 
 #[test]
 fn codex_app_server_context_links_to_rich_card() {
-    // Codex's app-server enrichment rides the same `AgentContext` field as
-    // Claude's statusline, so it lights up the rich card with no renderer
-    // change: the official display name and effort on the capability line,
-    // and both usage windows in the selected detail block. Token usage and
-    // cost have no read-only source, so the gauge and detail fall back to the
-    // rollout scalars.
+    // Codex's split enrichment rides the same `AgentContext` field as Claude's
+    // statusline, so it lights up the rich card with no renderer change: the
+    // official display name, actual configured effort, and both usage windows in
+    // the selected detail block. Token usage and cost are absent in this
+    // fixture, so the gauge and detail fall back to the rollout scalars.
     let mut codex = agent(
         "codex-1",
         "codex",
@@ -1387,8 +1385,8 @@ fn codex_app_server_context_links_to_rich_card() {
     );
 
     // The app-server display name supersedes the raw catalog id (its hyphen
-    // traded for a space, matching `Opus 4.8`), and effort surfaces — neither
-    // was on the rollout-only row.
+    // traded for a space, matching `Opus 4.8`), and locally sourced effort
+    // surfaces — neither was on the rollout-only row.
     assert!(rendered.contains("GPT 5.5 Codex"));
     assert!(!rendered.contains("gpt-5.5-codex"));
     assert!(rendered.contains("xhigh"));

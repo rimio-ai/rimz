@@ -21,6 +21,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::agents::codex;
 use crate::agents::spending::{
     ProviderSpendingCache, read_provider_spending_cache, today_spend_live_usd,
 };
@@ -678,7 +679,7 @@ pub fn enrich_consumer(
     if !spend_cache.spending.total.is_zero() {
         snapshot.value_tally = Some(spend_cache.spending.total.clone());
     }
-    // The live overlay rides the same fold: a statusline push wakes the
+    // The live overlay rides the same fold: a context sidecar push wakes the
     // consumer, the refold lands the session's fresh cost on its row, and the
     // cockpit's headline retargets in the same frame — no waiting out the
     // walk's TTL.
@@ -716,13 +717,21 @@ pub fn fold_machine_config_producing(
     snapshot
 }
 
-/// Kick detached, best-effort Codex budget refreshes. A live/root Codex session
-/// refreshes its `AgentContext` sidecar because provider aggregation prefers live
-/// session readings over the shared cache. A logged-in metered Codex account with
-/// no root session refreshes the account cache instead, so idle dashboards stay
-/// current. Both paths are producer-only and throttled per target.
+/// Refresh Codex enrichment from the producer. A live/root Codex session first
+/// refreshes its transcript-derived tokens/cost in process with a stat gate, then
+/// the existing detached helper refreshes app-server-owned budget/account fields
+/// on the coarse per-target cadence. A logged-in metered Codex account with no
+/// root session refreshes the account cache instead, so idle dashboards stay
+/// current.
 fn refresh_codex_rate_limits(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
     for refresh in codex_rate_limit_refreshes(snapshot) {
+        if let CodexRateLimitRefresh::Session {
+            session_id,
+            model_hint,
+        } = &refresh
+        {
+            refresh_codex_transcript_context(runtime, session_id, model_hint.as_deref());
+        }
         if !codex_rate_limit_probe_due(runtime, &refresh) {
             continue;
         }
@@ -734,6 +743,42 @@ fn refresh_codex_rate_limits(snapshot: &SidebarSnapshot, runtime: &RuntimePaths)
             CodexRateLimitRefresh::Account => spawn_codex_account_window_fetch(runtime),
         }
     }
+}
+
+fn refresh_codex_transcript_context(
+    runtime: &RuntimePaths,
+    session_id: &str,
+    model_hint: Option<&str>,
+) {
+    let prior = crate::ledger::agent_context::read_one(runtime, "codex", session_id);
+    let refresh = codex::refresh_transcript_context(
+        session_id,
+        model_hint,
+        prior
+            .as_ref()
+            .and_then(|record| record.context.effort.as_deref()),
+        prior
+            .as_ref()
+            .and_then(|record| record.transcript_path.as_deref()),
+        prior
+            .as_ref()
+            .and_then(|record| record.transcript_stat.as_ref()),
+    );
+    let Some(refresh) = refresh else {
+        return;
+    };
+    if let Err(err) = crate::ledger::agent_context::merge_local_context(
+        runtime,
+        "codex",
+        session_id,
+        prior,
+        refresh,
+        Timestamp::now(),
+    ) {
+        tracing::warn!(error = %err, "sidebar: failed to merge codex transcript context");
+        return;
+    }
+    let _ = crate::ledger::wakeup::wake_sidebars_for_context(runtime, &runtime.workspace_id);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -817,8 +862,10 @@ fn codex_rate_limit_probe_marker(
 }
 
 /// Spawn the detached, fresh-stdio helper that refreshes one active Codex
-/// session's `AgentContext` sidecar. Best-effort: a spawn failure is logged and
-/// dropped — the dashboard keeps the prior reading until the next due frame.
+/// session's app-server-owned `AgentContext` fields. Transcript tokens/cost are
+/// refreshed in process before this helper is considered. Best-effort: a spawn
+/// failure is logged and dropped — the dashboard keeps the prior reading until
+/// the next due frame.
 fn spawn_codex_context_refresh(runtime: &RuntimePaths, session_id: &str, model_hint: Option<&str>) {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
@@ -957,7 +1004,7 @@ pub fn fold_machine_config_cached(
 /// Stamp the cockpit's live today-spend onto the snapshot: the published
 /// walk's exact figure plus each live row's overshoot over its publish-time
 /// baseline ([`today_spend_live_usd`]), so the headline tracks every
-/// statusline push instead of waiting out the walk's TTL. Shared by the
+/// context sidecar push instead of waiting out the walk's TTL. Shared by the
 /// producing CLI and the consumer fold, so every tab paints the same figure;
 /// zero — an empty room on an unspent day — stays `None` and the cockpit
 /// keeps its bare `¤` line.

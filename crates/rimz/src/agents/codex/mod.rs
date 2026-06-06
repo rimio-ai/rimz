@@ -10,13 +10,14 @@
 //! Owns hook install / uninstall through a non-destructive merge into
 //! `~/.codex/config.toml` using Codex's inline `[[hooks.Event]]` tables.
 //!
-//! Realtime details split across two sources. The context-window gauge
-//! (`context_pct` / `total_tokens`) is read from the rollout tail below, because
-//! the Codex app-server exposes token usage only on a live, subscribing
-//! `thread/resume` — never read-only. The rich enrichment Claude gets from its
-//! statusline (rate-limit windows, model display name + effort, version) comes
-//! from the app-server read-only methods via [`refresh_context`], spawned
-//! out-of-band by `rimz codex refresh-context`.
+//! Realtime details split across two sources. Usage (`context_pct`,
+//! `total_tokens`, token composition, and cost) is read from the rollout tail
+//! through [`refresh_transcript_context`], because the Codex app-server exposes
+//! token usage only on a live, subscribing `thread/resume` — never read-only.
+//! Metadata Claude gets from its statusline (rate-limit windows, model display
+//! name, version) comes from the app-server read-only methods via
+//! [`refresh_app_server_context`], spawned out-of-band by
+//! `rimz codex refresh-context`.
 
 pub(crate) mod account;
 pub(crate) mod app_server;
@@ -27,7 +28,7 @@ pub(crate) mod spend;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::Value;
 
@@ -38,7 +39,7 @@ use self::payloads::{
     CodexPermissionBehavior, CodexPermissionDecisionOutput, CodexPermissionHookOutput,
     parse_session_start, parse_subagent_start, parse_subagent_stop, parse_user_prompt_submit,
 };
-use super::context::{AgentContext, AgentCost};
+use super::context::{AgentContext, AgentCost, AgentCurrentUsage, AgentTokenUsage};
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
 };
@@ -48,10 +49,11 @@ use super::observation::{payload_context_pct, payload_total_tokens};
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, LifecycleRefreshCtx, RefreshSpawn, Result,
-    RootIdentity, SubagentIdentity, agent_config_path, choice_is_allow, classify_agent_hook,
-    optional_payload_string, read_optional_file, read_transcript_tail, resolve_root_identity,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    HookInstallReport, HookUninstallReport, LifecycleRefreshCtx, LocalContextRefresh,
+    LocalContextRefreshCtx, RefreshSpawn, Result, RootIdentity, SubagentIdentity, TranscriptStat,
+    agent_config_path, choice_is_allow, classify_agent_hook, optional_payload_string,
+    read_optional_file, read_transcript_tail, resolve_root_identity, resolve_subagent_identity,
+    sanitize_user_prompt, stop_payload_errored,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ledger::atomic;
@@ -353,10 +355,7 @@ impl AgentAdapter for CodexAdapter {
         observation.prompt =
             sanitize_user_prompt(user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
         observation.model = optional_payload_string(payload, &["model"]).or(usage.model);
-        observation.effort = optional_payload_string(
-            payload,
-            &["model_reasoning_effort", "reasoning_effort", "effort"],
-        );
+        observation.effort = payload_reasoning_effort(payload).or_else(configured_reasoning_effort);
         observation.context_pct = payload_context_pct(payload, usage.context_pct);
         // The rollout's `model_context_window` (e.g. 258k for GPT-5.5) doubles
         // as the card's window label.
@@ -405,12 +404,12 @@ impl AgentAdapter for CodexAdapter {
         account::probe()
     }
 
-    /// Codex has no statusline, so its rich realtime context (rate-limit
-    /// windows, model display name, version) refreshes out-of-band from the
-    /// app-server on turn boundaries: `SessionStart` populates it early (rate
-    /// limits + model need no thread); `UserPromptSubmit`/`Stop` keep it
-    /// current. Per-tool events are excluded — an app-server spawn per tool
-    /// call is too frequent.
+    /// Codex has no statusline, so app-server-owned metadata (rate-limit
+    /// windows, model display name, version) refreshes out-of-band on turn
+    /// boundaries: `SessionStart` populates it early (rate limits + model need
+    /// no thread); `UserPromptSubmit`/`Stop` keep it current. Per-tool events
+    /// are excluded — an app-server spawn per tool call is too frequent. Local
+    /// transcript usage has its own stat-gated inline refresh below.
     fn post_lifecycle_refresh(
         &self,
         event_name: &str,
@@ -433,6 +432,26 @@ impl AgentAdapter for CodexAdapter {
         Some(RefreshSpawn { args })
     }
 
+    fn local_context_refresh(
+        &self,
+        event_name: &str,
+        ctx: &LocalContextRefreshCtx<'_>,
+    ) -> Option<LocalContextRefresh> {
+        if !matches!(
+            event_name,
+            "SessionStart" | "UserPromptSubmit" | "PostToolUse" | "Stop"
+        ) {
+            return None;
+        }
+        refresh_transcript_context(
+            ctx.agent_id,
+            ctx.model_hint,
+            ctx.prior_effort,
+            ctx.prior_transcript_path,
+            ctx.prior_transcript_stat,
+        )
+    }
+
     fn transcript_files(&self) -> Vec<PathBuf> {
         spend::codex_session_files()
     }
@@ -452,55 +471,63 @@ impl AgentAdapter for CodexAdapter {
 
 /// Read Codex's read-only realtime details from the app-server and project them
 /// onto an [`AgentContext`] for the session sidecar. Spawned out-of-band by
-/// `rimz codex refresh-context` (never inline in a hook). `session_id` is used
-/// to locate the rollout JSONL for a cumulative cost estimate; `None` skips the
-/// cost step (account-only refreshes). `model_hint` is the session's model id
-/// from the lifecycle observation, used to resolve the model's display name +
-/// effort. `broker_socket` is this session's broker socket (the preferred, warm
-/// transport); `None`/absent falls back to the per-user daemon then a cold-spawn.
-/// Returns `None` when the app-server is unreachable — best-effort.
-pub fn refresh_context(
-    session_id: Option<&str>,
+/// `rimz codex refresh-context` (never inline in a hook). The app-server owns
+/// rate-limit windows, account plan, model display name, and version.
+/// Transcript-derived tokens and cost are refreshed separately from the local
+/// rollout tail, so an unreachable app-server never suppresses them.
+pub fn refresh_app_server_context(
     model_hint: Option<&str>,
     broker_socket: Option<&Path>,
 ) -> Option<AgentContext> {
     let mut client = CodexAppServer::connect(broker_socket)?;
-    let mut context = client.observe_context("codex", model_hint, Timestamp::now());
+    Some(client.observe_context("codex", model_hint, Timestamp::now()))
+}
 
-    // Compute accumulated session cost from the rollout JSONL when a session_id
-    // is provided.  Best-effort: a missing file, an unknown model, or a zero
-    // cost all result in `cost` staying `None`, matching current behaviour.
-    if let Some(sid) = session_id
-        && let Some(path) = find_session_transcript(sid)
+/// Backwards-compatible name for the app-server-only context read. New callers
+/// use [`refresh_app_server_context`] and [`refresh_transcript_context`] so local
+/// transcript data is independent from app-server availability.
+pub fn refresh_context(
+    _session_id: Option<&str>,
+    model_hint: Option<&str>,
+    broker_socket: Option<&Path>,
+) -> Option<AgentContext> {
+    refresh_app_server_context(model_hint, broker_socket)
+}
+
+/// Refresh Codex's local transcript-derived context for one session, skipping the
+/// tail read when the persisted transcript stat still matches.
+pub fn refresh_transcript_context(
+    session_id: &str,
+    model_hint: Option<&str>,
+    prior_effort: Option<&str>,
+    prior_transcript_path: Option<&str>,
+    prior_transcript_stat: Option<&TranscriptStat>,
+) -> Option<LocalContextRefresh> {
+    let effort = configured_reasoning_effort();
+    let mut path = prior_transcript_path.map(PathBuf::from);
+    let mut stat = path.as_deref().and_then(transcript_stat);
+    if stat.is_none() {
+        path = find_session_transcript(session_id);
+        stat = path.as_deref().and_then(transcript_stat);
+    }
+    let path = path?;
+    let stat = stat?;
+    if prior_transcript_stat.is_some_and(|prior| *prior == stat)
+        && prior_effort == effort.as_deref()
     {
-        let usage = usage_from_transcript(&path);
-        if let (Some(total_input), Some(total_output)) = (
-            usage.cumulative_input_tokens,
-            usage.cumulative_output_tokens,
-        ) {
-            let model_id = context
-                .model_id
-                .as_deref()
-                .or(model_hint)
-                .or(usage.model.as_deref())
-                .unwrap_or("");
-            let price_book = PriceBook::embedded();
-            if let Some(price) = price_book.price(model_id) {
-                let uncached = total_input.saturating_sub(usage.cumulative_cached_tokens);
-                let cost = uncached as f64 * price.input
-                    + usage.cumulative_cached_tokens as f64 * price.cache_read
-                    + total_output as f64 * price.output;
-                if cost > 0.0 {
-                    context.cost = Some(AgentCost {
-                        total_cost_usd: Some(cost),
-                        ..AgentCost::default()
-                    });
-                }
-            }
-        }
+        return None;
     }
 
-    Some(context)
+    let usage = usage_from_transcript(&path);
+    let (tokens, cost, model_id) = transcript_enrichment(&usage, model_hint);
+    Some(LocalContextRefresh {
+        model_id,
+        effort,
+        tokens,
+        cost,
+        transcript_path: Some(path.to_string_lossy().into_owned()),
+        transcript_stat: Some(stat),
+    })
 }
 
 /// The thread ids the per-user Codex app-server daemon currently holds in memory,
@@ -542,6 +569,102 @@ struct TranscriptUsage {
     cumulative_cached_tokens: u64,
     /// Cumulative output tokens from `total_token_usage`.
     cumulative_output_tokens: Option<u64>,
+}
+
+fn transcript_enrichment(
+    usage: &TranscriptUsage,
+    model_hint: Option<&str>,
+) -> (Option<AgentTokenUsage>, Option<AgentCost>, Option<String>) {
+    let current_usage = if usage.last_input_tokens.is_some()
+        || usage.last_cached_input_tokens.is_some()
+        || usage.last_output_tokens.is_some()
+    {
+        Some(AgentCurrentUsage {
+            input_tokens: usage
+                .last_input_tokens
+                .map(|input| input.saturating_sub(usage.last_cached_input_tokens.unwrap_or(0))),
+            output_tokens: usage.last_output_tokens,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: usage.last_cached_input_tokens,
+        })
+    } else {
+        None
+    };
+    let tokens =
+        if usage.context_window.is_some() || usage.context_pct.is_some() || current_usage.is_some()
+        {
+            Some(AgentTokenUsage {
+                context_window_size: usage.context_window,
+                used_percentage: usage.context_pct,
+                remaining_percentage: usage.context_pct.map(|pct| 100u8.saturating_sub(pct)),
+                current_usage,
+            })
+        } else {
+            None
+        };
+
+    let model_id = model_hint
+        .filter(|model| !model.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| usage.model.clone());
+    let cost = match (
+        usage.cumulative_input_tokens,
+        usage.cumulative_output_tokens,
+        model_id.as_deref(),
+    ) {
+        (Some(total_input), Some(total_output), Some(model_id)) => {
+            let price_book = PriceBook::embedded();
+            price_book.price(model_id).and_then(|price| {
+                let uncached = total_input.saturating_sub(usage.cumulative_cached_tokens);
+                let cost = uncached as f64 * price.input
+                    + usage.cumulative_cached_tokens as f64 * price.cache_read
+                    + total_output as f64 * price.output;
+                (cost > 0.0).then_some(AgentCost {
+                    total_cost_usd: Some(cost),
+                    ..AgentCost::default()
+                })
+            })
+        }
+        _ => None,
+    };
+    (tokens, cost, model_id)
+}
+
+fn transcript_stat(path: &Path) -> Option<TranscriptStat> {
+    let meta = fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?;
+    let since_epoch = modified.duration_since(UNIX_EPOCH).ok()?;
+    Some(TranscriptStat {
+        mtime_secs: since_epoch.as_secs().try_into().unwrap_or(i64::MAX),
+        mtime_nanos: since_epoch.subsec_nanos(),
+        len: meta.len(),
+    })
+}
+
+fn payload_reasoning_effort(payload: &Value) -> Option<String> {
+    optional_payload_string(
+        payload,
+        &["model_reasoning_effort", "reasoning_effort", "effort"],
+    )
+}
+
+fn configured_reasoning_effort() -> Option<String> {
+    #[cfg(test)]
+    if std::env::var_os("RIMZ_CODEX_CONFIG").is_none() {
+        return None;
+    }
+    codex_config_path()
+        .ok()
+        .and_then(|path| configured_reasoning_effort_at(&path))
+}
+
+fn configured_reasoning_effort_at(path: &Path) -> Option<String> {
+    read_existing_table(path).ok().and_then(|root| {
+        root.get("model_reasoning_effort")
+            .and_then(toml::Value::as_str)
+            .filter(|effort| !effort.is_empty())
+            .map(ToOwned::to_owned)
+    })
 }
 
 impl TranscriptUsage {

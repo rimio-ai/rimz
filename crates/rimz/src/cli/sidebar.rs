@@ -247,8 +247,8 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 snapshot = snapshot.with_worktree_roots(roots);
             }
 
-            // Fold each session's rich statusline context onto its agent state
-            // (read-only; the feed process is the writer). Both the context
+            // Fold each session's rich context sidecar onto its agent state
+            // (read-only from this path; CLI producers write it). Both the context
             // sidecar and the per-tool activity heartbeats fold only onto
             // existing agents, so an empty room skips both directory scans —
             // the common idle case. Activity lands before the pane overlay so
@@ -840,7 +840,7 @@ fn compute_fleet_spending(
 /// all-time pile read by both the cockpit's today figure and the bottom value
 /// corner; `None` when nothing has ever been recorded — and stamp the live
 /// today-spend overlay beside it, so the cockpit's headline tracks the
-/// statusline pushes between walks. The per-provider breakdown is folded into
+/// context sidecar pushes between walks. The per-provider breakdown is folded into
 /// the dashboard panels separately (see `with_provider_aggregates`).
 fn apply_spending(
     snapshot: &mut rimz::SidebarSnapshot,

@@ -12,20 +12,20 @@ Enrichment is **never correctness**. A missing file, a torn line, an absent agen
 
 A session's context data has two origins. Both flow through one adapter — the [`AgentAdapter`](../../crates/rimz/src/agents/mod.rs) — and normalize onto the same internal fields, so a new provider implements one or both and the rest of Rimz is unchanged.
 
-**The transcript tail** is the universal floor. Every provider writes a JSONL session log, so every agent gets a context gauge from it. Capture is low-frequency: it runs inside `observe_lifecycle` on the turn-boundary events Rimz already fires (session start, prompt submit, turn end), and only once a payload supplies a session id. It reads a bounded tail, takes the most recent usage record, and never blocks the hook.
+**The transcript tail** is the universal floor. Every provider writes a JSONL session log, so every agent gets a context gauge from it. For Claude this is a low-frequency lifecycle read, because statusline owns the live `AgentContext`. For Codex the rollout tail is also the live token/cost source: progress hooks and the elected snapshot producer run a stat-gated local refresh that reads a bounded tail only when `(mtime, nanos, len)` changes, merges tokens/cost into the runtime sidecar, and wakes the sidebar.
 
-**The rich-context transport** is the high-frequency upgrade, where a provider offers one. It carries everything the transcript cannot — cost, rate-limit windows, account plan, PR info, model display name — and refreshes far more often than turn boundaries. Each provider's transport differs; both normalize through `observe_context` into one [`AgentContext`](../../crates/rimz/src/agents/context.rs).
+**The rich-context transport** is the provider-specific upgrade, where a provider offers one. It carries everything the local read cannot or should not derive — rate-limit windows, account plan, PR info, model display name, version — on that provider's own cadence. Claude pushes it through statusline on render; Codex reads only read-only app-server methods in detached helpers and account probes. Each provider's transport differs, and transport payloads normalize through `observe_context` into one [`AgentContext`](../../crates/rimz/src/agents/context.rs); local transcript refreshes use the adapter's separate `local_context_refresh` hook.
 
 A provider whose hook wire Rimz authors has a third option: stamp the gauge **onto the hook payload itself**. Pi's extension does this on every envelope, so its gauge needs neither a tail nor a transport ([Appendix — Pi](#appendix--pi)).
 
-|                     | transcript tail                                  | rich-context transport                         |
+|                     | transcript / local read                          | rich-context transport                         |
 | ------------------- | ------------------------------------------------ | ---------------------------------------------- |
 | Claude Code         | hook payload `transcript_path`                   | statusline pipe (`rimz statusline feed`)       |
 | Codex               | `~/.codex/sessions/…/rollout-*.jsonl` (by id)    | `codex app-server` JSON-RPC (read-only)        |
 | Pi                  | — (the gauge rides the hook payload itself)      | — (none)                                       |
-| frequency           | turn boundaries, after a session id appears      | every render / poll                            |
-| produces            | `context_pct`, `total_tokens`, `model`           | the full `AgentContext` (gauges, cost, limits) |
-| target              | observation gauge fields ([agent.md](./agent.md#the-rollup)) | `AgentContext` ([context.rs](../../crates/rimz/src/agents/context.rs)) |
+| frequency           | turn boundaries; Codex progress hooks plus producer backstop | statusline render, detached helper, or account probe |
+| produces            | `context_pct`, `total_tokens`, `model`; Codex also `AgentContext.tokens`, `AgentContext.cost`, and actual configured effort | provider-owned `AgentContext` fields such as limits, account, model display, version |
+| target              | observation gauge fields and local context sidecar fields | `AgentContext` ([context.rs](../../crates/rimz/src/agents/context.rs)) |
 
 ## Reading rules
 
@@ -90,19 +90,22 @@ Install wraps Claude's per-child `subagentStatusLine` the same way (at `rimz sta
 | `token_count`   | `payload.info.last_token_usage.cached_input_tokens` | `cache_read_input_tokens` (the card's `◌`) |
 | `token_count`   | `payload.info.last_token_usage.input_tokens − cached_input_tokens` | `fresh_input_tokens` (the card's `↘`; `input_tokens` includes the cached slice) |
 | `token_count`   | `payload.info.last_token_usage.output_tokens`  | `output_tokens` (the card's `↗`)          |
+| `token_count`   | `payload.info.total_token_usage`               | `cost` (cumulative totals priced through [pricing.md](./pricing.md)) |
 | `turn_context`  | `payload.model`                                | `model` (display name)                    |
 
 Unlike Claude — which stores raw tokens and derives the window from the payload model — Codex stores a **precomputed `context_pct`**, because the rollout carries the window (`model_context_window`) directly.
 
-**Rich context.** Codex has no statusline, so its `AgentContext` is read out of band from the official `codex app-server` (JSON-RPC 2.0 over stdio) by [`app_server.rs`](../../crates/rimz/src/agents/codex/app_server.rs). The client speaks only **read-only, non-interfering** methods — the handshake, the rate-limit read, and the model list (the methods and their response schemas are in [adapter/codex-reference.md → App-server API](./adapter/codex-reference.md#app-server-api)). It never calls `thread/resume`, `turn/start`, or any write, which would rejoin and own the user's live thread.
+**Rich context.** Codex has no statusline, so its `AgentContext` is split. The rollout/config local read owns the live per-session usage fields (`tokens`, context percentage/window, cumulative `cost`, and the actual configured reasoning effort): `rimz hooks feed` attempts a local refresh inline on `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop`, but only after the hook's decision channel is irrelevant and only when the stat gate says the rollout changed. The hidden `rimz codex refresh-context` helper performs the same local merge before any app-server work, and the elected snapshot producer runs an in-process stat-gated backstop for visible root Codex rows. All three write the same runtime sidecar and wake the sidebar; none touches the durable ledger.
 
-The trigger is never inline: a turn-boundary hook spawns `rimz codex refresh-context` detached with null stdio, so the hook returns before the round-trip and adds no latency. That helper writes the same per-session `AgentContext` sidecar Claude's statusline produces. The producer also keeps the account-scoped balance windows fresh between turns on a bounded cadence — the rate-limit refresh logic (and the `rimz codex refresh-rate-limits` idle path) lives in [account.md → Refresh cadences](./account.md#refresh-cadences). `RIMZ_CODEX_BIN` overrides the binary for tests. Connection preference is warmest-first, all best-effort with a cold-spawn floor so enrichment never depends on any one of them:
+The official `codex app-server` (JSON-RPC 2.0 over stdio) owns the fields the rollout does not: rate-limit windows, account plan, model display name, and agent version. The client speaks only **read-only, non-interfering** methods — the handshake, the rate-limit read, and the model list (the methods and their response schemas are in [adapter/codex-reference.md → App-server API](./adapter/codex-reference.md#app-server-api)). It never calls `thread/resume`, `turn/start`, or any write, which would rejoin and own the user's live thread. `model/list.defaultReasoningEffort` is deliberately ignored for the row because it is a catalog recommendation/default, not the current session's configured effort.
+
+The app-server trigger is never inline: a turn-boundary hook spawns `rimz codex refresh-context` detached with null stdio, so the hook returns before the round-trip and adds no latency. The helper throttles app-server-owned fields by their own `rate_limits_observed_at` stamp, so a fresh transcript/cost merge never suppresses a due account refresh and an app-server retry never suppresses local usage. The producer also keeps the account-scoped balance windows fresh between turns on a bounded cadence — the rate-limit refresh logic (and the `rimz codex refresh-rate-limits` idle path) lives in [account.md → Refresh cadences](./account.md#refresh-cadences). `RIMZ_CODEX_BIN` overrides the binary for tests. Connection preference is warmest-first, all best-effort with a cold-spawn floor so enrichment never depends on any one of them:
 
 1. **The per-session broker** ([`broker.rs`](../../crates/rimz/src/agents/codex/broker.rs), run as `rimz codex app-server serve` in the `rimzd` daemon tab) holds one warm, already-handshaked `codex app-server` and serves it over a unix socket, so each datapoint skips the cold handshake.
 2. **The per-user remote-control daemon**, re-used via `codex app-server proxy --sock <path>` (overridable by `RIMZ_CODEX_APP_SERVER_SOCK`).
 3. **A fresh cold-spawned `codex app-server`** — the always-present fallback, so headless / no-mux still enriches.
 
-The one datapoint the app-server does **not** expose read-only is token / context-window usage: it rides only the live `thread/tokenUsage/updated` notification behind a subscribing `thread/resume`. So `AgentContext.tokens` stays `None` and Codex's context gauge — the percent *and* the per-call composition the card legends — is sourced from the rollout transcript above, riding the lifecycle rail to the row.
+The one datapoint the app-server does **not** expose read-only is token / context-window usage: it rides only the live `thread/tokenUsage/updated` notification behind a subscribing `thread/resume`. Rimz therefore treats the rollout as authoritative for live Codex usage, including the `AgentContext.tokens` value the card reads; app-server unavailability can stale rate limits or display-name metadata, but it cannot stall the context meter, token composition, or per-session cost.
 
 ## Appendix — Pi
 

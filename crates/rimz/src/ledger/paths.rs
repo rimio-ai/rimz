@@ -97,9 +97,9 @@ pub struct RuntimePaths {
     pub root: PathBuf,
     pub sock_dir: PathBuf,
     pub heartbeat_dir: PathBuf,
-    /// Holds one latest-wins agent-context sidecar per session (Claude
-    /// statusline enrichment). Written by the feed process, read by the
-    /// snapshot CLI — never the sidebar.
+    /// Holds one latest-wins agent-context sidecar per session. Written by CLI
+    /// producer paths (statusline feed, hook/local transcript refresh, detached
+    /// helpers, snapshot producer backstops) and folded by snapshot reads.
     pub agent_context_dir: PathBuf,
     /// Holds one latest-wins subagent-context sidecar per child (Claude's
     /// `subagentStatusLine` enrichment: description, token count, start time).

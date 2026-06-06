@@ -32,7 +32,7 @@ pub(crate) mod transcript_fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::{debug, error};
 
@@ -203,6 +203,45 @@ pub struct LifecycleRefreshCtx<'a> {
     pub model_hint: Option<&'a str>,
 }
 
+/// File identity for a bounded transcript/rollout tail read. Producers persist it
+/// beside the sidecar so a high-frequency hook can stat-gate local enrichment
+/// before reading the tail again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptStat {
+    pub mtime_secs: i64,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub mtime_nanos: u32,
+    pub len: u64,
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
+/// Context for [`AgentAdapter::local_context_refresh`]: the session that just
+/// proved progress, its current model hint, and the transcript gate state from
+/// the latest sidecar.
+pub struct LocalContextRefreshCtx<'a> {
+    pub agent_id: &'a str,
+    pub model_hint: Option<&'a str>,
+    pub prior_effort: Option<&'a str>,
+    pub prior_transcript_path: Option<&'a str>,
+    pub prior_transcript_stat: Option<&'a TranscriptStat>,
+}
+
+/// Display-only context derived from a local transcript/rollout read. The
+/// adapter owns the provider mapping; the CLI owns merging and writing the
+/// sidecar.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LocalContextRefresh {
+    pub model_id: Option<String>,
+    pub effort: Option<String>,
+    pub tokens: Option<AgentTokenUsage>,
+    pub cost: Option<AgentCost>,
+    pub transcript_path: Option<String>,
+    pub transcript_stat: Option<TranscriptStat>,
+}
+
 /// A detached `rimz` helper an adapter requests after a lifecycle event lands
 /// — just the argv. The CLI owns the spawn discipline (fresh, fully-nulled
 /// stdio; fire-and-forget), so adapters stay pure mappers.
@@ -305,6 +344,20 @@ pub trait AgentAdapter: Send + Sync {
         _event_name: &str,
         _ctx: &LifecycleRefreshCtx<'_>,
     ) -> Option<RefreshSpawn> {
+        None
+    }
+
+    /// A cheap, synchronous local enrichment read to run inline after a
+    /// progress-proving hook event. This is for bounded file reads that are
+    /// lighter than the ledger write already performed by the hook; network,
+    /// subprocess, broker, or app-server work belongs in
+    /// [`post_lifecycle_refresh`](Self::post_lifecycle_refresh). The adapter
+    /// returns mapped fields only and never writes the sidecar itself.
+    fn local_context_refresh(
+        &self,
+        _event_name: &str,
+        _ctx: &LocalContextRefreshCtx<'_>,
+    ) -> Option<LocalContextRefresh> {
         None
     }
 

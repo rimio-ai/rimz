@@ -16,7 +16,7 @@ Every agent — Claude, Codex, Pi, and every future one — speaks to Rimz throu
 - **`observe_lifecycle`** is the normalizer: it maps a native lifecycle event onto one [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs) — the unified event shape every downstream reducer reads. `None` means "no state transition here", so high-frequency events stay silent.
 - **`render_decision`** / **`render_neutral`** emit the agent-native decision JSON when a resolver answers, and the neutral no-op when no one does.
 - **`hook_cap`** (a descriptor field) is how long a blocking hook may park on the bridge before falling back to neutral — set from the upstream's published deadline.
-- **`observe_context`** normalizes a rich out-of-band payload into [`AgentContext`](../../crates/rimz/src/agents/mod.rs); `ends_session` / `moves_on` mark the events that expire a session's pending asks.
+- **`observe_context`** normalizes a rich out-of-band payload into [`AgentContext`](../../crates/rimz/src/agents/mod.rs); **`local_context_refresh`** derives sidecar fields from local provider state during non-blocking progress hooks; `ends_session` / `moves_on` mark the events that expire a session's pending asks.
 - **`install_hooks`** / **`preview_hook_install`** / **`uninstall_hooks`** / **`hooks_installed`** own the per-user config write and report it (gated by the descriptor's `hook_install` capability).
 
 Two invariants hold the seam shut:
@@ -58,7 +58,7 @@ A blocking hook fires → `classify_hook` returns `BlockingFeed` with a `FeedKin
 
 Installing hooks edits the agent's own config, so it is a security surface, never silent. `rimz start` detects installed, supported agents each run, previews the additive per-user change, installs on approval, and continues if the user skips. `rimz hooks install <agent>` / `uninstall <agent>` are the manual entry points. `hooks_installed()` makes the state observable: `rimz doctor` reports it per agent and the sidebar's first-run hint points at install until an agent is wired. An agent run before its hooks are installed fires nothing and is invisible — never silently broken.
 
-**What install wires.** Every event the state machine needs (the turn-boundary signals) plus the high-frequency per-tool events that keep enrichment and audit depth current. The single source of truth for the wired set is each adapter's `INSTALLED_EVENTS`-style constant — not restated here. Per-tool payload *content* is gated by `[privacy] payload_mode` (`metadata` / `redacted` / `full`; see [configuration.md](../reference/configuration.md#privacy)); the gate strips content, never whether a transition is observed.
+**What install wires.** Every event the state machine needs (the turn-boundary signals) plus the high-frequency per-tool events that keep enrichment and audit depth current. Codex uses those progress events to stat-gate the rollout tail and push local token/cost context without waiting for the app-server. The single source of truth for the wired set is each adapter's `INSTALLED_EVENTS`-style constant — not restated here. Per-tool payload *content* is gated by `[privacy] payload_mode` (`metadata` / `redacted` / `full`; see [configuration.md](../reference/configuration.md#privacy)); the gate strips content, never whether a transition is observed.
 
 **The installed config shape.** Claude and Codex have no wildcard event key, so install writes one block per wired event into their config files; Pi instead owns one whole extension file (see [Appendix Pi](#appendix--pi)). Inside the config-merge shape it stays minimal:
 
@@ -146,7 +146,7 @@ Codex hooks are **daemon-routed** (since 0.137 for a plain TUI launch, not just 
 
 ### Context enrichment
 
-Codex has no statusline: its `AgentContext` is read out of band from `codex app-server`, and its context gauge from the rollout transcript tail. The read-only client, the detached refresh trigger, the broker → daemon → cold-spawn connection preference, and the one gap (usage rides only a live notification, so the gauge stays transcript-sourced) all live in [transcript.md → Appendix Codex](./transcript.md#appendix--codex).
+Codex has no statusline: its live usage context is read from the rollout transcript tail, while app-server metadata is read out of band from `codex app-server`. `local_context_refresh` runs on `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop`, stat-gates the rollout, and merges tokens/cost into the sidecar before any detached helper runs. The read-only app-server client, the detached metadata refresh trigger, the broker → daemon → cold-spawn connection preference, and the one gap (usage rides only a live notification, so Rimz keeps usage rollout-sourced) all live in [transcript.md → Appendix Codex](./transcript.md#appendix--codex).
 
 ## Appendix — Pi
 

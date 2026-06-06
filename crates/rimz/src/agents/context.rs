@@ -1,12 +1,12 @@
 //! Agent-agnostic, session-scoped context enrichment.
 //!
 //! [`AgentContext`] is the normalized shape for the rich, high-frequency
-//! per-session data an agent publishes out of band — Claude's statusline feed
-//! today, Codex's JSON-RPC poll later. It is display-only and redactable: it
-//! never drives routing, ranking, or a decision (the no-transcript-correctness
-//! rule). Each agent integration produces it from its own transport via
-//! [`super::AgentAdapter::observe_context`]; storage
-//! ([`crate::ledger::agent_context`]) and the snapshot fold-in are
+//! per-session data an agent publishes out of band — Claude's statusline feed,
+//! Codex's rollout tail plus app-server metadata, and future provider surfaces.
+//! It is display-only and redactable: it never drives routing, ranking, or a
+//! decision (the no-transcript-correctness rule). Each agent integration
+//! produces it from its own transport or local refresh via [`super::AgentAdapter`];
+//! storage ([`crate::ledger::agent_context`]) and the snapshot fold-in are
 //! transport-agnostic, so a new agent slots in with only a new producer — no
 //! change to this type, the sidecar, or the fold-in.
 
@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 /// and a future renderer can prefer them for display.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentContext {
-    /// Which transport produced this record (`"claude"` today). Stamped from
-    /// the ingest `--source` tag, not parsed from the payload.
+    /// Which agent kind produced this record. Stamped from the ingest `--source`
+    /// tag or merge path, not parsed from provider payload content.
     pub source: String,
     /// Human-readable session name the user set (`--name` / `/rename`). Absent
     /// until named, so a renderer prefers it over the task descriptor only when

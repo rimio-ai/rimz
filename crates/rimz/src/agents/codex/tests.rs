@@ -3,6 +3,7 @@ use serde_json::json;
 use super::*;
 use crate::agents::AgentHookClass;
 use crate::feed::ResolutionMethod;
+use std::io::Write;
 use std::path::Path;
 
 #[test]
@@ -248,6 +249,26 @@ fn classification_unchanged_for_unknown_event() {
     let c = CodexAdapter.classify_hook("WatItIs", &Value::Null);
     assert_eq!(c.class, AgentHookClass::Unknown);
     assert!(c.feed_kind.is_none());
+}
+
+#[test]
+fn configured_reasoning_effort_reads_the_actual_codex_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+model = "gpt-5.5-codex"
+model_reasoning_effort = "xhigh"
+plan_mode_reasoning_effort = "medium"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        configured_reasoning_effort_at(&path).as_deref(),
+        Some("xhigh")
+    );
 }
 
 #[test]
@@ -577,13 +598,58 @@ fn post_lifecycle_refresh_fires_on_turn_boundaries_only() {
         .post_lifecycle_refresh("SessionStart", &bare)
         .expect("SessionStart refreshes");
     assert!(!spawn.args.iter().any(|arg| arg == "--model"));
-    // Per-tool events stay silent — an app-server spawn per call is too frequent.
+    // Per-tool events stay silent here — an app-server spawn per call is too frequent.
+    // The cheap local transcript refresh is a separate inline lane.
     for event in ["PreToolUse", "PostToolUse", "SubagentStop", "Notification"] {
         assert!(
             CodexAdapter.post_lifecycle_refresh(event, &ctx).is_none(),
             "{event}"
         );
     }
+}
+
+#[test]
+fn local_context_refresh_fires_for_progress_events_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\"}}\n\
+             {\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+             \"last_token_usage\":{\"input_tokens\":500,\"cached_input_tokens\":300,\
+             \"output_tokens\":20,\"total_tokens\":520},\
+             \"model_context_window\":1000}}}\n",
+    )
+    .unwrap();
+    let path = path.to_string_lossy().into_owned();
+    let ctx = crate::agents::LocalContextRefreshCtx {
+        agent_id: "sess-1",
+        model_hint: Some("gpt-5"),
+        prior_effort: None,
+        prior_transcript_path: Some(&path),
+        prior_transcript_stat: None,
+    };
+
+    let refresh = CodexAdapter
+        .local_context_refresh("PostToolUse", &ctx)
+        .expect("PostToolUse reads local transcript context");
+    assert_eq!(
+        refresh
+            .tokens
+            .as_ref()
+            .and_then(|tokens| tokens.used_percentage),
+        Some(50)
+    );
+    assert!(
+        CodexAdapter
+            .local_context_refresh("PreToolUse", &ctx)
+            .is_none()
+    );
+    assert!(
+        CodexAdapter
+            .local_context_refresh("PermissionRequest", &ctx)
+            .is_none()
+    );
 }
 
 #[test]
@@ -691,6 +757,133 @@ fn transcript_tail_populates_the_per_call_split() {
     assert_eq!(usage.last_input_tokens, Some(129_200));
     assert_eq!(usage.last_cached_input_tokens, Some(120_000));
     assert_eq!(usage.last_output_tokens, Some(800));
+}
+
+#[test]
+fn transcript_enrichment_maps_codex_split_to_rich_usage() {
+    let usage = TranscriptUsage {
+        context_pct: Some(42),
+        context_window: Some(10_000),
+        total_tokens: Some(4_200),
+        model: Some("gpt-5".to_owned()),
+        last_input_tokens: Some(1_200),
+        last_cached_input_tokens: Some(1_000),
+        last_output_tokens: Some(80),
+        cumulative_input_tokens: None,
+        cumulative_cached_tokens: 0,
+        cumulative_output_tokens: None,
+    };
+    let (tokens, cost, model_id) = transcript_enrichment(&usage, None);
+    let tokens = tokens.expect("tokens are mapped");
+    let current = tokens.current_usage.expect("current usage is mapped");
+    assert_eq!(tokens.context_window_size, Some(10_000));
+    assert_eq!(tokens.used_percentage, Some(42));
+    assert_eq!(tokens.remaining_percentage, Some(58));
+    assert_eq!(current.input_tokens, Some(200));
+    assert_eq!(current.cache_read_input_tokens, Some(1_000));
+    assert_eq!(current.cache_creation_input_tokens, None);
+    assert_eq!(current.output_tokens, Some(80));
+    assert_eq!(
+        current.input_tokens.unwrap()
+            + current.cache_read_input_tokens.unwrap()
+            + current.cache_creation_input_tokens.unwrap_or(0),
+        usage.last_input_tokens.unwrap(),
+        "rich context numerator matches the row-level fallback"
+    );
+    assert_eq!(cost, None);
+    assert_eq!(model_id.as_deref(), Some("gpt-5"));
+}
+
+#[test]
+fn transcript_enrichment_prices_cumulative_totals() {
+    let usage = TranscriptUsage {
+        context_pct: None,
+        context_window: None,
+        total_tokens: None,
+        model: Some("gpt-5".to_owned()),
+        last_input_tokens: None,
+        last_cached_input_tokens: None,
+        last_output_tokens: None,
+        cumulative_input_tokens: Some(1_000),
+        cumulative_cached_tokens: 400,
+        cumulative_output_tokens: Some(200),
+    };
+    let (_tokens, cost, _model_id) = transcript_enrichment(&usage, None);
+    let cost = cost
+        .and_then(|cost| cost.total_cost_usd)
+        .expect("known model prices cumulative totals");
+    let price = PriceBook::embedded().price("gpt-5").unwrap();
+    let expected = 600.0 * price.input + 400.0 * price.cache_read + 200.0 * price.output;
+    assert!((cost - expected).abs() < f64::EPSILON);
+}
+
+#[test]
+fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\"}}\n",
+    )
+    .unwrap();
+    let stat = transcript_stat(&path).unwrap();
+    let path_string = path.to_string_lossy().into_owned();
+    assert!(
+        refresh_transcript_context("sess-1", None, None, Some(&path_string), Some(&stat)).is_none(),
+        "unchanged stat skips the tail read and sidecar write"
+    );
+
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(
+            b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+              \"last_token_usage\":{\"input_tokens\":50,\"total_tokens\":60},\
+              \"model_context_window\":100}}}\n",
+        )
+        .unwrap();
+    let refresh = refresh_transcript_context("sess-1", None, None, Some(&path_string), Some(&stat))
+        .expect("changed stat refreshes");
+    assert_eq!(
+        refresh
+            .tokens
+            .as_ref()
+            .and_then(|tokens| tokens.used_percentage),
+        Some(50)
+    );
+    assert_ne!(refresh.transcript_stat, Some(stat));
+}
+
+#[test]
+fn refresh_transcript_context_reruns_when_prior_effort_is_stale() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+             \"last_token_usage\":{\"input_tokens\":50,\"total_tokens\":60},\
+             \"model_context_window\":100}}}\n",
+    )
+    .unwrap();
+    let stat = transcript_stat(&path).unwrap();
+    let path_string = path.to_string_lossy().into_owned();
+
+    let refresh = refresh_transcript_context(
+        "sess-1",
+        None,
+        Some("medium"),
+        Some(&path_string),
+        Some(&stat),
+    )
+    .expect("stale prior effort forces a local refresh despite unchanged stat");
+    assert_eq!(
+        refresh
+            .tokens
+            .as_ref()
+            .and_then(|tokens| tokens.used_percentage),
+        Some(50)
+    );
 }
 
 #[test]

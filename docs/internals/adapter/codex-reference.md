@@ -196,7 +196,7 @@ The reaper queries the per-user daemon **specifically** (never a cold-spawn, who
 
 Fields are `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`); `secondary` may be `null`, and a server-side change in window count or length renders gracefully off `windowDurationMins` rather than a hard-coded 5h/7d.
 
-**`model/list`** (`{ "includeHidden": true }`) → the session model's display name and default effort.
+**`model/list`** (`{ "includeHidden": true }`) → the session model's display name. The payload also carries `defaultReasoningEffort`, but Rimz does not map it to row effort because it is a catalog default/recommendation, not the current session's configured value.
 
 ```jsonc
 // result.data[] (RawModel)

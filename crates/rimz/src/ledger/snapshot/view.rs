@@ -357,8 +357,9 @@ pub struct SidebarRow {
     /// The session's rich enrichment (cost, token breakdown, rate-limit windows,
     /// session name), copied from `AgentState.context` so the renderer reads one
     /// struct instead of cross-referencing `agents[]`. Source-agnostic: Claude
-    /// fills it from its statusline, Codex from the app-server (rate-limit
-    /// windows, model display name, effort, version). Display-only; `None` for
+    /// fills it from its statusline, Codex from local rollout/config refresh
+    /// plus app-server metadata (rate-limit windows, model display name,
+    /// version). Display-only; `None` for
     /// process rows and any agent with no out-of-band source, where the scalar
     /// `model`/`effort`/`context_pct`/`total_tokens` are the fallback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -717,7 +718,7 @@ impl SidebarSnapshot {
         self
     }
 
-    /// Attach each session's rich statusline context to its `AgentState` by
+    /// Attach each session's rich context sidecar to its `AgentState` by
     /// `(kind, agent_id)`, then re-fold groups so the rows carry it for the
     /// renderer (`SidebarRow.context`). Context is display-only — it never
     /// changes ranking, since `last_activity` is untouched — but rows are built

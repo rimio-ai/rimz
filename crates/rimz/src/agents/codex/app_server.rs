@@ -27,7 +27,7 @@
 //! notification (requires a subscribing `thread/resume`), never on a read-only
 //! method. So the context gauge stays sourced from the rollout tail in
 //! [`crate::agents::codex`]; this client supplies what the app-server *does* expose
-//! read-only: rate-limit windows, model display name + effort, and version.
+//! read-only: rate-limit windows, model display name, and version.
 //!
 //! Best-effort, never correctness: every failure maps to an omitted field or a
 //! `None` record — it never fails a hook or a turn.
@@ -310,8 +310,6 @@ struct RawModel {
     model: String,
     #[serde(default)]
     display_name: String,
-    #[serde(default)]
-    default_reasoning_effort: Option<String>,
 }
 
 /// A model from `model/list` matched to the session's model hint.
@@ -319,7 +317,6 @@ struct RawModel {
 struct MatchedModel {
     id: String,
     display_name: String,
-    effort: Option<String>,
 }
 
 // --- client ---
@@ -509,8 +506,8 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
     }
 
     /// Match the session's model `hint` (a raw model id from the lifecycle
-    /// observation) against the catalog, returning its display name + default
-    /// effort. `None` when there is no hint or no match — never a guess.
+    /// observation) against the catalog, returning its display name. `None`
+    /// when there is no hint or no match — never a guess.
     fn matched_model(&mut self, hint: &str) -> Result<Option<MatchedModel>, AppServerErr> {
         let result = self
             .transport
@@ -528,7 +525,6 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
                     model.model
                 },
                 display_name: model.display_name,
-                effort: model.default_reasoning_effort.filter(|e| !e.is_empty()),
             })
             .filter(|model| !model.display_name.is_empty()))
     }
@@ -630,8 +626,8 @@ fn extract_thread_id(value: &Value) -> Option<String> {
 /// Project the gathered read-only parts onto the transport-agnostic record.
 /// Pure and deterministic so it is unit-testable from canned JSON; `observed_at`
 /// is stamped by the caller. Codex has no read-only source for the session name,
-/// tokens, cost, PR, thinking toggle, output style, or vim mode — those stay
-/// `None`.
+/// actual reasoning effort, tokens, cost, PR, thinking toggle, output style, or
+/// vim mode — those stay `None`.
 #[allow(clippy::too_many_arguments)]
 fn into_context(
     source: &str,
@@ -646,7 +642,7 @@ fn into_context(
         session_name: None,
         model_id: model.as_ref().map(|model| model.id.clone()),
         model_display_name: model.as_ref().map(|model| model.display_name.clone()),
-        effort: model.and_then(|model| model.effort),
+        effort: None,
         thinking_enabled: None,
         output_style: None,
         vim_mode: None,
@@ -936,14 +932,17 @@ mod tests {
     }
 
     #[test]
-    fn model_hint_resolves_display_name_and_effort() {
+    fn model_hint_resolves_display_name_but_not_default_effort() {
         let transport = CannedTransport::new().with("model/list", model_list_result());
         let mut client = CodexAppServer::new(transport);
         client.handshake().unwrap();
         let ctx = client.observe_context("codex", Some("gpt-5.5-codex"), ts());
         assert_eq!(ctx.model_id.as_deref(), Some("gpt-5.5-codex"));
         assert_eq!(ctx.model_display_name.as_deref(), Some("GPT-5.5 Codex"));
-        assert_eq!(ctx.effort.as_deref(), Some("high"));
+        assert_eq!(
+            ctx.effort, None,
+            "model/list defaultReasoningEffort is a recommendation, not the session's actual effort"
+        );
         assert_eq!(ctx.agent_version.as_deref(), Some("0.135.0"));
     }
 

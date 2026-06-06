@@ -395,7 +395,7 @@ fn agent_lead_cell(
 /// bold `$cost` (money-green) pinned right — counting up through the row's
 /// stepped [`CostRolls`] roll as a turn lands, with the shared settle brighten.
 /// The window token is the model's context window (`258k`, `1M`) — the
-/// statusline/app-server reading first, the hook-derived fallback second,
+/// context-sidecar reading first, the hook-derived fallback second,
 /// omitted when neither has named it. Capability tokens degrade by width tier:
 /// L2 carries model + effort + window, L1 drops effort, L0 keeps just the name
 /// — cost always pins right. A blocked `?`/`!` glyph heats through amber to
@@ -473,9 +473,8 @@ fn agent_identity_line(
 }
 
 /// The model's context window for the identity line (`258k`, `1m`). Prefers the
-/// out-of-band runtime reading (Claude's statusline / Codex's app-server — the
-/// live truth), falls back to the hook-derived scalar, and omits when neither
-/// source has named it.
+/// out-of-band runtime reading, falls back to the hook-derived scalar, and
+/// omits when neither source has named it.
 fn display_context_window(row: &SidebarRow) -> Option<u64> {
     ctx(row)
         .and_then(|context| context.tokens.as_ref())
@@ -591,9 +590,9 @@ fn display_model(row: &SidebarRow) -> Option<String> {
 }
 
 /// Reasoning effort: the hook/ledger value (what the user configured) is
-/// preferred; the statusline falls back for sessions that haven't seen a
-/// hook-Stop yet. This means a configured `xhigh` shows even when the model
-/// caps its effective level to `high` in the statusline.
+/// preferred; context falls back for sessions whose lifecycle observation has
+/// not named it. This means a configured `xhigh` wins over provider/catalog
+/// defaults such as `medium` or `high`.
 fn display_effort(row: &SidebarRow) -> Option<&str> {
     row.effort
         .as_deref()

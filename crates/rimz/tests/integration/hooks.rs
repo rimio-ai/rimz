@@ -1415,7 +1415,7 @@ fn codex_appserver_stub() -> std::path::PathBuf {
 /// A Codex turn boundary spawns a detached refresh that reads the app-server
 /// (here, a stub) and writes the session's context sidecar with the rich
 /// details Claude gets from its statusline: rate-limit windows, model display
-/// name + effort, and version. The context gauge (`tokens`) stays `None` — the
+/// name, and version. The context gauge (`tokens`) stays `None` — the
 /// app-server exposes no read-only token usage, so that stays rollout-sourced.
 #[test]
 fn codex_turn_boundary_refreshes_context_sidecar_from_app_server() {
@@ -1469,7 +1469,10 @@ fn codex_turn_boundary_refreshes_context_sidecar_from_app_server() {
         record.context.model_display_name.as_deref(),
         Some("GPT-5.5 Codex")
     );
-    assert_eq!(record.context.effort.as_deref(), Some("high"));
+    assert_eq!(
+        record.context.effort, None,
+        "model/list defaultReasoningEffort is not the session's actual effort"
+    );
     assert_eq!(record.context.agent_version.as_deref(), Some("9.9.9"));
     assert!(
         record.context.tokens.is_none(),

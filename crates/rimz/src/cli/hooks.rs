@@ -285,6 +285,51 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                     "lifecycle: failed to touch the agent activity heartbeat",
                 );
             }
+            if let Some(context_agent_id) = payload_context_agent_id(&payload) {
+                let prior = rimz::ledger::agent_context::read_one(
+                    ledger.runtime_paths(),
+                    agent.descriptor().kind,
+                    context_agent_id,
+                );
+                let refresh = {
+                    let refresh_ctx = rimz::agents::LocalContextRefreshCtx {
+                        agent_id: context_agent_id,
+                        model_hint: model_hint.as_deref(),
+                        prior_effort: prior
+                            .as_ref()
+                            .and_then(|record| record.context.effort.as_deref()),
+                        prior_transcript_path: prior
+                            .as_ref()
+                            .and_then(|record| record.transcript_path.as_deref()),
+                        prior_transcript_stat: prior
+                            .as_ref()
+                            .and_then(|record| record.transcript_stat.as_ref()),
+                    };
+                    agent.local_context_refresh(&event_name, &refresh_ctx)
+                };
+                if let Some(refresh) = refresh {
+                    if let Err(err) = rimz::ledger::agent_context::merge_local_context(
+                        ledger.runtime_paths(),
+                        agent.descriptor().kind,
+                        context_agent_id,
+                        prior,
+                        refresh,
+                        jiff::Timestamp::now(),
+                    ) {
+                        warn!(
+                            agent = agent.descriptor().kind,
+                            event = %event_name,
+                            error = %err,
+                            "lifecycle: failed to merge local context sidecar",
+                        );
+                    } else {
+                        let _ = rimz::ledger::wakeup::wake_sidebars_for_context(
+                            ledger.runtime_paths(),
+                            &workspace.workspace_id,
+                        );
+                    }
+                }
+            }
             // An adapter can request a detached `rimz` helper after a
             // lifecycle event — Codex refreshes its app-server context on turn
             // boundaries. Spawned with fresh stdio and never awaited, so it
@@ -820,6 +865,18 @@ fn spawn_refresh_detached(spawn: &rimz::agents::RefreshSpawn) {
 /// or from a stored ask. Empty ids are filtered out.
 fn payload_agent_id(payload: &Value) -> Option<&str> {
     ["agent_id", "session_id"].into_iter().find_map(|key| {
+        payload
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+    })
+}
+
+/// The sidecar key for local context enrichment. Root sessions file context
+/// under `session_id`; child-specific `agent_id`s are lifecycle identities, not
+/// Codex rollout files.
+fn payload_context_agent_id(payload: &Value) -> Option<&str> {
+    ["session_id", "agent_id"].into_iter().find_map(|key| {
         payload
             .get(key)
             .and_then(Value::as_str)

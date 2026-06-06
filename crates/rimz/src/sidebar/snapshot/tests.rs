@@ -3,6 +3,7 @@ use crate::agents::TurnPhase;
 use crate::feed::{AgentState, AgentStatus};
 use crate::ids::{MuxName, WorkspaceId};
 use crate::ledger::atomic;
+use std::io::Write;
 
 fn pane(id: &str, command: &str, cwd: &str) -> PaneRef {
     PaneRef {
@@ -884,6 +885,71 @@ fn codex_rate_limit_probe_throttles_per_target() {
         codex_rate_limit_probe_due(&runtime, &session),
         "the session becomes due again after the 60s interval"
     );
+}
+
+#[test]
+fn codex_transcript_backstop_is_stat_gated() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\"}}\n\
+             {\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+             \"last_token_usage\":{\"input_tokens\":50,\"total_tokens\":60},\
+             \"model_context_window\":100}}}\n",
+    )
+    .unwrap();
+
+    let mut record = crate::ledger::agent_context::new_record(
+        "codex",
+        "sess-1",
+        crate::ledger::agent_context::empty_context("codex", Timestamp::now()),
+    );
+    record.transcript_path = Some(path.to_string_lossy().into_owned());
+    crate::ledger::agent_context::write_record(&runtime, &record).unwrap();
+
+    refresh_codex_transcript_context(&runtime, "sess-1", Some("gpt-5"));
+    let first = crate::ledger::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
+    assert_eq!(
+        first
+            .context
+            .tokens
+            .as_ref()
+            .and_then(|t| t.used_percentage),
+        Some(50)
+    );
+    let observed_at = first.context.observed_at;
+    let stat = first.transcript_stat;
+
+    refresh_codex_transcript_context(&runtime, "sess-1", Some("gpt-5"));
+    let second = crate::ledger::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
+    assert_eq!(second.context.observed_at, observed_at);
+    assert_eq!(second.transcript_stat, stat);
+
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(
+            b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+              \"last_token_usage\":{\"input_tokens\":80,\"total_tokens\":90},\
+              \"model_context_window\":100}}}\n",
+        )
+        .unwrap();
+    refresh_codex_transcript_context(&runtime, "sess-1", Some("gpt-5"));
+    let third = crate::ledger::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
+    assert_eq!(
+        third
+            .context
+            .tokens
+            .as_ref()
+            .and_then(|t| t.used_percentage),
+        Some(80)
+    );
+    assert_ne!(third.transcript_stat, stat);
 }
 
 /// Only Codex exposes an account-scoped window read today; Claude's windows
