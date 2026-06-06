@@ -10,7 +10,7 @@ Two per-machine files configure how Rimz drives *your* box: `~/.config/rimz/conf
 
 | File | Scope | What it does today |
 | --- | --- | --- |
-| `~/.config/rimz/config.toml` | per-machine | room options, sidebar look, remote-control auto-launch |
+| `~/.config/rimz/config.toml` | per-machine | worktree defaults, agent layouts, room options, sidebar look, remote-control auto-launch |
 | `~/.config/rimz/resolvers.toml` | per-machine | the resolver allowlist and chain order |
 | `~/.config/rimz/projects/<id>/trust.toml` | per-machine | the project's trust grant — written by `rimz trust grant`, not by hand |
 | `<root>/.rimz/config.toml` | committed | the declared workspace shape; trust-tracked, [not yet applied](#project-config) |
@@ -19,7 +19,7 @@ The per-machine tier is personal and never committed — a clone never inherits 
 
 ## Per-machine config — `~/.config/rimz/config.toml`
 
-Five sections, each optional: `[remote_control]`, `[sidebar]`, `[zellij]`, `[tmux]`, `[resume]`.
+Seven sections, each optional: `[worktree]`, `[agents.layouts]`, `[remote_control]`, `[sidebar]`, `[zellij]`, `[tmux]`, `[resume]`.
 
 ### Remote control auto-launch
 
@@ -81,6 +81,27 @@ max = 8             # cap auto-resumed agents per birth (default 8); overflow is
 ```
 
 When a session is reborn — reboot, multiplexer crash, or a Rimz-initiated rebirth of a stuck room — Rimz re-seeds the prior agents from the durable rollup, each restored idle in its own pane (`claude --resume`, `codex resume`, `pi --session`), so the room comes up where you left off. `on_rebirth = false` (or `--no-resume` per invocation) comes up empty for a deliberately fresh start; `max` bounds how many agents one birth relaunches so a long-lived workspace never fork-bombs a fleet of processes. Mechanics in [internals/sidebar.md](../internals/sidebar.md#resume-on-rebirth).
+
+### Worktree launch defaults
+
+```toml
+[worktree]
+dir = "../{repo}-worktrees"   # relative to the repo root; {repo} expands to the root basename
+base = "head"                 # "head" | "fresh" | any git ref
+branch_prefix = "rimz/"
+```
+
+`rimz worktree`, `rimz tab --worktree`, and `rimz agents --worktree` use this section when creating Rimz-owned Git worktrees. `head` branches from local `HEAD`; `fresh` branches from `origin/HEAD`; any other string is passed to Git as the base ref. The marker lives in the worktree's Git admin directory, not the checkout. Mechanics in [internals/worktrees.md](../internals/worktrees.md).
+
+### Agent tab layouts
+
+```toml
+[agents.layouts]
+dual = "claude,codex"
+review = "claude,codex+term"
+```
+
+Named layouts feed `rimz tab --layout <name>`. Commas split columns, plus signs stack rows in a column, and cells are registered agent kinds or `term`. The built-in `dual = "claude,codex"` exists even when unset; defining it here overrides the built-in for your machine.
 
 ### Sidebar appearance
 

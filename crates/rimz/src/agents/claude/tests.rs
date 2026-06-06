@@ -12,6 +12,18 @@ fn resume_command_is_claude_resume_with_the_session_id() {
     assert_eq!(argv, vec!["claude", "--resume", "sess-123"]);
 }
 
+#[test]
+fn launch_command_is_claude_with_optional_prompt() {
+    assert_eq!(
+        ClaudeAdapter.launch_command(None),
+        Some(vec!["claude".to_owned()])
+    );
+    assert_eq!(
+        ClaudeAdapter.launch_command(Some("review this")),
+        Some(vec!["claude".to_owned(), "review this".to_owned()])
+    );
+}
+
 fn fixture(kind: FeedKind) -> FeedItem {
     crate::agents::testkit::feed_item(kind, "claude")
 }

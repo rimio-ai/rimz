@@ -210,6 +210,28 @@ pub struct HostPane {
     pub cwd: PathBuf,
 }
 
+/// One command pane in a caller-built tab layout. The caller owns semantics
+/// (agent exec wrapper vs shell); backends only run argv.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaneCmd {
+    pub argv: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayoutPanes {
+    pub columns: Vec<Vec<PaneCmd>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TabOptions {
+    pub session_name: String,
+    pub title: String,
+    pub cwd: PathBuf,
+    pub panes: LayoutPanes,
+    pub focus: bool,
+    pub sidebar: SidebarPaneOptions,
+}
+
 /// Options for launching the managed daemon hosts into a single dedicated, named
 /// *view* of a session — a tmux window or a Zellij tab — forced to the first
 /// position and out of the user's focus. The view is born with the global
@@ -351,6 +373,10 @@ pub trait MuxBackend: Send + Sync {
     /// so a relaunch never strands the user on the daemon view. The view never
     /// gates correctness — a failure here leaves the room intact.
     fn open_background_view(&self, opts: &BackgroundViewOptions) -> Result<BackgroundViewLaunch>;
+    /// Open one user-facing tab/window with a caller-built pane layout. The
+    /// global sidebar is included by backend convention: tmux relies on the
+    /// session's `after-new-window` hook; Zellij renders it into the tab layout.
+    fn open_tab(&self, opts: &TabOptions) -> Result<()>;
     /// Best-effort wakeup; sockets are the channel of record per the docs.
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()>;
     /// Load the session's presence plugin — the push channel that nudges the

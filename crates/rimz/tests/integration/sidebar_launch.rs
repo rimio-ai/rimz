@@ -260,6 +260,10 @@ impl MuxBackend for FakeBackend {
         Ok(rimz::mux::BackgroundViewLaunch::Launched)
     }
 
+    fn open_tab(&self, _opts: &rimz::mux::TabOptions) -> rimz::mux::Result<()> {
+        Ok(())
+    }
+
     fn wake_sidebar(&self, _session_name: &str, _bytes: &[u8]) -> rimz::mux::Result<()> {
         Ok(())
     }

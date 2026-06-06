@@ -223,6 +223,14 @@ impl AgentAdapter for ClaudeAdapter {
         ])
     }
 
+    fn launch_command(&self, prompt: Option<&str>) -> Option<Vec<String>> {
+        let mut argv = vec!["claude".to_owned()];
+        if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
+            argv.push(prompt.to_owned());
+        }
+        Some(argv)
+    }
+
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
         let feed_kind = match event_name {
             "PermissionRequest" => Some(FeedKind::Permission),

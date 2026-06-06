@@ -39,6 +39,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         Err(_) => (0, None),
     };
     let prune = gc::prune_dead_workspaces().context("pruning dead workspaces")?;
+    let worktrees_swept = sweep_worktrees(globals);
     #[expect(clippy::print_stdout, reason = "user-facing maintenance report")]
     {
         println!("gc complete");
@@ -57,6 +58,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         println!("  dirs removed  : {}", report.dirs_removed);
         println!("  bytes removed : {}", report.bytes_removed);
         println!("  workspaces    : {}", prune.removed.len());
+        println!("  worktrees swept: {worktrees_swept}");
         print_prune_removals(&prune);
         if !prune.retained_unreadable.is_empty() {
             println!(
@@ -66,6 +68,68 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn sweep_worktrees(globals: &GlobalFlags) -> usize {
+    let Ok(workspace) = WorkspaceResolver::resolve(".", globals.root.clone()) else {
+        return 0;
+    };
+    if workspace.root_class != rimz::workspace::RootClass::Repo {
+        return 0;
+    }
+    let live_cwds = match rimz::mux::auto_detect_backend(globals.mux) {
+        Ok(mux) => rimz::mux::backend_for(mux)
+            .list_panes(rimz::mux::PaneListOptions::default())
+            .map(|panes| {
+                panes
+                    .into_iter()
+                    .filter_map(|pane| pane.cwd.map(std::path::PathBuf::from))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    let entries = match rimz::worktree::list(&workspace.project_root) {
+        Ok(entries) => entries,
+        Err(err) => {
+            tracing::debug!(error = %err, "worktree gc skipped");
+            return 0;
+        }
+    };
+    let mut swept = 0;
+    for entry in entries {
+        if live_cwds
+            .iter()
+            .any(|cwd| rimz::worktree::path_inside(cwd, &entry.path))
+            || entry.dirty
+            || entry.commits_ahead > 0
+        {
+            continue;
+        }
+        let Some(marker) = rimz::worktree::read_marker_for_worktree(&entry.path)
+            .ok()
+            .flatten()
+        else {
+            continue;
+        };
+        match rimz::worktree::remove_marked_worktree(
+            &workspace.project_root,
+            &entry.path,
+            &marker,
+            false,
+        ) {
+            Ok(()) => swept += 1,
+            Err(err) => tracing::debug!(
+                path = %entry.path.display(),
+                error = %err,
+                "worktree gc removal skipped",
+            ),
+        }
+    }
+    if swept > 0 {
+        let _ = rimz::worktree::prune(&workspace.project_root);
+    }
+    swept
 }
 
 /// Render the per-workspace removal lines for the prune step.

@@ -302,6 +302,14 @@ impl AgentAdapter for PiAdapter {
         ])
     }
 
+    fn launch_command(&self, prompt: Option<&str>) -> Option<Vec<String>> {
+        let mut argv = vec!["pi".to_owned()];
+        if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
+            argv.push(prompt.to_owned());
+        }
+        Some(argv)
+    }
+
     fn install_hooks(&self) -> Result<HookInstallReport> {
         let path = pi_extension_path()?;
         install_into(&path)

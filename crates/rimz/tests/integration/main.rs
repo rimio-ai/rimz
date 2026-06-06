@@ -31,4 +31,5 @@ mod start;
 mod trust;
 mod wakeup_pipe;
 mod workspace;
+mod worktree;
 mod zellij_health;

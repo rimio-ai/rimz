@@ -22,12 +22,13 @@ use serde_json::Value;
 
 use layout::{
     TempLayoutFile, render_background_view_layout, render_session_layout, render_sidebar_layout,
+    render_tab_layout,
 };
 
 use super::{
     BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, DaemonView, MuxBackend, MuxErr,
     PaneCapture, PaneListOptions, Result, SessionHealth, SessionOptions, SidebarLiveness,
-    SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions, ViewSidebars,
+    SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions, TabOptions, ViewSidebars,
     ensure_pane_backend,
 };
 use crate::config::ZellijConfig;
@@ -1315,6 +1316,30 @@ impl MuxBackend for ZellijBackend {
             );
         }
         Ok(BackgroundViewLaunch::Launched)
+    }
+
+    fn open_tab(&self, opts: &TabOptions) -> Result<()> {
+        let layout = TempLayoutFile::new(render_tab_layout(opts)?)?;
+        self.zellij_action(&opts.session_name)
+            .args([
+                "new-tab".to_owned(),
+                "--layout".to_owned(),
+                layout.path().to_string_lossy().into_owned(),
+                "--name".to_owned(),
+                opts.title.clone(),
+            ])
+            .run()?;
+        drop(layout);
+        if !opts.focus
+            && let Err(err) = self.go_to_tab(&opts.session_name, 1)
+        {
+            tracing::warn!(
+                session = %opts.session_name,
+                error = %err,
+                "could not return focus after opening an unfocused tab",
+            );
+        }
+        Ok(())
     }
 
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()> {

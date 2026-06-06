@@ -14,6 +14,18 @@ fn resume_command_is_codex_resume_with_the_session_id() {
     assert_eq!(argv, vec!["codex", "resume", "sess-abc"]);
 }
 
+#[test]
+fn launch_command_is_codex_with_optional_prompt() {
+    assert_eq!(
+        CodexAdapter.launch_command(None),
+        Some(vec!["codex".to_owned()])
+    );
+    assert_eq!(
+        CodexAdapter.launch_command(Some("review this")),
+        Some(vec!["codex".to_owned(), "review this".to_owned()])
+    );
+}
+
 fn fixture(kind: FeedKind) -> FeedItem {
     crate::agents::testkit::feed_item(kind, "codex")
 }

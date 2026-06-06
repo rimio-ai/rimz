@@ -90,6 +90,7 @@ Every other document is a leaf from here. The `docs/` tree groups by audience: *
 - [adapter/pi-reference.md](./docs/internals/adapter/pi-reference.md) — Pi upstream protocol reference: the in-process extension API (events, payloads, blocking returns, install surface), the session JSONL, the headless RPC/JSON modes, and the auth file, each pinned to its source URL for refresh.
 - [adapter/opencode-reference.md](./docs/internals/adapter/opencode-reference.md) — OpenCode upstream protocol reference: the in-process plugin API (hooks, bus events, blocking returns, install surface), the SQLite session store, the server HTTP API, and the auth file, each pinned to its source URL for refresh.
 - [web.md](./docs/internals/web.md) — Zellij-only browser access and session-route design.
+- [worktrees.md](./docs/internals/worktrees.md) — Rimz-owned git worktrees, agent tab layouts, supervised cleanup, and backend tab rendering.
 - [performance.md](./docs/internals/performance.md) — render-thread hot path, the cost map, and the rules a performance change follows.
 
 **Contributing** — `docs/contributing/`

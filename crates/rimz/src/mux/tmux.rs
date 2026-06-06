@@ -16,8 +16,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, DaemonView, MuxBackend, MuxErr,
-    PaneCapture, PaneListOptions, Result, SessionOptions, SidebarLiveness, SidebarPaneOptions,
-    SidebarRecovery, SplitPaneOptions, ViewSidebars, ensure_pane_backend,
+    PaneCapture, PaneCmd, PaneListOptions, Result, SessionOptions, SidebarLiveness,
+    SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, TabOptions, ViewSidebars,
+    ensure_pane_backend,
 };
 use crate::config::TmuxConfig;
 use crate::feed::PaneRef;
@@ -305,6 +306,39 @@ impl TmuxBackend {
                 .args(["select-window".to_owned(), "-t".to_owned(), window_id])
                 .run();
         }
+    }
+
+    fn split_tab_pane(
+        &self,
+        opts: &TabOptions,
+        direction: &str,
+        target: &str,
+        pane: &PaneCmd,
+    ) -> Result<String> {
+        let output = self
+            .cmd()
+            .args([
+                "split-window".to_owned(),
+                "-d".to_owned(),
+                direction.to_owned(),
+                "-P".to_owned(),
+                "-F".to_owned(),
+                "#{pane_id}".to_owned(),
+                "-t".to_owned(),
+                target.to_owned(),
+                "-c".to_owned(),
+                opts.cwd.to_string_lossy().into_owned(),
+            ])
+            .args(pane.argv.clone())
+            .run()?;
+        let pane_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if pane_id.is_empty() {
+            return Err(MuxErr::Output {
+                program: "tmux".to_owned(),
+                reason: "split-window did not print a pane id".to_owned(),
+            });
+        }
+        Ok(pane_id)
     }
 
     /// The session's first window index (`base-index`, default 0 — almost always
@@ -811,6 +845,69 @@ impl MuxBackend for TmuxBackend {
         Ok(BackgroundViewLaunch::Launched)
     }
 
+    fn open_tab(&self, opts: &TabOptions) -> Result<()> {
+        let Some((first_column, rest_columns)) = opts.panes.columns.split_first() else {
+            return Err(MuxErr::Output {
+                program: "tmux".to_owned(),
+                reason: "tab layout has no columns".to_owned(),
+            });
+        };
+        let Some((first, first_column_rest)) = first_column.split_first() else {
+            return Err(MuxErr::Output {
+                program: "tmux".to_owned(),
+                reason: "tab layout has an empty column".to_owned(),
+            });
+        };
+        let output = self
+            .cmd()
+            .args([
+                "new-window".to_owned(),
+                "-d".to_owned(),
+                "-P".to_owned(),
+                "-F".to_owned(),
+                "#{window_id}\t#{pane_id}".to_owned(),
+                "-t".to_owned(),
+                opts.session_name.clone(),
+                "-n".to_owned(),
+                opts.title.clone(),
+                "-c".to_owned(),
+                opts.cwd.to_string_lossy().into_owned(),
+            ])
+            .args(first.argv.clone())
+            .run()?;
+        let (window_id, first_pane) = parse_new_window_ids(&output.stdout)?;
+
+        let mut column_anchors = vec![first_pane.clone()];
+        let mut previous_in_column = first_pane;
+        for pane in first_column_rest {
+            previous_in_column = self.split_tab_pane(opts, "-v", &previous_in_column, pane)?;
+        }
+        for column in rest_columns {
+            let Some((top, rows)) = column.split_first() else {
+                return Err(MuxErr::Output {
+                    program: "tmux".to_owned(),
+                    reason: "tab layout has an empty column".to_owned(),
+                });
+            };
+            let target = column_anchors
+                .last()
+                .cloned()
+                .unwrap_or_else(|| window_id.clone());
+            let new_column = self.split_tab_pane(opts, "-h", &target, top)?;
+            column_anchors.push(new_column.clone());
+            let mut previous = new_column;
+            for row in rows {
+                previous = self.split_tab_pane(opts, "-v", &previous, row)?;
+            }
+        }
+        if opts.focus {
+            self.cmd()
+                .args(["select-window".to_owned(), "-t".to_owned(), window_id])
+                .run()?;
+        }
+        Ok(())
+    }
+
     fn wake_sidebar(&self, _session_name: &str, _bytes: &[u8]) -> Result<()> {
         // tmux has no pipe equivalent; the sidebar wakeup socket is the
         // only channel. Socket fanout lives above this trait in the ledger
@@ -877,6 +974,20 @@ fn parse_pane_line(line: &str) -> Option<PaneRef> {
         cpu_pct: None,
         io_bps: None,
     })
+}
+
+fn parse_new_window_ids(stdout: &[u8]) -> Result<(String, String)> {
+    let raw = String::from_utf8_lossy(stdout);
+    let mut cols = raw.trim().split('\t');
+    let window = cols.next().unwrap_or_default().trim();
+    let pane = cols.next().unwrap_or_default().trim();
+    if window.is_empty() || pane.is_empty() {
+        return Err(MuxErr::Output {
+            program: "tmux".to_owned(),
+            reason: format!("new-window did not print window and pane ids: {raw:?}"),
+        });
+    }
+    Ok((window.to_owned(), pane.to_owned()))
 }
 
 // ── Control-mode presence stream ──────────────────────────────────────────────

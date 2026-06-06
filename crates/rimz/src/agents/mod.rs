@@ -411,6 +411,13 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// The argv that launches a fresh interactive session of this agent in the
+    /// pane's cwd. `prompt`, when present, is passed as the agent's positional
+    /// startup prompt; an agent with no launch CLI returns `None`.
+    fn launch_command(&self, _prompt: Option<&str>) -> Option<Vec<String>> {
+        None
+    }
+
     /// Write or merge the adapter's hook config into the agent's per-user
     /// config file. Defaults to an explicit "not implemented" error until an
     /// adapter owns installation.

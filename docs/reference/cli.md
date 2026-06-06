@@ -19,7 +19,7 @@ rimz feed ask --title "Promote staging → prod?" \
               --options yes,no --timeout 1h         # blocks until answered
 
 rimz attach --remote dev-box:query-engine          # reattach from anywhere over ssh
-rimz pane split && claude                           # run an agent in a new pane
+rimz agents claude codex --worktree                 # launch agents in fresh worktree tabs
 ```
 
 That is the whole loop. For the five-minute tour and the why, see [the product guide](../guide/product.md); for the model that shapes the surface, see [DESIGN.md](../../DESIGN.md).
@@ -50,6 +50,25 @@ When a session is reborn — after a reboot, a multiplexer crash, or a reset —
 A dropped link reconnects by itself. Keepalives (`ServerAliveInterval=5`, three strikes) detect a dead link in about fifteen seconds, and rimz reattaches with capped exponential backoff — the remote room survives the drop by design, so pickup is where you left it. A clean detach ends the session, a first connection that fails (auth, unknown host) surfaces immediately rather than looping a password prompt, and a remote failure that isn't a link drop reports the remote's own error. `--no-reconnect` hands the link to a single ssh run. `--no-resume` and `--mux` ride into the remote `rimz`.
 
 `rimz doctor` reports the backend, installed hooks, trust state, enrolled resolvers, and the machine's room tree — every recorded workspace with its root, root class, and liveness, the current directory's room starred and nesting live rooms flagged — and names the fix for anything misconfigured. Run it first when something looks wrong.
+
+## Run agents in tabs and worktrees
+
+```sh
+rimz worktree new [NAME] [--base <head|fresh|ref>] [--branch <name>]
+rimz worktree list [--json]
+rimz worktree remove <name> [--force]
+
+rimz tab [--layout <name|spec>] [--worktree [NAME]] [--name <title>] [--prompt <text>] [--no-focus]
+rimz agents <KIND>... [--worktree [NAME]] [--prompt <text>] [--no-focus]
+```
+
+`rimz worktree` manages only Rimz-marked Git worktrees. New worktrees live under `[worktree] dir` (default `../{repo}-worktrees/<name>`), branch from `[worktree] base`, and carry their marker in the worktree's Git admin directory so the checkout stays untouched. `remove` refuses dirty or ahead worktrees unless `--force` is explicit.
+
+`rimz tab` opens one Zellij tab or tmux window in the current room. `--layout` accepts a named `[agents.layouts]` entry or an inline spec: commas split columns, plus signs stack rows, and cells are agent kinds (`claude`, `codex`, `pi`) or `term`; the built-in `dual` layout is `claude,codex`, and no layout is one terminal.
+
+`--worktree` creates or reuses a Rimz-owned worktree and runs every cell in it. A bare `--worktree` creates a fresh generated name; `--worktree demo` reuses `demo` when marked or creates it. `--prompt` is passed to agent cells; `term` cells run your shell.
+
+`rimz agents` is launcher sugar: each positional kind opens its own single-agent tab. Repeating a kind opens a fleet. Bare `--worktree` creates one fresh worktree per agent; a named worktree is shared by all launched agents. Details and cleanup state machine: [internals/worktrees.md](../internals/worktrees.md).
 
 ## Publish events and ask questions
 
@@ -123,12 +142,12 @@ Resolvers form an ordered chain that ends with you. Each entry carries its own `
 ```sh
 rimz reset [--yes] [--no-start] [PATH]   # destroy a wedged room and rebuild it clean
 rimz reload                              # converge every running sidebar to a healthy set
-rimz gc [--older-than <duration>]        # sweep stale liveness hints and dead-owner items
+rimz gc [--older-than <duration>]        # sweep stale liveness hints, dead-owner items, clean marked worktrees
 rimz workspace migrate <old-root> <new-root>
 rimz workspace rotate-events [--max-bytes <size>] [--archive-older-than <duration>]
 ```
 
-`reset` tears a stuck room down — the session, its resurrection cache, and orphaned processes — then rebuilds and reattaches it; `--no-start` stops after teardown, `--yes` skips the confirmation. `reload` runs from anywhere and reconciles sidebars across all of your workspaces: it re-execs each to a freshly-installed build and re-adds any view that lost its sidebar, never rebirthing a session ([internals/sidebar.md](../internals/sidebar.md)). `gc` is the global janitor: it removes stale resolver/sidebar heartbeats and sockets, abandons pending items whose owner process has exited, and reaps provably-dead workspace ledgers.
+`reset` tears a stuck room down — the session, its resurrection cache, and orphaned processes — then rebuilds and reattaches it; `--no-start` stops after teardown, `--yes` skips the confirmation. `reload` runs from anywhere and reconciles sidebars across all of your workspaces: it re-execs each to a freshly-installed build and re-adds any view that lost its sidebar, never rebirthing a session ([internals/sidebar.md](../internals/sidebar.md)). `gc` is the global janitor: it removes stale resolver/sidebar heartbeats and sockets, abandons pending items whose owner process has exited, reaps provably-dead workspace ledgers, and sweeps clean Rimz-marked worktrees in the current repo when no live pane is inside them.
 
 `workspace migrate` rewires the ledger after a repo moves on disk, rewriting every feed item, event, and snapshot to the new workspace ID. `workspace rotate-events` archives the active event log past `--max-bytes` (default `64MiB`), preserving the agent rollup, and prunes archives older than `--archive-older-than`. The durability rules behind both live in [internals/ledger.md](../internals/ledger.md).
 
@@ -160,8 +179,9 @@ rimz sidebar serve ...                             # the terminal sidebar render
 rimz sidebar wake --reason <r> [--workspace-id <id>] # Zellij presence-plugin poke (stamp + eldest nudge)
 rimz statusline feed --source <agent>              # captures statusline context
 rimz hooks feed --source <agent> [--event <e>]     # routes a hook payload (--event is a debug override)
+rimz agents exec <agent> [--worktree-path <p>] [--prompt <text>] # supervised agent pane wrapper
 rimz codex ...                                     # Codex enrichment helpers
 rimz workspace resolve [PATH]                      # print the resolved workspace as JSON
 ```
 
-The installed hook command passes only `--source`; the event is read from the payload on stdin. The Codex helpers and the daemon broker they back are documented in [internals/hooks.md](../internals/hooks.md) and [internals/transcript.md](../internals/transcript.md).
+The installed hook command passes only `--source`; the event is read from the payload on stdin. `agents exec` is what `rimz tab` and `rimz agents` run inside agent panes: it launches the adapter's CLI and performs marked-worktree cleanup after exit. The Codex helpers and the daemon broker they back are documented in [internals/hooks.md](../internals/hooks.md), [internals/transcript.md](../internals/transcript.md), and [internals/worktrees.md](../internals/worktrees.md).

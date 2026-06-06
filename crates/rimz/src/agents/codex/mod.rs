@@ -176,6 +176,14 @@ impl AgentAdapter for CodexAdapter {
         ])
     }
 
+    fn launch_command(&self, prompt: Option<&str>) -> Option<Vec<String>> {
+        let mut argv = vec!["codex".to_owned()];
+        if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
+            argv.push(prompt.to_owned());
+        }
+        Some(argv)
+    }
+
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
         let feed_kind = (event_name == "PermissionRequest").then_some(FeedKind::Permission);
         classify_agent_hook(

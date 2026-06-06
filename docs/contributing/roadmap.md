@@ -67,6 +67,8 @@ Remaining: the OpenCode adapter — upstream surface mirrored and live-verified 
 
 Done: non-git roots are first-class — typed root classes with session-pinned identity ([cli.md → Workspace resolution](../reference/cli.md#start-and-attach-a-workspace)), and the directory room groups panes by depth-1 child repos with a name-only root pod ([sidebar.md → Worktree groups](../internals/sidebar.md#worktree-groups)).
 
+Done: repo-backed rooms can launch agents through Rimz-owned worktrees and backend-native tabs — `rimz worktree`, `rimz tab`, and `rimz agents` share the same marker and layout IR ([worktrees.md](../internals/worktrees.md)).
+
 Deferred, in design-readiness order:
 
 - **Depth >1 enumeration.** A repo at `<root>/org/repo` folds into the root pod today (the v1 depth rule). A deeper scan needs a depth/ignore policy before it pays its `read_dir` fan-out.

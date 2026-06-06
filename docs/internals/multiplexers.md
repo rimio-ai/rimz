@@ -32,12 +32,15 @@ focus_pane(pane_id)
 capture_pane(pane_id, opts)     normalized output
 send_keys(pane_id, text)
 open_sidebar(session_name, workspace_id, cwd, rimz_bin, width)
+open_tab(session_name, title, cwd, layout_panes, sidebar)
 wake_sidebar(session, bytes)
 ensure_presence_plugin(session, workspace_id, wasm, rimz_bin, converge)
 version()
 ```
 
 Backend-specific fast paths cannot become correctness requirements. If a feature exists only on Zellij, the tmux backend must still pass the same matrix without it.
+
+`open_tab` receives backend-neutral pane argv and layout geometry from the CLI. Agent resolution, prompts, and worktree cleanup are already compiled into the argv (`rimz agents exec …`), so the backend stays ignorant of agent kinds and worktree ownership. The shared layout IR and cleanup model live in [worktrees.md](./worktrees.md).
 
 ### The identity pin
 

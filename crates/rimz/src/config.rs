@@ -44,6 +44,8 @@ pub type Result<T> = std::result::Result<T, ConfigErr>;
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct MachineConfig {
+    pub worktree: WorktreeConfig,
+    pub agents: AgentsConfig,
     pub remote_control: RemoteControlConfig,
     pub sidebar: SidebarConfig,
     pub zellij: ZellijConfig,
@@ -93,6 +95,79 @@ impl From<&MachineConfig> for MultiplexerConfig {
         }
     }
 }
+
+/// Git-worktree launch defaults. Per-machine by design: it names where this
+/// machine stores sibling worktrees and which base ref it prefers for new ones.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WorktreeConfig {
+    /// Directory template for Rimz-owned worktrees. Relative paths resolve from
+    /// the repository root; `{repo}` expands to the root directory basename.
+    pub dir: String,
+    /// Base ref for new worktrees: local `HEAD`, remote `origin/HEAD`, or an
+    /// explicit ref string.
+    pub base: WorktreeBase,
+    /// Branch name prefix for auto-created worktree branches.
+    pub branch_prefix: String,
+}
+
+impl Default for WorktreeConfig {
+    fn default() -> Self {
+        Self {
+            dir: "../{repo}-worktrees".to_owned(),
+            base: WorktreeBase::Head,
+            branch_prefix: "rimz/".to_owned(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub enum WorktreeBase {
+    #[default]
+    Head,
+    Fresh,
+    Explicit(String),
+}
+
+impl WorktreeBase {
+    pub fn as_refspec(&self) -> &str {
+        match self {
+            Self::Head => "HEAD",
+            Self::Fresh => "origin/HEAD",
+            Self::Explicit(value) => value,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for WorktreeBase {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(serde::de::Error::custom("worktree base cannot be empty"));
+        }
+        Ok(match trimmed {
+            "head" => Self::Head,
+            "fresh" => Self::Fresh,
+            other => Self::Explicit(other.to_owned()),
+        })
+    }
+}
+
+/// Agent-launch preferences. Layout strings name registry-backed agent kinds or
+/// `term`; the parser lives in [`crate::tab_layout`].
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AgentsConfig {
+    pub layouts: LayoutsConfig,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct LayoutsConfig(pub BTreeMap<String, String>);
 
 /// Rimz-owned Zellij room defaults. These are passed as `zellij attach …
 /// options …` when a Rimz session is born or reattached, so they do not require
@@ -637,6 +712,51 @@ mod tests {
         let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
         assert!(!config.remote_control.claude);
         assert!(!config.remote_control.codex);
+    }
+
+    #[test]
+    fn worktree_config_defaults_and_parses() {
+        let dir = tempdir().expect("tempdir");
+        let defaults = MachineConfig::load_from(&write(&dir, "")).expect("load");
+        assert_eq!(defaults.worktree.dir, "../{repo}-worktrees");
+        assert_eq!(defaults.worktree.base, WorktreeBase::Head);
+        assert_eq!(defaults.worktree.branch_prefix, "rimz/");
+
+        let config = MachineConfig::load_from(&write(
+            &dir,
+            "[worktree]\n\
+             dir = \"../wt-{repo}\"\n\
+             base = \"fresh\"\n\
+             branch_prefix = \"agents/\"\n",
+        ))
+        .expect("load");
+        assert_eq!(config.worktree.dir, "../wt-{repo}");
+        assert_eq!(config.worktree.base, WorktreeBase::Fresh);
+        assert_eq!(config.worktree.branch_prefix, "agents/");
+
+        let explicit =
+            MachineConfig::load_from(&write(&dir, "[worktree]\nbase = \"main\"\n")).expect("load");
+        assert_eq!(
+            explicit.worktree.base,
+            WorktreeBase::Explicit("main".to_owned())
+        );
+        assert!(MachineConfig::load_from(&write(&dir, "[worktree]\nbase = \"\"\n")).is_err());
+    }
+
+    #[test]
+    fn agents_layouts_parse_as_named_specs() {
+        let dir = tempdir().expect("tempdir");
+        let config = MachineConfig::load_from(&write(
+            &dir,
+            "[agents.layouts]\n\
+             review = \"claude,codex+term\"\n",
+        ))
+        .expect("load");
+        assert_eq!(
+            config.agents.layouts.0.get("review").map(String::as_str),
+            Some("claude,codex+term")
+        );
+        assert!(MachineConfig::default().agents.layouts.0.is_empty());
     }
 
     #[test]

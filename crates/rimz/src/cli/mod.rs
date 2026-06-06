@@ -1,6 +1,7 @@
 //! CLI parsing surface. Each subcommand has its own file under `cli/` and
 //! exposes a single `run(...)` entry called from `dispatch`.
 
+mod agents_cmd;
 mod codex;
 mod doctor;
 mod event;
@@ -15,8 +16,10 @@ mod reset;
 mod resolver;
 mod sidebar;
 mod statusline;
+mod tab;
 mod trust;
 mod workspace;
+mod worktree;
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -45,6 +48,9 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Event(args)) => event::run(args, &globals),
         Some(Subcmd::Feed(args)) => feed::run(args, &globals),
         Some(Subcmd::Gc(args)) => gc::run(args, &globals),
+        Some(Subcmd::Worktree(args)) => worktree::run(args, &globals),
+        Some(Subcmd::Tab(args)) => tab::run(args, &globals),
+        Some(Subcmd::Agents(args)) => agents_cmd::run(args, &globals),
         Some(Subcmd::Reload(args)) => reload::run(args, &globals),
         Some(Subcmd::Reset(args)) => reset::run(args, &globals),
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
@@ -123,6 +129,12 @@ enum Subcmd {
     Feed(feed::FeedArgs),
     /// Remove stale runtime liveness hints.
     Gc(gc::GcArgs),
+    /// Create, list, and remove Rimz-owned git worktrees.
+    Worktree(worktree::WorktreeArgs),
+    /// Open one laid-out tab/window in the current Rimz room.
+    Tab(tab::TabArgs),
+    /// Launch agent tabs, optionally in Rimz-owned worktrees.
+    Agents(agents_cmd::AgentsArgs),
     /// Reload running sidebars in place (pick up a freshly-installed build).
     Reload(reload::ReloadArgs),
     /// Force a clean rebirth of this workspace's room, destroying a stuck or

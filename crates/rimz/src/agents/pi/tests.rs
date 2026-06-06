@@ -282,6 +282,15 @@ fn resume_command_is_pi_with_the_session_id() {
     );
 }
 
+#[test]
+fn launch_command_is_pi_with_optional_prompt() {
+    assert_eq!(PiAdapter.launch_command(None), Some(vec!["pi".to_owned()]));
+    assert_eq!(
+        PiAdapter.launch_command(Some("review this")),
+        Some(vec!["pi".to_owned(), "review this".to_owned()])
+    );
+}
+
 /// Empty stdout is pi's neutral: the extension's child is fire-and-forget
 /// and nothing reads it. Golden so the shape never drifts.
 #[test]

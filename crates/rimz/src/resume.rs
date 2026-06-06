@@ -167,7 +167,7 @@ pub fn plan_resume(
 /// A short, view-safe label for a resumed agent: `kind:branch`, falling back to
 /// the worktree directory name, then `kind:agent`. Doubles as the Zellij tab /
 /// tmux window name and the seed's idempotency key.
-fn build_label(kind: &str, branch: Option<&str>, worktree: &Path) -> String {
+pub fn build_label(kind: &str, branch: Option<&str>, worktree: &Path) -> String {
     let short = branch
         .filter(|branch| !branch.is_empty())
         .map(ToOwned::to_owned)

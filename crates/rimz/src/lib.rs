@@ -24,8 +24,10 @@ pub mod resolver;
 pub mod resume;
 pub mod schema;
 pub mod sidebar;
+pub mod tab_layout;
 pub mod trust;
 pub mod workspace;
+pub mod worktree;
 
 pub use crate::agents::{SpendTally, SpendWindow};
 pub use crate::bridge::{BridgeErr, BridgeOutcome, ExpectedFrame};

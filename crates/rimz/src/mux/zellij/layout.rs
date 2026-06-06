@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 
 use super::SIDEBAR_PANE_NAME;
 use crate::mux::{
-    BackgroundViewOptions, DaemonView, HostPane, MuxErr, Result, ResumePane, SidebarPaneOptions,
+    BackgroundViewOptions, DaemonView, HostPane, MuxErr, PaneCmd, Result, ResumePane,
+    SidebarPaneOptions, TabOptions,
 };
 
 pub(super) struct TempLayoutFile {
@@ -275,6 +276,64 @@ pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Res
     ))
 }
 
+/// A user-opened tab born with the global sidebar docked on the left and the
+/// caller's columns to the right. Columns split vertically; rows inside a
+/// column split horizontally. Every command pane shares `opts.cwd`.
+pub(super) fn render_tab_layout(opts: &TabOptions) -> Result<String> {
+    if opts.panes.columns.is_empty() {
+        return Err(MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: "tab layout has no columns".to_owned(),
+        });
+    }
+    let sidebar = sidebar_pane_kdl(
+        &opts.sidebar,
+        Some(&opts.sidebar.cwd),
+        BirthGeometry::Detached,
+    )?;
+    let mut focused = false;
+    let mut columns = String::new();
+    for column in &opts.panes.columns {
+        columns.push_str(&render_tab_column(column, &opts.cwd, &mut focused)?);
+    }
+    Ok(format!(
+        r#"layout {{
+    pane split_direction="vertical" {{
+        {sidebar}
+{columns}    }}
+    {COMPACT_BAR_KDL}
+}}
+"#,
+    ))
+}
+
+fn render_tab_column(column: &[PaneCmd], cwd: &Path, focused: &mut bool) -> Result<String> {
+    match column {
+        [] => Err(MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: "tab layout has an empty column".to_owned(),
+        }),
+        [pane] => {
+            let focus = !*focused;
+            *focused = true;
+            render_command_pane(&pane.argv, cwd, focus)
+        }
+        rows => {
+            let mut rendered = String::new();
+            for pane in rows {
+                let focus = !*focused;
+                *focused = true;
+                rendered.push_str(&render_command_pane(&pane.argv, cwd, focus)?);
+            }
+            Ok(format!(
+                r#"        pane split_direction="horizontal" {{
+{rendered}        }}
+"#,
+            ))
+        }
+    }
+}
+
 /// One command pane in a tab's right side (`argv` run in `cwd`), indented to
 /// nest under the vertical split beside the sidebar. Born unsuspended and
 /// closing with its process — an exit means the pane is gone. `focus` pins the
@@ -523,6 +582,42 @@ mod tests {
     #[test]
     fn background_view_layout_rejects_no_hosts() {
         assert!(render_background_view_layout(&background_view_opts(vec![])).is_err());
+    }
+
+    #[test]
+    fn tab_layout_renders_sidebar_columns_rows_and_focus() {
+        let sidebar = background_view_opts(vec![]).sidebar;
+        let opts = TabOptions {
+            session_name: sidebar.session_name.clone(),
+            title: "review".to_owned(),
+            cwd: PathBuf::from("/proj/worktree"),
+            panes: crate::mux::LayoutPanes {
+                columns: vec![
+                    vec![PaneCmd {
+                        argv: vec!["/bin/sh".to_owned()],
+                    }],
+                    vec![
+                        PaneCmd {
+                            argv: vec!["codex".to_owned()],
+                        },
+                        PaneCmd {
+                            argv: vec!["/bin/sh".to_owned(), "-l".to_owned()],
+                        },
+                    ],
+                ],
+            },
+            focus: true,
+            sidebar,
+        };
+        let layout = render_tab_layout(&opts).expect("render tab layout");
+        assert!(layout.contains(r#"name="rimz-sidebar""#), "{layout}");
+        assert!(layout.contains("compact-bar"), "{layout}");
+        assert!(
+            layout.contains(r#"pane split_direction="horizontal""#),
+            "{layout}"
+        );
+        assert!(layout.contains(r#"command "codex""#), "{layout}");
+        assert_eq!(layout.matches("focus=true").count(), 1, "{layout}");
     }
 
     fn daemon_view(hosts: Vec<HostPane>) -> DaemonView {
