@@ -25,7 +25,6 @@ mod process;
 mod provider;
 mod worktree;
 
-pub(super) use agent_card::shows_loading_dots;
 pub(super) use cockpit::{cockpit_spend_line, cockpit_summary_line};
 pub(crate) use fleet::{MakeUpHit, status_total};
 pub(super) use fleet::{first_run_hint_lines, fleet_header_lines, fleet_size};

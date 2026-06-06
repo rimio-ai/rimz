@@ -201,9 +201,9 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Al
 
 /// The fastest animation class currently visible in the snapshot. Fast motion
 /// changes every frame (working/thinking spinners, resolver work, active process
-/// rows). Slow motion is cosmetic attention/loading movement whose visible
-/// state is held for several base frames, so the serve loop can redraw it less
-/// often without making the sidebar feel stale.
+/// rows). Slow motion is cosmetic attention movement whose visible state is
+/// held for several base frames, so the serve loop can redraw it less often
+/// without making the sidebar feel stale.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnimationCadence {
     None,
@@ -213,15 +213,15 @@ pub enum AnimationCadence {
 
 /// Whether any visible row is in an animated state — a running agent (working
 /// or pre-edit thinking), a resolver mid-flight, an active process spinning on
-/// real work (a build, a test, a `sudo` install), an attention row whose `?`/`!`
-/// glyph breathes, or an idle agent showing the loading-dots cue. The serve
-/// loop uses this as the broad "does anything move?" gate; [`animation_cadence`]
-/// decides whether the movement needs the fast frame grid or the slower
-/// cosmetic cadence. A fully settled sidebar (only quiet idle/done rows) keeps
-/// idling on the slow data tick. A stalled agent is projected to `failed`
-/// upstream, so it reads as a breathing `!` here. The cockpit's today-spend
-/// count-up rides a separate gate (`UiState::tally`), so a finished-turn climb
-/// keeps the tick alive even when every row is otherwise static.
+/// real work (a build, a test, a `sudo` install), or an attention row whose
+/// `?`/`!` glyph breathes. The serve loop uses this as the broad "does anything
+/// move?" gate; [`animation_cadence`] decides whether the movement needs the
+/// fast frame grid or the slower cosmetic cadence. A fully settled sidebar
+/// (only quiet idle/done rows) keeps idling on the slow data tick. A stalled
+/// agent is projected to `failed` upstream, so it reads as a breathing `!`
+/// here. The cockpit's today-spend count-up rides a separate gate
+/// (`UiState::tally`), so a finished-turn climb keeps the tick alive even when
+/// every row is otherwise static.
 pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {
     animation_cadence(snapshot) != AnimationCadence::None
 }
@@ -241,14 +241,10 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
                 if row.resolver.is_some() || row.status == Some(AgentStatus::Running) {
                     return AnimationCadence::Fast;
                 }
-                // `?`/`!` breathe to pull the eye back to an unanswered row —
+                // `?`/`!` breathe to pull the eye back to an unanswered row,
                 // quickening with age up to the red blink, which flips every
-                // 300ms by design so it samples cleanly on this grid — and the
-                // idle "waiting for a prompt" loading-dots cue cycles in
-                // place. None of it needs a 10fps full-frame redraw.
-                if row.status.is_some_and(AgentStatus::is_actionable)
-                    || sections::shows_loading_dots(row)
-                {
+                // 300ms by design so it samples cleanly on this grid.
+                if row.status.is_some_and(AgentStatus::is_actionable) {
                     slow = true;
                 }
             }

@@ -487,7 +487,7 @@ fn display_context_window(row: &SidebarRow) -> Option<u64> {
 /// context metadata wins first; for Codex that is app-server `preview`, then
 /// thread `name`. Named sessions and live task/prompt fallbacks keep the row
 /// labelled when richer metadata is absent. An idle agent with nothing to show
-/// yet paints the animated loading-dots cue instead; any other empty description
+/// yet paints the static loading-dots cue instead; any other empty description
 /// falls to an em dash. A turn that died on a provider API error takes the line
 /// over the fall-through — the soft upstream error text (`turn_error_label`,
 /// quoted verbatim) is the row's most important fact while the `!` escalation
@@ -558,11 +558,8 @@ fn usable_description(value: &str) -> bool {
 
 /// Whether an agent row paints the idle loading-dots cue in place of a
 /// description — an idle agent with nothing to show yet (no preview, session
-/// name, task, or prompt), the "waiting for your first prompt" state. Shared by
-/// the renderer (to paint the animated dots) and the serve loop's
-/// [`has_live_animation`](crate::sidebar_renderer::render::has_live_animation) (to keep the
-/// animation tick alive while they cycle).
-pub(in crate::sidebar_renderer::render) fn shows_loading_dots(row: &SidebarRow) -> bool {
+/// name, task, or prompt), the "waiting for your first prompt" state.
+fn shows_loading_dots(row: &SidebarRow) -> bool {
     row.row_kind == SidebarRowKind::Agent
         && matches!(row.status.unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
         && descriptor(row).is_none()

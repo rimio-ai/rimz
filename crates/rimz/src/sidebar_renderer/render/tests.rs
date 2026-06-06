@@ -1764,6 +1764,19 @@ fn animation_cadence_separates_fast_work_from_slow_cosmetic_motion() {
     );
     assert_eq!(animation_cadence(&waiting), AnimationCadence::Slow);
 
+    let idle_empty = snapshot_with(
+        Vec::new(),
+        vec![agent(
+            "codex-1",
+            "codex",
+            AgentStatus::Idle,
+            Some("/repo/main"),
+            Some("main"),
+            None,
+        )],
+    );
+    assert_eq!(animation_cadence(&idle_empty), AnimationCadence::None);
+
     let calm = snapshot_with(
         Vec::new(),
         vec![agent(

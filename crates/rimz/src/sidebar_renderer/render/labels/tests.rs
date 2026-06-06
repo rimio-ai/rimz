@@ -400,17 +400,16 @@ fn animations_cycle_and_wrap() {
     );
 }
 
-/// The loading dots cycle `.` → `..` → `...`, holding each step eight ticks
-/// (a 2.4s full cycle, matching the resting attention breath), and the
-/// attention glyph breathes a slow brightness pulse — `DIM` at the troughs,
-/// `BOLD` at the peak — that wraps with the phase, never strobing.
+/// The loading dots are static while the attention glyph breathes a slow
+/// brightness pulse — `DIM` at the troughs, `BOLD` at the peak — that wraps
+/// with the phase, never strobing.
 #[test]
 fn loading_dots_and_attention_breath_cadence() {
-    assert_eq!(loading_dots(0), ".");
-    assert_eq!(loading_dots(7), "."); // held across ticks
-    assert_eq!(loading_dots(8), "..");
+    assert_eq!(loading_dots(0), "...");
+    assert_eq!(loading_dots(7), "...");
+    assert_eq!(loading_dots(8), "...");
     assert_eq!(loading_dots(16), "...");
-    assert_eq!(loading_dots(24), ".", "wraps back to one dot");
+    assert_eq!(loading_dots(24), "...");
 
     // DIM at the troughs, normal between, BOLD at the half-cycle peak.
     let fresh = 5 * 60;

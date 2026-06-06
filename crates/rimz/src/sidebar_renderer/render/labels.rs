@@ -74,20 +74,18 @@ const COMPACTING_FRAMES: [&str; 10] = ["▁", "▃", "▄", "▅", "▆", "▇",
 /// live head, just delegating.
 const SUBAGENT_FRAMES: [&str; 8] = ["_", "-", "`", "´", "'", "´", "`", "-"];
 
-/// Idle, waiting-for-a-prompt: a quiet `.` → `..` → `...` loading cue that stands
-/// in for the em-dash on a just-started agent with nothing to describe yet. Held
-/// several ticks per step so it breathes rather than flickers.
-const LOADING_FRAMES: [&str; 3] = [".", "..", "..."];
+/// Idle, waiting-for-a-prompt: a static `...` placeholder that stands in for the
+/// em-dash on a just-started agent with nothing to describe yet.
+const LOADING_DOTS: &str = "...";
 
 fn frame(frames: &[&'static str], animation_phase: u64) -> &'static str {
     frames[(animation_phase as usize) % frames.len()]
 }
 
-/// The idle loading-dots cue (`.` / `..` / `...`), each step held eight ticks
-/// (~800ms) — a 2.4s full cycle, the same lazy cadence as the attention breath —
-/// so an idle row drifts rather than strobes.
-pub(super) fn loading_dots(animation_phase: u64) -> &'static str {
-    LOADING_FRAMES[((animation_phase / 8) as usize) % LOADING_FRAMES.len()]
+/// The idle loading-dots cue. The phase argument is accepted so the card render
+/// path stays aligned with the other glyph helpers, but idle agents stay still.
+pub(super) fn loading_dots(_animation_phase: u64) -> &'static str {
+    LOADING_DOTS
 }
 
 /// The brightness modifier for a breathing attention glyph (`?` / `!`) on this

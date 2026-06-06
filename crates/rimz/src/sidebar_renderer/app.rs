@@ -564,9 +564,9 @@ fn set_terminal_title() -> io::Result<()> {
 /// something to move.
 const ANIMATION_FRAME: Duration = Duration::from_millis(100);
 
-/// Slow cosmetic animation tick for attention breathing and empty-idle loading
-/// dots. These visual states already hold the same rendered frame for several
-/// base phases, so redrawing them at 10fps wastes CPU in an idle or blocked room.
+/// Slow cosmetic animation tick for attention breathing. The breath already
+/// holds the same rendered frame for several base phases, so redrawing it at
+/// 10fps wastes CPU in a blocked room.
 const SLOW_ANIMATION_FRAME: Duration = Duration::from_millis(300);
 
 /// Money animation tick — one paint per roll click, derived from the odometer's
