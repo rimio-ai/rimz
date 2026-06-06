@@ -284,6 +284,7 @@ impl StatuslinePayload {
         AgentContext {
             source: source.to_owned(),
             session_name: self.session_name,
+            session_preview: None,
             model_id: self.model.id,
             model_display_name: self.model.display_name,
             effort: self.effort.level,

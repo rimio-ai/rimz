@@ -193,6 +193,7 @@ pub fn empty_context(source: &str, observed_at: Timestamp) -> AgentContext {
     AgentContext {
         source: source.to_owned(),
         session_name: None,
+        session_preview: None,
         model_id: None,
         model_display_name: None,
         effort: None,
@@ -311,6 +312,7 @@ mod tests {
         AgentContext {
             source: "claude".to_owned(),
             session_name: None,
+            session_preview: None,
             model_id: Some("claude-opus-4-8".to_owned()),
             model_display_name: None,
             effort: None,

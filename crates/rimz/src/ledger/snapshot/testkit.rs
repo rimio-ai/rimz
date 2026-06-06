@@ -173,6 +173,7 @@ pub(super) fn bare_context() -> AgentContext {
     AgentContext {
         source: "claude".to_owned(),
         session_name: None,
+        session_preview: None,
         model_id: None,
         model_display_name: None,
         effort: None,

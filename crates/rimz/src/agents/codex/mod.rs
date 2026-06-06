@@ -15,9 +15,9 @@
 //! through [`refresh_transcript_context`], because the Codex app-server exposes
 //! token usage only on a live, subscribing `thread/resume` — never read-only.
 //! Metadata Claude gets from its statusline (rate-limit windows, model display
-//! name, version) comes from the app-server read-only methods via
-//! [`refresh_app_server_context`], spawned out-of-band by
-//! `rimz codex refresh-context`.
+//! name, thread preview/name, version) comes from the app-server read-only
+//! methods via [`refresh_app_server_context`], spawned out-of-band by `rimz codex
+//! refresh-context`.
 
 pub(crate) mod account;
 pub(crate) mod app_server;
@@ -428,11 +428,12 @@ impl AgentAdapter for CodexAdapter {
     }
 
     /// Codex has no statusline, so app-server-owned metadata (rate-limit
-    /// windows, model display name, version) refreshes out-of-band on turn
-    /// boundaries: `SessionStart` populates it early (rate limits + model need
-    /// no thread); `UserPromptSubmit`/`Stop` keep it current. Per-tool events
-    /// are excluded — an app-server spawn per tool call is too frequent. Local
-    /// transcript usage has its own stat-gated inline refresh below.
+    /// windows, model display name, thread preview/name, version) refreshes
+    /// out-of-band on turn boundaries: `SessionStart` populates it early (rate
+    /// limits + model need no thread); `UserPromptSubmit`/`Stop` keep it
+    /// current. Per-tool events are excluded — an app-server spawn per tool call
+    /// is too frequent. Local transcript usage has its own stat-gated inline
+    /// refresh below.
     fn post_lifecycle_refresh(
         &self,
         event_name: &str,
@@ -495,26 +496,28 @@ impl AgentAdapter for CodexAdapter {
 /// Read Codex's read-only realtime details from the app-server and project them
 /// onto an [`AgentContext`] for the session sidecar. Spawned out-of-band by
 /// `rimz codex refresh-context` (never inline in a hook). The app-server owns
-/// rate-limit windows, account plan, model display name, and version.
+/// rate-limit windows, account plan, model display name, thread preview/name,
+/// and version.
 /// Transcript-derived tokens and cost are refreshed separately from the local
 /// rollout tail, so an unreachable app-server never suppresses them.
 pub fn refresh_app_server_context(
+    session_id: Option<&str>,
     model_hint: Option<&str>,
     broker_socket: Option<&Path>,
 ) -> Option<AgentContext> {
     let mut client = CodexAppServer::connect(broker_socket)?;
-    Some(client.observe_context("codex", model_hint, Timestamp::now()))
+    Some(client.observe_context("codex", session_id, model_hint, Timestamp::now()))
 }
 
 /// Backwards-compatible name for the app-server-only context read. New callers
 /// use [`refresh_app_server_context`] and [`refresh_transcript_context`] so local
 /// transcript data is independent from app-server availability.
 pub fn refresh_context(
-    _session_id: Option<&str>,
+    session_id: Option<&str>,
     model_hint: Option<&str>,
     broker_socket: Option<&Path>,
 ) -> Option<AgentContext> {
-    refresh_app_server_context(model_hint, broker_socket)
+    refresh_app_server_context(session_id, model_hint, broker_socket)
 }
 
 /// Refresh Codex's local transcript-derived context for one session, skipping the

@@ -4,10 +4,11 @@
 //! Claude's statusline `AgentContext`) is read from the official Codex
 //! app-server (`codex app-server`, JSON-RPC 2.0 over stdio). This client speaks
 //! only **read-only, non-interfering** methods — `initialize`/`initialized`,
-//! `account/rateLimits/read`, `model/list`, and `thread/loaded/list` — and never
-//! `thread/resume` or `turn/start` (which would rejoin/own the user's live Codex
-//! thread). It is the out-of-band producer behind `rimz codex refresh-context`
-//! and the daemon-mode liveness probe behind the sidebar's ghost-session reap;
+//! `account/rateLimits/read`, `model/list`, `thread/read`, `thread/list`, and
+//! `thread/loaded/list` — and never `thread/resume` or `turn/start` (which would
+//! rejoin/own the user's live Codex thread). It is the out-of-band producer
+//! behind `rimz codex refresh-context` and the daemon-mode liveness probe behind
+//! the sidebar's ghost-session reap;
 //! storage
 //! ([`crate::ledger::agent_context`]) and the snapshot fold-in are
 //! transport-agnostic, exactly as for Claude.
@@ -27,7 +28,8 @@
 //! notification (requires a subscribing `thread/resume`), never on a read-only
 //! method. So the context gauge stays sourced from the rollout tail in
 //! [`crate::agents::codex`]; this client supplies what the app-server *does* expose
-//! read-only: rate-limit windows, model display name, and version.
+//! read-only: rate-limit windows, model display name, thread preview/name, and
+//! version.
 //!
 //! Best-effort, never correctness: every failure maps to an omitted field or a
 //! `None` record — it never fails a hook or a turn.
@@ -319,6 +321,39 @@ struct MatchedModel {
     display_name: String,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadReadResponse {
+    #[serde(default)]
+    thread: Option<RawThreadSummary>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadListResponse {
+    #[serde(default)]
+    data: Vec<RawThreadSummary>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawThreadSummary {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    preview: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ThreadSummary {
+    preview: Option<String>,
+    name: Option<String>,
+}
+
 // --- client ---
 
 pub(crate) struct CodexAppServer<T: JsonRpcTransport> {
@@ -529,6 +564,69 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
             .filter(|model| !model.display_name.is_empty()))
     }
 
+    /// Read the thread's short metadata without resuming or subscribing to it.
+    /// `thread/read` is direct by id; `thread/list` is the documented history UI
+    /// surface that reliably carries `preview`, so it fills any missing field.
+    /// Both reads are best-effort and read-only.
+    fn thread_summary(&mut self, session_id: &str) -> Option<ThreadSummary> {
+        let session_id = (!session_id.is_empty()).then_some(session_id)?;
+        let read = self.thread_read_summary(session_id).ok().flatten();
+        if read
+            .as_ref()
+            .is_some_and(|summary| summary.preview.is_some())
+        {
+            return read;
+        }
+        let listed = self.thread_list_summary(session_id).ok().flatten();
+        match (read, listed) {
+            (Some(mut read), Some(listed)) => {
+                if read.preview.is_none() {
+                    read.preview = listed.preview;
+                }
+                if read.name.is_none() {
+                    read.name = listed.name;
+                }
+                Some(read)
+            }
+            (Some(read), None) => Some(read),
+            (None, Some(listed)) => Some(listed),
+            (None, None) => None,
+        }
+    }
+
+    fn thread_read_summary(
+        &mut self,
+        session_id: &str,
+    ) -> Result<Option<ThreadSummary>, AppServerErr> {
+        let result = self.transport.request(
+            "thread/read",
+            json!({ "threadId": session_id, "includeTurns": false }),
+        )?;
+        let parsed: ThreadReadResponse = serde_json::from_value(result.clone())
+            .map_err(|err| AppServerErr::Protocol(err.to_string()))?;
+        Ok(parsed
+            .thread
+            .or_else(|| serde_json::from_value(result).ok())
+            .and_then(thread_summary_from_raw))
+    }
+
+    fn thread_list_summary(
+        &mut self,
+        session_id: &str,
+    ) -> Result<Option<ThreadSummary>, AppServerErr> {
+        let result = self.transport.request(
+            "thread/list",
+            json!({ "cursor": null, "limit": 100, "sortKey": "updated_at" }),
+        )?;
+        let parsed: ThreadListResponse = serde_json::from_value(result)
+            .map_err(|err| AppServerErr::Protocol(err.to_string()))?;
+        Ok(parsed
+            .data
+            .into_iter()
+            .find(|thread| thread_matches_session(thread, session_id))
+            .and_then(thread_summary_from_raw))
+    }
+
     /// Read every read-only field the app-server exposes and project it onto an
     /// [`AgentContext`]. Each read is independent and best-effort: a failed
     /// `account/rateLimits/read` (e.g. API-key account) still yields the model
@@ -536,11 +634,13 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
     pub(crate) fn observe_context(
         &mut self,
         source: &str,
+        session_id: Option<&str>,
         model_hint: Option<&str>,
         observed_at: Timestamp,
     ) -> AgentContext {
         let (rate_limits, account) = self.rate_limits().unwrap_or_default();
         let model = model_hint.and_then(|hint| self.matched_model(hint).ok().flatten());
+        let thread = session_id.and_then(|id| self.thread_summary(id));
         let agent_version = self
             .user_agent
             .as_deref()
@@ -550,6 +650,7 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
             rate_limits,
             account,
             model,
+            thread,
             agent_version,
             observed_at,
         )
@@ -623,23 +724,41 @@ fn extract_thread_id(value: &Value) -> Option<String> {
     None
 }
 
+fn thread_matches_session(thread: &RawThreadSummary, session_id: &str) -> bool {
+    thread.id == session_id || thread.session_id.as_deref() == Some(session_id)
+}
+
+fn thread_summary_from_raw(thread: RawThreadSummary) -> Option<ThreadSummary> {
+    let preview = nonempty_trimmed(thread.preview);
+    let name = nonempty_trimmed(thread.name);
+    (preview.is_some() || name.is_some()).then_some(ThreadSummary { preview, name })
+}
+
+fn nonempty_trimmed(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
 /// Project the gathered read-only parts onto the transport-agnostic record.
 /// Pure and deterministic so it is unit-testable from canned JSON; `observed_at`
-/// is stamped by the caller. Codex has no read-only source for the session name,
-/// actual reasoning effort, tokens, cost, PR, thinking toggle, output style, or
-/// vim mode — those stay `None`.
+/// is stamped by the caller. Codex has no read-only source for the actual
+/// reasoning effort, tokens, cost, PR, thinking toggle, output style, or vim mode
+/// — those stay `None`.
 #[allow(clippy::too_many_arguments)]
 fn into_context(
     source: &str,
     rate_limits: Option<AgentRateLimits>,
     account: Option<AgentAccount>,
     model: Option<MatchedModel>,
+    thread: Option<ThreadSummary>,
     agent_version: Option<String>,
     observed_at: Timestamp,
 ) -> AgentContext {
     AgentContext {
         source: source.to_owned(),
-        session_name: None,
+        session_name: thread.as_ref().and_then(|thread| thread.name.clone()),
+        session_preview: thread.as_ref().and_then(|thread| thread.preview.clone()),
         model_id: model.as_ref().map(|model| model.id.clone()),
         model_display_name: model.as_ref().map(|model| model.display_name.clone()),
         effort: None,
@@ -800,7 +919,7 @@ mod tests {
             .with("model/list", model_list_result());
         let mut client = CodexAppServer::new(transport);
         client.handshake().unwrap();
-        let _ = client.observe_context("codex", Some("gpt-5.5-codex"), ts());
+        let _ = client.observe_context("codex", None, Some("gpt-5.5-codex"), ts());
         // initialize, then the initialized notification, then the reads.
         assert_eq!(client.transport.calls[0], "initialize");
         assert_eq!(client.transport.calls[1], "notify:initialized");
@@ -821,7 +940,7 @@ mod tests {
             CannedTransport::new().with("account/rateLimits/read", rate_limits_result());
         let mut client = CodexAppServer::new(transport);
         client.handshake().unwrap();
-        let ctx = client.observe_context("codex", None, ts());
+        let ctx = client.observe_context("codex", None, None, ts());
         let limits = ctx.rate_limits.expect("rate limits present");
         assert_eq!(limits.windows.len(), 2);
         // Wire order is preserved: primary (300 min) then secondary (10080 min).
@@ -855,7 +974,7 @@ mod tests {
         let transport = CannedTransport::new().with("account/rateLimits/read", result);
         let mut client = CodexAppServer::new(transport);
         client.handshake().unwrap();
-        let ctx = client.observe_context("codex", None, ts());
+        let ctx = client.observe_context("codex", None, None, ts());
         let limits = ctx.rate_limits.expect("rate limits present");
         assert_eq!(limits.windows.len(), 1, "one window, no secondary");
         let window = &limits.windows[0];
@@ -874,7 +993,7 @@ mod tests {
         let mut client = CodexAppServer::new(transport);
         client.handshake().unwrap();
         let account = client
-            .observe_context("codex", None, ts())
+            .observe_context("codex", None, None, ts())
             .account
             .expect("account from planType");
         assert_eq!(account.plan.as_deref(), Some("team"));
@@ -889,7 +1008,10 @@ mod tests {
         let transport = CannedTransport::new().with("account/rateLimits/read", result);
         let mut client = CodexAppServer::new(transport);
         client.handshake().unwrap();
-        assert_eq!(client.observe_context("codex", None, ts()).account, None);
+        assert_eq!(
+            client.observe_context("codex", None, None, ts()).account,
+            None
+        );
     }
 
     #[test]
@@ -904,7 +1026,7 @@ mod tests {
         let mut client = CodexAppServer::new(transport);
         client.handshake().unwrap();
         let limits = client
-            .observe_context("codex", None, ts())
+            .observe_context("codex", None, None, ts())
             .rate_limits
             .expect("rate limits");
         assert_eq!(limits.windows.len(), 2);
@@ -924,7 +1046,7 @@ mod tests {
         let mut client = CodexAppServer::new(transport);
         client.handshake().unwrap();
         let limits = client
-            .observe_context("codex", None, ts())
+            .observe_context("codex", None, None, ts())
             .rate_limits
             .unwrap();
         assert_eq!(limits.windows[0].used_percentage, Some(100));
@@ -936,7 +1058,7 @@ mod tests {
         let transport = CannedTransport::new().with("model/list", model_list_result());
         let mut client = CodexAppServer::new(transport);
         client.handshake().unwrap();
-        let ctx = client.observe_context("codex", Some("gpt-5.5-codex"), ts());
+        let ctx = client.observe_context("codex", None, Some("gpt-5.5-codex"), ts());
         assert_eq!(ctx.model_id.as_deref(), Some("gpt-5.5-codex"));
         assert_eq!(ctx.model_display_name.as_deref(), Some("GPT-5.5 Codex"));
         assert_eq!(
@@ -947,15 +1069,72 @@ mod tests {
     }
 
     #[test]
+    fn thread_read_preview_and_name_land_on_context() {
+        let transport = CannedTransport::new().with(
+            "thread/read",
+            json!({
+                "thread": {
+                    "id": "sess-1",
+                    "preview": "Create a TUI",
+                    "name": "TUI prototype"
+                }
+            }),
+        );
+        let mut client = CodexAppServer::new(transport);
+        client.handshake().unwrap();
+        let ctx = client.observe_context("codex", Some("sess-1"), None, ts());
+
+        assert_eq!(ctx.session_preview.as_deref(), Some("Create a TUI"));
+        assert_eq!(ctx.session_name.as_deref(), Some("TUI prototype"));
+        assert!(
+            !client.transport.calls.iter().any(|c| c == "thread/list"),
+            "a direct read with preview does not need the list fallback"
+        );
+    }
+
+    #[test]
+    fn thread_list_preview_fills_when_read_has_only_name() {
+        let transport = CannedTransport::new()
+            .with(
+                "thread/read",
+                json!({
+                    "thread": {
+                        "id": "sess-1",
+                        "name": "TUI prototype"
+                    }
+                }),
+            )
+            .with(
+                "thread/list",
+                json!({
+                    "data": [
+                        { "id": "older", "preview": "Ignore me" },
+                        { "id": "thread-fork", "sessionId": "sess-1", "preview": "Create a TUI" }
+                    ]
+                }),
+            );
+        let mut client = CodexAppServer::new(transport);
+        client.handshake().unwrap();
+        let ctx = client.observe_context("codex", Some("sess-1"), None, ts());
+
+        assert_eq!(ctx.session_preview.as_deref(), Some("Create a TUI"));
+        assert_eq!(
+            ctx.session_name.as_deref(),
+            Some("TUI prototype"),
+            "the direct title is preserved when the list supplies only preview"
+        );
+    }
+
+    #[test]
     fn unmatched_or_absent_model_hint_leaves_model_none() {
         let transport = CannedTransport::new().with("model/list", model_list_result());
         let mut client = CodexAppServer::new(transport);
         client.handshake().unwrap();
-        let unmatched = client.observe_context("codex", Some("does-not-exist"), ts());
+        let unmatched = client.observe_context("codex", None, Some("does-not-exist"), ts());
         assert_eq!(unmatched.model_display_name, None);
         assert_eq!(unmatched.model_id, None);
 
-        let absent = client.observe_context("codex", None, ts());
+        let absent = client.observe_context("codex", None, None, ts());
         assert_eq!(absent.model_display_name, None);
         assert_eq!(absent.effort, None);
     }
@@ -967,7 +1146,7 @@ mod tests {
             .with("model/list", model_list_result());
         let mut client = CodexAppServer::new(transport);
         client.handshake().unwrap();
-        let ctx = client.observe_context("codex", Some("o4-mini"), ts());
+        let ctx = client.observe_context("codex", None, Some("o4-mini"), ts());
         assert_eq!(ctx.rate_limits, None);
         assert_eq!(ctx.model_display_name.as_deref(), Some("o4-mini"));
         assert_eq!(ctx.agent_version.as_deref(), Some("0.135.0"));

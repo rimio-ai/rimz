@@ -359,11 +359,11 @@ pub struct SidebarRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub todo_total: Option<u32>,
     /// The session's rich enrichment (cost, token breakdown, rate-limit windows,
-    /// session name), copied from `AgentState.context` so the renderer reads one
-    /// struct instead of cross-referencing `agents[]`. Source-agnostic: Claude
-    /// fills it from its statusline, Codex from local rollout/config refresh
-    /// plus app-server metadata (rate-limit windows, model display name,
-    /// version). Display-only; `None` for
+    /// session or thread name), copied from `AgentState.context` so the renderer
+    /// reads one struct instead of cross-referencing `agents[]`. Source-agnostic:
+    /// Claude fills it from its statusline, Codex from local rollout/config
+    /// refresh plus app-server metadata (rate-limit windows, model display name,
+    /// preview/name, version). Display-only; `None` for
     /// process rows and any agent with no out-of-band source, where the scalar
     /// `model`/`effort`/`context_pct`/`total_tokens` are the fallback.
     #[serde(default, skip_serializing_if = "Option::is_none")]

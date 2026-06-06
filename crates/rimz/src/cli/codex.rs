@@ -166,7 +166,9 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
     // Prefer this session's warm broker socket; the app-server read falls back to
     // the per-user daemon then a cold-spawn when it isn't up.
     let broker_socket = runtime.codex_app_server_socket_path();
-    let Some(context) = codex::refresh_app_server_context(model, Some(&broker_socket)) else {
+    let Some(context) =
+        codex::refresh_app_server_context(Some(session_id), model, Some(&broker_socket))
+    else {
         // App-server unreachable / nothing to record. Transcript context, if it
         // changed, was already written above.
         if wrote {
@@ -193,7 +195,7 @@ fn refresh_rate_limits(workspace_id: &str) -> Result<()> {
     runtime.ensure_dirs().context("preparing runtime dirs")?;
 
     let broker_socket = runtime.codex_app_server_socket_path();
-    let Some(context) = codex::refresh_app_server_context(None, Some(&broker_socket)) else {
+    let Some(context) = codex::refresh_app_server_context(None, None, Some(&broker_socket)) else {
         return Ok(());
     };
     if let Some(rate_limits) = context.rate_limits {
@@ -227,6 +229,12 @@ fn merge_app_server_context(
     });
 
     record.context.source = context.source;
+    if context.session_name.is_some() {
+        record.context.session_name = context.session_name;
+    }
+    if context.session_preview.is_some() {
+        record.context.session_preview = context.session_preview;
+    }
     if context.model_id.is_some() {
         record.context.model_id = context.model_id;
     }
@@ -322,7 +330,8 @@ mod tests {
             "sess-1",
             AgentContext {
                 source: "codex".to_owned(),
-                session_name: None,
+                session_name: Some("TUI prototype".to_owned()),
+                session_preview: Some("Create a TUI".to_owned()),
                 model_id: Some("gpt-5".to_owned()),
                 model_display_name: Some("GPT-5".to_owned()),
                 effort: Some("high".to_owned()),
@@ -375,6 +384,14 @@ mod tests {
             Some("/tmp/rollout.jsonl")
         );
         assert_eq!(merged.context.model_display_name.as_deref(), Some("GPT-5"));
+        assert_eq!(
+            merged.context.session_preview.as_deref(),
+            Some("Create a TUI")
+        );
+        assert_eq!(
+            merged.context.session_name.as_deref(),
+            Some("TUI prototype")
+        );
         assert_eq!(merged.context.effort.as_deref(), Some("xhigh"));
         assert_eq!(
             merged

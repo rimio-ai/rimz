@@ -203,13 +203,25 @@ Fields are `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`); `seco
 { "id": "string", "model": "string", "displayName": "string", "defaultReasoningEffort": "string?" }
 ```
 
+**`thread/read`** (`{ "threadId": "<session_id>", "includeTurns": false }`) and **`thread/list`** → stored thread metadata for the card description.
+
+```jsonc
+// thread/read result (wrapped shape; direct thread objects are also tolerated)
+{ "thread": { "id": "thr_123", "preview": "Create a TUI", "name": "TUI prototype" } }
+
+// thread/list result.data[]
+{ "id": "thr_123", "preview": "Create a TUI", "name": "TUI prototype", "updatedAt": 1730831111 }
+```
+
+Rimz reads `thread/read` by the hook `session_id`, then uses `thread/list` as the documented list-summary fallback to fill missing thread metadata, matching by `id` or `sessionId`. `preview` maps to `AgentContext.session_preview` and wins the Codex card's description line; `name` maps to `AgentContext.session_name` as the thread-name fallback when no preview exists.
+
 **The token-usage gap.** The app-server does **not** expose token / context-window usage read-only — it rides only the live `thread/tokenUsage/updated` notification behind a subscribing `thread/resume`. So Codex's context gauge is sourced from the rollout transcript below, not the app-server.
 
 ### Method index (the rest)
 
 A non-exhaustive map of the broader surface, for future wiring. Generate the exact, version-pinned schema with `codex app-server generate-json-schema`.
 
-- **Thread**: `thread/start`, `thread/resume`, `thread/fork`, `thread/read`, `thread/list`, `thread/archive`, `thread/name/set`, `thread/goal/{set,get,clear}`, `thread/compact/start`, `thread/rollback`, `thread/inject_items`.
+- **Thread**: `thread/start`, `thread/resume`, `thread/fork`, `thread/archive`, `thread/name/set`, `thread/goal/{set,get,clear}`, `thread/compact/start`, `thread/rollback`, `thread/inject_items`.
 - **Turn**: `turn/start`, `turn/steer`, `turn/interrupt`; `review/start`.
 - **Account / auth**: `account/read`, `account/login/{start,cancel}`, `account/logout`, `account/rateLimits/read`, `account/sendAddCreditsNudgeEmail`.
 - **Tools / exec / fs**: `command/exec` (+ `write`/`resize`/`terminate`), `process/{spawn,writeStdin,resizePty,kill}`, `fs/{readFile,writeFile,createDirectory,getMetadata,readDirectory,remove,copy,watch,unwatch}`, `mcpServer/*`.

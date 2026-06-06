@@ -25,11 +25,17 @@ pub struct AgentContext {
     /// Which agent kind produced this record. Stamped from the ingest `--source`
     /// tag or merge path, not parsed from provider payload content.
     pub source: String,
-    /// Human-readable session name the user set (`--name` / `/rename`). Absent
-    /// until named, so a renderer prefers it over the task descriptor only when
-    /// present.
+    /// Human-readable session or provider thread name. Claude fills this from
+    /// the user-set session name (`--name` / `/rename`); Codex fills it from
+    /// app-server thread `name`. Absent until named, so a renderer prefers it
+    /// over the task descriptor only when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_name: Option<String>,
+    /// Short provider-generated thread summary. Codex fills this from
+    /// app-server `thread/read` / `thread/list` `preview`; renderers prefer it
+    /// for the activity description when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_preview: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

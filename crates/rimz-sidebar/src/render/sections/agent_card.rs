@@ -483,16 +483,17 @@ fn display_context_window(row: &SidebarRow) -> Option<u64> {
         .filter(|window| *window > 0)
 }
 
-/// Line 2 for an agent: the description (the user's session name, else the task,
-/// else the prompt) on its own full-width line. An idle agent with nothing to
-/// show yet paints the animated loading-dots cue instead; any other empty
-/// description falls to an em dash. A turn that died on a provider API error
-/// takes the line over the fall-through — the soft upstream error text
-/// (`turn_error_label`, quoted verbatim) is the row's most important fact while
-/// the `!` escalation holds, and the fall-through returns once it clears. At L2
-/// the todo progress (`●●●○○ 3/5`) pins to a right column, aligning under the
-/// cost/age above so the dots read as a tidy gutter instead of floating after
-/// the text.
+/// Line 2 for an agent: the description on its own full-width line. Rich
+/// context metadata wins first; for Codex that is app-server `preview`, then
+/// thread `name`. Named sessions and live task/prompt fallbacks keep the row
+/// labelled when richer metadata is absent. An idle agent with nothing to show
+/// yet paints the animated loading-dots cue instead; any other empty description
+/// falls to an em dash. A turn that died on a provider API error takes the line
+/// over the fall-through — the soft upstream error text (`turn_error_label`,
+/// quoted verbatim) is the row's most important fact while the `!` escalation
+/// holds, and the fall-through returns once it clears. At L2 the todo progress
+/// (`●●●○○ 3/5`) pins to a right column, aligning under the cost/age above so
+/// the dots read as a tidy gutter instead of floating after the text.
 fn description_line(
     theme: &Theme,
     row: &SidebarRow,
@@ -525,28 +526,40 @@ fn description_line(
     Line::from(trim_spans_to_width(left, width))
 }
 
-/// The line-2 description: the user's session name when they set one (`--name` /
-/// `/rename`), else the agent's live task, else the latest prompt. The name is
-/// what a human chose to call this session, so it reads better than the task. The
-/// activity-bound `task` clears on idle, so the persisted prompt keeps an unnamed
-/// session labelled past its turn until it earns a name. `None` when the session
-/// has nothing to show — the caller paints the idle loading-dots or an em dash.
+/// The line-2 description: rich preview, then rich session/thread name, then
+/// task, then latest prompt. Codex maps app-server `preview` to the rich preview
+/// and app-server `name` to the rich name, so its concrete order is thread
+/// preview → thread name. The activity-bound `task` clears on idle, so the
+/// persisted prompt keeps an unnamed session labelled past its turn until it
+/// earns richer metadata. `None` when the session has nothing to show — the
+/// caller paints the idle loading-dots or an em dash.
 fn descriptor(row: &SidebarRow) -> Option<&str> {
     // The producer sanitizes prompt/task before they reach the row; this is a
     // last-ditch backstop so a harness control turn (`<task-notification>…`)
     // can never paint the description even if a future producer regressed.
-    let usable = |value: &str| !value.is_empty() && !looks_like_control_text(value);
     ctx(row)
-        .and_then(|context| context.session_name.as_deref())
-        .filter(|name| usable(name))
-        .or(row.task.as_deref().filter(|task| usable(task)))
-        .or(row.prompt.as_deref().filter(|prompt| usable(prompt)))
+        .and_then(|context| context.session_preview.as_deref())
+        .filter(|preview| usable_description(preview))
+        .or_else(|| {
+            ctx(row)
+                .and_then(|context| context.session_name.as_deref())
+                .filter(|name| usable_description(name))
+        })
+        .or(row.task.as_deref().filter(|task| usable_description(task)))
+        .or(row
+            .prompt
+            .as_deref()
+            .filter(|prompt| usable_description(prompt)))
+}
+
+fn usable_description(value: &str) -> bool {
+    !value.is_empty() && !looks_like_control_text(value)
 }
 
 /// Whether an agent row paints the idle loading-dots cue in place of a
-/// description — an idle agent with nothing to show yet (no session name, task,
-/// or prompt), the "waiting for your first prompt" state. Shared by the renderer
-/// (to paint the animated dots) and the serve loop's
+/// description — an idle agent with nothing to show yet (no preview, session
+/// name, task, or prompt), the "waiting for your first prompt" state. Shared by
+/// the renderer (to paint the animated dots) and the serve loop's
 /// [`has_live_animation`](crate::render::has_live_animation) (to keep the
 /// animation tick alive while they cycle).
 pub(in crate::render) fn shows_loading_dots(row: &SidebarRow) -> bool {

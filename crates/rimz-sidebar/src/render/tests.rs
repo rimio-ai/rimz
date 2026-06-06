@@ -201,6 +201,7 @@ fn claude_context(now: Timestamp) -> AgentContext {
     AgentContext {
         source: "claude".to_owned(),
         session_name: Some("ledger refactor".to_owned()),
+        session_preview: None,
         model_id: Some("claude-opus-4-8".to_owned()),
         model_display_name: Some("Opus 4.8 (1M context)".to_owned()),
         effort: Some("high".to_owned()),
@@ -259,6 +260,7 @@ fn codex_context(now: Timestamp) -> AgentContext {
     AgentContext {
         source: "codex".to_owned(),
         session_name: None,
+        session_preview: None,
         model_id: Some("gpt-5.5-codex".to_owned()),
         model_display_name: Some("GPT-5.5 Codex".to_owned()),
         effort: Some("xhigh".to_owned()),
@@ -1117,6 +1119,48 @@ fn line_one_prefers_session_name_over_task() {
     let rendered = snapshot_to_screen(&snapshot, 44, 12);
 
     assert!(rendered.contains("ledger refactor"));
+    assert!(!rendered.contains("db migrate"));
+}
+
+#[test]
+fn codex_line_two_prefers_thread_preview_over_thread_name_and_task() {
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    let mut context = codex_context(fixed_now());
+    context.session_name = Some("TUI prototype".to_owned());
+    context.session_preview = Some("Create a TUI".to_owned());
+    codex.context = Some(context);
+    let snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let rendered = snapshot_to_screen(&snapshot, 44, 12);
+
+    assert!(rendered.contains("Create a TUI"));
+    assert!(!rendered.contains("TUI prototype"));
+    assert!(!rendered.contains("db migrate"));
+}
+
+#[test]
+fn codex_line_two_prefers_thread_name_over_task_when_preview_is_absent() {
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    let mut context = codex_context(fixed_now());
+    context.session_name = Some("TUI prototype".to_owned());
+    codex.context = Some(context);
+    let snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let rendered = snapshot_to_screen(&snapshot, 44, 12);
+
+    assert!(rendered.contains("TUI prototype"));
     assert!(!rendered.contains("db migrate"));
 }
 

@@ -1532,6 +1532,7 @@ fn cost_row(id: &str, usd: Option<f64>, registered_at: Option<Timestamp>) -> cra
     row.context = usd.map(|usd| crate::agents::AgentContext {
         source: "claude".to_owned(),
         session_name: None,
+        session_preview: None,
         model_id: None,
         model_display_name: None,
         effort: None,
