@@ -53,12 +53,9 @@ pub(crate) struct MakeUpHit {
 /// Every non-zero bucket is also a click-to-filter target, so the line returns
 /// its [`MakeUpHit`]s alongside — emitted in lockstep with the spans, columns
 /// relative to the unpadded content. The `filter` is the active pick: that
-/// bucket paints as a chip (ink on its semantic fill, bold) with color on —
-/// fill and weight alone, never a glyph — and under `NO_COLOR`, where the fill
-/// drops, `┤ ├` caps wrap it as the pick's shape instead (the gaps have no
-/// reserved cells the provider rail has, so the caps extend the bucket rather
-/// than repaint a neighbour). The resting line is byte-identical with or
-/// without the feature.
+/// bucket paints as a padded chip (ink on its semantic fill, bold) with color
+/// on — one space on each side, like the dashboard tab — and under `NO_COLOR`,
+/// where the fill drops, `┤ ├` caps wrap the padded pick as its shape instead.
 pub(in crate::render) fn fleet_header_lines(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
@@ -201,9 +198,9 @@ impl<'a> Cluster<'a> {
     /// position. The glyph always wears its semantic color, so the make-up
     /// reads as a stable colored legend; a zero bucket rests the glyph (no
     /// bold, no heat), reads its count at the soft stat tier, and emits no hit
-    /// — inert, as if not a tab. The active filter's bucket paints as a chip
-    /// (`TAB_INK` on the glyph's semantic fill, bold) over the same text, and
-    /// under `NO_COLOR` gains the wrapping `┤ ├` caps instead.
+    /// — inert, as if not a tab. The active filter's bucket paints as a padded
+    /// chip (`TAB_INK` on the glyph's semantic fill, bold) with one space on
+    /// each side, and under `NO_COLOR` gains the wrapping `┤ ├` caps instead.
     fn push_count(&mut self, status: AgentStatus, glyph_color: Color, count: usize, style: Style) {
         if !self.spans.is_empty() {
             self.spans.push(Span::raw("   "));
@@ -215,10 +212,10 @@ impl<'a> Cluster<'a> {
             let chip = self.theme.chip(TAB_INK, glyph_color, Modifier::BOLD);
             if chip.bg.is_none() {
                 self.push_span(Span::styled(TAB_CAP_LEFT.to_string(), self.theme.soft()));
-                self.push_span(Span::styled(format!("{glyph} {count}"), chip));
+                self.push_span(Span::styled(format!(" {glyph} {count} "), chip));
                 self.push_span(Span::styled(TAB_CAP_RIGHT.to_string(), self.theme.soft()));
             } else {
-                self.push_span(Span::styled(format!("{glyph} {count}"), chip));
+                self.push_span(Span::styled(format!(" {glyph} {count} "), chip));
             }
         } else if count == 0 {
             self.push_span(Span::styled(
