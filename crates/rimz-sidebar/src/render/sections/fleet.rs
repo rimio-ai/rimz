@@ -10,7 +10,7 @@ use crate::render::fmt::age_secs;
 use crate::render::labels::{age_heat, agent_style, status_glyph, status_style};
 use crate::render::theme::{ORANGE, Theme};
 
-use super::{TAB_CAP_LEFT, TAB_CAP_RIGHT, TAB_INK, pin_right, trim_spans_to_width};
+use super::{TAB_INK, pin_right, trim_spans_to_width};
 
 /// One clickable status bucket in the cockpit make-up line: the line index
 /// within [`fleet_header_lines`]'s returned lines (always 0 — the make-up is
@@ -53,9 +53,9 @@ pub(crate) struct MakeUpHit {
 /// Every non-zero bucket is also a click-to-filter target, so the line returns
 /// its [`MakeUpHit`]s alongside — emitted in lockstep with the spans, columns
 /// relative to the unpadded content. The `filter` is the active pick: that
-/// bucket paints as a padded chip (ink on its semantic fill, bold) with color
-/// on — one space on each side, like the dashboard tab — and under `NO_COLOR`,
-/// where the fill drops, `┤ ├` caps wrap the padded pick as its shape instead.
+/// bucket paints the same `glyph count` cells as rest (ink on its semantic
+/// fill, bold), so moving the pick changes style without moving text. Under
+/// `NO_COLOR`, where the fill drops, reverse-video marks the same fixed cells.
 pub(in crate::render) fn fleet_header_lines(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
@@ -198,9 +198,10 @@ impl<'a> Cluster<'a> {
     /// position. The glyph always wears its semantic color, so the make-up
     /// reads as a stable colored legend; a zero bucket rests the glyph (no
     /// bold, no heat), reads its count at the soft stat tier, and emits no hit
-    /// — inert, as if not a tab. The active filter's bucket paints as a padded
-    /// chip (`TAB_INK` on the glyph's semantic fill, bold) with one space on
-    /// each side, and under `NO_COLOR` gains the wrapping `┤ ├` caps instead.
+    /// — inert, as if not a tab. The active filter's bucket paints the fixed
+    /// `glyph count` footprint as a chip (`TAB_INK` on the glyph's semantic
+    /// fill, bold); under `NO_COLOR` it keeps the footprint and adds reverse
+    /// video because there is no fill color to carry the pick.
     fn push_count(&mut self, status: AgentStatus, glyph_color: Color, count: usize, style: Style) {
         if !self.spans.is_empty() {
             self.spans.push(Span::raw("   "));
@@ -210,13 +211,12 @@ impl<'a> Cluster<'a> {
         let start = self.col;
         if self.filter == Some(status) && count > 0 {
             let chip = self.theme.chip(TAB_INK, glyph_color, Modifier::BOLD);
-            if chip.bg.is_none() {
-                self.push_span(Span::styled(TAB_CAP_LEFT.to_string(), self.theme.soft()));
-                self.push_span(Span::styled(format!(" {glyph} {count} "), chip));
-                self.push_span(Span::styled(TAB_CAP_RIGHT.to_string(), self.theme.soft()));
+            let pick = if chip.bg.is_none() {
+                chip.add_modifier(Modifier::REVERSED)
             } else {
-                self.push_span(Span::styled(format!(" {glyph} {count} "), chip));
-            }
+                chip
+            };
+            self.push_span(Span::styled(format!("{glyph} {count}"), pick));
         } else if count == 0 {
             self.push_span(Span::styled(
                 glyph.to_owned(),

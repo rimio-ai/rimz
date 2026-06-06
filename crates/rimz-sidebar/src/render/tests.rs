@@ -3448,11 +3448,11 @@ fn make_up_text(lines: &[Line<'static>]) -> String {
         .collect()
 }
 
-/// With color, a make-up pick paints a padded chip: the selected bucket gains
-/// one highlighted space on each side, with no `NO_COLOR` caps. The hit covers
-/// the padded footprint so the visual tab and click target stay together.
+/// With color, a make-up pick changes fill and weight only: whichever bucket
+/// is active, the line renders glyph-for-glyph identical text and every hit
+/// covers the same `glyph count` footprint, so a filter change moves no cells.
 #[test]
-fn make_up_pads_the_active_chip_with_color() {
+fn make_up_filter_keeps_every_glyph_still_across_picks() {
     let theme = Theme::fixed(false);
     let snapshot = make_up_snapshot();
     let compose = |filter| fleet_header_lines(&theme, &snapshot.worktree_groups, filter, 38);
@@ -3462,10 +3462,15 @@ fn make_up_pads_the_active_chip_with_color() {
     let resting = make_up_text(&resting_lines);
     let failed = make_up_text(&failed_lines);
     let running = make_up_text(&running_lines);
-    assert!(failed.contains(" ! 1 "), "failed chip is padded:\n{failed}");
-    assert!(
-        running.contains(" ⢿ 1 "),
-        "running chip is padded:\n{running}"
+    assert_eq!(resting, failed, "the failed pick moves no glyphs");
+    assert_eq!(resting, running, "the running pick moves no glyphs");
+    assert_eq!(
+        resting_hits, failed_hits,
+        "the failed pick keeps click targets fixed"
+    );
+    assert_eq!(
+        resting_hits, running_hits,
+        "the running pick keeps click targets fixed"
     );
     assert!(
         [resting.as_str(), failed.as_str(), running.as_str()]
@@ -3473,17 +3478,9 @@ fn make_up_pads_the_active_chip_with_color() {
             .all(|text| !text.contains('┤')),
         "with color, no caps paint:\n{resting}\n{failed}\n{running}"
     );
-    assert_eq!(
-        resting_hits
-            .iter()
-            .map(|hit| hit.status)
-            .collect::<Vec<_>>(),
-        vec![AgentStatus::Failed, AgentStatus::Running],
-        "the resting line keeps one hit per non-zero bucket"
-    );
     for (lines, hits, status, expected) in [
-        (&failed_lines, &failed_hits, AgentStatus::Failed, " ! 1 "),
-        (&running_lines, &running_hits, AgentStatus::Running, " ⢿ 1 "),
+        (&failed_lines, &failed_hits, AgentStatus::Failed, "! 1"),
+        (&running_lines, &running_hits, AgentStatus::Running, "⢿ 1"),
     ] {
         let text = make_up_text(lines);
         let hit = hits
@@ -3495,29 +3492,35 @@ fn make_up_pads_the_active_chip_with_color() {
             .skip(usize::from(hit.col_start))
             .take(usize::from(hit.col_end - hit.col_start))
             .collect();
-        assert_eq!(footprint, expected, "hit covers the padded chip");
+        assert_eq!(footprint, expected, "hit covers the fixed bucket");
     }
 }
 
-/// Under `NO_COLOR` the chip fill drops, so the `┤ ├` caps return as the
-/// pick's shape — wrapped around the padded picked bucket, and covered by the
-/// bucket's hit so the cap cells stay clickable.
+/// Under `NO_COLOR` the chip fill drops, so reverse-video marks the same fixed
+/// `glyph count` cells instead of adding caps that would move the bucket text.
 #[test]
-fn make_up_caps_mark_the_pick_under_no_color() {
+fn make_up_filter_no_color_marks_the_fixed_bucket_cells() {
     let theme = Theme::fixed(true);
     let snapshot = make_up_snapshot();
+    let (resting_lines, resting_hits) =
+        fleet_header_lines(&theme, &snapshot.worktree_groups, None, 38);
     let (lines, hits) = fleet_header_lines(
         &theme,
         &snapshot.worktree_groups,
         Some(AgentStatus::Failed),
         38,
     );
+    assert_eq!(resting_hits, hits, "the pick keeps click targets fixed");
     let text = make_up_text(&lines);
-    assert!(
-        text.contains("┤ ! 1 ├"),
-        "the caps wrap the picked bucket alone:\n{text}"
+    assert_eq!(
+        make_up_text(&resting_lines),
+        text,
+        "the pick moves no glyphs under NO_COLOR"
     );
-    assert_eq!(text.matches('┤').count(), 1, "one pick, one cap pair");
+    assert!(
+        !text.contains('┤'),
+        "caps would move the bucket text:\n{text}"
+    );
     let hit = hits
         .iter()
         .find(|hit| hit.status == AgentStatus::Failed)
@@ -3527,7 +3530,16 @@ fn make_up_caps_mark_the_pick_under_no_color() {
         .skip(usize::from(hit.col_start))
         .take(usize::from(hit.col_end - hit.col_start))
         .collect();
-    assert_eq!(footprint, "┤ ! 1 ├", "the hit covers the caps");
+    assert_eq!(footprint, "! 1", "the hit covers the fixed bucket");
+    let active = lines[0]
+        .spans
+        .iter()
+        .find(|span| span.content.as_ref() == "! 1")
+        .expect("the active bucket stays one span");
+    assert!(
+        active.style.add_modifier.contains(Modifier::REVERSED),
+        "NO_COLOR marks the active fixed cells by modifier"
+    );
 }
 
 /// A zero bucket emits no hit — inert, as if not a tab — and every emitted

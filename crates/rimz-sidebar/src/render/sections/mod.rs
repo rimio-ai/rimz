@@ -46,11 +46,8 @@ const SESSIONS_GLYPH: &str = "◎";
 /// same; drops to plain bold under `NO_COLOR` like every other tone.
 const VALUE_FLASH: Color = Color::Indexed(150);
 
-/// An active pick's `NO_COLOR` caps — when a chip fill drops with the colors,
-/// these notch the pick by shape instead. Shared by the provider tab rail
-/// (painted into its reserved rail cells) and the cockpit make-up line
-/// (wrapped around the picked bucket), so the pick reads as one shape
-/// everywhere.
+/// An active provider-tab pick's `NO_COLOR` caps — when a chip fill drops with
+/// the colors, these notch the pick by shape inside the rail's reserved cells.
 const TAB_CAP_LEFT: char = '┤';
 const TAB_CAP_RIGHT: char = '├';
 
