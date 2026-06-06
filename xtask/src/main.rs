@@ -16,29 +16,213 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
 
+struct TaskInfo {
+    name: &'static str,
+    summary: &'static str,
+    runs: &'static str,
+}
+
+const TASKS: &[TaskInfo] = &[
+    TaskInfo {
+        name: "build",
+        summary: "Build rimz and the Zellij presence plugin.",
+        runs: "cargo build --workspace --all-features --locked",
+    },
+    TaskInfo {
+        name: "build-plugin",
+        summary: "Build the Zellij presence plugin wasm artifact.",
+        runs: "cargo build -p rimz-presence-zellij --target wasm32-wasip1 --release --locked",
+    },
+    TaskInfo {
+        name: "install",
+        summary: "Build and install the rimz binary.",
+        runs: "cargo xtask stage-install, then atomically installs rimz",
+    },
+    TaskInfo {
+        name: "stage-install",
+        summary: "Build release artifacts into target/xtask/install/bin.",
+        runs: "cargo build -p rimz --bin rimz --release --locked",
+    },
+    TaskInfo {
+        name: "fmt",
+        summary: "Check Rust formatting.",
+        runs: "cargo fmt --all -- --check",
+    },
+    TaskInfo {
+        name: "lint",
+        summary: "Run clippy with warnings as errors.",
+        runs: "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+    },
+    TaskInfo {
+        name: "test",
+        summary: "Run the workspace test suite through nextest.",
+        runs: "cargo nextest run --workspace --all-features --locked",
+    },
+    TaskInfo {
+        name: "doctest",
+        summary: "Run workspace doctests.",
+        runs: "cargo test --workspace --doc --all-features --locked",
+    },
+    TaskInfo {
+        name: "deny",
+        summary: "Run cargo-deny policy checks.",
+        runs: "cargo deny check -D warnings",
+    },
+    TaskInfo {
+        name: "deps",
+        summary: "Run the unused dependency check.",
+        runs: "cargo machete",
+    },
+    TaskInfo {
+        name: "vet",
+        summary: "Run cargo-vet supply-chain checks.",
+        runs: "cargo vet",
+    },
+    TaskInfo {
+        name: "coverage",
+        summary: "Run the instrumented nextest coverage suite.",
+        runs: "cargo llvm-cov nextest --workspace --all-features --locked",
+    },
+    TaskInfo {
+        name: "semver",
+        summary: "Run semver checks for published versions.",
+        runs: "cargo semver-checks",
+    },
+    TaskInfo {
+        name: "invariants",
+        summary: "Run repository architecture invariants.",
+        runs: "grep-style invariants implemented in xtask",
+    },
+    TaskInfo {
+        name: "pricing-refresh",
+        summary: "Refresh the vendored LiteLLM pricing snapshot.",
+        runs: "fetch LiteLLM pricing JSON, compact it, and rewrite the vendored snapshot",
+    },
+    TaskInfo {
+        name: "ci",
+        summary: "Run the full local CI gate stack.",
+        runs: "fmt, invariants, audits, build-plugin, lint, coverage, doctest, semver",
+    },
+];
+
+#[derive(Debug, PartialEq, Eq)]
+enum Action<'a> {
+    Run(&'a str),
+    Help(Option<&'a str>),
+}
+
 fn main() -> Result<()> {
-    let mut args = env::args().skip(1);
-    let task = args.next().unwrap_or_else(|| "ci".to_owned());
-    let root = workspace_root()?;
-    match task.as_str() {
-        "build" => build(&root),
-        "build-plugin" => build_plugin(&root),
-        "install" => install(&root),
-        "stage-install" => stage_install(&root).map(|_| ()),
-        "fmt" => fmt(&root),
-        "lint" => lint(&root),
-        "test" => test(&root),
-        "doctest" => doctest(&root),
-        "deny" => deny(&root),
-        "deps" => deps(&root),
-        "vet" => vet(&root),
-        "coverage" => coverage(&root),
-        "semver" => semver(&root),
-        "invariants" => invariants(&root),
-        "pricing-refresh" => pricing_refresh(&root),
-        "ci" => ci(&root),
+    let args: Vec<String> = env::args().skip(1).collect();
+    match parse_args(&args)? {
+        Action::Run(task) => {
+            let root = workspace_root()?;
+            run_task(task, &root)
+        }
+        Action::Help(None) => {
+            print_xtask_help();
+            Ok(())
+        }
+        Action::Help(Some(task)) => print_task_help(task),
+    }
+}
+
+fn parse_args(args: &[String]) -> Result<Action<'_>> {
+    let Some(first) = args.first().map(String::as_str) else {
+        return Ok(Action::Run("ci"));
+    };
+
+    if is_help_flag(first) {
+        if args.len() == 1 {
+            return Ok(Action::Help(None));
+        }
+        bail!("root help takes no arguments");
+    }
+
+    if first == "help" {
+        return match args {
+            [_] => Ok(Action::Help(None)),
+            [_, task] => Ok(Action::Help(Some(task.as_str()))),
+            _ => bail!("help takes at most one task name"),
+        };
+    }
+
+    if args.iter().skip(1).any(|arg| is_help_flag(arg)) {
+        if args.len() == 2 {
+            return Ok(Action::Help(Some(first)));
+        }
+        bail!("xtask `{first}` help takes no other arguments");
+    }
+
+    if args.len() > 1 {
+        bail!("xtask `{first}` takes no arguments; run `cargo xtask {first} --help`");
+    }
+
+    Ok(Action::Run(first))
+}
+
+fn is_help_flag(arg: &str) -> bool {
+    matches!(arg, "-h" | "--help")
+}
+
+fn run_task(task: &str, root: &Path) -> Result<()> {
+    match task {
+        "build" => build(root),
+        "build-plugin" => build_plugin(root),
+        "install" => install(root),
+        "stage-install" => stage_install(root).map(|_| ()),
+        "fmt" => fmt(root),
+        "lint" => lint(root),
+        "test" => test(root),
+        "doctest" => doctest(root),
+        "deny" => deny(root),
+        "deps" => deps(root),
+        "vet" => vet(root),
+        "coverage" => coverage(root),
+        "semver" => semver(root),
+        "invariants" => invariants(root),
+        "pricing-refresh" => pricing_refresh(root),
+        "ci" => ci(root),
         other => bail!("unknown xtask `{other}`"),
     }
+}
+
+fn task_info(name: &str) -> Option<&'static TaskInfo> {
+    TASKS.iter().find(|task| task.name == name)
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "xtask help text is the command's stdout contract"
+)]
+fn print_xtask_help() {
+    println!("Contributor task runner");
+    println!();
+    println!("Usage:");
+    println!("  cargo xtask              # run ci");
+    println!("  cargo xtask <task>");
+    println!("  cargo xtask <task> --help");
+    println!();
+    println!("Tasks:");
+    for task in TASKS {
+        println!("  {:<15} {}", task.name, task.summary);
+    }
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "xtask help text is the command's stdout contract"
+)]
+fn print_task_help(task: &str) -> Result<()> {
+    let Some(info) = task_info(task) else {
+        bail!("unknown xtask `{task}`");
+    };
+    println!("cargo xtask {}", info.name);
+    println!();
+    println!("{}", info.summary);
+    println!();
+    println!("Runs:");
+    println!("  {}", info.runs);
+    Ok(())
 }
 
 fn fmt(root: &Path) -> Result<()> {
@@ -842,4 +1026,48 @@ fn ensure_inline_tests_stay_small(files: &[PathBuf]) -> Result<()> {
         "inline tests modules past {INLINE_TESTS_MAX_LINES} lines move to a sibling tests.rs — see docs/contributing/rust-conventions.md#tests\n{}",
         violations.join("\n")
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| (*item).to_owned()).collect()
+    }
+
+    #[test]
+    fn no_args_default_to_ci() {
+        assert_eq!(parse_args(&args(&[])).unwrap(), Action::Run("ci"));
+    }
+
+    #[test]
+    fn root_help_is_first_class() {
+        assert_eq!(parse_args(&args(&["--help"])).unwrap(), Action::Help(None));
+        assert_eq!(parse_args(&args(&["-h"])).unwrap(), Action::Help(None));
+        assert_eq!(parse_args(&args(&["help"])).unwrap(), Action::Help(None));
+    }
+
+    #[test]
+    fn task_help_does_not_run_the_task() {
+        assert_eq!(
+            parse_args(&args(&["test", "--help"])).unwrap(),
+            Action::Help(Some("test")),
+        );
+        assert_eq!(
+            parse_args(&args(&["help", "test"])).unwrap(),
+            Action::Help(Some("test")),
+        );
+    }
+
+    #[test]
+    fn unexpected_task_args_fail_instead_of_being_ignored() {
+        let err = parse_args(&args(&["test", "--package", "rimz"]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("xtask `test` takes no arguments"),
+            "unexpected error: {err}"
+        );
+    }
 }
