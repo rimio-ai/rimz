@@ -241,7 +241,8 @@ fn idle_agent_row(pane: &PaneRef, kind: &str, now: Timestamp) -> SidebarRow {
         // Agent rows draw the started-session gauge at `Some(0)` (see the
         // `SidebarRow.context_pct` doc) — matching a freshly-bound session.
         context_pct: Some(0),
-        context_window: None,
+        context_window: crate::agents::descriptor_by_kind(kind)
+            .and_then(|descriptor| descriptor.default_context_window),
         total_tokens: None,
         cache_read_input_tokens: None,
         fresh_input_tokens: None,

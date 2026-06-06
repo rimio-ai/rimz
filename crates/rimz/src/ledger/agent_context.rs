@@ -128,12 +128,26 @@ pub fn merge_local_context(
 ) -> Result<(), atomic::AtomicErr> {
     let mut record =
         prior.unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
+    let prior_model_id = record.context.model_id.clone();
+    let prior_context_window = record
+        .context
+        .tokens
+        .as_ref()
+        .and_then(|tokens| tokens.context_window_size);
+    let refresh_model_id = refresh.model_id.clone();
     record.context.source = kind.to_owned();
     if refresh.model_id.is_some() {
         record.context.model_id = refresh.model_id;
     }
     record.context.effort = refresh.effort;
     record.context.tokens = refresh.tokens;
+    preserve_cached_context_window(
+        kind,
+        prior_model_id.as_deref(),
+        prior_context_window,
+        refresh_model_id.as_deref(),
+        record.context.tokens.as_mut(),
+    );
     // A missing local cost means the latest transcript tail could not be priced,
     // not that the already-spent session returned to zero.
     if refresh.cost.is_some() {
@@ -143,6 +157,36 @@ pub fn merge_local_context(
     record.transcript_path = refresh.transcript_path;
     record.transcript_stat = refresh.transcript_stat;
     write_record(runtime, &record)
+}
+
+fn preserve_cached_context_window(
+    kind: &str,
+    prior_model_id: Option<&str>,
+    prior_context_window: Option<u64>,
+    refresh_model_id: Option<&str>,
+    tokens: Option<&mut crate::agents::AgentTokenUsage>,
+) {
+    let Some(tokens) = tokens else {
+        return;
+    };
+    let Some(prior_context_window) = prior_context_window else {
+        return;
+    };
+    let Some(default_context_window) = crate::agents::descriptor_by_kind(kind)
+        .and_then(|descriptor| descriptor.default_context_window)
+    else {
+        return;
+    };
+    if tokens.context_window_size != Some(default_context_window) {
+        return;
+    }
+    if prior_context_window == default_context_window {
+        return;
+    }
+    if refresh_model_id.is_some_and(|model| prior_model_id != Some(model)) {
+        return;
+    }
+    tokens.context_window_size = Some(prior_context_window);
 }
 
 pub fn empty_context(source: &str, observed_at: Timestamp) -> AgentContext {
@@ -486,6 +530,62 @@ mod tests {
                 .and_then(|tokens| tokens.used_percentage),
             Some(10),
             "window tokens still update independently of cost pricing"
+        );
+    }
+
+    #[test]
+    fn merge_local_context_preserves_cached_exact_window_over_default_fallback() {
+        let (_dir, runtime) = runtime();
+        let prior_at = Timestamp::from_second(1_700_000_000).unwrap();
+        let local_at = Timestamp::from_second(1_700_000_030).unwrap();
+        let mut prior_context = ctx(prior_at);
+        prior_context.source = "codex".to_owned();
+        prior_context.model_id = Some("gpt-5.5".to_owned());
+        prior_context.tokens = Some(crate::agents::AgentTokenUsage {
+            context_window_size: Some(258_400),
+            used_percentage: Some(50),
+            remaining_percentage: Some(50),
+            current_usage: None,
+        });
+        write_record(&runtime, &new_record("codex", "sess-1", prior_context)).unwrap();
+
+        merge_local_context(
+            &runtime,
+            "codex",
+            "sess-1",
+            read_one(&runtime, "codex", "sess-1"),
+            crate::agents::LocalContextRefresh {
+                model_id: None,
+                effort: Some("high".to_owned()),
+                tokens: Some(crate::agents::AgentTokenUsage {
+                    context_window_size: Some(258_000),
+                    used_percentage: Some(10),
+                    remaining_percentage: Some(90),
+                    current_usage: None,
+                }),
+                cost: None,
+                transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
+                transcript_stat: Some(crate::agents::TranscriptStat {
+                    mtime_secs: 123,
+                    mtime_nanos: 456,
+                    len: 789,
+                }),
+            },
+            local_at,
+        )
+        .unwrap();
+
+        let merged = read_one(&runtime, "codex", "sess-1").unwrap();
+        let tokens = merged.context.tokens.as_ref().unwrap();
+        assert_eq!(
+            tokens.context_window_size,
+            Some(258_400),
+            "an exact rollout window cached in the sidecar beats a later fallback"
+        );
+        assert_eq!(
+            tokens.used_percentage,
+            Some(10),
+            "fresh usage still updates while only the fallback window is replaced"
         );
     }
 

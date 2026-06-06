@@ -88,6 +88,7 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: false,
         hook_install: true,
     },
+    default_context_window: None,
     hook_cap: CLAUDE_HOOK_CAP,
     process_names: &["claude"],
     // `PreToolUse` (races the blocking ask) and `Notification` (idle) are

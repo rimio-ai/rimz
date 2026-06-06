@@ -1965,6 +1965,11 @@ fn fresh_codex_pane_with_proc_start_shows_idle_not_ghost() {
         "no ghost tokens on a fresh pane"
     );
     assert_eq!(rows[0].model, None, "no ghost model on a fresh pane");
+    assert_eq!(
+        rows[0].context_window,
+        Some(258_000),
+        "fresh Codex rows use the provider fallback window, not stale session stats"
+    );
 }
 
 #[test]
@@ -1990,6 +1995,11 @@ fn wired_unprompted_codex_pane_renders_as_idle_agent() {
     assert_eq!(
         rows[0].model, None,
         "no model until the first turn enriches it"
+    );
+    assert_eq!(
+        rows[0].context_window,
+        Some(258_000),
+        "the card can show Codex's context tier before the first session event"
     );
 }
 

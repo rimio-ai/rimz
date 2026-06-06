@@ -2061,7 +2061,7 @@ pub(super) fn row_from_agent(agent: &AgentState, now: Timestamp) -> SidebarRow {
         model: agent.model.clone(),
         effort: agent.effort.clone(),
         context_pct: Some(agent.context_pct.unwrap_or(0)),
-        context_window: agent.context_window,
+        context_window: agent_context_window(agent),
         total_tokens: agent.total_tokens,
         cache_read_input_tokens: agent.cache_read_input_tokens,
         fresh_input_tokens: agent.fresh_input_tokens,
@@ -2097,6 +2097,13 @@ pub(super) fn row_from_agent(agent: &AgentState, now: Timestamp) -> SidebarRow {
 fn is_compacting(agent: &AgentState, now: Timestamp) -> bool {
     agent.compacting_since.is_some_and(|since| {
         now.duration_since(since).as_secs() < crate::feed::COMPACTING_WINDOW_SECS
+    })
+}
+
+fn agent_context_window(agent: &AgentState) -> Option<u64> {
+    agent.context_window.or_else(|| {
+        crate::agents::descriptor_by_kind(agent.kind.as_str())
+            .and_then(|descriptor| descriptor.default_context_window)
     })
 }
 
@@ -2144,7 +2151,7 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         } else {
             None
         },
-        context_window: matched.and_then(|agent| agent.context_window),
+        context_window: matched.and_then(agent_context_window),
         total_tokens: matched.and_then(|agent| agent.total_tokens),
         cache_read_input_tokens: matched.and_then(|agent| agent.cache_read_input_tokens),
         fresh_input_tokens: matched.and_then(|agent| agent.fresh_input_tokens),

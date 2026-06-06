@@ -64,6 +64,12 @@ use crate::ledger::atomic;
 /// before tightening.
 const CODEX_HOOK_CAP: Duration = Duration::from_secs(60);
 
+/// Codex's effective GPT-5.5 context tier. The rollout's
+/// `model_context_window` replaces this as soon as it appears; until then the
+/// agent card uses this stable provider fallback instead of briefly omitting
+/// the window token.
+const DEFAULT_CONTEXT_WINDOW: u64 = 258_000;
+
 /// Everything `const` about Codex, in one place. See [`AgentDescriptor`] for
 /// the descriptor-vs-trait split.
 static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
@@ -100,6 +106,7 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: true,
         hook_install: true,
     },
+    default_context_window: Some(DEFAULT_CONTEXT_WINDOW),
     hook_cap: CODEX_HOOK_CAP,
     // Codex commonly runs as a `node` bundle, so PID attribution accepts the
     // launcher process name beside its own.
@@ -362,12 +369,14 @@ impl AgentAdapter for CodexAdapter {
         };
         observation.prompt =
             sanitize_user_prompt(user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
+        let reported_context_window = usage.reported_context_window();
         observation.model = optional_payload_string(payload, &["model"]).or(usage.model);
         observation.effort = payload_reasoning_effort(payload).or_else(configured_reasoning_effort);
         observation.context_pct = payload_context_pct(payload, usage.context_pct);
         // The rollout's `model_context_window` (e.g. 258k for GPT-5.5) doubles
-        // as the card's window label.
-        observation.context_window = usage.context_window;
+        // as the card's exact window label; the 258k fallback stays in the
+        // sidecar/view-model path so it never overwrites an exact rollup value.
+        observation.context_window = reported_context_window;
         observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
         // The latest call's split — the card's composition line. The rollout's
         // `input_tokens` includes the cached slice (the protocol reports no
@@ -558,6 +567,7 @@ struct TranscriptUsage {
     /// The model's context window from the rollout's `model_context_window`
     /// (e.g. 258k for GPT-5.5) — the card's window label.
     context_window: Option<u64>,
+    context_window_reported: bool,
     total_tokens: Option<u64>,
     model: Option<String>,
     /// The latest call's full input from `last_token_usage.input_tokens` —
@@ -682,7 +692,8 @@ impl TranscriptUsage {
     fn fresh() -> Self {
         Self {
             context_pct: Some(0),
-            context_window: None,
+            context_window: Some(DEFAULT_CONTEXT_WINDOW),
+            context_window_reported: false,
             total_tokens: Some(0),
             model: None,
             last_input_tokens: Some(0),
@@ -691,6 +702,14 @@ impl TranscriptUsage {
             cumulative_input_tokens: None,
             cumulative_cached_tokens: 0,
             cumulative_output_tokens: None,
+        }
+    }
+
+    fn reported_context_window(&self) -> Option<u64> {
+        if self.context_window_reported {
+            self.context_window
+        } else {
+            None
         }
     }
 }
@@ -867,15 +886,22 @@ fn usage_from_transcript(path: &Path) -> TranscriptUsage {
         };
     match latest_usage {
         Some(last) => {
+            let context_window_reported = last.window > 0;
+            let context_window = if context_window_reported {
+                last.window
+            } else {
+                DEFAULT_CONTEXT_WINDOW
+            };
             let context_pct = last
                 .input
                 .unwrap_or(0)
                 .saturating_mul(100)
-                .checked_div(last.window)
+                .checked_div(context_window)
                 .map(|pct| pct.min(100) as u8);
             TranscriptUsage {
                 context_pct,
-                context_window: (last.window > 0).then_some(last.window),
+                context_window: Some(context_window),
+                context_window_reported,
                 total_tokens: last.total,
                 model: latest_model,
                 last_input_tokens: last.input,

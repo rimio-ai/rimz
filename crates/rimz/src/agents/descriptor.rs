@@ -37,6 +37,9 @@ pub struct AgentDescriptor {
     /// so a missing surface renders as a declared absence, never an
     /// accidental gap.
     pub capabilities: Capabilities,
+    /// Provider-owned fallback for the model context window shown in an agent
+    /// card before a richer runtime source reports the exact value.
+    pub default_context_window: Option<u64>,
     /// Maximum time a blocking hook may hold the bridge open before falling
     /// back to the neutral no-op. Set from the upstream's published deadline,
     /// with margin so the bridge times out before the agent kills the hook.

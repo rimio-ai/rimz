@@ -46,6 +46,14 @@ fn codex_registers_its_session_lazily() {
 }
 
 #[test]
+fn codex_declares_the_context_window_fallback() {
+    assert_eq!(
+        CodexAdapter.descriptor().default_context_window,
+        Some(258_000)
+    );
+}
+
+#[test]
 fn permission_decision_has_no_reserved_keys() {
     let item = fixture(FeedKind::Permission);
     let resolution = Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::HookBridge);
@@ -689,6 +697,7 @@ fn transcript_tail_populates_context_gauge() {
     .unwrap();
     let usage = usage_from_transcript(&path);
     assert_eq!(usage.context_pct, Some(50));
+    assert_eq!(usage.reported_context_window(), Some(258_400));
     assert_eq!(usage.total_tokens, Some(130_000));
     assert_eq!(usage.model.as_deref(), Some("gpt-5.5"));
 }
@@ -708,6 +717,8 @@ fn fresh_transcript_reports_zero_context_not_unknown() {
     .unwrap();
     let usage = usage_from_transcript(&path);
     assert_eq!(usage.context_pct, Some(0));
+    assert_eq!(usage.context_window, Some(258_000));
+    assert_eq!(usage.reported_context_window(), None);
     assert_eq!(usage.total_tokens, Some(0));
     // The per-call split reads an explicit zero too, mirroring the totals.
     assert_eq!(usage.last_input_tokens, Some(0));
@@ -721,6 +732,7 @@ fn missing_transcript_leaves_context_unknown() {
     // hidden rather than asserting a false 0%.
     let usage = usage_from_transcript(Path::new("/nonexistent/path/rollout.jsonl"));
     assert_eq!(usage.context_pct, None);
+    assert_eq!(usage.context_window, None);
     assert_eq!(usage.total_tokens, None);
 }
 
@@ -776,6 +788,7 @@ fn transcript_enrichment_maps_codex_split_to_rich_usage() {
     let usage = TranscriptUsage {
         context_pct: Some(42),
         context_window: Some(10_000),
+        context_window_reported: true,
         total_tokens: Some(4_200),
         model: Some("gpt-5".to_owned()),
         last_input_tokens: Some(1_200),
@@ -811,6 +824,7 @@ fn transcript_enrichment_prices_cumulative_totals() {
     let usage = TranscriptUsage {
         context_pct: None,
         context_window: None,
+        context_window_reported: false,
         total_tokens: None,
         model: Some("gpt-5".to_owned()),
         last_input_tokens: None,
@@ -834,6 +848,7 @@ fn transcript_enrichment_uses_model_hint_to_price_cumulative_totals() {
     let usage = TranscriptUsage {
         context_pct: None,
         context_window: None,
+        context_window_reported: false,
         total_tokens: None,
         model: None,
         last_input_tokens: None,
