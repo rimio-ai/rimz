@@ -7,7 +7,7 @@
 use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
 
-use crate::sidebar::snapshot::RollupCursor;
+use crate::sidebar::consumer::RollupCursor;
 use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 
 use super::input::SNAPSHOT_WAKEUP;
@@ -59,7 +59,7 @@ pub(super) struct FetchOutcome {
 ///
 /// **Fast lane (every cycle, producer and consumer alike):** fold the
 /// event-fresh ledger rollup over the published pane frame entirely in process
-/// ([`crate::sidebar::snapshot::read_published_snapshot`]) — no `list-panes`,
+/// ([`crate::sidebar::consumer::read_published_snapshot`]) — no `list-panes`,
 /// no git. This is the paint that lands a status flip or a cost update within
 /// one wakeup, in single-digit milliseconds — and it runs even over an aged
 /// pane frame, so a dead producer stales only pane *presence* while status
@@ -94,10 +94,10 @@ fn run_fetch_cycle(
 ) {
     let is_producer = !crate::sidebar::elder_sidebar_present(runtime, &config.instance_id);
     let exclude = crate::mux::own_pane_id(config.mux);
-    let now_ms = crate::sidebar::snapshot::unix_now_ms();
+    let now_ms = crate::sidebar::cache::unix_now_ms();
     let published_frame_produced_at_ms =
-        crate::sidebar::snapshot::published_frame_produced_at_ms(runtime, &config.session_name);
-    let fast = crate::sidebar::snapshot::read_published_snapshot(
+        crate::sidebar::cache::published_frame_produced_at_ms(runtime, &config.session_name);
+    let fast = crate::sidebar::consumer::read_published_snapshot(
         cursor,
         state,
         runtime,
@@ -229,7 +229,7 @@ impl FetchRequest {
     pub(super) fn producer_fresh_panes() -> Self {
         Self {
             mode: FetchMode::ProducerFreshPanes,
-            min_pane_cache_ms: Some(crate::sidebar::snapshot::unix_now_ms()),
+            min_pane_cache_ms: Some(crate::sidebar::cache::unix_now_ms()),
             published_frame_hint: false,
         }
     }
@@ -237,7 +237,7 @@ impl FetchRequest {
     pub(super) fn hard_refresh() -> Self {
         Self {
             mode: FetchMode::HardRefresh,
-            min_pane_cache_ms: Some(crate::sidebar::snapshot::unix_now_ms()),
+            min_pane_cache_ms: Some(crate::sidebar::cache::unix_now_ms()),
             published_frame_hint: false,
         }
     }

@@ -148,7 +148,7 @@ pub struct SidebarSnapshot {
     /// Fleet-wide JSONL-computed spend and token tally — today / week / month /
     /// all-time — summing every provider (Claude scoped to the visible worktrees,
     /// Codex and Pi fleet-wide). Attached by the sidebar enrichment spine
-    /// (`sidebar::snapshot::enrich`) from the producer's fleet spending walk
+    /// (`sidebar::enrich::enrich`) from the producer's fleet spending walk
     /// (`sidebar::produce`, via [`crate::agents::spending::compute_spending`]);
     /// `None` until the cache is seeded (the first producer tick after startup)
     /// or when nothing has been recorded. The cockpit reads `today` (sessions,

@@ -85,7 +85,7 @@ Contracts live in the layered `AGENTS.md` files — the root contract plus a loc
 | `src/mux/` | the Zellij/tmux seam: `MuxBackend`, bounded subprocess engine, reconcile planner, recovery | [contract](./crates/rimz/src/mux/AGENTS.md) · [multiplexers.md](./docs/internals/multiplexers.md) |
 | `src/agents/` | the agent integration layer: adapter trait, registry, per-provider adapters, spend/pricing/account | [contract](./crates/rimz/src/agents/AGENTS.md) · [hooks.md](./docs/internals/hooks.md) |
 | `src/resolver/` | per-machine allowlist, heartbeat freshness, TOCTOU restat | [resolvers.md](./docs/internals/resolvers.md) |
-| `src/sidebar/` | sidebar data plane: producer election, heartbeats, the in-process consumer read, the shared enrichment fold, and the produce pipeline (`produce/` — panes, metrics, git, spending) | [sidebar.md](./docs/internals/sidebar.md) · [performance.md](./docs/internals/performance.md) |
+| `src/sidebar/` | sidebar data plane: producer election and heartbeats (`mod.rs`), runtime cache formats/TTLs (`cache.rs`), the in-process no-fork consumer read (`consumer.rs`), the shared enrichment fold (`enrich.rs`), and the producer pipeline (`produce/` — panes, metrics, git, spending) | [sidebar.md](./docs/internals/sidebar.md) · [performance.md](./docs/internals/performance.md) |
 | `src/sidebar_renderer/` | native terminal sidebar renderer: the pane-resident serve loop and frame composition over the snapshot view-model | [sidebar.md](./docs/internals/sidebar.md) · [interface/sidebar.md](./docs/interface/sidebar.md) |
 | `src/schema/` | event envelope, heartbeat shape, protocol-version constants | [ledger.md](./docs/internals/ledger.md) |
 

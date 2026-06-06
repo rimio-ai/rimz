@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::ledger::atomic;
-use crate::sidebar::snapshot::unix_now_ms;
+use crate::sidebar::cache::unix_now_ms;
 
 /// Per-pane CPU and IO tick counters sampled by the producer on the previous
 /// tick, plus the pane's root-pid binding. Two consecutive readings plus the

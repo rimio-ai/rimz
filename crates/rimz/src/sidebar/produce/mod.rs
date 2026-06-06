@@ -27,9 +27,9 @@ mod spending;
 use std::path::PathBuf;
 
 use crate::ids::{MuxName, PaneId};
-use crate::sidebar::snapshot::{
-    EnrichMode, RollupCursor, SnapshotCache, enrich, live_row_costs, rollup_snapshot, unix_now_ms,
-};
+use crate::sidebar::cache::{SnapshotCache, unix_now_ms};
+use crate::sidebar::consumer::{RollupCursor, rollup_snapshot};
+use crate::sidebar::enrich::{EnrichMode, enrich, live_row_costs};
 use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 
 #[derive(Debug, thiserror::Error)]
@@ -146,8 +146,8 @@ fn pane_list_fixture() -> Result<Option<Vec<crate::feed::PaneRef>>> {
 }
 
 /// Assemble the producer inputs and run the shared enrichment spine
-/// ([`crate::sidebar::snapshot::enrich`]) in [`EnrichMode::Producing`]. This
-/// owns only what forks or walks; the spine owns the fold order.
+/// ([`crate::sidebar::enrich::enrich`]) in [`EnrichMode::Producing`]. This owns
+/// only what forks or walks; the spine owns the fold order.
 ///
 /// - Group roots: a repo room's worktree checkouts, a directory room's
 ///   depth-1 child repos — cached under `WORKTREE_ROOTS_TTL`, refused below

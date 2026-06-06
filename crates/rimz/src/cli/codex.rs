@@ -199,7 +199,7 @@ fn refresh_rate_limits(workspace_id: &str) -> Result<()> {
         return Ok(());
     };
     if let Some(rate_limits) = context.rate_limits {
-        rimz::sidebar::snapshot::merge_account_rate_limits(&runtime, "codex", rate_limits);
+        rimz::sidebar::enrich::merge_account_rate_limits(&runtime, "codex", rate_limits);
         let _ = rimz::ledger::wakeup::wake_sidebars_for_context(&runtime, &workspace_id);
     }
     Ok(())

@@ -324,7 +324,7 @@ fn report_zellij_capabilities() {
     reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
 )]
 fn report_presence_channel(ws: &rimz::ResolvedWorkspace) {
-    use rimz::sidebar::snapshot::{presence_event_mode, presence_stamp_age_ms};
+    use rimz::sidebar::cache::{presence_event_mode, presence_stamp_age_ms};
 
     let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
         Ok(runtime) => runtime,

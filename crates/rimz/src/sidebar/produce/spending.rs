@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use crate::sidebar::snapshot::unix_now_ms;
+use crate::sidebar::cache::unix_now_ms;
 
 /// Walk every provider's transcript history into a fleet-wide and per-provider
 /// [`Spending`](crate::agents::spending::Spending), publishing the stamped
@@ -102,7 +102,7 @@ mod tests {
     use crate::RuntimePaths;
     use crate::agents::spending::{Spending, write_provider_spending_cache};
     use crate::ids::WorkspaceId;
-    use crate::sidebar::snapshot::unix_now_ms;
+    use crate::sidebar::cache::unix_now_ms;
 
     use super::compute_fleet_spending;
 

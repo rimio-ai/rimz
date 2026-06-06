@@ -20,10 +20,9 @@ use rimz::ledger::workspace_record;
 use rimz::sidebar::produce::{
     ProduceOptions, pane_fixture_active, produce_rollup_snapshot, produce_snapshot,
 };
-use rimz::sidebar::snapshot::{
-    EnrichMode, RollupCursor, enrich, read_published_snapshot, rollup_snapshot,
-    write_presence_stamp,
-};
+use rimz::sidebar::{cache::write_presence_stamp, consumer::RollupCursor};
+use rimz::sidebar::{consumer::read_published_snapshot, consumer::rollup_snapshot};
+use rimz::sidebar::{enrich::EnrichMode, enrich::enrich};
 use rimz::workspace::WorkspaceResolver;
 use rimz::{RuntimePaths, StatePaths};
 

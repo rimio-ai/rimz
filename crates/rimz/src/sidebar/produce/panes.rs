@@ -11,7 +11,7 @@ use crate::ids::MuxName;
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
 use crate::mux::PaneListOptions;
-use crate::sidebar::snapshot::{
+use crate::sidebar::cache::{
     SnapshotCache, effective_pane_ttl, presence_stamp_age_ms, read_snapshot_cache,
     snapshot_cache_is_fresh, unix_now_ms,
 };

@@ -11,7 +11,7 @@
 //! it and publishes the result to the shared `accounts.json` cache (TTL'd,
 //! single-flighted like the diff stats); consumer tabs read that cache and never
 //! fork. A probe is a pure read — the cross-process memoization lives one layer
-//! up, in [`crate::sidebar::snapshot`]'s producer cache.
+//! up, in [`crate::sidebar::cache`]'s producer cache.
 //!
 //! A probe also detects a *logged-in but idle* provider — one with no active
 //! session this run — so the dashboard can show your accounts and their budgets

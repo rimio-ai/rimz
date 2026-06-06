@@ -10,11 +10,11 @@ use std::time::Duration;
 
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
-use crate::sidebar::snapshot::{
+use crate::sidebar::cache::{
     DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, DiffStats, DiffStatsCache, DiffStatsCacheEntry,
-    WorktreeRootsCache, hot_worktree_paths, needed_worktree_paths, project_diff_stats,
-    read_diff_stats_cache, unix_now_ms,
+    WorktreeRootsCache, read_diff_stats_cache, unix_now_ms,
 };
+use crate::sidebar::enrich::{hot_worktree_paths, needed_worktree_paths, project_diff_stats};
 use crate::workspace::RootClass;
 
 /// How a non-producing sidebar waits for the elected producer's diff-stats
@@ -27,7 +27,7 @@ const DIFF_STATS_WAIT_STEPS: u32 = 15;
 /// Refresh the producer's per-worktree git facts, then project them onto the
 /// snapshot's worktree groups. The git forks are the producer's job — a
 /// consumer reads the published frame in process via
-/// [`crate::sidebar::snapshot::read_published_snapshot`] and never reaches here.
+/// [`crate::sidebar::consumer::read_published_snapshot`] and never reaches here.
 /// `configured_trunk` is the per-machine `[sidebar] trunk` preference the trunk
 /// ladder tries first.
 pub(super) fn enrich_worktree_groups(
