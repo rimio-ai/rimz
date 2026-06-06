@@ -7,6 +7,7 @@ use std::io;
 use std::os::unix::net::UnixDatagram;
 
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
+use rimz::feed::AgentStatus;
 use serde::Deserialize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,14 +51,23 @@ pub(super) enum Wakeup {
 pub(super) enum KeyAction {
     Up,
     Down,
+    WorktreeUp,
+    WorktreeDown,
     Enter,
     Space,
     Help,
     Dismiss,
+    Filter(FilterAction),
     Digit(u8),
     /// `←`/`→` — cycle the provider dashboard's tab.
     TabPrev,
     TabNext,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FilterAction {
+    All,
+    Status(AgentStatus),
 }
 
 /// The control word the background fetch worker sends to the loop's wakeup
@@ -75,8 +85,21 @@ pub(super) fn encode_key(code: KeyCode) -> Option<String> {
         KeyCode::Left => "key:tab_prev",
         KeyCode::Right => "key:tab_next",
         KeyCode::Enter => "key:enter",
+        KeyCode::Char('k') => "key:up",
+        KeyCode::Char('j') => "key:down",
+        KeyCode::Char('K') => "key:worktree_up",
+        KeyCode::Char('J') => "key:worktree_down",
+        KeyCode::Char('l') => "key:enter",
         KeyCode::Char(' ') => "key:space",
         KeyCode::Char('?') => "key:help",
+        KeyCode::Char('a') => "key:filter:all",
+        KeyCode::Char('q') => "key:filter:waiting",
+        KeyCode::Char('!') => "key:filter:failed",
+        KeyCode::Char('e') => "key:filter:failed",
+        KeyCode::Char('o') => "key:filter:idle",
+        KeyCode::Char('p') => "key:filter:rate_limited",
+        KeyCode::Char('w') => "key:filter:running",
+        KeyCode::Char('d') => "key:filter:success",
         KeyCode::Char('x') => "key:dismiss",
         KeyCode::Char(c @ '1'..='9') => return Some(format!("key:digit:{c}")),
         // `r` rides the very `reload` control word `rimz reload` posts, so a
@@ -127,11 +150,32 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         "reload" => Wakeup::Reload,
         "key:up" => Wakeup::Key(KeyAction::Up),
         "key:down" => Wakeup::Key(KeyAction::Down),
+        "key:worktree_up" => Wakeup::Key(KeyAction::WorktreeUp),
+        "key:worktree_down" => Wakeup::Key(KeyAction::WorktreeDown),
         "key:tab_prev" => Wakeup::Key(KeyAction::TabPrev),
         "key:tab_next" => Wakeup::Key(KeyAction::TabNext),
         "key:enter" => Wakeup::Key(KeyAction::Enter),
         "key:space" => Wakeup::Key(KeyAction::Space),
         "key:help" => Wakeup::Key(KeyAction::Help),
+        "key:filter:all" => Wakeup::Key(KeyAction::Filter(FilterAction::All)),
+        "key:filter:waiting" => Wakeup::Key(KeyAction::Filter(FilterAction::Status(
+            AgentStatus::Waiting,
+        ))),
+        "key:filter:failed" => {
+            Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Failed)))
+        }
+        "key:filter:idle" => {
+            Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Idle)))
+        }
+        "key:filter:rate_limited" => Wakeup::Key(KeyAction::Filter(FilterAction::Status(
+            AgentStatus::RateLimited,
+        ))),
+        "key:filter:running" => Wakeup::Key(KeyAction::Filter(FilterAction::Status(
+            AgentStatus::Running,
+        ))),
+        "key:filter:success" => Wakeup::Key(KeyAction::Filter(FilterAction::Status(
+            AgentStatus::Success,
+        ))),
         "key:dismiss" => Wakeup::Key(KeyAction::Dismiss),
         "scroll:up" => Wakeup::Scroll { down: false },
         "scroll:down" => Wakeup::Scroll { down: true },
@@ -289,6 +333,73 @@ mod tests {
     }
 
     #[test]
+    fn vim_row_and_focus_keys_round_trip() {
+        assert_eq!(
+            decode_wakeup(encode_key(KeyCode::Char('j')).unwrap().as_bytes()),
+            Wakeup::Key(KeyAction::Down)
+        );
+        assert_eq!(
+            decode_wakeup(encode_key(KeyCode::Char('k')).unwrap().as_bytes()),
+            Wakeup::Key(KeyAction::Up)
+        );
+        assert_eq!(
+            decode_wakeup(encode_key(KeyCode::Char('l')).unwrap().as_bytes()),
+            Wakeup::Key(KeyAction::Enter)
+        );
+    }
+
+    #[test]
+    fn worktree_jump_keys_round_trip() {
+        assert_eq!(
+            decode_wakeup(encode_key(KeyCode::Char('J')).unwrap().as_bytes()),
+            Wakeup::Key(KeyAction::WorktreeDown)
+        );
+        assert_eq!(
+            decode_wakeup(encode_key(KeyCode::Char('K')).unwrap().as_bytes()),
+            Wakeup::Key(KeyAction::WorktreeUp)
+        );
+    }
+
+    #[test]
+    fn filter_keys_round_trip() {
+        let cases = [
+            (KeyCode::Char('a'), KeyAction::Filter(FilterAction::All)),
+            (
+                KeyCode::Char('q'),
+                KeyAction::Filter(FilterAction::Status(AgentStatus::Waiting)),
+            ),
+            (
+                KeyCode::Char('!'),
+                KeyAction::Filter(FilterAction::Status(AgentStatus::Failed)),
+            ),
+            (
+                KeyCode::Char('e'),
+                KeyAction::Filter(FilterAction::Status(AgentStatus::Failed)),
+            ),
+            (
+                KeyCode::Char('o'),
+                KeyAction::Filter(FilterAction::Status(AgentStatus::Idle)),
+            ),
+            (
+                KeyCode::Char('p'),
+                KeyAction::Filter(FilterAction::Status(AgentStatus::RateLimited)),
+            ),
+            (
+                KeyCode::Char('w'),
+                KeyAction::Filter(FilterAction::Status(AgentStatus::Running)),
+            ),
+            (
+                KeyCode::Char('d'),
+                KeyAction::Filter(FilterAction::Status(AgentStatus::Success)),
+            ),
+        ];
+        for (key, action) in cases {
+            let encoded = encode_key(key).expect("filter key is encoded");
+            assert_eq!(decode_wakeup(encoded.as_bytes()), Wakeup::Key(action));
+        }
+    }
+
+    #[test]
     fn control_words_never_start_with_brace() {
         // The leading-brace discriminator (ledger delta vs control/input) holds
         // only while no control or input wire word can begin with `{`.
@@ -306,8 +417,21 @@ mod tests {
             KeyCode::Left,
             KeyCode::Right,
             KeyCode::Enter,
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Char('J'),
+            KeyCode::Char('K'),
+            KeyCode::Char('l'),
             KeyCode::Char(' '),
             KeyCode::Char('?'),
+            KeyCode::Char('a'),
+            KeyCode::Char('q'),
+            KeyCode::Char('!'),
+            KeyCode::Char('e'),
+            KeyCode::Char('o'),
+            KeyCode::Char('p'),
+            KeyCode::Char('w'),
+            KeyCode::Char('d'),
             KeyCode::Char('x'),
             KeyCode::Char('r'),
             KeyCode::Char('1'),

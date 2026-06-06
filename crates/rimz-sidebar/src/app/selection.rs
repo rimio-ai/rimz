@@ -11,7 +11,7 @@ use crate::render::{
     selected_agent_kind, status_total,
 };
 
-use super::input::KeyAction;
+use super::input::{FilterAction, KeyAction};
 
 /// Content lines a wheel tick moves the viewport — about one card line-group
 /// per notch, so a flick traverses cards rather than crawling line by line.
@@ -77,6 +77,8 @@ pub(super) fn handle_key(
             }
             InputOutcome::default()
         }
+        KeyAction::WorktreeUp => select_adjacent_worktree(ui, snapshot, -1),
+        KeyAction::WorktreeDown => select_adjacent_worktree(ui, snapshot, 1),
         KeyAction::Enter => {
             // Jump on the current row: fire the focus command at the selected
             // pane without touching selection — the highlight follows once the
@@ -112,6 +114,7 @@ pub(super) fn handle_key(
             }
             InputOutcome::redraw()
         }
+        KeyAction::Filter(action) => apply_make_up_filter(ui, snapshot, action),
         KeyAction::Dismiss => InputOutcome::dismiss(),
         KeyAction::Digit(digit) => {
             let index = usize::from(digit.saturating_sub(1));
@@ -173,8 +176,11 @@ pub(super) fn handle_mouse_click(
     // The cockpit's make-up buckets are the top block's only hit targets — a
     // click on one toggles the body's status filter in place, never a jump.
     if let Some(status) = make_up_status_at(ui, column, row) {
-        toggle_make_up_filter(ui, snapshot, status);
-        return InputOutcome::redraw();
+        return if toggle_make_up_filter(ui, snapshot, status) {
+            InputOutcome::redraw()
+        } else {
+            InputOutcome::default()
+        };
     }
     if let Some(index) = row_index_at_screen_position(ui, row)
         && let Some(pane) = pane_at_row(snapshot, ui.make_up_filter, index)
@@ -237,14 +243,118 @@ fn make_up_status_at(ui: &UiState, column: u16, row: u16) -> Option<AgentStatus>
 /// (the [`select_row`] discipline) and the selection re-anchors at once: a
 /// highlight whose row the filter hides drops to a clamped index, re-seated by
 /// the held baseline when the filter clears.
-fn toggle_make_up_filter(ui: &mut UiState, snapshot: &SidebarSnapshot, status: AgentStatus) {
-    ui.make_up_filter = if ui.make_up_filter == Some(status) {
-        None
-    } else {
-        Some(status)
+fn apply_make_up_filter(
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+    action: FilterAction,
+) -> InputOutcome {
+    let changed = match action {
+        FilterAction::All => set_make_up_filter(ui, snapshot, None),
+        FilterAction::Status(status) => toggle_make_up_filter(ui, snapshot, status),
     };
+    if changed {
+        InputOutcome::redraw()
+    } else {
+        InputOutcome::default()
+    }
+}
+
+fn toggle_make_up_filter(
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+    status: AgentStatus,
+) -> bool {
+    let target = if ui.make_up_filter == Some(status) {
+        None
+    } else if status_total(&snapshot.worktree_groups, status) > 0 {
+        Some(status)
+    } else {
+        return false;
+    };
+    set_make_up_filter(ui, snapshot, target)
+}
+
+fn set_make_up_filter(
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+    filter: Option<AgentStatus>,
+) -> bool {
+    if ui.make_up_filter == filter {
+        return false;
+    }
+    ui.make_up_filter = filter;
     ui.manual_scroll = None;
     anchor_selection(ui, snapshot);
+    true
+}
+
+/// Jump the browse pick to the first visible row of the neighbouring worktree.
+/// The walk uses the same filtered row universe as ordinary selection, so an
+/// active make-up filter skips groups it emptied and the line map stays 1:1
+/// with the highlighted row.
+fn select_adjacent_worktree(
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+    step: isize,
+) -> InputOutcome {
+    let ranges = visible_group_ranges(snapshot, ui.make_up_filter);
+    if ranges.len() < 2 {
+        return InputOutcome::default();
+    }
+    let Some(row_count) = ranges.last().map(|range| range.end()) else {
+        return InputOutcome::default();
+    };
+    let selected = ui.selected_index.min(row_count.saturating_sub(1));
+    let Some(current) = ranges.iter().position(|range| range.contains(selected)) else {
+        return InputOutcome::default();
+    };
+    let target = if step < 0 {
+        current.checked_sub(1)
+    } else {
+        (current + 1 < ranges.len()).then_some(current + 1)
+    };
+    let Some(target) = target else {
+        return InputOutcome::default();
+    };
+    select_row(ui, snapshot, ranges[target].start);
+    begin_or_continue_browse(ui);
+    InputOutcome::redraw()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VisibleGroupRange {
+    start: usize,
+    len: usize,
+}
+
+impl VisibleGroupRange {
+    fn end(&self) -> usize {
+        self.start + self.len
+    }
+
+    fn contains(&self, index: usize) -> bool {
+        (self.start..self.end()).contains(&index)
+    }
+}
+
+fn visible_group_ranges(
+    snapshot: &SidebarSnapshot,
+    filter: Option<AgentStatus>,
+) -> Vec<VisibleGroupRange> {
+    let mut start = 0;
+    let mut ranges = Vec::new();
+    for group in &snapshot.worktree_groups {
+        let len = group
+            .rows
+            .iter()
+            .filter(|row| row_passes_filter(row, filter))
+            .count();
+        if len > 0 {
+            ranges.push(VisibleGroupRange { start, len });
+            start += len;
+        }
+    }
+    ranges
 }
 
 /// Point the highlight at a visible row by index — the identity-keyed selection

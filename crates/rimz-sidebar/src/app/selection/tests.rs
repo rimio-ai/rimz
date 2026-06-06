@@ -718,6 +718,58 @@ fn arrow_key_reports_immediate_ui_change() {
 }
 
 #[test]
+fn worktree_keys_browse_to_neighboring_worktree_heads() {
+    let ws = workspace();
+    let snapshot = filterable_snapshot(&ws);
+    let feature = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+    let main = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let mut ui = UiState {
+        selected_index: 0,
+        selected_pane: Some(main.clone()),
+        baseline_pane: Some(main.clone()),
+        ..Default::default()
+    };
+
+    let outcome = handle_key(KeyAction::WorktreeDown, &mut ui, &snapshot);
+
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.selected_index, 2);
+    assert_eq!(ui.selected_pane, Some(feature));
+    assert!(ui.browse.is_some(), "a worktree jump is a browse pick");
+
+    let outcome = handle_key(KeyAction::WorktreeDown, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::default(), "no wrap at the end");
+    assert_eq!(ui.selected_index, 2);
+
+    let outcome = handle_key(KeyAction::WorktreeUp, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.selected_index, 0);
+    assert_eq!(ui.selected_pane, Some(main));
+}
+
+#[test]
+fn worktree_keys_respect_the_make_up_filter() {
+    use rimz::feed::AgentStatus;
+    let ws = workspace();
+    let snapshot = filterable_snapshot(&ws);
+    let failed = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+    let mut ui = UiState {
+        selected_index: 0,
+        selected_pane: Some(failed),
+        make_up_filter: Some(AgentStatus::Failed),
+        ..Default::default()
+    };
+
+    let outcome = handle_key(KeyAction::WorktreeDown, &mut ui, &snapshot);
+
+    assert_eq!(outcome, InputOutcome::default());
+    assert_eq!(
+        ui.selected_index, 0,
+        "only one group remains under the failed filter"
+    );
+}
+
+#[test]
 fn dismiss_key_requests_alert_dismissal() {
     let ws = workspace();
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
@@ -1265,6 +1317,57 @@ fn make_up_click_picks_switches_and_clears_the_filter() {
     let outcome = handle_mouse_click(8, 5, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
     assert_eq!(ui.make_up_filter, None);
+}
+
+#[test]
+fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
+    use rimz::feed::AgentStatus;
+    let ws = workspace();
+    let snapshot = filterable_snapshot(&ws);
+    let mut ui = UiState::default();
+
+    let outcome = handle_key(
+        KeyAction::Filter(FilterAction::Status(AgentStatus::Failed)),
+        &mut ui,
+        &snapshot,
+    );
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert!(outcome.focus.is_none());
+    assert_eq!(ui.make_up_filter, Some(AgentStatus::Failed));
+
+    let outcome = handle_key(
+        KeyAction::Filter(FilterAction::Status(AgentStatus::Failed)),
+        &mut ui,
+        &snapshot,
+    );
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.make_up_filter, None, "the active key toggles to all");
+
+    let outcome = handle_key(
+        KeyAction::Filter(FilterAction::Status(AgentStatus::Waiting)),
+        &mut ui,
+        &snapshot,
+    );
+    assert_eq!(
+        outcome,
+        InputOutcome::default(),
+        "zero-count buckets are inert from keys too"
+    );
+    assert_eq!(ui.make_up_filter, None);
+
+    handle_key(
+        KeyAction::Filter(FilterAction::Status(AgentStatus::Running)),
+        &mut ui,
+        &snapshot,
+    );
+    assert_eq!(ui.make_up_filter, Some(AgentStatus::Running));
+
+    let outcome = handle_key(KeyAction::Filter(FilterAction::All), &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.make_up_filter, None);
+
+    let outcome = handle_key(KeyAction::Filter(FilterAction::All), &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::default());
 }
 
 #[test]

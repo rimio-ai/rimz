@@ -1063,12 +1063,16 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     let faint = theme.faint();
     vec![
         Line::styled("keys & legend", faint),
-        Line::styled("↑/↓ select   1-9 jump   ↵ jump", faint),
-        Line::styled("␣ next ?!   ←/→ provider tab", faint),
-        Line::styled("x dismiss   r reload   ? close", faint),
-        Line::styled("click a status count to filter", faint),
-        Line::styled("⢿ working   ✽ thinking   ? waiting", faint),
-        Line::styled("! attention   ○ idle   ✓ done", faint),
+        Line::styled("move     j/k rows   J/K worktrees", faint),
+        Line::styled("focus    l or ↵     1-9 direct", faint),
+        Line::styled("triage   ␣ next ?!  ←/→ accounts", faint),
+        Line::styled("filter   q waiting   !/e attention", faint),
+        Line::styled("         o idle      p paused", faint),
+        Line::styled("         w working   d done   a all", faint),
+        Line::styled("system   r reload   x dismiss", faint),
+        Line::styled("help     ? close", faint),
+        Line::styled("? waiting   ! attention   ⏸ paused", faint),
+        Line::styled("⢿ working  ✽ thinking   ○ idle   ✓ done", faint),
     ]
 }
 

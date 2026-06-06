@@ -1764,9 +1764,14 @@ fn render_footer_and_help_overlay() {
             ..Default::default()
         },
         80,
-        20,
+        28,
     );
     assert!(help.contains("keys & legend"));
+    assert!(help.contains("j/k rows"));
+    assert!(help.contains("J/K worktrees"));
+    assert!(help.contains("l or"));
+    assert!(help.contains("q waiting"));
+    assert!(help.contains("!/e attention"));
     assert!(help.contains("? waiting"));
     assert!(help.contains("○ idle"));
     assert!(
