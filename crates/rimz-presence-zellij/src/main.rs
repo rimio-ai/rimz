@@ -91,7 +91,6 @@ mod shell {
                         self.pending_focus_tab = next_active;
                     }
                     self.active_tab = next_active;
-                    self.fold(now);
                     self.correct_switched_tab_focus();
                 }
                 Event::CommandChanged(_, _, is_foreground, _) => {
@@ -128,19 +127,24 @@ mod shell {
 
     impl State {
         /// Flip into granted mode once: poke an immediate keepalive so the
-        /// producer enters event mode now rather than after the first
-        /// cadence, and hide the pane Zellij surfaced for the permission
-        /// prompt — the plugin is headless, so a visible pane is only ever
-        /// that prompt's leftover. Idempotent; already-hidden panes no-op.
+        /// producer enters event mode now rather than after the first cadence,
+        /// unless a pre-grant topology signal is already waiting — that
+        /// `panes-changed` wake writes the same stamp and also refreshes the
+        /// pane frame. Hide the pane Zellij surfaced for the permission prompt;
+        /// the plugin is headless, so a visible pane is only ever that prompt's
+        /// leftover. Idempotent; already-hidden panes no-op.
         fn mark_granted(&mut self, now: u64) {
             if self.granted {
                 self.flush_pregrant_change(now);
                 return;
             }
             self.granted = true;
-            self.poke(Poke::Alive);
             hide_self();
-            self.flush_pregrant_change(now);
+            if self.pending_pregrant_change {
+                self.flush_pregrant_change(now);
+            } else {
+                self.poke(Poke::Alive);
+            }
         }
 
         fn signal_change(&mut self, now: u64) {

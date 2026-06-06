@@ -6,14 +6,10 @@
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
-/// One poke is debounced this long after the first change of a burst, so a
-/// split (which fans out as several manifest events) collapses to one poke.
-pub const DEBOUNCE_MS: u64 = 200;
-
 /// Floor between two `panes-changed` pokes — caps host forks under
 /// pathological manifest churn. A change that lands inside the floor is
 /// deferred, never dropped.
-pub const POKE_FLOOR_MS: u64 = 500;
+pub const POKE_FLOOR_MS: u64 = 100;
 
 /// Keepalive cadence. One host fork per minute per session keeps an
 /// idle-but-healthy channel distinguishable from a dead one; the host's
@@ -52,11 +48,12 @@ impl PaneFields {
 /// Fold the projected manifest into one stable hash. The `BTreeMap` keying by
 /// tab position makes iteration order deterministic regardless of the host
 /// map's order; callers sort each tab's panes by id before inserting. The
-/// value only ever compares against the previous hash in this process, so no
-/// cross-version stability is needed.
-pub fn manifest_hash(tabs: &BTreeMap<usize, Vec<PaneFields>>, active_tab: Option<usize>) -> u64 {
+/// active tab is deliberately excluded: tab switches are navigation, while the
+/// sidebar's row roster and selection baseline change only when the per-pane
+/// fields change. The value only ever compares against the previous hash in
+/// this process, so no cross-version stability is needed.
+pub fn manifest_hash(tabs: &BTreeMap<usize, Vec<PaneFields>>, _active_tab: Option<usize>) -> u64 {
     let mut hasher = std::hash::DefaultHasher::new();
-    active_tab.hash(&mut hasher);
     for (tab, panes) in tabs {
         tab.hash(&mut hasher);
         for pane in panes {
@@ -106,9 +103,9 @@ pub enum Poke {
 #[derive(Debug)]
 pub struct PokePolicy {
     last_hash: Option<u64>,
-    /// First change of the current burst, the debounce anchor. Deliberately
-    /// not refreshed by later changes in the burst: the poke fires at most
-    /// `DEBOUNCE_MS` after the first change even under continuous churn.
+    /// First change of the current duplicate burst. The first change pokes
+    /// immediately; a later change inside [`POKE_FLOOR_MS`] is held until the
+    /// floor lifts and then pokes once for the burst.
     pending_since: Option<u64>,
     last_changed_poke: Option<u64>,
     next_keepalive: u64,
@@ -151,17 +148,17 @@ impl PokePolicy {
         }
     }
 
-    /// The pokes due at `now_ms`, consuming them. A pending change fires once
-    /// its debounce has elapsed and the rate floor allows; the keepalive fires
-    /// on its own cadence regardless of change traffic.
+    /// The pokes due at `now_ms`, consuming them. A pending change fires
+    /// immediately unless it arrived inside the duplicate floor; the keepalive
+    /// fires on its own cadence regardless of change traffic.
     pub fn due(&mut self, now_ms: u64) -> Vec<Poke> {
         let mut pokes = Vec::new();
         if let Some(since) = self.pending_since {
-            let debounced = now_ms >= since.saturating_add(DEBOUNCE_MS);
-            let floored = self
-                .last_changed_poke
-                .is_none_or(|at| now_ms >= at.saturating_add(POKE_FLOOR_MS));
-            if debounced && floored {
+            let due_at = match self.last_changed_poke {
+                Some(at) => since.max(at.saturating_add(POKE_FLOOR_MS)),
+                None => since,
+            };
+            if now_ms >= due_at {
                 self.pending_since = None;
                 self.last_changed_poke = Some(now_ms);
                 pokes.push(Poke::Changed);
@@ -177,13 +174,12 @@ impl PokePolicy {
     /// The next absolute instant [`PokePolicy::due`] should be consulted.
     /// Always `Some` — the keepalive deadline never disappears.
     pub fn next_wake_at(&self) -> u64 {
-        let change_at = self.pending_since.map(|since| {
-            let debounce_at = since.saturating_add(DEBOUNCE_MS);
-            match self.last_changed_poke {
-                Some(at) => debounce_at.max(at.saturating_add(POKE_FLOOR_MS)),
-                None => debounce_at,
-            }
-        });
+        let change_at = self
+            .pending_since
+            .map(|since| match self.last_changed_poke {
+                Some(at) => since.max(at.saturating_add(POKE_FLOOR_MS)),
+                None => since,
+            });
         match change_at {
             Some(at) => at.min(self.next_keepalive),
             None => self.next_keepalive,

@@ -43,10 +43,10 @@ fn focus_move_changes_the_hash() {
 }
 
 #[test]
-fn active_tab_move_changes_the_hash() {
+fn active_tab_move_does_not_change_the_hash() {
     let on_zero = manifest_hash(&tabs(vec![pane(1)]), Some(0));
     let on_one = manifest_hash(&tabs(vec![pane(1)]), Some(1));
-    assert_ne!(on_zero, on_one);
+    assert_eq!(on_zero, on_one);
 }
 
 #[test]
@@ -60,6 +60,35 @@ fn command_change_changes_the_hash_and_exit_flag_too() {
     agent_pane.exited = true;
     let exited = manifest_hash(&tabs(vec![agent_pane]), Some(0));
     assert_ne!(agent, exited);
+}
+
+#[test]
+fn live_state_flags_change_the_hash() {
+    let live = manifest_hash(&tabs(vec![pane(1)]), Some(0));
+
+    let mut suppressed = pane(1);
+    suppressed.is_suppressed = true;
+    assert_ne!(
+        live,
+        manifest_hash(&tabs(vec![suppressed]), Some(0)),
+        "suppressed panes disappear from the sidebar's live roster"
+    );
+
+    let mut held = pane(1);
+    held.is_held = true;
+    assert_ne!(
+        live,
+        manifest_hash(&tabs(vec![held]), Some(0)),
+        "held panes are no longer live working panes"
+    );
+
+    let mut plugin = pane(1);
+    plugin.is_plugin = true;
+    assert_ne!(
+        live,
+        manifest_hash(&tabs(vec![plugin]), Some(0)),
+        "plugin panes are chrome, not work rows"
+    );
 }
 
 #[test]
@@ -113,13 +142,13 @@ fn switched_tab_focus_target_requires_a_live_working_pane() {
     );
 }
 
-// --- PokePolicy: debounce, floor, keepalive ---
+// --- PokePolicy: immediate change, duplicate floor, keepalive ---
 
 #[test]
 fn first_manifest_is_a_baseline_not_a_poke() {
     let mut policy = PokePolicy::new(0);
     policy.on_manifest(11, 0);
-    assert_eq!(policy.due(DEBOUNCE_MS + 1), Vec::<Poke>::new());
+    assert_eq!(policy.due(0), Vec::<Poke>::new());
     assert_eq!(
         policy.next_wake_at(),
         KEEPALIVE_MS,
@@ -128,45 +157,68 @@ fn first_manifest_is_a_baseline_not_a_poke() {
 }
 
 #[test]
-fn burst_coalesces_to_one_poke_after_the_debounce() {
+fn manifest_change_pokes_immediately() {
     let mut policy = PokePolicy::new(0);
     policy.on_manifest(11, 0);
-    // A split fans out as several manifests within the debounce window.
     policy.on_manifest(22, 10);
-    policy.on_manifest(33, 60);
-    policy.on_manifest(44, 120);
-    assert_eq!(policy.due(150), Vec::<Poke>::new(), "still inside debounce");
+
     assert_eq!(
-        policy.due(10 + DEBOUNCE_MS),
+        policy.due(10),
         vec![Poke::Changed],
-        "one poke for the whole burst, anchored at the burst's first change"
+        "a sidebar-changing manifest should wake the producer now"
     );
-    assert_eq!(policy.due(10 + DEBOUNCE_MS + 1), Vec::<Poke>::new());
+    assert_eq!(policy.due(11), Vec::<Poke>::new());
 }
 
 #[test]
-fn explicit_signal_pokes_without_a_manifest_baseline() {
+fn explicit_signal_pokes_immediately_without_a_manifest_baseline() {
     let mut policy = PokePolicy::new(0);
     policy.on_signal(10);
 
-    assert_eq!(policy.due(10 + DEBOUNCE_MS - 1), Vec::<Poke>::new());
-    assert_eq!(policy.due(10 + DEBOUNCE_MS), vec![Poke::Changed]);
+    assert_eq!(policy.due(10), vec![Poke::Changed]);
 }
 
 #[test]
-fn explicit_signals_coalesce_with_manifest_changes() {
+fn duplicate_changes_inside_the_floor_defer_once() {
+    let mut policy = PokePolicy::new(0);
+    policy.on_signal(100);
+    assert_eq!(policy.due(100), vec![Poke::Changed]);
+
+    // A split or command handoff can fan out several events. The first one
+    // already refreshed panes, so duplicates inside the 100ms floor wait and
+    // collapse into one follow-up.
+    policy.on_signal(150);
+    policy.on_signal(180);
+    assert_eq!(policy.due(199), Vec::<Poke>::new());
+    assert_eq!(
+        policy.next_wake_at(),
+        100 + POKE_FLOOR_MS,
+        "the follow-up is armed for the floor's end"
+    );
+    assert_eq!(policy.due(200), vec![Poke::Changed]);
+    assert_eq!(policy.due(201), Vec::<Poke>::new());
+}
+
+#[test]
+fn explicit_signals_coalesce_with_manifest_changes_inside_the_floor() {
     let mut policy = PokePolicy::new(0);
     policy.on_manifest(11, 0);
     policy.on_signal(10);
+    assert_eq!(policy.due(10), vec![Poke::Changed]);
+
     policy.on_manifest(22, 50);
     policy.on_signal(90);
 
     assert_eq!(
-        policy.due(10 + DEBOUNCE_MS),
-        vec![Poke::Changed],
-        "the first signal anchors the burst"
+        policy.due(10 + POKE_FLOOR_MS - 1),
+        Vec::<Poke>::new(),
+        "the duplicate floor holds the burst"
     );
-    assert_eq!(policy.due(10 + DEBOUNCE_MS + 1), Vec::<Poke>::new());
+    assert_eq!(
+        policy.due(10 + POKE_FLOOR_MS),
+        vec![Poke::Changed],
+        "manifest and explicit signals collapse into one follow-up"
+    );
 }
 
 #[test]
@@ -174,16 +226,12 @@ fn change_during_the_floor_is_deferred_never_dropped() {
     let mut policy = PokePolicy::new(0);
     policy.on_manifest(11, 0);
     policy.on_manifest(22, 100);
-    assert_eq!(policy.due(100 + DEBOUNCE_MS), vec![Poke::Changed]);
-    let poked_at = 100 + DEBOUNCE_MS;
+    assert_eq!(policy.due(100), vec![Poke::Changed]);
+    let poked_at = 100;
 
-    // A second change lands well inside the 500ms floor.
-    policy.on_manifest(33, poked_at + 100);
-    assert_eq!(
-        policy.due(poked_at + 100 + DEBOUNCE_MS),
-        Vec::<Poke>::new(),
-        "debounce elapsed but the floor holds"
-    );
+    // A second change lands well inside the duplicate floor.
+    policy.on_manifest(33, poked_at + 50);
+    assert_eq!(policy.due(poked_at + POKE_FLOOR_MS - 1), Vec::<Poke>::new());
     assert_eq!(
         policy.next_wake_at(),
         poked_at + POKE_FLOOR_MS,
@@ -221,8 +269,8 @@ fn keepalive_fires_on_cadence_without_changes() {
 fn change_and_keepalive_can_fire_together() {
     let mut policy = PokePolicy::new(0);
     policy.on_manifest(11, 0);
-    policy.on_manifest(22, KEEPALIVE_MS - 10);
-    let pokes = policy.due(KEEPALIVE_MS + DEBOUNCE_MS);
+    policy.on_manifest(22, KEEPALIVE_MS);
+    let pokes = policy.due(KEEPALIVE_MS);
     assert!(pokes.contains(&Poke::Changed));
     assert!(pokes.contains(&Poke::Alive));
 }
@@ -234,8 +282,8 @@ fn next_wake_is_the_earlier_of_change_and_keepalive() {
     policy.on_manifest(22, 40);
     assert_eq!(
         policy.next_wake_at(),
-        40 + DEBOUNCE_MS,
-        "a pending change wakes before the keepalive"
+        40,
+        "a pending change wakes immediately before the keepalive"
     );
 }
 
@@ -255,16 +303,16 @@ fn timer_gate_dedupes_equal_and_later_deadlines() {
 
 #[test]
 fn timer_gate_collapses_a_superseded_chain() {
-    // The load arms the keepalive, then a debounce supersedes it — two host
+    // The load arms the keepalive, then an earlier change supersedes it — two host
     // timers are now outstanding, and Zellij fires both.
     let mut gate = TimerGate::default();
     assert!(gate.should_arm(60_000));
-    assert!(gate.should_arm(30_200));
+    assert!(gate.should_arm(30_100));
 
-    gate.on_fire(30_200);
+    gate.on_fire(30_100);
     assert!(
         gate.should_arm(60_000),
-        "after the debounce fire the keepalive re-arms"
+        "after the earlier timer fires the keepalive re-arms"
     );
     gate.on_fire(60_000);
     assert!(
