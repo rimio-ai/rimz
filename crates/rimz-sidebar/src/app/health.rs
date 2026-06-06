@@ -74,9 +74,9 @@ pub(super) fn next_health(previous: &Health, failure: Option<String>) -> Health 
 /// How long the refresh loop may stay continuously degraded before the renderer
 /// gives up and exits. Generous so a transient mux hiccup or the sub-second gap
 /// while `cargo install` swaps `rimz` never closes a healthy sidebar; short
-/// enough that a genuinely broken renderer (missing `RIMZ_BIN`, deleted ledger,
-/// an old build whose heartbeat subcommand was removed) heals on the next
-/// reload/attach instead of lingering for minutes.
+/// enough that a genuinely broken renderer (deleted ledger, dead mux, or an old
+/// build past the current runtime contract) heals on the next reload/attach
+/// instead of lingering for minutes.
 pub(super) const GIVE_UP_AFTER_DEGRADED: Duration = Duration::from_secs(30);
 
 /// Whether the refresh loop has been *continuously* degraded past

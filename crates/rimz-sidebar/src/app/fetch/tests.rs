@@ -74,11 +74,11 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         session_name: "rimz-test".to_owned(),
         instance_id: SidebarInstanceId::new(),
         tick_seconds: 2,
-        rimz_bin: PathBuf::from("rimz"),
     };
     let request = FetchRequest {
-        force_produce: true,
+        mode: FetchMode::HardRefresh,
         min_pane_cache_ms: None,
+        published_frame_hint: false,
     };
     let mut cursor = RollupCursor::new();
     let mut outcomes = Vec::new();
@@ -117,20 +117,49 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
 fn producer_skips_produce_while_its_frame_is_within_one_tick() {
     // The two-speed contract: a ledger-delta storm paints per delta off the
     // in-process fast lane, producing at most once per data tick.
-    assert!(!produce_this_cycle(true, false, Some(100), 1000));
-    assert!(produce_this_cycle(true, false, Some(1000), 1000));
+    assert!(!produce_this_cycle(
+        true,
+        FetchMode::Normal,
+        Some(100),
+        1000
+    ));
+    assert!(produce_this_cycle(
+        true,
+        FetchMode::Normal,
+        Some(1000),
+        1000
+    ));
     assert!(
-        produce_this_cycle(true, false, None, 1000),
+        produce_this_cycle(true, FetchMode::Normal, None, 1000),
         "no usable frame (cold start) always produces"
     );
 }
 
 #[test]
-fn forced_requests_always_produce() {
-    assert!(produce_this_cycle(true, true, Some(0), 1000));
+fn hard_refresh_requests_always_produce() {
+    assert!(produce_this_cycle(
+        true,
+        FetchMode::HardRefresh,
+        Some(0),
+        1000
+    ));
     assert!(
-        produce_this_cycle(false, true, Some(0), 1000),
-        "a consumer reload/resize produces regardless of election"
+        produce_this_cycle(false, FetchMode::HardRefresh, Some(0), 1000),
+        "a consumer reload/manual recovery produces regardless of election"
+    );
+}
+
+#[test]
+fn producer_only_fresh_panes_produces_only_on_the_producer() {
+    assert!(produce_this_cycle(
+        true,
+        FetchMode::ProducerFreshPanes,
+        Some(0),
+        1000
+    ));
+    assert!(
+        !produce_this_cycle(false, FetchMode::ProducerFreshPanes, Some(0), 1000),
+        "consumers wait for the producer publication instead of local-producing"
     );
 }
 
@@ -141,10 +170,20 @@ fn consumer_never_produces_unforced_however_stale_the_frame() {
     // wedged producer never turns every consumer into its own uncached
     // `list-panes` + git produce. The consumer keeps folding the held panes
     // with the event-fresh rollup — status stays live, only pane presence ages.
-    assert!(!produce_this_cycle(false, false, Some(5_000), 1000));
-    assert!(!produce_this_cycle(false, false, Some(60_000), 1000));
+    assert!(!produce_this_cycle(
+        false,
+        FetchMode::Normal,
+        Some(5_000),
+        1000
+    ));
+    assert!(!produce_this_cycle(
+        false,
+        FetchMode::Normal,
+        Some(60_000),
+        1000
+    ));
     assert!(
-        !produce_this_cycle(false, false, None, 1000),
+        !produce_this_cycle(false, FetchMode::Normal, None, 1000),
         "even a missing frame waits for the elected producer"
     );
 }
@@ -154,12 +193,12 @@ fn fetch_request_sends_immediately_when_idle() {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut in_flight = false;
     let mut pending = None;
-    let request = FetchRequest::fresh_panes();
+    let request = FetchRequest::producer_fresh_panes();
 
     request_fetch(&tx, &mut in_flight, &mut pending, request, true);
 
     assert!(in_flight);
-    assert!(rx.try_recv().unwrap().force_produce);
+    assert_eq!(rx.try_recv().unwrap().mode, FetchMode::ProducerFreshPanes);
     assert!(pending.is_none());
 }
 
@@ -168,73 +207,96 @@ fn fetch_request_preserves_forced_pane_refresh_while_in_flight() {
     let (tx, _rx) = std::sync::mpsc::channel();
     let mut in_flight = true;
     let mut pending = Some(FetchRequest::default());
-    let request = FetchRequest::fresh_panes();
+    let request = FetchRequest::producer_fresh_panes();
     let min_pane_cache_ms = request.min_pane_cache_ms;
 
     request_fetch(&tx, &mut in_flight, &mut pending, request, true);
 
     let pending = pending.expect("pending refetch");
-    assert!(pending.force_produce);
+    assert_eq!(pending.mode, FetchMode::ProducerFreshPanes);
     assert_eq!(pending.min_pane_cache_ms, min_pane_cache_ms);
 }
 
 #[test]
-fn self_close_probe_request_sends_when_idle() {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut in_flight = false;
-    let mut pending = None;
-
-    request_self_close_probe(&tx, &mut in_flight, &mut pending, Duration::ZERO);
-
-    assert!(in_flight);
-    assert_eq!(
-        rx.try_recv().unwrap(),
-        SelfCloseProbeRequest {
-            delay: Duration::ZERO
-        }
-    );
-    assert_eq!(pending, None);
-}
-
-#[test]
-fn self_close_probe_request_coalesces_to_shortest_pending_delay() {
+fn hard_refresh_dominates_pending_producer_only_refresh() {
     let (tx, _rx) = std::sync::mpsc::channel();
     let mut in_flight = true;
-    let mut pending = Some(Duration::from_secs(2));
+    let mut pending = Some(FetchRequest::producer_fresh_panes());
+    let request = FetchRequest::hard_refresh();
 
-    request_self_close_probe(&tx, &mut in_flight, &mut pending, Duration::from_millis(50));
+    request_fetch(&tx, &mut in_flight, &mut pending, request, true);
 
     assert!(in_flight);
-    assert_eq!(pending, Some(Duration::from_millis(50)));
+    let pending = pending.expect("pending refetch");
+    assert_eq!(pending.mode, FetchMode::HardRefresh);
+    assert!(pending.min_pane_cache_ms.is_some());
 }
 
 #[test]
-fn self_close_probe_outcome_uses_the_existing_latch() {
+fn pane_frame_published_request_is_read_only_but_marks_the_fold_fresh() {
+    let request = FetchRequest::pane_frame_published();
+
+    assert_eq!(request.mode, FetchMode::Normal);
+    assert!(request.published_frame_hint);
+}
+
+#[test]
+fn pane_frame_published_refolds_a_consumer_from_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = workspace();
+    let state = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
+    let runtime = RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap();
+    state.ensure_dirs().unwrap();
+    runtime.ensure_dirs().unwrap();
+
+    let frame = rimz::sidebar::snapshot::SnapshotCache {
+        produced_at_ms: rimz::sidebar::snapshot::unix_now_ms(),
+        session_name: "rimz-test".to_owned(),
+        panes: vec![pane("terminal_7", "tab_1", false)],
+    };
+    std::fs::write(
+        runtime.root.join("snapshot.json"),
+        serde_json::to_vec(&frame).unwrap(),
+    )
+    .unwrap();
+    let elder = SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da04").unwrap();
+    let younger = SidebarInstanceId::parse("sb_019e8c565bbd7b22854f93a905e1034c").unwrap();
+    rimz::sidebar::write_heartbeat(
+        &runtime,
+        workspace_id.clone(),
+        &elder,
+        MuxName::Zellij,
+        "rimz-test",
+        &runtime.sock_dir.join("elder.sock"),
+        None,
+    )
+    .unwrap();
+
     let config = ServeConfig {
-        workspace_id: workspace(),
+        workspace_id,
         mux: MuxName::Zellij,
         session_name: "rimz-test".to_owned(),
-        instance_id: SidebarInstanceId::new(),
+        instance_id: younger,
         tick_seconds: 2,
-        rimz_bin: PathBuf::from("rimz"),
     };
-    let mut state = SelfCloseState::default();
+    let mut cursor = RollupCursor::new();
+    let mut outcomes = Vec::new();
+    run_fetch_cycle(
+        &config,
+        &runtime,
+        &state,
+        FetchRequest::pane_frame_published(),
+        &mut cursor,
+        &mut |outcome| outcomes.push(outcome),
+    );
 
-    assert!(!apply_self_close_probe_outcome(
-        &config,
-        SelfCloseProbeOutcome {
-            sibling_count: Some(1),
-            error: None,
-        },
-        &mut state,
-    ));
-    assert!(state.seen_sibling);
-    assert!(apply_self_close_probe_outcome(
-        &config,
-        SelfCloseProbeOutcome {
-            sibling_count: Some(0),
-            error: None,
-        },
-        &mut state,
-    ));
+    assert_eq!(outcomes.len(), 1, "consumer folds once from cache");
+    let outcome = outcomes.pop().unwrap();
+    assert!(outcome.final_for_request);
+    assert!(outcome.fresh_pane_frame);
+    let snapshot = outcome.snapshot.expect("consumer fold succeeds");
+    assert!(
+        !snapshot.worktree_groups.is_empty(),
+        "published panes are folded into the consumer snapshot"
+    );
 }

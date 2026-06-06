@@ -1,21 +1,16 @@
 //! The off-thread fetch machinery: the two-speed fetch cycle (the in-process
 //! consumer fast lane plus the elder's in-process produce, sharing one warm
-//! [`RollupCursor`]), its single-flight request coalescing, and the
-//! lightweight self-close probe worker. Everything here runs on a worker
-//! thread so the render/input loop never blocks on the produce's
-//! `list-panes`/git round-trips.
+//! [`RollupCursor`]), and its single-flight request coalescing. Everything
+//! here runs on a worker thread so the render/input loop never blocks on the
+//! produce's `list-panes`/git round-trips.
 
 use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
-use std::time::Duration;
 
-use rimz::mux::PaneListOptions;
 use rimz::sidebar::snapshot::RollupCursor;
 use rimz::{RuntimePaths, SidebarSnapshot, StatePaths};
-use tracing::debug;
 
-use super::input::{SELF_CLOSE_WAKEUP, SNAPSHOT_WAKEUP};
-use super::lifecycle::{PROBE_COMMAND_TIMEOUT, SelfCloseState, self_close_decision};
+use super::input::SNAPSHOT_WAKEUP;
 use super::{ServeConfig, tick_for};
 
 /// Run one in-process produce behind a panic guard. The produce pipeline
@@ -53,6 +48,7 @@ fn run_produce_guarded(
 pub(super) struct FetchOutcome {
     pub(super) snapshot: std::result::Result<SidebarSnapshot, String>,
     pub(super) final_for_request: bool,
+    pub(super) fresh_pane_frame: bool,
 }
 
 /// One fetch cycle, posting one or two outcomes. Runs on the fetch worker
@@ -78,14 +74,16 @@ pub(super) struct FetchOutcome {
 /// publishes the shared caches every other tab reads. One producer per
 /// workspace — the eldest live instance — and on it the produce is gated to
 /// the data tick: a ledger-delta storm paints per delta but produces at most
-/// once per tick. A consumer produces only when forced (reload, fresh panes):
-/// stale-frame recovery belongs to the election, not the consumers — a dead
-/// elder's heartbeat ages out within one TTL and the next-eldest *becomes*
-/// the producer, so a wedged producer costs one handoff, never an
-/// every-consumer produce storm (the old self-heal, whose single-flight loser
-/// wait was shorter than a `list-panes`, so every loser timed out into its
-/// own uncached produce). A lone renderer is its own next-eldest, so it still
-/// self-heals through the producer branch.
+/// once per tick. Topology freshness is producer-only: consumers wait for the
+/// producer's `pane_frame_published` broadcast and fold the new cache without
+/// locally producing. Only a hard refresh (reload/manual recovery) lets a
+/// consumer produce. Stale-frame recovery belongs to the election, not the
+/// consumers — a dead elder's heartbeat ages out within one TTL and the
+/// next-eldest *becomes* the producer, so a wedged producer costs one handoff,
+/// never an every-consumer produce storm (the old self-heal, whose
+/// single-flight loser wait was shorter than a `list-panes`, so every loser
+/// timed out into its own uncached produce). A lone renderer is its own
+/// next-eldest, so it still self-heals through the producer branch.
 fn run_fetch_cycle(
     config: &ServeConfig,
     runtime: &RuntimePaths,
@@ -97,6 +95,8 @@ fn run_fetch_cycle(
     let is_producer = !rimz::sidebar::elder_sidebar_present(runtime, &config.instance_id);
     let exclude = rimz::mux::own_pane_id(config.mux);
     let now_ms = rimz::sidebar::snapshot::unix_now_ms();
+    let published_frame_produced_at_ms =
+        rimz::sidebar::snapshot::published_frame_produced_at_ms(runtime, &config.session_name);
     let fast = rimz::sidebar::snapshot::read_published_snapshot(
         cursor,
         state,
@@ -110,20 +110,28 @@ fn run_fetch_cycle(
     // it). Read from the published pane-frame stamp, and only when the fast
     // lane actually folded that frame — an unreadable ledger must produce,
     // never coast on a young stamp it could not use.
-    let frame_age_ms = fast.as_ref().and_then(|_| {
-        rimz::sidebar::snapshot::published_frame_age_ms(runtime, &config.session_name, now_ms)
-    });
+    let frame_age_ms = fast
+        .as_ref()
+        .and_then(|_| published_frame_produced_at_ms)
+        .map(|produced_at_ms| now_ms.saturating_sub(produced_at_ms));
     let produce = produce_this_cycle(
         is_producer,
-        request.force_produce,
+        request.mode,
         frame_age_ms,
         tick_for(config.tick_seconds).as_millis() as u64,
     );
+    let fast_has_request_fresh_frame = fast.as_ref().is_some_and(|_| {
+        request.published_frame_hint
+            || request.min_pane_cache_ms.is_some_and(|min| {
+                published_frame_produced_at_ms.is_some_and(|produced_at_ms| produced_at_ms >= min)
+            })
+    });
     let fast_posted = fast.is_some();
     if let Some(snapshot) = fast {
         post(FetchOutcome {
             snapshot: Ok(snapshot),
             final_for_request: !produce,
+            fresh_pane_frame: fast_has_request_fresh_frame,
         });
     }
     if produce {
@@ -138,6 +146,7 @@ fn run_fetch_cycle(
                 rimz::sidebar::produce::produce_snapshot(cursor, state, runtime, &opts)
             }),
             final_for_request: true,
+            fresh_pane_frame: request.mode.produces_fresh_panes(),
         });
     } else if !fast_posted {
         // Consumer with no published frame yet (cold start): report the soft
@@ -145,53 +154,105 @@ fn run_fetch_cycle(
         post(FetchOutcome {
             snapshot: Err("waiting for the producer's first published snapshot".to_owned()),
             final_for_request: true,
+            fresh_pane_frame: false,
         });
     }
 }
 
 /// Whether this cycle pays the produce, decided from cheap pre-reads. Pure, so
-/// the produce-gating contract is unit-testable: the producer runs when forced
-/// or when the published frame outlived one data tick (`None` age = no usable
-/// frame — cold start); a consumer produces only when explicitly forced
-/// (reload, fresh panes). A consumer never produces on a stale frame — staleness recovery
-/// is delegated to the election: once the dead elder's heartbeat ages out
-/// (≤ one TTL) the next-eldest renderer *is* the producer and recovers through
-/// the branch above, while everyone else keeps folding the held panes with the
-/// event-fresh rollup. Exactly one producer at any moment, never a per-
-/// consumer produce storm; the lone renderer is its own next-eldest.
+/// the produce-gating contract is unit-testable: the producer runs on a hard
+/// refresh, on a producer-only topology refresh, or when the published frame
+/// outlived one data tick (`None` age = no usable frame — cold start). A
+/// consumer produces only for a hard refresh; it never produces for topology
+/// freshness or a stale frame. Staleness recovery is delegated to the election:
+/// once the dead elder's heartbeat ages out (≤ one TTL) the next-eldest renderer
+/// *is* the producer and recovers through the branch above, while everyone else
+/// keeps folding the held panes with the event-fresh rollup. Exactly one
+/// producer at any moment, never a per-consumer produce storm; the lone renderer
+/// is its own next-eldest.
 fn produce_this_cycle(
     is_producer: bool,
-    force_produce: bool,
+    mode: FetchMode,
     frame_age_ms: Option<u64>,
     tick_ms: u64,
 ) -> bool {
-    if is_producer {
-        force_produce || frame_age_ms.is_none_or(|age| age >= tick_ms)
-    } else {
-        force_produce
+    match mode {
+        FetchMode::Normal if is_producer => frame_age_ms.is_none_or(|age| age >= tick_ms),
+        FetchMode::Normal => false,
+        FetchMode::ProducerFreshPanes => is_producer,
+        FetchMode::HardRefresh => true,
     }
 }
 
-/// One request to the fetch worker. `force_produce` makes the run take the
-/// producer path (real `list-panes`/git) regardless of election. When it is
-/// paired with `min_pane_cache_ms`, the producer ignores a pane cache older
-/// than the signal that asked for fresh topology.
+/// One request to the fetch worker. The mode keeps topology signals producer-
+/// only, while a hard refresh remains available for manual recovery. When a
+/// request carries `min_pane_cache_ms`, any producing lane ignores a pane cache
+/// older than the signal that asked for fresh topology.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct FetchRequest {
-    force_produce: bool,
+    mode: FetchMode,
     min_pane_cache_ms: Option<u64>,
+    published_frame_hint: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum FetchMode {
+    #[default]
+    Normal,
+    ProducerFreshPanes,
+    HardRefresh,
+}
+
+impl FetchMode {
+    fn strength(self) -> u8 {
+        match self {
+            Self::Normal => 0,
+            Self::ProducerFreshPanes => 1,
+            Self::HardRefresh => 2,
+        }
+    }
+
+    fn strongest(self, other: Self) -> Self {
+        if self.strength() >= other.strength() {
+            self
+        } else {
+            other
+        }
+    }
+
+    fn produces_fresh_panes(self) -> bool {
+        matches!(self, Self::ProducerFreshPanes | Self::HardRefresh)
+    }
 }
 
 impl FetchRequest {
-    pub(super) fn fresh_panes() -> Self {
+    pub(super) fn producer_fresh_panes() -> Self {
         Self {
-            force_produce: true,
+            mode: FetchMode::ProducerFreshPanes,
             min_pane_cache_ms: Some(rimz::sidebar::snapshot::unix_now_ms()),
+            published_frame_hint: false,
+        }
+    }
+
+    pub(super) fn hard_refresh() -> Self {
+        Self {
+            mode: FetchMode::HardRefresh,
+            min_pane_cache_ms: Some(rimz::sidebar::snapshot::unix_now_ms()),
+            published_frame_hint: false,
+        }
+    }
+
+    pub(super) fn pane_frame_published() -> Self {
+        Self {
+            mode: FetchMode::Normal,
+            min_pane_cache_ms: None,
+            published_frame_hint: true,
         }
     }
 
     fn merge(&mut self, other: Self) {
-        self.force_produce |= other.force_produce;
+        self.mode = self.mode.strongest(other.mode);
+        self.published_frame_hint |= other.published_frame_hint;
         self.min_pane_cache_ms = match (self.min_pane_cache_ms, other.min_pane_cache_ms) {
             (Some(current), Some(next)) => Some(current.max(next)),
             (Some(current), None) => Some(current),
@@ -249,6 +310,7 @@ pub(super) fn spawn_fetch_worker(
                 Err(err) => post(FetchOutcome {
                     snapshot: Err(format!("resolving workspace state paths: {err}")),
                     final_for_request: true,
+                    fresh_pane_frame: false,
                 }),
             }
             if disconnected {
@@ -256,57 +318,6 @@ pub(super) fn spawn_fetch_worker(
             }
         }
     })
-}
-
-pub(super) fn spawn_self_close_probe_worker(
-    config: ServeConfig,
-    socket_path: PathBuf,
-    request_rx: std::sync::mpsc::Receiver<SelfCloseProbeRequest>,
-    result_tx: std::sync::mpsc::Sender<SelfCloseProbeOutcome>,
-) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        let waker = UnixDatagram::unbound().ok();
-        while let Ok(first) = request_rx.recv() {
-            let mut delay = first.delay;
-            while let Ok(extra) = request_rx.try_recv() {
-                delay = delay.min(extra.delay);
-            }
-            if !delay.is_zero() {
-                std::thread::sleep(delay);
-            }
-            let outcome = run_self_close_probe(&config);
-            if result_tx.send(outcome).is_err() {
-                return;
-            }
-            if let Some(waker) = &waker {
-                let _ = waker.send_to(SELF_CLOSE_WAKEUP, &socket_path);
-            }
-        }
-    })
-}
-
-fn run_self_close_probe(config: &ServeConfig) -> SelfCloseProbeOutcome {
-    let Some(own) = rimz::mux::own_pane_id(config.mux) else {
-        return SelfCloseProbeOutcome {
-            sibling_count: None,
-            error: None,
-        };
-    };
-    match rimz::mux::backend_for(config.mux).list_panes(PaneListOptions {
-        session_name: Some(config.session_name.clone()),
-        command_timeout: Some(PROBE_COMMAND_TIMEOUT),
-    }) {
-        Ok(panes) => SelfCloseProbeOutcome {
-            // This probe reads only `sibling_count`.
-            sibling_count: rimz::SidebarOwnView::from_panes(&own, &panes)
-                .map(|view| view.sibling_count),
-            error: None,
-        },
-        Err(err) => SelfCloseProbeOutcome {
-            sibling_count: None,
-            error: Some(err.to_string()),
-        },
-    }
 }
 
 /// Ask the fetch worker for a fresh snapshot. `in_flight` collapses redundant
@@ -331,61 +342,6 @@ pub(super) fn request_fetch(
             None => *pending_refetch = Some(request),
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct SelfCloseProbeRequest {
-    delay: Duration,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(super) struct SelfCloseProbeOutcome {
-    sibling_count: Option<usize>,
-    error: Option<String>,
-}
-
-/// Ask the lightweight self-close worker for a live sibling count. While a
-/// probe is already running, keep the shortest pending delay so an immediate
-/// resize probe wins over the startup grace recheck.
-pub(super) fn request_self_close_probe(
-    request_tx: &std::sync::mpsc::Sender<SelfCloseProbeRequest>,
-    in_flight: &mut bool,
-    pending_delay: &mut Option<Duration>,
-    delay: Duration,
-) {
-    if !*in_flight {
-        if request_tx.send(SelfCloseProbeRequest { delay }).is_ok() {
-            *in_flight = true;
-        }
-        return;
-    }
-    *pending_delay = Some(pending_delay.map_or(delay, |pending| pending.min(delay)));
-}
-
-/// Fold a fast probe result into the same latch the snapshot path uses. The
-/// probe is best-effort metadata: failures never degrade the rendered frame
-/// because the normal snapshot backstop still owns recovery.
-pub(super) fn apply_self_close_probe_outcome(
-    config: &ServeConfig,
-    outcome: SelfCloseProbeOutcome,
-    self_close: &mut SelfCloseState,
-) -> bool {
-    if let Some(error) = outcome.error {
-        debug!(
-            session = %config.session_name,
-            error = %error,
-            "self-close pane probe failed",
-        );
-        return false;
-    }
-    if self_close_decision(self_close, outcome.sibling_count) {
-        debug!(
-            session = %config.session_name,
-            "sidebar tab emptied; exiting after resize probe",
-        );
-        return true;
-    }
-    false
 }
 
 #[cfg(test)]

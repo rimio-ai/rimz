@@ -270,9 +270,15 @@ pub fn rollup_snapshot(
 /// usable frame: produce". The age saturates, so a clock that ran backwards
 /// reads as fresh (age 0) rather than forcing a fork.
 pub fn published_frame_age_ms(runtime: &RuntimePaths, session: &str, now_ms: u64) -> Option<u64> {
+    published_frame_produced_at_ms(runtime, session)
+        .map(|produced_at_ms| now_ms.saturating_sub(produced_at_ms))
+}
+
+/// The producer timestamp of the published same-session pane frame. `None`
+/// when no usable same-session frame exists.
+pub fn published_frame_produced_at_ms(runtime: &RuntimePaths, session: &str) -> Option<u64> {
     let cache_path = runtime.root.join("snapshot.json");
-    read_snapshot_cache(&cache_path, session)
-        .map(|cache| now_ms.saturating_sub(cache.produced_at_ms))
+    read_snapshot_cache(&cache_path, session).map(|cache| cache.produced_at_ms)
 }
 
 /// The presence liveness stamp the Zellij presence plugin refreshes through

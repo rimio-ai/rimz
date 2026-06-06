@@ -7,11 +7,10 @@
 //! or the sidebar reads as a multi-second blank pane on attach.
 //!
 //! A grow resize (attach is one: 1x1 -> usable) now defers its paint until the
-//! self-close verdict the resize fires resolves, so the sidebar never paints at
-//! the grown width on its way out (the self-close full-width flash). That stays
-//! well inside this test's budget: the probe fires with `Duration::ZERO`, and
-//! with no `ZELLIJ_PANE_ID` set it returns instantly with a "stay" verdict that
-//! releases the held paint.
+//! next fresh pane-frame fold resolves self-close, so the sidebar never paints
+//! at the grown width on its way out (the self-close full-width flash). With no
+//! `ZELLIJ_PANE_ID` set, the placeholder path keeps the resize redraw prompt
+//! within this test's budget.
 //!
 //! This drives the real `rimz-sidebar serve` binary through a PTY: render into
 //! a 1x1 pane, resize to a usable size, and assert the full frame appears well
@@ -32,21 +31,6 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 /// resize. The assertion threshold sits comfortably between the two.
 const TICK_SECONDS: u64 = 5;
 const REDRAW_BUDGET: Duration = Duration::from_secs(2);
-
-/// A throwaway `rimz` whose `sidebar snapshot`/`heartbeat` calls fail fast, so
-/// the serve loop keeps rendering its placeholder snapshot — no real ledger or
-/// mux needed to prove the loop redrew at the new size. The placeholder's
-/// top-border title is the workspace name ([`WORKSPACE_ID`]), which is the
-/// marker we scan for.
-fn failing_rimz_stub(dir: &std::path::Path) -> PathBuf {
-    let path = dir.join("rimz-stub");
-    std::fs::write(&path, "#!/bin/sh\nexit 1\n").expect("write stub");
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = std::fs::metadata(&path).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&path, perms).expect("chmod");
-    path
-}
 
 /// The grid we render the renderer's byte stream into — the post-resize size,
 /// so we match on what the pane *shows* rather than on raw escape bytes
@@ -79,7 +63,6 @@ fn sidebar_redraws_at_new_size_on_resize() {
         .rand_bytes(6)
         .tempdir()
         .expect("xdg tempdir");
-    let stub = failing_rimz_stub(xdg.path());
 
     let pty = native_pty_system();
     let pair = pty
@@ -103,7 +86,6 @@ fn sidebar_redraws_at_new_size_on_resize() {
         "--tick-seconds",
         &TICK_SECONDS.to_string(),
     ]);
-    cmd.env("RIMZ_BIN", &stub);
     cmd.env("XDG_STATE_HOME", xdg.path());
     cmd.env("XDG_RUNTIME_DIR", xdg.path());
     let mut child = pair.slave.spawn_command(cmd).expect("spawn rimz-sidebar");

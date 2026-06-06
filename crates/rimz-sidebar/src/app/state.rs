@@ -1,21 +1,19 @@
 //! Folding a fetch outcome into what the loop renders: the pure
 //! [`compute_next_state`] reducer, the last-known-good gate overlay, the
-//! selection reconcile, and the exit/detach verdicts.
+//! selection reconcile, and the exit verdict.
 
-use std::process::Command;
 use std::time::Instant;
 
 use jiff::Timestamp;
 use rimz::{SidebarSnapshot, WorkspaceId};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::render::UiState;
 
 use super::fetch::FetchOutcome;
 use super::gate::{GateState, apply_gate};
 use super::health::{Health, degraded_too_long, next_health};
-use super::lifecycle::{SelfCloseState, SessionExitState, self_close_decision};
-use super::reload::resolve_rimz_bin;
+use super::lifecycle::{SelfCloseState, self_close_decision};
 use super::selection::{reconcile_selection, row_index_of_pane};
 use super::{Result, ServeConfig, wall_clock_phase};
 
@@ -110,7 +108,6 @@ pub(super) fn apply_fetch_outcome(
     health: &mut Health,
     gate: &mut GateState,
     self_close: &mut SelfCloseState,
-    session_exit: &mut SessionExitState,
     ui: &mut UiState,
     anim_start: Instant,
 ) -> Result<ApplyOutcome> {
@@ -208,11 +205,10 @@ pub(super) fn apply_fetch_outcome(
         });
     }
 
-    // Own-view (sibling count) rides in on the snapshot — the CLI computes it
-    // from the same pane list it already enumerated. Resize events have their
-    // own metadata-only fast probe; this snapshot path stays the durable
-    // backstop. The focus-driven selection reconcile already ran in the fold
-    // above.
+    // Own-view (sibling count) rides in on the snapshot — the producer computes
+    // it from the same pane list it already enumerated. Presence publication and
+    // the poll backstop feed this latch; resize only decides whether to hold a
+    // grown-width paint while the fresh fold is pending.
     if self_close_decision(
         self_close,
         current.own_view.as_ref().map(|view| view.sibling_count),
@@ -226,56 +222,10 @@ pub(super) fn apply_fetch_outcome(
             rejected,
         });
     }
-    // The daemon-view sidebar detaches the client once the daemon tab is the
-    // only tab left — gated on our own view being the daemon view, then latched
-    // so it fires once after a working view has come and gone. Unlike
-    // self-close it does not exit: the daemon pane keeps running in the
-    // background session and resurrects on reattach.
-    let only_daemon = current.own_view.as_ref().and_then(|view| {
-        view.own_view_is_daemon
-            .then_some(current.only_daemon_view_remains)
-    });
-    if session_exit.should_detach(only_daemon) {
-        info!(
-            session = %config.session_name,
-            "only the daemon view remains; detaching the client",
-        );
-        request_detach(config);
-    }
     Ok(ApplyOutcome {
         should_exit: false,
         rejected,
     })
-}
-
-/// Detach the attached client from the session, best-effort, by shelling out to
-/// `rimz pane detach` (the cached `rimz` binary, so no mux command knowledge
-/// leaks into the sidebar). The daemon-view sidebar calls this once the daemon
-/// tab is the only tab left; the background session and its daemons keep
-/// running and resurrect on the next attach. A failure is logged, never fatal —
-/// the session stays attached and the next tick retries.
-fn request_detach(config: &ServeConfig) {
-    let bin = resolve_rimz_bin(&config.rimz_bin);
-    match Command::new(&bin)
-        .args(["pane", "detach", "--mux"])
-        .arg(config.mux.as_str())
-        .args(["--session-name", &config.session_name])
-        .status()
-    {
-        Ok(status) if status.success() => {
-            debug!(session = %config.session_name, "client detach requested");
-        }
-        Ok(status) => warn!(
-            session = %config.session_name,
-            code = ?status.code(),
-            "client detach exited non-zero",
-        ),
-        Err(err) => warn!(
-            session = %config.session_name,
-            error = %err,
-            "client detach spawn failed",
-        ),
-    }
 }
 
 #[cfg(test)]

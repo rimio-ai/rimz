@@ -30,9 +30,8 @@ pub struct SidebarOwnView {
     pub active_pane_id: Option<PaneId>,
     /// Whether the caller's own view is the `rimzd` daemon view: its siblings,
     /// after dropping any sidebar pane, are non-empty and all managed hosts
-    /// ([`crate::remote_control::pane_is_host`]). The daemon-view sidebar gates
-    /// the session-exit detach on this so a working-tab sidebar never triggers
-    /// it. `#[serde(default)]` keeps the wire shape stable for older producers.
+    /// ([`crate::remote_control::pane_is_host`]). `#[serde(default)]` keeps the
+    /// wire shape stable for older producers.
     #[serde(default)]
     pub own_view_is_daemon: bool,
 }

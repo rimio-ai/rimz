@@ -87,24 +87,3 @@ fn same_file_contents_detects_byte_equality() {
     assert!(!same_file_contents(&original, &same_len_differs).unwrap());
     assert!(!same_file_contents(&original, &shorter).unwrap());
 }
-
-#[test]
-fn rimz_bin_uses_the_cached_path_while_it_exists() {
-    // The sibling `rimz` captured at launch is still on disk — drive the
-    // detach helper with exactly that build, so a dev worktree's changes apply.
-    let dir = tempfile::tempdir().unwrap();
-    let cached = dir.path().join("rimz");
-    std::fs::write(&cached, b"x").unwrap();
-    assert_eq!(resolve_rimz_bin(&cached), cached);
-}
-
-#[test]
-fn rimz_bin_falls_back_to_path_when_the_cached_binary_vanished() {
-    // The dev worktree this sidebar launched from was removed, deleting the
-    // sibling `rimz` it cached. Recover via the installed binary on `PATH`
-    // rather than forking a path that no longer exists.
-    let dir = tempfile::tempdir().unwrap();
-    let gone = dir.path().join("rimz");
-    assert!(!gone.is_file(), "the cached path must not exist");
-    assert_eq!(resolve_rimz_bin(&gone), PathBuf::from("rimz"));
-}

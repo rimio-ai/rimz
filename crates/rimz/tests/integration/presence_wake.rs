@@ -3,8 +3,8 @@
 //! The poke contract (`rimz sidebar wake`): both reasons refresh the presence
 //! stamp that flips the producer's pane TTL to event mode, and only
 //! `panes-changed` datagrams a sidebar — the **eldest** fresh heartbeat
-//! alone, because the wire word maps to a force-produce fetch and a broadcast
-//! would fork an N-way produce storm per topology change.
+//! alone. That producer publishes the fresh pane frame and then broadcasts
+//! `pane_frame_published` so consumers refold from cache instead of producing.
 //!
 //! The producer contract (`rimz sidebar snapshot`): with a fresh stamp, a
 //! pane cache far past the poll TTL is served with **zero** mux forks — the
@@ -270,6 +270,34 @@ fn wake_alive_stamps_without_a_datagram() {
     let stamp = env.read_stamp().expect("alive writes the stamp");
     assert!(stamp.written_at_ms > 0);
     env.assert_no_mux_fork();
+}
+
+#[test]
+fn pane_frame_publication_broadcasts_to_all_fresh_sidebars() {
+    let env = WakeEnv::new();
+    if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
+        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        return;
+    }
+    let recv_eldest = env.bind_socket("sidebar.eldest.sock");
+    let recv_younger = env.bind_socket("sidebar.younger.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
+    env.plant_heartbeat("sidebar.younger.json", YOUNGER_ID, "sidebar.younger.sock");
+
+    let count = rimz::ledger::wakeup::wake_sidebars_pane_frame_published(&env.runtime)
+        .expect("publication wakeup walks sidebars");
+    assert_eq!(count, 2);
+
+    for (name, recv) in [("eldest", recv_eldest), ("younger", recv_younger)] {
+        let mut buf = [0u8; 256];
+        let len = recv
+            .recv(&mut buf)
+            .unwrap_or_else(|err| panic!("{name} receives publication wakeup: {err}"));
+        assert_eq!(
+            &buf[..len],
+            rimz::ledger::wakeup::PANE_FRAME_PUBLISHED_WAKEUP
+        );
+    }
 }
 
 #[test]

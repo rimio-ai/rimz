@@ -1,5 +1,5 @@
-//! Exit latches: self-close when the tab empties, the daemon-view detach, and
-//! the grow-resize classification behind the full-width-flash guard.
+//! Exit latches: self-close when the tab empties, and the grow-resize
+//! classification behind the full-width-flash guard.
 
 use std::time::Duration;
 
@@ -60,54 +60,6 @@ const EMPTY_STARTUP_OBSERVATIONS_BEFORE_CLOSE: u8 = 2;
 /// this asks the normal snapshot path for a fresh own-view count. Sized at 2s
 /// so cleanup stays prompt even when a caller configured a much slower data tick.
 pub(super) const SELF_CLOSE_WATCHDOG: Duration = Duration::from_secs(2);
-/// Maximum time the self-close probe spends waiting for the mux backend's
-/// `list-panes` subprocess. Shorter than the default 30s backend timeout so
-/// a hung Zellij does not pin the sidebar open indefinitely. Resize probes are
-/// the fast path for the full-width-flash guard; the periodic backstop uses the
-/// shared snapshot fetch instead.
-pub(super) const PROBE_COMMAND_TIMEOUT: Duration = Duration::from_secs(4);
-
-/// Decide whether the daemon-view sidebar should detach the client because the
-/// `rimzd` daemon tab is the only tab left in the session. Mirrors
-/// [`SelfCloseState`], but it detaches the client (the session keeps running)
-/// rather than exiting, fires once, and only after a working view has been seen.
-///
-/// `only_daemon` is the snapshot's `only_daemon_view_remains`, passed only when
-/// this renderer's own view *is* the daemon view (the caller gates on
-/// `SidebarOwnView::own_view_is_daemon`); otherwise `None`, which never detaches.
-#[derive(Debug, Default)]
-pub(super) struct SessionExitState {
-    /// Latched once a non-daemon (working) view has ever been seen. Until then,
-    /// "only the daemon view remains" is session birth (the `rimzd` tab is born
-    /// first), not teardown, so it must never detach.
-    seen_other_view: bool,
-    /// Latched after a detach has been requested once, so a slow client teardown
-    /// spanning the next few ticks does not spawn redundant detaches.
-    fired: bool,
-}
-
-impl SessionExitState {
-    pub(super) fn should_detach(&mut self, only_daemon: Option<bool>) -> bool {
-        match only_daemon {
-            // A working view still exists → latch it; never detach while the
-            // user has work open.
-            Some(false) => {
-                self.seen_other_view = true;
-                false
-            }
-            // Only the daemon view remains, a working view has come and gone, and
-            // we have not detached yet → the room emptied: detach, once.
-            Some(true) if self.seen_other_view && !self.fired => {
-                self.fired = true;
-                true
-            }
-            // Already fired, or session birth (no working view seen yet): hold.
-            Some(true) => false,
-            // Not in the daemon view, or unknown: never our call.
-            None => false,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests;

@@ -268,19 +268,17 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             };
             let program = sidebar_renderer_program();
             let mut command = Command::new(&program);
-            command
-                .args([
-                    "serve",
-                    "--workspace-id",
-                    workspace_id.as_str(),
-                    "--mux",
-                    mux.as_str(),
-                    "--session-name",
-                    &session_name,
-                    "--tick-seconds",
-                    &tick_seconds.to_string(),
-                ])
-                .env("RIMZ_BIN", rimz_cli_program());
+            command.args([
+                "serve",
+                "--workspace-id",
+                workspace_id.as_str(),
+                "--mux",
+                mux.as_str(),
+                "--session-name",
+                &session_name,
+                "--tick-seconds",
+                &tick_seconds.to_string(),
+            ]);
             let status = command
                 .status()
                 .with_context(|| format!("running `{}` serve", program.to_string_lossy()))?;
@@ -311,9 +309,9 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             write_presence_stamp(&runtime);
             if let WakeReason::PanesChanged = reason {
                 // Topology changed: nudge the eldest sidebar (the elected
-                // producer) into a fresh-panes fetch. Eldest-only — the word
-                // maps to a force-produce, so a broadcast would fork an N-way
-                // produce storm. Best-effort: no live sidebar is fine.
+                // producer) into a producer-only fresh-panes fetch. The producer
+                // broadcasts after publication, so consumers fold from cache
+                // instead of turning the poke into N local produces.
                 if let Err(err) = rimz::ledger::wakeup::wake_eldest_sidebar_panes_changed(&runtime)
                 {
                     tracing::debug!(error = %err, "presence poke: eldest datagram failed");

@@ -191,6 +191,12 @@ pub const RELOAD_WAKEUP: &[u8] = b"reload";
 /// no dependency, so a unit test here pins the literal against drift.
 pub const PANES_CHANGED_WAKEUP: &[u8] = b"panes_changed";
 
+/// Control word a producer posts after publishing a fresh `snapshot.json` pane
+/// frame. Consumer renderers decode it into an immediate read-only cache fold,
+/// so producer-side pane truth reaches every tab without making each tab
+/// locally fork `list-panes`/git.
+pub const PANE_FRAME_PUBLISHED_WAKEUP: &[u8] = b"pane_frame_published";
+
 /// The eldest fresh heartbeat: the minimum instance id — UUIDv7 ids sort by
 /// birth, the same order the producer election
 /// (`crate::sidebar::elder_sidebar_present`) relies on.
@@ -202,19 +208,31 @@ fn eldest_heartbeat(sidebars: Vec<SidebarHeartbeat>) -> Option<SidebarHeartbeat>
 
 /// Post the `panes_changed` wire word to the eldest fresh, protocol-current
 /// sidebar of this workspace — and only that one. The renderer maps the word
-/// to a force-produce fresh-panes fetch, so broadcasting it to every tab's
-/// socket would fork an N-way produce storm per topology change; the eldest
-/// is the elected producer, so the one fork lands where the shared pane cache
-/// is published and every consumer reads it back on its own cycle. A poke
-/// that races the elder's death is lost — the event-mode pane TTL bounds the
-/// staleness and the next poke targets the new eldest. Returns whether a
-/// datagram was sent (`false`: no live sidebar).
+/// to a producer-only fresh-panes fetch. The eldest is the elected producer, so
+/// the one fork lands where the shared pane cache is published; the publication
+/// broadcast then wakes consumers to refold from cache. A poke that races the
+/// elder's death is lost — the event-mode pane TTL bounds the staleness and the
+/// next poke targets the new eldest. Returns whether a datagram was sent
+/// (`false`: no live sidebar).
 pub fn wake_eldest_sidebar_panes_changed(rt: &RuntimePaths) -> Result<bool> {
     let Some(eldest) = eldest_heartbeat(collect_fresh_sidebars(rt)?) else {
         return Ok(false);
     };
     send_datagram(PANES_CHANGED_WAKEUP, &eldest.wakeup_socket);
     Ok(true)
+}
+
+/// Broadcast the `pane_frame_published` word to every fresh, protocol-current
+/// sidebar after the producer publishes a fresh shared pane frame. Returns the
+/// number of sidebars targeted; send failures are absorbed per target.
+pub fn wake_sidebars_pane_frame_published(rt: &RuntimePaths) -> Result<usize> {
+    let sidebars = collect_fresh_sidebars(rt)?;
+    let signaled = sidebars.len();
+    send_datagrams(
+        PANE_FRAME_PUBLISHED_WAKEUP,
+        sidebars.iter().map(|hb| hb.wakeup_socket.as_path()),
+    );
+    Ok(signaled)
 }
 
 /// Walk the runtime heartbeat dir and return every sidebar heartbeat that is
@@ -363,6 +381,11 @@ mod tests {
     #[test]
     fn panes_changed_wire_word_is_pinned() {
         assert_eq!(PANES_CHANGED_WAKEUP, b"panes_changed");
+    }
+
+    #[test]
+    fn pane_frame_published_wire_word_is_pinned() {
+        assert_eq!(PANE_FRAME_PUBLISHED_WAKEUP, b"pane_frame_published");
     }
 
     fn heartbeat(id: &str, socket: &str) -> SidebarHeartbeat {

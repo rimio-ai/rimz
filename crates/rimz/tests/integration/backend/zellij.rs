@@ -1215,12 +1215,10 @@ fn wait_for_no_sidebar_heartbeat(dir: &Path, timeout: Duration) -> bool {
 /// Both panes are `close_on_exit`, so each disappears when its command ends.
 fn self_close_layout(session: &str, rimz: &Path, sidebar: &Path, xdg: &Path) -> String {
     let q = |s: String| serde_json::to_string(&s).expect("kdl escape");
-    // A short data tick so the snapshot backstop drives the detection. The
-    // resize-triggered fast probe is the accelerator when Zellij delivers the
-    // relayout, but delivery is best-effort — under load the server drops it
-    // even with a client attached (observed live) — and the backstop is the
-    // path the product guarantees. The probe's latch is unit-tested in
-    // `app.rs`.
+    // A short data tick so the snapshot backstop drives the detection. Resize
+    // delivery is best-effort — under load the server drops it even with a
+    // client attached (observed live) — so the shared snapshot fold is the path
+    // the product guarantees.
     let serve = sidebar_serve_command_with_tick(session, rimz, sidebar, xdg, 2);
     format!(
         r#"layout {{

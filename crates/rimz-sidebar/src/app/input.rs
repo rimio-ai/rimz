@@ -23,14 +23,14 @@ pub(super) enum Wakeup {
     /// [`SNAPSHOT_WAKEUP`]; the loop folds the result waiting on its result
     /// channel. Keeps the fetch subprocess off the render thread.
     Snapshot,
-    /// A resize-triggered sibling-count probe finished. This carries only
-    /// pane-list metadata for the self-close latch, never a rendered snapshot.
-    SelfCloseProbe,
     /// The tmux control-mode presence watcher saw pane topology change — a
     /// window or split opened/closed. A latency fast path only: the loop pulls
     /// a fresh pane list now instead of waiting out the poll, and a dead
     /// watcher degrades to exactly that poll.
     PanesChanged,
+    /// The elected producer published a fresh shared pane frame. Consumers fold
+    /// it from cache immediately; they do not locally produce.
+    PaneFramePublished,
     Resize,
     /// `rimz reload` asks the renderer to re-exec its own binary in place so a
     /// freshly-installed build takes effect without a session rebirth.
@@ -74,9 +74,10 @@ pub(super) enum FilterAction {
 /// socket once a snapshot is ready to fold. Riding the same socket every other
 /// wakeup uses keeps the loop blocking in exactly one place.
 pub(super) const SNAPSHOT_WAKEUP: &[u8] = b"snapshot";
-pub(super) const SELF_CLOSE_WAKEUP: &[u8] = b"self_close_probe";
 /// The control word the tmux presence watcher posts on a topology change.
 pub(super) const PANES_CHANGED_WAKEUP: &[u8] = b"panes_changed";
+/// The control word the producer broadcasts after publishing `snapshot.json`.
+pub(super) const PANE_FRAME_PUBLISHED_WAKEUP: &str = "pane_frame_published";
 
 pub(super) fn encode_key(code: KeyCode) -> Option<String> {
     let wire = match code {
@@ -144,8 +145,8 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
     }
     match raw {
         "snapshot" => Wakeup::Snapshot,
-        "self_close_probe" => Wakeup::SelfCloseProbe,
         "panes_changed" => Wakeup::PanesChanged,
+        PANE_FRAME_PUBLISHED_WAKEUP => Wakeup::PaneFramePublished,
         "resize" => Wakeup::Resize,
         "reload" => Wakeup::Reload,
         "key:up" => Wakeup::Key(KeyAction::Up),
@@ -294,8 +295,15 @@ mod tests {
     }
 
     #[test]
-    fn self_close_probe_control_word_decodes_to_probe() {
-        assert_eq!(decode_wakeup(SELF_CLOSE_WAKEUP), Wakeup::SelfCloseProbe);
+    fn pane_frame_published_control_word_decodes_to_publication() {
+        assert_eq!(
+            decode_wakeup(PANE_FRAME_PUBLISHED_WAKEUP.as_bytes()),
+            Wakeup::PaneFramePublished
+        );
+        assert_eq!(
+            decode_wakeup(rimz::ledger::wakeup::PANE_FRAME_PUBLISHED_WAKEUP),
+            Wakeup::PaneFramePublished
+        );
     }
 
     #[test]
@@ -407,9 +415,10 @@ mod tests {
             "resize".to_owned(),
             "reload".to_owned(),
             String::from_utf8(SNAPSHOT_WAKEUP.to_vec()).unwrap(),
-            String::from_utf8(SELF_CLOSE_WAKEUP.to_vec()).unwrap(),
             String::from_utf8(PANES_CHANGED_WAKEUP.to_vec()).unwrap(),
+            PANE_FRAME_PUBLISHED_WAKEUP.to_owned(),
             String::from_utf8(rimz::ledger::wakeup::RELOAD_WAKEUP.to_vec()).unwrap(),
+            String::from_utf8(rimz::ledger::wakeup::PANE_FRAME_PUBLISHED_WAKEUP.to_vec()).unwrap(),
         ];
         for code in [
             KeyCode::Up,

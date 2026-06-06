@@ -253,6 +253,10 @@ pub(super) fn cached_panes_or_produce(
             );
             if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &cache) {
                 tracing::warn!(path = %cache_path.display(), error = %err, "sidebar snapshot cache write failed");
+            } else if let Err(err) =
+                crate::ledger::wakeup::wake_sidebars_pane_frame_published(runtime)
+            {
+                tracing::debug!(error = %err, "sidebar pane-frame publication wakeup failed");
             }
             Ok(cache)
         }

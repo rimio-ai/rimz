@@ -4,7 +4,6 @@
 #![deny(clippy::print_stderr)]
 
 use std::io::{self, Read};
-use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -109,29 +108,6 @@ fn serve(
         session_name,
         instance_id: SidebarInstanceId::new(),
         tick_seconds,
-        rimz_bin: rimz_cli_program(),
     })
     .context("serving sidebar")
-}
-
-fn rimz_cli_program() -> PathBuf {
-    env_path("RIMZ_BIN")
-        .or_else(|| sibling_rimz_bin().filter(|path| path.is_file()))
-        .unwrap_or_else(|| PathBuf::from(rimz_bin_name()))
-}
-
-fn sibling_rimz_bin() -> Option<PathBuf> {
-    let current = std::env::current_exe().ok()?;
-    let parent = current.parent()?;
-    Some(parent.join(rimz_bin_name()))
-}
-
-fn rimz_bin_name() -> String {
-    format!("rimz{}", std::env::consts::EXE_SUFFIX)
-}
-
-fn env_path(key: &str) -> Option<PathBuf> {
-    std::env::var_os(key)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
 }

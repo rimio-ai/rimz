@@ -4,8 +4,8 @@
 //! loop folds lives in its own submodule — [`fetch`] (the two-speed off-thread
 //! fetch cycle), [`state`] (the pure `compute_next_state` reducer and the fold
 //! integrator), [`gate`] (the last-known-good regression hold), [`health`]
-//! (failure debounce and give-up), [`lifecycle`] (self-close and daemon-view
-//! detach latches), [`reload`] (binary resolution and re-exec), and
+//! (failure debounce and give-up), [`lifecycle`] (self-close and resize-grow
+//! classification), [`reload`] (binary resolution and re-exec), and
 //! [`selection`] (the identity-keyed highlight and input handlers).
 
 use std::io;
@@ -39,14 +39,10 @@ mod selection;
 mod state;
 mod tmux_watch;
 
-use fetch::{
-    FetchOutcome, FetchRequest, SelfCloseProbeOutcome, SelfCloseProbeRequest,
-    apply_self_close_probe_outcome, request_fetch, request_self_close_probe, spawn_fetch_worker,
-    spawn_self_close_probe_worker,
-};
+use fetch::{FetchOutcome, FetchRequest, request_fetch, spawn_fetch_worker};
 use gate::GateState;
 use input::{Wakeup, encode_key, encode_mouse, wait_for_wakeup};
-use lifecycle::{SELF_CLOSE_WATCHDOG, SelfCloseState, SessionExitState, resize_grew};
+use lifecycle::{SELF_CLOSE_WATCHDOG, SelfCloseState, resize_grew};
 use reload::{ReloadAction, reexec_self, reload_action};
 use selection::{InputOutcome, handle_key, handle_mouse_click, handle_scroll};
 use state::{apply_fetch_outcome, placeholder_snapshot};
@@ -61,7 +57,6 @@ pub struct ServeConfig {
     pub session_name: String,
     pub instance_id: SidebarInstanceId,
     pub tick_seconds: u64,
-    pub rimz_bin: PathBuf,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -115,7 +110,6 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     let mut health = Health::default();
     let mut gate = GateState::default();
     let mut self_close = SelfCloseState::default();
-    let mut session_exit = SessionExitState::default();
     let mut ui = UiState::default();
     let mut reexec_to: Option<PathBuf> = None;
     // Monotonic base for the animation frame. Deriving the phase from elapsed
@@ -142,28 +136,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     let mut in_flight = false;
     let mut pending_refetch: Option<FetchRequest> = None;
 
-    // Resize is the earliest signal that a sibling pane closed and Zellij/tmux
-    // gave the sidebar the freed space. Probe only the live pane list on a
-    // second worker: it feeds the existing self-close latch without running the
-    // snapshot path's ledger/git/account enrichments.
-    let (self_close_probe_tx, self_close_probe_rx) =
-        std::sync::mpsc::channel::<SelfCloseProbeRequest>();
-    let (self_close_result_tx, self_close_result_rx) =
-        std::sync::mpsc::channel::<SelfCloseProbeOutcome>();
-    let _probe_handle = spawn_self_close_probe_worker(
-        config.clone(),
-        socket_path.clone(),
-        self_close_probe_rx,
-        self_close_result_tx,
-    );
-    let mut self_close_probe_in_flight = false;
-    let mut pending_self_close_probe: Option<Duration> = None;
-
     // tmux fast path: the elected producer streams control-mode topology
-    // nudges into this loop's socket so a pane open/close repaints in tens of
-    // milliseconds instead of waiting out the poll. Latency only — the poll
-    // stays the presence backstop, and Zellij stays poll-only (its plugin
-    // rail is the future fast path; see docs/internals/multiplexers.md).
+    // nudges into this loop's socket so a pane open/close can publish a fresh
+    // pane frame in tens of milliseconds instead of waiting out the poll.
+    // Latency only — the poll stays the presence backstop. Zellij reaches the
+    // same producer-publication path through its presence plugin.
     if config.mux == MuxName::Tmux {
         let _ = tmux_watch::spawn(
             runtime.clone(),
@@ -262,6 +239,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 let mut rejected = false;
                 if let Some(outcome) = latest {
                     let snapshot_ok = outcome.snapshot.is_ok();
+                    let fresh_pane_frame = outcome.fresh_pane_frame;
                     fetched_at = Instant::now();
                     let applied = apply_fetch_outcome(
                         &config,
@@ -271,7 +249,6 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                         &mut health,
                         &mut gate,
                         &mut self_close,
-                        &mut session_exit,
                         &mut ui,
                         anim_start,
                     )?;
@@ -282,10 +259,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     }
                     // The fold mutated the model; the frame phase paints it.
                     dirty = true;
-                    if !should_exit {
-                        // The snapshot carried a stay verdict (sibling count > 0,
-                        // or unknowable): release any held grow-repaint so the
-                        // frame phase paints it at the new size.
+                    if !should_exit && !applied.rejected && fresh_pane_frame {
+                        // The snapshot folded a post-signal pane frame. Its
+                        // own-view verdict has decided the resize-grow case:
+                        // exit without painting when alone, or release the hold
+                        // and paint at the new size when siblings remain.
                         paint_held = false;
                     }
                 }
@@ -316,27 +294,6 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     );
                 }
             }
-            Wakeup::SelfCloseProbe => {
-                self_close_probe_in_flight = false;
-                while let Ok(outcome) = self_close_result_rx.try_recv() {
-                    if apply_self_close_probe_outcome(&config, outcome, &mut self_close) {
-                        should_exit = true;
-                        break;
-                    }
-                }
-                if !should_exit {
-                    // Stay/unknown verdict: a held grow-repaint is now safe to show.
-                    paint_held = false;
-                    if let Some(delay) = pending_self_close_probe.take() {
-                        request_self_close_probe(
-                            &self_close_probe_tx,
-                            &mut self_close_probe_in_flight,
-                            &mut pending_self_close_probe,
-                            delay,
-                        );
-                    }
-                }
-            }
             // A recv timeout: the active grid reached a frame boundary, or the
             // idle backstop interval elapsed. It carries no state of its own —
             // the frame phase below advances the spin and paints, and the
@@ -353,31 +310,43 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     &mut in_flight,
                     &mut pending_refetch,
                     if fresh_panes {
-                        FetchRequest::fresh_panes()
+                        FetchRequest::producer_fresh_panes()
                     } else {
                         FetchRequest::default()
                     },
                     true,
                 );
             }
-            // The tmux presence watcher saw topology change: pull a fresh pane
-            // list now, requiring a cache produced after the signal. A burst
-            // (one split fans out as several control lines) coalesces through
+            // The tmux/Zellij presence path saw topology change: ask the elected
+            // producer for a pane frame produced after the signal. A burst (one
+            // split fans out as several control lines) coalesces through
             // `in_flight`/`pending_refetch` like any wakeup storm.
             Wakeup::PanesChanged => {
                 request_fetch(
                     &request_tx,
                     &mut in_flight,
                     &mut pending_refetch,
-                    FetchRequest::fresh_panes(),
+                    FetchRequest::producer_fresh_panes(),
+                    true,
+                );
+            }
+            // The producer published a new shared pane frame. Fold it from the
+            // cache immediately; consumers stay read-only and the producer's
+            // own receipt is cheap because the frame is just-published.
+            Wakeup::PaneFramePublished => {
+                request_fetch(
+                    &request_tx,
+                    &mut in_flight,
+                    &mut pending_refetch,
+                    FetchRequest::pane_frame_published(),
                     true,
                 );
             }
             Wakeup::Resize => {
                 // A grow is the mux handing the sidebar a freed sibling's space —
                 // the precondition for the self-close full-width flash. Hold the
-                // paint until the sibling-count verdict the probe and fetch below
-                // request: a "close" verdict exits without ever painting the grown
+                // paint until the next fresh pane-frame fold carries the sibling
+                // count: a "close" verdict exits without ever painting the grown
                 // frame (the frame phase guards on `should_exit`); a "stay" verdict
                 // releases the hold and paints at the new size. A shrink, a
                 // same-width resize, or an unreadable size cannot flash, so each
@@ -408,23 +377,17 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     // grow left pending so it cannot suppress this frame.
                     paint_held = false;
                 }
-                request_self_close_probe(
-                    &self_close_probe_tx,
-                    &mut self_close_probe_in_flight,
-                    &mut pending_self_close_probe,
-                    Duration::ZERO,
-                );
                 last_self_close_check = Instant::now();
                 // A resize is the mux telling us topology changed: a split
                 // opened/closed, or the sidebar got space back. Pull a fresh
-                // pane list immediately and require a cache produced after this
-                // signal; otherwise a just-closed/just-opened agent can linger
-                // until the pane-cache TTL or the next data tick.
+                // pane list through the elected producer and require a cache
+                // produced after this signal; consumers wait for the producer's
+                // publication wake instead of locally producing.
                 request_fetch(
                     &request_tx,
                     &mut in_flight,
                     &mut pending_refetch,
-                    FetchRequest::fresh_panes(),
+                    FetchRequest::producer_fresh_panes(),
                     true,
                 );
             }
@@ -452,7 +415,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                         &request_tx,
                         &mut in_flight,
                         &mut pending_refetch,
-                        FetchRequest::fresh_panes(),
+                        FetchRequest::hard_refresh(),
                         true,
                     );
                 }
@@ -468,7 +431,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                         &request_tx,
                         &mut in_flight,
                         &mut pending_refetch,
-                        FetchRequest::fresh_panes(),
+                        FetchRequest::hard_refresh(),
                         true,
                     );
                 }
@@ -517,13 +480,12 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             }
         }
 
-        // Self-close watchdog: if no resize event fired (e.g. background sessions
-        // where the mux omits SIGWINCH after a pane closes), ask the normal
-        // snapshot path to refresh so the snapshot's own-view count can close a
-        // lone sidebar. This preserves the one-producer bound: consumers read
-        // the shared pane cache in process instead of each forking `list-panes`.
-        // The resize path remains the fast lane and still runs the metadata-only
-        // probe for the full-width-flash guard.
+        // Self-close watchdog: if no resize or presence event fired (e.g.
+        // background sessions where the mux omits SIGWINCH after a pane closes),
+        // ask the normal snapshot path to refresh so the snapshot's own-view
+        // count can close a lone sidebar. This preserves the one-producer bound:
+        // consumers read the shared pane cache in process instead of each
+        // forking `list-panes`.
         if last_self_close_check.elapsed() >= SELF_CLOSE_WATCHDOG {
             last_self_close_check = Instant::now();
             request_fetch(
@@ -808,9 +770,9 @@ fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -
         Wakeup::Tick
         | Wakeup::Ledger { .. }
         | Wakeup::PanesChanged
+        | Wakeup::PaneFramePublished
         | Wakeup::Reload
-        | Wakeup::Snapshot
-        | Wakeup::SelfCloseProbe => InputOutcome::default(),
+        | Wakeup::Snapshot => InputOutcome::default(),
     }
 }
 

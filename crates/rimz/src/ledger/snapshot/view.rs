@@ -91,12 +91,9 @@ pub struct SidebarSnapshot {
     pub own_view: Option<SidebarOwnView>,
     /// True iff every live, non-sidebar view in the session is the `rimzd`
     /// daemon view — the user has closed every working tab and only the managed
-    /// daemon tab remains. The daemon view's own sidebar reads it (gated by
-    /// `SidebarOwnView::own_view_is_daemon` and a latch) to detach the client,
-    /// leaving the background session and its daemons alive. Like `own_view`,
-    /// this is live-pane state the pure reducer can't read, so the reducer and
-    /// the placeholder/persisted snapshot leave it `false`; the `rimz sidebar
-    /// snapshot` CLI fills it from the live pane list.
+    /// daemon tab remains. Like `own_view`, this is live-pane state the pure
+    /// reducer can't read, so the reducer and the placeholder/persisted snapshot
+    /// leave it `false`; the producer fills it from the live pane list.
     #[serde(default)]
     pub only_daemon_view_remains: bool,
     /// The project's canonical root. Grouping uses it to tell a project
@@ -936,8 +933,7 @@ impl SidebarSnapshot {
     /// ([`crate::remote_control::pane_is_host`]); a *working* view iff it holds
     /// any non-sidebar, non-host pane. A sidebar-only view (a working tab
     /// mid-self-close) counts as neither, so it neither trips nor blocks the
-    /// signal. Returns `false` for an empty or not-yet-born session (no daemon
-    /// view), so the renderer never detaches at startup.
+    /// signal. Returns `false` for an empty or not-yet-born session.
     ///
     /// Keys on `view_id` + `pane_is_host` (which reads the command marker or
     /// the `rimzd` view name — both backends report the view name), so it

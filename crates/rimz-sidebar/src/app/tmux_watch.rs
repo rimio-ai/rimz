@@ -2,12 +2,13 @@
 //!
 //! The elected producer holds one read-only [`PresenceWatch`]
 //! (`rimz::mux::tmux`) on the session and posts [`PANES_CHANGED_WAKEUP`] to
-//! the serve loop's own socket whenever a window or split opens or closes, so
-//! pane presence lands in tens of milliseconds instead of waiting out the
-//! poll. Latency only, never truth: the poll remains the presence backstop
-//! (docs/internals/multiplexers.md), a dead watcher degrades to exactly
-//! today's behavior, and this thread respawns the client with backoff.
-//! Zellij stays poll-only — its plugin rail is the future fast path.
+//! the serve loop's own socket whenever a window or split opens or closes. The
+//! loop asks only the producer for fresh panes; after the producer publishes,
+//! every consumer wakes from `pane_frame_published` and folds the cache. Latency
+//! only, never truth: the poll remains the presence backstop
+//! (docs/internals/multiplexers.md), a dead watcher degrades to exactly today's
+//! behavior, and this thread respawns the client with backoff.
+//! Zellij has the same producer-publication contract through its presence plugin.
 //!
 //! One control client per workspace: only the eldest live instance (the same
 //! election as the produce fork) attaches; the rest sleep on the election

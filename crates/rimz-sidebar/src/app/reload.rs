@@ -1,7 +1,6 @@
 //! Reload (`rimz reload` or the `r` keypress): resolve the on-disk renderer
 //! binary, compare it to the running image, and re-exec in place only when the
-//! build actually changed. Also resolves the `rimz` binary the detach helper
-//! drives, healing a deleted dev-worktree path via `PATH`.
+//! build actually changed.
 
 use std::io;
 use std::io::Read;
@@ -80,23 +79,6 @@ fn resolve_reexec_target(exe: PathBuf) -> Option<PathBuf> {
         return Some(exe);
     }
     strip_deleted_suffix(&exe).filter(|path| path.is_file())
-}
-
-/// Resolve the `rimz` binary the detach helper drives (`rimz pane detach`).
-///
-/// `cached` is the path captured at launch — the sibling `rimz` beside this
-/// renderer, or `RIMZ_BIN`. A long-lived sidebar can outlive it: removing the
-/// dev worktree it was built in deletes that binary out from under the still
-/// running renderer, and the helper would then fail with ENOENT (a reload
-/// cannot rescue it either, since the renderer binary in that worktree is gone
-/// too). Keep the cached path while it is a real file; once it vanishes, fall
-/// back to the installed `rimz` on `PATH` so the helper keeps working.
-pub(super) fn resolve_rimz_bin(cached: &Path) -> PathBuf {
-    if cached.is_file() {
-        return cached.to_path_buf();
-    }
-    // A bare name; `Command::new` resolves it against `PATH`.
-    PathBuf::from(format!("rimz{}", std::env::consts::EXE_SUFFIX))
 }
 
 /// Strip the kernel's " (deleted)" annotation from a `/proc/self/exe` path.
