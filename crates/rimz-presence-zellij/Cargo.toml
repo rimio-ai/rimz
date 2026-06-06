@@ -7,11 +7,12 @@ repository.workspace = true
 
 # The Zellij presence plugin: a headless wasm32-wasip1 plugin loaded by rimz
 # into every Zellij session it manages, poking `rimz sidebar wake` on pane
-# topology and focus changes. The lib (rlib) is the pure policy core
-# (`policy.rs`), host-tested inside the ordinary workspace test run; the bin
-# is the Zellij plugin entrypoint (`register_plugin!` defines `main`), built
-# for wasm by `cargo xtask build-plugin` and a stub on host targets so
-# `--workspace` builds and lints stay green without the wasm toolchain.
+# topology/focus changes and correcting switched-to tabs whose focus restored
+# to the sidebar. The lib (rlib) is the pure policy core (`policy.rs`),
+# host-tested inside the ordinary workspace test run; the bin is the Zellij
+# plugin entrypoint (`register_plugin!` defines `main`), built for wasm by
+# `cargo xtask build-plugin` and a stub on host targets so `--workspace` builds
+# and lints stay green without the wasm toolchain.
 [lib]
 path = "src/lib.rs"
 

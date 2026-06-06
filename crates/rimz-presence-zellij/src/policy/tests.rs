@@ -5,7 +5,10 @@ fn pane(id: u32) -> PaneFields {
         id,
         is_plugin: false,
         is_focused: false,
+        is_suppressed: false,
         exited: false,
+        is_held: false,
+        title: format!("pane-{id}"),
         terminal_command: Some("zsh".to_owned()),
     }
 }
@@ -61,14 +64,53 @@ fn command_change_changes_the_hash_and_exit_flag_too() {
 
 #[test]
 fn title_is_excluded_by_projection() {
-    // `PaneFields` carries no title at all — the projection in `main.rs` drops
-    // it before hashing, so a title-only change *cannot* alter the hash. This
-    // test pins the contract by construction: the struct compiles without a
-    // title field, and two manifests differing only in a dropped field are
-    // the same input.
+    let mut renamed = pane(1);
+    renamed.title = "line-mutated agent title".to_owned();
     let a = manifest_hash(&tabs(vec![pane(1)]), Some(0));
-    let b = manifest_hash(&tabs(vec![pane(1)]), Some(0));
+    let b = manifest_hash(&tabs(vec![renamed]), Some(0));
     assert_eq!(a, b);
+}
+
+// --- switched_tab_focus_target: only tab-switch sidebar focus is corrected ---
+
+#[test]
+fn switched_tab_focus_target_moves_sidebar_focus_to_working_pane() {
+    let mut sidebar = pane(1);
+    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
+    sidebar.is_focused = true;
+    let work = pane(2);
+
+    assert_eq!(
+        switched_tab_focus_target(&tabs(vec![sidebar, work]), Some(0)),
+        Some(2),
+    );
+}
+
+#[test]
+fn switched_tab_focus_target_leaves_working_focus_alone() {
+    let mut sidebar = pane(1);
+    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
+    let mut work = pane(2);
+    work.is_focused = true;
+
+    assert_eq!(
+        switched_tab_focus_target(&tabs(vec![sidebar, work]), Some(0)),
+        None,
+    );
+}
+
+#[test]
+fn switched_tab_focus_target_requires_a_live_working_pane() {
+    let mut sidebar = pane(1);
+    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
+    sidebar.is_focused = true;
+    let mut held_work = pane(2);
+    held_work.is_held = true;
+
+    assert_eq!(
+        switched_tab_focus_target(&tabs(vec![sidebar, held_work]), Some(0)),
+        None,
+    );
 }
 
 // --- PokePolicy: debounce, floor, keepalive ---

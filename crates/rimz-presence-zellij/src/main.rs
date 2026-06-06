@@ -1,9 +1,9 @@
-//! The Zellij plugin shell: projects host events into the pure policy core
-//! and executes the pokes it returns. Headless — it renders nothing, holds no
-//! pane, and its one side effect is running the fixed `rimz sidebar wake`
-//! argv on the host. Compiled only for wasm (`register_plugin!` defines the
-//! wasip1 `main`); host targets build a stub so `--workspace` builds, lints,
-//! and the policy unit tests run without the wasm toolchain.
+//! The Zellij plugin shell: projects host events into the pure policy core,
+//! runs the pokes it returns, and corrects a switched-to tab whose remembered
+//! focus is Rimz's sidebar. Headless — it renders nothing and holds no pane.
+//! Compiled only for wasm (`register_plugin!` defines the wasip1 `main`); host
+//! targets build a stub so `--workspace` builds, lints, and the policy unit
+//! tests run without the wasm toolchain.
 
 #[cfg(target_family = "wasm")]
 mod shell {
@@ -20,6 +20,9 @@ mod shell {
         /// The projected room shape, refreshed per manifest event.
         tabs: BTreeMap<usize, Vec<PaneFields>>,
         active_tab: Option<usize>,
+        /// Set on active-tab changes, then consumed once a pane manifest proves
+        /// whether Zellij restored that tab's focus to Rimz's sidebar.
+        pending_focus_tab: Option<usize>,
         /// Configuration written by rimz at load time (never user config):
         /// the workspace to poke and the absolute rimz binary, insulating the
         /// poke from the host PATH. Absent (a hand-loaded plugin), the wake
@@ -42,6 +45,7 @@ mod shell {
             self.rimz_bin = configuration.get("rimz_bin").cloned();
             request_permission(&[
                 PermissionType::ReadApplicationState,
+                PermissionType::ChangeApplicationState,
                 PermissionType::RunCommands,
             ]);
             subscribe(&[
@@ -72,11 +76,17 @@ mod shell {
                     self.mark_granted();
                     self.tabs = project(&manifest);
                     self.fold(now);
+                    self.correct_switched_tab_focus();
                 }
                 Event::TabUpdate(tabs) => {
                     self.mark_granted();
-                    self.active_tab = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
+                    let next_active = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
+                    if next_active != self.active_tab {
+                        self.pending_focus_tab = next_active;
+                    }
+                    self.active_tab = next_active;
                     self.fold(now);
+                    self.correct_switched_tab_focus();
                 }
                 Event::Timer(_) => {
                     self.timer_gate.on_fire(now);
@@ -122,6 +132,23 @@ mod shell {
             if let Some(policy) = self.policy.as_mut() {
                 policy.on_manifest(hash, now);
             }
+        }
+
+        /// Zellij remembers per-tab focus. When the user switches back to a tab
+        /// whose remembered focus is the sidebar, redirect once to that tab's
+        /// first live working pane. Ordinary same-tab sidebar focus is left
+        /// alone so the native renderer remains interactive.
+        fn correct_switched_tab_focus(&mut self) {
+            let Some(tab) = self.pending_focus_tab else {
+                return;
+            };
+            if self.active_tab != Some(tab) || !self.tabs.contains_key(&tab) {
+                return;
+            }
+            if let Some(target) = policy::switched_tab_focus_target(&self.tabs, Some(tab)) {
+                focus_terminal_pane(target, false, false);
+            }
+            self.pending_focus_tab = None;
         }
 
         fn dispatch_due(&mut self, now: u64) {
@@ -177,7 +204,10 @@ mod shell {
                         id: pane.id,
                         is_plugin: pane.is_plugin,
                         is_focused: pane.is_focused,
+                        is_suppressed: pane.is_suppressed,
                         exited: pane.exited,
+                        is_held: pane.is_held,
+                        title: pane.title.clone(),
                         terminal_command: pane.terminal_command.clone(),
                     })
                     .collect();

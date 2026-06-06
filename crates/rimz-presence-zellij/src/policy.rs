@@ -20,16 +20,33 @@ pub const POKE_FLOOR_MS: u64 = 500;
 /// `PRESENCE_STAMP_FRESH` (150s) allows two missed keepalives of slack.
 pub const KEEPALIVE_MS: u64 = 60_000;
 
-/// The pane fields the hash folds — the stable subset whose change means the
-/// sidebar should refetch panes. `title` is deliberately absent: agents
+/// Pane title the Zellij layouts assign to Rimz's native sidebar.
+pub const SIDEBAR_PANE_TITLE: &str = "rimz-sidebar";
+
+/// The pane fields the plugin projects. The manifest hash folds only the stable
+/// subset whose change means the sidebar should refetch panes. `title` is
+/// carried for focus correction but deliberately excluded from the hash: agents
 /// mutate titles per output line, and hashing them would re-poke per line.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneFields {
     pub id: u32,
     pub is_plugin: bool,
     pub is_focused: bool,
+    pub is_suppressed: bool,
     pub exited: bool,
+    pub is_held: bool,
+    pub title: String,
     pub terminal_command: Option<String>,
+}
+
+impl PaneFields {
+    fn is_live_terminal(&self) -> bool {
+        !self.is_plugin && !self.is_suppressed && !self.exited && !self.is_held
+    }
+
+    fn is_sidebar(&self) -> bool {
+        self.is_live_terminal() && self.title == SIDEBAR_PANE_TITLE
+    }
 }
 
 /// Fold the projected manifest into one stable hash. The `BTreeMap` keying by
@@ -42,9 +59,35 @@ pub fn manifest_hash(tabs: &BTreeMap<usize, Vec<PaneFields>>, active_tab: Option
     active_tab.hash(&mut hasher);
     for (tab, panes) in tabs {
         tab.hash(&mut hasher);
-        panes.hash(&mut hasher);
+        for pane in panes {
+            pane.id.hash(&mut hasher);
+            pane.is_plugin.hash(&mut hasher);
+            pane.is_focused.hash(&mut hasher);
+            pane.is_suppressed.hash(&mut hasher);
+            pane.exited.hash(&mut hasher);
+            pane.is_held.hash(&mut hasher);
+            pane.terminal_command.hash(&mut hasher);
+        }
     }
     hasher.finish()
+}
+
+/// The terminal pane that should take focus after switching to `active_tab`, if
+/// Zellij restored the tab's focus to the sidebar. `None` means the tab is
+/// already on work, has no sidebar focus, or has no live working pane.
+pub fn switched_tab_focus_target(
+    tabs: &BTreeMap<usize, Vec<PaneFields>>,
+    active_tab: Option<usize>,
+) -> Option<u32> {
+    let panes = tabs.get(&active_tab?)?;
+    let focused = panes.iter().find(|pane| pane.is_focused)?;
+    if !focused.is_sidebar() {
+        return None;
+    }
+    panes
+        .iter()
+        .find(|pane| pane.is_live_terminal() && !pane.is_sidebar())
+        .map(|pane| pane.id)
 }
 
 /// What the shell should do now.
