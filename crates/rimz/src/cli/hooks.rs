@@ -292,9 +292,14 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                     context_agent_id,
                 );
                 let refresh = {
+                    let local_model_hint = model_hint.as_deref().or_else(|| {
+                        prior
+                            .as_ref()
+                            .and_then(|record| record.context.model_id.as_deref())
+                    });
                     let refresh_ctx = rimz::agents::LocalContextRefreshCtx {
                         agent_id: context_agent_id,
-                        model_hint: model_hint.as_deref(),
+                        model_hint: local_model_hint,
                         prior_effort: prior
                             .as_ref()
                             .and_then(|record| record.context.effort.as_deref()),

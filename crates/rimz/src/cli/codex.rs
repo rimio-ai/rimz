@@ -123,10 +123,15 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
     runtime.ensure_dirs().context("preparing runtime dirs")?;
 
     let prior = rimz::ledger::agent_context::read_one(&runtime, "codex", session_id);
+    let transcript_model_hint = model.or_else(|| {
+        prior
+            .as_ref()
+            .and_then(|record| record.context.model_id.as_deref())
+    });
     let mut wrote = false;
     let transcript_refresh = codex::refresh_transcript_context(
         session_id,
-        model,
+        transcript_model_hint,
         prior
             .as_ref()
             .and_then(|record| record.context.effort.as_deref()),

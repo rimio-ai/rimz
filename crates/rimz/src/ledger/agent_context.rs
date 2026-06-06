@@ -134,7 +134,11 @@ pub fn merge_local_context(
     }
     record.context.effort = refresh.effort;
     record.context.tokens = refresh.tokens;
-    record.context.cost = refresh.cost;
+    // A missing local cost means the latest transcript tail could not be priced,
+    // not that the already-spent session returned to zero.
+    if refresh.cost.is_some() {
+        record.context.cost = refresh.cost;
+    }
     record.context.observed_at = observed_at;
     record.transcript_path = refresh.transcript_path;
     record.transcript_stat = refresh.transcript_stat;
@@ -423,6 +427,65 @@ mod tests {
         assert_eq!(
             merged.transcript_path.as_deref(),
             Some("/tmp/rollout.jsonl")
+        );
+    }
+
+    #[test]
+    fn merge_local_context_preserves_prior_cost_when_refresh_is_unpriced() {
+        let (_dir, runtime) = runtime();
+        let prior_at = Timestamp::from_second(1_700_000_000).unwrap();
+        let local_at = Timestamp::from_second(1_700_000_030).unwrap();
+        let mut prior_context = ctx(prior_at);
+        prior_context.cost = Some(crate::agents::AgentCost {
+            total_cost_usd: Some(0.42),
+            ..crate::agents::AgentCost::default()
+        });
+        write_record(&runtime, &new_record("codex", "sess-1", prior_context)).unwrap();
+
+        merge_local_context(
+            &runtime,
+            "codex",
+            "sess-1",
+            read_one(&runtime, "codex", "sess-1"),
+            crate::agents::LocalContextRefresh {
+                model_id: Some("gpt-5".to_owned()),
+                effort: Some("high".to_owned()),
+                tokens: Some(crate::agents::AgentTokenUsage {
+                    context_window_size: Some(1_000),
+                    used_percentage: Some(10),
+                    remaining_percentage: Some(90),
+                    current_usage: None,
+                }),
+                cost: None,
+                transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
+                transcript_stat: Some(crate::agents::TranscriptStat {
+                    mtime_secs: 123,
+                    mtime_nanos: 456,
+                    len: 789,
+                }),
+            },
+            local_at,
+        )
+        .unwrap();
+
+        let merged = read_one(&runtime, "codex", "sess-1").unwrap();
+        assert_eq!(
+            merged
+                .context
+                .cost
+                .as_ref()
+                .and_then(|cost| cost.total_cost_usd),
+            Some(0.42),
+            "an unpriced refresh keeps the last known cumulative session cost"
+        );
+        assert_eq!(
+            merged
+                .context
+                .tokens
+                .as_ref()
+                .and_then(|tokens| tokens.used_percentage),
+            Some(10),
+            "window tokens still update independently of cost pricing"
         );
     }
 

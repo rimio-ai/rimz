@@ -830,6 +830,30 @@ fn transcript_enrichment_prices_cumulative_totals() {
 }
 
 #[test]
+fn transcript_enrichment_uses_model_hint_to_price_cumulative_totals() {
+    let usage = TranscriptUsage {
+        context_pct: None,
+        context_window: None,
+        total_tokens: None,
+        model: None,
+        last_input_tokens: None,
+        last_cached_input_tokens: None,
+        last_output_tokens: None,
+        cumulative_input_tokens: Some(1_000),
+        cumulative_cached_tokens: 400,
+        cumulative_output_tokens: Some(200),
+    };
+    let (_tokens, cost, model_id) = transcript_enrichment(&usage, Some("gpt-5"));
+    let cost = cost
+        .and_then(|cost| cost.total_cost_usd)
+        .expect("prior model hint prices a tail without turn_context");
+    let price = PriceBook::embedded().price("gpt-5").unwrap();
+    let expected = 600.0 * price.input + 400.0 * price.cache_read + 200.0 * price.output;
+    assert!((cost - expected).abs() < f64::EPSILON);
+    assert_eq!(model_id.as_deref(), Some("gpt-5"));
+}
+
+#[test]
 fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rollout-session.jsonl");
