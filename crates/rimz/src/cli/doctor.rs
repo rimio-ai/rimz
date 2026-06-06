@@ -342,8 +342,8 @@ fn report_presence_channel(ws: &rimz::ResolvedWorkspace) {
     // Poll mode: name the first failing precondition in fix order.
     if zellij_mod::presence_plugin_path().is_none() {
         println!(
-            "  presence      : poll mode — plugin artifact missing (reinstall rimz so \
-             rimz-presence-zellij.wasm sits beside the binary)",
+            "  presence      : poll mode — embedded plugin unavailable or could not \
+             materialize (reinstall rimz)",
         );
         return;
     }
@@ -505,12 +505,7 @@ fn report_remote_control() {
     reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
 )]
 fn report_sidebar_renderer() {
-    let status = if super::sidebar::sidebar_renderer_present() {
-        "found"
-    } else {
-        "missing"
-    };
-    println!("  sidebar renderer: rimz-sidebar {status}");
+    println!("  sidebar renderer: built into rimz");
 }
 
 #[expect(

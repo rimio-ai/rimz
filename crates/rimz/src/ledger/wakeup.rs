@@ -186,9 +186,9 @@ pub const RELOAD_WAKEUP: &[u8] = b"reload";
 
 /// Control word the tmux presence watch and the Zellij presence plugin both
 /// pulse on a pane-topology change; the renderer decodes it into a
-/// fresh-panes refetch. The renderer keeps its own byte-identical copy
-/// (`rimz-sidebar` `app::input::PANES_CHANGED_WAKEUP`) — the two crates share
-/// no dependency, so a unit test here pins the literal against drift.
+/// fresh-panes refetch. The renderer keeps its own byte-identical copy in
+/// `sidebar_renderer::app::input::PANES_CHANGED_WAKEUP`, so a unit test here
+/// pins the literal against drift.
 pub const PANES_CHANGED_WAKEUP: &[u8] = b"panes_changed";
 
 /// Control word a producer posts after publishing a fresh `snapshot.json` pane
@@ -375,8 +375,7 @@ mod tests {
     use super::*;
     use crate::ids::{MuxName, SidebarInstanceId};
 
-    /// The renderer's decoder (`rimz-sidebar` `app::input`) keeps a private,
-    /// byte-identical copy of this word; the two crates share no dependency,
+    /// The renderer's decoder keeps a private, byte-identical copy of this word,
     /// so this pin is the drift guard.
     #[test]
     fn panes_changed_wire_word_is_pinned() {

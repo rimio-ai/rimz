@@ -99,12 +99,14 @@ fn workspace_version(root: &Path) -> Result<String> {
 }
 
 fn build(root: &Path) -> Result<()> {
-    run(
+    build_plugin(root)?;
+    let envs = presence_plugin_embed_env(root);
+    run_with_env(
         root,
         "cargo",
         ["build", "--workspace", "--all-features", "--locked"],
-    )?;
-    build_plugin(root)
+        &envs,
+    )
 }
 
 /// Build the Zellij presence plugin for its real target. The host-target
@@ -157,9 +159,7 @@ fn stage_bin_dir(root: &Path) -> PathBuf {
     target_dir(root).join("xtask").join("install").join("bin")
 }
 
-/// Where a user install lands binaries — the same ladder `cargo install` walks —
-/// so the `.wasm` copied beside them is found by the sibling-file resolution in
-/// `rimz` (`presence_plugin_path`).
+/// Where a user install lands binaries — the same ladder `cargo install` walks.
 fn cargo_install_bin_dir() -> PathBuf {
     if let Some(install_root) = env::var_os("CARGO_INSTALL_ROOT") {
         return PathBuf::from(install_root).join("bin");
@@ -184,33 +184,33 @@ fn install(root: &Path) -> Result<()> {
     Ok(())
 }
 
-const INSTALL_ARTIFACTS: [&str; 3] = ["rimz", "rimz-sidebar", "rimz-presence-zellij.wasm"];
+const INSTALL_ARTIFACTS: [&str; 1] = ["rimz"];
 
 fn stage_install(root: &Path) -> Result<PathBuf> {
-    for (package, bin) in [("rimz", "rimz"), ("rimz-sidebar", "rimz-sidebar")] {
-        run(
-            root,
-            "cargo",
-            [
-                "build",
-                "-p",
-                package,
-                "--bin",
-                bin,
-                "--release",
-                "--locked",
-            ],
-        )?;
-    }
     build_plugin(root)?;
+    let envs = presence_plugin_embed_env(root);
+    run_with_env(
+        root,
+        "cargo",
+        [
+            "build",
+            "-p",
+            "rimz",
+            "--bin",
+            "rimz",
+            "--release",
+            "--locked",
+        ],
+        &envs,
+    )?;
     let stage = stage_bin_dir(root);
     fs::create_dir_all(&stage).with_context(|| format!("creating {}", stage.display()))?;
-    for bin in ["rimz", "rimz-sidebar"] {
-        copy_atomically(&release_artifact(root, bin), &stage.join(bin))?;
-    }
-    let artifact = plugin_artifact(root);
-    copy_atomically(&artifact, &stage.join("rimz-presence-zellij.wasm"))?;
+    copy_atomically(&release_artifact(root, "rimz"), &stage.join("rimz"))?;
     Ok(stage)
+}
+
+fn presence_plugin_embed_env(root: &Path) -> Vec<(&'static str, PathBuf)> {
+    vec![("RIMZ_EMBED_PRESENCE_PLUGIN", plugin_artifact(root))]
 }
 
 fn copy_atomically(source: &Path, dest: &Path) -> Result<()> {
@@ -345,7 +345,7 @@ fn deps(root: &Path) -> Result<()> {
 }
 
 fn test(root: &Path) -> Result<()> {
-    run(
+    run_with_env_removed(
         root,
         "cargo",
         [
@@ -355,6 +355,7 @@ fn test(root: &Path) -> Result<()> {
             "--all-features",
             "--locked",
         ],
+        &["NO_COLOR"],
     )
 }
 
@@ -362,7 +363,7 @@ fn test(root: &Path) -> Result<()> {
 // under instrumentation, so there is no separate uninstrumented `test` pass to
 // build and execute the workspace a second time.
 fn coverage(root: &Path) -> Result<()> {
-    run(
+    run_with_env_removed(
         root,
         "cargo",
         [
@@ -372,6 +373,7 @@ fn coverage(root: &Path) -> Result<()> {
             "--all-features",
             "--locked",
         ],
+        &["NO_COLOR"],
     )
 }
 
@@ -466,10 +468,51 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    run_with_env(root, program, args, &[])
+}
+
+fn run_with_env<I, S>(root: &Path, program: &str, args: I, envs: &[(&str, PathBuf)]) -> Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    run_with_env_and_removed(root, program, args, envs, &[])
+}
+
+fn run_with_env_removed<I, S>(
+    root: &Path,
+    program: &str,
+    args: I,
+    removed_envs: &[&str],
+) -> Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    run_with_env_and_removed(root, program, args, &[], removed_envs)
+}
+
+fn run_with_env_and_removed<I, S>(
+    root: &Path,
+    program: &str,
+    args: I,
+    envs: &[(&str, PathBuf)],
+    removed_envs: &[&str],
+) -> Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let args: Vec<_> = args.into_iter().collect();
-    let status = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args.iter().map(AsRef::as_ref))
         .current_dir(root)
+        .envs(envs.iter().map(|(key, value)| (*key, value)));
+    for key in removed_envs {
+        command.env_remove(key);
+    }
+    let status = command
         .status()
         .with_context(|| format!("running `{program}`"))?;
     ensure_success(program, &args, status)
@@ -509,8 +552,9 @@ fn invariants(root: &Path) -> Result<()> {
             || path.starts_with(root.join("xtask"))
             || path.extension().and_then(OsStr::to_str) == Some("md")
     };
-    let outside_sidebar = |path: &Path| {
-        !path.starts_with(root.join("crates/rimz-sidebar")) || path.starts_with(root.join("xtask"))
+    let outside_sidebar_renderer = |path: &Path| {
+        !path.starts_with(root.join("crates/rimz/src/sidebar_renderer"))
+            || path.starts_with(root.join("xtask"))
     };
 
     let banned_imports: &[(&str, &str)] = &[
@@ -550,8 +594,8 @@ fn invariants(root: &Path) -> Result<()> {
         ensure_no_match(
             &files,
             needle,
-            outside_sidebar,
-            "sidebar crate must not import ledger writer APIs",
+            outside_sidebar_renderer,
+            "sidebar renderer must not import ledger writer APIs",
         )?;
     }
 
@@ -635,7 +679,6 @@ fn invariants(root: &Path) -> Result<()> {
     // an agent working inside a nested repo.
     let outside_participants = {
         let cli_root = root.join("crates/rimz/src/cli");
-        let sidebar_main = root.join("crates/rimz-sidebar/src/main.rs");
         move |path: &Path| {
             let participant_cli = path.starts_with(&cli_root)
                 && matches!(
@@ -649,7 +692,7 @@ fn invariants(root: &Path) -> Result<()> {
                             | "sidebar.rs"
                     )
                 );
-            !(participant_cli || path == sidebar_main)
+            !participant_cli
         }
     };
     ensure_no_match(

@@ -7,14 +7,14 @@
 //! elder renderer produces in process on its fetch worker, so this arm serves
 //! inspection, scripting, and the plugin rail's `--no-produce` read.
 
+use std::io::{self, Read};
 use std::path::PathBuf;
-use std::process::Command;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand};
 
 use super::GlobalFlags;
-use rimz::ids::{MuxName, WorkspaceId};
+use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
 use rimz::ledger::paths::env_path;
 use rimz::ledger::workspace_record;
 use rimz::sidebar::produce::{
@@ -67,6 +67,13 @@ enum SidebarSubcmd {
         session_name: Option<String>,
         #[arg(long, default_value_t = 1)]
         tick_seconds: u64,
+    },
+    /// Read a snapshot JSON from stdin and render one fixed frame.
+    Render {
+        #[arg(long, default_value_t = 80)]
+        width: u16,
+        #[arg(long, default_value_t = 24)]
+        height: u16,
     },
     /// Presence poke from the Zellij presence plugin: refresh the liveness
     /// stamp and, on a topology change, datagram the eldest sidebar for a
@@ -266,26 +273,29 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 Some(mux) => mux,
                 None => rimz::mux::auto_detect_backend(globals.mux)?,
             };
-            let program = sidebar_renderer_program();
-            let mut command = Command::new(&program);
-            command.args([
-                "serve",
-                "--workspace-id",
-                workspace_id.as_str(),
-                "--mux",
-                mux.as_str(),
-                "--session-name",
-                &session_name,
-                "--tick-seconds",
-                &tick_seconds.to_string(),
-            ]);
-            let status = command
-                .status()
-                .with_context(|| format!("running `{}` serve", program.to_string_lossy()))?;
-            if !status.success() {
-                bail!("rimz-sidebar serve exited with {status}");
-            }
-            Ok(())
+            rimz::sidebar_renderer::app::serve(rimz::sidebar_renderer::app::ServeConfig {
+                workspace_id,
+                mux,
+                session_name,
+                instance_id: SidebarInstanceId::new(),
+                tick_seconds,
+            })
+            .context("serving sidebar")
+        }
+        SidebarSubcmd::Render { width, height } => {
+            let mut buf = String::new();
+            io::stdin()
+                .read_to_string(&mut buf)
+                .context("reading stdin")?;
+            let snapshot = serde_json::from_str(&buf).context("parsing snapshot from stdin")?;
+            rimz::sidebar_renderer::render::render_fixed(
+                io::stdout(),
+                &snapshot,
+                None,
+                width,
+                height,
+            )
+            .context("rendering snapshot")
         }
         SidebarSubcmd::Wake {
             workspace_id,
@@ -326,31 +336,6 @@ fn session_name_from_record(state: &StatePaths) -> Option<String> {
     workspace_record::read(&state.workspace_record)
         .ok()
         .map(|record| record.session_name)
-}
-
-pub(crate) fn sidebar_renderer_program() -> PathBuf {
-    if let Some(path) = env_path("RIMZ_SIDEBAR_BIN") {
-        return path;
-    }
-    if let Some(path) = sibling_bin("rimz-sidebar").filter(|path| path.is_file()) {
-        return path;
-    }
-    which::which(bin_name("rimz-sidebar"))
-        .unwrap_or_else(|_| PathBuf::from(bin_name("rimz-sidebar")))
-}
-
-pub(crate) fn sidebar_renderer_present() -> bool {
-    if let Some(path) = env_path("RIMZ_SIDEBAR_BIN") {
-        return path.is_file();
-    }
-    sibling_bin("rimz-sidebar").is_some_and(|path| path.is_file())
-        || which::which(bin_name("rimz-sidebar")).is_ok()
-}
-
-/// A sibling of the running executable, named `stem` with the platform suffix.
-fn sibling_bin(stem: &str) -> Option<PathBuf> {
-    let current = std::env::current_exe().ok()?;
-    Some(current.parent()?.join(bin_name(stem)))
 }
 
 fn bin_name(stem: &str) -> String {

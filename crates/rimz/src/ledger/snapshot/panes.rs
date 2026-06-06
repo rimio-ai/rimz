@@ -26,7 +26,7 @@ pub struct SidebarOwnView {
     pub own_is_active: bool,
     /// The view's active working pane: the non-sidebar sibling carrying the
     /// per-view `is_focused` mark. The renderer derives its selection baseline
-    /// from it (see `rimz-sidebar`'s `reconcile_selection`) — same-tab by
+    /// from it (see `sidebar_renderer::app::selection`) — same-tab by
     /// construction, defined whether or not a client is viewing the tab.
     pub active_pane_id: Option<PaneId>,
     /// Whether the caller's own view is the `rimzd` daemon view: its siblings,
@@ -424,12 +424,7 @@ mod tests {
     fn only_daemon_view_true_when_only_the_daemon_view_remains() {
         // rimzd view: sidebar + two managed hosts; no working view left.
         let panes = vec![
-            pane_cmd(
-                "terminal_0",
-                "tab_0",
-                "rimz-sidebar serve --workspace-id ws_x",
-                None,
-            ),
+            pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
             pane_cmd(
                 "terminal_1",
                 "tab_0",
@@ -444,14 +439,14 @@ mod tests {
     #[test]
     fn only_daemon_view_false_while_a_working_view_exists() {
         let panes = vec![
-            pane_cmd("terminal_0", "tab_0", "rimz-sidebar serve", None),
+            pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
             pane_cmd(
                 "terminal_1",
                 "tab_0",
                 "claude remote-control --spawn worktree",
                 None,
             ),
-            pane_cmd("terminal_3", "tab_1", "rimz-sidebar serve", None),
+            pane_cmd("terminal_3", "tab_1", "rimz-sidebar", None),
             pane_cmd("terminal_4", "tab_1", "zsh", None),
         ];
         assert!(!SidebarSnapshot::only_daemon_view(&panes));
@@ -460,7 +455,7 @@ mod tests {
     #[test]
     fn only_daemon_view_false_when_no_daemon_view() {
         let panes = vec![
-            pane_cmd("terminal_0", "tab_0", "rimz-sidebar serve", None),
+            pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
             pane_cmd("terminal_1", "tab_0", "zsh", None),
         ];
         assert!(!SidebarSnapshot::only_daemon_view(&panes));
@@ -476,9 +471,9 @@ mod tests {
         // The working tab's last working pane just exited; its sidebar is mid
         // self-close. That sidebar-only view counts as neither, so detach fires.
         let panes = vec![
-            pane_cmd("terminal_0", "tab_0", "rimz-sidebar serve", None),
+            pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
             pane_cmd("terminal_1", "tab_0", "rimz codex app-server serve", None),
-            pane_cmd("terminal_3", "tab_1", "rimz-sidebar serve", None),
+            pane_cmd("terminal_3", "tab_1", "rimz-sidebar", None),
         ];
         assert!(SidebarSnapshot::only_daemon_view(&panes));
     }
@@ -489,7 +484,7 @@ mod tests {
         // host command markers alone, covering builds that omit tab names.
         let own = PaneId::from_parts(MuxName::Zellij, "terminal_0");
         let panes = vec![
-            pane_cmd("terminal_0", "tab_0", "rimz-sidebar serve", None),
+            pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
             pane_cmd(
                 "terminal_1",
                 "tab_0",
@@ -508,7 +503,7 @@ mod tests {
         // its command carries no marker.
         let own = PaneId::from_parts(MuxName::Zellij, "terminal_0");
         let panes = vec![
-            pane_cmd("terminal_0", "rimzd", "rimz-sidebar serve", Some("rimzd")),
+            pane_cmd("terminal_0", "rimzd", "rimz-sidebar", Some("rimzd")),
             pane_cmd("terminal_1", "rimzd", "claude", Some("rimzd")),
         ];
         let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane present");
@@ -519,7 +514,7 @@ mod tests {
     fn own_view_is_daemon_false_in_a_working_view() {
         let own = PaneId::from_parts(MuxName::Zellij, "terminal_0");
         let panes = vec![
-            pane_cmd("terminal_0", "tab_1", "rimz-sidebar serve", None),
+            pane_cmd("terminal_0", "tab_1", "rimz-sidebar", None),
             pane_cmd("terminal_1", "tab_1", "zsh", None),
         ];
         let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane present");

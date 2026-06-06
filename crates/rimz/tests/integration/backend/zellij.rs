@@ -1101,7 +1101,7 @@ fn wait_for_tab_count(xdg: &Path, session: &str, want: usize) -> Vec<u64> {
     }
 }
 
-/// End-to-end self-close: a real `rimz-sidebar` shares a tab with a terminal
+/// End-to-end self-close: a real `rimz sidebar serve` pane shares a tab with a terminal
 /// pane that exits on its own. The sidebar polls `rimz pane list`, sees it is
 /// alone, and exits; being `close_on_exit`, its pane then closes. We assert the
 /// lone sidebar removes its own pane — the tab drops from two terminal panes to
@@ -1112,9 +1112,8 @@ fn sidebar_self_closes_when_its_tab_empties() {
     require_zellij!();
 
     let rimz = assert_cmd::cargo::cargo_bin("rimz");
-    let sidebar = assert_cmd::cargo::cargo_bin("rimz-sidebar");
-    if !rimz.exists() || !sidebar.exists() {
-        eprintln!("rimz/rimz-sidebar binaries not built; skipping self-close test");
+    if !rimz.exists() {
+        eprintln!("rimz binary not built; skipping self-close test");
         return;
     }
 
@@ -1129,7 +1128,7 @@ fn sidebar_self_closes_when_its_tab_empties() {
         xdg: xdg.path().to_path_buf(),
     };
 
-    let layout = self_close_layout(&name, &rimz, &sidebar, xdg.path());
+    let layout = self_close_layout(&name, &rimz, xdg.path());
     let layout_path = cwd.path().join("layout.kdl");
     std::fs::write(&layout_path, layout).expect("write layout");
 
@@ -1210,16 +1209,16 @@ fn wait_for_no_sidebar_heartbeat(dir: &Path, timeout: Duration) -> bool {
     }
 }
 
-/// Layout for the self-close test: a real `rimz-sidebar` renderer on the left
+/// Layout for the self-close test: a real `rimz sidebar serve` renderer on the left
 /// (env-scoped to a throwaway XDG dir) and a terminal that exits after a beat.
 /// Both panes are `close_on_exit`, so each disappears when its command ends.
-fn self_close_layout(session: &str, rimz: &Path, sidebar: &Path, xdg: &Path) -> String {
+fn self_close_layout(session: &str, rimz: &Path, xdg: &Path) -> String {
     let q = |s: String| serde_json::to_string(&s).expect("kdl escape");
     // A short data tick so the snapshot backstop drives the detection. Resize
     // delivery is best-effort — under load the server drops it even with a
     // client attached (observed live) — so the shared snapshot fold is the path
     // the product guarantees.
-    let serve = sidebar_serve_command_with_tick(session, rimz, sidebar, xdg, 2);
+    let serve = sidebar_serve_command_with_tick(session, rimz, xdg, 2);
     format!(
         r#"layout {{
     default_tab_template split_direction="vertical" {{
@@ -1246,7 +1245,6 @@ fn self_close_layout(session: &str, rimz: &Path, sidebar: &Path, xdg: &Path) -> 
 fn sidebar_serve_command_with_tick(
     session: &str,
     rimz: &Path,
-    sidebar: &Path,
     xdg: &Path,
     tick_seconds: u64,
 ) -> String {
@@ -1259,11 +1257,10 @@ fn sidebar_serve_command_with_tick(
     format!(
         "HOME={xdg} XDG_CONFIG_HOME={xdg} XDG_STATE_HOME={xdg} XDG_RUNTIME_DIR={xdg} \
          RIMZ_BIN={rimz} \
-         exec {sidebar} serve --mux zellij --workspace-id ws_0123456789abcdef01234567 \
+         exec {rimz} sidebar serve --mux zellij --workspace-id ws_0123456789abcdef01234567 \
          --session-name {session} --tick-seconds {tick_seconds}",
         xdg = xdg.display(),
         rimz = rimz.display(),
-        sidebar = sidebar.display(),
     )
 }
 

@@ -1,7 +1,7 @@
 //! Verifies `rimz reload` delivery: `reload_sidebars` posts the `reload`
 //! control word to every fresh sidebar's wakeup socket and skips stale ones,
 //! returning the count it signaled. The renderer decodes `reload` into a
-//! re-exec (covered by `rimz-sidebar`'s `input` unit tests).
+//! re-exec (covered by the renderer input unit tests).
 //!
 //! No live mux needed — we plant heartbeats and bound sockets directly under a
 //! `RuntimePaths::under` root and call the library function.

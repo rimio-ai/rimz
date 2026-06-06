@@ -599,7 +599,7 @@ fn ensure_presence_plugin(
     let Some(wasm) = rimz::mux::zellij::presence_plugin_path() else {
         tracing::debug!(
             session = %session_name,
-            "presence plugin artifact not installed; the producer keeps its pane poll",
+            "presence plugin unavailable; the producer keeps its pane poll",
         );
         return;
     };

@@ -82,12 +82,12 @@ The Rust toolchain is pinned by [rust-toolchain.toml](./rust-toolchain.toml). Ze
 
 ```sh
 make build      # cargo xtask build
-make install    # install rimz, rimz-sidebar, and the presence plugin
+make install    # install the single rimz binary
 make test       # cargo xtask test
 make ci         # full CI gate
 ```
 
-`make` is a thin wrapper around `cargo xtask <task>`; `xtask` is the source of truth for automation. Use focused tasks for routine validation and the full CI gate when the change calls for it. `make install` writes binaries to `${CARGO_HOME:-$HOME/.cargo}/bin`, so that directory must be on `PATH`. `sudo make install` builds as the invoking user and installs to `/usr/local/bin`; set `PREFIX=/opt/rimz` or `DESTDIR=...` to change the root-owned destination.
+`make` is a thin wrapper around `cargo xtask <task>`; `xtask` is the source of truth for automation. Use focused tasks for routine validation and the full CI gate when the change calls for it. `make install` writes `rimz` to `${CARGO_HOME:-$HOME/.cargo}/bin`, so that directory must be on `PATH`. `sudo make install` builds as the invoking user and installs to `/usr/local/bin`; set `PREFIX=/opt/rimz` or `DESTDIR=...` to change the root-owned destination.
 
 After installing, smoke-test the CLI:
 

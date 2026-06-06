@@ -1,0 +1,263 @@
+//! Perf guard for frame composition at fleet scale (see
+//! docs/internals/performance.md → frame redraw). The render thread paints by
+//! recomposing the whole frame from the cached snapshot, so its cost must stay
+//! linear in the row count — an accidental per-row full-snapshot scan (O(rows²))
+//! is exactly the regression a tens-of-agents fleet would feel as a stuttering
+//! spinner. Bounds are relative (big-vs-small ratio) plus one deliberately loose
+//! wall-clock tripwire, never a tight budget that flakes on a busy CI box.
+
+use std::io;
+use std::time::{Duration, Instant};
+
+use crate::agents::RateLimitWindow;
+use crate::ids::{MuxName, PaneId, WorkspaceId};
+use crate::sidebar_renderer::render::render_fixed;
+use crate::{
+    SidebarProviderPanel, SidebarRow, SidebarRowKind, SidebarSnapshot, SidebarStatusCount,
+    SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, SpendTally, SpendWindow,
+};
+use jiff::Timestamp;
+
+fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
+    SidebarSubAgent {
+        id: format!("{parent}-sub-{index}"),
+        name: "Explore".to_owned(),
+        status: crate::feed::AgentStatus::Running,
+        phase: crate::agents::TurnPhase::Acting,
+        task: None,
+        model: Some("claude-opus-4-8".to_owned()),
+        effort: Some("high".to_owned()),
+        description: Some(format!("scan module {index} for callers")),
+        total_tokens: Some(40_000 + (index as u64) * 7_321),
+        elapsed_secs: Some(90 + index as i64),
+        started_at: Some(Timestamp::now()),
+        last_activity: Timestamp::now(),
+    }
+}
+
+fn agent_row(group: usize, index: usize) -> SidebarRow {
+    let id = format!("agent-{group}-{index}");
+    SidebarRow {
+        row_kind: SidebarRowKind::Agent,
+        id: id.clone(),
+        name: "claude".to_owned(),
+        status: Some(crate::feed::AgentStatus::Running),
+        phase: crate::agents::TurnPhase::Acting,
+        pane: Some(crate::feed::PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{group}_{index}")),
+            session_name: "rimz-perf".to_owned(),
+            view_id: Some(format!("tab_{group}")),
+            view_kind: Some(crate::ids::ViewKind::Tab),
+            view_name: None,
+            is_focused: false,
+            command: Some("node".to_owned()),
+            cwd: Some(format!("/repo/wt{group}")),
+            pane_pid: None,
+            pane_process_start: None,
+            rss_kb: None,
+            cpu_pct: None,
+            io_bps: None,
+        }),
+        request_id: None,
+        surface: None,
+        task: Some(format!("refactor module {index} of worktree {group}")),
+        prompt: None,
+        model: Some("Opus".to_owned()),
+        effort: Some("high".to_owned()),
+        context_pct: Some(((index * 13) % 100) as u8),
+        context_window: Some(200_000),
+        total_tokens: Some(10_000 + (index as u64) * 991),
+        cache_read_input_tokens: None,
+        fresh_input_tokens: None,
+        output_tokens: None,
+        todo_done: Some(3),
+        todo_total: Some(7),
+        context: None,
+        context_severity: Some(crate::feed::ContextSeverity::Yellow),
+        worktree_path: Some(format!("/repo/wt{group}")),
+        worktree_branch: Some(format!("feature-{group}")),
+        last_activity: Timestamp::now(),
+        registered_at: None,
+        resolver: None,
+        options: Vec::new(),
+        // Row 0 is the default selection, so its card expands these in every
+        // composed frame — the sub-agent loop stays inside the measured work.
+        sub_agents: (0..3).map(|sub| sub_agent(&id, sub)).collect(),
+        process_active: false,
+        command_detail: None,
+        compacting: false,
+        turn_error_label: None,
+        rss_kb: None,
+        cpu_pct: None,
+        io_bps: None,
+    }
+}
+
+fn spend_window(usd: f64) -> SpendWindow {
+    SpendWindow {
+        usd,
+        tokens: (usd * 100_000.0) as u64,
+        input: (usd * 80_000.0) as u64,
+        output: (usd * 20_000.0) as u64,
+        cache_read: (usd * 400_000.0) as u64,
+        cache_write: (usd * 50_000.0) as u64,
+        sessions: 4,
+    }
+}
+
+fn provider_panel(index: usize) -> SidebarProviderPanel {
+    SidebarProviderPanel {
+        kind: format!("provider{index}"),
+        product_name: format!("Provider {index}"),
+        art: vec!["▐███▌".to_owned(), "▝▜█▛▘".to_owned(), " ▘▝ ".to_owned()],
+        color: 100 + index as u8,
+        version: Some("1.2.3".to_owned()),
+        plan: Some("Max".to_owned()),
+        metered: true,
+        remote_control: false,
+        spending: Some(SpendTally {
+            today: spend_window(4.2 + index as f64),
+            week: spend_window(31.0 + index as f64),
+            month: spend_window(118.0 + index as f64),
+            year: spend_window(960.0 + index as f64),
+        }),
+        // Two budget windows per panel so the mana bars and the fleet ledger's
+        // W/M columns pay their real per-window cost at provider scale.
+        windows: vec![
+            RateLimitWindow {
+                used_percentage: Some(((index * 17) % 100) as u8),
+                resets_at: Some(Timestamp::now()),
+                duration_mins: Some(300),
+            },
+            RateLimitWindow {
+                used_percentage: Some(((index * 7) % 100) as u8),
+                resets_at: Some(Timestamp::now()),
+                duration_mins: Some(10_080),
+            },
+        ],
+    }
+}
+
+/// `groups` worktree groups of `per_group` agent cards plus `providers`
+/// dashboard blocks — the synthetic fleet the guard scales. Every card carries
+/// sub-agents and every panel carries spend figures and budget windows, so the
+/// loop-heavy compose paths (the selected card's sub-agent expansion, the
+/// dashboard's mana bars, the fleet ledger's per-window columns) sit inside the
+/// measured work rather than short-circuiting on empty fixtures.
+fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
+    let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
+    let now = Timestamp::now();
+    SidebarSnapshot {
+        workspace_id,
+        display_name: "query-engine".to_owned(),
+        generated_at: now,
+        now,
+        worktree_groups: (0..groups)
+            .map(|group| SidebarWorktreeGroup {
+                key: format!("/repo/wt{group}"),
+                label: format!("feature-{group}"),
+                kind: SidebarWorktreeKind::Worktree,
+                status_counts: vec![SidebarStatusCount {
+                    status: crate::feed::AgentStatus::Running,
+                    count: per_group,
+                }],
+                rows: (0..per_group)
+                    .map(|index| agent_row(group, index))
+                    .collect(),
+                hidden_count: 0,
+                diff_added: Some(120),
+                diff_removed: Some(40),
+                commits_ahead: Some(3),
+                commits_behind: Some(1),
+                trunk: Some("main".to_owned()),
+                clean: None,
+            })
+            .collect(),
+        needs_attention: Vec::new(),
+        resolver_working: Vec::new(),
+        agents: Vec::new(),
+        agent_hooks_ready: true,
+        wired_lazy_kinds: Vec::new(),
+        lazy_agent_default_models: std::collections::BTreeMap::new(),
+        own_view: None,
+        only_daemon_view_remains: false,
+        project_root: Some(std::path::PathBuf::from("/repo")),
+        worktree_roots: Vec::new(),
+        root_class: crate::workspace::RootClass::Repo,
+        sidebar: crate::config::SidebarConfig::default(),
+        providers: (0..providers).map(provider_panel).collect(),
+        value_tally: None,
+        today_spend_live_usd: None,
+        reflects_log: None,
+    }
+}
+
+fn render_n(snapshot: &SidebarSnapshot, rounds: u32) -> Duration {
+    let start = Instant::now();
+    for _ in 0..rounds {
+        render_fixed(io::sink(), snapshot, None, 54, 200).expect("render");
+    }
+    start.elapsed()
+}
+
+/// Proves the fixture loads the loop-heavy paths it claims to: the selected
+/// card's sub-agent expansion and the per-window mana bars must appear in the
+/// composed frame, or the budget below measures a short-circuit instead of the
+/// real work.
+#[test]
+fn the_synthetic_fleet_pays_the_loop_heavy_paths() {
+    let mut out = Vec::new();
+    render_fixed(&mut out, &fleet(10, 5, 8), None, 54, 200).expect("render");
+    let frame = String::from_utf8_lossy(&out);
+    assert!(
+        frame.contains("subagents (3)"),
+        "the default-selected card no longer expands its sub-agents"
+    );
+    assert!(
+        frame.contains("5h"),
+        "the provider panels no longer paint their budget windows"
+    );
+}
+
+/// The linearity work-proxy: a 10-worktree / 50-agent / 8-provider fleet holds
+/// roughly 10× the content of the small room, so its compose may cost roughly
+/// 10× — generous slack included. What this catches is a superlinear regression
+/// (a per-row scan of the whole snapshot, an O(rows²) sort) that would multiply
+/// the ratio far past the slack, while staying immune to absolute machine speed.
+#[test]
+fn compose_scales_linearly_with_fleet_size() {
+    const ROUNDS: u32 = 60;
+    let small = fleet(1, 5, 1);
+    let big = fleet(10, 5, 8);
+
+    // Warm both paths once so lazy init (palette OnceLock, allocator warmup)
+    // lands outside the measured rounds.
+    render_n(&small, 5);
+    render_n(&big, 5);
+
+    let small_elapsed = render_n(&small, ROUNDS).max(Duration::from_micros(1));
+    let big_elapsed = render_n(&big, ROUNDS);
+
+    let ratio = big_elapsed.as_secs_f64() / small_elapsed.as_secs_f64();
+    assert!(
+        ratio < 60.0,
+        "big/small compose ratio {ratio:.1}× suggests a superlinear regression \
+         (content ratio is ~10×; big {big_elapsed:?}, small {small_elapsed:?})"
+    );
+}
+
+/// The tripwire, not a budget: a single fleet-scale frame must land orders of
+/// magnitude under this ceiling (sub-millisecond in practice). It only catches
+/// a catastrophic regression — compose suddenly forking, reading files, or
+/// blowing up combinatorially — without flaking on a slow CI box.
+#[test]
+fn compose_of_a_large_fleet_stays_far_under_the_frame_budget() {
+    let big = fleet(10, 5, 8);
+    render_n(&big, 5); // warm
+    let elapsed = render_n(&big, 10) / 10;
+    assert!(
+        elapsed < Duration::from_millis(50),
+        "one fleet-scale compose took {elapsed:?}; the 100ms frame grid leaves \
+         no headroom for this"
+    );
+}

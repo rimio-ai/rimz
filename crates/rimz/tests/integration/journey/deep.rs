@@ -2,7 +2,7 @@
 //!
 //! The phase journey (`sidebar_phases.rs`) drives the renderer through a
 //! `portable-pty`; these two tests close the loop by birthing a real session
-//! with a real `rimz-sidebar` pane, firing an agent hook, and capturing what
+//! with a real `rimz sidebar serve` pane, firing an agent hook, and capturing what
 //! the actual mux pane shows. They self-skip without the mux binary (the
 //! common CI shape) and under a socket-bind sandbox.
 
@@ -15,30 +15,23 @@ use std::time::{Duration, Instant};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use tempfile::TempDir;
 
-use super::{rimz_sidebar_bin, session_start_at};
+use super::{rimz_bin, session_start_at};
 use crate::common::{CommandTimeoutExt, Env};
 
 const CAPTURE_BUDGET: Duration = Duration::from_secs(15);
 
 /// Shell line that runs the renderer over `env`'s ledger but with its own short
 /// `XDG_RUNTIME_DIR` (the wakeup socket must stay under the AF_UNIX limit).
-fn sidebar_serve_line(
-    env: &Env,
-    sidebar: &Path,
-    runtime: &Path,
-    mux: &str,
-    session: &str,
-) -> String {
+fn sidebar_serve_line(env: &Env, rimz: &Path, runtime: &Path, mux: &str, session: &str) -> String {
     format!(
         "XDG_STATE_HOME={state} XDG_CONFIG_HOME={config} XDG_RUNTIME_DIR={runtime} HOME={home} \
-         RIMZ_BIN={rimz} exec {sidebar} serve --mux {mux} --workspace-id {ws} \
+         RIMZ_BIN={rimz} exec {rimz} sidebar serve --mux {mux} --workspace-id {ws} \
          --session-name {session} --tick-seconds 1",
         state = env.state_root().display(),
         config = env.config_root().display(),
         runtime = runtime.display(),
         home = env.project_root.display(),
-        rimz = env.rimz_bin().display(),
-        sidebar = sidebar.display(),
+        rimz = rimz.display(),
         ws = env.workspace_id.as_str(),
     )
 }
@@ -53,7 +46,7 @@ fn fake_codex_bin(dir: &Path) -> PathBuf {
     path
 }
 
-/// tmux: split a real `rimz-sidebar` pane beside a live command, fire `codex
+/// tmux: split a real `rimz sidebar serve` pane beside a live command, fire `codex
 /// SessionStart`, and capture the sidebar pane until the agent row appears.
 #[test]
 fn tmux_room_shows_agent_after_hook() {
@@ -61,8 +54,8 @@ fn tmux_room_shows_agent_after_hook() {
         eprintln!("tmux not on PATH; skipping deep tmux smoke");
         return;
     }
-    let Some(sidebar) = rimz_sidebar_bin() else {
-        eprintln!("rimz-sidebar not built; skipping deep tmux smoke");
+    let Some(rimz) = rimz_bin() else {
+        eprintln!("rimz not built; skipping deep tmux smoke");
         return;
     };
     let env = Env::new();
@@ -116,7 +109,7 @@ fn tmux_room_shows_agent_after_hook() {
     // hook stamps it exactly as TMUX_PANE would inside that pane, binding the
     // agent row to its live pane.
     let codex_pane = tmux_capture(&socket, &["list-panes", "-t", "room", "-F", "#{pane_id}"]);
-    let serve = sidebar_serve_line(&env, &sidebar, runtime.path(), "tmux", "room");
+    let serve = sidebar_serve_line(&env, &rimz, runtime.path(), "tmux", "room");
     tmux(&socket, &["split-window", "-h", "-t", "room", &serve]);
 
     // Wire codex the way the user does, then run it through its installed
@@ -183,8 +176,8 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
         eprintln!("tmux not on PATH; skipping deep tmux self-close smoke");
         return;
     }
-    let Some(sidebar) = rimz_sidebar_bin() else {
-        eprintln!("rimz-sidebar not built; skipping deep tmux self-close smoke");
+    let Some(rimz) = rimz_bin() else {
+        eprintln!("rimz not built; skipping deep tmux self-close smoke");
         return;
     };
     let env = Env::new();
@@ -221,7 +214,7 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
         ],
     );
     let codex_pane = tmux_capture(&socket, &["list-panes", "-t", "room", "-F", "#{pane_id}"]);
-    let serve = sidebar_serve_line(&env, &sidebar, runtime.path(), "tmux", "room");
+    let serve = sidebar_serve_line(&env, &rimz, runtime.path(), "tmux", "room");
     tmux(&socket, &["split-window", "-h", "-t", "room", &serve]);
 
     // Drive a real agent so the sidebar renders a complete frame; reaching that
@@ -295,8 +288,8 @@ fn zellij_room_shows_agent_after_hook() {
         eprintln!("zellij not on PATH; skipping deep zellij smoke");
         return;
     }
-    let Some(sidebar) = rimz_sidebar_bin() else {
-        eprintln!("rimz-sidebar not built; skipping deep zellij smoke");
+    let Some(rimz) = rimz_bin() else {
+        eprintln!("rimz not built; skipping deep zellij smoke");
         return;
     };
     let env = Env::new();
@@ -319,7 +312,7 @@ fn zellij_room_shows_agent_after_hook() {
 
     // Birth a background session whose left pane is a real renderer over the
     // shared ledger (the self-close layout shape from `backend/zellij.rs`).
-    let serve = sidebar_serve_line(&env, &sidebar, runtime.path(), "zellij", name);
+    let serve = sidebar_serve_line(&env, &rimz, runtime.path(), "zellij", name);
     let layout = format!(
         r#"layout {{
     tab name="room" {{

@@ -12,10 +12,10 @@
 
 mod layout;
 
-use std::env;
 use std::num::NonZeroU16;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use std::{env, fs};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,11 @@ use super::{
 use crate::config::ZellijConfig;
 use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
+use crate::ledger::{atomic, paths};
+
+const EMBEDDED_PRESENCE_PLUGIN: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/rimz-presence-zellij.wasm"));
+const PRESENCE_PLUGIN_FILE: &str = "rimz-presence-zellij.wasm";
 
 /// Minimum Zellij version that ships the pipe-broadcast semantics Rimz uses
 /// as a best-effort wakeup optimization.
@@ -150,23 +155,64 @@ fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
 }
 
 /// Locate the presence-plugin wasm: the `RIMZ_PRESENCE_PLUGIN` override, else
-/// `rimz-presence-zellij.wasm` beside the running executable — where
-/// `cargo xtask install` places it. `None` (not installed) leaves the session
-/// in poll mode; `rimz doctor` names the missing artifact and the fix.
+/// the embedded plugin materialized under `$XDG_DATA_HOME/rimz/plugins/`, else
+/// a development fallback beside the running executable. `None` leaves the
+/// session in poll mode; `rimz doctor` names the missing artifact and the fix.
 ///
 /// Canonical, because Zellij keys the user's one-time permission grant on the
 /// exact path string it is handed: one real artifact must read as one string
 /// however rimz was invoked (symlinked bin dir, relative exe), or the user is
 /// re-prompted per spelling.
 pub fn presence_plugin_path() -> Option<PathBuf> {
-    let raw = match env::var_os("RIMZ_PRESENCE_PLUGIN") {
-        Some(path) => PathBuf::from(path),
-        None => env::current_exe()
-            .ok()?
-            .parent()?
-            .join("rimz-presence-zellij.wasm"),
-    };
-    raw.canonicalize().ok().filter(|path| path.is_file())
+    if let Some(path) = env::var_os("RIMZ_PRESENCE_PLUGIN") {
+        return PathBuf::from(path)
+            .canonicalize()
+            .ok()
+            .filter(|path| path.is_file());
+    }
+    if let Some(path) = embedded_presence_plugin_path() {
+        return Some(path);
+    }
+    env::current_exe()
+        .ok()?
+        .parent()?
+        .join(PRESENCE_PLUGIN_FILE)
+        .canonicalize()
+        .ok()
+        .filter(|path| path.is_file())
+}
+
+fn embedded_presence_plugin_path() -> Option<PathBuf> {
+    match materialize_presence_plugin_bytes(EMBEDDED_PRESENCE_PLUGIN, &paths::data_home()) {
+        Ok(Some(path)) => path.canonicalize().ok().filter(|path| path.is_file()),
+        Ok(None) => None,
+        Err(err) => {
+            tracing::debug!(error = %err, "materializing embedded presence plugin failed");
+            None
+        }
+    }
+}
+
+fn materialized_presence_plugin_path_under(data_root: &std::path::Path) -> PathBuf {
+    data_root
+        .join("rimz")
+        .join("plugins")
+        .join(PRESENCE_PLUGIN_FILE)
+}
+
+fn materialize_presence_plugin_bytes(
+    bytes: &[u8],
+    data_root: &std::path::Path,
+) -> std::result::Result<Option<PathBuf>, atomic::AtomicErr> {
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    let path = materialized_presence_plugin_path_under(data_root);
+    if fs::read(&path).is_ok_and(|existing| existing == bytes) {
+        return Ok(Some(path));
+    }
+    atomic::write_bytes_atomically(&path, bytes)?;
+    Ok(Some(path))
 }
 
 /// The `key=value,key=value` configuration the plugin reads at load. The
@@ -393,7 +439,7 @@ impl ZellijBackend {
     /// pane on the left and focuses the user's terminal on the right. The layout
     /// doubles as the default tab template, so new tabs are born with a sidebar
     /// too. The sidebar pane is `close_on_exit`, so when its own process exits
-    /// the pane closes — see the self-close loop in `crates/rimz-sidebar`.
+    /// the pane closes — see the self-close loop in `sidebar_renderer::app`.
     ///
     /// Zellij parses `--default-layout` asynchronously, after the
     /// `--create-background` client returns, so the temp layout file must

@@ -1516,11 +1516,7 @@ fn live_panes_suppress_stale_agent_attention_without_process() {
 
     let snapshot = room(vec![item], Vec::new()).with_live_panes(
         vec![
-            pane(
-                "%0",
-                "/home/me/.cargo/bin/rimz-sidebar serve --workspace-id ws_x",
-                "/repo/main",
-            ),
+            pane("%0", "rimz-sidebar", "/repo/main"),
             pane("%1", "zsh", "/repo/main"),
         ],
         None,

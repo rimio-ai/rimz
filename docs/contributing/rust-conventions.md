@@ -2,7 +2,7 @@
 
 > See [AGENTS.md](../../AGENTS.md) for the engineering principles and implementation rules this doc operationalizes.
 
-The shape that every module in `crates/rimz` and `crates/rimz-sidebar` follows. Pick the closest existing module before inventing; the team values consistency over novelty.
+The shape that every module in `crates/rimz` follows. Pick the closest existing module before inventing; the team values consistency over novelty.
 
 ## CLI shape
 
@@ -79,7 +79,7 @@ pub type Result<T> = std::result::Result<T, EventLogErr>;
 
 The `Result<T>` alias lives next to the enum it shadows. Predicates like `is_recoverable()` or `is_retryable()` go on the enum, not at call sites. `#[from]` is used for boring system-error conversions; structured context is captured as struct fields on the variant, never lost.
 
-`anyhow` is allowed only at binary boundaries: `crates/rimz/src/main.rs`, the private `cli/` module tree, `crates/rimz-sidebar/src/main.rs`, and `xtask/`. Library modules return their own typed `Result`.
+`anyhow` is allowed only at binary boundaries: `crates/rimz/src/main.rs`, the private `cli/` module tree, and `xtask/`. Library modules return their own typed `Result`.
 
 ## Identifier newtypes
 
@@ -192,7 +192,7 @@ Current snapshot — entries move when a better-designed alternative wins on des
 | --- | --- |
 | **Runtime — core** | `clap`, `serde`, `serde_json`, `tokio`, `tracing`, `tracing-subscriber`, `thiserror`, `uuid`, `jiff` |
 | **Runtime — utility** | `tempfile`, `fs4`, `which`, `sha2`, `hex`, `crc32fast` (event-log frame checksum: hardware CRC32 on the per-frame validate and the repair scan; already transitive via `ureq` → `flate2` and already vet-exempted), `nix` (Unix sockets, sigaction) on `cfg(unix)`, `ureq` (rustls; the runtime pricing-refresh HTTP client, also used by `xtask pricing-refresh`), `terminal_size` (the launch-path terminal probe behind the sidebar birth size; already transitive via clap's `wrap_help`) |
-| **Binary boundary only** | `anyhow` — permitted in `crates/rimz/src/main.rs`, the private `cli/` module tree, `crates/rimz-sidebar/src/main.rs`, and `xtask/` |
+| **Binary boundary only** | `anyhow` — permitted in `crates/rimz/src/main.rs`, the private `cli/` module tree, and `xtask/` |
 | **Sidebar runtime** | `ratatui` (via its `crossterm_0_29` feature); direct `crossterm` only when sidebar I/O actually requires it |
 | **Zellij plugin (wasm-only)** | `zellij-tile` — the official plugin API, a `cfg(target_family = "wasm")` dependency of `crates/rimz-presence-zellij` alone, so no host artifact links it. Its tree is excluded from `deny.toml`'s audited targets (the wasm executes inside Zellij's plugin sandbox) and covered by `cargo vet` at `safe-to-run` |
 | **Tests** | `insta`, `proptest`, `assert_cmd`, `predicates`, `vt100`, `tempfile`, `portable-pty` |

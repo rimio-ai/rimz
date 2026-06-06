@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rimz", "crates/rimz-presence-zellij", "crates/rimz-sidebar", "xtask"]
+members = ["crates/rimz", "crates/rimz-presence-zellij", "xtask"]
 resolver = "2"
 
 [workspace.package]
@@ -94,9 +94,9 @@ portable-pty = "0.9"
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
 
-# The integration suite spawns the `rimz` / `rimz-sidebar` binaries hundreds of
-# times; an unoptimized dependency tree (serde, clap, jiff, ratatui) dominates
-# per-spawn startup. Optimize dependencies even in dev/test builds — they
+# The integration suite spawns the `rimz` binary hundreds of times; an
+# unoptimized dependency tree (serde, clap, jiff, ratatui) dominates per-spawn
+# startup. Optimize dependencies even in dev/test builds — they
 # compile once and cache — while leaving our own crates at opt-level 0 so
 # incremental rebuilds and debugging stay fast.
 [profile.dev.package."*"]

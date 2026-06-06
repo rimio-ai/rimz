@@ -14,7 +14,7 @@ The snapshot command runs in the `rimz` binary, which owns mux access, so it enu
 
 Two renderers project the same snapshot today, with a third planned:
 
-- **Native pane (default).** The `rimz-sidebar` binary in an ordinary pane — identical on Zellij and tmux, across detach/reattach. The default and the cross-backend fallback.
+- **Native pane (default).** `rimz sidebar serve` in an ordinary pane — identical on Zellij and tmux, across detach/reattach. The default and the cross-backend fallback.
 - **CLI listings.** `rimz feed list` and friends — the same data as text.
 - **Zellij plugin rail (planned).** A docked, persistent left rail for Zellij users who opt in. See [Zellij plugin rail](#zellij-plugin-rail-planned).
 
@@ -222,7 +222,7 @@ The sidebar keeps the last successful snapshot across iterations. When the in-pr
 4. On recovery, lingers as a dim `⚠ last alert 8s ago … · x dismiss` notice rather than erasing, so a failure that flickered past is still visible; `x` dismisses it, a fresh failure re-arms it. While the alert is active the body — first-run hint, footer, help overlay — steps aside and lets the alert speak alone.
 5. Gives up if the failure never clears — a failing heartbeat write, a vanished ledger, a mux that stays dead. A renderer continuously degraded past `GIVE_UP_AFTER_DEGRADED` is non-functional and — once its heartbeat goes stale — invisible to `rimz reload` and ledger wakeups, so it exits rather than freezing on a stale frame; reload/attach then rebuilds a current-build sidebar against the live panes, and a lone orphan with no working pane simply disappears.
 
-This is the degraded twin of [self-close](#self-close): self-close fires when the view empties, give-up when the view can no longer be read at all. The decision logic is the pure function `app::compute_next_state`, which folds each fetch outcome into a debounced, sticky `Health` (`failure_streak` plus an optional `Alert`); the loop applies its `RenderState` verbatim. `rimz-sidebar` defaults tracing to `off` so warnings do not corrupt the terminal UI — set `RUST_LOG` when debugging the renderer.
+This is the degraded twin of [self-close](#self-close): self-close fires when the view empties, give-up when the view can no longer be read at all. The decision logic is the pure function `app::compute_next_state`, which folds each fetch outcome into a debounced, sticky `Health` (`failure_streak` plus an optional `Alert`); the loop applies its `RenderState` verbatim. `rimz sidebar serve` defaults tracing to `off` so warnings do not corrupt the terminal UI — set `RUST_LOG` when debugging the renderer.
 
 ## Resume-on-rebirth
 

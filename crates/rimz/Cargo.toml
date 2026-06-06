@@ -82,6 +82,8 @@ tracing.workspace = true
 ureq.workspace = true
 uuid.workspace = true
 which.workspace = true
+ratatui.workspace = true
+tachyonfx.workspace = true
 
 # anyhow is the binary boundary; per rust-conventions.md it is permitted in
 # `crates/rimz/src/main.rs` and the private CLI module tree. Library modules

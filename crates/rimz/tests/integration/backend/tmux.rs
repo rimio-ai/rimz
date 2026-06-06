@@ -922,15 +922,14 @@ fn reconcile_sidebars_collapses_an_orphan_sidebar_only_window() {
     let server = TmuxServer::new();
     server.ensure_with_shell("multi"); // window 0: a working `sh` pane
     server.tmux(&["rename-window", "-t", "multi:0", "room"]);
-    let (_stub_dir, stub) = sidebar_process_stub();
-    // window 1: a lone `rimz-sidebar` pane, no working sibling — the orphan.
+    // window 1: a lone sidebar-titled pane, no working sibling — the orphan.
     server.tmux(&[
         "new-window",
         "-t",
         "multi",
         "-n",
         "ghost",
-        &format!("exec {} 600", stub.display()),
+        "printf '\\033]2;rimz-sidebar\\007'; exec sleep 600",
     ]);
     server.wait_for_pane_command("multi", "rimz-sidebar");
     assert_eq!(
@@ -981,17 +980,6 @@ fn sidebar_command_stub() -> (TempDir, PathBuf) {
         perms.set_mode(0o755);
         std::fs::set_permissions(&path, perms).expect("chmod");
     }
-    (dir, path)
-}
-
-/// A real binary named `rimz-sidebar` (the backend's `SIDEBAR_BIN_NAME`), so a
-/// pane running it reports `pane_current_command == "rimz-sidebar"` and reconcile
-/// classifies it as a sidebar. A `#!/bin/sh` stub would report `sh`, so copy a
-/// genuine executable (`sleep`) under the wanted name instead.
-fn sidebar_process_stub() -> (TempDir, PathBuf) {
-    let dir = TempDir::new().expect("stub dir");
-    let path = dir.path().join("rimz-sidebar");
-    std::fs::copy("/bin/sleep", &path).expect("copy sleep to rimz-sidebar");
     (dir, path)
 }
 

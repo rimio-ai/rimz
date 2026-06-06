@@ -391,10 +391,10 @@ impl TmuxBackend {
     }
 }
 
-/// Binary name a tmux sidebar pane runs in the foreground. The launching `rimz
-/// sidebar serve` parent waits on the `rimz-sidebar` child, so that child is
-/// what `pane_current_command` reports.
-const SIDEBAR_BIN_NAME: &str = "rimz-sidebar";
+/// Pane title the sidebar renderer sets through the terminal title escape. The
+/// host binary is now `rimz`, so tmux identifies chrome through this title
+/// instead of the foreground command name.
+const SIDEBAR_PANE_TITLE: &str = "rimz-sidebar";
 
 /// The `rimz sidebar serve …` argv a tmux sidebar pane runs. Shared by initial
 /// launch and in-place recovery so the two cannot drift.
@@ -413,7 +413,7 @@ fn sidebar_serve_command(opts: &SidebarPaneOptions) -> Vec<String> {
 }
 
 fn is_tmux_sidebar(pane: &PaneRef) -> bool {
-    pane.command.as_deref() == Some(SIDEBAR_BIN_NAME)
+    pane.command.as_deref() == Some(SIDEBAR_PANE_TITLE)
 }
 
 /// Group a pane list into per-window [`ViewSidebars`] for the reconcile planner:
@@ -611,7 +611,7 @@ impl MuxBackend for TmuxBackend {
             "list-panes",
             "-a",
             "-F",
-            "#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_start_time}\t#{pane_active}\t#{window_name}",
+            "#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_start_time}\t#{pane_active}\t#{window_name}\t#{pane_title}",
         ]);
         if let Some(session) = opts.session_name {
             spec = spec.args(["-t".to_owned(), session]);
@@ -971,7 +971,14 @@ fn parse_pane_line(line: &str) -> Option<PaneRef> {
         view_kind: Some(ViewKind::Window),
         view_name: trimmed_nonempty(8),
         is_focused: cols.get(7).is_some_and(|value| value.trim() == "1"),
-        command: trimmed_nonempty(3),
+        command: if cols
+            .get(9)
+            .is_some_and(|value| value.trim() == SIDEBAR_PANE_TITLE)
+        {
+            Some(SIDEBAR_PANE_TITLE.to_owned())
+        } else {
+            trimmed_nonempty(3)
+        },
         cwd: trimmed_nonempty(4),
         pane_pid: cols
             .get(5)
@@ -1143,10 +1150,10 @@ mod tests {
     #[test]
     fn views_with_sidebars_groups_by_window_and_flags_working() {
         let panes = vec![
-            tmux_pane("%1", "@0", "sh"),             // working pane
-            tmux_pane("%2", "@0", SIDEBAR_BIN_NAME), // its sidebar
-            tmux_pane("%3", "@0", SIDEBAR_BIN_NAME), // a duplicate sidebar
-            tmux_pane("%4", "@1", SIDEBAR_BIN_NAME), // a sidebar-only window
+            tmux_pane("%1", "@0", "sh"),               // working pane
+            tmux_pane("%2", "@0", SIDEBAR_PANE_TITLE), // its sidebar
+            tmux_pane("%3", "@0", SIDEBAR_PANE_TITLE), // a duplicate sidebar
+            tmux_pane("%4", "@1", SIDEBAR_PANE_TITLE), // a sidebar-only window
         ];
         let views = tmux_views_with_sidebars(&panes);
         assert_eq!(views.len(), 2, "two windows, in first-seen order");

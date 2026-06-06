@@ -117,9 +117,7 @@ fn is_sweep_target(
     }
     let mux_server = include_mux_server && cmdline.contains("--server");
     let workspace_daemon = cmdline.contains(workspace_id)
-        && (cmdline.contains("rimz-sidebar")
-            || cmdline.contains("sidebar")
-            || cmdline.contains("app-server"));
+        && (cmdline.contains("sidebar") || cmdline.contains("app-server"));
     mux_server || workspace_daemon
 }
 
@@ -208,9 +206,8 @@ pub(crate) fn sweep_orphan_processes(
 }
 
 /// Whether `cmdline` is one of `(workspace, session)`'s sidebar *serve* processes
-/// — the wrapper `rimz sidebar serve` or the renderer `rimz-sidebar serve` — and
-/// not the mux server or the agent app-server. The exact, path-derived session
-/// name plus the workspace id scope it; `sidebar` + `serve` selects the renderer
+/// — `rimz sidebar serve` — and not the mux server or the agent app-server. The
+/// exact, path-derived session name plus the workspace id scope it; `sidebar` + `serve` selects the renderer
 /// pair and excludes `rimz codex app-server serve`.
 pub(crate) fn is_sidebar_serve(cmdline: &str, workspace_id: &str, session_name: &str) -> bool {
     cmdline.contains(session_name)
@@ -339,7 +336,7 @@ mod tests {
                 1,
                 me,
                 &format!(
-                    "rimz-sidebar serve --workspace-id {WS} --mux zellij --session-name {SESSION}"
+                    "rimz sidebar serve --workspace-id {WS} --mux zellij --session-name {SESSION}"
                 ),
             ),
             // Leaked codex app-server for this workspace+session — swept.
@@ -445,7 +442,7 @@ mod tests {
         let wrapper =
             format!("rimz sidebar serve --mux zellij --workspace-id {WS} --session-name {SESSION}");
         let renderer = format!(
-            "rimz-sidebar serve --workspace-id {WS} --mux zellij --session-name {SESSION} --tick-seconds 1"
+            "rimz sidebar serve --workspace-id {WS} --mux zellij --session-name {SESSION} --tick-seconds 1"
         );
         assert!(is_sidebar_serve(&wrapper, WS, SESSION));
         assert!(is_sidebar_serve(&renderer, WS, SESSION));
@@ -469,7 +466,7 @@ mod tests {
 
     #[test]
     fn is_sidebar_serve_is_scoped_to_the_workspace_and_session() {
-        let other_session = "rimz-sidebar serve --workspace-id ws_other --session-name rimz-other";
+        let other_session = "rimz sidebar serve --workspace-id ws_other --session-name rimz-other";
         assert!(!is_sidebar_serve(other_session, WS, SESSION));
     }
 }

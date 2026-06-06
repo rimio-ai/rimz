@@ -245,6 +245,18 @@ pub fn config_home() -> PathBuf {
     env::temp_dir().join("rimz-config")
 }
 
+/// Per-user data root. Rimz stores stable, user-level artifacts here, including
+/// the materialized embedded Zellij presence plugin.
+pub fn data_home() -> PathBuf {
+    if let Some(value) = env_path("XDG_DATA_HOME") {
+        return value;
+    }
+    if let Some(home) = env_path("HOME") {
+        return home.join(".local/share");
+    }
+    env::temp_dir().join("rimz-data")
+}
+
 /// Per-user cache root, where Zellij keeps its serialized-session cache
 /// (`<cache>/zellij/<contract_version>/session_info/<name>`). `rimz reset` wipes
 /// the matching entry so a stuck room cannot be resurrected.

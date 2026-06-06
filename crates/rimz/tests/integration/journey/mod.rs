@@ -1,9 +1,8 @@
 //! End-user journey suite: launch the room, run agents, watch the sidebar.
 //!
 //! These tests read as the session story in `docs/guide/product.md` and
-//! `docs/guide/experience.md`. They drive the *real* `rimz-sidebar serve`
-//! renderer through a `portable-pty` over a *real* ledger (the
-//! `crates/rimz-sidebar/tests/resize_redraw.rs` pattern) and assert on
+//! `docs/guide/experience.md`. They drive the real `rimz sidebar serve`
+//! renderer through a `portable-pty` over a real ledger and assert on
 //! `vt100`-parsed screen text — what the column actually shows. Renderer
 //! mechanics stay in `docs/internals/sidebar.md`.
 //!
@@ -15,6 +14,7 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 mod deep;
+mod resize_redraw;
 mod sidebar_phases;
 
 use std::collections::BTreeMap;
@@ -45,7 +45,7 @@ const COLS: u16 = 36;
 /// its first frame.
 pub const SETTLE: Duration = Duration::from_secs(15);
 
-/// A live Rimz "room": a real `rimz-sidebar serve` renderer in a
+/// A live Rimz "room": a real `rimz sidebar serve` renderer in a
 /// `portable-pty`, reading the [`Env`] ledger that hooks mutate.
 ///
 /// The renderer shares the `Env` *state* (the ledger, via `XDG_STATE_HOME`) but
@@ -84,12 +84,8 @@ impl<'a> RoomHarness<'a> {
     }
 
     fn launch_inner(env: &'a Env, mux: MuxName, broken_pane_fixture: bool) -> Self {
-        let bin = cargo_bin("rimz-sidebar");
-        assert!(
-            bin.exists(),
-            "rimz-sidebar binary missing: {}",
-            bin.display()
-        );
+        let bin = cargo_bin("rimz");
+        assert!(bin.exists(), "rimz binary missing: {}", bin.display());
 
         // Materialize the workspace ledger so a never-used room answers
         // `sidebar snapshot` with an empty-but-valid snapshot (Phase 0), not a
@@ -123,6 +119,7 @@ impl<'a> RoomHarness<'a> {
 
         let mut cmd = CommandBuilder::new(&bin);
         cmd.args([
+            "sidebar",
             "serve",
             "--mux",
             mux.as_str(),
@@ -141,7 +138,7 @@ impl<'a> RoomHarness<'a> {
         cmd.env("RIMZ_TEST_PANE_LIST", &pane_file);
         cmd.env_remove("RUST_LOG");
 
-        let child = pair.slave.spawn_command(cmd).expect("spawn rimz-sidebar");
+        let child = pair.slave.spawn_command(cmd).expect("spawn rimz sidebar");
         drop(pair.slave);
 
         // Feed one long-lived parser incrementally from the reader thread, so
@@ -464,10 +461,10 @@ pub fn permission_request(session_id: &str, secret: &str) -> Value {
     })
 }
 
-/// Absolute path to the built `rimz-sidebar` renderer, or `None` if it is not
+/// Absolute path to the built `rimz` binary, or `None` if it is not
 /// built (lets deep tests self-skip rather than fail).
-pub fn rimz_sidebar_bin() -> Option<PathBuf> {
-    let bin = cargo_bin("rimz-sidebar");
+pub fn rimz_bin() -> Option<PathBuf> {
+    let bin = cargo_bin("rimz");
     bin.exists().then_some(bin)
 }
 

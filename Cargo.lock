@@ -2798,9 +2798,11 @@ dependencies = [
  "portable-pty",
  "predicates",
  "proptest",
+ "ratatui",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tachyonfx",
  "tempfile",
  "terminal_size 0.4.4",
  "thiserror 2.0.18",
@@ -2819,27 +2821,6 @@ name = "rimz-presence-zellij"
 version = "0.0.0"
 dependencies = [
  "zellij-tile",
-]
-
-[[package]]
-name = "rimz-sidebar"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "clap 4.6.1",
- "insta",
- "jiff",
- "portable-pty",
- "ratatui",
- "rimz",
- "serde",
- "serde_json",
- "tachyonfx",
- "tempfile",
- "thiserror 2.0.18",
- "tracing",
- "tracing-subscriber",
- "vt100",
 ]
 
 [[package]]

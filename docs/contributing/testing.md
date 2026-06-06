@@ -10,7 +10,7 @@ Local runner: `cargo xtask test` (wraps `cargo nextest run`). Doctests run separ
 
 - **Function/unit tests** live with the module under test — inline `mod tests`, or a sibling `tests.rs` once it outgrows the file (see [rust-conventions.md](./rust-conventions.md#tests)) — and cover pure state transitions, parsers, render helpers, trust hashing, and formatting rules. They do not spawn subprocesses or touch real ledgers.
 - **Integration tests** live under `crates/rimz/tests/integration/` and cover public CLI, ledger files, sockets, hooks, resolvers, and subprocess round trips through the shared harness.
-- **Journey tests** live under `crates/rimz/tests/integration/journey/` and assert rendered end-user flows through a real `rimz-sidebar serve` process and `vt100` screen capture.
+- **Journey tests** live under `crates/rimz/tests/integration/journey/` and assert rendered end-user flows through a real `rimz sidebar serve` process and `vt100` screen capture.
 - **Live-backend tests** cover real tmux/Zellij behavior and self-skip when the backend binary or socket permissions are unavailable. They stay narrow and backend-specific.
 - **Performance tests** live under `crates/rimz/tests/integration/performance/` and assert bounded work, fork counts, cache behavior, or single-flight behavior. They do not duplicate product semantics already covered by unit or journey tests. Syscall and IO budgets read the always-compiled testkit counters (`ledger::atomic::testkit::fsync_count`, `event_log::testkit::bytes_read`) — `cfg(test)` statics are invisible to the integration binary, and nextest's process-per-test isolation keeps readings exact.
 
@@ -50,7 +50,7 @@ Recorded non-gaps, so they are not re-opened as missing coverage: wakeup-datagra
 
 - session birth from a layout via `attach --create-background ... --default-layout` (left 30% `rimz-sidebar` pane + focused terminal); a second launch on the existing session is a no-op,
 - the pre-attach health gate: `ensure_clean_session` births an absent room RUNNING (`Reborn`, no held panes), `probe_session_health` reports the live room `Healthy`, and a second gate call leaves a clean room untouched; `--session-serialization false` is on every birth/attach and is not version-gated; `rimz reset` purges the serialized-session cache and refuses without a tty unless `--yes`,
-- self-close: a real `rimz-sidebar` whose tab's last terminal pane exits closes its own pane (non-plugin pane count drops to zero),
+- self-close: a real `rimz sidebar serve` whose tab's last terminal pane exits closes its own pane (non-plugin pane count drops to zero),
 - sidebar heartbeat socket,
 - the wakeup walk fans out one datagram per fresh instance and spawns no `zellij pipe` (the consumerless broadcast was removed; re-arms only with the future rail),
 - `list-panes -j` parsing of `pane_command` and `pane_cwd` into `PaneRef`,
@@ -108,7 +108,7 @@ All `insta` snapshots — CLI stdout, `--json` event payloads, hook stdout, side
 
 - **Volatile output.** Normalize UUIDs, timestamps, absolute paths, workspace IDs, multiplexer session names, and other transient identifiers at the assertion boundary before snapshotting. Add a shared redaction helper only when more than one suite needs the same normalization. Snapshots compare semantic shape, not transient identifiers.
 - **Failure-shape snapshots.** Error messages, `--json` error envelopes, and hook neutral silence are snapshotted alongside success cases. Wire-shape error changes are reviewed events, not silent regressions.
-- **Sidebar render snapshots.** `crates/rimz-sidebar` snapshot tests render through a `vt100::Parser`-backed ratatui backend and assert on the parsed screen contents, never on widget internals. Resize the backend within the test to exercise wrapping and truncation.
+- **Sidebar render snapshots.** `crates/rimz/src/sidebar_renderer` snapshot tests render through a `vt100::Parser`-backed ratatui backend and assert on the parsed screen contents, never on widget internals. Resize the backend within the test to exercise wrapping and truncation.
 
 ## Sidebar tests
 
@@ -136,7 +136,7 @@ All `insta` snapshots — CLI stdout, `--json` event payloads, hook stdout, side
 
 `crates/rimz/tests/integration/journey/` tells the session as a story from `docs/guide/product.md` and `docs/guide/experience.md`: launch the room, onboard, run an agent, watch the column move through `shell → idle → running → waiting → fleet`. `docs/internals/sidebar.md` owns renderer mechanics, not the story source. "Running an agent" fires its *installed* hook, never a hand-rolled `rimz hooks feed`: the harness onboards with `rimz hooks install` and then runs the exact `rimz hooks feed --source <agent> --event <event>` command the agent's config wires. An un-onboarded `agent_hook` is a no-op — exactly what a real agent does with no Rimz hook configured — so the suite fails when "I ran codex and nothing showed up" would. That faithfulness is non-negotiable: a journey test that fires hooks an un-wired agent could never fire would pass against a broken product.
 
-- **Content** (`sidebar_phases.rs`) drives the real `rimz-sidebar serve` renderer through a `portable-pty` over a real ledger and asserts on the `vt100`-parsed pane (the `resize_redraw.rs` pattern). The renderer gets its own short `XDG_RUNTIME_DIR` so the per-instance wakeup socket stays under the AF_UNIX limit.
+- **Content** (`sidebar_phases.rs`) drives the real `rimz sidebar serve` renderer through a `portable-pty` over a real ledger and asserts on the `vt100`-parsed pane (the `resize_redraw.rs` pattern). The renderer gets its own short `XDG_RUNTIME_DIR` so the per-instance wakeup socket stays under the AF_UNIX limit.
 - **Deep smokes** (`deep.rs`) birth a real tmux/zellij session with a real sidebar pane, fire a hook, and capture the live pane content; they self-skip without the mux binary. They poll for a *complete* frame (every expected token) so a partial repaint captured mid-paint under load never reads as a failure.
 - **Layout, tabs, and focus** live in `backend/zellij.rs` (left-30% sidebar, focused right terminal, every new tab born with the same split); tmux per-window parity — every new window born with its own sidebar via the `after-new-window` hook — is `backend/tmux.rs::new_window_is_born_with_a_sidebar_and_focused_terminal`.
 - The whole journey suite is green against `main`, with no ignored future-target tests. Document planned phases in the roadmap until implementation makes the executable journey assertion pass under the normal nextest suite.

@@ -686,3 +686,31 @@ fn presence_plugin_configuration_omits_an_inexpressible_rimz_path() {
         );
     }
 }
+
+#[test]
+fn materialize_presence_plugin_bytes_writes_stable_artifact() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = materialize_presence_plugin_bytes(b"wasm-bytes", dir.path())
+        .unwrap()
+        .unwrap();
+    assert!(path.ends_with("rimz/plugins/rimz-presence-zellij.wasm"));
+    assert_eq!(std::fs::read(&path).unwrap(), b"wasm-bytes");
+
+    let same_path = materialize_presence_plugin_bytes(b"wasm-bytes", dir.path())
+        .unwrap()
+        .unwrap();
+    assert_eq!(same_path, path);
+
+    materialize_presence_plugin_bytes(b"new-bytes", dir.path()).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"new-bytes");
+}
+
+#[test]
+fn empty_presence_plugin_embed_materializes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        materialize_presence_plugin_bytes(b"", dir.path())
+            .unwrap()
+            .is_none()
+    );
+}

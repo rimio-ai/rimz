@@ -17,14 +17,9 @@ install:
 		sudo -H -u "$$SUDO_USER" env PATH="$$user_home/.cargo/bin:$$PATH" CARGO_TARGET_DIR="$$cargo_target_dir" cargo xtask stage-install; \
 		printf '%s\n' "installing rimz artifacts to $$dest"; \
 		install -d "$$dest"; \
-		for name in rimz rimz-sidebar; do \
-			tmp="$$dest/.$$name.tmp.$$$$"; \
-			install -m 0755 "$$stage_bin/$$name" "$$tmp"; \
-			mv -f "$$tmp" "$$dest/$$name"; \
-		done; \
-		name=rimz-presence-zellij.wasm; \
+		name=rimz; \
 		tmp="$$dest/.$$name.tmp.$$$$"; \
-		install -m 0644 "$$stage_bin/$$name" "$$tmp"; \
+		install -m 0755 "$$stage_bin/$$name" "$$tmp"; \
 		mv -f "$$tmp" "$$dest/$$name"; \
 	else \
 		cargo xtask install; \

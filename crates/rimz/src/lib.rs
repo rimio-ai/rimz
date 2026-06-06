@@ -24,6 +24,7 @@ pub mod resolver;
 pub mod resume;
 pub mod schema;
 pub mod sidebar;
+pub mod sidebar_renderer;
 pub mod tab_layout;
 pub mod trust;
 pub mod workspace;

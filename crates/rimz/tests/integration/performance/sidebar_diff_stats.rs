@@ -1,6 +1,6 @@
 //! Cross-process single-flight proof for the sidebar's per-worktree git probes.
 //!
-//! A multi-tab session runs one `rimz-sidebar serve` per tab, each forking
+//! A multi-tab session runs one `rimz sidebar serve` per tab, each forking
 //! `rimz sidebar snapshot --json`, which runs git per worktree (trunk ref →
 //! merge-base → numstat → branch). Those probes are single-flighted across the
 //! fleet: one elected producer forks git and writes the shared `diff-stats.json`
