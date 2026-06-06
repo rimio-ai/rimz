@@ -46,7 +46,7 @@ enum Subcmd {
         #[arg(long, default_value_t = 24)]
         height: u16,
     },
-    /// Poll `rimz sidebar snapshot --json` and redraw after wakeups or ticks.
+    /// Serve the in-process fetch loop and redraw after wakeups or ticks.
     Serve {
         #[arg(long)]
         workspace_id: Option<String>,

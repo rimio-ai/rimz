@@ -165,8 +165,9 @@ fn agent_event_name(event: &EventEnvelope) -> Option<&str> {
 
 /// Tell every fresh sidebar of this workspace to re-exec its own binary, so it
 /// picks up a freshly-installed renderer in place — no session rebirth, no pane
-/// churn. The per-tick `rimz` snapshot subprocess already reloads on its own;
-/// this covers the long-lived renderer process. Returns how many sidebars were
+/// churn. One-shot `rimz sidebar snapshot` calls pick up the installed binary on
+/// every run; this covers the long-lived renderer process that now owns the
+/// in-process produce path. Returns how many sidebars were
 /// signaled. A wedged or already-dead sidebar receives nothing; relaunch it via
 /// `rimz start`/`rimz attach` instead.
 pub fn reload_sidebars(rt: &RuntimePaths) -> Result<usize> {

@@ -24,7 +24,6 @@ mod metrics;
 mod panes;
 mod spending;
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::ids::{MuxName, PaneId};
@@ -146,7 +145,7 @@ fn pane_list_fixture() -> Result<Option<Vec<crate::feed::PaneRef>>> {
     Ok(Some(panes))
 }
 
-/// Assemble the producer's forked inputs and run the shared enrichment spine
+/// Assemble the producer inputs and run the shared enrichment spine
 /// ([`crate::sidebar::snapshot::enrich`]) in [`EnrichMode::Producing`]. This
 /// owns only what forks or walks; the spine owns the fold order.
 ///
@@ -173,10 +172,11 @@ fn enrich_producing(
     let config = crate::config::MachineConfig::load().unwrap_or_default();
     let trunk = config.sidebar.trunk.clone();
     let compute_spending = |snapshot: &SidebarSnapshot| {
-        let live_costs: BTreeMap<String, f64> = live_row_costs(snapshot)
-            .map(|(id, usd, _)| (id.to_owned(), usd))
-            .collect();
-        spending::compute_fleet_spending(runtime, live_costs)
+        spending::compute_fleet_spending(runtime, || {
+            live_row_costs(snapshot)
+                .map(|(id, usd, _)| (id.to_owned(), usd))
+                .collect()
+        })
     };
     let refresh_git = |snapshot: &mut SidebarSnapshot| {
         git::enrich_worktree_groups(snapshot, runtime, trunk.as_deref());

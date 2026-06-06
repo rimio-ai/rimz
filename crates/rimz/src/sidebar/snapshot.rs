@@ -1,11 +1,11 @@
 //! Sidebar snapshot caches and the in-process consumer read.
 //!
-//! The producer (the elected eldest renderer, via `rimz sidebar snapshot`)
-//! publishes two runtime caches: the snapshot base (`snapshot.json`: the ledger
-//! rollup plus the live pane list) and the per-worktree git facts
-//! (`diff-stats.json`). Every other per-tab renderer is a *consumer* — it reads
-//! those caches and folds its own pane exclusion in process, never forking a
-//! `list-panes`/git of its own.
+//! The producer (the elected eldest renderer, via [`super::produce`])
+//! publishes runtime caches: the snapshot base (`snapshot.json`: the live pane
+//! list), per-worktree git facts (`diff-stats.json`), metrics, accounts, and
+//! spending. Every other per-tab renderer is a *consumer* — it reads those
+//! caches and folds its own pane exclusion in process, never forking a
+//! `list-panes`/git/account probe of its own.
 //!
 //! [`read_published_snapshot`] is that consumer read: it lives in the library so
 //! the native renderer calls it directly (no subprocess per tick) and the
@@ -620,9 +620,8 @@ pub fn wired_lazy_kinds() -> Vec<String> {
 /// the new agent/status in this tab within one wakeup, while the slower
 /// `list-panes` cadence only governs genuine pane open/close.
 ///
-/// This is the in-process twin of the producer's `rimz sidebar snapshot`: the
-/// native renderer calls it directly each tick instead of forking, and the
-/// `--no-produce` CLI path (the plugin rail's read) shares it.
+/// This is the producer's fast-lane twin: the native renderer calls it directly
+/// each tick, and the `--no-produce` CLI path (the plugin rail's read) shares it.
 ///
 /// The rollup folds through the caller's [`RollupCursor`], so a long-lived
 /// reader (the sidebar fetch worker owns one across its loop) pays O(new log
@@ -655,9 +654,9 @@ pub enum EnrichMode<'a> {
     /// and spending caches, the cached diff-stats projection. No `list-panes`,
     /// no git, no subprocess, no ledger lock.
     Cached,
-    /// The elected producer's fold. The caller forks and walks the producer
-    /// inputs up front — the fork code stays in [`super::produce`] — and the
-    /// spine sequences them into the shared order.
+    /// The elected producer's fold. The caller supplies the producer-only
+    /// inputs and callbacks, and the spine sequences them into the shared
+    /// order.
     Producing {
         /// The room's freshly enumerated group roots; `None` when the
         /// snapshot carries no project root.
@@ -684,7 +683,7 @@ pub enum EnrichMode<'a> {
 /// rollup's groups stand until the next produce.
 ///
 /// [`EnrichMode::Cached`] reads only runtime caches and sidecars;
-/// [`EnrichMode::Producing`] carries the forked inputs in the mode and inserts
+/// [`EnrichMode::Producing`] carries the producer inputs in the mode and inserts
 /// the daemon reap, the account probe, and the git refresh at their named
 /// points.
 pub fn enrich(
@@ -807,8 +806,8 @@ pub fn enrich(
     // The fleet `value_tally` — the JSONL today / month / all-time pile read
     // by the cockpit's today figure and the bottom value corner — attaches
     // once, after every fold; `None` when nothing has ever been recorded.
-    snapshot.value_tally = (!spending_cache.spending.total.is_zero())
-        .then_some(spending_cache.spending.total.clone());
+    snapshot.value_tally =
+        (!spending_cache.spending.total.is_zero()).then_some(spending_cache.spending.total.clone());
     // The live overlay rides the same fold: a context sidecar push wakes the
     // consumer, the refold lands the session's fresh cost on its row, and the
     // cockpit's headline retargets in the same frame — no waiting out the

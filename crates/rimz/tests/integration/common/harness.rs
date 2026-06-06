@@ -67,6 +67,7 @@ impl Harness {
             &self.runtime_paths.root.join("provider-spending.json"),
             now_ms,
             &rimz::agents::spending::Spending::default(),
+            Default::default(),
         );
         let accounts = rimz::sidebar::snapshot::AccountsCache {
             refreshed_at_ms: now_ms,

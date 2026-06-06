@@ -149,11 +149,11 @@ fn run_fetch_cycle(
     }
 }
 
-/// Whether this cycle pays the fork, decided from cheap pre-reads. Pure, so
-/// the fork-gating contract is unit-testable: the producer forks when forced
+/// Whether this cycle pays the produce, decided from cheap pre-reads. Pure, so
+/// the produce-gating contract is unit-testable: the producer runs when forced
 /// or when the published frame outlived one data tick (`None` age = no usable
-/// frame — cold start); a consumer forks only when explicitly forced (reload,
-/// fresh panes). A consumer never forks on a stale frame — staleness recovery
+/// frame — cold start); a consumer produces only when explicitly forced
+/// (reload, fresh panes). A consumer never produces on a stale frame — staleness recovery
 /// is delegated to the election: once the dead elder's heartbeat ages out
 /// (≤ one TTL) the next-eldest renderer *is* the producer and recovers through
 /// the branch above, while everyone else keeps folding the held panes with the

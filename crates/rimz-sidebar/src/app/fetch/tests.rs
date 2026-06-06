@@ -55,6 +55,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         &runtime.root.join("provider-spending.json"),
         now_ms,
         &rimz::agents::spending::Spending::default(),
+        Default::default(),
     );
     let accounts = rimz::sidebar::snapshot::AccountsCache {
         refreshed_at_ms: now_ms,
@@ -113,9 +114,9 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
 }
 
 #[test]
-fn producer_skips_the_fork_while_its_frame_is_within_one_tick() {
+fn producer_skips_produce_while_its_frame_is_within_one_tick() {
     // The two-speed contract: a ledger-delta storm paints per delta off the
-    // in-process fast lane, forking at most once per data tick.
+    // in-process fast lane, producing at most once per data tick.
     assert!(!produce_this_cycle(true, false, Some(100), 1000));
     assert!(produce_this_cycle(true, false, Some(1000), 1000));
     assert!(
@@ -125,16 +126,16 @@ fn producer_skips_the_fork_while_its_frame_is_within_one_tick() {
 }
 
 #[test]
-fn forced_requests_always_fork() {
+fn forced_requests_always_produce() {
     assert!(produce_this_cycle(true, true, Some(0), 1000));
     assert!(
         produce_this_cycle(false, true, Some(0), 1000),
-        "a consumer reload/resize forks regardless of election"
+        "a consumer reload/resize produces regardless of election"
     );
 }
 
 #[test]
-fn consumer_never_forks_unforced_however_stale_the_frame() {
+fn consumer_never_produces_unforced_however_stale_the_frame() {
     // The storm-removal contract: staleness recovery belongs to the election
     // (the next-eldest becomes the producer within one heartbeat TTL), so a
     // wedged producer never turns every consumer into its own uncached

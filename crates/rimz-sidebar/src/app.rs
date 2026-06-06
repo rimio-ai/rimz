@@ -123,11 +123,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // across re-fetches and ledger deltas, so no redraw path can stall it.
     let anim_start = Instant::now();
 
-    // The snapshot subprocess (workspace resolve + `list-panes` + git) runs on
-    // a background worker, so animation and input never block on it. The worker
+    // The snapshot fetch (fast in-process fold plus optional produce) runs on a
+    // background worker, so animation and input never block on it. The worker
     // posts `SNAPSHOT_WAKEUP` when a result is ready; `in_flight`/
     // `pending_refetch` coalesce requests so a ledger-delta storm or a slow
-    // fetch can never queue more than one extra run.
+    // produce can never queue more than one extra run.
     let (request_tx, request_rx) = std::sync::mpsc::channel::<FetchRequest>();
     let (result_tx, result_rx) = std::sync::mpsc::channel::<FetchOutcome>();
     // `JoinHandle` drops without blocking: the thread runs to completion on its

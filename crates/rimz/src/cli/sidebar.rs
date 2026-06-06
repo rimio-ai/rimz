@@ -101,7 +101,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             json,
             no_produce,
         } => {
-            // A producer forks `list-panes`/git and publishes the shared cache;
+            // A producer reads `list-panes`/git and publishes the shared cache;
             // a non-producer renders read-only from that cache. Default is to
             // produce, so bare CLI calls and the plugin rail are unchanged.
             let produce = !no_produce;
