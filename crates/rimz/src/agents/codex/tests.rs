@@ -46,11 +46,28 @@ fn codex_registers_its_session_lazily() {
 }
 
 #[test]
-fn codex_declares_the_context_window_fallback() {
+fn codex_declares_idle_card_fallbacks() {
+    assert_eq!(CodexAdapter.descriptor().default_model, Some("GPT-5.5"));
     assert_eq!(
         CodexAdapter.descriptor().default_context_window,
         Some(258_000)
     );
+}
+
+#[test]
+fn configured_model_reads_codex_launch_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+model = "o4-mini"
+model_reasoning_effort = "high"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(configured_model_at(&path).as_deref(), Some("o4-mini"));
 }
 
 #[test]

@@ -1,13 +1,14 @@
 //! Pane binding: which ledger agent owns which live pane, the own-view
 //! projection, and the daemon-view predicates.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::process::{command_agent_kind, program_label};
 use super::view::{SidebarRow, SidebarRowKind};
+use crate::agents::AgentDescriptor;
 use crate::agents::lifecycle::TurnPhase;
 use crate::feed::{AgentState, AgentStatus, PaneRef};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
@@ -179,12 +180,12 @@ pub(super) fn lazy_agent_for_pane<'a>(
     agents: &'a [AgentState],
     bound: &BTreeSet<(AgentKind, AgentSessionId)>,
     wired_lazy_kinds: &[String],
+    lazy_agent_default_models: &BTreeMap<String, String>,
     now: Timestamp,
 ) -> Option<LazyAgentRow<'a>> {
     let kind = command_agent_kind(pane.command.as_deref()?)?;
-    let registers_lazily = crate::agents::descriptor_by_kind(kind)
-        .is_some_and(|descriptor| descriptor.capabilities.registers_lazily);
-    if !registers_lazily {
+    let descriptor = crate::agents::descriptor_by_kind(kind)?;
+    if !descriptor.capabilities.registers_lazily {
         return None;
     }
     let cwd = pane.cwd.as_deref().filter(|cwd| !cwd.is_empty())?;
@@ -198,10 +199,17 @@ pub(super) fn lazy_agent_for_pane<'a>(
     {
         return Some(LazyAgentRow::Agent(agent));
     }
-    wired_lazy_kinds
-        .iter()
-        .any(|wired| wired == kind)
-        .then(|| LazyAgentRow::Idle(Box::new(idle_agent_row(pane, kind, now))))
+    wired_lazy_kinds.iter().any(|wired| wired == kind).then(|| {
+        LazyAgentRow::Idle(Box::new(idle_agent_row(
+            pane,
+            descriptor,
+            lazy_agent_default_models
+                .get(kind)
+                .map(String::as_str)
+                .or(descriptor.default_model),
+            now,
+        )))
+    })
 }
 
 /// Defensive guard for the cwd fallback: when the pane's process start is known,
@@ -220,14 +228,20 @@ pub(super) fn pane_start_allows_bind(agent: &AgentState, pane: &PaneRef) -> bool
 }
 
 /// The resting row for a wired lazy-agent pane that no session claimed: `○ <kind>`
-/// with no model or context yet (the first turn swaps in the real bound agent
-/// row). Keyed on the pane id — no session id exists, and pane ids and agent ids
-/// are disjoint, so `attach_sub_agents` can never mis-nest a child onto it.
-fn idle_agent_row(pane: &PaneRef, kind: &str, now: Timestamp) -> SidebarRow {
+/// with adapter-owned model/window defaults when known (the first turn swaps in
+/// the real bound agent row). Keyed on the pane id — no session id exists, and
+/// pane ids and agent ids are disjoint, so `attach_sub_agents` can never
+/// mis-nest a child onto it.
+fn idle_agent_row(
+    pane: &PaneRef,
+    descriptor: &AgentDescriptor,
+    default_model: Option<&str>,
+    now: Timestamp,
+) -> SidebarRow {
     SidebarRow {
         row_kind: SidebarRowKind::Agent,
         id: pane.pane_id.to_string(),
-        name: kind.to_owned(),
+        name: descriptor.kind.to_owned(),
         status: Some(AgentStatus::Idle),
         phase: TurnPhase::Idle,
         pane: Some(pane.clone()),
@@ -235,13 +249,12 @@ fn idle_agent_row(pane: &PaneRef, kind: &str, now: Timestamp) -> SidebarRow {
         surface: None,
         task: None,
         prompt: None,
-        model: None,
+        model: default_model.map(ToOwned::to_owned),
         effort: None,
         // Agent rows draw the started-session gauge at `Some(0)` (see the
         // `SidebarRow.context_pct` doc) — matching a freshly-bound session.
         context_pct: Some(0),
-        context_window: crate::agents::descriptor_by_kind(kind)
-            .and_then(|descriptor| descriptor.default_context_window),
+        context_window: descriptor.default_context_window,
         total_tokens: None,
         cache_read_input_tokens: None,
         fresh_input_tokens: None,

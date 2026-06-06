@@ -613,6 +613,23 @@ pub fn wired_lazy_kinds() -> Vec<String> {
         .collect()
 }
 
+/// Launch-model defaults for wired lazy-registering agents, used only for
+/// synthesized idle rows before a real session reports its model.
+pub fn wired_lazy_default_models() -> BTreeMap<String, String> {
+    crate::agents::ADAPTERS
+        .iter()
+        .filter(|agent| {
+            let capabilities = agent.descriptor().capabilities;
+            capabilities.registers_lazily && capabilities.hook_install && agent.hooks_installed()
+        })
+        .filter_map(|agent| {
+            agent
+                .default_launch_model()
+                .map(|model| (agent.descriptor().kind.to_owned(), model))
+        })
+        .collect()
+}
+
 /// Render the published snapshot for a consumer renderer, entirely from runtime
 /// caches and sidecars — no `list-panes`, no git. Reads the producer's coalesced
 /// pane list from `snapshot.json`, pairs it with the **event-fresh** rollup read
@@ -740,6 +757,7 @@ pub fn enrich(
     // Wiring state gates the live-pane fold (the idle-instance synthesis), so
     // set it before folding panes, not after.
     snapshot.wired_lazy_kinds = wired_lazy_kinds();
+    snapshot.lazy_agent_default_models = wired_lazy_default_models();
 
     // Producer-only: reap daemon-mode Codex ghosts the app-server no longer
     // holds. A remote-control conversation records the shared daemon's pid,

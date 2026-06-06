@@ -112,7 +112,7 @@ fn run_fetch_cycle(
     // never coast on a young stamp it could not use.
     let frame_age_ms = fast
         .as_ref()
-        .and_then(|_| published_frame_produced_at_ms)
+        .and(published_frame_produced_at_ms)
         .map(|produced_at_ms| now_ms.saturating_sub(produced_at_ms));
     let produce = produce_this_cycle(
         is_producer,

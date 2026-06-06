@@ -1964,7 +1964,11 @@ fn fresh_codex_pane_with_proc_start_shows_idle_not_ghost() {
         rows[0].total_tokens, None,
         "no ghost tokens on a fresh pane"
     );
-    assert_eq!(rows[0].model, None, "no ghost model on a fresh pane");
+    assert_eq!(
+        rows[0].model.as_deref(),
+        Some("GPT-5.5"),
+        "fresh Codex rows use the provider fallback model, not stale session stats"
+    );
     assert_eq!(
         rows[0].context_window,
         Some(258_000),
@@ -1993,14 +1997,30 @@ fn wired_unprompted_codex_pane_renders_as_idle_agent() {
     assert_eq!(rows[0].id, "tmux:term1");
     assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "term1");
     assert_eq!(
-        rows[0].model, None,
-        "no model until the first turn enriches it"
+        rows[0].model.as_deref(),
+        Some("GPT-5.5"),
+        "the card can show Codex's default model before the first session event"
     );
     assert_eq!(
         rows[0].context_window,
         Some(258_000),
         "the card can show Codex's context tier before the first session event"
     );
+}
+
+#[test]
+fn wired_unprompted_codex_uses_configured_default_model() {
+    let mut snapshot = room(Vec::new(), Vec::new());
+    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+    snapshot
+        .lazy_agent_default_models
+        .insert("codex".to_owned(), "o4-mini".to_owned());
+    let snapshot = snapshot.with_live_panes(vec![pane("term1", "codex", "/repo/main")], None);
+
+    let row = &snapshot.worktree_groups[0].rows[0];
+    assert_eq!(row.row_kind, SidebarRowKind::Agent);
+    assert_eq!(row.model.as_deref(), Some("o4-mini"));
+    assert_eq!(row.context_window, Some(258_000));
 }
 
 #[test]

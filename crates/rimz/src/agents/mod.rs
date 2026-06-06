@@ -255,6 +255,14 @@ pub trait AgentAdapter: Send + Sync {
     /// classification tables. Everything `const` about an agent lives here;
     /// the trait methods own everything behavioral.
     fn descriptor(&self) -> &'static AgentDescriptor;
+
+    /// Display model to use before a lazy-registering agent reports a real
+    /// session model. Defaults to the descriptor's provider fallback; adapters
+    /// with user-configured launch defaults override it.
+    fn default_launch_model(&self) -> Option<String> {
+        self.descriptor().default_model.map(ToOwned::to_owned)
+    }
+
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook;
     /// Render the agent-native decision JSON for this resolution. Called
     /// only when the hook is on the bridge and a resolver has answered.

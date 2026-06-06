@@ -95,6 +95,7 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         hook_install: true,
     },
     default_context_window: None,
+    default_model: None,
     // Pi awaits the `tool_call` handler with no kill window of its own, so
     // the cap is purely Rimz's bridge ceiling — matched to Claude's so a
     // resolver chain budgets identically across agents.

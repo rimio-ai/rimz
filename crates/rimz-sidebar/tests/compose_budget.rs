@@ -178,6 +178,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         agents: Vec::new(),
         agent_hooks_ready: true,
         wired_lazy_kinds: Vec::new(),
+        lazy_agent_default_models: std::collections::BTreeMap::new(),
         own_view: None,
         only_daemon_view_remains: false,
         project_root: Some(std::path::PathBuf::from("/repo")),

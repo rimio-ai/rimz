@@ -69,6 +69,7 @@ const CODEX_HOOK_CAP: Duration = Duration::from_secs(60);
 /// agent card uses this stable provider fallback instead of briefly omitting
 /// the window token.
 const DEFAULT_CONTEXT_WINDOW: u64 = 258_000;
+const DEFAULT_MODEL: &str = "GPT-5.5";
 
 /// Everything `const` about Codex, in one place. See [`AgentDescriptor`] for
 /// the descriptor-vs-trait split.
@@ -107,6 +108,7 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         hook_install: true,
     },
     default_context_window: Some(DEFAULT_CONTEXT_WINDOW),
+    default_model: Some(DEFAULT_MODEL),
     hook_cap: CODEX_HOOK_CAP,
     // Codex commonly runs as a `node` bundle, so PID attribution accepts the
     // launcher process name beside its own.
@@ -169,6 +171,10 @@ pub struct CodexAdapter;
 impl AgentAdapter for CodexAdapter {
     fn descriptor(&self) -> &'static AgentDescriptor {
         &CODEX_DESCRIPTOR
+    }
+
+    fn default_launch_model(&self) -> Option<String> {
+        configured_model().or_else(|| self.descriptor().default_model.map(ToOwned::to_owned))
     }
 
     /// `codex resume <id>` resolves the UUID to its rollout file and restores
@@ -672,6 +678,23 @@ fn configured_reasoning_effort() -> Option<String> {
     codex_config_path()
         .ok()
         .and_then(|path| configured_reasoning_effort_at(&path))
+}
+
+fn configured_model() -> Option<String> {
+    #[cfg(test)]
+    std::env::var_os("RIMZ_CODEX_CONFIG")?;
+    codex_config_path()
+        .ok()
+        .and_then(|path| configured_model_at(&path))
+}
+
+fn configured_model_at(path: &Path) -> Option<String> {
+    read_existing_table(path).ok().and_then(|root| {
+        root.get("model")
+            .and_then(toml::Value::as_str)
+            .filter(|model| !model.is_empty())
+            .map(ToOwned::to_owned)
+    })
 }
 
 fn configured_reasoning_effort_at(path: &Path) -> Option<String> {

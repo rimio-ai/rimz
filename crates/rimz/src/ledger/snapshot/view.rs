@@ -79,6 +79,13 @@ pub struct SidebarSnapshot {
     /// (a process row).
     #[serde(default)]
     pub wired_lazy_kinds: Vec<String>,
+    /// Per-kind launch model defaults for idle synthesized lazy-agent rows,
+    /// filled from adapter-owned config reads before the live-pane fold. Codex
+    /// uses this to show the configured model beside the context window before
+    /// its first session event; the pure reducer leaves it empty and falls
+    /// back to descriptor defaults.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lazy_agent_default_models: BTreeMap<String, String>,
     /// The calling sidebar's own-view summary: how many sibling panes share its
     /// tab/window, whether its own pane holds focus, and which sibling is
     /// focused. The renderer's self-close and selection-sync read it instead of
@@ -655,6 +662,7 @@ impl SidebarSnapshot {
             agents,
             agent_hooks_ready: false,
             wired_lazy_kinds: Vec::new(),
+            lazy_agent_default_models: BTreeMap::new(),
             own_view: None,
             only_daemon_view_remains: false,
             project_root: None,
@@ -998,6 +1006,7 @@ impl SidebarSnapshot {
                 &self.resolver_working,
                 &panes,
                 &self.wired_lazy_kinds,
+                &self.lazy_agent_default_models,
                 self.now,
             ),
             &self.agents,
@@ -1429,6 +1438,7 @@ fn rows_from_panes(
     resolver_working: &[FeedItem],
     panes: &[PaneRef],
     wired_lazy_kinds: &[String],
+    lazy_agent_default_models: &BTreeMap<String, String>,
     now: Timestamp,
 ) -> Vec<SidebarRow> {
     let mut rows = Vec::new();
@@ -1445,9 +1455,14 @@ fn rows_from_panes(
                 resolver_working,
                 now,
             );
-        } else if let Some(bind) =
-            lazy_agent_for_pane(pane, agents, &bound_agents, wired_lazy_kinds, now)
-        {
+        } else if let Some(bind) = lazy_agent_for_pane(
+            pane,
+            agents,
+            &bound_agents,
+            wired_lazy_kinds,
+            lazy_agent_default_models,
+            now,
+        ) {
             // The lazy-agent relaxation of stamped-id binding. A lazy-registering
             // agent (Codex) can be present without a stamped session — it registers
             // lazily and routes hooks through the pane-less app-server — so it can't
