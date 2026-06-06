@@ -1887,6 +1887,39 @@ fn two_paneless_codex_in_one_worktree_bind_most_recent() {
 }
 
 #[test]
+fn paneless_codex_and_new_stamped_codex_share_one_worktree_without_idle_row() {
+    // Daemon-routed Codex can first bind one session by cwd, then recover a
+    // newer session's focused pane at hook ingestion. The older paneless
+    // session must survive long enough to bind the other same-cwd pane.
+    let newer = paneless_codex("sess-new", "/repo/main", 2_000).in_pane("%2");
+    let snapshot = room(
+        Vec::new(),
+        vec![paneless_codex("sess-old", "/repo/main", 1_000), newer],
+    )
+    .with_live_panes(
+        vec![
+            pane("%1", "codex", "/repo/main"),
+            pane("%2", "codex", "/repo/main"),
+        ],
+        None,
+    );
+
+    let rows = &snapshot.worktree_groups[0].rows;
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| row.row_kind == SidebarRowKind::Agent));
+    let old = rows
+        .iter()
+        .find(|row| row.id == "sess-old")
+        .expect("older session renders");
+    let new = rows
+        .iter()
+        .find(|row| row.id == "sess-new")
+        .expect("newer session renders");
+    assert_eq!(old.pane.as_ref().unwrap().pane_id.raw(), "%1");
+    assert_eq!(new.pane.as_ref().unwrap().pane_id.raw(), "%2");
+}
+
+#[test]
 fn paneless_codex_predating_pane_start_does_not_bind() {
     // The defensive guard on the cwd fallback: when the backend reports the
     // pane's process start, a pane-less Codex session whose last activity
@@ -3250,6 +3283,29 @@ fn reap_collapses_superseded_paneless_session_to_the_newest() {
         reap_survivors(vec![older, newer]),
         vec!["newer".to_owned()],
         "the older paneless session on the same path+branch is reaped"
+    );
+}
+
+#[test]
+fn reap_keeps_paneless_older_when_newer_has_distinct_stamped_pane() {
+    // A recovered focused-pane stamp on the newer daemon-routed Codex session
+    // proves only where the newer session lives. The older paneless session may
+    // still bind another same-cwd live pane at projection time, so the reaper
+    // must not collapse it as an indistinguishable duplicate.
+    let older = agent("codex", "older", AgentStatus::Idle, 0)
+        .worktree("/repo/a")
+        .branch("main")
+        .active_ago(120);
+    let newer = agent("codex", "newer", AgentStatus::Idle, 0)
+        .worktree("/repo/a")
+        .branch("main")
+        .in_pane("%2")
+        .active_ago(60);
+
+    assert_eq!(
+        reap_survivors(vec![older, newer]),
+        vec!["newer".to_owned(), "older".to_owned()],
+        "a newer distinct pane does not prove the paneless older session is stale"
     );
 }
 

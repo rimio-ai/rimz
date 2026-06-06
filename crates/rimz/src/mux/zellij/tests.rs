@@ -102,6 +102,30 @@ fn raw_pane_deserializes_minimal_shape() {
 }
 
 #[test]
+fn parse_focused_client_panes_reads_unique_terminal_ids() {
+    let output = b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n\
+                   1         terminal_30    codex\n\
+                   2         terminal_30    codex\n\
+                   3         terminal_4     claude\n";
+    let panes = parse_focused_client_panes(output);
+    assert_eq!(
+        panes,
+        vec![
+            PaneId::from_parts(MuxName::Zellij, "terminal_30"),
+            PaneId::from_parts(MuxName::Zellij, "terminal_4"),
+        ]
+    );
+}
+
+#[test]
+fn parse_focused_client_panes_ignores_headers_and_plugins() {
+    let output = b"\x1b[32;1mCLIENT_ID\x1b[m ZELLIJ_PANE_ID RUNNING_COMMAND\n\
+                   1 plugin_2 rimz-presence-zellij\n\
+                   2 - unknown\n";
+    assert!(parse_focused_client_panes(output).is_empty());
+}
+
+#[test]
 fn raw_pane_command_uses_terminal_command_and_sidebar_title() {
     let json = r#"[
           {

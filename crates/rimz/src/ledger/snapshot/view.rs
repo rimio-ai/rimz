@@ -1354,16 +1354,17 @@ fn session_age_secs(now: Timestamp, agent: &AgentState) -> i64 {
 }
 
 /// True when reaping `older` cannot drop a concurrently-live agent: either it
-/// never stamped a pane, or it stamped the very pane `newer` now occupies (a
-/// relaunch in place). An older session holding its own distinct pane is a
-/// separate live agent and is kept.
+/// is paneless and the newer session is paneless too (indistinguishable daemon
+/// remnants), or it stamped the very pane `newer` now occupies (a relaunch in
+/// place). An older paneless session does not yield to a newer distinctly
+/// stamped pane: it may still be the occupant of another same-cwd lazy agent
+/// pane that only the projection can bind.
 fn older_yields_pane(older: &AgentState, newer: &AgentState) -> bool {
-    match older.pane.as_ref() {
-        None => true,
-        Some(older_pane) => newer
-            .pane
-            .as_ref()
-            .is_some_and(|newer_pane| newer_pane.pane_id == older_pane.pane_id),
+    match (older.pane.as_ref(), newer.pane.as_ref()) {
+        (None, None) => true,
+        (None, Some(_)) => false,
+        (Some(older_pane), Some(newer_pane)) => newer_pane.pane_id == older_pane.pane_id,
+        (Some(_), None) => false,
     }
 }
 

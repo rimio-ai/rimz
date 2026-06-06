@@ -15,10 +15,10 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, DaemonView, MuxBackend, MuxErr,
-    PaneCapture, PaneCmd, PaneListOptions, Result, SessionOptions, SidebarLiveness,
-    SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, TabOptions, ViewSidebars,
-    ensure_pane_backend,
+    BackgroundViewLaunch, BackgroundViewOptions, ClientFocusOptions, CommandSpec, DaemonView,
+    MuxBackend, MuxErr, PaneCapture, PaneCmd, PaneListOptions, Result, SessionOptions,
+    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, TabOptions,
+    ViewSidebars, ensure_pane_backend,
 };
 use crate::config::TmuxConfig;
 use crate::feed::PaneRef;
@@ -624,6 +624,16 @@ impl MuxBackend for TmuxBackend {
         Ok(panes)
     }
 
+    fn focused_client_panes(&self, opts: ClientFocusOptions) -> Result<Vec<PaneId>> {
+        let timeout = opts.command_timeout.unwrap_or(super::COMMAND_TIMEOUT);
+        let mut spec = self.cmd().args(["list-clients", "-F", "#{pane_id}"]);
+        if let Some(session) = opts.session_name {
+            spec = spec.args(["-t".to_owned(), session]);
+        }
+        let output = spec.run_with_timeout(timeout)?;
+        Ok(parse_focused_client_panes(&output.stdout))
+    }
+
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()> {
         let mut spec = self.cmd().args(["split-window", "-d", "-h"]);
         for (key, value) in &opts.env {
@@ -976,6 +986,20 @@ fn parse_pane_line(line: &str) -> Option<PaneRef> {
     })
 }
 
+fn parse_focused_client_panes(stdout: &[u8]) -> Vec<PaneId> {
+    let mut panes = Vec::new();
+    for raw in String::from_utf8_lossy(stdout).lines().map(str::trim) {
+        if !raw.starts_with('%') {
+            continue;
+        }
+        let pane = PaneId::from_parts(MuxName::Tmux, raw);
+        if !panes.iter().any(|known| known == &pane) {
+            panes.push(pane);
+        }
+    }
+    panes
+}
+
 fn parse_new_window_ids(stdout: &[u8]) -> Result<(String, String)> {
     let raw = String::from_utf8_lossy(stdout);
     let mut cols = raw.trim().split('\t');
@@ -1264,6 +1288,23 @@ mod tests {
             "needs session+window+pane"
         );
         assert!(parse_pane_line("").is_none());
+    }
+
+    #[test]
+    fn parse_focused_client_panes_reads_unique_tmux_panes() {
+        let panes = parse_focused_client_panes(b"%10\n%10\n%11\n");
+        assert_eq!(
+            panes,
+            vec![
+                PaneId::from_parts(MuxName::Tmux, "%10"),
+                PaneId::from_parts(MuxName::Tmux, "%11"),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_focused_client_panes_ignores_malformed_rows() {
+        assert!(parse_focused_client_panes(b"\nno-pane\n@1\n").is_empty());
     }
 
     #[test]

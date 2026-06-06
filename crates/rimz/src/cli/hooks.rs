@@ -24,16 +24,17 @@ use tracing::{debug, warn};
 use super::{GlobalFlags, open_ledger};
 use rimz::EventEnvelope;
 use rimz::Ledger;
-use rimz::agents::lifecycle::{self, TransitionKind};
+use rimz::agents::lifecycle::{self, LifecycleSignal, TransitionKind};
 use rimz::agents::{AgentAdapter, AgentHookClass, AgentLifecycleObservation, adapter_by_kind};
 use rimz::bridge::{self, BridgeOutcome, ExpectedFrame, SocketGuard};
 use rimz::feed::{
-    AbandonReason, FeedItem, FeedKind, FeedStatus, ResolverStep, ResolverStepState,
-    RuntimeOwnerKind, Surface,
+    AbandonReason, AgentState, FeedItem, FeedKind, FeedStatus, PaneRef, ResolverStep,
+    ResolverStepState, RuntimeOwnerKind, Surface,
 };
 use rimz::ids::{MuxName, PaneId};
 use rimz::ledger::AskExpiry;
 use rimz::ledger::runtime::process_owner;
+use rimz::mux::{ClientFocusOptions, PaneListOptions};
 use rimz::resolver::{Allowlist, AllowlistEntry, fresh_enrolled, is_resolver_fresh, restat};
 use rimz::workspace::{self, ResolvedWorkspace, WorkspaceResolver};
 
@@ -41,6 +42,7 @@ use rimz::workspace::{self, ResolvedWorkspace, WorkspaceResolver};
 /// shape can be exercised in tens of milliseconds. Production callers leave
 /// this unset and the adapter's `hook_cap` governs.
 const HOOK_CAP_OVERRIDE_ENV: &str = "RIMZ_HOOK_CAP_MILLIS";
+const FOCUSED_PANE_BIND_TIMEOUT: Duration = Duration::from_millis(1_000);
 
 #[derive(Debug, Args)]
 pub struct HooksArgs {
@@ -209,6 +211,14 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             if observation.worktree_branch.is_none() {
                 observation.worktree_branch = workspace.worktree_branch.clone();
             }
+            recover_focused_pane_binding(
+                agent.descriptor().kind,
+                agent.descriptor().capabilities.registers_lazily,
+                globals.mux,
+                &workspace,
+                &ledger,
+                &mut observation,
+            );
             model_hint = observation.model.clone();
             // Validate the transition this event drives against the prior rollup
             // and log any anomaly once, here at ingestion — the reducer
@@ -418,6 +428,228 @@ fn attach_agent_owner(source: &str, observation: &mut AgentLifecycleObservation)
     observation.agent_pid = Some(pid);
     observation.agent_process_start = owner.process_start.clone();
     observation.runtime_owner = Some(owner);
+}
+
+fn recover_focused_pane_binding(
+    kind: &str,
+    registers_lazily: bool,
+    mux_hint: Option<MuxName>,
+    workspace: &ResolvedWorkspace,
+    ledger: &Ledger,
+    observation: &mut AgentLifecycleObservation,
+) {
+    if observation.pane_id.is_some() || !registers_lazily {
+        return;
+    }
+    if observation.parent_agent_id.is_some() {
+        return;
+    }
+    if !matches!(
+        observation.signal,
+        LifecycleSignal::Registered | LifecycleSignal::TurnStarted
+    ) {
+        return;
+    }
+    let Some(agent_id) = observation.agent_id.as_deref().filter(|id| !id.is_empty()) else {
+        return;
+    };
+    let Some(worktree_path) = observation
+        .worktree_path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+    else {
+        return;
+    };
+
+    let snapshot = match ledger.snapshot_cached() {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            debug!(
+                agent = kind,
+                agent_id,
+                error = %err,
+                "lifecycle: skipped focused pane recovery because the prior rollup was unreadable",
+            );
+            return;
+        }
+    };
+    let prior = prior_agent_panes(&snapshot.agents);
+    if session_already_stamped(kind, agent_id, &prior) {
+        return;
+    }
+
+    let Some((panes, client_focus)) =
+        live_binding_inputs(mux_hint, &workspace.session_name, kind, agent_id)
+    else {
+        return;
+    };
+    if let Some(pane_id) = select_focused_pane_binding(
+        kind,
+        agent_id,
+        worktree_path,
+        &prior,
+        &panes,
+        client_focus.as_deref(),
+    ) {
+        debug!(
+            agent = kind,
+            agent_id,
+            pane = %pane_id,
+            "lifecycle: recovered daemon-routed pane binding from live focus",
+        );
+        observation.pane_id = Some(pane_id);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PriorAgentPane<'a> {
+    kind: &'a str,
+    agent_id: &'a str,
+    pane_id: Option<&'a PaneId>,
+}
+
+fn prior_agent_panes(agents: &[AgentState]) -> Vec<PriorAgentPane<'_>> {
+    agents
+        .iter()
+        .map(|agent| PriorAgentPane {
+            kind: agent.kind.as_str(),
+            agent_id: agent.agent_id.as_str(),
+            pane_id: agent.pane.as_ref().map(|pane| &pane.pane_id),
+        })
+        .collect()
+}
+
+fn live_binding_inputs(
+    mux_hint: Option<MuxName>,
+    session_name: &str,
+    kind: &str,
+    agent_id: &str,
+) -> Option<(Vec<PaneRef>, Option<Vec<PaneId>>)> {
+    let muxes: Vec<MuxName> = mux_hint
+        .map(|mux| vec![mux])
+        .unwrap_or_else(|| vec![MuxName::Zellij, MuxName::Tmux]);
+    let mut panes = Vec::new();
+    let mut focused = Vec::new();
+    let mut focus_probe_succeeded = false;
+
+    for mux in muxes {
+        let backend = rimz::mux::backend_for(mux);
+        match backend.list_panes(PaneListOptions {
+            session_name: Some(session_name.to_owned()),
+            command_timeout: Some(FOCUSED_PANE_BIND_TIMEOUT),
+        }) {
+            Ok(mut listed) => panes.append(&mut listed),
+            Err(err) => {
+                debug!(
+                    agent = kind,
+                    agent_id,
+                    mux = mux.as_str(),
+                    error = %err,
+                    "lifecycle: focused pane recovery could not list panes",
+                );
+                continue;
+            }
+        }
+        match backend.focused_client_panes(ClientFocusOptions {
+            session_name: Some(session_name.to_owned()),
+            command_timeout: Some(FOCUSED_PANE_BIND_TIMEOUT),
+        }) {
+            Ok(listed) => {
+                focus_probe_succeeded = true;
+                append_unique_panes(&mut focused, listed);
+            }
+            Err(err) => {
+                debug!(
+                    agent = kind,
+                    agent_id,
+                    mux = mux.as_str(),
+                    error = %err,
+                    "lifecycle: focused pane recovery could not read client focus",
+                );
+            }
+        }
+    }
+
+    if panes.is_empty() {
+        return None;
+    }
+    Some((panes, focus_probe_succeeded.then_some(focused)))
+}
+
+fn append_unique_panes(target: &mut Vec<PaneId>, panes: Vec<PaneId>) {
+    for pane in panes {
+        if !target.iter().any(|known| known == &pane) {
+            target.push(pane);
+        }
+    }
+}
+
+fn select_focused_pane_binding(
+    kind: &str,
+    agent_id: &str,
+    worktree_path: &str,
+    prior_agents: &[PriorAgentPane<'_>],
+    panes: &[PaneRef],
+    client_focus: Option<&[PaneId]>,
+) -> Option<PaneId> {
+    let candidates: Vec<&PaneRef> = panes
+        .iter()
+        .filter(|pane| pane_matches_lazy_agent(kind, worktree_path, pane))
+        .filter(|pane| !pane_stamped_to_other_agent(kind, agent_id, prior_agents, &pane.pane_id))
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+
+    if let Some(client_focus) = client_focus {
+        if client_focus.is_empty() {
+            return None;
+        }
+        return unique_pane_id(
+            candidates
+                .into_iter()
+                .filter(|pane| client_focus.iter().any(|focused| focused == &pane.pane_id)),
+        );
+    }
+
+    unique_pane_id(candidates.into_iter().filter(|pane| pane.is_focused))
+}
+
+fn pane_matches_lazy_agent(kind: &str, worktree_path: &str, pane: &PaneRef) -> bool {
+    pane.cwd.as_deref() == Some(worktree_path)
+        && pane
+            .command
+            .as_deref()
+            .and_then(rimz::ledger::snapshot::command_agent_kind)
+            == Some(kind)
+}
+
+fn pane_stamped_to_other_agent(
+    kind: &str,
+    agent_id: &str,
+    prior_agents: &[PriorAgentPane<'_>],
+    pane_id: &PaneId,
+) -> bool {
+    prior_agents.iter().any(|agent| {
+        agent.kind == kind
+            && agent.agent_id != agent_id
+            && agent.pane_id.is_some_and(|known| known == pane_id)
+    })
+}
+
+fn session_already_stamped(
+    kind: &str,
+    agent_id: &str,
+    prior_agents: &[PriorAgentPane<'_>],
+) -> bool {
+    prior_agents
+        .iter()
+        .any(|agent| agent.kind == kind && agent.agent_id == agent_id && agent.pane_id.is_some())
+}
+
+fn unique_pane_id<'a>(mut panes: impl Iterator<Item = &'a PaneRef>) -> Option<PaneId> {
+    let first = panes.next()?.pane_id.clone();
+    panes.all(|pane| pane.pane_id == first).then_some(first)
 }
 
 #[cfg(target_os = "linux")]
@@ -933,7 +1165,29 @@ fn emit_neutral(agent: &dyn AgentAdapter, event_name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::matches_agent_kind;
+    use super::{
+        PriorAgentPane, matches_agent_kind, select_focused_pane_binding, session_already_stamped,
+    };
+    use rimz::feed::PaneRef;
+    use rimz::ids::{MuxName, PaneId};
+
+    fn pane(raw: &str, command: &str, cwd: &str, focused: bool) -> PaneRef {
+        PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
+            session_name: "rimz-test".to_owned(),
+            view_id: None,
+            view_kind: None,
+            view_name: None,
+            is_focused: focused,
+            command: Some(command.to_owned()),
+            cwd: Some(cwd.to_owned()),
+            pane_pid: None,
+            pane_process_start: None,
+            rss_kb: None,
+            cpu_pct: None,
+            io_bps: None,
+        }
+    }
 
     /// Claude's binary is `claude`; codex is shipped as a node bundle, so the
     /// kernel-visible `comm` is `node`. The matcher accepts both so the
@@ -947,5 +1201,103 @@ mod tests {
         assert!(!matches_agent_kind("node", "claude"));
         assert!(!matches_agent_kind("zsh", "claude"));
         assert!(!matches_agent_kind("bash", "codex"));
+    }
+
+    #[test]
+    fn focused_pane_recovery_selects_unique_client_focused_codex_pane() {
+        let panes = vec![
+            pane("terminal_4", "codex", "/repo/main", true),
+            pane("terminal_30", "codex", "/repo/main", true),
+        ];
+        let focused = vec![PaneId::from_parts(MuxName::Zellij, "terminal_30")];
+
+        let selected =
+            select_focused_pane_binding("codex", "new", "/repo/main", &[], &panes, Some(&focused))
+                .expect("unique focused client pane binds");
+
+        assert_eq!(selected.raw(), "terminal_30");
+    }
+
+    #[test]
+    fn focused_pane_recovery_refuses_ambiguous_client_focus() {
+        let panes = vec![
+            pane("terminal_4", "codex", "/repo/main", true),
+            pane("terminal_30", "codex", "/repo/main", true),
+        ];
+        let focused = vec![
+            PaneId::from_parts(MuxName::Zellij, "terminal_4"),
+            PaneId::from_parts(MuxName::Zellij, "terminal_30"),
+        ];
+
+        assert_eq!(
+            select_focused_pane_binding("codex", "new", "/repo/main", &[], &panes, Some(&focused)),
+            None,
+            "two client-focused candidate panes is ambiguous"
+        );
+    }
+
+    #[test]
+    fn focused_pane_recovery_uses_per_view_focus_when_client_probe_unavailable() {
+        let panes = vec![
+            pane("terminal_4", "codex", "/repo/main", false),
+            pane("terminal_30", "codex", "/repo/main", true),
+        ];
+
+        let selected = select_focused_pane_binding("codex", "new", "/repo/main", &[], &panes, None)
+            .expect("unique per-view focus binds when client focus is unavailable");
+
+        assert_eq!(selected.raw(), "terminal_30");
+    }
+
+    #[test]
+    fn focused_pane_recovery_rejects_other_cwd_or_kind() {
+        let panes = vec![
+            pane("terminal_4", "claude", "/repo/main", true),
+            pane("terminal_30", "codex", "/repo/other", true),
+        ];
+        let focused = vec![PaneId::from_parts(MuxName::Zellij, "terminal_30")];
+
+        assert_eq!(
+            select_focused_pane_binding("codex", "new", "/repo/main", &[], &panes, Some(&focused)),
+            None
+        );
+    }
+
+    #[test]
+    fn focused_pane_recovery_rejects_foreign_stamped_pane() {
+        let terminal_30 = PaneId::from_parts(MuxName::Zellij, "terminal_30");
+        let prior = vec![PriorAgentPane {
+            kind: "codex",
+            agent_id: "old",
+            pane_id: Some(&terminal_30),
+        }];
+        let panes = vec![pane("terminal_30", "codex", "/repo/main", true)];
+        let focused = vec![terminal_30.clone()];
+
+        assert_eq!(
+            select_focused_pane_binding(
+                "codex",
+                "new",
+                "/repo/main",
+                &prior,
+                &panes,
+                Some(&focused)
+            ),
+            None,
+            "a pane already durably stamped to another session is not stolen"
+        );
+    }
+
+    #[test]
+    fn focused_pane_recovery_detects_existing_stamped_session() {
+        let terminal_30 = PaneId::from_parts(MuxName::Zellij, "terminal_30");
+        let prior = vec![PriorAgentPane {
+            kind: "codex",
+            agent_id: "new",
+            pane_id: Some(&terminal_30),
+        }];
+
+        assert!(session_already_stamped("codex", "new", &prior));
+        assert!(!session_already_stamped("codex", "other", &prior));
     }
 }

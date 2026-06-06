@@ -27,10 +27,10 @@ use layout::{
 };
 
 use super::{
-    BackgroundViewLaunch, BackgroundViewOptions, CommandSpec, DaemonView, MuxBackend, MuxErr,
-    PaneCapture, PaneListOptions, Result, SessionHealth, SessionOptions, SidebarLiveness,
-    SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions, TabOptions, ViewSidebars,
-    ensure_pane_backend,
+    BackgroundViewLaunch, BackgroundViewOptions, ClientFocusOptions, CommandSpec, DaemonView,
+    MuxBackend, MuxErr, PaneCapture, PaneListOptions, Result, SessionHealth, SessionOptions,
+    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions,
+    TabOptions, ViewSidebars, ensure_pane_backend,
 };
 use crate::config::ZellijConfig;
 use crate::feed::PaneRef;
@@ -977,6 +977,18 @@ impl MuxBackend for ZellijBackend {
                 io_bps: None,
             })
             .collect())
+    }
+
+    fn focused_client_panes(&self, opts: ClientFocusOptions) -> Result<Vec<PaneId>> {
+        let timeout = opts.command_timeout.unwrap_or(super::COMMAND_TIMEOUT);
+        let mut spec = self.cmd();
+        if let Some(name) = opts.session_name {
+            spec = spec.args(["--session".to_owned(), name]);
+        }
+        let output = spec
+            .args(["action", "list-clients"])
+            .run_with_timeout(timeout)?;
+        Ok(parse_focused_client_panes(&output.stdout))
     }
 
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()> {
@@ -2074,6 +2086,31 @@ fn strip_ansi(line: &str) -> String {
         }
     }
     out
+}
+
+fn parse_focused_client_panes(stdout: &[u8]) -> Vec<PaneId> {
+    let mut panes = Vec::new();
+    for line in String::from_utf8_lossy(stdout).lines() {
+        let clean = strip_ansi(line);
+        let mut cols = clean.split_whitespace();
+        let Some(first) = cols.next() else {
+            continue;
+        };
+        let Some(raw_pane) = cols.next() else {
+            continue;
+        };
+        if first == "CLIENT_ID" || raw_pane == "ZELLIJ_PANE_ID" {
+            continue;
+        }
+        if !raw_pane.starts_with("terminal_") {
+            continue;
+        }
+        let pane = PaneId::from_parts(MuxName::Zellij, raw_pane);
+        if !panes.iter().any(|known| known == &pane) {
+            panes.push(pane);
+        }
+    }
+    panes
 }
 
 fn trim_capture(raw_text: String, max_lines: Option<u16>) -> (String, Vec<String>) {

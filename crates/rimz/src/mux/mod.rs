@@ -81,6 +81,15 @@ pub struct PaneListOptions {
     pub command_timeout: Option<Duration>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct ClientFocusOptions {
+    pub session_name: Option<String>,
+    /// Override the backend's default subprocess timeout. The hook ingestion
+    /// path uses a short bound because this is a best-effort pane recovery
+    /// probe, never a precondition for recording the lifecycle event.
+    pub command_timeout: Option<Duration>,
+}
+
 #[derive(Clone, Debug)]
 pub struct SessionOptions {
     pub session_name: String,
@@ -306,6 +315,10 @@ pub trait MuxBackend: Send + Sync {
     fn kill_session(&self, name: &str) -> Result<()>;
     fn list_sessions(&self) -> Result<Vec<String>>;
     fn list_panes(&self, opts: PaneListOptions) -> Result<Vec<PaneRef>>;
+    fn focused_client_panes(&self, opts: ClientFocusOptions) -> Result<Vec<PaneId>> {
+        let _ = opts;
+        Ok(Vec::new())
+    }
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()>;
     fn focus_pane(&self, pane: &PaneId) -> Result<()>;
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture>;
