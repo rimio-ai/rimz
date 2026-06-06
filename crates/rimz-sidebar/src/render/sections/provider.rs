@@ -12,6 +12,7 @@ use crate::render::fmt::{dollars2, reset_countdown, tokens_int, tokens_short, wi
 use crate::render::labels::{
     SEGMENT_CACHE_READ, SEGMENT_INPUT, SEGMENT_OUTPUT, TOKENS_CACHED, TOKENS_IN, TOKENS_OUT,
     TOKENS_TOTAL, infinite_bar_spans, mana_bar_spans, mana_style, token_breakdown_spans,
+    unknown_mana_bar_spans,
 };
 use crate::render::theme::Theme;
 
@@ -533,8 +534,9 @@ fn window_not_started(window: &RateLimitWindow) -> bool {
 /// the value column at the soft tier. The label mirrors its bar's tone — the
 /// resting green, or the severity it heats to. `force_exhausted`
 /// paints the row as fully spent — red, no countdown — regardless of the window's
-/// own reading (a longer spent window gates it). `None` when the window reported
-/// no usage percentage and is not force-exhausted.
+/// own reading (a longer spent window gates it). A window with no usage
+/// percentage paints as an unknown dim track, preserving the label but claiming
+/// no remaining budget.
 ///
 /// A window that has **not started** drops its countdown — a full bar with no
 /// `↻` reads "send a message to start it" rather than a misleading ticking reset.
@@ -551,6 +553,19 @@ fn metered_bar_row(
     force_exhausted: bool,
     zones: &BudgetZonesConfig,
 ) -> Option<Vec<Span<'static>>> {
+    let label = window_label(window.duration_mins);
+    let bar_width = provider_bar_width(region);
+    if !force_exhausted && window.used_percentage.is_none() {
+        let mut spans = vec![
+            Span::styled(format!("{label:<PROVIDER_LABEL_WIDTH$}"), theme.dim()),
+            Span::raw(" "),
+        ];
+        spans.extend(unknown_mana_bar_spans(theme, bar_width));
+        spans.push(Span::raw(" "));
+        spans.push(Span::raw(" ".repeat(PROVIDER_VALUE_WIDTH)));
+        return Some(spans);
+    }
+
     let not_started = !force_exhausted && window_not_started(window);
     let remaining = if force_exhausted {
         0
@@ -566,7 +581,6 @@ fn metered_bar_row(
             raw
         }
     };
-    let label = window_label(window.duration_mins);
     let value = if force_exhausted || not_started {
         String::new()
     } else {
@@ -575,7 +589,6 @@ fn metered_bar_row(
             .map(|at| format!("↻ {}", reset_countdown(at)))
             .unwrap_or_default()
     };
-    let bar_width = provider_bar_width(region);
     let mut spans = vec![
         Span::styled(
             format!("{label:<PROVIDER_LABEL_WIDTH$}"),

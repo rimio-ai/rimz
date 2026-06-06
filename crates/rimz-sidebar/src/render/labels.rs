@@ -625,6 +625,16 @@ pub(super) fn mana_bar_spans(
     )
 }
 
+/// An unknown provider budget: the window identity is known (`5h`, `7d`, …) but
+/// the account reading is older than the longest reset. Paint a plain dim empty
+/// track, distinct from a full green bar and from the fully-spent red track.
+pub(super) fn unknown_mana_bar_spans(theme: &Theme, width: usize) -> Vec<Span<'static>> {
+    vec![Span::styled(
+        std::iter::repeat_n(MANA_TRACK, width.max(1)).collect::<String>(),
+        theme.dim(),
+    )]
+}
+
 /// The mana bar's tone at `remaining_pct` budget left: red when near-spent (or
 /// fully spent), then the same gold → clay-amber escalation the age and
 /// context ramps speak, resting green while the budget sits above every

@@ -1045,15 +1045,14 @@ impl SidebarSnapshot {
 
     /// Fold the agent rollup into per-provider dashboard blocks — one per agent
     /// kind, plus one for any provider with no active session this run that is
-    /// either logged in or has recorded spend (an account-only block, so the
-    /// dashboard shows your accounts, budgets, and fleet history between turns).
+    /// logged in (an account-only block, so the dashboard shows your accounts
+    /// and budgets between turns).
     /// Sums each kind's spend, tokens, and edited lines; takes the plan, version,
     /// and rate-limit windows from the freshest session (account state is shared,
     /// so the latest reading is truest). `probed_accounts` carries out-of-band
     /// login facts the context cannot (Claude's `auth status`, Codex's
     /// `auth.json`), preferred only when the freshest context has none — and a kind
-    /// whose only signal is such a login, or whose only signal is recorded spend in
-    /// `provider_spending`, still earns a block;
+    /// whose only signal is such a login still earns a block;
     /// `remote_control` carries the per-kind `⇅ rc` flag. Styling (emblem, color,
     /// name) resolves from `self.sidebar.providers` over the built-in defaults, so
     /// the renderer gets a ready-to-paint block. Capped to `max_provider_blocks`
@@ -1083,14 +1082,6 @@ impl SidebarSnapshot {
                 kinds.push(kind.clone());
             }
         }
-        // A provider with recorded spend earns a block too, so its fleet history
-        // shows even with no live session and no probed login this run.
-        for (kind, tally) in provider_spending {
-            if !tally.is_zero() && !kinds.iter().any(|known| known == kind) {
-                kinds.push(kind.clone());
-            }
-        }
-
         let mut panels: Vec<SidebarProviderPanel> = Vec::new();
         for kind in kinds {
             let sessions: Vec<&AgentState> = self
@@ -1098,13 +1089,10 @@ impl SidebarSnapshot {
                 .iter()
                 .filter(|agent| agent.parent_agent_id.is_none() && agent.kind == kind)
                 .collect();
-            // Nothing to show without a session, a logged-in account, or recorded
-            // spend; an idle provider with any of the three falls through to a
-            // minimal block.
-            let has_spend = provider_spending
-                .get(&kind)
-                .is_some_and(|tally| !tally.is_zero());
-            if sessions.is_empty() && !probed_accounts.contains_key(&kind) && !has_spend {
+            // Nothing to show without a session or a logged-in account. Recorded
+            // spend enriches an existing provider block but never creates the
+            // provider section by itself.
+            if sessions.is_empty() && !probed_accounts.contains_key(&kind) {
                 continue;
             }
 

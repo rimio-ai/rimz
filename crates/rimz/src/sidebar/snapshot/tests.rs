@@ -469,10 +469,14 @@ fn diff_stats_cache_entry_without_clean_reads_none() {
 /// A 5-hour budget window for tests — a known `duration_mins` so the
 /// projection and per-duration reconciliation have something to key on.
 fn rl_window(used: u8, resets_at: Option<Timestamp>) -> RateLimitWindow {
+    rl_window_mins(used, resets_at, 300)
+}
+
+fn rl_window_mins(used: u8, resets_at: Option<Timestamp>, duration_mins: u32) -> RateLimitWindow {
     RateLimitWindow {
         used_percentage: Some(used),
         resets_at,
-        duration_mins: Some(300),
+        duration_mins: Some(duration_mins),
     }
 }
 
@@ -628,18 +632,22 @@ fn producer_persists_live_windows_for_idle_fallback() {
     );
 }
 
-/// An idle window whose reset has long passed projects to full, but the
+/// An idle short window whose reset has passed projects to full while the
+/// longer cached window is still active, but the
 /// producer keeps persisting the real last reading — the synthesized full
 /// window is a read-time projection, never written back.
 #[test]
-fn idle_past_reset_shows_full_without_persisting_the_synthetic_window() {
+fn idle_short_window_past_reset_shows_full_without_persisting_the_synthetic_window() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
     let passed = Timestamp::from_second(1_000_000_000).unwrap(); // 2001 — always past
+    let future = Timestamp::from_second(4_000_000_000).unwrap();
 
-    // Seed a drained reading whose reset has long since passed.
+    // Seed a drained 5h reading whose reset has long since passed, plus a 7d
+    // reading whose reset is still ahead. The short window refills, but the
+    // long window keeps the cache inside a known provider budget shape.
     let path = runtime.root.join("rate_limits.json");
     write_rate_limits_cache(
         &path,
@@ -648,7 +656,10 @@ fn idle_past_reset_shows_full_without_persisting_the_synthetic_window() {
             windows: BTreeMap::from([(
                 "claude".to_owned(),
                 AgentRateLimits {
-                    windows: vec![rl_window(90, Some(passed))],
+                    windows: vec![
+                        rl_window_mins(90, Some(passed), 300),
+                        rl_window_mins(70, Some(future), 7 * 24 * 60),
+                    ],
                 },
             )]),
         },
@@ -661,6 +672,14 @@ fn idle_past_reset_shows_full_without_persisting_the_synthetic_window() {
     let shown = idle.providers[0].windows.first().expect("a full window");
     assert_eq!(shown.used_percentage, Some(0), "a reset window shows full");
     assert!(shown.resets_at.is_some(), "with a rolled-forward countdown");
+    assert_eq!(
+        idle.providers[0]
+            .windows
+            .get(1)
+            .and_then(|window| window.used_percentage),
+        Some(70),
+        "the unexpired long window keeps its cached reading"
+    );
 
     let persisted = read_rate_limits_cache(&path);
     assert_eq!(
@@ -672,6 +691,60 @@ fn idle_past_reset_shows_full_without_persisting_the_synthetic_window() {
         Some(90),
         "the cache retains ground truth, not the synthesized full window"
     );
+}
+
+/// Once the longest cached window has reset, every cached bar reads as unknown
+/// until a provider refresh supplies real data. The cache still stores the last
+/// ground-truth readings so a future projection never writes synthetic values.
+#[test]
+fn idle_longest_window_past_reset_shows_unknown_without_persisting_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let passed = Timestamp::from_second(1_000_000_000).unwrap();
+    let path = runtime.root.join("rate_limits.json");
+    write_rate_limits_cache(
+        &path,
+        &RateLimitsCache {
+            refreshed_at_ms: 0,
+            windows: BTreeMap::from([(
+                "claude".to_owned(),
+                AgentRateLimits {
+                    windows: vec![
+                        rl_window_mins(90, Some(passed), 300),
+                        rl_window_mins(80, Some(passed), 7 * 24 * 60),
+                    ],
+                },
+            )]),
+        },
+    );
+
+    let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+    apply_rate_limit_cache(&mut idle, &runtime, true);
+
+    assert_eq!(idle.providers[0].windows.len(), 2);
+    assert!(
+        idle.providers[0]
+            .windows
+            .iter()
+            .all(|window| window.used_percentage.is_none() && window.resets_at.is_none()),
+        "expired long-window cache displays unknown bars"
+    );
+    assert_eq!(
+        idle.providers[0]
+            .windows
+            .iter()
+            .map(|window| window.duration_mins)
+            .collect::<Vec<_>>(),
+        vec![Some(300), Some(7 * 24 * 60)],
+        "unknown bars keep their window labels"
+    );
+
+    let persisted = read_rate_limits_cache(&path);
+    let persisted_windows = &persisted.windows["claude"].windows;
+    assert_eq!(persisted_windows[0].used_percentage, Some(90));
+    assert_eq!(persisted_windows[1].used_percentage, Some(80));
 }
 
 /// When one provider logs out while another stays, the logged-out kind loses
@@ -793,15 +866,12 @@ fn active_codex_session_refreshes_context_even_when_windows_exist() {
 fn idle_metered_codex_refreshes_account_cache() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let snapshot = snapshot_with_panels(
-        workspace,
-        vec![provider_panel("codex", vec![rl_window(25, None)])],
-    );
+    let snapshot = snapshot_with_panels(workspace, vec![provider_panel("codex", Vec::new())]);
 
     assert_eq!(
         codex_rate_limit_refreshes(&snapshot),
         vec![CodexRateLimitRefresh::Account],
-        "idle Codex accounts refresh the shared cache even with prior windows"
+        "idle Codex accounts refresh the shared cache even before windows exist"
     );
 }
 

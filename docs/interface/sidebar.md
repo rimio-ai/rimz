@@ -93,7 +93,7 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `✓ main`          | worktree holds no work of its own — zero ahead, zero diff, clean tree — but the trunk has moved on: done, safe to remove |
 | `●●●○○ 3/5`       | todo progress |
 | `$1.27`           | spend — money-green, always two decimals; omitted while a session's cost still rounds to zero |
-| `▰▱` / `∞`        | provider budget bar (fill = left), draining green → yellow → amber → red by what remains / unmetered account — the `∞` icon and its empty track share the provider's brand color |
+| `▰▱` / `▱▱` / `∞` | provider budget bar (fill = left), draining green → yellow → amber → red by what remains / unknown cached budget as a dim empty track / unmetered account — the `∞` icon and its empty track share the provider's brand color |
 | `↻ 2h06m`         | when that budget resets |
 
 **Structure and chrome.**
@@ -306,6 +306,8 @@ Each block's stats line speaks the fleet ledger's vocabulary, scoped to the prov
 A **metered account** drains one "mana" bar per budget window toward its reset. The bar fills with what's *left*, ramping green → yellow → amber → red as it empties over a dim empty track — and a fully-spent window (0% left) flips its whole empty track red, so an exhausted budget never reads as an untouched one. Each window's label (`5h`/`7d`) wears its own bar's tone, and the `↻` reset countdown beside it reads at the quiet soft tier, so the row reads as one unit. A spent longer window gates the shorter ones: once the `7d` is exhausted the `5h` row is painted exhausted too — red, no countdown — regardless of its own reading, since that budget is unusable until the longer window resets.
 
 These are **sliding windows** that begin counting only on your first token, so until then the provider keeps sliding the reset a full window-length ahead. A window whose reset still sits ~a full window out has **not started** (it still reads ~1% used, not 0 — so it's the reset distance that gives it away). Any usage above that ~1% floor means it has already started, countdown and all; only a 0–1% window with a near-full reset qualifies. A not-started window shows a near-full bar with **no countdown**, reading "ready — send a message to start it" rather than a misleading ticking placeholder; the countdown appears once your first token fixes the reset and it begins ticking down.
+
+When Rimz is reading only cached budgets and the longest cached window has already reset, the balance is unknown until the provider refreshes. The panel keeps the account and window labels, but every cached budget row becomes a dim empty track with no countdown, so it does not claim either a refreshed full budget or an exhausted one.
 
 ```
  ─── Claude ──── Codex ──────────────────────────────    tab rail — the panel's top hairline; the selected pane runs Claude, so its chip fills

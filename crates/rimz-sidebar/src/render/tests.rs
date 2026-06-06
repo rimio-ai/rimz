@@ -2714,6 +2714,42 @@ fn codex_not_started_shows_full_bar() {
     );
 }
 
+/// An expired long-window cache is an unknown budget reading, not a full budget
+/// and not a spent one. It keeps the duration label but paints a plain dim empty
+/// track with no countdown.
+#[test]
+fn unknown_provider_window_draws_dim_empty_track() {
+    let theme = Theme::fixed(false);
+    let mut claude = provider_panel("claude", "Claude", 173, true, false, None);
+    claude.windows = vec![RateLimitWindow {
+        used_percentage: None,
+        resets_at: None,
+        duration_mins: Some(7 * 24 * 60),
+    }];
+    let rows = metered_bar_rows(&theme, &claude);
+    assert_eq!(rows.len(), 1);
+    let label = rows[0]
+        .spans
+        .first()
+        .expect("a label span")
+        .content
+        .trim()
+        .to_owned();
+    assert_eq!(label, "7d");
+    let (label_fg, glyph_fg, has_reset) = bar_row_facts(&rows[0]);
+    assert_eq!(label_fg, glyph_fg, "unknown label mirrors its dim track");
+    assert_ne!(glyph_fg, Some(Color::Red), "unknown is not exhausted");
+    assert!(!has_reset, "unknown windows have no reset countdown");
+    assert!(
+        !rows[0].spans.iter().any(|span| span.content.contains('▰')),
+        "unknown windows have no filled budget cells"
+    );
+    assert!(
+        rows[0].spans.iter().any(|span| span.content.contains('▱')),
+        "unknown windows keep an empty track"
+    );
+}
+
 /// The full provider stats line (all spans joined) of one rendered panel.
 fn stats_line(theme: &Theme, panel: &rimz::SidebarProviderPanel) -> String {
     provider_panel_lines(

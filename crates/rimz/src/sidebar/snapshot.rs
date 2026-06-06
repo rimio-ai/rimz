@@ -1351,15 +1351,44 @@ fn project_idle_window(cached: RateLimitWindow, now: Timestamp) -> RateLimitWind
     }
 }
 
+/// Whether the cached account reading has aged past its longest dated window.
+/// At that point Rimz no longer knows the account's budget shape: the short
+/// window may have refilled several times, and the long cap may have refilled
+/// too. The cache remains ground truth for persistence, but display switches to
+/// unknown bars until a provider reading refreshes it.
+fn longest_cached_window_expired(
+    prev: &BTreeMap<Option<u32>, RateLimitWindow>,
+    now: Timestamp,
+) -> bool {
+    prev.values()
+        .filter_map(|window| Some((window.duration_mins?, window.resets_at?)))
+        .max_by_key(|(mins, _)| *mins)
+        .is_some_and(|(_, resets_at)| resets_at <= now)
+}
+
+/// Preserve the cached window's identity while clearing the value, so the
+/// renderer can draw an honest unknown bar (`5h`, `7d`, …) without claiming a
+/// refreshed or exhausted budget.
+fn unknown_idle_window(cached: RateLimitWindow) -> RateLimitWindow {
+    RateLimitWindow {
+        used_percentage: None,
+        resets_at: None,
+        duration_mins: cached.duration_mins,
+    }
+}
+
 /// Fold the persisted account-scoped windows onto the resolved provider panels:
 /// a kind with no live reading this frame paints its last-known bars (projected
 /// through [`project_idle_window`]'s reset-to-max rule) instead of an empty
-/// dashboard. Reconciled per window duration, so each budget is carried forward
-/// independently. On the producer (`persist`) the live readings are written
-/// back — and only the live ground truth, never the synthesized full window —
-/// so budgets survive a session ending or going idle. The written cache tracks
-/// login: it is rebuilt from the panels alone, so a logged-out kind (no panel)
-/// drops out. A consumer reads the same cache but never writes it.
+/// dashboard. Once the longest cached window has reset with no live reading, the
+/// display switches all cached windows to unknown bars until a provider refresh
+/// succeeds. Reconciled per window duration, so each budget is carried forward
+/// independently while the cache is still inside its long window. On the producer
+/// (`persist`) the live readings are written back — and only the live ground
+/// truth, never the synthesized full or unknown windows — so budgets survive a
+/// session ending or going idle. The written cache tracks login: it is rebuilt
+/// from the panels alone, so a logged-out kind (no panel) drops out. A consumer
+/// reads the same cache but never writes it.
 fn apply_rate_limit_cache(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths, persist: bool) {
     // No dashboard, no windows: skip the cache I/O entirely. A room with no
     // logged-in provider has nothing to fall back to and nothing to persist, so
@@ -1395,6 +1424,7 @@ fn apply_rate_limit_cache(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths
             .map(|window| (window.duration_mins, window.clone()))
             .collect();
         let durations: BTreeSet<Option<u32>> = live.keys().chain(prev.keys()).copied().collect();
+        let cache_unknown = live.is_empty() && longest_cached_window_expired(&prev, now);
 
         // Persist ground truth only: a live reading supersedes the cached one;
         // absent one, the prior reading is retained unchanged. The synthesized
@@ -1416,9 +1446,13 @@ fn apply_rate_limit_cache(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths
             .iter()
             .filter_map(|duration| {
                 live.get(duration).cloned().or_else(|| {
-                    prev.get(duration)
-                        .cloned()
-                        .map(|window| project_idle_window(window, now))
+                    prev.get(duration).cloned().map(|window| {
+                        if cache_unknown {
+                            unknown_idle_window(window)
+                        } else {
+                            project_idle_window(window, now)
+                        }
+                    })
                 })
             })
             .collect();
