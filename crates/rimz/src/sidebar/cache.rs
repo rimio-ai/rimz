@@ -278,11 +278,10 @@ pub fn patch_snapshot_pane_focus(
             .iter()
             .rev()
             .find(|(pane_id, _)| *pane_id == pane.pane_id)
+            && pane.is_focused != *is_focused
         {
-            if pane.is_focused != *is_focused {
-                pane.is_focused = *is_focused;
-                changed = true;
-            }
+            pane.is_focused = *is_focused;
+            changed = true;
         }
     }
     if changed {
