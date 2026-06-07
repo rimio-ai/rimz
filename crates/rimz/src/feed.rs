@@ -750,6 +750,16 @@ pub struct AgentState {
     /// real session name exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// Agent-reported transcript path for this session, carried forward from
+    /// lifecycle events when available. Display/diagnostic metadata; sidecar
+    /// readers keep their own freshness gates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<String>,
+    /// Recent user prompts for this session, newest last, capped by the rollup.
+    /// The sidebar row keeps only `prompt`; snapshot JSON exposes the history on
+    /// `agents[]` for diagnostics and future panes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_prompts: Vec<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
     /// Context-window utilization in percent (0..=100). Reported by the

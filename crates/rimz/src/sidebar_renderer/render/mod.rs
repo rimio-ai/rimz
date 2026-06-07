@@ -29,7 +29,7 @@ use std::io::{self, Write};
 use crate::config::ScrollbarMode;
 use crate::feed::AgentStatus;
 use crate::ids::PaneId;
-use crate::{SidebarRow, SidebarRowKind, SidebarSnapshot};
+use crate::{SidebarRow, SidebarSnapshot};
 use jiff::Timestamp;
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::layout::Rect;
@@ -236,20 +236,18 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
         .iter()
         .flat_map(|group| &group.rows)
     {
-        match row.row_kind {
-            SidebarRowKind::Agent => {
-                if row.resolver.is_some() || row.status == Some(AgentStatus::Running) {
-                    return AnimationCadence::Fast;
-                }
-                // `?`/`!` breathe to pull the eye back to an unanswered row,
-                // quickening with age up to the red blink, which flips every
-                // 300ms by design so it samples cleanly on this grid.
-                if row.status.is_some_and(AgentStatus::is_actionable) {
-                    slow = true;
-                }
+        if row.is_agent() {
+            if row.resolver().is_some() || row.status() == Some(AgentStatus::Running) {
+                return AnimationCadence::Fast;
             }
-            SidebarRowKind::Process if row.process_active => return AnimationCadence::Fast,
-            SidebarRowKind::Process => {}
+            // `?`/`!` breathe to pull the eye back to an unanswered row,
+            // quickening with age up to the red blink, which flips every
+            // 300ms by design so it samples cleanly on this grid.
+            if row.status().is_some_and(AgentStatus::is_actionable) {
+                slow = true;
+            }
+        } else if row.process_is_busy() {
+            return AnimationCadence::Fast;
         }
     }
     if slow {
@@ -310,7 +308,7 @@ pub fn draw_with_ui(
 /// With no filter every row passes; with a bucket active only agent rows of
 /// that status pass, so process rows (status `None`) drop out entirely.
 pub(crate) fn row_passes_filter(row: &SidebarRow, filter: Option<AgentStatus>) -> bool {
-    filter.is_none_or(|status| row.status == Some(status))
+    filter.is_none_or(|status| row.status() == Some(status))
 }
 
 /// The provider kind the dashboard's tab focus derives from the selection: the
@@ -326,7 +324,7 @@ pub(crate) fn selected_agent_kind(snapshot: &SidebarSnapshot, ui: &UiState) -> O
         .flat_map(|group| &group.rows)
         .filter(|row| row_passes_filter(row, ui.make_up_filter))
         .nth(ui.selected_index)
-        .filter(|row| row.row_kind == SidebarRowKind::Agent)
+        .filter(|row| row.is_agent())
         .map(|row| row.name.clone())
 }
 
@@ -996,13 +994,13 @@ fn should_show_first_run_hint(snapshot: &SidebarSnapshot) -> bool {
         .worktree_groups
         .iter()
         .flat_map(|group| &group.rows)
-        .all(|row| row.row_kind == SidebarRowKind::Process && !is_known_agent_process(row))
+        .all(|row| row.is_process() && !is_known_agent_process(row))
 }
 
 fn is_known_agent_process(row: &crate::SidebarRow) -> bool {
     // tmux can expose Claude/Codex as the shared Node host before hook
     // enrichment claims the pane, so `node` is agent-like for the empty-room cue.
-    row.row_kind == SidebarRowKind::Process
+    row.is_process()
         && (crate::agents::known_kinds().any(|kind| kind == row.name) || row.name == "node")
 }
 
@@ -1012,7 +1010,7 @@ fn footer_lines(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> Vec<
         .iter()
         .flat_map(|group| &group.rows)
         .any(|row| {
-            row.status
+            row.status()
                 .is_some_and(crate::feed::AgentStatus::is_actionable)
         });
     // Faint chrome — the deepest legible gray, so the footer recedes to pure

@@ -42,42 +42,18 @@ fn frame_interval_slows_cosmetic_animation_only() {
         kind: crate::SidebarWorktreeKind::Worktree,
         status_counts: Vec::new(),
         rows: vec![crate::SidebarRow {
-            row_kind: crate::SidebarRowKind::Agent,
             id: "claude-1".to_owned(),
             name: "claude".to_owned(),
-            status: Some(crate::feed::AgentStatus::Waiting),
-            phase: crate::agents::TurnPhase::Idle,
             pane: None,
-            request_id: None,
-            surface: None,
-            task: Some("allow cargo fmt".to_owned()),
-            prompt: None,
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            todo_done: None,
-            todo_total: None,
-            context: None,
-            context_severity: None,
             worktree_path: Some("/repo/main".to_owned()),
             worktree_branch: Some("main".to_owned()),
             last_activity: Timestamp::now(),
-            registered_at: None,
-            resolver: None,
-            options: Vec::new(),
-            sub_agents: Vec::new(),
-            process_active: false,
-            command_detail: None,
-            compacting: false,
-            turn_error_label: None,
-            rss_kb: None,
-            cpu_pct: None,
-            io_bps: None,
+            card: crate::RowCard::Agent(Box::new(crate::AgentCard {
+                status: Some(crate::feed::AgentStatus::Waiting),
+                phase: crate::agents::TurnPhase::Idle,
+                task: Some("allow cargo fmt".to_owned()),
+                ..crate::AgentCard::default()
+            })),
         }],
         hidden_count: 0,
         diff_added: None,
@@ -93,7 +69,10 @@ fn frame_interval_slows_cosmetic_animation_only() {
         crate::sidebar::timing::SLOW_ANIMATION_FRAME
     );
 
-    slow.worktree_groups[0].rows[0].status = Some(crate::feed::AgentStatus::Running);
+    slow.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .status = Some(crate::feed::AgentStatus::Running);
     assert_eq!(
         frame_interval(&slow, &UiState::default()),
         crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS)

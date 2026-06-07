@@ -13,7 +13,7 @@ use crate::agents::RateLimitWindow;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::sidebar_renderer::render::render_fixed;
 use crate::{
-    SidebarProviderPanel, SidebarRow, SidebarRowKind, SidebarSnapshot, SidebarStatusCount,
+    AgentCard, RowCard, SidebarProviderPanel, SidebarRow, SidebarSnapshot, SidebarStatusCount,
     SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, SpendTally, SpendWindow,
 };
 use jiff::Timestamp;
@@ -38,11 +38,8 @@ fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
 fn agent_row(group: usize, index: usize) -> SidebarRow {
     let id = format!("agent-{group}-{index}");
     SidebarRow {
-        row_kind: SidebarRowKind::Agent,
         id: id.clone(),
         name: "claude".to_owned(),
-        status: Some(crate::feed::AgentStatus::Running),
-        phase: crate::agents::TurnPhase::Acting,
         pane: Some(crate::feed::PaneRef {
             pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{group}_{index}")),
             session_name: "rimz-perf".to_owned(),
@@ -55,38 +52,26 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
             pane_pid: None,
             pane_process_start: None,
         }),
-        request_id: None,
-        surface: None,
-        task: Some(format!("refactor module {index} of worktree {group}")),
-        prompt: None,
-        model: Some("Opus".to_owned()),
-        effort: Some("high".to_owned()),
-        context_pct: Some(((index * 13) % 100) as u8),
-        context_window: Some(200_000),
-        total_tokens: Some(10_000 + (index as u64) * 991),
-        cache_read_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        todo_done: Some(3),
-        todo_total: Some(7),
-        context: None,
-        context_severity: Some(crate::feed::ContextSeverity::Yellow),
         worktree_path: Some(format!("/repo/wt{group}")),
         worktree_branch: Some(format!("feature-{group}")),
         last_activity: Timestamp::now(),
-        registered_at: None,
-        resolver: None,
-        options: Vec::new(),
-        // Row 0 is the default selection, so its card expands these in every
-        // composed frame — the sub-agent loop stays inside the measured work.
-        sub_agents: (0..3).map(|sub| sub_agent(&id, sub)).collect(),
-        process_active: false,
-        command_detail: None,
-        compacting: false,
-        turn_error_label: None,
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
+        card: RowCard::Agent(Box::new(AgentCard {
+            status: Some(crate::feed::AgentStatus::Running),
+            phase: crate::agents::TurnPhase::Acting,
+            task: Some(format!("refactor module {index} of worktree {group}")),
+            model: Some("Opus".to_owned()),
+            effort: Some("high".to_owned()),
+            context_pct: Some(((index * 13) % 100) as u8),
+            context_window: Some(200_000),
+            total_tokens: Some(10_000 + (index as u64) * 991),
+            todo_done: Some(3),
+            todo_total: Some(7),
+            context_severity: Some(crate::feed::ContextSeverity::Yellow),
+            // Row 0 is the default selection, so its card expands these in every
+            // composed frame — the sub-agent loop stays inside the measured work.
+            sub_agents: (0..3).map(|sub| sub_agent(&id, sub)).collect(),
+            ..AgentCard::default()
+        })),
     }
 }
 

@@ -189,8 +189,8 @@ pub(super) fn apply_fetch_outcome(
             .iter()
             .flat_map(|group| group.rows.iter())
             .filter_map(|row| {
-                row.context
-                    .as_ref()
+                row.as_agent()
+                    .and_then(|agent| agent.context.as_ref())
                     .and_then(|context| context.cost.as_ref())
                     .and_then(|cost| cost.total_cost_usd)
                     .map(|usd| (row.id.clone(), usd))

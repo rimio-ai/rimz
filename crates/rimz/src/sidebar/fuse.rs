@@ -213,7 +213,7 @@ mod tests {
         let row = &fused.worktree_groups[0].rows[0];
         assert_eq!(row.id, "zellij:terminal_1");
         assert_eq!(row.name, "cargo");
-        assert!(row.process_active);
+        assert!(row.process_is_busy());
     }
 
     #[test]

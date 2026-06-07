@@ -176,15 +176,9 @@ fn reject_holds_prior_frame_as_render_and_baseline() {
     assert!(rejected);
     // Both the rendered frame AND the next-tick baseline stay the good
     // frame, so the cache never advances onto the demotion.
-    assert!(matches!(
-        state.snapshot.worktree_groups[0].rows[0].row_kind,
-        crate::SidebarRowKind::Agent
-    ));
+    assert!(state.snapshot.worktree_groups[0].rows[0].is_agent());
     let baseline = state.last_snapshot.expect("baseline retained");
-    assert!(matches!(
-        baseline.worktree_groups[0].rows[0].row_kind,
-        crate::SidebarRowKind::Agent
-    ));
+    assert!(baseline.worktree_groups[0].rows[0].is_agent());
     assert_eq!(gate.reject_streak, 1);
     assert!(gate.rejecting_since.is_some());
     // Orthogonal to Health: a held regression is a *successful* fetch, so it
@@ -213,10 +207,7 @@ fn reject_holds_prior_frame_over_frameless_fetch() {
         state.snapshot.panes_produced_at_ms,
         prior.panes_produced_at_ms
     );
-    assert!(matches!(
-        state.snapshot.worktree_groups[0].rows[0].row_kind,
-        crate::SidebarRowKind::Agent
-    ));
+    assert!(state.snapshot.worktree_groups[0].rows[0].is_agent());
     assert_eq!(gate.reject_streak, 1);
 }
 
@@ -239,8 +230,5 @@ fn accept_resets_the_gate() {
     let (state, gate, rejected) = apply_gate(computed, true, &prior, &prev_gate, gate_now());
     assert!(!rejected);
     assert_eq!(gate, GateState::default());
-    assert!(matches!(
-        state.snapshot.worktree_groups[0].rows[0].row_kind,
-        crate::SidebarRowKind::Agent
-    ));
+    assert!(state.snapshot.worktree_groups[0].rows[0].is_agent());
 }

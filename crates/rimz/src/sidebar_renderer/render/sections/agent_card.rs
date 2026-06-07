@@ -6,7 +6,7 @@
 use crate::agents::{AgentContext, TurnPhase};
 use crate::config::ContextSeverityConfig;
 use crate::feed::{AgentStatus, ContextSeverity};
-use crate::{SidebarProviderPanel, SidebarRow, SidebarRowKind, SidebarSubAgent};
+use crate::{AgentCard, SidebarProviderPanel, SidebarRow, SidebarSubAgent};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -52,8 +52,12 @@ const NAME_MAX: usize = 12;
 /// with no real usage behind it yet. Its 0% bar and zeroed stat lines are noise,
 /// so the card collapses to identity + description (+ the last-activity age).
 fn idle_unstarted(row: &SidebarRow) -> bool {
-    matches!(row.status.unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
+    matches!(row.status().unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
         && gauge_percent(row).unwrap_or(0) == 0
+}
+
+fn agent(row: &SidebarRow) -> Option<&AgentCard> {
+    row.as_agent()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -87,12 +91,12 @@ pub(super) fn row_lines(
     // An active process row carries its full command on a dim second line under
     // the shell anchor — the build or `sudo` install reads in full while line 1
     // stays the stable shell label. Idle process rows have no detail to add.
-    if row.row_kind == SidebarRowKind::Process
+    if row.is_process()
         && let Some(line) = process_detail_line(theme, row, cw)
     {
         inner.push(line);
     }
-    if row.row_kind == SidebarRowKind::Agent {
+    if let Some(agent) = agent(row) {
         inner.push(description_line(theme, row, tier, cw, animation_phase));
         // A just-started idle agent sits on the 0% baseline gauge with nothing
         // behind it, so it rests at identity + description alone. Once an agent
@@ -110,8 +114,13 @@ pub(super) fn row_lines(
         // The subagents this agent spawned this turn, listed only in the expanded
         // card — appended after the stats so the resting card never reflows
         // (selection only ever adds lines).
-        if selected && !row.sub_agents.is_empty() {
-            inner.extend(sub_agent_lines(theme, &row.sub_agents, cw, animation_phase));
+        if selected && !agent.sub_agents.is_empty() {
+            inner.extend(sub_agent_lines(
+                theme,
+                &agent.sub_agents,
+                cw,
+                animation_phase,
+            ));
         }
     }
     inner
@@ -313,11 +322,11 @@ fn identity_line(
     animation_phase: u64,
     cost_rolls: &CostRolls,
 ) -> Line<'static> {
-    if row.row_kind == SidebarRowKind::Process {
+    if row.is_process() {
         return process_row_line(theme, row, width, animation_phase);
     }
 
-    if let Some(resolver) = &row.resolver {
+    if let Some(resolver) = row.resolver() {
         let resolver_name = resolver
             .display_name
             .as_deref()
@@ -342,7 +351,7 @@ fn identity_line(
         );
     }
 
-    let status = row.status.unwrap_or(AgentStatus::Idle);
+    let status = row.status().unwrap_or(AgentStatus::Idle);
     agent_identity_line(
         theme,
         row,
@@ -369,14 +378,16 @@ fn agent_lead_cell(
     animation_phase: u64,
 ) -> Span<'static> {
     let actionable = status.is_actionable();
-    if !actionable && row.compacting {
+    if !actionable && agent(row).is_some_and(|agent| agent.compacting) {
         return Span::styled(compacting_glyph(animation_phase), compacting_style(theme));
     }
     if status == AgentStatus::Running
-        && row
-            .sub_agents
-            .iter()
-            .any(|child| child.status == AgentStatus::Running)
+        && agent(row).is_some_and(|agent| {
+            agent
+                .sub_agents
+                .iter()
+                .any(|child| child.status == AgentStatus::Running)
+        })
     {
         return Span::styled(subagent_glyph(animation_phase), subagent_style(theme));
     }
@@ -384,7 +395,7 @@ fn agent_lead_cell(
     // `attention_glyph_style` — to pull the eye back to an unanswered row. It
     // never blanks, so the one-cell column never shifts as it swells and fades.
     Span::styled(
-        agent_glyph(status, row.phase, animation_phase),
+        agent_glyph(status, row.phase(), animation_phase),
         attention_glyph_style(theme, status, age_secs(row.last_activity), animation_phase),
     )
 }
@@ -479,7 +490,7 @@ fn display_context_window(row: &SidebarRow) -> Option<u64> {
     ctx(row)
         .and_then(|context| context.tokens.as_ref())
         .and_then(|tokens| tokens.context_window_size)
-        .or(row.context_window)
+        .or_else(|| agent(row).and_then(|agent| agent.context_window))
         .filter(|window| *window > 0)
 }
 
@@ -501,7 +512,7 @@ fn description_line(
     width: usize,
     animation_phase: u64,
 ) -> Line<'static> {
-    let body = if let Some(label) = row.turn_error_label.as_deref() {
+    let body = if let Some(label) = agent(row).and_then(|agent| agent.turn_error_label.as_deref()) {
         Span::styled(label.to_owned(), theme.soft())
     } else {
         match descriptor(row) {
@@ -516,11 +527,13 @@ fn description_line(
     // The agent parked its turn on still-in-flight background work: keep the
     // real activity above and add a distinct, faint secondary marker rather than
     // overwriting the description with a synthetic "N background tasks" count.
-    if row.phase == TurnPhase::Parked {
+    if row.phase() == TurnPhase::Parked {
         left.push(Span::styled("  ⋯ bg", theme.faint()));
     }
-    if tier == Tier::L2 && row.todo_total.unwrap_or(0) > 0 {
-        let (done, total) = (row.todo_done.unwrap_or(0), row.todo_total.unwrap_or(0));
+    let todo_total = agent(row).and_then(|agent| agent.todo_total).unwrap_or(0);
+    if tier == Tier::L2 && todo_total > 0 {
+        let done = agent(row).and_then(|agent| agent.todo_done).unwrap_or(0);
+        let total = todo_total;
         return pin_right(left, todo_spans(theme, done, total), width);
     }
     Line::from(trim_spans_to_width(left, width))
@@ -545,11 +558,16 @@ fn descriptor(row: &SidebarRow) -> Option<&str> {
                 .and_then(|context| context.session_name.as_deref())
                 .filter(|name| usable_description(name))
         })
-        .or(row.task.as_deref().filter(|task| usable_description(task)))
-        .or(row
-            .prompt
-            .as_deref()
-            .filter(|prompt| usable_description(prompt)))
+        .or_else(|| {
+            agent(row)
+                .and_then(|agent| agent.task.as_deref())
+                .filter(|task| usable_description(task))
+        })
+        .or_else(|| {
+            agent(row)
+                .and_then(|agent| agent.prompt.as_deref())
+                .filter(|prompt| usable_description(prompt))
+        })
 }
 
 fn usable_description(value: &str) -> bool {
@@ -560,8 +578,8 @@ fn usable_description(value: &str) -> bool {
 /// description — an idle agent with nothing to show yet (no preview, session
 /// name, task, or prompt), the "waiting for your first prompt" state.
 fn shows_loading_dots(row: &SidebarRow) -> bool {
-    row.row_kind == SidebarRowKind::Agent
-        && matches!(row.status.unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
+    row.is_agent()
+        && matches!(row.status().unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
         && descriptor(row).is_none()
 }
 
@@ -585,7 +603,7 @@ fn looks_like_control_text(value: &str) -> bool {
 
 /// The session's statusline enrichment, when it published any.
 fn ctx(row: &SidebarRow) -> Option<&AgentContext> {
-    row.context.as_ref()
+    agent(row).and_then(|agent| agent.context.as_ref())
 }
 
 /// Model name preferred from the statusline (`Opus 4.8 (1M context)`) over the
@@ -594,7 +612,7 @@ fn ctx(row: &SidebarRow) -> Option<&AgentContext> {
 fn display_model(row: &SidebarRow) -> Option<String> {
     ctx(row)
         .and_then(|context| context.model_display_name.as_deref())
-        .or(row.model.as_deref())
+        .or_else(|| agent(row).and_then(|agent| agent.model.as_deref()))
         .filter(|model| !model.is_empty())
         .map(model_label)
 }
@@ -604,8 +622,8 @@ fn display_model(row: &SidebarRow) -> Option<String> {
 /// not named it. This means a configured `xhigh` wins over provider/catalog
 /// defaults such as `medium` or `high`.
 fn display_effort(row: &SidebarRow) -> Option<&str> {
-    row.effort
-        .as_deref()
+    agent(row)
+        .and_then(|agent| agent.effort.as_deref())
         .or_else(|| ctx(row).and_then(|context| context.effort.as_deref()))
         .filter(|effort| !effort.is_empty())
 }
@@ -704,13 +722,15 @@ fn gauge_line(
 /// before the stamp (an older producer mid-upgrade). Either way it is
 /// [`ContextSeverity::classify`]'s verdict, never a renderer-private ramp.
 fn row_severity(row: &SidebarRow, bands: &ContextSeverityConfig) -> ContextSeverity {
-    row.context_severity.unwrap_or_else(|| {
-        ContextSeverity::classify(
-            gauge_percent(row).unwrap_or(0),
-            row.context_used_tokens(),
-            bands,
-        )
-    })
+    agent(row)
+        .and_then(|agent| agent.context_severity)
+        .unwrap_or_else(|| {
+            ContextSeverity::classify(
+                gauge_percent(row).unwrap_or(0),
+                row.context_used_tokens(),
+                bands,
+            )
+        })
 }
 
 /// A precise context-used fraction (0..=100) from the current-message token
@@ -849,7 +869,7 @@ fn context_tokens_line(
         ));
         return Some(pin_right(left, age, width));
     }
-    let total = row.total_tokens?;
+    let total = agent(row).and_then(|agent| agent.total_tokens)?;
     let mut left = vec![Span::raw("  ")];
     left.extend(context_total_spans(theme, severity, total, tokens_int));
     Some(pin_right(left, age, width))

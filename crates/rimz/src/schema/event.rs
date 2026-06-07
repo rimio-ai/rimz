@@ -86,6 +86,7 @@ impl EventEnvelope {
             "worktree_branch": observation.worktree_branch,
             "task": observation.task,
             "prompt": observation.prompt,
+            "transcript_path": observation.transcript_path,
             "model": observation.model,
             "effort": observation.effort,
             "context_pct": observation.context_pct,

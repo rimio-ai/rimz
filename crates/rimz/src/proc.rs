@@ -192,6 +192,8 @@ pub fn cwd(_pid: u32) -> Option<std::path::PathBuf> {
 /// `VmRSS` alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StatMetrics {
+    /// Process state character from field 3 (`R`, `S`, `D`, `Z`, ...).
+    pub state: char,
     /// utime + stime (fields 14 + 15), in clock ticks. Two readings diffed
     /// over a known interval give CPU%.
     pub cpu_ticks: u64,
@@ -222,17 +224,19 @@ pub fn stat_metrics(_pid: u32) -> Option<StatMetrics> {
 
 /// Parse a `/proc/<pid>/stat` line into [`StatMetrics`]. The same
 /// `rsplit_once(')')` anchor as [`parse_starttime_ticks`] — `comm` may carry
-/// spaces and parens — then, indexed past the closing paren: utime 11,
+/// spaces and parens — then, indexed past the closing paren: state 0, utime 11,
 /// stime 12, starttime 19, rss 21.
 #[cfg(target_os = "linux")]
 fn parse_stat_metrics(stat: &str, page_kb: u64) -> Option<StatMetrics> {
     let tail = stat.rsplit_once(')')?.1;
     let mut fields = tail.split_whitespace();
-    let utime: u64 = fields.nth(11)?.parse().ok()?;
+    let state = fields.next()?.chars().next()?;
+    let utime: u64 = fields.nth(10)?.parse().ok()?;
     let stime: u64 = fields.next()?.parse().ok()?;
     let start_ticks: u64 = fields.nth(6)?.parse().ok()?;
     let rss_pages: u64 = fields.nth(1)?.parse().ok()?;
     Some(StatMetrics {
+        state,
         cpu_ticks: utime.saturating_add(stime),
         rss_kb: rss_pages.saturating_mul(page_kb),
         start_ticks,
@@ -427,6 +431,7 @@ mod tests {
         assert_eq!(
             parse_stat_metrics(stat, 4),
             Some(StatMetrics {
+                state: 'S',
                 cpu_ticks: 59, // 42 + 17
                 rss_kb: 8192,  // 2048 pages × 4 KiB
                 start_ticks: 646_245_020,
@@ -442,6 +447,7 @@ mod tests {
         assert_eq!(
             parse_stat_metrics(stat, 4),
             Some(StatMetrics {
+                state: 'S',
                 cpu_ticks: 15, // 10 + 5
                 rss_kb: 12,    // 3 pages × 4 KiB
                 start_ticks: 100,

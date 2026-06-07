@@ -436,9 +436,11 @@ impl AgentAdapter for ClaudeAdapter {
         // on these low-frequency events. Resolve the model first: only the payload
         // id carries the `[1m]` marker that widens the window (the transcript id
         // never does), so it wins over the bare transcript id before the gauge.
-        let usage = optional_payload_string(payload, &["session_id"])
-            .and_then(|_| optional_payload_string(payload, &["transcript_path"]))
-            .map(|path| usage_from_transcript(&path))
+        let transcript_path = optional_payload_string(payload, &["session_id"])
+            .and_then(|_| optional_payload_string(payload, &["transcript_path"]));
+        let usage = transcript_path
+            .as_deref()
+            .map(usage_from_transcript)
             .unwrap_or_default();
         let payload_model = session_start
             .as_ref()
@@ -471,6 +473,7 @@ impl AgentAdapter for ClaudeAdapter {
         };
         observation.prompt =
             sanitize_user_prompt(user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
+        observation.transcript_path = transcript_path;
         observation.model = model;
         // `effort` is an `{ "level": … }` object on the tool-use-context events
         // (Stop / SubagentStop here); the flat `thinking_level` string is a legacy

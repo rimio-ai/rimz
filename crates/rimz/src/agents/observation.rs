@@ -51,6 +51,10 @@ pub struct AgentLifecycleObservation {
     /// `task`), so the sidebar can label an unnamed session by its prompt once
     /// the turn ends, until a real session name exists.
     pub prompt: Option<String>,
+    /// The transcript path the agent names for this session, when the adapter
+    /// has one. Carry-forward enrichment; readers use it for traceability and
+    /// sidecar refresh hints, never as routing truth.
+    pub transcript_path: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
     /// Context-window utilization in percent reported by the agent (0..=100).
@@ -100,6 +104,7 @@ impl AgentLifecycleObservation {
             worktree_branch: None,
             task: None,
             prompt: None,
+            transcript_path: None,
             model: None,
             effort: None,
             context_pct: None,

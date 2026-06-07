@@ -1,8 +1,8 @@
 //! Bare process rows: the shell/build line, its right-pinned resource stats,
 //! the full-command detail line, and the resolver's composed row.
 
-use crate::SidebarRow;
 use crate::feed::AgentStatus;
+use crate::{ProcessState, SidebarRow};
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
@@ -25,16 +25,20 @@ pub(super) fn process_row_line(
     // the name at the soft tier. That slight step — not a seam line — is what
     // sets the group's command tail apart from the agent cards above it, and
     // under `NO_COLOR` it survives as the soft tier's DIM weight.
-    let (lead, lead_style) = if row.process_active {
-        (
+    let state = row.process_state().unwrap_or(ProcessState::Idle);
+    let (lead, lead_style) = match state {
+        ProcessState::Busy => (
             working_glyph(animation_phase),
             theme.style(ORANGE, Modifier::DIM),
-        )
-    } else {
-        (
+        ),
+        ProcessState::Stuck => (
+            status_glyph(AgentStatus::Failed),
+            status_style(theme, AgentStatus::Failed).add_modifier(Modifier::BOLD),
+        ),
+        ProcessState::Idle => (
             status_glyph(AgentStatus::Idle),
             status_style(theme, AgentStatus::Idle).add_modifier(Modifier::DIM),
-        )
+        ),
     };
     let left = vec![
         Span::styled(lead, lead_style),
@@ -73,10 +77,13 @@ pub(in crate::sidebar_renderer::render) fn proc_stats_spans(
     theme: &Theme,
     row: &SidebarRow,
 ) -> Vec<Span<'static>> {
+    let Some(process) = row.as_process() else {
+        return Vec::new();
+    };
     let slots: [(&str, Color, usize, Option<String>); 3] = [
-        ("C", Color::Blue, CPU_SLOT, row.cpu_pct.map(fmt_cpu)),
-        ("M", Color::Green, RSS_SLOT, row.rss_kb.map(fmt_rss)),
-        ("⇅", Color::Magenta, IO_SLOT, row.io_bps.map(fmt_io)),
+        ("C", Color::Blue, CPU_SLOT, process.cpu_pct.map(fmt_cpu)),
+        ("M", Color::Green, RSS_SLOT, process.rss_kb.map(fmt_rss)),
+        ("⇅", Color::Magenta, IO_SLOT, process.io_bps.map(fmt_io)),
     ];
     if slots.iter().all(|(_, _, _, figure)| figure.is_none()) {
         return Vec::new();
@@ -106,7 +113,7 @@ pub(super) fn process_detail_line(
     row: &SidebarRow,
     width: usize,
 ) -> Option<Line<'static>> {
-    let detail = row.command_detail.as_deref()?;
+    let detail = row.as_process()?.command_detail.as_deref()?;
     let left = vec![
         Span::raw("  "),
         Span::styled(detail.to_owned(), theme.soft()),

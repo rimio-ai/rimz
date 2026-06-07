@@ -619,6 +619,7 @@ fn runtime_projection_serves_lock_free_while_a_writer_holds_the_lock() {
         worktree_branch: Some("main".to_owned()),
         task: None,
         prompt: None,
+        transcript_path: None,
         model: None,
         effort: None,
         context_pct: None,

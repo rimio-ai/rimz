@@ -182,6 +182,8 @@ fn agent(
         worktree_branch: branch.map(ToOwned::to_owned),
         task: task.map(ToOwned::to_owned),
         prompt: None,
+        transcript_path: None,
+        recent_prompts: Vec::new(),
         model: None,
         effort: None,
         context_pct: None,
@@ -502,11 +504,9 @@ fn render_agent_card_context_line_pins_age_not_resource_stats() {
     let stamped = pane("%1", "claude", "/repo/main");
     claude.pane = Some(stamped.clone());
     let live = stamped;
-    let mut snapshot = snapshot_with(Vec::new(), vec![claude]).with_live_panes(vec![live], None);
-    let row = &mut snapshot.worktree_groups[0].rows[0];
-    row.cpu_pct = Some(11);
-    row.rss_kb = Some(1_153_024); // 1.1 GiB
-    row.io_bps = Some(3 * 1_048_576);
+    let snapshot = snapshot_with(Vec::new(), vec![claude]).with_live_panes(vec![live], None);
+    let row = &snapshot.worktree_groups[0].rows[0];
+    assert!(row.as_process().is_none());
 
     let rendered = snapshot_to_screen(&snapshot, 56, 14);
 
@@ -535,9 +535,10 @@ fn render_process_row_pins_resource_stats_at_l2() {
     let busy = pane("%1", "cargo build --release", "/repo/main");
     let mut snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(vec![busy], None);
     let row = &mut snapshot.worktree_groups[0].rows[0];
-    row.cpu_pct = Some(34);
-    row.rss_kb = Some(512 * 1_024);
-    row.io_bps = Some(8 * 1_048_576);
+    let process = row.as_process_mut().unwrap();
+    process.cpu_pct = Some(34);
+    process.rss_kb = Some(512 * 1_024);
+    process.io_bps = Some(8 * 1_048_576);
 
     let rendered = snapshot_to_screen(&snapshot, 56, 14);
 
@@ -563,9 +564,10 @@ fn proc_stats_hold_a_fixed_dim_grid() {
     let busy = pane("%1", "cargo build --release", "/repo/main");
     let mut snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(vec![busy], None);
     let row = &mut snapshot.worktree_groups[0].rows[0];
-    row.cpu_pct = Some(34);
-    row.rss_kb = Some(512 * 1_024);
-    row.io_bps = Some(8 * 1_048_576);
+    let process = row.as_process_mut().unwrap();
+    process.cpu_pct = Some(34);
+    process.rss_kb = Some(512 * 1_024);
+    process.io_bps = Some(8 * 1_048_576);
     let row = &snapshot.worktree_groups[0].rows[0];
 
     let theme = Theme::fixed(false);
@@ -600,9 +602,10 @@ fn proc_stats_hold_a_fixed_dim_grid() {
     // A figure changing magnitude re-aligns within its slot; the grid width
     // holds, so the right-pinned cluster never moves.
     let mut hotter = row.clone();
-    hotter.cpu_pct = Some(100);
-    hotter.rss_kb = Some(1_153_024); // 1.1 GiB
-    hotter.io_bps = Some(450 * 1_024);
+    let process = hotter.as_process_mut().unwrap();
+    process.cpu_pct = Some(100);
+    process.rss_kb = Some(1_153_024); // 1.1 GiB
+    process.io_bps = Some(450 * 1_024);
     let shifted: String = sections::proc_stats_spans(&theme, &hotter)
         .iter()
         .map(|span| span.content.as_ref())
@@ -614,8 +617,9 @@ fn proc_stats_hold_a_fixed_dim_grid() {
     // holds a dim `--` in its figure slot, so the grid reads whole from the
     // first reading on and the columns never move.
     let mut first_tick = row.clone();
-    first_tick.cpu_pct = None;
-    first_tick.io_bps = None;
+    let process = first_tick.as_process_mut().unwrap();
+    process.cpu_pct = None;
+    process.io_bps = None;
     let blanked: String = sections::proc_stats_spans(&theme, &first_tick)
         .iter()
         .map(|span| span.content.as_ref())
@@ -3712,42 +3716,13 @@ fn render_make_up_filter_narrows_the_body() {
         .expect("the fixture groups by worktree");
     main_group.hidden_count = 2;
     main_group.rows.push(crate::SidebarRow {
-        row_kind: crate::SidebarRowKind::Process,
         id: "%9".to_owned(),
         name: "zsh".to_owned(),
-        status: None,
-        phase: crate::agents::TurnPhase::Idle,
         pane: Some(pane("%9", "zsh", "/home/me/query-engine")),
-        request_id: None,
-        surface: None,
-        task: None,
-        prompt: None,
-        model: None,
-        effort: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        todo_done: None,
-        todo_total: None,
-        context: None,
-        context_severity: None,
         worktree_path: Some("/home/me/query-engine".to_owned()),
         worktree_branch: Some("main".to_owned()),
         last_activity: fixed_now(),
-        registered_at: None,
-        resolver: None,
-        options: Vec::new(),
-        sub_agents: Vec::new(),
-        process_active: false,
-        command_detail: None,
-        compacting: false,
-        turn_error_label: None,
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
+        card: crate::RowCard::Process(crate::ProcessCard::default()),
     });
     let ui = UiState {
         make_up_filter: Some(crate::feed::AgentStatus::Failed),

@@ -135,16 +135,13 @@ fn multiple_pending_asks_for_one_session_render_one_row() {
         room(items, vec![session]).with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
 
     let rows = &snapshot.worktree_groups[0].rows;
-    let agent_rows: Vec<_> = rows
-        .iter()
-        .filter(|row| row.row_kind == SidebarRowKind::Agent)
-        .collect();
+    let agent_rows: Vec<_> = rows.iter().filter(|row| row.is_agent()).collect();
     assert_eq!(
         agent_rows.len(),
         1,
         "two pending asks for one session collapse to one row: {rows:?}"
     );
-    assert_eq!(agent_rows[0].status, Some(AgentStatus::Waiting));
+    assert_eq!(agent_rows[0].status(), Some(AgentStatus::Waiting));
 }
 
 #[test]
@@ -531,11 +528,8 @@ fn one_branch_path_keeps_agent_and_shell_in_one_group() {
     );
     assert_eq!(snapshot.worktree_groups[0].label, "main");
     let rows = &snapshot.worktree_groups[0].rows;
-    assert!(rows.iter().any(|row| row.row_kind == SidebarRowKind::Agent));
-    assert!(
-        rows.iter()
-            .any(|row| row.row_kind == SidebarRowKind::Process && row.name == "zsh")
-    );
+    assert!(rows.iter().any(|row| row.is_agent()));
+    assert!(rows.iter().any(|row| row.is_process() && row.name == "zsh"));
 }
 
 #[test]
@@ -941,7 +935,7 @@ fn remote_control_host_pane_renders_no_row() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1, "only the shell pane is a row: {rows:?}");
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+    assert!(rows[0].is_process());
     assert_eq!(rows[0].name, "zsh");
     assert!(
         rows.iter().all(|row| row.name != "claude"),
@@ -974,9 +968,9 @@ fn sub_agent_nests_under_parent_and_never_top_level() {
     let mut rows = vec![row_from_agent(&parent, epoch())];
     attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
     assert_eq!(rows.len(), 1, "the child is never its own top-level row");
-    assert_eq!(rows[0].sub_agents.len(), 1);
-    assert_eq!(rows[0].sub_agents[0].id, "child-1");
-    assert_eq!(rows[0].sub_agents[0].name, "Explore");
+    assert_eq!(rows[0].sub_agents().len(), 1);
+    assert_eq!(rows[0].sub_agents()[0].id, "child-1");
+    assert_eq!(rows[0].sub_agents()[0].name, "Explore");
 }
 
 #[test]
@@ -1021,7 +1015,7 @@ fn recently_finished_child_holds_off_the_stall() {
     let snapshot = room_with_agent_panes(Vec::new(), vec![parent, child]);
 
     let row = row(&snapshot, "sess-root");
-    assert_eq!(row.status, Some(AgentStatus::Running), "not a stall");
+    assert_eq!(row.status(), Some(AgentStatus::Running), "not a stall");
     assert_eq!(row.last_activity, ago(240));
 }
 
@@ -1049,15 +1043,12 @@ fn turn_dead_parent_keeps_the_death_certificate() {
 
     let row = row(&snapshot, "sess-root");
     assert_eq!(
-        row.status,
+        row.status(),
         Some(AgentStatus::Failed),
         "the turn death holds"
     );
     assert_eq!(row.last_activity, ago(120), "the fold abstained");
-    assert_eq!(
-        row.turn_error_label.as_deref(),
-        Some("API Error: Overloaded")
-    );
+    assert_eq!(row.turn_error_label(), Some("API Error: Overloaded"));
 }
 
 #[test]
@@ -1226,7 +1217,7 @@ fn finished_sub_agent_drops_once_parent_starts_next_turn() {
     let child = child_state("sess-root", "child-1", AgentStatus::Success, 60);
     let mut rows = vec![row_from_agent(&parent, epoch())];
     attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
-    assert!(rows[0].sub_agents.is_empty());
+    assert!(rows[0].sub_agents().is_empty());
 }
 
 #[test]
@@ -1238,7 +1229,7 @@ fn running_sub_agent_of_current_turn_is_kept() {
     let mut rows = vec![row_from_agent(&parent, epoch())];
     attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
     assert_eq!(
-        rows[0].sub_agents.len(),
+        rows[0].sub_agents().len(),
         1,
         "a live child of the current turn is kept"
     );
@@ -1255,7 +1246,7 @@ fn superseded_running_sub_agent_is_reaped_as_ghost() {
     let mut rows = vec![row_from_agent(&parent, epoch())];
     attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
     assert!(
-        rows[0].sub_agents.is_empty(),
+        rows[0].sub_agents().is_empty(),
         "a running child from a past turn is a ghost"
     );
 }
@@ -1268,7 +1259,7 @@ fn finished_sub_agent_of_current_turn_is_kept() {
     let child = child_state("sess-root", "child-1", AgentStatus::Success, 30);
     let mut rows = vec![row_from_agent(&parent, epoch())];
     attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
-    assert_eq!(rows[0].sub_agents.len(), 1);
+    assert_eq!(rows[0].sub_agents().len(), 1);
 }
 
 #[test]
@@ -1291,7 +1282,7 @@ fn sub_agents_sort_by_creation_time_ascending() {
         &[parent.clone(), undated, second, first],
         epoch(),
     );
-    let ids: Vec<&str> = rows[0].sub_agents.iter().map(|s| s.id.as_str()).collect();
+    let ids: Vec<&str> = rows[0].sub_agents().iter().map(|s| s.id.as_str()).collect();
     assert_eq!(ids, vec!["c-late-id", "c-early-id", "c-undated"]);
 }
 
@@ -1305,11 +1296,11 @@ fn duplicate_children_collapse_to_one_row() {
     let mut rows = vec![row_from_agent(&parent, epoch())];
     attach_sub_agents(&mut rows, &[parent.clone(), stale, fresh], epoch());
     assert_eq!(
-        rows[0].sub_agents.len(),
+        rows[0].sub_agents().len(),
         1,
         "the same child can't appear twice"
     );
-    assert_eq!(rows[0].sub_agents[0].id, "child-dup");
+    assert_eq!(rows[0].sub_agents()[0].id, "child-dup");
 }
 
 #[test]
@@ -1322,7 +1313,7 @@ fn typeless_child_renders_degraded_label_never_the_kind() {
     child.task = None;
     let mut rows = vec![row_from_agent(&parent, epoch())];
     attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
-    let name = &rows[0].sub_agents[0].name;
+    let name = &rows[0].sub_agents()[0].name;
     assert!(name.starts_with("subagent"), "got {name}");
     assert_ne!(name, "claude");
 }
@@ -1343,7 +1334,7 @@ fn running_child_past_ghost_ttl_is_reaped() {
     let mut rows = vec![row_from_agent(&parent, epoch())];
     attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
     assert!(
-        rows[0].sub_agents.is_empty(),
+        rows[0].sub_agents().is_empty(),
         "a running child silent past the ghost TTL is reaped"
     );
 }
@@ -1360,7 +1351,7 @@ fn finished_child_is_kept_however_long_ago_it_finished() {
     let mut rows = vec![row_from_agent(&parent, epoch())];
     attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
     assert_eq!(
-        rows[0].sub_agents.len(),
+        rows[0].sub_agents().len(),
         1,
         "a finished child never clears on age, only on the next turn"
     );
@@ -1389,8 +1380,8 @@ fn newer_subagent_does_not_expire_parent_attention() {
     );
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(row.id, "parent-claude");
-    assert_eq!(row.status, Some(AgentStatus::Waiting));
-    assert_eq!(row.request_id, Some(item.request_id));
+    assert_eq!(row.status(), Some(AgentStatus::Waiting));
+    assert_eq!(row.request_id().cloned(), Some(item.request_id));
 }
 
 // ── Pane binding: stamped ids, live overlays, one pane = one row ─────────────
@@ -1402,9 +1393,9 @@ fn live_panes_add_process_rows_without_attention_counts() {
 
     assert_eq!(snapshot.worktree_groups.len(), 1);
     let row = &snapshot.worktree_groups[0].rows[0];
-    assert_eq!(row.row_kind, SidebarRowKind::Process);
+    assert!(row.is_process());
     assert_eq!(row.name, "zsh");
-    assert_eq!(row.status, None);
+    assert_eq!(row.status(), None);
     assert!(snapshot.worktree_groups[0].status_counts.is_empty());
 }
 
@@ -1440,8 +1431,8 @@ fn standalone_script_ask_renders_only_from_matching_frame_pane() {
     let rows = rows(&snapshot);
     assert_eq!(rows.len(), 1, "the ask owns the pane row slot");
     let row = rows[0];
-    assert_eq!(row.request_id.as_ref(), Some(&request_id));
-    assert_eq!(row.task.as_deref(), Some("approve deploy?"));
+    assert_eq!(row.request_id(), Some(&request_id));
+    assert_eq!(row.task(), Some("approve deploy?"));
     assert_eq!(row.worktree_path.as_deref(), Some("/repo/main"));
     assert_eq!(row.pane.as_ref(), Some(&frame_pane));
 }
@@ -1461,8 +1452,7 @@ fn standalone_script_ask_without_pane_does_not_render() {
         "the live shell still renders as a process row"
     );
     assert!(
-        rows.iter()
-            .all(|row| row.request_id.as_ref() != Some(&request_id)),
+        rows.iter().all(|row| row.request_id() != Some(&request_id)),
         "the unframed ask remains metadata only"
     );
 }
@@ -1478,8 +1468,7 @@ fn standalone_script_ask_for_absent_pane_does_not_render() {
     let rows = rows(&snapshot);
     assert_eq!(rows.len(), 1);
     assert!(
-        rows.iter()
-            .all(|row| row.request_id.as_ref() != Some(&request_id)),
+        rows.iter().all(|row| row.request_id() != Some(&request_id)),
         "an ask for a pane absent from the frame is not jumpable"
     );
 }
@@ -1497,8 +1486,7 @@ fn standalone_script_ask_for_reused_pane_id_does_not_render() {
     let rows = rows(&snapshot);
     assert_eq!(rows.len(), 1);
     assert!(
-        rows.iter()
-            .all(|row| row.request_id.as_ref() != Some(&request_id)),
+        rows.iter().all(|row| row.request_id() != Some(&request_id)),
         "a reused pane id with a different process start must not route the ask"
     );
 }
@@ -1527,21 +1515,21 @@ fn standalone_ask_on_an_agents_pane_folds_onto_the_agent_row() {
     let rows = rows(&snapshot);
     assert_eq!(rows.len(), 1, "one pane, one row: {rows:?}");
     let row = rows[0];
-    assert_eq!(row.row_kind, SidebarRowKind::Agent);
+    assert!(row.is_agent());
     assert_eq!(row.id, "sess-a", "the agent keeps the row identity");
     assert_eq!(row.name, "claude");
     assert_eq!(
-        row.model.as_deref(),
+        row.model(),
         Some("opus-4"),
         "the capability line survives the fold"
     );
-    assert_eq!(row.status, Some(AgentStatus::Waiting));
+    assert_eq!(row.status(), Some(AgentStatus::Waiting));
     assert_eq!(
-        row.request_id.as_ref(),
+        row.request_id(),
         Some(&request_id),
         "the pane-blocking script ask outranks the agent-hook ask"
     );
-    assert_eq!(row.surface, Some(Surface::Script));
+    assert_eq!(row.surface(), Some(Surface::Script));
 }
 
 #[test]
@@ -1564,10 +1552,10 @@ fn standalone_bridge_ask_renders_its_resolver_from_the_frame() {
     let rows = rows(&snapshot);
     assert_eq!(rows.len(), 1, "the bridge ask owns the pane row slot");
     let row = rows[0];
-    assert_eq!(row.status, Some(AgentStatus::Waiting));
-    assert_eq!(row.request_id.as_ref(), Some(&request_id));
+    assert_eq!(row.status(), Some(AgentStatus::Waiting));
+    assert_eq!(row.request_id(), Some(&request_id));
     assert_eq!(
-        row.resolver
+        row.resolver()
             .as_ref()
             .map(|resolver| resolver.resolver_id.as_str()),
         Some("auto-approver"),
@@ -1587,14 +1575,14 @@ fn standalone_ask_on_a_wired_idle_lazy_pane_folds_onto_the_idle_row() {
     let rows = rows(&snapshot);
     assert_eq!(rows.len(), 1, "one pane, one row: {rows:?}");
     let row = rows[0];
-    assert_eq!(row.row_kind, SidebarRowKind::Agent);
+    assert!(row.is_agent());
     assert_eq!(
         row.name, "codex",
         "the idle lazy identity survives the fold"
     );
     assert_eq!(row.id, "tmux:term1");
-    assert_eq!(row.status, Some(AgentStatus::Waiting));
-    assert_eq!(row.request_id.as_ref(), Some(&request_id));
+    assert_eq!(row.status(), Some(AgentStatus::Waiting));
+    assert_eq!(row.request_id(), Some(&request_id));
 }
 
 #[test]
@@ -1631,7 +1619,7 @@ fn commandless_pane_with_agent_still_renders_agent_row() {
 
     let rows = rows(&snapshot);
     assert_eq!(rows.len(), 1, "the stamped agent row survives: {rows:?}");
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
+    assert!(rows[0].is_agent());
 }
 
 #[test]
@@ -1685,7 +1673,7 @@ fn live_panes_overlay_matching_agent_rows() {
     assert_eq!(snapshot.worktree_groups.len(), 1);
     assert_eq!(snapshot.worktree_groups[0].rows.len(), 1);
     let row = &snapshot.worktree_groups[0].rows[0];
-    assert_eq!(row.row_kind, SidebarRowKind::Agent);
+    assert!(row.is_agent());
     assert_eq!(row.pane.as_ref().unwrap().pane_id.raw(), "%1");
 }
 
@@ -1702,7 +1690,7 @@ fn stamped_codex_returned_to_shell_renders_process_row() {
 
     let rows = rows(&snapshot);
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+    assert!(rows[0].is_process());
     assert_eq!(rows[0].name, "zsh");
     assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "%1");
 }
@@ -1719,14 +1707,14 @@ fn live_panes_do_not_render_unmatched_ledger_agents() {
         snapshot.worktree_groups[0]
             .rows
             .iter()
-            .all(|row| row.row_kind != SidebarRowKind::Agent),
+            .all(|row| !row.is_agent()),
         "non-attention agent rows must come from live pane presence"
     );
     assert!(
         snapshot.worktree_groups[0]
             .rows
             .iter()
-            .any(|row| row.row_kind == SidebarRowKind::Process && row.name == "zsh"),
+            .any(|row| row.is_process() && row.name == "zsh"),
         "the live shell pane remains a process row"
     );
 }
@@ -1748,7 +1736,7 @@ fn live_panes_suppress_stale_agent_attention_without_process() {
         snapshot.worktree_groups[0]
             .rows
             .iter()
-            .all(|row| row.row_kind == SidebarRowKind::Process && row.name == "zsh"),
+            .all(|row| row.is_process() && row.name == "zsh"),
         "a stale agent prompt must not claim the sidebar pane or outlive its agent process: {:?}",
         snapshot.worktree_groups[0].rows,
     );
@@ -1771,9 +1759,9 @@ fn live_panes_keep_agent_attention_with_process() {
 
     assert_eq!(snapshot.worktree_groups.len(), 1);
     let row = &snapshot.worktree_groups[0].rows[0];
-    assert_eq!(row.row_kind, SidebarRowKind::Agent);
+    assert!(row.is_agent());
     assert_eq!(row.name, "claude");
-    assert_eq!(row.status, Some(AgentStatus::Waiting));
+    assert_eq!(row.status(), Some(AgentStatus::Waiting));
     assert_eq!(row.pane.as_ref().unwrap().pane_id.raw(), "%1");
 }
 
@@ -1797,9 +1785,9 @@ fn answered_native_ui_ask_returns_to_running() {
         .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
 
     let row = &snapshot.worktree_groups[0].rows[0];
-    assert_eq!(row.row_kind, SidebarRowKind::Agent);
+    assert!(row.is_agent());
     assert_eq!(
-        row.status,
+        row.status(),
         Some(AgentStatus::Running),
         "an answered ask the agent moved past must not pin the row to waiting"
     );
@@ -1877,7 +1865,7 @@ fn agent_binds_only_by_stamped_pane_id() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+    assert!(rows[0].is_process());
     assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "%1");
 }
 
@@ -1907,12 +1895,12 @@ fn subagent_never_steals_its_parents_pane() {
     );
     assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "%1");
     assert_eq!(
-        rows[0].sub_agents.len(),
+        rows[0].sub_agents().len(),
         1,
         "the child nests under the parent"
     );
-    assert_eq!(rows[0].sub_agents[0].id, "child-1");
-    assert_eq!(rows[0].sub_agents[0].name, "Explore");
+    assert_eq!(rows[0].sub_agents()[0].id, "child-1");
+    assert_eq!(rows[0].sub_agents()[0].name, "Explore");
 }
 
 #[test]
@@ -1946,10 +1934,7 @@ fn each_live_pane_yields_exactly_one_row() {
         .collect();
     pane_ids.sort_unstable();
     assert_eq!(pane_ids, vec!["%1", "%2", "%3"], "no pane id is duplicated");
-    let agents = rows
-        .iter()
-        .filter(|row| row.row_kind == SidebarRowKind::Agent)
-        .count();
+    let agents = rows.iter().filter(|row| row.is_agent()).count();
     assert_eq!(agents, 2, "the two stamped panes bound their agents");
 }
 
@@ -1988,8 +1973,8 @@ fn live_agent_and_process_rows_are_pane_backed() {
         .iter()
         .find(|row| row.id == "sess-root")
         .expect("parent row present");
-    assert_eq!(parent.sub_agents.len(), 1);
-    assert_eq!(parent.sub_agents[0].id, "child-1");
+    assert_eq!(parent.sub_agents().len(), 1);
+    assert_eq!(parent.sub_agents()[0].id, "child-1");
 }
 
 // ── The lazy-codex bind: cwd fallback and idle synthesis ─────────────────────
@@ -2013,7 +1998,7 @@ fn paneless_codex_agent_binds_to_its_worktree_pane() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
+    assert!(rows[0].is_agent());
     assert_eq!(rows[0].name, "codex");
     assert_eq!(rows[0].id, "sess-1");
     assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "term1");
@@ -2031,7 +2016,7 @@ fn paneless_codex_agent_in_other_worktree_stays_a_process_row() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+    assert!(rows[0].is_process());
     assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "term1");
 }
 
@@ -2045,7 +2030,7 @@ fn paneless_codex_agent_does_not_capture_a_nested_worktree_pane() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+    assert!(rows[0].is_process());
     assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "term1");
 }
 
@@ -2061,7 +2046,7 @@ fn paneless_codex_does_not_bind_a_non_codex_pane() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+    assert!(rows[0].is_process());
 }
 
 #[test]
@@ -2075,7 +2060,7 @@ fn paneless_claude_agent_is_never_rescued_by_cwd() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+    assert!(rows[0].is_process());
 }
 
 #[test]
@@ -2094,7 +2079,7 @@ fn two_paneless_codex_in_one_worktree_bind_most_recent() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
+    assert!(rows[0].is_agent());
     assert_eq!(rows[0].id, "sess-new");
 }
 
@@ -2118,7 +2103,7 @@ fn paneless_codex_and_new_stamped_codex_share_one_worktree_without_idle_row() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 2);
-    assert!(rows.iter().all(|row| row.row_kind == SidebarRowKind::Agent));
+    assert!(rows.iter().all(|row| row.is_agent()));
     let old = rows
         .iter()
         .find(|row| row.id == "sess-old")
@@ -2149,9 +2134,8 @@ fn paneless_codex_predating_pane_start_does_not_bind() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
-    assert_eq!(
-        rows[0].row_kind,
-        SidebarRowKind::Process,
+    assert!(
+        rows[0].is_process(),
         "a session predating the pane start must not bind it",
     );
 }
@@ -2169,7 +2153,7 @@ fn paneless_codex_active_after_pane_start_binds() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
+    assert!(rows[0].is_agent());
     assert_eq!(rows[0].id, "sess-1");
     assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "term1");
 }
@@ -2199,23 +2183,24 @@ fn fresh_codex_pane_with_proc_start_shows_idle_not_ghost() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
-    assert_eq!(rows[0].status, Some(AgentStatus::Idle));
+    assert!(rows[0].is_agent());
+    assert_eq!(rows[0].status(), Some(AgentStatus::Idle));
     // The synthesized idle row keys on the pane id, never the stale session, and
     // carries none of its stats.
     assert_eq!(rows[0].id, "tmux:term1");
     assert_ne!(rows[0].id, "sess-old");
     assert_eq!(
-        rows[0].total_tokens, None,
+        rows[0].total_tokens(),
+        None,
         "no ghost tokens on a fresh pane"
     );
     assert_eq!(
-        rows[0].model.as_deref(),
+        rows[0].model(),
         Some("GPT-5.5"),
         "fresh Codex rows use the provider fallback model, not stale session stats"
     );
     assert_eq!(
-        rows[0].context_window,
+        rows[0].context_window(),
         Some(258_000),
         "fresh Codex rows use the provider fallback window, not stale session stats"
     );
@@ -2234,20 +2219,20 @@ fn wired_unprompted_codex_pane_renders_as_idle_agent() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
+    assert!(rows[0].is_agent());
     assert_eq!(rows[0].name, "codex");
-    assert_eq!(rows[0].status, Some(AgentStatus::Idle));
+    assert_eq!(rows[0].status(), Some(AgentStatus::Idle));
     // No session id exists yet, so the row keys on the pane id (its full
     // mux-qualified form, as `row_from_process` does).
     assert_eq!(rows[0].id, "tmux:term1");
     assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "term1");
     assert_eq!(
-        rows[0].model.as_deref(),
+        rows[0].model(),
         Some("GPT-5.5"),
         "the card can show Codex's default model before the first session event"
     );
     assert_eq!(
-        rows[0].context_window,
+        rows[0].context_window(),
         Some(258_000),
         "the card can show Codex's context tier before the first session event"
     );
@@ -2263,9 +2248,9 @@ fn wired_unprompted_codex_uses_configured_default_model() {
     let snapshot = snapshot.with_live_panes(vec![pane("term1", "codex", "/repo/main")], None);
 
     let row = &snapshot.worktree_groups[0].rows[0];
-    assert_eq!(row.row_kind, SidebarRowKind::Agent);
-    assert_eq!(row.model.as_deref(), Some("o4-mini"));
-    assert_eq!(row.context_window, Some(258_000));
+    assert!(row.is_agent());
+    assert_eq!(row.model(), Some("o4-mini"));
+    assert_eq!(row.context_window(), Some(258_000));
 }
 
 #[test]
@@ -2283,7 +2268,7 @@ fn non_lazy_agent_pane_is_never_idle_synthesized() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+    assert!(rows[0].is_process());
 }
 
 #[test]
@@ -2297,7 +2282,7 @@ fn unwired_codex_pane_stays_a_process_row() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+    assert!(rows[0].is_process());
     assert_eq!(rows[0].name, "codex");
 }
 
@@ -2315,12 +2300,12 @@ fn bound_codex_pane_keeps_its_real_agent_over_idle_synthesis() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
+    assert!(rows[0].is_agent());
     assert_eq!(
         rows[0].id, "sess-1",
         "the real agent binds, not a synthesis"
     );
-    assert_eq!(rows[0].status, Some(AgentStatus::Running));
+    assert_eq!(rows[0].status(), Some(AgentStatus::Running));
 }
 
 #[test]
@@ -2345,7 +2330,7 @@ fn two_codex_panes_one_agent_yields_one_real_one_idle() {
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 2);
     assert!(
-        rows.iter().all(|row| row.row_kind == SidebarRowKind::Agent),
+        rows.iter().all(|row| row.is_agent()),
         "neither codex pane is a process row",
     );
     assert!(
@@ -2353,7 +2338,8 @@ fn two_codex_panes_one_agent_yields_one_real_one_idle() {
         "the prompted session binds one pane",
     );
     assert!(
-        rows.iter().any(|row| row.status == Some(AgentStatus::Idle)),
+        rows.iter()
+            .any(|row| row.status() == Some(AgentStatus::Idle)),
         "the unprompted pane synthesizes an idle row",
     );
 }
@@ -2369,7 +2355,7 @@ fn unbound_claude_pane_stays_a_process_row_even_when_codex_wired() {
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+    assert!(rows[0].is_process());
     assert_eq!(rows[0].name, "claude");
 }
 
@@ -2398,7 +2384,7 @@ fn stale_session_ask_does_not_render_or_steal_a_pane() {
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1, "only the live codex renders");
     assert_eq!(rows[0].name, "codex");
-    assert_eq!(rows[0].status, Some(AgentStatus::Idle));
+    assert_eq!(rows[0].status(), Some(AgentStatus::Idle));
     assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "%1");
 }
 
@@ -2428,7 +2414,7 @@ fn superseded_zombie_ask_yields_pane_to_the_fresh_session() {
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1, "only the fresh session renders");
     assert_eq!(rows[0].id, "fresh-claude");
-    assert_eq!(rows[0].status, Some(AgentStatus::Idle));
+    assert_eq!(rows[0].status(), Some(AgentStatus::Idle));
     assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "%1");
 }
 
@@ -2450,7 +2436,7 @@ fn live_codex_command_does_not_corroborate_claude_attention() {
     assert_eq!(snapshot.worktree_groups.len(), 1);
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Process);
+    assert!(rows[0].is_process());
     assert_eq!(rows[0].name, "codex");
     assert!(snapshot.worktree_groups[0].status_counts.is_empty());
 }
@@ -2480,10 +2466,7 @@ fn live_claude_pane_binds_despite_pile_of_stale_ledger_ghosts() {
     .with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
 
     let rows = &snapshot.worktree_groups[0].rows;
-    let agent_rows: Vec<_> = rows
-        .iter()
-        .filter(|r| r.row_kind == SidebarRowKind::Agent)
-        .collect();
+    let agent_rows: Vec<_> = rows.iter().filter(|r| r.is_agent()).collect();
     assert_eq!(agent_rows.len(), 1, "only the live claude renders");
     assert_eq!(agent_rows[0].id, "live");
 }
@@ -2514,7 +2497,7 @@ fn stalled_running_agent_recovers_when_activity_resumes() {
 
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(
-        row.status,
+        row.status(),
         Some(AgentStatus::Running),
         "a fresh heartbeat readvances last_activity, so the stalled row recovers"
     );
@@ -2535,7 +2518,7 @@ fn stalled_running_agent_escalates_to_attention() {
 
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(
-        row.status,
+        row.status(),
         Some(AgentStatus::Failed),
         "a long-silent running agent escalates to the attention bucket"
     );
@@ -2573,16 +2556,16 @@ fn spent_account_parks_every_resting_agent_of_the_kind() {
 
     let snapshot = room_with_agent_panes(Vec::new(), vec![reporter, fresh, working]);
     assert_eq!(
-        row(&snapshot, "sess-spent").status,
+        row(&snapshot, "sess-spent").status(),
         Some(AgentStatus::RateLimited)
     );
     assert_eq!(
-        row(&snapshot, "sess-fresh").status,
+        row(&snapshot, "sess-fresh").status(),
         Some(AgentStatus::RateLimited),
         "a fresh idle session inherits the account verdict"
     );
     assert_eq!(
-        row(&snapshot, "sess-busy").status,
+        row(&snapshot, "sess-busy").status(),
         Some(AgentStatus::RateLimited),
         "a running session in a spent account parks — the budget is gone regardless"
     );
@@ -2608,7 +2591,7 @@ fn a_window_spent_but_already_reset_does_not_park() {
 
     let snapshot = room_with_agent_panes(Vec::new(), vec![idle]);
     assert_eq!(
-        snapshot.worktree_groups[0].rows[0].status,
+        snapshot.worktree_groups[0].rows[0].status(),
         Some(AgentStatus::Idle),
         "a passed reset means the budget refilled — not rate-limited"
     );
@@ -2633,12 +2616,12 @@ fn running_parent_with_a_live_subagent_waits_instead_of_stalling() {
 
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(
-        row.status,
+        row.status(),
         Some(AgentStatus::Running),
         "a parent delegating to a live child is waiting on it, not stalled"
     );
     assert!(
-        row.sub_agents
+        row.sub_agents()
             .iter()
             .any(|child| child.status == AgentStatus::Running),
         "the live child is nested so the renderer can paint the wait head"
@@ -2663,12 +2646,12 @@ fn api_error_turn_escalates_running_to_attention() {
 
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(
-        row.status,
+        row.status(),
         Some(AgentStatus::Failed),
         "the explicit death certificate escalates without waiting out the stall window"
     );
     assert_eq!(
-        row.turn_error_label.as_deref(),
+        row.turn_error_label(),
         Some("API Error: Overloaded"),
         "the row carries the upstream error text for the card's line 2"
     );
@@ -2707,12 +2690,12 @@ fn api_error_self_clears_when_activity_resumes() {
 
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(
-        row.status,
+        row.status(),
         Some(AgentStatus::Running),
         "activity newer than the marker means the session moved on"
     );
     assert!(
-        row.turn_error_label.is_none(),
+        row.turn_error_label().is_none(),
         "a cleared escalation leaves no stale reason label"
     );
 }
@@ -2731,8 +2714,8 @@ fn api_error_does_not_override_waiting() {
         .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
 
     let row = &snapshot.worktree_groups[0].rows[0];
-    assert_eq!(row.status, Some(AgentStatus::Waiting));
-    assert!(row.turn_error_label.is_none());
+    assert_eq!(row.status(), Some(AgentStatus::Waiting));
+    assert!(row.turn_error_label().is_none());
 }
 
 #[test]
@@ -2751,8 +2734,8 @@ fn dead_parent_with_live_child_keeps_running() {
         .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
 
     let row = &snapshot.worktree_groups[0].rows[0];
-    assert_eq!(row.status, Some(AgentStatus::Running));
-    assert!(row.turn_error_label.is_none());
+    assert_eq!(row.status(), Some(AgentStatus::Running));
+    assert!(row.turn_error_label().is_none());
 }
 
 // ── The precedence ladder, pinned as an ordering ─────────────────────────────
@@ -2872,13 +2855,13 @@ fn displayed_status_precedence_ladder_holds() {
             room(Vec::new(), agents).with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
         let row = row(&snapshot, "root");
         assert_eq!(
-            row.status,
+            row.status(),
             Some(rung.expect),
             "precedence rung: {}",
             rung.name
         );
         assert_eq!(
-            row.turn_error_label.is_some(),
+            row.turn_error_label().is_some(),
             rung.expect_error_label,
             "error-label rung: {}",
             rung.name
@@ -2898,7 +2881,7 @@ fn running_agent_in_spent_account_parks_not_fails() {
 
     let snapshot = room_with_agent_panes(Vec::new(), vec![stalled]);
     assert_eq!(
-        snapshot.worktree_groups[0].rows[0].status,
+        snapshot.worktree_groups[0].rows[0].status(),
         Some(AgentStatus::RateLimited),
         "rate-limit outranks stall: agent is paused by the account, not wedged"
     );
@@ -2921,12 +2904,12 @@ fn rate_limit_outranks_the_turn_death_marker() {
     let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(
-        row.status,
+        row.status(),
         Some(AgentStatus::RateLimited),
         "rate-limit outranks turn-death: the marker is the limit's own corpse"
     );
     assert!(
-        row.turn_error_label.is_none(),
+        row.turn_error_label().is_none(),
         "a parked row carries no failure label"
     );
 }
@@ -2944,7 +2927,7 @@ fn running_parent_with_live_child_in_spent_account_parks() {
 
     let snapshot = room_with_agent_panes(Vec::new(), vec![parent, child]);
     assert_eq!(
-        snapshot.worktree_groups[0].rows[0].status,
+        snapshot.worktree_groups[0].rows[0].status(),
         Some(AgentStatus::RateLimited),
         "a spent account parks the delegating parent — its children share the budget"
     );
@@ -2971,15 +2954,15 @@ fn compacting_marker_lights_the_head_then_expires() {
 
     let snapshot = room_with_agent_panes(Vec::new(), vec![fresh, inside, stale]);
     assert!(
-        row(&snapshot, "compacting-now").compacting,
+        row(&snapshot, "compacting-now").compacting(),
         "a fresh marker pulses"
     );
     assert!(
-        row(&snapshot, "compacting-inside").compacting,
+        row(&snapshot, "compacting-inside").compacting(),
         "a marker one second inside the window still pulses"
     );
     assert!(
-        !row(&snapshot, "compacted-long-ago").compacting,
+        !row(&snapshot, "compacted-long-ago").compacting(),
         "a marker past the window has expired"
     );
 }
@@ -3147,7 +3130,7 @@ fn calm_tail_cap_never_hides_attention_rows() {
         snapshot.worktree_groups[0]
             .rows
             .iter()
-            .any(|row| row.status == Some(AgentStatus::Failed)),
+            .any(|row| row.status() == Some(AgentStatus::Failed)),
         "attention rows remain visible past the calm-row cap"
     );
     assert!(snapshot.worktree_groups[0].hidden_count > 0);
@@ -3205,7 +3188,7 @@ fn bucket_order_puts_attention_first_and_idle_last() {
     let order = snapshot.worktree_groups[0]
         .rows
         .iter()
-        .map(|row| row.status)
+        .map(|row| row.status())
         .collect::<Vec<_>>();
     assert_eq!(
         order,

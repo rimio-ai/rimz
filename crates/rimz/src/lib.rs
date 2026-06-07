@@ -40,9 +40,10 @@ pub use crate::ids::{
     EventId, MuxName, PaneId, RequestId, ResolverId, SidebarInstanceId, ViewKind, WorkspaceId,
 };
 pub use crate::ledger::{
-    Ledger, RuntimePaths, RuntimeProjection, RuntimeScope, SidebarOwnView, SidebarProviderPanel,
-    SidebarResolverState, SidebarRow, SidebarRowKind, SidebarSnapshot, SidebarStatusCount,
-    SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, StatePaths, WorkspaceRecord,
+    AgentCard, Ledger, ProcessCard, ProcessState, RowCallSplit, RowCard, RuntimePaths,
+    RuntimeProjection, RuntimeScope, SidebarOwnView, SidebarProviderPanel, SidebarResolverState,
+    SidebarRow, SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
+    SidebarWorktreeKind, StatePaths, WorkspaceRecord,
 };
 pub use crate::schema::event::EventEnvelope;
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

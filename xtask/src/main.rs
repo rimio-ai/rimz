@@ -843,6 +843,7 @@ fn invariants(root: &Path) -> Result<()> {
     }
     ensure_snapshot_json_writes_stay_in_produce(root, &files)?;
     ensure_sidebar_enrich_folds_before_live_panes(root)?;
+    ensure_card_admission_predicate(root)?;
 
     // Durability barriers live in one file: every fsync syscall goes through
     // `ledger/atomic.rs`, so the write-class contract is auditable in one
@@ -1003,6 +1004,46 @@ fn ensure_sidebar_enrich_folds_before_live_panes(root: &Path) -> Result<()> {
     }
     bail!(
         "sidebar enrich rollup/context/liveness folds must stay before with_live_panes\n{}",
+        violations.join("\n")
+    );
+}
+
+fn ensure_card_admission_predicate(root: &Path) -> Result<()> {
+    let path = root.join("crates/rimz/src/ledger/snapshot/view.rs");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let Some(live_fold) = text.find("pub fn with_live_panes(") else {
+        bail!("sidebar live-pane fold must stay in view.rs");
+    };
+    let after = &text[live_fold..];
+    let Some(groups_fold) = after.find("self.worktree_groups =") else {
+        bail!("with_live_panes must build worktree groups after card admission");
+    };
+    let body = &after[..groups_fold];
+    if !body.contains("pane_admits_card(pane, exclude).admits()") {
+        bail!("with_live_panes must filter rows through pane_admits_card");
+    }
+    let mut violations = Vec::new();
+    for needle in [
+        "command_is_sidebar_chrome",
+        "pane_is_host",
+        "pane.pane_id !=",
+        "pane.pane_id ==",
+    ] {
+        if let Some(offset) = body.find(needle) {
+            let line = text[..live_fold + offset]
+                .bytes()
+                .filter(|byte| *byte == b'\n')
+                .count()
+                + 1;
+            violations.push(format!("{}:{}: {}", path.display(), line, needle));
+        }
+    }
+    if violations.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "with_live_panes card-admission filtering must stay behind pane_admits_card\n{}",
         violations.join("\n")
     );
 }

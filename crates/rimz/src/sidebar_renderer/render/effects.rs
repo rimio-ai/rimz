@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use crate::feed::AgentStatus;
 use crate::ids::PaneId;
-use crate::{SidebarRow, SidebarRowKind, SidebarSnapshot};
+use crate::{SidebarRow, SidebarSnapshot};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -220,10 +220,7 @@ impl EffectState {
         let first_frame = !self.primed;
         self.primed = true;
         for row in rows {
-            if row.row_kind != SidebarRowKind::Agent {
-                continue;
-            }
-            let Some(status) = row.status else { continue };
+            let Some(status) = row.status() else { continue };
             let previous = self.prev.insert(row.id.clone(), Observed { status });
             if first_frame {
                 continue;
@@ -331,10 +328,10 @@ fn build_oneshot(kind: TransitionKind, theme: &Theme) -> (Target, Effect) {
 /// see [`super::labels::attention_breath`]), so color and modifier swell as
 /// one motion.
 fn glow_delta(row: &SidebarRow, phase: u64) -> Option<f32> {
-    if row.row_kind != SidebarRowKind::Agent || row.resolver.is_some() {
+    if !row.is_agent() || row.resolver().is_some() {
         return None;
     }
-    if !row.status.is_some_and(AgentStatus::is_actionable) {
+    if !row.status().is_some_and(AgentStatus::is_actionable) {
         return None;
     }
     let heat = age_heat(age_secs(row.last_activity));
@@ -449,7 +446,10 @@ mod tests {
     use crate::config::SidebarConfig;
     use crate::feed::PaneRef;
     use crate::ids::{MuxName, ResolverId, ViewKind};
-    use crate::{SidebarResolverState, SidebarWorktreeGroup, SidebarWorktreeKind, WorkspaceId};
+    use crate::{
+        AgentCard, RowCard, SidebarResolverState, SidebarWorktreeGroup, SidebarWorktreeKind,
+        WorkspaceId,
+    };
     use jiff::Timestamp;
 
     use super::*;
@@ -471,42 +471,38 @@ mod tests {
 
     fn row(id: &str, status: AgentStatus) -> SidebarRow {
         SidebarRow {
-            row_kind: SidebarRowKind::Agent,
             id: id.to_owned(),
             name: "claude".to_owned(),
-            status: Some(status),
-            phase: crate::agents::TurnPhase::Idle,
             pane: Some(pane(id)),
-            request_id: None,
-            surface: None,
-            task: Some("db migrate".to_owned()),
-            prompt: None,
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            todo_done: None,
-            todo_total: None,
-            context: None,
-            context_severity: None,
             worktree_path: Some("/repo/main".to_owned()),
             worktree_branch: Some("main".to_owned()),
             last_activity: Timestamp::now(),
-            registered_at: None,
-            resolver: None,
-            options: Vec::new(),
-            sub_agents: Vec::new(),
-            process_active: false,
-            command_detail: None,
-            compacting: false,
-            turn_error_label: None,
-            rss_kb: None,
-            cpu_pct: None,
-            io_bps: None,
+            card: RowCard::Agent(Box::new(AgentCard {
+                status: Some(status),
+                phase: crate::agents::TurnPhase::Idle,
+                request_id: None,
+                surface: None,
+                task: Some("db migrate".to_owned()),
+                prompt: None,
+                model: None,
+                effort: None,
+                context_pct: None,
+                context_window: None,
+                total_tokens: None,
+                cache_read_input_tokens: None,
+                fresh_input_tokens: None,
+                output_tokens: None,
+                todo_done: None,
+                todo_total: None,
+                context: None,
+                context_severity: None,
+                registered_at: None,
+                resolver: None,
+                options: Vec::new(),
+                sub_agents: Vec::new(),
+                compacting: false,
+                turn_error_label: None,
+            })),
         }
     }
 
@@ -766,7 +762,7 @@ mod tests {
         assert_eq!(glow_delta(&calm, mid_breath), None);
 
         let mut handled = row("a", AgentStatus::Waiting);
-        handled.resolver = Some(SidebarResolverState {
+        handled.as_agent_mut().unwrap().resolver = Some(SidebarResolverState {
             resolver_id: ResolverId::new_unchecked("opus-policy"),
             display_name: None,
             budget_until: None,

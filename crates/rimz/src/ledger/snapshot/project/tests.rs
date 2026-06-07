@@ -416,9 +416,9 @@ fn typeless_subagent_stop_without_start_is_ignored() {
         Timestamp::now(),
     )];
     attach_sub_agents(&mut rows, &agents, Timestamp::now());
-    assert_eq!(rows[0].sub_agents.len(), 1);
-    assert_eq!(rows[0].sub_agents[0].id, "child-real");
-    assert_eq!(rows[0].sub_agents[0].name, "Explore");
+    assert_eq!(rows[0].sub_agents().len(), 1);
+    assert_eq!(rows[0].sub_agents()[0].id, "child-real");
+    assert_eq!(rows[0].sub_agents()[0].name, "Explore");
 }
 
 #[test]
@@ -597,6 +597,51 @@ fn prompt_persists_past_stop_while_task_clears() {
         agent.prompt.as_deref(),
         Some("fix auth flow"),
         "the latest prompt persists past the Stop"
+    );
+}
+
+#[test]
+fn lifecycle_carries_transcript_path_and_bounded_prompt_history() {
+    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+    let lifecycle = |params: serde_json::Value| {
+        EventEnvelope::new(
+            workspace.clone(),
+            "session",
+            "claude",
+            "agent-hook",
+            "agent.lifecycle",
+            params,
+        )
+    };
+    let start = lifecycle(serde_json::json!({
+        "event_name": "SessionStart",
+        "agent_id": "s1",
+        "signal": { "signal": "registered" },
+        "transcript_path": "/tmp/s1.jsonl",
+    }));
+    let mut events = vec![start];
+    for index in 0..18 {
+        events.push(lifecycle(serde_json::json!({
+            "event_name": "UserPromptSubmit",
+            "agent_id": "s1",
+            "signal": { "signal": "turn_started" },
+            "prompt": format!("prompt {index}"),
+        })));
+    }
+
+    let agents = reduce_agent_states(&events);
+    let agent = agents.iter().find(|a| a.agent_id == "s1").expect("agent");
+
+    assert_eq!(agent.transcript_path.as_deref(), Some("/tmp/s1.jsonl"));
+    assert_eq!(agent.prompt.as_deref(), Some("prompt 17"));
+    assert_eq!(agent.recent_prompts.len(), 16);
+    assert_eq!(
+        agent.recent_prompts.first().map(String::as_str),
+        Some("prompt 2")
+    );
+    assert_eq!(
+        agent.recent_prompts.last().map(String::as_str),
+        Some("prompt 17")
     );
 }
 

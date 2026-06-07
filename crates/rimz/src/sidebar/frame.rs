@@ -63,6 +63,12 @@ pub struct PaneProcess {
 /// rows. All-`None` until the first due `/proc` sample.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneMetrics {
+    /// The sampler's stuck verdict only — `Some(Stuck)` when `/proc` reported a
+    /// zombie or repeated uninterruptible sleep, else `None`. Idle-vs-busy is
+    /// never carried here; the fold classifies it from the pane's program
+    /// (`ledger::snapshot::process`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_state: Option<crate::ProcessState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rss_kb: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

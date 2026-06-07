@@ -3,8 +3,7 @@
 
 use jiff::Timestamp;
 
-use super::view::{SidebarRow, SidebarRowKind};
-use crate::agents::lifecycle::TurnPhase;
+use super::row::{ProcessCard, ProcessState, RowCard, SidebarRow};
 use crate::feed::PaneRef;
 
 /// Whether a pane no agent has bound carries enough identity to render a
@@ -25,12 +24,16 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
     let program = command
         .map(program_label)
         .unwrap_or_else(|| "process".to_owned());
-    let active = command.is_some_and(process_is_active);
+    let state = if command.is_some_and(process_is_active) {
+        ProcessState::Busy
+    } else {
+        ProcessState::Idle
+    };
     // An active pane anchors its primary line on the shell that owns it (its root
     // process), so the line stays put as commands come and go while the live
     // command rides the second line. An idle pane keeps its foreground program as
     // its one label. Where `/proc` can't name the shell, fall back to the program.
-    let name = if active {
+    let name = if state.is_busy() {
         pane.pane_pid
             .and_then(crate::proc::comm)
             .unwrap_or_else(|| program.clone())
@@ -40,46 +43,23 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
     // The full command earns a second line only when it adds something past the
     // primary label — an active pane whose command isn't already its whole name.
     let command_detail = command
-        .filter(|_| active)
+        .filter(|_| state.is_busy())
         .map(ToOwned::to_owned)
         .filter(|full| *full != name);
     SidebarRow {
-        row_kind: SidebarRowKind::Process,
         id: pane.pane_id.to_string(),
         name,
-        status: None,
-        phase: TurnPhase::Idle,
         pane: Some(pane.clone()),
-        request_id: None,
-        surface: None,
-        task: None,
-        prompt: None,
-        model: None,
-        effort: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        todo_done: None,
-        todo_total: None,
-        context: None,
-        context_severity: None,
         worktree_path: pane.cwd.clone(),
         worktree_branch: None,
         last_activity: pane.pane_process_start.unwrap_or(now),
-        registered_at: None,
-        resolver: None,
-        options: Vec::new(),
-        sub_agents: Vec::new(),
-        process_active: active,
-        command_detail,
-        compacting: false,
-        turn_error_label: None,
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
+        card: RowCard::Process(ProcessCard {
+            state,
+            command_detail,
+            rss_kb: None,
+            cpu_pct: None,
+            io_bps: None,
+        }),
     }
 }
 
@@ -270,23 +250,33 @@ mod tests {
             &pane("%1", "sudo npm install -g @openai/codex", "/repo"),
             Timestamp::now(),
         );
-        assert_eq!(active.row_kind, SidebarRowKind::Process);
+        assert!(active.is_process());
         assert_eq!(active.name, "npm");
-        assert!(active.process_active);
+        assert_eq!(active.process_state(), Some(ProcessState::Busy));
         assert_eq!(
-            active.command_detail.as_deref(),
+            active
+                .as_process()
+                .and_then(|process| process.command_detail.as_deref()),
             Some("sudo npm install -g @openai/codex")
         );
 
         // Idle shell: one clean line, no detail.
         let idle = row_from_process(&pane("%2", "zsh", "/repo"), Timestamp::now());
         assert_eq!(idle.name, "zsh");
-        assert!(!idle.process_active);
-        assert_eq!(idle.command_detail, None);
+        assert_eq!(idle.process_state(), Some(ProcessState::Idle));
+        assert_eq!(
+            idle.as_process()
+                .and_then(|process| process.command_detail.as_ref()),
+            None
+        );
 
         // An active command already equal to its label adds no redundant line.
         let bare = row_from_process(&pane("%3", "cargo", "/repo"), Timestamp::now());
-        assert!(bare.process_active);
-        assert_eq!(bare.command_detail, None);
+        assert_eq!(bare.process_state(), Some(ProcessState::Busy));
+        assert_eq!(
+            bare.as_process()
+                .and_then(|process| process.command_detail.as_ref()),
+            None
+        );
     }
 }

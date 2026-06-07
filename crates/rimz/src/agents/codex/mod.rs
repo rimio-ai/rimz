@@ -352,9 +352,11 @@ impl AgentAdapter for CodexAdapter {
         // Context budget lives in the rollout JSONL, not the payload — locate the
         // session's file by id and read its tail. The rollout carries a precomputed
         // percentage (it has the window directly), unlike Claude's raw tokens.
-        let usage = optional_payload_string(payload, &["session_id"])
-            .and_then(|id| find_session_transcript(&id))
-            .map(|path| usage_from_transcript(&path))
+        let transcript_path = optional_payload_string(payload, &["session_id"])
+            .and_then(|id| find_session_transcript(&id));
+        let usage = transcript_path
+            .as_deref()
+            .map(usage_from_transcript)
             .unwrap_or_default();
         let mut observation =
             AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
@@ -375,6 +377,8 @@ impl AgentAdapter for CodexAdapter {
         };
         observation.prompt =
             sanitize_user_prompt(user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
+        observation.transcript_path =
+            transcript_path.map(|path| path.to_string_lossy().into_owned());
         let reported_context_window = usage.reported_context_window();
         observation.model = optional_payload_string(payload, &["model"]).or(usage.model);
         observation.effort = payload_reasoning_effort(payload).or_else(configured_reasoning_effort);

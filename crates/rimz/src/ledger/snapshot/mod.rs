@@ -13,6 +13,7 @@ mod fold;
 mod panes;
 mod process;
 mod project;
+mod row;
 #[cfg(test)]
 mod testkit;
 mod view;
@@ -35,9 +36,13 @@ pub(crate) use fold::{
 pub use panes::SidebarOwnView;
 pub use process::command_agent_kind;
 pub(crate) use process::command_is_sidebar_chrome;
+pub use row::{
+    AgentCard, ProcessCard, ProcessState, RowCallSplit, RowCard, SidebarResolverState, SidebarRow,
+    SidebarSubAgent,
+};
 pub use view::{
-    SidebarProviderPanel, SidebarResolverState, SidebarRow, SidebarRowKind, SidebarSnapshot,
-    SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind,
+    SidebarProviderPanel, SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup,
+    SidebarWorktreeKind,
 };
 
 #[derive(Debug, thiserror::Error)]

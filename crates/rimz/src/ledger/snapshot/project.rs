@@ -11,6 +11,12 @@ use crate::feed::{AgentState, PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::schema::event::EventEnvelope;
 
+/// How many user prompts a session's rollup keeps (`AgentState::recent_prompts`,
+/// newest last). The events are durable, so the cap bounds only the projected
+/// history, not the record; 16 covers a long working session without growing
+/// the rollup cache unbounded.
+const RECENT_PROMPTS_LIMIT: usize = 16;
+
 /// Strip a trailing capability tag (`claude-opus-4-8[1m]` → `claude-opus-4-8`)
 /// so the sidebar shows one stable model id per agent. The tag rides only on a
 /// fresh-launch SessionStart payload — it is absent after `/clear`, the
@@ -174,6 +180,16 @@ pub(super) fn reduce_agent_states_seeded(
             signal,
             lifecycle::LifecycleSignal::Registered | lifecycle::LifecycleSignal::SubagentStarted
         );
+        if prior.is_none() && !establishes_identity {
+            debug!(
+                target: "rimz::agent::binding",
+                kind = %kind,
+                agent_id = %agent_id,
+                signal = ?signal,
+                event_name = event_name.unwrap_or(""),
+                "non-start lifecycle event created an unseen session in the reducer",
+            );
+        }
         // The parent link is pure identity: only ever set, never cleared. Adopt
         // it from any event that carries it, then carry it forward. A typed
         // `SubagentStop` can be the first useful child event Claude reports;
@@ -242,8 +258,20 @@ pub(super) fn reduce_agent_states_seeded(
         };
         // The latest prompt, unlike `task`, persists: only the prompt-bearing
         // event sets it, so carry the prior one forward to label an unnamed
-        // session past idle until it earns a real name.
-        let prompt = param_string("prompt").or_else(|| prior.and_then(|p| p.prompt.clone()));
+        // session past idle until it earns a real name. The same event appends
+        // to the bounded prompt history (newest last, oldest dropped).
+        let event_prompt = param_string("prompt");
+        let mut recent_prompts = prior.map(|p| p.recent_prompts.clone()).unwrap_or_default();
+        if let Some(prompt) = event_prompt.as_deref().filter(|prompt| !prompt.is_empty()) {
+            recent_prompts.push(prompt.to_owned());
+            let excess = recent_prompts.len().saturating_sub(RECENT_PROMPTS_LIMIT);
+            if excess > 0 {
+                recent_prompts.drain(0..excess);
+            }
+        }
+        let prompt = event_prompt.or_else(|| prior.and_then(|p| p.prompt.clone()));
+        let transcript_path = param_string("transcript_path")
+            .or_else(|| prior.and_then(|p| p.transcript_path.clone()));
         // Always store the canonical model id. The agent reports a suffixed id
         // (`claude-opus-4-8[1m]`) only on a fresh-launch SessionStart; every
         // other event (and the transcript fallback) carries the bare id, so the
@@ -282,6 +310,8 @@ pub(super) fn reduce_agent_states_seeded(
             worktree_branch,
             task,
             prompt,
+            transcript_path,
+            recent_prompts,
             model,
             effort,
             context_pct,

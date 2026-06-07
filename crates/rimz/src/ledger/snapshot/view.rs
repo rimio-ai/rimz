@@ -12,16 +12,17 @@ use tracing::{debug, warn};
 use super::fold::agent_rollup_with_carryover;
 use super::panes::{
     LazyAgentRow, SidebarOwnView, agent_for_pane, is_daemon_mode_codex, lazy_agent_for_pane,
-    pane_start_matches, row_from_frame_pane,
+    pane_admits_card, pane_start_matches, row_from_frame_pane,
 };
 use super::process::{pane_command_is_known, row_from_process};
+use super::row::{AgentCard, RowCard, SidebarResolverState, SidebarRow, SidebarSubAgent};
 use crate::agent_activity::AgentActivity;
 use crate::agents::lifecycle::TurnPhase;
-use crate::agents::{AgentAccount, AgentContext, RateLimitWindow, SpendTally};
+use crate::agents::{AgentAccount, RateLimitWindow, SpendTally};
 use crate::feed::{
     AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, PaneRef, ResolverStepState, Surface,
 };
-use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, ResolverId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::ledger::agent_context::AgentContextRecord;
 use crate::ledger::event_log::{self};
 use crate::ledger::subagent_context::SubagentContextRecord;
@@ -299,288 +300,6 @@ pub struct SidebarWorktreeGroup {
 pub struct SidebarStatusCount {
     pub status: AgentStatus,
     pub count: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SidebarRowKind {
-    /// An agent session admitted by its live pane. A standalone script/bridge
-    /// ask reuses this kind after its pane is admitted by the same frame; it
-    /// renders the same single line when no capability fields are set.
-    Agent,
-    /// A live pane with no agent bound to it: a shell, an editor, `git`.
-    Process,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SidebarRow {
-    pub row_kind: SidebarRowKind,
-    pub id: String,
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<AgentStatus>,
-    /// The running turn's shape, copied from the rollup: `reasoning` paints the
-    /// thinking sparkle, `acting` the working spinner, `parked` the secondary
-    /// "background" marker. A transient axis like `compacting`, never a status
-    /// bucket of its own. Always `idle` for process rows and outside `Running`.
-    #[serde(default, skip_serializing_if = "turn_phase_is_idle")]
-    pub phase: TurnPhase,
-    pub pane: Option<PaneRef>,
-    pub request_id: Option<RequestId>,
-    pub surface: Option<Surface>,
-    pub task: Option<String>,
-    /// The session's latest user prompt, carried forward from `AgentState`. The
-    /// renderer labels an unnamed session by it once `task` clears on idle.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<String>,
-    pub model: Option<String>,
-    pub effort: Option<String>,
-    /// Context-window % gauge value (0..=100). Agent rows default this to
-    /// `Some(0)` so renderers always draw the started-session gauge; transcript
-    /// usage only upgrades the meter.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_pct: Option<u8>,
-    /// The model's context window in tokens, the identity line's `258k`/`1M`
-    /// token. Hook-derived fallback; the renderer prefers the fresher
-    /// `context.tokens.context_window_size` when an out-of-band source reports
-    /// it. `None` for process rows and before any source has named it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_window: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_tokens: Option<u64>,
-    /// The latest API call's per-call token split (`◌` cache-read, `↘` fresh
-    /// input, `↗` output), carried forward from `AgentState` — the Codex
-    /// rollout's `last_token_usage`. The renderer's composition line falls back
-    /// to it when the rich `context.tokens.current_usage` is absent; see
-    /// [`Self::call_split`]. No cache-write: the provider feeding this path
-    /// reports none per call.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fresh_input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub todo_done: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub todo_total: Option<u32>,
-    /// The session's rich enrichment (cost, token breakdown, rate-limit windows,
-    /// session or thread name), copied from `AgentState.context` so the renderer
-    /// reads one struct instead of cross-referencing `agents[]`. Source-agnostic:
-    /// Claude fills it from its statusline, Codex from local rollout/config
-    /// refresh plus app-server metadata (rate-limit windows, model display name,
-    /// preview/name, version). Display-only; `None` for
-    /// process rows and any agent with no out-of-band source, where the scalar
-    /// `model`/`effort`/`context_pct`/`total_tokens` are the fallback.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context: Option<AgentContext>,
-    /// The context meter's severity verdict —
-    /// [`ContextSeverity::classify`](crate::feed::ContextSeverity::classify)
-    /// over this row's gauge inputs and the `[sidebar.context]` bands — stamped
-    /// once where the machine config is folded onto the snapshot, so the
-    /// renderer's color ramp and any future signal emitter read one authority.
-    /// Display + signal; never a status bucket. `None` for process rows and on
-    /// a snapshot that predates the config fold (the renderer then classifies
-    /// locally from the same bands).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_severity: Option<crate::feed::ContextSeverity>,
-    pub worktree_path: Option<String>,
-    pub worktree_branch: Option<String>,
-    pub last_activity: Timestamp,
-    /// The session's durable spawn key, copied from `AgentState.registered_at`.
-    /// The calm tiebreak falls back to it when the row's pane reports no
-    /// `pane_process_start` (Zellij), so a calm row holds a stable order
-    /// without a pane start and a renamed session never reshuffles. `None` for
-    /// process rows and a snapshot predating the field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registered_at: Option<Timestamp>,
-    pub resolver: Option<SidebarResolverState>,
-    pub options: Vec<String>,
-    /// Subagents this agent spawned this turn (Claude Task children, Codex
-    /// threads), nested under the parent at projection time. Paneless, so they
-    /// never render as their own row; the sidebar lists them inside the parent's
-    /// expanded card. Empty for every non-parent row.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sub_agents: Vec<SidebarSubAgent>,
-    /// A `process` row whose foreground command is genuine work (a build, a
-    /// test, a script) rather than a bare shell or interactive TUI — so the
-    /// renderer can give it the running spinner in a dim tone. Always `false`
-    /// for agent rows and for idle shells/editors; never enters `status_counts`
-    /// (a process row keeps `status: None`).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub process_active: bool,
-    /// The full foreground command of an *active* `process` row (`sudo npm install
-    /// -g @openai/codex`, `cargo build --release`), shown dim on the row's second
-    /// line beneath the shell anchor on `name`. `None` for idle process rows —
-    /// where the single label already says everything — and for every agent row.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command_detail: Option<String>,
-    /// The agent is condensing its context window right now (Claude `PreCompact`,
-    /// Codex `SessionStart:compact`). A short-lived transient the renderer paints
-    /// as a pulsing head over the base status; never a status bucket of its own.
-    /// Always `false` for process rows.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub compacting: bool,
-    /// Why the displayed status escalated to `failed` when the agent's latest
-    /// turn died on a provider API error with no `Stop` hook — the upstream
-    /// error text ("API Error: Overloaded") from the transcript-tail marker.
-    /// Set only by the turn-death projection (`project_display_status`), so it
-    /// is present exactly while that escalation holds; the renderer paints it
-    /// as the card's dim line-2 body. Always `None` for process rows.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_error_label: Option<String>,
-    /// Resident set size of the row's pane process in kibibytes, from the
-    /// producer's per-tick `/proc` read. Display-only; set for process rows
-    /// only — an agent card spends its right slots on cost and age instead.
-    /// `None` on non-Linux or when the process was unreadable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rss_kb: Option<u64>,
-    /// CPU utilisation of the row's pane process in integer percent, from two
-    /// consecutive `/proc/<pid>/stat` readings. Set for process rows only.
-    /// `None` on the first tick (no prior sample), on non-Linux, or when the
-    /// process was unreadable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cpu_pct: Option<u16>,
-    /// Combined VFS I/O rate (rchar + wchar bytes/s) of the row's pane
-    /// process, from two consecutive `/proc/<pid>/io` readings. Set for
-    /// process rows only. `None` on the first tick, on non-Linux, or when the
-    /// file was unreadable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub io_bps: Option<u64>,
-}
-
-impl SidebarRow {
-    /// The context gauge's value (0..=100): the statusline's authoritative
-    /// `used_percentage` when present, else the transcript-derived scalar.
-    /// One of the two inputs `context_severity` is classified from; the
-    /// renderer also reads it for the bar fill.
-    pub fn context_gauge_percent(&self) -> Option<u8> {
-        self.context
-            .as_ref()
-            .and_then(|context| context.tokens.as_ref())
-            .and_then(|tokens| tokens.used_percentage)
-            .or(self.context_pct)
-    }
-
-    /// Tokens currently occupying the context window — the current message's
-    /// `input + cache_creation + cache_read`, exactly the numerator the gauge
-    /// percent scales. The severity classification's absolute-token axis.
-    /// Falls back to the row-level [`call_split`](Self::call_split) when the
-    /// rich blob carries no per-message breakdown; `None` when neither source
-    /// reported one.
-    pub fn context_used_tokens(&self) -> Option<u64> {
-        let rich = self
-            .context
-            .as_ref()
-            .and_then(|context| context.tokens.as_ref())
-            .and_then(|tokens| tokens.current_usage.as_ref())
-            .map(|usage| {
-                usage.input_tokens.unwrap_or(0)
-                    + usage.cache_creation_input_tokens.unwrap_or(0)
-                    + usage.cache_read_input_tokens.unwrap_or(0)
-            });
-        rich.or_else(|| self.call_split().map(|split| split.filled()))
-    }
-
-    /// The latest call's composition when the rich `context.tokens.
-    /// current_usage` blob is absent — the row-level split the lifecycle rail
-    /// fills (Codex's rollout `last_token_usage`). `None` until the input side
-    /// of a call is known, so a pre-first-turn row keeps the bare total.
-    pub fn call_split(&self) -> Option<RowCallSplit> {
-        let fresh_input = self.fresh_input_tokens?;
-        Some(RowCallSplit {
-            cache_read: self.cache_read_input_tokens.unwrap_or(0),
-            fresh_input,
-            output: self.output_tokens.unwrap_or(0),
-        })
-    }
-}
-
-/// A row-level per-call token composition — the fallback the renderer legends
-/// when no rich per-call blob exists. Carries no cache-write: the provider
-/// that feeds this path (Codex) reports none per call, so that column simply
-/// drops from the line.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RowCallSplit {
-    /// Tokens read back from cache (`◌`).
-    pub cache_read: u64,
-    /// Fresh, uncached input (`↘`).
-    pub fresh_input: u64,
-    /// Output generated (`↗`) — it joins the window next turn.
-    pub output: u64,
-}
-
-impl RowCallSplit {
-    /// The window numerator — everything occupying the window after this call
-    /// (`cache_read + fresh_input`), exactly what the `▣` percent scales and
-    /// the `▤` head shows.
-    pub fn filled(&self) -> u64 {
-        self.cache_read + self.fresh_input
-    }
-}
-
-/// `skip_serializing_if` helper: the resting phase is the default and stays off
-/// the wire.
-fn turn_phase_is_idle(phase: &TurnPhase) -> bool {
-    *phase == TurnPhase::Idle
-}
-
-/// A compact summary of a child agent, nested under its parent's row. The
-/// expanded list paints its identity and live status, and — when Claude's
-/// `subagentStatusLine` has reported them — what the parent asked it to do, what
-/// it has spent, and how long it has run. The enrichment fields stay `None` for a
-/// Codex child or before the first render, and the card degrades to the bare
-/// type line.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SidebarSubAgent {
-    pub id: String,
-    /// The subagent's type (`Explore`, `review`, …), from the `SubagentStart`
-    /// task descriptor; falls back to a short degraded id when none was
-    /// reported.
-    pub name: String,
-    pub status: AgentStatus,
-    /// The running turn's shape (reasoning / acting), the child's own lifecycle
-    /// machine output — it drives the thinking/working head on the child's list
-    /// glyph exactly as the parent's drives its row cell. Always
-    /// [`TurnPhase::Idle`] outside `Running`; the machine normalizes it.
-    #[serde(default, skip_serializing_if = "turn_phase_is_idle")]
-    pub phase: TurnPhase,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task: Option<String>,
-    /// The model the child runs on, from its own `AgentState.model` (carried
-    /// forward by the reducer). `None` until an event names it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    /// The child's reasoning effort (`high`, `medium`, …) — Claude reports it
-    /// on `SubagentStop`, so it typically lands once the child finishes. Same
-    /// carry-forward discipline as `model`; `None` until an event names it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
-    /// What the parent asked this child to do (`subagentStatusLine` description),
-    /// painted after the type on the first row.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Cumulative tokens the child has spent (`subagentStatusLine` `tokenCount`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_tokens: Option<u64>,
-    /// Wall-clock seconds the child has worked: `now − started_at` while running,
-    /// frozen at `last_activity − started_at` once it finishes. `None` when no
-    /// start time was reported.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub elapsed_secs: Option<i64>,
-    /// When the child began (its `subagentStatusLine` `startTime`) — the
-    /// expanded list's sort key, so siblings hold their spawn order across
-    /// refreshes. `None` for a Codex child or before the first status report.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub started_at: Option<Timestamp>,
-    pub last_activity: Timestamp,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SidebarResolverState {
-    pub resolver_id: ResolverId,
-    pub display_name: Option<String>,
-    pub budget_until: Option<Timestamp>,
 }
 
 impl SidebarSnapshot {
@@ -938,16 +657,7 @@ impl SidebarSnapshot {
     pub fn with_live_panes(mut self, panes: Vec<PaneRef>, exclude: Option<&PaneId>) -> Self {
         let panes = panes
             .into_iter()
-            .filter(|pane| exclude.is_none_or(|excluded| pane.pane_id != *excluded))
-            .filter(|pane| {
-                pane.command
-                    .as_deref()
-                    .is_none_or(|command| !super::process::command_is_sidebar_chrome(command))
-            })
-            // The remote-control host is ambient infrastructure, not work: it no
-            // longer renders as a row. Its presence surfaces as the `⇅ rc` flag
-            // on the provider dashboard block instead, so drop its pane here.
-            .filter(|pane| !crate::remote_control::pane_is_host(pane))
+            .filter(|pane| pane_admits_card(pane, exclude).admits())
             .collect::<Vec<_>>();
         self.worktree_groups = build_worktree_groups_from_rows(
             rows_from_panes(
@@ -1667,17 +1377,20 @@ fn agent_moved_past_ask(agent: &AgentState, ask: &FeedItem) -> bool {
 /// identity and capability line but takes the ask's waiting status, request,
 /// surface, resolver, options, and age.
 fn fold_ask_onto_row(row: &mut SidebarRow, ask: &FeedItem) {
-    row.status = Some(AgentStatus::Waiting);
+    row.last_activity = ask.updated_at;
+    let Some(agent) = row.as_agent_mut() else {
+        return;
+    };
+    agent.status = Some(AgentStatus::Waiting);
     // Phase is a head on Running — the reduced state's invariant — so the
     // waiting overlay drops it rather than carrying a stale Reasoning/Acting.
-    row.phase = TurnPhase::Idle;
-    row.request_id = Some(ask.request_id.clone());
-    row.surface = Some(ask.surface);
-    row.resolver = active_resolver_state(ask);
-    row.options = ask.options.clone();
-    row.last_activity = ask.updated_at;
-    if row.task.is_none() {
-        row.task = Some(feed_kind_task(ask.kind).to_owned());
+    agent.phase = TurnPhase::Idle;
+    agent.request_id = Some(ask.request_id.clone());
+    agent.surface = Some(ask.surface);
+    agent.resolver = active_resolver_state(ask);
+    agent.options = ask.options.clone();
+    if agent.task.is_none() {
+        agent.task = Some(feed_kind_task(ask.kind).to_owned());
     }
 }
 
@@ -1846,9 +1559,11 @@ pub(super) fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState], 
         // Attach to the parent row when one is present; an orphan (no parent
         // row) never renders — but log it, since a child that names a parent
         // with no row is an anomaly worth tracing.
-        if let Some(parent) = rows.iter_mut().find(|row| {
-            row.row_kind == SidebarRowKind::Agent && row.name == child.kind && row.id == parent_id
-        }) {
+        let parent = rows
+            .iter_mut()
+            .filter(|row| row.name == child.kind && row.id == parent_id)
+            .find_map(SidebarRow::as_agent_mut);
+        if let Some(parent) = parent {
             parent.sub_agents.push(sub_agent_from_state(child, now));
         } else {
             warn!(
@@ -1860,18 +1575,22 @@ pub(super) fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState], 
             );
         }
     }
-    for row in rows.iter_mut().filter(|r| !r.sub_agents.is_empty()) {
+    for agent in rows.iter_mut().filter_map(SidebarRow::as_agent_mut) {
+        if agent.sub_agents.is_empty() {
+            continue;
+        }
         // Dedup by child id (freshest activity wins) so the same logical child
         // can never appear twice and the `subagents (N)` count stays honest.
-        row.sub_agents
+        agent
+            .sub_agents
             .sort_by(|a, b| a.id.cmp(&b.id).then(b.last_activity.cmp(&a.last_activity)));
-        row.sub_agents.dedup_by(|a, b| a.id == b.id);
+        agent.sub_agents.dedup_by(|a, b| a.id == b.id);
         // Display order: creation time ascending — the spawn order the parent
         // launched them in, stable across refreshes (an activity-keyed sort
         // reshuffled the list on every tick). A child with no reported start
         // time sorts after the dated ones; the id tiebreak keeps the whole
         // order deterministic.
-        row.sub_agents.sort_by(|a, b| {
+        agent.sub_agents.sort_by(|a, b| {
             cmp_start_asc(a.started_at, b.started_at).then_with(|| a.id.cmp(&b.id))
         });
     }
@@ -1889,19 +1608,27 @@ pub(super) fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState], 
 /// still-ticking child can never mask the death certificate.
 fn fold_child_activity_onto_parents(rows: &mut [SidebarRow]) {
     for row in rows.iter_mut() {
-        if row.row_kind != SidebarRowKind::Agent || row.sub_agents.is_empty() {
+        let Some(agent) = row.as_agent() else {
+            continue;
+        };
+        if agent.sub_agents.is_empty() {
             continue;
         }
-        let Some(status) = row.status else {
+        let Some(status) = agent.status else {
             continue;
         };
         if matches!(status, AgentStatus::Waiting | AgentStatus::Failed) {
             continue;
         }
-        if crate::feed::is_turn_dead(status, row.context.as_ref(), row.last_activity) {
+        if crate::feed::is_turn_dead(status, agent.context.as_ref(), row.last_activity) {
             continue;
         }
-        if let Some(freshest) = row.sub_agents.iter().map(|child| child.last_activity).max() {
+        if let Some(freshest) = agent
+            .sub_agents
+            .iter()
+            .map(|child| child.last_activity)
+            .max()
+        {
             row.last_activity = row.last_activity.max(freshest);
         }
     }
@@ -1935,24 +1662,26 @@ fn fold_child_activity_onto_parents(rows: &mut [SidebarRow]) {
 fn project_display_status(rows: &mut [SidebarRow], agents: &[AgentState], now: Timestamp) {
     let limited_kinds = rate_limited_kinds(agents, now);
     for row in rows.iter_mut() {
-        if row.row_kind != SidebarRowKind::Agent {
+        let row_name = row.name.clone();
+        let last_activity = row.last_activity;
+        let Some(agent) = row.as_agent_mut() else {
             continue;
-        }
-        let Some(status) = row.status else {
+        };
+        let Some(status) = agent.status else {
             continue;
         };
         // A human-blocked `waiting` ask outranks every derived state.
         if status == AgentStatus::Waiting {
             continue;
         }
-        let has_live_child = row
+        let has_live_child = agent
             .sub_agents
             .iter()
             .any(|child| child.status == AgentStatus::Running);
         // `row.name` is the agent kind for an agent row (see `row_from_agent`),
         // and the rate-limit verdict is account- (kind-) scoped.
         let projected =
-            if crate::feed::is_rate_limited(status, limited_kinds.contains(row.name.as_str())) {
+            if crate::feed::is_rate_limited(status, limited_kinds.contains(row_name.as_str())) {
                 // The spent-account park leads the chain: a rate-limited turn dies
                 // with the same `isApiErrorMessage` marker the turn-death check
                 // reads (which would mislabel the park as a failure), its retry
@@ -1964,27 +1693,27 @@ fn project_display_status(rows: &mut [SidebarRow], agents: &[AgentState], now: T
                 AgentStatus::RateLimited
             } else if status == AgentStatus::Running && has_live_child {
                 AgentStatus::Running
-            } else if crate::feed::is_turn_dead(status, row.context.as_ref(), row.last_activity) {
+            } else if crate::feed::is_turn_dead(status, agent.context.as_ref(), last_activity) {
                 // The turn died on a provider API error with no `Stop` hook — the
                 // transcript marker is explicit, so escalate now rather than
                 // waiting out the stall window, and surface the upstream text.
-                row.turn_error_label = row
+                agent.turn_error_label = agent
                     .context
                     .as_ref()
                     .and_then(|context| context.turn_error.as_ref())
                     .and_then(|error| error.label.clone());
                 AgentStatus::Failed
-            } else if crate::feed::is_stalled(status, row.last_activity, now) {
+            } else if crate::feed::is_stalled(status, last_activity, now) {
                 AgentStatus::Failed
             } else {
                 status
             };
-        row.status = Some(projected);
+        agent.status = Some(projected);
         if projected != AgentStatus::Running {
             // Phase is a head on Running — the reduced state's invariant —
             // so a Failed/RateLimited override drops it rather than carrying
             // a stale Reasoning/Acting onto a resting row.
-            row.phase = TurnPhase::Idle;
+            agent.phase = TurnPhase::Idle;
         }
     }
 }
@@ -2094,46 +1823,38 @@ pub(super) fn row_from_agent(agent: &AgentState, now: Timestamp) -> SidebarRow {
     // spent-budget → `rate_limited`); a pending ask folds `waiting` on upstream.
     // The rollup in `snapshot.agents` always keeps the true status.
     SidebarRow {
-        row_kind: SidebarRowKind::Agent,
         id: agent.agent_id.to_string(),
         name: agent.kind.to_string(),
-        status: Some(agent.status),
-        phase: agent.phase,
         pane: agent.pane.clone(),
-        request_id: None,
-        surface: None,
-        task: agent.task.clone(),
-        prompt: agent.prompt.clone(),
-        model: agent.model.clone(),
-        effort: agent.effort.clone(),
-        context_pct: Some(agent.context_pct.unwrap_or(0)),
-        context_window: agent_context_window(agent),
-        total_tokens: agent.total_tokens,
-        cache_read_input_tokens: agent.cache_read_input_tokens,
-        fresh_input_tokens: agent.fresh_input_tokens,
-        output_tokens: agent.output_tokens,
-        todo_done: agent.todo_done,
-        todo_total: agent.todo_total,
-        context: agent.context.clone(),
-        context_severity: None,
         worktree_path: agent.worktree_path.clone(),
         worktree_branch: agent.worktree_branch.clone(),
         last_activity: agent.last_activity,
-        registered_at: agent.registered_at,
-        resolver: None,
-        options: Vec::new(),
-        sub_agents: Vec::new(),
-        process_active: false,
-        command_detail: None,
-        compacting: is_compacting(agent, now),
-        // Filled by the turn-death projection (`project_display_status`) when
-        // the escalation holds; never carried from the rollup.
-        turn_error_label: None,
-        // Filled by `push_agent_row` from the live pane; the rollup carries no
-        // per-process metrics.
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
+        card: RowCard::Agent(Box::new(AgentCard {
+            status: Some(agent.status),
+            phase: agent.phase,
+            request_id: None,
+            surface: None,
+            task: agent.task.clone(),
+            prompt: agent.prompt.clone(),
+            model: agent.model.clone(),
+            effort: agent.effort.clone(),
+            context_pct: Some(agent.context_pct.unwrap_or(0)),
+            context_window: agent_context_window(agent),
+            total_tokens: agent.total_tokens,
+            cache_read_input_tokens: agent.cache_read_input_tokens,
+            fresh_input_tokens: agent.fresh_input_tokens,
+            output_tokens: agent.output_tokens,
+            todo_done: agent.todo_done,
+            todo_total: agent.todo_total,
+            context: agent.context.clone(),
+            context_severity: None,
+            registered_at: agent.registered_at,
+            resolver: None,
+            options: Vec::new(),
+            sub_agents: Vec::new(),
+            compacting: is_compacting(agent, now),
+            turn_error_label: None,
+        })),
     }
 }
 
@@ -2165,43 +1886,39 @@ fn row_from_standalone_item(item: &FeedItem, pane: &PaneRef) -> SidebarRow {
     debug_assert_ne!(item.source_kind, "agent-hook");
     let id = agent_id_from_item(item).unwrap_or_else(|| item.request_id.to_string());
     SidebarRow {
-        row_kind: SidebarRowKind::Agent,
         id,
         name: item.source.clone(),
-        status: Some(AgentStatus::Waiting),
-        // A waiting row is blocked on the human, not reasoning — no turn phase.
-        phase: TurnPhase::Idle,
         pane: Some(pane.clone()),
-        request_id: Some(item.request_id.clone()),
-        surface: Some(item.surface),
-        task: Some(item.title.clone()),
-        prompt: None,
-        model: None,
-        effort: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        todo_done: None,
-        todo_total: None,
-        context: None,
-        context_severity: None,
         worktree_path: item.worktree_path.clone().or_else(|| pane.cwd.clone()),
         worktree_branch: item.worktree_branch.clone(),
         last_activity: item.updated_at,
-        registered_at: None,
-        resolver: active_resolver_state(item),
-        options: item.options.clone(),
-        sub_agents: Vec::new(),
-        process_active: false,
-        command_detail: None,
-        compacting: false,
-        turn_error_label: None,
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
+        card: RowCard::Agent(Box::new(AgentCard {
+            status: Some(AgentStatus::Waiting),
+            // A waiting row is blocked on the human, not reasoning — no turn phase.
+            phase: TurnPhase::Idle,
+            request_id: Some(item.request_id.clone()),
+            surface: Some(item.surface),
+            task: Some(item.title.clone()),
+            prompt: None,
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            context: None,
+            context_severity: None,
+            registered_at: None,
+            resolver: active_resolver_state(item),
+            options: item.options.clone(),
+            sub_agents: Vec::new(),
+            compacting: false,
+            turn_error_label: None,
+        })),
     }
 }
 
@@ -2376,7 +2093,7 @@ fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
     .filter_map(|status| {
         let count = rows
             .iter()
-            .filter(|row| row.row_kind != SidebarRowKind::Process && row.status == Some(status))
+            .filter(|row| row.status() == Some(status))
             .count();
         (count > 0).then_some(SidebarStatusCount { status, count })
     })
@@ -2400,7 +2117,7 @@ fn refresh_overlay_group(group: &mut SidebarWorktreeGroup) {
 fn capped_rows(rows: Vec<SidebarRow>) -> Vec<SidebarRow> {
     let mut visible = Vec::new();
     for row in rows {
-        if row.status.is_some_and(AgentStatus::is_actionable)
+        if row.status().is_some_and(AgentStatus::is_actionable)
             || row.pane.as_ref().is_some_and(|pane| pane.is_focused)
             || visible.len() < WORKTREE_ROW_CAP
         {
@@ -2430,7 +2147,7 @@ fn compare_rows(left: &SidebarRow, right: &SidebarRow) -> Ordering {
 /// heartbeat — so a working agent never jumps just because it finished a tool,
 /// and new agents append at the bottom of their bucket.
 fn within_bucket(left: &SidebarRow, right: &SidebarRow) -> Ordering {
-    if is_attention(left.status) {
+    if is_attention(left.status()) {
         left.last_activity.cmp(&right.last_activity)
     } else {
         cmp_start_asc(spawn_key(left), spawn_key(right))
@@ -2443,7 +2160,7 @@ fn within_bucket(left: &SidebarRow, right: &SidebarRow) -> Ordering {
 /// activity heartbeat, so the calm order is stable across refreshes and a
 /// renamed session never reorders.
 fn spawn_key(row: &SidebarRow) -> Option<Timestamp> {
-    pane_start(row).or(row.registered_at)
+    pane_start(row).or_else(|| row.as_agent().and_then(|agent| agent.registered_at))
 }
 
 fn is_attention(status: Option<AgentStatus>) -> bool {
@@ -2487,7 +2204,7 @@ fn compare_groups(left: &SidebarWorktreeGroup, right: &SidebarWorktreeGroup) -> 
 /// sibling just because its top row flipped success↔running↔idle — calm groups
 /// hold the stable earliest-pane order, and only genuine attention reorders.
 fn group_tier(group: &SidebarWorktreeGroup) -> u8 {
-    match group.rows.first().map(|row| row.status) {
+    match group.rows.first().map(SidebarRow::status) {
         Some(Some(AgentStatus::Waiting)) => 0,
         Some(Some(AgentStatus::Failed)) => 1,
         Some(Some(AgentStatus::RateLimited)) => 2,
@@ -2511,7 +2228,7 @@ fn group_earliest_spawn(group: &SidebarWorktreeGroup) -> Option<Timestamp> {
 }
 
 fn row_rank(row: &SidebarRow) -> u8 {
-    match row.status {
+    match row.status() {
         Some(status) => status_rank(status),
         None => 7,
     }

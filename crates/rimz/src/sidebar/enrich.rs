@@ -114,8 +114,8 @@ pub fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
         // A future-stamped row reads as a negative age — within the window,
         // the safe (hot) direction, matching the saturating TTL convention.
         let any_hot = group.rows.iter().any(|row| {
-            row.row_kind == crate::SidebarRowKind::Agent
-                && (row.status == Some(AgentStatus::Running)
+            row.is_agent()
+                && (row.status() == Some(AgentStatus::Running)
                     || snapshot.now.duration_since(row.last_activity) <= window)
         });
         if any_hot {
@@ -401,9 +401,14 @@ fn apply_pane_metrics(snapshot: &mut SidebarSnapshot, metrics: Vec<(PaneId, Pane
             let Some(metric) = metrics.get(&pane.pane_id) else {
                 continue;
             };
-            row.rss_kb = metric.rss_kb;
-            row.cpu_pct = metric.cpu_pct;
-            row.io_bps = metric.io_bps;
+            if let Some(process) = row.as_process_mut() {
+                process.rss_kb = metric.rss_kb;
+                process.cpu_pct = metric.cpu_pct;
+                process.io_bps = metric.io_bps;
+                if let Some(state) = metric.process_state {
+                    process.state = state;
+                }
+            }
         }
     }
 }
@@ -757,12 +762,13 @@ pub fn live_row_costs(
         .flat_map(|group| group.rows.iter())
         .filter_map(|row| {
             let usd = row
-                .context
-                .as_ref()
+                .as_agent()
+                .and_then(|agent| agent.context.as_ref())
                 .and_then(|context| context.cost.as_ref())
                 .and_then(|cost| cost.total_cost_usd)?;
             let registered_ms = row
-                .registered_at
+                .as_agent()
+                .and_then(|agent| agent.registered_at)
                 .map(|at| at.as_millisecond().max(0) as u64);
             Some((row.id.as_str(), usd, registered_ms))
         })
@@ -809,12 +815,15 @@ pub(crate) fn stamp_context_severity(
 ) {
     for group in groups {
         for row in &mut group.rows {
-            if row.row_kind == crate::SidebarRowKind::Agent {
-                row.context_severity = Some(crate::feed::ContextSeverity::classify(
+            if row.is_agent() {
+                let severity = crate::feed::ContextSeverity::classify(
                     row.context_gauge_percent().unwrap_or(0),
                     row.context_used_tokens(),
                     bands,
-                ));
+                );
+                if let Some(agent) = row.as_agent_mut() {
+                    agent.context_severity = Some(severity);
+                }
             }
         }
     }

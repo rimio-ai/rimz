@@ -20,80 +20,33 @@ fn browse(pane: &PaneId, baseline: Option<&PaneId>) -> Browse {
 fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     let mut snapshot = snapshot(ws);
     let agent = crate::SidebarRow {
-        row_kind: crate::SidebarRowKind::Agent,
         id: "agent-1".to_owned(),
         name: "claude".to_owned(),
-        status: Some(crate::feed::AgentStatus::Running),
-        phase: crate::agents::TurnPhase::Idle,
         pane: Some(pane("terminal_9", "tab_0", false)),
-        request_id: None,
-        surface: None,
-        task: Some("inspect auth".to_owned()),
-        prompt: None,
-        model: Some("Opus".to_owned()),
-        effort: Some("high".to_owned()),
-        context_pct: Some(38),
-        context_window: None,
-        total_tokens: Some(12_400),
-        cache_read_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        todo_done: Some(3),
-        todo_total: Some(5),
-        context: None,
-        context_severity: None,
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: Some("main".to_owned()),
         last_activity: Timestamp::now(),
-        registered_at: None,
-        resolver: None,
-        options: Vec::new(),
-        sub_agents: Vec::new(),
-        process_active: false,
-        command_detail: None,
-        compacting: false,
-        turn_error_label: None,
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
+        card: crate::RowCard::Agent(Box::new(crate::AgentCard {
+            status: Some(crate::feed::AgentStatus::Running),
+            phase: crate::agents::TurnPhase::Idle,
+            task: Some("inspect auth".to_owned()),
+            model: Some("Opus".to_owned()),
+            effort: Some("high".to_owned()),
+            context_pct: Some(38),
+            total_tokens: Some(12_400),
+            todo_done: Some(3),
+            todo_total: Some(5),
+            ..crate::AgentCard::default()
+        })),
     };
     let process = crate::SidebarRow {
-        row_kind: crate::SidebarRowKind::Process,
         id: "terminal_10".to_owned(),
         name: "zsh".to_owned(),
-        status: None,
-        phase: crate::agents::TurnPhase::Idle,
         pane: Some(pane("terminal_10", "tab_0", false)),
-        request_id: None,
-        surface: None,
-        task: None,
-        prompt: None,
-        model: None,
-        effort: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        todo_done: None,
-        todo_total: None,
-        context: None,
-        context_severity: None,
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: Some("main".to_owned()),
         last_activity: Timestamp::now(),
-        registered_at: None,
-        resolver: None,
-        options: Vec::new(),
-        sub_agents: Vec::new(),
-        process_active: false,
-        command_detail: None,
-        compacting: false,
-        turn_error_label: None,
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
+        card: crate::RowCard::Process(crate::ProcessCard::default()),
     };
     snapshot.worktree_groups = vec![crate::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
@@ -682,7 +635,12 @@ fn space_fires_focus_at_the_next_attention_row_without_selecting() {
             pane("terminal_2", "tab_0", false),
         ],
     );
-    snapshot.worktree_groups[0].rows[1].status = Some(crate::feed::AgentStatus::Waiting);
+    snapshot.worktree_groups[0].rows[1].name = "claude".to_owned();
+    snapshot.worktree_groups[0].rows[1].card = crate::RowCard::Agent(Box::new(crate::AgentCard {
+        status: Some(crate::feed::AgentStatus::Waiting),
+        phase: crate::agents::TurnPhase::Idle,
+        ..crate::AgentCard::default()
+    }));
     let mut ui = UiState::default();
 
     let outcome = handle_key(KeyAction::Space, &mut ui, &snapshot);
@@ -1158,7 +1116,7 @@ fn clicking_a_tab_label_picks_that_tab_in_place() {
 /// One agent or process row bound to `pane_name` in `worktree` — the make-up
 /// filter tests' row builder.
 fn filter_row(
-    kind: crate::SidebarRowKind,
+    is_agent: bool,
     id: &str,
     name: &str,
     status: Option<crate::feed::AgentStatus>,
@@ -1166,42 +1124,21 @@ fn filter_row(
     worktree: &str,
 ) -> crate::SidebarRow {
     crate::SidebarRow {
-        row_kind: kind,
         id: id.to_owned(),
         name: name.to_owned(),
-        status,
-        phase: crate::agents::TurnPhase::Idle,
         pane: Some(pane(pane_name, "tab_0", false)),
-        request_id: None,
-        surface: None,
-        task: None,
-        prompt: None,
-        model: None,
-        effort: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        todo_done: None,
-        todo_total: None,
-        context: None,
-        context_severity: None,
         worktree_path: Some(worktree.to_owned()),
         worktree_branch: None,
         last_activity: Timestamp::now(),
-        registered_at: None,
-        resolver: None,
-        options: Vec::new(),
-        sub_agents: Vec::new(),
-        process_active: false,
-        command_detail: None,
-        compacting: false,
-        turn_error_label: None,
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
+        card: if is_agent {
+            crate::RowCard::Agent(Box::new(crate::AgentCard {
+                status,
+                phase: crate::agents::TurnPhase::Idle,
+                ..crate::AgentCard::default()
+            }))
+        } else {
+            crate::RowCard::Process(crate::ProcessCard::default())
+        },
     }
 }
 
@@ -1223,21 +1160,14 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             }],
             rows: vec![
                 filter_row(
-                    crate::SidebarRowKind::Agent,
+                    true,
                     "agent-1",
                     "claude",
                     Some(AgentStatus::Running),
                     "terminal_1",
                     "/repo/main",
                 ),
-                filter_row(
-                    crate::SidebarRowKind::Process,
-                    "terminal_2",
-                    "zsh",
-                    None,
-                    "terminal_2",
-                    "/repo/main",
-                ),
+                filter_row(false, "terminal_2", "zsh", None, "terminal_2", "/repo/main"),
             ],
             hidden_count: 0,
             diff_added: None,
@@ -1256,7 +1186,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
                 count: 1,
             }],
             rows: vec![filter_row(
-                crate::SidebarRowKind::Agent,
+                true,
                 "agent-2",
                 "codex",
                 Some(AgentStatus::Failed),

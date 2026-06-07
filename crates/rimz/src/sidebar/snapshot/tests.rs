@@ -221,14 +221,14 @@ fn read_published_snapshot_folds_subagent_context() {
         .find(|row| row.id == "parent-1")
         .expect("parent row");
 
-    assert_eq!(parent.sub_agents.len(), 1);
-    assert_eq!(parent.sub_agents[0].id, "child-1");
-    assert_eq!(parent.sub_agents[0].name, "Explore");
+    assert_eq!(parent.sub_agents().len(), 1);
+    assert_eq!(parent.sub_agents()[0].id, "child-1");
+    assert_eq!(parent.sub_agents()[0].name, "Explore");
     assert_eq!(
-        parent.sub_agents[0].description.as_deref(),
+        parent.sub_agents()[0].description.as_deref(),
         Some("trace the sidebar rows"),
     );
-    assert_eq!(parent.sub_agents[0].total_tokens, Some(12_400));
+    assert_eq!(parent.sub_agents()[0].total_tokens, Some(12_400));
 }
 
 #[test]
@@ -563,6 +563,8 @@ fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> AgentState {
         worktree_branch: None,
         task: None,
         prompt: None,
+        transcript_path: None,
+        recent_prompts: Vec::new(),
         model: model.map(ToOwned::to_owned),
         effort: None,
         context_pct: None,
@@ -1079,54 +1081,35 @@ fn only_codex_has_an_out_of_band_window_read() {
 /// ramp and any future signal emitter read — and leaves process rows `None`.
 #[test]
 fn config_fold_stamps_agent_context_severity() {
-    let row = |kind: crate::SidebarRowKind, pct: Option<u8>| crate::SidebarRow {
-        row_kind: kind,
+    let agent_row = |pct: Option<u8>| crate::SidebarRow {
         id: "row".to_owned(),
         name: "claude".to_owned(),
-        status: Some(AgentStatus::Running),
-        phase: TurnPhase::Idle,
         pane: None,
-        request_id: None,
-        surface: None,
-        task: None,
-        prompt: None,
-        model: None,
-        effort: None,
-        context_pct: pct,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        todo_done: None,
-        todo_total: None,
-        context: None,
-        context_severity: None,
         worktree_path: None,
         worktree_branch: None,
         last_activity: jiff::Timestamp::now(),
-        registered_at: None,
-        resolver: None,
-        options: Vec::new(),
-        sub_agents: Vec::new(),
-        process_active: false,
-        command_detail: None,
-        compacting: false,
-        turn_error_label: None,
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
+        card: crate::RowCard::Agent(Box::new(crate::AgentCard {
+            status: Some(AgentStatus::Running),
+            phase: TurnPhase::Idle,
+            context_pct: pct,
+            ..crate::AgentCard::default()
+        })),
+    };
+    let process_row = || crate::SidebarRow {
+        id: "row".to_owned(),
+        name: "zsh".to_owned(),
+        pane: None,
+        worktree_path: None,
+        worktree_branch: None,
+        last_activity: jiff::Timestamp::now(),
+        card: crate::RowCard::Process(crate::ProcessCard::default()),
     };
     let mut groups = vec![crate::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         kind: crate::SidebarWorktreeKind::Worktree,
         status_counts: Vec::new(),
-        rows: vec![
-            row(crate::SidebarRowKind::Agent, Some(85)),
-            row(crate::SidebarRowKind::Agent, Some(5)),
-            row(crate::SidebarRowKind::Process, None),
-        ],
+        rows: vec![agent_row(Some(85)), agent_row(Some(5)), process_row()],
         hidden_count: 0,
         diff_added: None,
         diff_removed: None,
@@ -1143,16 +1126,17 @@ fn config_fold_stamps_agent_context_severity() {
 
     let rows = &groups[0].rows;
     assert_eq!(
-        rows[0].context_severity,
+        rows[0].as_agent().and_then(|agent| agent.context_severity),
         Some(crate::feed::ContextSeverity::Amber),
         "85% crosses the default amber band"
     );
     assert_eq!(
-        rows[1].context_severity,
+        rows[1].as_agent().and_then(|agent| agent.context_severity),
         Some(crate::feed::ContextSeverity::Calm)
     );
     assert_eq!(
-        rows[2].context_severity, None,
+        rows[2].as_agent().and_then(|agent| agent.context_severity),
+        None,
         "a process row carries no context verdict"
     );
 }
@@ -1192,48 +1176,27 @@ fn worktree_roots_cache_expires_after_roots_ttl() {
 /// A minimal agent/process row for the hot-set tests: only the fields
 /// `hot_worktree_paths` reads vary.
 fn activity_row(
-    row_kind: crate::SidebarRowKind,
+    is_agent: bool,
     status: Option<AgentStatus>,
     last_activity: Timestamp,
     worktree_path: &Path,
 ) -> crate::SidebarRow {
     crate::SidebarRow {
-        row_kind,
         id: "row".to_owned(),
         name: "claude".to_owned(),
-        status,
-        phase: TurnPhase::Idle,
         pane: None,
-        request_id: None,
-        surface: None,
-        task: None,
-        prompt: None,
-        model: None,
-        effort: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        todo_done: None,
-        todo_total: None,
-        context: None,
-        context_severity: None,
         worktree_path: Some(worktree_path.display().to_string()),
         worktree_branch: None,
         last_activity,
-        registered_at: None,
-        resolver: None,
-        options: Vec::new(),
-        sub_agents: Vec::new(),
-        process_active: false,
-        command_detail: None,
-        turn_error_label: None,
-        compacting: false,
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
+        card: if is_agent {
+            crate::RowCard::Agent(Box::new(crate::AgentCard {
+                status,
+                phase: TurnPhase::Idle,
+                ..crate::AgentCard::default()
+            }))
+        } else {
+            crate::RowCard::Process(crate::ProcessCard::default())
+        },
     }
 }
 
@@ -1289,7 +1252,7 @@ fn hot_worktree_paths_keys_on_running_or_recent_agent_rows() {
         worktree_group(
             &running,
             vec![activity_row(
-                crate::SidebarRowKind::Agent,
+                true,
                 Some(AgentStatus::Running),
                 stale_activity,
                 &running,
@@ -1298,7 +1261,7 @@ fn hot_worktree_paths_keys_on_running_or_recent_agent_rows() {
         worktree_group(
             &recent,
             vec![activity_row(
-                crate::SidebarRowKind::Agent,
+                true,
                 Some(AgentStatus::Idle),
                 now - SignedDuration::from_secs(1),
                 &recent,
@@ -1308,7 +1271,7 @@ fn hot_worktree_paths_keys_on_running_or_recent_agent_rows() {
         worktree_group(
             &boundary,
             vec![activity_row(
-                crate::SidebarRowKind::Agent,
+                true,
                 Some(AgentStatus::Idle),
                 now - window,
                 &boundary,
@@ -1317,28 +1280,20 @@ fn hot_worktree_paths_keys_on_running_or_recent_agent_rows() {
         worktree_group(
             &idle,
             vec![activity_row(
-                crate::SidebarRowKind::Agent,
+                true,
                 Some(AgentStatus::Idle),
                 stale_activity,
                 &idle,
             )],
         ),
         // A busy process row is not an agent row: cold by definition.
-        worktree_group(
-            &procs,
-            vec![activity_row(
-                crate::SidebarRowKind::Process,
-                None,
-                now,
-                &procs,
-            )],
-        ),
+        worktree_group(&procs, vec![activity_row(false, None, now, &procs)]),
         // An External-kind group never reaches the git refresh.
         {
             let mut group = worktree_group(
                 &external_kind,
                 vec![activity_row(
-                    crate::SidebarRowKind::Agent,
+                    true,
                     Some(AgentStatus::Running),
                     now,
                     &external_kind,
@@ -1350,12 +1305,7 @@ fn hot_worktree_paths_keys_on_running_or_recent_agent_rows() {
         // A running agent in a since-removed dir: hot ⊆ needed, so excluded.
         worktree_group(
             &dead,
-            vec![activity_row(
-                crate::SidebarRowKind::Agent,
-                Some(AgentStatus::Running),
-                now,
-                &dead,
-            )],
+            vec![activity_row(true, Some(AgentStatus::Running), now, &dead)],
         ),
     ];
 
@@ -1393,7 +1343,7 @@ fn hot_worktree_paths_treats_future_activity_as_hot() {
     snapshot.worktree_groups = vec![worktree_group(
         dir.path(),
         vec![activity_row(
-            crate::SidebarRowKind::Agent,
+            true,
             Some(AgentStatus::Idle),
             now + SignedDuration::from_secs(120),
             dir.path(),
@@ -1561,14 +1511,15 @@ fn snapshot_cache_age_saturates_on_a_future_producer_clock() {
 /// [`live_row_costs`] projects.
 fn cost_row(id: &str, usd: Option<f64>, registered_at: Option<Timestamp>) -> crate::SidebarRow {
     let mut row = activity_row(
-        crate::SidebarRowKind::Agent,
+        true,
         Some(AgentStatus::Running),
         Timestamp::from_second(1_750_000_000).unwrap(),
         Path::new("/repo/wt"),
     );
     row.id = id.to_owned();
-    row.registered_at = registered_at;
-    row.context = usd.map(|usd| crate::agents::AgentContext {
+    let agent = row.as_agent_mut().unwrap();
+    agent.registered_at = registered_at;
+    agent.context = usd.map(|usd| crate::agents::AgentContext {
         source: "claude".to_owned(),
         session_name: None,
         session_preview: None,

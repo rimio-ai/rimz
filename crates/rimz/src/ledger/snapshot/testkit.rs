@@ -10,7 +10,8 @@ use std::path::Path;
 
 use jiff::Timestamp;
 
-use super::view::{SidebarRow, SidebarSnapshot};
+use super::row::SidebarRow;
+use super::view::SidebarSnapshot;
 use crate::agents::lifecycle::{self, TurnPhase};
 use crate::agents::{AgentContext, AgentRateLimits, AgentTurnError, RateLimitWindow};
 use crate::feed::{AgentState, AgentStatus, FeedItem, PaneRef};
@@ -108,6 +109,8 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
         worktree_branch: None,
         task: None,
         prompt: None,
+        transcript_path: None,
+        recent_prompts: Vec::new(),
         model: None,
         effort: None,
         context_pct: None,

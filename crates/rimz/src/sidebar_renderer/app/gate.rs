@@ -83,14 +83,14 @@ fn demotes_agentish_to_process(prev: &SidebarSnapshot, incoming: &SidebarSnapsho
         .worktree_groups
         .iter()
         .flat_map(|group| &group.rows)
-        .filter(|row| row.row_kind == crate::SidebarRowKind::Agent)
+        .filter(|row| row.is_agent())
         .filter_map(|row| row.pane.as_ref().map(|pane| &pane.pane_id))
         .collect();
     incoming
         .worktree_groups
         .iter()
         .flat_map(|group| &group.rows)
-        .filter(|row| row.row_kind == crate::SidebarRowKind::Process)
+        .filter(|row| row.is_process())
         .filter_map(|row| row.pane.as_ref().map(|pane| &pane.pane_id))
         .any(|pane_id| agentish.contains(pane_id))
 }

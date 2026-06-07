@@ -5,6 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::ProcessState;
 use crate::ledger::atomic;
 use crate::sidebar::cache::unix_now_ms;
 use crate::sidebar::frame::PaneFrame;
@@ -52,6 +53,13 @@ struct MetricsSampleEntry {
     io_bps: Option<u64>,
     #[serde(default)]
     rss_kb: Option<u64>,
+    /// Last `/proc/<pid>/stat` state character for the sampled process.
+    #[serde(default)]
+    state_char: Option<char>,
+    /// Last stuck verdict, carried across fresh windows without re-reading
+    /// `/proc`.
+    #[serde(default)]
+    process_state: Option<ProcessState>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -128,6 +136,7 @@ pub(super) fn enrich_pane_metrics(
             pane.metrics.cpu_pct = entry.cpu_pct;
             pane.metrics.io_bps = entry.io_bps;
             pane.metrics.rss_kb = entry.rss_kb;
+            pane.metrics.process_state = entry.process_state;
         }
         return;
     }
@@ -184,10 +193,13 @@ pub(super) fn enrich_pane_metrics(
         let stat_now = crate::proc::stat_metrics(stats_pid);
         pane.metrics.rss_kb = stat_now.map(|stat| stat.rss_kb);
         let cpu_now = stat_now.map(|stat| stat.cpu_ticks);
+        let state_char = stat_now.map(|stat| stat.state);
         let io_now = crate::proc::io_bytes(stats_pid);
 
         let pane_key = pane.pane_id.to_string();
+        let mut prior_state_char = None;
         if let Some(prior_entry) = prior.entries.get(&pane_key) {
+            prior_state_char = prior_entry.state_char;
             // Only compute a rate when the stats PID hasn't changed across ticks
             // and the elapsed time is non-trivial (a very short gap yields noise).
             if prior_entry.stats_pid == stats_pid {
@@ -206,6 +218,8 @@ pub(super) fn enrich_pane_metrics(
                 }
             }
         }
+        pane.metrics.process_state =
+            process_state_from_stat(state_char, prior_state_char).filter(ProcessState::is_stuck);
 
         // The root binding recorded for the next tick's restore: the shell's
         // own stat read covers it when it is also the stats pid; an active
@@ -228,6 +242,8 @@ pub(super) fn enrich_pane_metrics(
                 cpu_pct: pane.metrics.cpu_pct,
                 io_bps: pane.metrics.io_bps,
                 rss_kb: pane.metrics.rss_kb,
+                state_char,
+                process_state: pane.metrics.process_state,
             },
         );
     }
@@ -238,6 +254,15 @@ pub(super) fn enrich_pane_metrics(
     };
     if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &new_cache) {
         tracing::warn!(error = %err, "metrics sample cache write failed");
+    }
+}
+
+fn process_state_from_stat(current: Option<char>, prior: Option<char>) -> Option<ProcessState> {
+    match current {
+        Some('Z') => Some(ProcessState::Stuck),
+        Some('D') if prior == Some('D') => Some(ProcessState::Stuck),
+        Some(_) => None,
+        None => None,
     }
 }
 

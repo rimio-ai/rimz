@@ -255,7 +255,7 @@ pub(in crate::sidebar_renderer::render) fn fleet_size(
     let subs = groups
         .iter()
         .flat_map(|group| &group.rows)
-        .map(|row| row.sub_agents.len())
+        .map(|row| row.sub_agents().len())
         .sum();
     (main, subs)
 }
@@ -275,7 +275,7 @@ fn attention_bucket_style(
     let oldest = groups
         .iter()
         .flat_map(|group| &group.rows)
-        .filter(|row| row.status == Some(status))
+        .filter(|row| row.status() == Some(status))
         .map(|row| age_secs(row.last_activity))
         .max()
         .unwrap_or(0);

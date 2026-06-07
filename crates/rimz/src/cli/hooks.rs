@@ -115,6 +115,20 @@ fn log_lifecycle_transition(ledger: &Ledger, kind: &str, observation: &AgentLife
                 .find(|agent| agent.kind == kind && agent.agent_id == agent_id)
         })
         .map(|agent| agent.lifecycle());
+    if prev.is_none()
+        && !matches!(
+            observation.signal,
+            LifecycleSignal::Registered | LifecycleSignal::SubagentStarted
+        )
+    {
+        warn!(
+            target: "rimz::agent::binding",
+            kind,
+            agent_id,
+            signal = ?observation.signal,
+            "non-start lifecycle event created an unseen session",
+        );
+    }
     let transition = lifecycle::step(prev.as_ref(), &observation.signal);
     match transition.kind {
         TransitionKind::Reconciled { from, reason } => warn!(
@@ -461,14 +475,15 @@ fn recover_focused_pane_binding(
     else {
         return;
     };
-    if let Some(pane_id) = select_focused_pane_binding(
+    let selection = select_focused_pane_binding(
         kind,
         agent_id,
         worktree_path,
         &prior,
         &panes,
         client_focus.as_deref(),
-    ) {
+    );
+    if let Some(pane_id) = selection.pane_id {
         debug!(
             agent = kind,
             agent_id,
@@ -476,6 +491,15 @@ fn recover_focused_pane_binding(
             "lifecycle: recovered daemon-routed pane binding from live focus",
         );
         observation.pane_id = Some(pane_id);
+    } else {
+        warn!(
+            target: "rimz::agent::binding",
+            kind,
+            agent_id,
+            cwd = worktree_path,
+            candidate_count = selection.candidate_count,
+            "daemon-routed lifecycle event exhausted focused pane binding candidates",
+        );
     }
 }
 
@@ -569,28 +593,43 @@ fn select_focused_pane_binding(
     prior_agents: &[PriorAgentPane<'_>],
     panes: &[PaneRef],
     client_focus: Option<&[PaneId]>,
-) -> Option<PaneId> {
+) -> FocusedPaneBindingSelection {
     let candidates: Vec<&PaneRef> = panes
         .iter()
         .filter(|pane| pane_matches_lazy_agent(kind, worktree_path, pane))
         .filter(|pane| !pane_stamped_to_other_agent(kind, agent_id, prior_agents, &pane.pane_id))
         .collect();
+    let candidate_count = candidates.len();
     if candidates.is_empty() {
-        return None;
+        return FocusedPaneBindingSelection {
+            pane_id: None,
+            candidate_count,
+        };
     }
 
-    if let Some(client_focus) = client_focus {
+    let pane_id = if let Some(client_focus) = client_focus {
         if client_focus.is_empty() {
-            return None;
+            None
+        } else {
+            unique_pane_id(
+                candidates
+                    .into_iter()
+                    .filter(|pane| client_focus.iter().any(|focused| focused == &pane.pane_id)),
+            )
         }
-        return unique_pane_id(
-            candidates
-                .into_iter()
-                .filter(|pane| client_focus.iter().any(|focused| focused == &pane.pane_id)),
-        );
+    } else {
+        unique_pane_id(candidates.into_iter().filter(|pane| pane.is_focused))
+    };
+    FocusedPaneBindingSelection {
+        pane_id,
+        candidate_count,
     }
+}
 
-    unique_pane_id(candidates.into_iter().filter(|pane| pane.is_focused))
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FocusedPaneBindingSelection {
+    pane_id: Option<PaneId>,
+    candidate_count: usize,
 }
 
 fn pane_matches_lazy_agent(kind: &str, worktree_path: &str, pane: &PaneRef) -> bool {
@@ -608,11 +647,26 @@ fn pane_stamped_to_other_agent(
     prior_agents: &[PriorAgentPane<'_>],
     pane_id: &PaneId,
 ) -> bool {
-    prior_agents.iter().any(|agent| {
+    if let Some(agent) = prior_agents.iter().find(|agent| {
         agent.kind == kind
             && agent.agent_id != agent_id
             && agent.pane_id.is_some_and(|known| known == pane_id)
-    })
+    }) {
+        // Routine in a shared worktree — the sibling's pane is simply taken —
+        // so this traces at debug; the anomaly signal is the caller's
+        // exhausted-candidates warn.
+        debug!(
+            target: "rimz::agent::binding",
+            kind,
+            agent_id,
+            stamped_agent_id = agent.agent_id,
+            pane = %pane_id,
+            "pane stamp belongs to another live agent; skipping focused binding candidate",
+        );
+        true
+    } else {
+        false
+    }
 }
 
 fn session_already_stamped(
@@ -1187,10 +1241,10 @@ mod tests {
         let focused = vec![PaneId::from_parts(MuxName::Zellij, "terminal_30")];
 
         let selected =
-            select_focused_pane_binding("codex", "new", "/repo/main", &[], &panes, Some(&focused))
-                .expect("unique focused client pane binds");
+            select_focused_pane_binding("codex", "new", "/repo/main", &[], &panes, Some(&focused));
 
-        assert_eq!(selected.raw(), "terminal_30");
+        assert_eq!(selected.pane_id.as_ref().unwrap().raw(), "terminal_30");
+        assert_eq!(selected.candidate_count, 2);
     }
 
     #[test]
@@ -1205,7 +1259,8 @@ mod tests {
         ];
 
         assert_eq!(
-            select_focused_pane_binding("codex", "new", "/repo/main", &[], &panes, Some(&focused)),
+            select_focused_pane_binding("codex", "new", "/repo/main", &[], &panes, Some(&focused))
+                .pane_id,
             None,
             "two client-focused candidate panes is ambiguous"
         );
@@ -1218,10 +1273,10 @@ mod tests {
             pane("terminal_30", "codex", "/repo/main", true),
         ];
 
-        let selected = select_focused_pane_binding("codex", "new", "/repo/main", &[], &panes, None)
-            .expect("unique per-view focus binds when client focus is unavailable");
+        let selected = select_focused_pane_binding("codex", "new", "/repo/main", &[], &panes, None);
 
-        assert_eq!(selected.raw(), "terminal_30");
+        assert_eq!(selected.pane_id.as_ref().unwrap().raw(), "terminal_30");
+        assert_eq!(selected.candidate_count, 2);
     }
 
     #[test]
@@ -1233,7 +1288,8 @@ mod tests {
         let focused = vec![PaneId::from_parts(MuxName::Zellij, "terminal_30")];
 
         assert_eq!(
-            select_focused_pane_binding("codex", "new", "/repo/main", &[], &panes, Some(&focused)),
+            select_focused_pane_binding("codex", "new", "/repo/main", &[], &panes, Some(&focused))
+                .pane_id,
             None
         );
     }
@@ -1257,7 +1313,8 @@ mod tests {
                 &prior,
                 &panes,
                 Some(&focused)
-            ),
+            )
+            .pane_id,
             None,
             "a pane already durably stamped to another session is not stolen"
         );

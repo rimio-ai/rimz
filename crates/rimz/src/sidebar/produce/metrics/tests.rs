@@ -251,7 +251,24 @@ fn binding_entry(pane_pid: u32, start_ticks: u64, command: &str) -> MetricsSampl
         cpu_pct: None,
         io_bps: None,
         rss_kb: None,
+        state_char: None,
+        process_state: None,
     }
+}
+
+#[test]
+fn process_state_marks_zombie_and_persistent_uninterruptible_sleep_as_stuck() {
+    assert_eq!(
+        process_state_from_stat(Some('Z'), None),
+        Some(ProcessState::Stuck)
+    );
+    assert_eq!(process_state_from_stat(Some('D'), None), None);
+    assert_eq!(
+        process_state_from_stat(Some('D'), Some('D')),
+        Some(ProcessState::Stuck)
+    );
+    assert_eq!(process_state_from_stat(Some('R'), Some('D')), None);
+    assert_eq!(process_state_from_stat(None, Some('D')), None);
 }
 
 #[test]

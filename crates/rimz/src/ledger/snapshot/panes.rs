@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::process::command_agent_kind;
 use super::process::{pane_command_is_known, row_from_process};
-use super::view::{SidebarRow, SidebarRowKind};
+use super::row::{AgentCard, RowCard, SidebarRow};
 use crate::agents::AgentDescriptor;
 use crate::agents::lifecycle::TurnPhase;
 use crate::feed::{AgentState, AgentStatus, PaneRef};
@@ -57,6 +57,45 @@ pub(super) fn is_daemon_mode_codex(agent: &AgentState, daemon_pids: &BTreeSet<u3
         return false;
     }
     agent_owner_pid(agent).is_some_and(|pid| daemon_pids.contains(&pid))
+}
+
+/// The card-admission verdict for one live pane: admitted, or the named reason
+/// it renders nothing. Exactly the panes that exist *for* the room rather than
+/// *in* it are excluded — the caller's own pane, sidebar chrome, and the
+/// managed remote-control / app-server hosts. Everything else is admitted: a
+/// pane whose command is still unreadable (a raced or mid-birth read) stays in,
+/// because an agent stamp binds by pane id alone and must keep rendering its
+/// row — the no-row guard for the *unbound* residue is the fold's
+/// `pane_command_is_known`, never admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CardAdmission {
+    Admitted,
+    ExcludedPaneId,
+    SidebarChrome,
+    RemoteControlOrAppServerHost,
+}
+
+impl CardAdmission {
+    pub(super) fn admits(self) -> bool {
+        self == Self::Admitted
+    }
+}
+
+pub(super) fn pane_admits_card(pane: &PaneRef, exclude: Option<&PaneId>) -> CardAdmission {
+    if exclude.is_some_and(|excluded| pane.pane_id == *excluded) {
+        return CardAdmission::ExcludedPaneId;
+    }
+    if pane
+        .command
+        .as_deref()
+        .is_some_and(super::process::command_is_sidebar_chrome)
+    {
+        return CardAdmission::SidebarChrome;
+    }
+    if crate::remote_control::pane_is_host(pane) {
+        return CardAdmission::RemoteControlOrAppServerHost;
+    }
+    CardAdmission::Admitted
 }
 
 /// The pid the hook recorded as this session's owner: the runtime owner when one
@@ -218,45 +257,41 @@ fn idle_agent_row(
     now: Timestamp,
 ) -> SidebarRow {
     SidebarRow {
-        row_kind: SidebarRowKind::Agent,
         id: pane.pane_id.to_string(),
         name: descriptor.kind.to_owned(),
-        status: Some(AgentStatus::Idle),
-        phase: TurnPhase::Idle,
         pane: Some(pane.clone()),
-        request_id: None,
-        surface: None,
-        task: None,
-        prompt: None,
-        model: default_model.map(ToOwned::to_owned),
-        effort: None,
-        // Agent rows draw the started-session gauge at `Some(0)` (see the
-        // `SidebarRow.context_pct` doc) — matching a freshly-bound session.
-        context_pct: Some(0),
-        context_window: descriptor.default_context_window,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        todo_done: None,
-        todo_total: None,
-        context: None,
-        context_severity: None,
         worktree_path: pane.cwd.clone(),
         worktree_branch: None,
         last_activity: pane.pane_process_start.unwrap_or(now),
-        // No session yet — the pane's process start is this row's spawn key.
-        registered_at: None,
-        resolver: None,
-        options: Vec::new(),
-        sub_agents: Vec::new(),
-        process_active: false,
-        command_detail: None,
-        compacting: false,
-        turn_error_label: None,
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
+        card: RowCard::Agent(Box::new(AgentCard {
+            status: Some(AgentStatus::Idle),
+            phase: TurnPhase::Idle,
+            request_id: None,
+            surface: None,
+            task: None,
+            prompt: None,
+            model: default_model.map(ToOwned::to_owned),
+            effort: None,
+            // Agent rows draw the started-session gauge at `Some(0)` — matching
+            // a freshly-bound session.
+            context_pct: Some(0),
+            context_window: descriptor.default_context_window,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            context: None,
+            context_severity: None,
+            // No session yet — the pane's process start is this row's spawn key.
+            registered_at: None,
+            resolver: None,
+            options: Vec::new(),
+            sub_agents: Vec::new(),
+            compacting: false,
+            turn_error_label: None,
+        })),
     }
 }
 
@@ -363,6 +398,48 @@ mod tests {
     #[test]
     fn only_daemon_view_false_on_empty_session() {
         assert!(!SidebarSnapshot::only_daemon_view(&[]));
+    }
+
+    #[test]
+    fn card_admission_accepts_a_working_pane() {
+        let pane = pane_cmd("terminal_1", "tab_0", "zsh", None);
+        assert_eq!(pane_admits_card(&pane, None), CardAdmission::Admitted);
+    }
+
+    #[test]
+    fn card_admission_names_excluded_pane_id() {
+        let pane = pane_cmd("terminal_1", "tab_0", "zsh", None);
+        assert_eq!(
+            pane_admits_card(&pane, Some(&pane.pane_id)),
+            CardAdmission::ExcludedPaneId
+        );
+    }
+
+    #[test]
+    fn card_admission_names_sidebar_chrome() {
+        let pane = pane_cmd("terminal_1", "tab_0", "rimz-sidebar", None);
+        assert_eq!(pane_admits_card(&pane, None), CardAdmission::SidebarChrome);
+    }
+
+    #[test]
+    fn card_admission_names_remote_control_hosts() {
+        let pane = pane_cmd("terminal_1", "tab_0", "rimz codex app-server serve", None);
+        assert_eq!(
+            pane_admits_card(&pane, None),
+            CardAdmission::RemoteControlOrAppServerHost
+        );
+    }
+
+    #[test]
+    fn card_admission_keeps_an_identityless_pane_in_the_fold() {
+        // A raced or mid-birth read with no command stays admitted: an agent
+        // stamp binds by pane id alone, so admission must not eat the row. The
+        // unbound no-row decision lives in the fold (`pane_command_is_known`).
+        let unreadable = crate::feed::PaneRef {
+            command: None,
+            ..pane_cmd("terminal_1", "tab_0", "zsh", None)
+        };
+        assert_eq!(pane_admits_card(&unreadable, None), CardAdmission::Admitted);
     }
 
     #[test]

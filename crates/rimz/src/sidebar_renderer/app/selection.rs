@@ -594,7 +594,7 @@ fn next_attention_index(
     (0..rows.len()).find_map(|offset| {
         let index = (start + offset) % rows.len();
         rows[index]
-            .status
+            .status()
             .is_some_and(AgentStatus::is_actionable)
             .then_some(index)
     })
