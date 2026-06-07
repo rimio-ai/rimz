@@ -18,7 +18,7 @@ terminal emulator
     sidebar renderer (native pane)
     shells, scripts, agents, CI helpers
                 │
-                │  per-instance sidebar socket  (wakeup of record)
+                │  per-instance sidebar socket  (typed wakeup events of record)
                 │  hook stdin/stdout            (decision channel)
                 ▼
 rimz CLI and hook subprocesses
@@ -87,9 +87,9 @@ Contracts live in the layered `AGENTS.md` files — the root contract plus a loc
 | `src/mux/` | the Zellij/tmux seam: `MuxBackend`, bounded subprocess engine, reconcile planner, recovery | [contract](./crates/rimz/src/mux/AGENTS.md) · [multiplexers.md](./docs/internals/multiplexers.md) |
 | `src/agents/` | the agent integration layer: adapter trait, registry, per-provider adapters, spend/pricing/account | [contract](./crates/rimz/src/agents/AGENTS.md) · [hooks.md](./docs/internals/hooks.md) |
 | `src/resolver/` | per-machine allowlist, heartbeat freshness, TOCTOU restat | [resolvers.md](./docs/internals/resolvers.md) |
-| `src/sidebar/` | sidebar data plane: producer election and heartbeats (`mod.rs`), runtime cache formats/TTLs (`cache.rs`), the in-process no-fork consumer read (`consumer.rs`), the shared enrichment fold (`enrich.rs`), and the producer pipeline (`produce/` — panes, metrics, git, spending) | [sidebar.md](./docs/internals/sidebar.md) · [performance.md](./docs/internals/performance.md) |
+| `src/sidebar/` | sidebar data plane: producer election and heartbeats (`mod.rs`), timing constants and cadence registry (`timing.rs`), renderer event store (`events.rs`), pure pulled-truth/event fusion (`fuse.rs`), runtime cache formats and reads (`cache.rs`), the in-process no-fork consumer read (`consumer.rs`), the shared enrichment fold (`enrich.rs`), and the producer pipeline (`produce/` — panes, metrics, git, spending) | [state.md](./docs/internals/state.md) · [sidebar.md](./docs/internals/sidebar.md) · [performance.md](./docs/internals/performance.md) |
 | `src/sidebar_renderer/` | native terminal sidebar renderer: the pane-resident serve loop and frame composition over the snapshot view-model | [sidebar.md](./docs/internals/sidebar.md) · [interface/sidebar.md](./docs/interface/sidebar.md) |
-| `src/schema/` | event envelope, heartbeat shape, protocol-version constants | [ledger.md](./docs/internals/ledger.md) |
+| `src/schema/` | durable event envelope, typed sidebar event envelope, heartbeat shape, protocol-version constants | [ledger.md](./docs/internals/ledger.md) · [state.md](./docs/internals/state.md) |
 
 Top-level domain modules are one file each, their `//!` headers carrying the detail: `workspace` (project identity), `worktree` (Rimz-owned Git worktrees and cleanup; [worktrees.md](./docs/internals/worktrees.md)), `tab_layout` (agent-tab layout DSL and IR; [worktrees.md](./docs/internals/worktrees.md)), `trust` (executable-surface hash and grant state; [trust.md](./docs/internals/trust.md)), `feed` (item lifecycle, surfaces, statuses), `bridge` (per-request sockets, nonce validation), `ids` (typed identifier newtypes), `resume` (resume-on-rebirth planner), `remote` and `remote_control` (SSH attach, agent remote-control launch), `config` (per-machine settings), `agent_activity` (liveness hints), `proc` (`/proc` reader), `reload` (binary-upgrade convergence).
 

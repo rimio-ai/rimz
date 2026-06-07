@@ -75,7 +75,8 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 **Internals** — `docs/internals/`
 - [ledger.md](./docs/internals/ledger.md) — durable state and the blocking decision bridge.
 - [multiplexers.md](./docs/internals/multiplexers.md) — Zellij and tmux backend contracts.
-- [sidebar.md](./docs/internals/sidebar.md) — sidebar mechanics: presence, ranking, launch, reload recovery, view-model (the on-screen look lives in [interface/sidebar.md](./docs/interface/sidebar.md)).
+- [state.md](./docs/internals/state.md) — sidebar pulled truth, typed realtime events, fusion, process roles, and timing cadences.
+- [sidebar.md](./docs/internals/sidebar.md) — sidebar mechanics: presence, ranking, launch, reload recovery, and view-model behaviour (the on-screen look lives in [interface/sidebar.md](./docs/interface/sidebar.md)).
 - [resolvers.md](./docs/internals/resolvers.md) — resolver protocol, chain, pane primitives.
 - [trust.md](./docs/internals/trust.md) — executable-surface hash, trust states, auto-revoke.
 - [hooks.md](./docs/internals/hooks.md) — the agent boundary: the integration trait, the two hook channels, install, and the Claude/Codex/Pi native-event mappings.
@@ -85,7 +86,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 - [account.md](./docs/internals/account.md) — agent accounts and balances: the plan/metered model, the per-provider auth and rate-limit mapping, the out-of-band account probe, and the provider-dashboard aggregation.
 - [web.md](./docs/internals/web.md) — Zellij-only browser access and session-route design.
 - [worktrees.md](./docs/internals/worktrees.md) — Rimz-owned git worktrees, agent tab layouts, supervised cleanup, and backend tab rendering.
-- [performance.md](./docs/internals/performance.md) — render-thread hot path, the cost map, and the rules a performance change follows.
+- [performance.md](./docs/internals/performance.md) — render-thread budget, the cost map, and the rules a performance change follows.
 
 **Externals** — `docs/externals/`
 - [claude-reference.md](./docs/externals/agent-adapter/claude-reference.md) — Claude Code upstream protocol reference: hook events and decision schema, the full statusline JSON schema, and the auth surface, each pinned to its source URL for refresh.

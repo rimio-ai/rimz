@@ -118,6 +118,15 @@ max_cols = 72     # column cap on the 30% sidebar split (default 72)
 
 Every sidebar pane targets 30% of the view at the `max_cols` cap, on both backends — on an ultra-wide terminal 30% alone is a hundred-column sidebar. The launch path reads your terminal's width once and resolves the verdict — `min(30%, max_cols)` in columns — into the session's pane templates, constant for the session's life: every new tab or window is born at exactly that width, however the terminal has changed since, and a `max_cols` edit applies at the next `rimz start`. Every pane — session birth, every new tab or window, recovery — lands at its size the instant it exists; resize a pane afterwards and your width sticks, and the sidebar always renders at the pane's full width. (A launch outside a terminal resolves to the bare `max_cols`; how each backend spells the verdict is in [internals/multiplexers.md](../internals/multiplexers.md).)
 
+#### Render tick
+
+```toml
+[sidebar]
+refresh_ms = 100   # base render grid in milliseconds (default 100)
+```
+
+`refresh_ms` sets the sidebar's in-process animation and dirty-frame grid. It defaults to 100ms, clamps to the supported range internally, and resolves onto the snapshot like the rest of `[sidebar]`, so a change lands on the next fold. It does not change the data backstop or any producer pull cadence; those timing lanes live in [internals/state.md](../internals/state.md).
+
 #### Context meter
 
 ```toml
