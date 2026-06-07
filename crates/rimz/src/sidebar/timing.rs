@@ -9,9 +9,13 @@ use std::time::Duration;
 
 /// The realtime event store's receiver-clock TTL. Events are a latency hint:
 /// a missed or expired event falls back to the next producer pull, so the TTL
-/// only has to outlive the longest pull window ([`EVENT_PANE_TTL`]) that
-/// supersedes it.
-pub const EVENT_STORE_TTL: Duration = Duration::from_secs(10);
+/// must outlive the longest supersession window — [`EVENT_PANE_TTL`] from the
+/// last pane read, plus the data tick and produce latency that deliver the
+/// verifying frame. The 2s grace covers that delivery: without it an overlay
+/// (a focus move, say) landing just after a pull could expire up to a tick
+/// before the superseding frame folds in, briefly reverting to the stale
+/// baseline.
+pub const EVENT_STORE_TTL: Duration = Duration::from_secs(EVENT_PANE_TTL.as_secs() + 2);
 
 /// Coalescing window for the shared snapshot cache — the **poll-mode** pane
 /// TTL, in effect whenever the presence push channel is dead or absent. Just
