@@ -34,6 +34,7 @@ use rimz::feed::{
 use rimz::ids::{MuxName, PaneId};
 use rimz::ledger::AskExpiry;
 use rimz::ledger::runtime::process_owner;
+use rimz::ledger::snapshot::pane_start_allows_bind;
 use rimz::mux::{ClientFocusOptions, PaneListOptions};
 use rimz::resolver::{Allowlist, AllowlistEntry, fresh_enrolled, is_resolver_fresh, restat};
 use rimz::workspace::{self, ResolvedWorkspace, WorkspaceResolver};
@@ -470,11 +471,12 @@ fn recover_focused_pane_binding(
         return;
     }
 
-    let Some((panes, client_focus)) =
+    let Some((mut panes, client_focus)) =
         live_binding_inputs(mux_hint, &workspace.session_name, kind, agent_id)
     else {
         return;
     };
+    backfill_candidate_pane_starts(kind, worktree_path, &mut panes);
     let selection = select_focused_pane_binding(
         kind,
         agent_id,
@@ -508,6 +510,9 @@ struct PriorAgentPane<'a> {
     kind: &'a str,
     agent_id: &'a str,
     pane_id: Option<&'a PaneId>,
+    /// The session's last recorded activity — what decides whether its stamp
+    /// still plausibly owns a live pane ([`pane_start_allows_bind`]).
+    last_activity: jiff::Timestamp,
 }
 
 fn prior_agent_panes(agents: &[AgentState]) -> Vec<PriorAgentPane<'_>> {
@@ -517,6 +522,7 @@ fn prior_agent_panes(agents: &[AgentState]) -> Vec<PriorAgentPane<'_>> {
             kind: agent.kind.as_str(),
             agent_id: agent.agent_id.as_str(),
             pane_id: agent.pane.as_ref().map(|pane| &pane.pane_id),
+            last_activity: agent.last_activity,
         })
         .collect()
 }
@@ -578,6 +584,30 @@ fn live_binding_inputs(
     Some((panes, focus_probe_succeeded.then_some(focused)))
 }
 
+/// Zellij's `list-panes` reports no per-pane process start, so without a start a
+/// prior tenant's stamp on a reused pane id would block focus recovery forever
+/// (`pane_stamped_to_other_agent` could never prove it stale). Stamp the
+/// producer's `/proc` cwd floor ([`rimz::remote_control::in_pane_agent_start`])
+/// onto the kind-matching candidates that lack one — at most one scan per
+/// recovery, and recovery runs once per session, so the hook path stays cheap.
+/// tmux reports starts natively and skips the scan.
+fn backfill_candidate_pane_starts(kind: &str, worktree_path: &str, panes: &mut [PaneRef]) {
+    let needs_start = |pane: &PaneRef| {
+        pane.pane_process_start.is_none() && pane_matches_lazy_agent(kind, worktree_path, pane)
+    };
+    if !panes.iter().any(&needs_start) {
+        return;
+    }
+    let Some(start) = rimz::remote_control::in_pane_agent_start(kind, worktree_path) else {
+        return;
+    };
+    for pane in panes.iter_mut() {
+        if needs_start(pane) {
+            pane.pane_process_start = Some(start);
+        }
+    }
+}
+
 fn append_unique_panes(target: &mut Vec<PaneId>, panes: Vec<PaneId>) {
     for pane in panes {
         if !target.iter().any(|known| known == &pane) {
@@ -597,7 +627,7 @@ fn select_focused_pane_binding(
     let candidates: Vec<&PaneRef> = panes
         .iter()
         .filter(|pane| pane_matches_lazy_agent(kind, worktree_path, pane))
-        .filter(|pane| !pane_stamped_to_other_agent(kind, agent_id, prior_agents, &pane.pane_id))
+        .filter(|pane| !pane_stamped_to_other_agent(kind, agent_id, prior_agents, pane))
         .collect();
     let candidate_count = candidates.len();
     if candidates.is_empty() {
@@ -641,16 +671,24 @@ fn pane_matches_lazy_agent(kind: &str, worktree_path: &str, pane: &PaneRef) -> b
             == Some(kind)
 }
 
+/// Whether another session's durable stamp still plausibly owns this pane. A
+/// stamp is only a pane id and a mux rebirth reuses ids, so a stamp whose
+/// session's last activity predates the pane's current process start is a prior
+/// tenant's residue: projection refuses such a bind ([`pane_start_allows_bind`]),
+/// and it must not block recovery either — or a reborn pane id could never be
+/// stamped again. A pane with no readable process start keeps the conservative
+/// block: an unprovable stamp is treated as live.
 fn pane_stamped_to_other_agent(
     kind: &str,
     agent_id: &str,
     prior_agents: &[PriorAgentPane<'_>],
-    pane_id: &PaneId,
+    pane: &PaneRef,
 ) -> bool {
     if let Some(agent) = prior_agents.iter().find(|agent| {
         agent.kind == kind
             && agent.agent_id != agent_id
-            && agent.pane_id.is_some_and(|known| known == pane_id)
+            && agent.pane_id.is_some_and(|known| known == &pane.pane_id)
+            && pane_start_allows_bind(agent.last_activity, pane)
     }) {
         // Routine in a shared worktree — the sibling's pane is simply taken —
         // so this traces at debug; the anomaly signal is the caller's
@@ -660,7 +698,7 @@ fn pane_stamped_to_other_agent(
             kind,
             agent_id,
             stamped_agent_id = agent.agent_id,
-            pane = %pane_id,
+            pane = %pane.pane_id,
             "pane stamp belongs to another live agent; skipping focused binding candidate",
         );
         true
@@ -669,6 +707,14 @@ fn pane_stamped_to_other_agent(
     }
 }
 
+/// Whether this session already holds a durable pane stamp — the cheap early-out
+/// that keeps every later turn of a stamped daemon session off the mux probes.
+/// Deliberately stamp-id-only: proving a session's *own* stamp stale needs the
+/// live pane list this early-out exists to avoid fetching, so a session resumed
+/// into a different pane keeps its old stamp until a hook env or a fresh
+/// recovery re-stamps it. The bind-side process-start guard keeps that stale
+/// stamp from capturing a reused pane while the session rests
+/// ([`pane_start_allows_bind`]).
 fn session_already_stamped(
     kind: &str,
     agent_id: &str,
@@ -1301,7 +1347,10 @@ mod tests {
             kind: "codex",
             agent_id: "old",
             pane_id: Some(&terminal_30),
+            last_activity: jiff::Timestamp::UNIX_EPOCH,
         }];
+        // No readable pane process start: the stamp cannot be proven stale, so
+        // the conservative block holds.
         let panes = vec![pane("terminal_30", "codex", "/repo/main", true)];
         let focused = vec![terminal_30.clone()];
 
@@ -1321,12 +1370,80 @@ mod tests {
     }
 
     #[test]
+    fn focused_pane_recovery_ignores_provably_stale_foreign_stamp() {
+        // A mux rebirth renumbers Zellij panes, so a dead session's stamp can
+        // name a freshly-born pane's id. Once the pane's current process start
+        // postdates the stamp owner's last activity, the stamp is a prior
+        // tenant's residue — projection refuses the bind, and recovery must be
+        // free to stamp the live session or the reused id stays unstampable.
+        let terminal_30 = PaneId::from_parts(MuxName::Zellij, "terminal_30");
+        let stale = jiff::Timestamp::UNIX_EPOCH;
+        let prior = vec![PriorAgentPane {
+            kind: "codex",
+            agent_id: "old",
+            pane_id: Some(&terminal_30),
+            last_activity: stale,
+        }];
+        let reborn = PaneRef {
+            pane_process_start: Some(jiff::Timestamp::from_second(60).unwrap()),
+            ..pane("terminal_30", "codex", "/repo/main", true)
+        };
+        let focused = vec![terminal_30.clone()];
+
+        let selected = select_focused_pane_binding(
+            "codex",
+            "new",
+            "/repo/main",
+            &prior,
+            &[reborn],
+            Some(&focused),
+        )
+        .pane_id
+        .expect("a provably stale foreign stamp must not block recovery");
+
+        assert_eq!(selected.raw(), "terminal_30");
+    }
+
+    #[test]
+    fn focused_pane_recovery_keeps_blocking_for_a_current_foreign_stamp() {
+        // The staleness carve-out never weakens the live case: a stamp owner
+        // active at or after the pane's process start plausibly owns it still.
+        let terminal_30 = PaneId::from_parts(MuxName::Zellij, "terminal_30");
+        let prior = vec![PriorAgentPane {
+            kind: "codex",
+            agent_id: "old",
+            pane_id: Some(&terminal_30),
+            last_activity: jiff::Timestamp::from_second(60).unwrap(),
+        }];
+        let occupied = PaneRef {
+            pane_process_start: Some(jiff::Timestamp::UNIX_EPOCH),
+            ..pane("terminal_30", "codex", "/repo/main", true)
+        };
+        let focused = vec![terminal_30.clone()];
+
+        assert_eq!(
+            select_focused_pane_binding(
+                "codex",
+                "new",
+                "/repo/main",
+                &prior,
+                &[occupied],
+                Some(&focused)
+            )
+            .pane_id,
+            None,
+            "a stamp its session still plausibly owns is not stolen"
+        );
+    }
+
+    #[test]
     fn focused_pane_recovery_detects_existing_stamped_session() {
         let terminal_30 = PaneId::from_parts(MuxName::Zellij, "terminal_30");
         let prior = vec![PriorAgentPane {
             kind: "codex",
             agent_id: "new",
             pane_id: Some(&terminal_30),
+            last_activity: jiff::Timestamp::UNIX_EPOCH,
         }];
 
         assert!(session_already_stamped("codex", "new", &prior));

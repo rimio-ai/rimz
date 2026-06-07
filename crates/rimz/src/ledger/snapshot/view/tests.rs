@@ -2235,13 +2235,14 @@ fn stale_stamped_codex_predating_reused_pane_start_shows_idle_in_live_worktree()
     );
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1, "one live pane yields one row: {rows:?}");
-    assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
+    assert!(rows[0].is_agent());
     assert_eq!(rows[0].id, "tmux:term1");
     assert_eq!(rows[0].name, "codex");
-    assert_eq!(rows[0].status, Some(AgentStatus::Idle));
+    assert_eq!(rows[0].status(), Some(AgentStatus::Idle));
     assert_eq!(rows[0].worktree_path.as_deref(), Some("/repo/hook-trace"));
     assert_eq!(
-        rows[0].total_tokens, None,
+        rows[0].total_tokens(),
+        None,
         "the reused pane must not inherit stale session stats",
     );
 }

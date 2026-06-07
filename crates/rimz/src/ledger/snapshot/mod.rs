@@ -33,7 +33,7 @@ pub(crate) use fold::{
     EventCarryover, agent_rollup_with_carryover, catch_up_rollup, read_carryover,
     reseed_rollup_cache_for_rotation, write_carryover,
 };
-pub use panes::SidebarOwnView;
+pub use panes::{SidebarOwnView, pane_start_allows_bind};
 pub use process::command_agent_kind;
 pub(crate) use process::command_is_sidebar_chrome;
 pub use row::{
