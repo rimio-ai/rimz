@@ -5,6 +5,52 @@ use std::process::{Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// Ambient session prefixes a developer's live room leaks into the suite: the
+/// `RIMZ_*` identity pin redirects workspace resolution, and the `ZELLIJ*` /
+/// `TMUX*` variables flip backend detection onto the real session. Prefix
+/// matching keeps a new pin covered without touching this list.
+const AMBIENT_SESSION_PREFIXES: [&str; 3] = ["RIMZ_", "ZELLIJ", "TMUX"];
+
+/// The ambient environment keys [`ScrubSessionEnvExt::scrub_session_env`]
+/// drops from a child.
+fn ambient_session_keys() -> impl Iterator<Item = String> {
+    std::env::vars_os().filter_map(|(key, _)| {
+        let key = key.into_string().ok()?;
+        AMBIENT_SESSION_PREFIXES
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
+            .then_some(key)
+    })
+}
+
+/// Drop every ambient Rimz/mux session variable from a child's environment, so
+/// a suite run from inside a live Rimz room behaves like a clean shell. Apply
+/// at builder construction: a test that *sets* one of these afterwards wins
+/// over the removal. Every builder that runs `rimz` or creates a mux server
+/// goes through this — a mux server captures the spawning environment and
+/// hands it to every pane it ever creates.
+pub trait ScrubSessionEnvExt {
+    fn scrub_session_env(&mut self) -> &mut Self;
+}
+
+impl ScrubSessionEnvExt for Command {
+    fn scrub_session_env(&mut self) -> &mut Self {
+        for key in ambient_session_keys() {
+            self.env_remove(key);
+        }
+        self
+    }
+}
+
+impl ScrubSessionEnvExt for portable_pty::CommandBuilder {
+    fn scrub_session_env(&mut self) -> &mut Self {
+        for key in ambient_session_keys() {
+            self.env_remove(key);
+        }
+        self
+    }
+}
+
 /// Maximum wall time for a mux control command in tests. Healthy control
 /// commands answer in milliseconds; this only catches wedged children.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);

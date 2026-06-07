@@ -16,8 +16,8 @@ use rimz::feed::RuntimeOwnerKind;
 use rimz::ledger::runtime::current_process_owner;
 
 use crate::common::{
-    Env, example_resolver_script, permission_payload, python3_present, skip_preconditions,
-    spawn_example_resolver, wait_for_heartbeat,
+    Env, ScrubSessionEnvExt, example_resolver_script, permission_payload, python3_present,
+    skip_preconditions, spawn_example_resolver, wait_for_heartbeat,
 };
 
 /// Isolated `TMUX_TMPDIR` so the live-pane happy path never collides with the
@@ -161,14 +161,16 @@ fn tmux_present() -> bool {
         .unwrap_or(false)
 }
 
-/// Run a `tmux` command against the isolated server. `TMUX` is removed so an
-/// ambient session (a developer running the suite inside tmux) can't redirect
-/// us onto their server; `TMUX_TMPDIR` selects our private socket.
+/// Run a `tmux` command against the isolated server. The ambient session env
+/// is scrubbed so a developer's live room can't redirect us onto their server
+/// — and so the private server, which captures the spawning environment for
+/// every pane it creates, never hands the resolver's `rimz` a foreign
+/// workspace pin; `TMUX_TMPDIR` selects our private socket.
 fn run_tmux(tmpdir: &Path, args: &[&str]) -> std::process::Output {
     Command::new("tmux")
+        .scrub_session_env()
         .args(args)
         .env("TMUX_TMPDIR", tmpdir)
-        .env_remove("TMUX")
         .output()
         .expect("spawn tmux")
 }

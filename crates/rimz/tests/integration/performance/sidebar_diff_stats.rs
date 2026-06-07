@@ -112,10 +112,6 @@ impl Fixture {
         .env("RIMZ_TEST_GIT_LOG", &self.git_log)
         .env("RIMZ_TEST_REAL_GIT", &self.real_git)
         .env("PATH", &self.patched_path)
-        .env_remove("ZELLIJ")
-        .env_remove("ZELLIJ_PANE_ID")
-        .env_remove("TMUX")
-        .env_remove("TMUX_PANE")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
         cmd

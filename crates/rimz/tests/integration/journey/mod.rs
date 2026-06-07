@@ -30,7 +30,7 @@ use rimz::ids::{MuxName, PaneId, ViewKind};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use crate::common::Env;
+use crate::common::{Env, ScrubSessionEnvExt};
 
 /// Sidebar pane dimensions for the journey. Within the documented 24–36 col
 /// band, tall enough that no phase scrolls off.
@@ -118,6 +118,7 @@ impl<'a> RoomHarness<'a> {
             .expect("openpty");
 
         let mut cmd = CommandBuilder::new(&bin);
+        cmd.scrub_session_env();
         cmd.args([
             "sidebar",
             "serve",

@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 
 use assert_cmd::cargo::CommandCargoExt;
 use jiff::Timestamp;
+
+use super::command::ScrubSessionEnvExt;
 use rimz::schema::heartbeat::ResolverHeartbeat;
 use rimz::{EventEnvelope, Ledger, RuntimePaths, StatePaths, WorkspaceId, WorkspaceResolver};
 use serde_json::Value;
@@ -100,15 +102,12 @@ impl Env {
     /// `--root`; tests targeting another project override `current_dir`.
     pub fn rimz(&self) -> Command {
         let mut cmd = Command::cargo_bin("rimz").expect("cargo-bin");
-        cmd.env("XDG_STATE_HOME", self.state_root())
+        cmd.scrub_session_env()
+            .env("XDG_STATE_HOME", self.state_root())
             .env("XDG_RUNTIME_DIR", &self.runtime_root)
             .env("XDG_CONFIG_HOME", self.config_root())
             .env("HOME", &self.home_root)
             .env_remove("RUST_LOG")
-            // Scrub any real session's identity pin so a developer running the
-            // suite inside a Rimz room never leaks their workspace into a test.
-            .env_remove(rimz::workspace::ENV_WORKSPACE_ID)
-            .env_remove(rimz::workspace::ENV_PROJECT_ROOT)
             .current_dir(&self.project_root);
         cmd
     }
@@ -269,8 +268,6 @@ impl Env {
         let mut cmd = self.rimz();
         cmd.args(["hooks", "feed", "--source", source])
             .env("RIMZ_AGENT_PID", std::process::id().to_string())
-            .env_remove("TMUX_PANE")
-            .env_remove("ZELLIJ_PANE_ID")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

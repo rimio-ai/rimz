@@ -18,9 +18,6 @@ fn start_inside_selected_mux_reports_and_skips_launch() {
         // Pretend we're already inside a Zellij session: `auto_detect_backend`
         // selects Zellij from `ZELLIJ` alone, with no binary on PATH.
         .env("ZELLIJ", "1")
-        .env_remove("ZELLIJ_PANE_ID")
-        .env_remove("TMUX")
-        .env_remove("TMUX_PANE")
         .bounded_output()
         .expect("run rimz start");
 

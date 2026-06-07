@@ -160,10 +160,6 @@ fn spending_walk_skips_entirely_within_ttl() {
             ])
             .env("RIMZ_TEST_PANE_LIST", &panes_path)
             .env("CLAUDE_CONFIG_DIR", &config_dir)
-            .env_remove("ZELLIJ")
-            .env_remove("ZELLIJ_PANE_ID")
-            .env_remove("TMUX")
-            .env_remove("TMUX_PANE")
             .output()
             .expect("spawn rimz sidebar snapshot");
         assert!(

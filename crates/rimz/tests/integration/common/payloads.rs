@@ -10,6 +10,7 @@ use rimz::EventEnvelope;
 use rimz::schema::heartbeat::ResolverHeartbeat;
 use serde_json::json;
 
+use super::command::ScrubSessionEnvExt;
 use super::env::Env;
 use super::harness::Harness;
 
@@ -113,7 +114,8 @@ pub fn spawn_example_resolver(
     assert!(script.exists(), "resolver script missing: {script:?}");
 
     let mut cmd = Command::new("python3");
-    cmd.arg(&script)
+    cmd.scrub_session_env()
+        .arg(&script)
         .args([
             "--workspace-id",
             env.workspace_id.as_str(),
@@ -135,12 +137,7 @@ pub fn spawn_example_resolver(
     if let Some(pane) = tmux_pane {
         let tmpdir = env.project_root.join("tmux");
         std::fs::create_dir_all(&tmpdir).expect("mkdir tmux tmpdir");
-        cmd.env("TMUX_TMPDIR", tmpdir)
-            .env("TMUX_PANE", pane)
-            .env_remove("TMUX")
-            .env_remove("ZELLIJ")
-            .env_remove("ZELLIJ_PANE_ID")
-            .env_remove("ZELLIJ_SESSION_NAME");
+        cmd.env("TMUX_TMPDIR", tmpdir).env("TMUX_PANE", pane);
     }
     cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())

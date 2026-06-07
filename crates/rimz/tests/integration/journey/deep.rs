@@ -16,7 +16,7 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use tempfile::TempDir;
 
 use super::{rimz_bin, session_start_at};
-use crate::common::{CommandTimeoutExt, Env};
+use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};
 
 const CAPTURE_BUDGET: Duration = Duration::from_secs(15);
 
@@ -387,6 +387,7 @@ fn attach_and_read_until(runtime: &Path, session: &str, needle: &str, budget: Du
         })
         .expect("openpty");
     let mut cmd = CommandBuilder::new("zellij");
+    cmd.scrub_session_env();
     cmd.args(["attach", session]);
     cmd.env("XDG_RUNTIME_DIR", runtime);
     let mut child = pair.slave.spawn_command(cmd).expect("attach zellij");
@@ -433,6 +434,7 @@ fn tmux(socket: &Path, args: &[&str]) {
 /// Run a tmux command and return its trimmed stdout (used to read a pane id).
 fn tmux_capture(socket: &Path, args: &[&str]) -> String {
     let out = Command::new("tmux")
+        .scrub_session_env()
         .arg("-S")
         .arg(socket)
         .args(args)
@@ -459,6 +461,7 @@ fn capture_until(
     let mut last = String::new();
     loop {
         let out = Command::new("tmux")
+            .scrub_session_env()
             .arg("-S")
             .arg(socket)
             .args(["capture-pane", "-p", "-t", session])
@@ -508,6 +511,7 @@ fn tmux_active_pane(socket: &Path, session: &str) -> (String, usize) {
 /// now-empty session) drops off the list, which is how the close is observed.
 fn tmux_pane_alive(socket: &Path, session: &str, pane: &str) -> bool {
     let out = Command::new("tmux")
+        .scrub_session_env()
         .arg("-S")
         .arg(socket)
         .args(["list-panes", "-t", session, "-F", "#{pane_id}"])
@@ -536,6 +540,7 @@ struct TmuxServerGuard {
 impl Drop for TmuxServerGuard {
     fn drop(&mut self) {
         let _ = Command::new("tmux")
+            .scrub_session_env()
             .arg("-S")
             .arg(&self.socket)
             .arg("kill-server")
@@ -547,7 +552,7 @@ impl Drop for TmuxServerGuard {
 
 fn scoped_zellij(runtime: &Path) -> Command {
     let mut cmd = Command::new("zellij");
-    cmd.env("XDG_RUNTIME_DIR", runtime);
+    cmd.scrub_session_env().env("XDG_RUNTIME_DIR", runtime);
     cmd
 }
 

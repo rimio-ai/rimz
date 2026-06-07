@@ -26,7 +26,7 @@ use rimz::mux::{
 };
 use tempfile::TempDir;
 
-use crate::common::CommandTimeoutExt;
+use crate::common::{CommandTimeoutExt, ScrubSessionEnvExt};
 
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -76,6 +76,7 @@ fn scoped_runtime_dir() -> TempDir {
 /// chokepoint, so no stray command can leak to the user's default server.
 fn scoped_zellij(xdg: &Path) -> std::process::Command {
     let mut cmd = std::process::Command::new("zellij");
+    cmd.scrub_session_env();
     // The first command against a runtime dir forks the session server, and
     // every pane command inherits the server's env — so scope the whole home
     // surface here, not just the socket root. A real `HOME` leaks the
@@ -133,6 +134,7 @@ impl ZellijSession {
         // hermetic home surface as `scoped_zellij` (the client can be the one
         // that forks the server). `CommandBuilder` seeds its env from the
         // current process, so these override and leave PATH and friends intact.
+        cmd.scrub_session_env();
         cmd.env("XDG_RUNTIME_DIR", xdg.path());
         cmd.env("XDG_STATE_HOME", xdg.path());
         cmd.env("XDG_CONFIG_HOME", xdg.path());
@@ -200,12 +202,11 @@ impl AttachedClient {
             })
             .expect("openpty");
         let mut cmd = CommandBuilder::new("zellij");
+        // The test process may itself run inside a Zellij pane (a client
+        // refuses to attach when it believes it is already in a session), and
+        // the server captures the spawning env for every pane it creates.
+        cmd.scrub_session_env();
         cmd.env("XDG_RUNTIME_DIR", xdg);
-        // The test process may itself run inside a Zellij pane; a client
-        // refuses to attach when it believes it is already in a session.
-        cmd.env_remove("ZELLIJ");
-        cmd.env_remove("ZELLIJ_SESSION_NAME");
-        cmd.env_remove("ZELLIJ_PANE_ID");
         cmd.args(["attach", name]);
         let child = pair.slave.spawn_command(cmd).expect("spawn zellij attach");
         drop(pair.slave);
@@ -286,6 +287,7 @@ fn capture_pty_output(spec: &rimz::mux::CommandSpec, duration: Duration) -> Vec<
         })
         .expect("openpty");
     let mut cmd = CommandBuilder::new(&spec.program);
+    cmd.scrub_session_env();
     cmd.args(spec.args.iter().map(String::as_str));
     for (key, value) in &spec.env {
         cmd.env(key, value);

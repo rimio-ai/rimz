@@ -25,6 +25,8 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
+use crate::common::ScrubSessionEnvExt;
+
 /// Tick long enough that a redraw waiting on it is unmistakably "broken": with
 /// the bug the frame appears at ~TICK; with the fix it appears right after the
 /// resize. The assertion threshold sits comfortably between the two.
@@ -70,6 +72,7 @@ fn sidebar_redraws_at_new_size_on_resize() {
         .expect("openpty");
 
     let mut cmd = CommandBuilder::new(&bin);
+    cmd.scrub_session_env();
     cmd.args([
         "sidebar",
         "serve",

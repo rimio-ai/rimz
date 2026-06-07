@@ -34,6 +34,8 @@ use rimz::sidebar::snapshot::{
 };
 use tempfile::TempDir;
 
+use crate::common::ScrubSessionEnvExt;
+
 const SESSION_NAME: &str = "rimz-presence-wake-test";
 
 /// The eldest of the two planted instance ids — UUIDv7 order, the same the
@@ -123,6 +125,7 @@ impl WakeEnv {
         extra_args: &[&str],
     ) -> std::process::Output {
         let mut command = Command::new(rimz_cli_path());
+        command.scrub_session_env();
         command.args(["sidebar", "wake", "--reason", reason]);
         if explicit_workspace {
             command.args(["--workspace-id", self.workspace_id.as_str()]);
@@ -135,10 +138,6 @@ impl WakeEnv {
             .env("XDG_RUNTIME_DIR", &self.runtime_root)
             .env("RIMZ_ZELLIJ_BIN", trace_shim_path())
             .env("RIMZ_TEST_ZELLIJ_LOG", &self.trace_log)
-            .env_remove("ZELLIJ")
-            .env_remove("ZELLIJ_PANE_ID")
-            .env_remove("TMUX")
-            .env_remove("TMUX_PANE")
             .output()
             .expect("spawn rimz sidebar wake")
     }
@@ -227,6 +226,7 @@ impl WakeEnv {
     fn snapshot(&self) -> std::process::Output {
         let mut command = Command::new(rimz_cli_path());
         command
+            .scrub_session_env()
             .args([
                 "sidebar",
                 "snapshot",
@@ -242,11 +242,6 @@ impl WakeEnv {
             .env("XDG_RUNTIME_DIR", &self.runtime_root)
             .env("RIMZ_ZELLIJ_BIN", trace_shim_path())
             .env("RIMZ_TEST_ZELLIJ_LOG", &self.trace_log)
-            .env_remove("RIMZ_TEST_PANE_LIST")
-            .env_remove("ZELLIJ")
-            .env_remove("ZELLIJ_PANE_ID")
-            .env_remove("TMUX")
-            .env_remove("TMUX_PANE")
             .output()
             .expect("spawn rimz sidebar snapshot")
     }

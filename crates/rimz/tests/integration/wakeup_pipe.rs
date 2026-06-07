@@ -31,6 +31,8 @@ use rimz::ledger::RuntimePaths;
 use rimz::schema::heartbeat::SidebarHeartbeat;
 use tempfile::TempDir;
 
+use crate::common::ScrubSessionEnvExt;
+
 const SESSION_NAME: &str = "rimz-wakeup-pipe-test";
 
 #[test]
@@ -104,6 +106,7 @@ fn wakeup_walk_sends_datagram_and_spawns_no_zellij_pipe() {
     );
 
     let output = Command::new(&rimz_bin)
+        .scrub_session_env()
         .args([
             "feed",
             "push",
@@ -117,10 +120,6 @@ fn wakeup_walk_sends_datagram_and_spawns_no_zellij_pipe() {
         .env("XDG_RUNTIME_DIR", &runtime_root)
         .env("RIMZ_ZELLIJ_BIN", &trace_bin)
         .env("RIMZ_TEST_ZELLIJ_LOG", &log_path)
-        .env_remove("ZELLIJ")
-        .env_remove("ZELLIJ_PANE_ID")
-        .env_remove("TMUX")
-        .env_remove("TMUX_PANE")
         .output()
         .expect("spawn rimz feed push");
     assert!(

@@ -17,7 +17,7 @@ mod env;
 mod harness;
 mod payloads;
 
-pub use command::CommandTimeoutExt;
+pub use command::{CommandTimeoutExt, ScrubSessionEnvExt};
 pub use env::{Env, af_unix_bind_sandboxed, canonical};
 pub use harness::Harness;
 pub use payloads::{

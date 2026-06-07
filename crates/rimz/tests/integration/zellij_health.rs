@@ -23,10 +23,6 @@ fn uninspectable_live_zellij_room_is_not_auto_deleted() {
         .env("RIMZ_ZELLIJ_BIN", &shim.bin)
         .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
         .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
-        .env_remove("ZELLIJ")
-        .env_remove("ZELLIJ_PANE_ID")
-        .env_remove("TMUX")
-        .env_remove("TMUX_PANE")
         .bounded_output()
         .expect("run rimz start");
 
