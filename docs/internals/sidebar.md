@@ -180,7 +180,7 @@ Launch is **idempotent by heartbeat**: before opening a pane Rimz scans `runtime
 
 ### State access
 
-Data flow is [state.md](./state.md)'s domain: producer election, pulled truth, typed realtime events, fusion, pane-frame publication, render cadences, and the pull-tick cadence table (values in [`sidebar/timing.rs`](../../crates/rimz/src/sidebar/timing.rs)).
+Data flow is [state.md](./state.md)'s domain: the node model, producer election, the published-file inventory, typed realtime events and push channels, fusion, render cadences, and the pull-tick cadence table (values in [`sidebar/timing.rs`](../../crates/rimz/src/sidebar/timing.rs)).
 
 This doc keeps the liveness contract: each renderer writes its own heartbeat in process and binds a per-instance wakeup socket; heartbeats carry workspace, session, mux, instance id, protocol version, socket path, pane id, and last-seen timestamp. The renderer receives the fused `SidebarSnapshot`; selection, self-close, reload recovery, and drawing stay in this doc.
 

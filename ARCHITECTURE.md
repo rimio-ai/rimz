@@ -35,6 +35,11 @@ runtime directory ($XDG_RUNTIME_DIR/rimz/<id>/)
   sock/sidebar.<instance_id>.sock   wakeup datagram socket
   heartbeat/sidebar.<instance_id>.json
   heartbeat/resolver.<resolver_id>.json
+  snapshot.json  presence.stamp    per-lane producer caches, one writer each
+  diff-stats.json  accounts.json   (inventory in docs/internals/state.md)
+  provider-spending.json  pricing-cache.json
+  metrics-sample.json  rate_limits.json
+  agent_context/  subagent_context/  agent-activity/   per-session sidecars
 ```
 
 The CLI and hook subprocesses are the only durable-state writers. The sidebar reads ledger state in process, read-only; the elder renderer additionally writes the shared runtime caches through `sidebar::produce`, and `rimz sidebar snapshot` is the same pipeline's one-shot inspection surface. There is no Rimz daemon. The per-instance sidebar socket is the wakeup channel of record; backend-specific fast paths are latency hints layered over it ([multiplexers.md](./docs/internals/multiplexers.md)).
