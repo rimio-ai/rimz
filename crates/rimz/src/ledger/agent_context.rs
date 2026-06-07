@@ -1,16 +1,22 @@
 //! Latest-wins per-session agent-context sidecar.
 //!
-//! High-frequency enrichment is written here by CLI producer paths — statusline
-//! feed, hook ingestion/local transcript refresh, detached helpers, and snapshot
-//! producer backstops — as one atomic file per `(kind, agent_id)` session under
-//! the runtime `agent_context/` dir. The snapshot read-side folds it in through
+//! High-frequency enrichment is written here by the context producers — the
+//! statusline feed, hook ingestion/local transcript refresh, and detached
+//! helpers (CLI paths), plus the elder renderer's producer-side triggers (the
+//! in-process snapshot-produce backstop and the transcript watcher,
+//! `sidebar_renderer::app::transcript_watch`) — as one atomic file per
+//! `(kind, agent_id)` session under the runtime `agent_context/` dir. The
+//! snapshot read-side folds it in through
 //! [`crate::ledger::snapshot::SidebarSnapshot::with_agent_context`]. It never
 //! touches the durable event log: this is display-only latency, not truth
 //! ("Ledger first", `docs/internals/ledger.md`).
 //!
-//! Ownership: writers are `rimz` CLI producers. The sidebar renderer reads this
-//! data only through the snapshot JSON, never this module, so "sidebar is
-//! read-only on the ledger" holds.
+//! Ownership: every renderer's fetch worker reads this module through the
+//! shared enrichment fold; writes stay producer-side (CLI paths and the
+//! elder's triggers above) and are cache-class — rename atomicity, no fsync,
+//! rebuilt from provider state. "Sidebar is read-only on the ledger" is about
+//! durable truth: nothing here reaches the event log or feed store, and the
+//! `cargo xtask invariants` greps enforce that boundary.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
