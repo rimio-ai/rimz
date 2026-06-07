@@ -59,7 +59,9 @@ The CLI and hook subprocesses are the only durable-state writers. The sidebar re
 |-- ARCHITECTURE.md        this file
 |-- DESIGN.md              design commitments and the three operating paths
 |-- README.md              product entry point
-|-- docs/                  product and engineering docs (map in AGENTS.md)
+|-- docs/                  product and engineering docs (map in AGENTS.md);
+|                          docs/externals/ holds the local mirrors of upstream
+|                          reference docs, pinned to source URLs for refresh
 |-- Cargo.toml
 |-- Makefile               thin aliases over cargo xtask
 |-- crates/
