@@ -80,7 +80,7 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
 /// bare shells and the interactive TUIs a user just sits in stay quiet;
 /// everything else (a build, a test, a script) reads as active, so real work
 /// never hides as idle chrome. An unknown command is active by default.
-fn process_is_active(command: &str) -> bool {
+pub(crate) fn process_is_active(command: &str) -> bool {
     // A known agent kind (claude/codex) or the shared `node` host is a transient
     // pre-enrichment state that becomes a proper agent row — never animate it as a
     // process. Shells and the interactive TUIs a user just sits in stay quiet too;

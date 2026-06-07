@@ -8,7 +8,8 @@
 //! The `/proc` metrics gate has no witness here by design: the
 //! `RIMZ_TEST_PANE_LIST` seam deliberately bypasses the shared pane cache and
 //! its produce arm, where `enrich_pane_metrics` lives. Its skip/due behaviour
-//! is pinned by the unit gates in `cli::sidebar::tests` (`metrics_*`).
+//! is pinned by the unit gates in `sidebar::produce::metrics::tests`
+//! (`metric*`).
 
 #![allow(clippy::print_stderr)] // self-skip notices, like the sibling fixture
 

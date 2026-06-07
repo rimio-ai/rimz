@@ -256,6 +256,18 @@ fn binding_entry(pane_pid: u32, start_ticks: u64, command: &str) -> MetricsSampl
     }
 }
 
+fn fresh_entry(
+    pane_pid: u32,
+    start_ticks: u64,
+    command: &str,
+    sampled_at_ms: u64,
+) -> MetricsSampleEntry {
+    MetricsSampleEntry {
+        sampled_at_ms,
+        ..binding_entry(pane_pid, start_ticks, command)
+    }
+}
+
 #[test]
 fn process_state_marks_zombie_and_persistent_uninterruptible_sleep_as_stuck() {
     assert_eq!(
@@ -290,10 +302,20 @@ fn cached_root_pid_restores_only_a_live_unchanged_binding() {
     assert_eq!(cached_root_pid(&unbound, &alive), None);
 }
 
+/// The due set `enrich_pane_metrics` builds when every sampleable pane is due
+/// — the cold-cache shape the restore tests exercise.
+fn all_sampleable_due(frame: &crate::sidebar::frame::PaneFrame) -> HashSet<String> {
+    frame
+        .pane_states()
+        .filter(|pane| pane_sampleable(pane))
+        .map(|pane| pane.pane_id.to_string())
+        .collect()
+}
+
 #[test]
 fn stable_panes_restore_their_bindings_and_skip_the_walk() {
-    // The steady-state contract: every pidless pane hits its guarded binding,
-    // so the tick walks zero processes.
+    // The steady-state contract: every due pidless pane hits its guarded
+    // binding, so the tick walks zero processes.
     let panes = vec![
         pane("terminal_1", Some("zsh"), Some("/repo")),
         pane("terminal_2", Some("node claude"), Some("/repo")),
@@ -313,7 +335,8 @@ fn stable_panes_restore_their_bindings_and_skip_the_walk() {
         _ => None,
     };
 
-    let needs_walk = restore_cached_bindings(&mut frame, &prior, &starts);
+    let due = all_sampleable_due(&frame);
+    let needs_walk = restore_cached_bindings(&mut frame, &prior, &due, &starts);
 
     assert!(!needs_walk, "an all-hit room never walks the process table");
     assert_eq!(state(&frame, "terminal_1").current.pid, Some(42));
@@ -322,11 +345,13 @@ fn stable_panes_restore_their_bindings_and_skip_the_walk() {
 
 #[test]
 fn binding_misses_drive_the_walk_and_unbindable_panes_do_not() {
-    // A pidless pane with no usable binding needs the walk…
+    // A due pidless pane with no usable binding needs the walk…
     let mut missing = frame_from_panes(vec![pane("terminal_2", Some("zsh"), None)]);
+    let due = all_sampleable_due(&missing);
     assert!(restore_cached_bindings(
         &mut missing,
         &MetricsSampleCache::default(),
+        &due,
         &|_| None,
     ));
     assert_eq!(
@@ -336,7 +361,8 @@ fn binding_misses_drive_the_walk_and_unbindable_panes_do_not() {
     );
 
     // …while panes the walk could never bind — no command, sidebar chrome —
-    // never trigger it, and a natively-pidded (tmux) pane is left alone.
+    // sit outside the sampleable due set, and a natively-pidded (tmux) pane
+    // is left alone.
     let mut pidded = pane("terminal_9", Some("zsh"), None);
     pidded.pane_pid = Some(9);
     let mut inert = frame_from_panes(vec![
@@ -348,39 +374,164 @@ fn binding_misses_drive_the_walk_and_unbindable_panes_do_not() {
         ),
         pidded,
     ]);
+    let due = all_sampleable_due(&inert);
     assert!(!restore_cached_bindings(
         &mut inert,
         &MetricsSampleCache::default(),
+        &due,
         &|_| None,
     ));
     assert_eq!(state(&inert, "terminal_9").current.pid, Some(9));
 }
 
-// ── Metrics sampling cadence (METRICS_SAMPLE_TTL) ───────────────────────────────
+#[test]
+fn unbound_panes_between_samples_never_drive_the_walk() {
+    // The mixed-room case: a hot pane is due while an idle unbound pane's
+    // fresh entry is not — the missing binding must not drag the table walk
+    // back onto every hot tick.
+    let panes = vec![
+        pane("terminal_1", Some("cargo build"), Some("/repo")),
+        pane("terminal_2", Some("zsh"), Some("/repo")),
+    ];
+    let mut frame = frame_from_panes(panes.clone());
+    let mut prior = MetricsSampleCache::default();
+    prior.entries.insert(
+        panes[0].pane_id.to_string(),
+        binding_entry(42, 700, "cargo build"),
+    );
+    prior.entries.insert(
+        panes[1].pane_id.to_string(),
+        unbound_entry(Some("zsh".to_owned()), 1_000),
+    );
+    let due = HashSet::from([panes[0].pane_id.to_string()]);
+
+    let needs_walk =
+        restore_cached_bindings(&mut frame, &prior, &due, &|pid| (pid == 42).then_some(700));
+
+    assert!(
+        !needs_walk,
+        "the due pane restored its binding; the unbound idle pane backs off"
+    );
+    assert_eq!(state(&frame, "terminal_1").current.pid, Some(42));
+    assert_eq!(state(&frame, "terminal_2").current.pid, None);
+}
+
+// ── Metrics sampling cadence ───────────────────────────────────────────────────
 
 #[test]
-fn metrics_cache_expires_after_sample_ttl() {
-    let cache = MetricsSampleCache {
-        sampled_at_ms: 1_000,
-        entries: HashMap::new(),
-    };
+fn metric_entry_due_samples_missing_and_changed_entries_immediately() {
+    let command = Some("zsh".to_owned());
+    let entry = fresh_entry(42, 700, "zsh", 1_000);
+
+    assert!(metric_entry_due(None, &command, 1_000));
+    assert!(metric_entry_due(
+        Some(&entry),
+        &Some("cargo build".to_owned()),
+        1_001
+    ));
+    assert!(
+        !metric_entry_due(Some(&entry), &command, 500),
+        "a clock that ran backwards reads fresh rather than busy-looping"
+    );
+}
+
+#[test]
+fn idle_entries_use_the_idle_metrics_ttl() {
+    let command = Some("zsh".to_owned());
+    let entry = fresh_entry(42, 700, "zsh", 1_000);
     let ttl_ms = METRICS_SAMPLE_TTL.as_millis() as u64;
-    // Boundary-exact: fresh at exactly the TTL, due one ms past it.
-    assert!(cache.is_fresh(1_000 + ttl_ms));
-    assert!(!cache.is_fresh(1_001 + ttl_ms));
-    // A clock that ran backwards reads fresh (saturating), never a re-sample
-    // every tick.
-    assert!(cache.is_fresh(500));
-    // A pre-stamp cache (serde-default 0) is due on any real wall clock.
-    assert!(!MetricsSampleCache::default().is_fresh(unix_now_ms()));
+
+    assert!(!metric_entry_due(Some(&entry), &command, 1_000 + ttl_ms));
+    assert!(metric_entry_due(Some(&entry), &command, 1_001 + ttl_ms));
+}
+
+#[test]
+fn active_and_child_entries_use_the_hot_metrics_ttl() {
+    let active = Some("cargo build".to_owned());
+    let active_entry = fresh_entry(42, 700, "cargo build", 1_000);
+    let ttl_ms = METRICS_HOT_SAMPLE_TTL.as_millis() as u64;
+
+    assert!(!metric_entry_due(
+        Some(&active_entry),
+        &active,
+        1_000 + ttl_ms
+    ));
+    assert!(metric_entry_due(
+        Some(&active_entry),
+        &active,
+        1_001 + ttl_ms
+    ));
+
+    let child_command = Some("htop".to_owned());
+    let mut child_entry = fresh_entry(42, 700, "htop", 1_000);
+    child_entry.stats_pid = 99;
+    assert!(metrics_entry_hot(&child_entry));
+    assert!(metric_entry_due(
+        Some(&child_entry),
+        &child_command,
+        1_001 + ttl_ms
+    ));
+}
+
+#[test]
+fn cached_entry_publishes_resource_stats_only_when_complete() {
+    let mut frame = frame_from_panes(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
+    let mut partial = fresh_entry(42, 700, "zsh", 1_000);
+    partial.rss_kb = Some(2_048);
+    partial.cpu_pct = Some(3);
+
+    apply_cached_entry(frame.pane_states_mut().next().unwrap(), &partial);
+    assert_eq!(state(&frame, "terminal_1").metrics.rss_kb, None);
+    assert_eq!(state(&frame, "terminal_1").metrics.cpu_pct, None);
+    assert_eq!(state(&frame, "terminal_1").metrics.io_bps, None);
+
+    let mut complete = partial;
+    complete.io_bps = Some(512);
+    apply_cached_entry(frame.pane_states_mut().next().unwrap(), &complete);
+    assert_eq!(state(&frame, "terminal_1").metrics.rss_kb, Some(2_048));
+    assert_eq!(state(&frame, "terminal_1").metrics.cpu_pct, Some(3));
+    assert_eq!(state(&frame, "terminal_1").metrics.io_bps, Some(512));
+}
+
+#[test]
+fn unbound_idle_panes_back_off_on_the_idle_ttl() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let runtime = crate::RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/metrics-unbound")),
+        dir.path(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(&runtime.root).unwrap();
+
+    let mut frame = frame_from_panes(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
+    assert!(enrich_pane_metrics(
+        &mut frame,
+        "rimz-test-no-such-session-for-metrics",
+        &runtime
+    ));
+    assert!(
+        !pane_metrics_due(&frame, &runtime),
+        "an unbound idle pane records a sample attempt instead of retrying the \
+         table walk every produce"
+    );
+
+    let cache_path = runtime.root.join("metrics-sample.json");
+    let cache: MetricsSampleCache =
+        serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
+    let entry = cache
+        .entries
+        .get(&state(&frame, "terminal_1").pane_id.to_string())
+        .unwrap();
+    assert_eq!(entry.stats_pid, 0);
+    assert_eq!(entry.pane_pid, None);
 }
 
 /// The within-TTL skip path: stored display values — and the root-pid binding
 /// the process-row name anchors on — carry forward onto the matching pane, the
-/// sample-time command guard blanks a changed foreground (even on the same
-/// root pid — the tmux shell survives every foreground change), an uncached
-/// pane keeps its `None`s, a natively-pidded pane keeps its own pid, and the
-/// cache file is left unwritten.
+/// sample-time command guard sends a changed foreground straight to warmup
+/// (even on the same root pid — the tmux shell survives every foreground
+/// change), an uncached pane keeps its `None`s, and a natively-pidded pane
+/// keeps its own pid.
 #[test]
 fn metrics_within_ttl_carries_display_values_forward() {
     let dir = tempfile::TempDir::new().unwrap();
@@ -403,8 +554,9 @@ fn metrics_within_ttl_carries_display_values_forward() {
     // terminal_4 reports its pid natively (the tmux case): the carry must
     // never overwrite a live read with a cached binding.
     panes[3].pane_pid = Some(7);
+    let now_ms = unix_now_ms();
     let mut cache = MetricsSampleCache {
-        sampled_at_ms: unix_now_ms(),
+        sampled_at_ms: now_ms,
         entries: HashMap::new(),
     };
     cache.entries.insert(
@@ -413,7 +565,7 @@ fn metrics_within_ttl_carries_display_values_forward() {
             cpu_pct: Some(42),
             io_bps: Some(1_024),
             rss_kb: Some(2_048),
-            ..binding_entry(42, 700, "zsh")
+            ..fresh_entry(42, 700, "zsh", now_ms)
         },
     );
     // terminal_2's entry sampled the prior foreground (`zsh`, now `cargo
@@ -425,18 +577,22 @@ fn metrics_within_ttl_carries_display_values_forward() {
             cpu_pct: Some(99),
             io_bps: Some(9_999),
             rss_kb: Some(9_999),
-            ..binding_entry(43, 701, "zsh")
+            ..fresh_entry(43, 701, "zsh", now_ms)
         },
     );
-    cache
-        .entries
-        .insert(panes[3].pane_id.to_string(), binding_entry(44, 702, "zsh"));
+    cache.entries.insert(
+        panes[3].pane_id.to_string(),
+        fresh_entry(44, 702, "zsh", now_ms),
+    );
     let cache_path = runtime.root.join("metrics-sample.json");
     std::fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
-    let written = std::fs::read(&cache_path).unwrap();
     let mut frame = frame_from_panes(panes);
 
-    enrich_pane_metrics(&mut frame, "rimz-query-engine", &runtime);
+    assert!(enrich_pane_metrics(
+        &mut frame,
+        "rimz-query-engine",
+        &runtime
+    ));
 
     assert_eq!(
         state(&frame, "terminal_1").metrics.cpu_pct,
@@ -454,7 +610,7 @@ fn metrics_within_ttl_carries_display_values_forward() {
     assert_eq!(
         state(&frame, "terminal_2").metrics.cpu_pct,
         None,
-        "a changed foreground on the same root pid carries nothing"
+        "a changed foreground on the same root pid publishes no partial stats"
     );
     assert_eq!(
         state(&frame, "terminal_3").metrics.cpu_pct,
@@ -466,10 +622,24 @@ fn metrics_within_ttl_carries_display_values_forward() {
         Some(7),
         "a natively-reported pid is never overwritten by the cached binding"
     );
+    let rewritten: MetricsSampleCache =
+        serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
     assert_eq!(
-        std::fs::read(&cache_path).unwrap(),
-        written,
-        "the skip path never rewrites the sample cache"
+        rewritten
+            .entries
+            .get(&state(&frame, "terminal_1").pane_id.to_string())
+            .unwrap()
+            .sampled_at_ms,
+        now_ms,
+        "carried entries keep their original sample time"
+    );
+    assert_eq!(
+        rewritten
+            .entries
+            .get(&state(&frame, "terminal_2").pane_id.to_string())
+            .and_then(|entry| entry.command.as_deref()),
+        Some("cargo build"),
+        "changed commands get a fresh raw-counter entry immediately"
     );
 }
 
@@ -493,8 +663,14 @@ fn metrics_due_path_resamples_and_restamps() {
     let cache_path = runtime.root.join("metrics-sample.json");
     std::fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
 
-    let mut frame = frame_from_panes(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
-    enrich_pane_metrics(&mut frame, "rimz-query-engine", &runtime);
+    let mut pidded = pane("terminal_1", Some("zsh"), Some("/repo"));
+    pidded.pane_pid = Some(std::process::id());
+    let mut frame = frame_from_panes(vec![pidded]);
+    assert!(enrich_pane_metrics(
+        &mut frame,
+        "rimz-query-engine",
+        &runtime
+    ));
 
     let rewritten: MetricsSampleCache =
         serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();

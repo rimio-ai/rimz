@@ -613,9 +613,8 @@ fn proc_stats_hold_a_fixed_dim_grid() {
     assert_eq!(shifted, "C 100%  M 1.1G  ⇅ 450k/s");
     assert_eq!(text.chars().count(), shifted.chars().count());
 
-    // A metric not yet sampled (rates on the first tick) keeps its marker and
-    // holds a dim `--` in its figure slot, so the grid reads whole from the
-    // first reading on and the columns never move.
+    // A partial reading (rates still warming on the first tick) stays hidden:
+    // CPU, memory, and IO appear together or not at all.
     let mut first_tick = row.clone();
     let process = first_tick.as_process_mut().unwrap();
     process.cpu_pct = None;
@@ -624,8 +623,7 @@ fn proc_stats_hold_a_fixed_dim_grid() {
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
-    assert_eq!(blanked, "C   --  M 512M  ⇅     --");
-    assert_eq!(blanked.chars().count(), text.chars().count());
+    assert_eq!(blanked, "");
 
     // NO_COLOR keeps the shape and sheds every tone.
     let plain = sections::proc_stats_spans(&Theme::fixed(true), row);

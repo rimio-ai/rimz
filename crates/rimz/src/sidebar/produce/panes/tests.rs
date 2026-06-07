@@ -369,3 +369,42 @@ fn read_only_consumer_serves_a_stale_same_session_base() {
         "the consumer's read serves the stale entry as last-good"
     );
 }
+
+#[test]
+fn metrics_only_refresh_preserves_the_pane_frame_timestamp() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = crate::RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/metrics-frame")),
+        dir.path(),
+    )
+    .unwrap();
+    runtime.ensure_dirs().unwrap();
+
+    let mut pidded = pane("terminal_1", Some("zsh"), Some("/repo"));
+    pidded.pane_pid = Some(std::process::id());
+    let produced_at_ms = unix_now_ms();
+    let frame = crate::sidebar::frame::assemble_frame(vec![pidded], produced_at_ms, "s");
+    let cache_path = runtime.root.join("snapshot.json");
+    atomic::write_temp_then_rename_cache(&cache_path, &frame).unwrap();
+
+    let refreshed = refresh_cached_metrics(
+        frame,
+        &runtime,
+        &cache_path,
+        &runtime.root.join("snapshot.lock"),
+        "s",
+        None,
+        SNAPSHOT_CACHE_TTL,
+    );
+
+    assert_eq!(refreshed.produced_at_ms, produced_at_ms);
+    let published = read_snapshot_cache(&cache_path, "s").unwrap();
+    assert_eq!(
+        published.produced_at_ms, produced_at_ms,
+        "a metrics-only publish must not masquerade as a fresh pane listing"
+    );
+    assert!(
+        runtime.root.join("metrics-sample.json").exists(),
+        "metrics refresh samples /proc and writes its own cache"
+    );
+}

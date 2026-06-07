@@ -189,15 +189,29 @@ pub(super) fn cached_panes_or_produce(
     // writes the stamp, so tmux is always poll mode by construction.
     let pane_ttl = effective_pane_ttl(presence_stamp_age_ms(runtime));
 
-    // Fast path: a fresh same-session entry needs no mux work.
+    // One single-flight lock covers both arms: the slow path's full produce
+    // and the fast path's metrics-only refresh, so only one elected producer
+    // ever writes the shared caches.
+    let lock_path = runtime.root.join("snapshot.lock");
+
+    // Fast path: a fresh same-session entry needs no mux work. Metrics still
+    // have their own cadence, so refresh them from the cached topology when
+    // due instead of waiting for the pane cache to expire.
     if let Some(cache) = fresh_snapshot_cache(&cache_path, session, min_pane_cache_ms, pane_ttl) {
-        return Ok(cache);
+        return Ok(refresh_cached_metrics(
+            cache,
+            runtime,
+            &cache_path,
+            &lock_path,
+            session,
+            min_pane_cache_ms,
+            pane_ttl,
+        ));
     }
 
     // Slow path: elect one producer for this `(workspace, session)` refresh.
     // Losers read its write back; if it wedges, they fall back to an uncached
     // local produce rather than block.
-    let lock_path = runtime.root.join("snapshot.lock");
     let fresh = || fresh_snapshot_cache(&cache_path, session, min_pane_cache_ms, pane_ttl);
     let produce_local = || -> Result<PaneFrame> {
         Ok(assemble_frame(
@@ -261,15 +275,61 @@ pub(super) fn cached_panes_or_produce(
                 &crate::remote_control::in_pane_agent_start_for_root,
                 &crate::remote_control::in_pane_agent_start,
             );
-            if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &frame) {
-                tracing::warn!(path = %cache_path.display(), error = %err, "sidebar snapshot cache write failed");
-            } else if let Err(err) =
-                crate::ledger::wakeup::wake_sidebars_pane_frame_published(runtime)
-            {
-                tracing::debug!(error = %err, "sidebar pane-frame publication wakeup failed");
-            }
+            publish_frame(runtime, &cache_path, &frame);
             Ok(frame)
         }
+    }
+}
+
+/// The fast path's metrics arm: re-sample `/proc` over a topology-fresh cached
+/// frame when some pane's sample is due, and republish. The publish keeps the
+/// frame's `produced_at_ms`, so a metrics-only refresh never masquerades as a
+/// fresh pane listing; election rides the same snapshot lock as the full
+/// produce, so one process samples per window and a loser serves the shared
+/// write back.
+fn refresh_cached_metrics(
+    frame: PaneFrame,
+    runtime: &crate::RuntimePaths,
+    cache_path: &Path,
+    lock_path: &Path,
+    session: &str,
+    min_pane_cache_ms: Option<u64>,
+    pane_ttl: Duration,
+) -> PaneFrame {
+    if !super::metrics::pane_metrics_due(&frame, runtime) {
+        return frame;
+    }
+    let fresh = || {
+        let cache = fresh_snapshot_cache(cache_path, session, min_pane_cache_ms, pane_ttl)?;
+        (!super::metrics::pane_metrics_due(&cache, runtime)).then_some(cache)
+    };
+    match single_flight::coalesce(
+        lock_path,
+        SNAPSHOT_CACHE_WAIT_STEP,
+        SNAPSHOT_CACHE_WAIT_STEPS,
+        fresh,
+    ) {
+        Coalesced::Shared(cache) => cache,
+        // A wedged producer must not block the visible tab. Keep rendering the
+        // cached frame rather than writing shared metrics state outside the
+        // elected producer path.
+        Coalesced::ProduceLocal => frame,
+        Coalesced::Produce(_guard) => {
+            let mut latest = fresh_snapshot_cache(cache_path, session, min_pane_cache_ms, pane_ttl)
+                .unwrap_or(frame);
+            if super::metrics::enrich_pane_metrics(&mut latest, session, runtime) {
+                publish_frame(runtime, cache_path, &latest);
+            }
+            latest
+        }
+    }
+}
+
+fn publish_frame(runtime: &crate::RuntimePaths, cache_path: &Path, frame: &PaneFrame) {
+    if let Err(err) = atomic::write_temp_then_rename_cache(cache_path, frame) {
+        tracing::warn!(path = %cache_path.display(), error = %err, "sidebar snapshot cache write failed");
+    } else if let Err(err) = crate::ledger::wakeup::wake_sidebars_pane_frame_published(runtime) {
+        tracing::debug!(error = %err, "sidebar pane-frame publication wakeup failed");
     }
 }
 

@@ -91,13 +91,18 @@ pub const ACCOUNTS_TTL: Duration = Duration::from_secs(10 * 60);
 /// pinning an empty dashboard for the full success window.
 pub const ACCOUNTS_RETRY_TTL: Duration = Duration::from_secs(10);
 
-/// How often the producer takes a fresh two-sample `/proc` reading per pane.
-/// Rate sampling needs a steady clock of its own — never the pane-read cadence,
-/// which event-paced pane updates make a topology clock — and the carried
-/// display values bound `/proc` IO to once per window regardless of produce
-/// rate. A ~3s two-sample window also smooths the rates a 1s window made
-/// jumpy; a new pane's stats warm up one window later.
-pub const METRICS_SAMPLE_TTL: Duration = Duration::from_secs(3);
+/// How often the producer samples an active or recently re-tenanted pane. Hot
+/// panes refresh fast enough that a new foreground command gets its first
+/// complete CPU/M/IO line on the next producer tick after warmup, while idle
+/// shells stay on [`METRICS_SAMPLE_TTL`].
+pub const METRICS_HOT_SAMPLE_TTL: Duration = Duration::from_secs(1);
+
+/// How often the producer takes a fresh two-sample `/proc` reading for an idle
+/// pane. Rate sampling needs a steady clock of its own — never the pane-read
+/// cadence, which event-paced pane updates make a topology clock — and the
+/// carried display values bound `/proc` IO to once per window regardless of
+/// produce rate.
+pub const METRICS_SAMPLE_TTL: Duration = Duration::from_secs(5);
 
 /// How long the producer trusts a published fleet-spending walk before
 /// re-walking every provider's transcript tree. Spend is display-only (the
@@ -229,8 +234,8 @@ pub const PULL_CADENCES: &[PullCadence] = &[
     },
     PullCadence {
         name: "metrics.sample",
-        ttl: METRICS_SAMPLE_TTL,
-        idle_ttl: None,
+        ttl: METRICS_HOT_SAMPLE_TTL,
+        idle_ttl: Some(METRICS_SAMPLE_TTL),
         retry_ttl: None,
     },
     PullCadence {

@@ -46,7 +46,7 @@ pub(super) fn process_row_line(
         Span::styled(row.name.clone(), theme.soft()),
     ];
     // At L2 width, resource stats pin right: `C  11%  M 1.1G  ⇅   3M/s`.
-    // The whole cluster drops at L0/L1, or when no metric has reported yet.
+    // The whole cluster drops at L0/L1, or until every metric has reported.
     if Tier::for_width(width) == Tier::L2 {
         let right = proc_stats_spans(theme, row);
         if !right.is_empty() {
@@ -65,14 +65,12 @@ const IO_SLOT: usize = 6;
 
 /// Build the right-pinned resource stats for a process row as one fixed grid —
 /// `C  34%  M 512M  ⇅   8M/s`. Each metric owns a fixed slot (marker, space,
-/// right-aligned figure); once any metric reports, all three markers paint —
-/// each in its own tone (`C` sky, `M` sage, `⇅` violet, DIM-weighted like the
-/// clay lead so the row stays a step below the agent cards) — and a metric not
-/// yet sampled (rates on the first tick) holds a dim `--` in its figure slot,
-/// so the grid reads whole from the first reading on and the columns never
-/// move. Figures and seams stay dim — the stats are secondary chrome, and the
-/// lead glyph carries the row's liveness. Empty when no metric has reported at
-/// all (non-Linux).
+/// right-aligned figure), and the whole cluster appears only after CPU,
+/// memory, and IO have all reported. Each marker wears its own tone (`C` sky,
+/// `M` sage, `⇅` violet, DIM-weighted like the clay lead so the row stays a
+/// step below the agent cards). Figures and seams stay dim — the stats are
+/// secondary chrome, and the lead glyph carries the row's liveness. Empty
+/// before the second rate sample, on partial reads, and on non-Linux.
 pub(in crate::sidebar_renderer::render) fn proc_stats_spans(
     theme: &Theme,
     row: &SidebarRow,
@@ -80,14 +78,16 @@ pub(in crate::sidebar_renderer::render) fn proc_stats_spans(
     let Some(process) = row.as_process() else {
         return Vec::new();
     };
-    let slots: [(&str, Color, usize, Option<String>); 3] = [
-        ("C", Color::Blue, CPU_SLOT, process.cpu_pct.map(fmt_cpu)),
-        ("M", Color::Green, RSS_SLOT, process.rss_kb.map(fmt_rss)),
-        ("⇅", Color::Magenta, IO_SLOT, process.io_bps.map(fmt_io)),
-    ];
-    if slots.iter().all(|(_, _, _, figure)| figure.is_none()) {
+    let (Some(cpu_pct), Some(rss_kb), Some(io_bps)) =
+        (process.cpu_pct, process.rss_kb, process.io_bps)
+    else {
         return Vec::new();
-    }
+    };
+    let slots: [(&str, Color, usize, String); 3] = [
+        ("C", Color::Blue, CPU_SLOT, fmt_cpu(cpu_pct)),
+        ("M", Color::Green, RSS_SLOT, fmt_rss(rss_kb)),
+        ("⇅", Color::Magenta, IO_SLOT, fmt_io(io_bps)),
+    ];
     let mut spans = Vec::with_capacity(3 * slots.len());
     for (i, (marker, tone, width, figure)) in slots.into_iter().enumerate() {
         if i > 0 {
@@ -97,7 +97,6 @@ pub(in crate::sidebar_renderer::render) fn proc_stats_spans(
             format!("{marker} "),
             theme.style(tone, Modifier::DIM),
         ));
-        let figure = figure.unwrap_or_else(|| "--".to_owned());
         spans.push(Span::styled(format!("{figure:>width$}"), theme.dim()));
     }
     spans

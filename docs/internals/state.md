@@ -27,7 +27,7 @@ Consumers never produce for freshness on their own. They fold the published pane
 | `snapshot.json` | producer ([`sidebar::produce::panes`](../../crates/rimz/src/sidebar/produce/panes.rs)) | every node's consumer fold | the pane frame alone — panes, command/cwd (raced-empty cwd repaired from the pane root's `/proc` cwd), metrics figures; `produced_at_ms` is the fusion supersession baseline; two-mode TTL, poll vs presence-stamp event mode |
 | `presence.stamp` | `rimz sidebar wake` (Zellij presence plugin) | producer | mtime stamp; fresh stretches the pane TTL to event mode |
 | `diff-stats.json` | producer ([`sidebar::produce::git`](../../crates/rimz/src/sidebar/produce/git.rs)), single-flighted on `diff-stats.lock` | every node | per-root stamps on activity-tiered TTLs; carries the cached group-root enumeration |
-| `metrics-sample.json` | producer ([`sidebar::produce::metrics`](../../crates/rimz/src/sidebar/produce/metrics.rs)) | producer only | sample stamp plus the pane→root-pid bindings; the displayed values reach consumers on the pane frame |
+| `metrics-sample.json` | producer ([`sidebar::produce::metrics`](../../crates/rimz/src/sidebar/produce/metrics.rs)) | producer only | per-pane sample stamps plus the pane→root-pid bindings; the displayed values reach consumers on the pane frame |
 | `provider-spending.json` | producer ([`sidebar::produce::spending`](../../crates/rimz/src/sidebar/produce/spending.rs)) | every node | walk stamp, fleet totals, and the cockpit overlay's live-session baselines |
 | `pricing-cache.json` | producer's spending walk (TTL-gated remote refresh inside it — [pricing.md](./pricing.md)) | producer's spending walk | remote-refresh layer over the embedded snapshot, daily TTL with failure backoff |
 | `accounts.json` | producer account probe | every node | success/retry TTL stamps |
@@ -90,7 +90,7 @@ The table names staleness-budget semantics. Exact values and rationale comments 
 | Presence stamp | `PRESENCE_STAMP_FRESH` | Switches the producer between poll and event-mode pane TTLs |
 | Git diff stats | `DIFF_STATS_TTL` for hot worktrees; `DIFF_STATS_IDLE_TTL` for idle worktrees | Worktree header churn, ahead/behind counts, landed markers |
 | Worktree root enumeration | `WORKTREE_ROOTS_TTL` | Grouping for checkouts added without a session boundary |
-| `/proc` metrics | `METRICS_SAMPLE_TTL` | `PaneState` child pids plus process-row CPU, memory, IO, and process-state figures |
+| `/proc` metrics | `METRICS_HOT_SAMPLE_TTL` for active/re-tenanted panes; `METRICS_SAMPLE_TTL` for idle panes | `PaneState` child pids plus process-row CPU, memory, IO, and process-state figures |
 | Spending walk | `SPENDING_TTL` | Fleet ledger and the walked floor under the live cockpit spend overlay |
 | Accounts | `ACCOUNTS_TTL` success, `ACCOUNTS_RETRY_TTL` failure | Provider dashboard login, plan, and account state |
 | Codex rate limits | `CODEX_RATE_LIMIT_REFRESH_INTERVAL` | Provider dashboard budget windows |

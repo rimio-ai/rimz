@@ -60,7 +60,8 @@ pub struct PaneProcess {
 
 /// Producer-sampled resource figures for one pane's foreground process —
 /// display-only, written by the metrics cadence and projected onto process
-/// rows. All-`None` until the first due `/proc` sample.
+/// rows. The CPU/memory/IO figures publish together once two same-tenant
+/// `/proc` samples complete them, never as a partial set.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneMetrics {
     /// The sampler's stuck verdict only — `Some(Stuck)` when `/proc` reported a
