@@ -11,6 +11,7 @@
 pub mod agent_activity;
 pub mod agents;
 pub mod bridge;
+pub mod child_process;
 pub mod config;
 pub mod feed;
 pub mod ids;

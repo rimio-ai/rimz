@@ -619,7 +619,8 @@ fn spawn_codex_context_refresh(runtime: &RuntimePaths, session_id: &str, model_h
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    if let Err(err) = cmd.spawn() {
+    if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "codex-refresh-context")
+    {
         tracing::warn!(error = %err, "sidebar: failed to spawn codex context refresh");
     }
 }
@@ -645,7 +646,9 @@ fn spawn_codex_account_window_fetch(runtime: &RuntimePaths) {
     .stdin(std::process::Stdio::null())
     .stdout(std::process::Stdio::null())
     .stderr(std::process::Stdio::null());
-    if let Err(err) = cmd.spawn() {
+    if let Err(err) =
+        crate::child_process::spawn_detached_reaped(&mut cmd, "codex-refresh-rate-limits")
+    {
         tracing::warn!(error = %err, "sidebar: failed to spawn codex rate-limit refresh");
     }
 }

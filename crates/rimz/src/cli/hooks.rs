@@ -1153,8 +1153,8 @@ fn build_item(
 
 /// Spawn an adapter-requested `rimz` helper detached, with all stdio nulled
 /// (the fresh-stdio invariant for hook helper children). The hook drops the
-/// child without waiting, so it returns before the helper runs and never adds
-/// latency to the agent's turn. Best-effort: a spawn failure is logged and
+/// child into the shared reaper, so it returns before the helper runs and never
+/// adds latency to the agent's turn. Best-effort: a spawn failure is logged and
 /// ignored — out-of-band enrichment is never correctness.
 fn spawn_refresh_detached(spawn: &rimz::agents::RefreshSpawn) {
     let exe = match std::env::current_exe() {
@@ -1169,7 +1169,7 @@ fn spawn_refresh_detached(spawn: &rimz::agents::RefreshSpawn) {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    if let Err(err) = cmd.spawn() {
+    if let Err(err) = rimz::child_process::spawn_detached_reaped(&mut cmd, "adapter-refresh") {
         warn!(error = %err, "lifecycle: failed to spawn the adapter refresh helper");
     }
 }

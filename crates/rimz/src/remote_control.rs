@@ -98,9 +98,9 @@ fn should_ensure_codex_daemon(codex_enabled: bool, standalone_present: bool) -> 
 }
 
 /// Spawn `codex remote-control start` from the managed standalone `bin` detached,
-/// with all stdio nulled, and drop the child without waiting. The command is
-/// idempotent — it no-ops once the per-user daemon is up — and returns as soon as
-/// the daemon is running, so this adds no latency and prints nothing to the
+/// with all stdio nulled, and hand it to the shared reaper. The command is
+/// idempotent — it no-ops once the per-user daemon is up — and returns as soon
+/// as the daemon is running, so this adds no latency and prints nothing to the
 /// terminal. Best-effort: a spawn failure is logged and ignored, because the
 /// app-server is enrichment, not correctness — the proxy client cold-spawns a
 /// server when the daemon is absent.
@@ -115,7 +115,7 @@ fn spawn_codex_daemon(bin: &Path) {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    if let Err(err) = cmd.spawn() {
+    if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "codex-daemon") {
         tracing::warn!(error = %err, "failed to spawn the codex app-server daemon");
     }
 }
