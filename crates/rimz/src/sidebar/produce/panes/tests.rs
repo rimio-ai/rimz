@@ -44,6 +44,84 @@ fn rotate_from_cache_is_noop_without_prior() {
 }
 
 #[test]
+fn backfill_pane_cwds_repairs_a_raced_empty_cwd_from_proc() {
+    let seen = std::cell::Cell::new(None);
+    let mut frame = frame(vec![pane("terminal_1", Some("zsh"), None)]);
+    first_mut(&mut frame).current.pid = Some(100);
+
+    backfill_pane_cwds(&mut frame, &|pid| {
+        seen.set(Some(pid));
+        Some(PathBuf::from("/repo/wt"))
+    });
+
+    assert_eq!(seen.get(), Some(100));
+    assert_eq!(first(&frame).current.cwd.as_deref(), Some("/repo/wt"));
+}
+
+#[test]
+fn backfill_pane_cwds_repairs_an_empty_string_cwd() {
+    let mut frame = frame(vec![pane("terminal_1", Some("zsh"), Some(""))]);
+    first_mut(&mut frame).current.pid = Some(100);
+
+    backfill_pane_cwds(&mut frame, &|pid| {
+        assert_eq!(pid, 100);
+        Some(PathBuf::from("/repo/wt"))
+    });
+
+    assert_eq!(first(&frame).current.cwd.as_deref(), Some("/repo/wt"));
+}
+
+#[test]
+fn backfill_pane_cwds_never_overrides_a_mux_reported_cwd() {
+    let mut frame = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo/main"))]);
+    first_mut(&mut frame).current.pid = Some(100);
+
+    backfill_pane_cwds(&mut frame, &|_| {
+        panic!("must not read /proc when the mux reported cwd")
+    });
+
+    assert_eq!(first(&frame).current.cwd.as_deref(), Some("/repo/main"));
+}
+
+#[test]
+fn backfill_pane_cwds_leaves_a_pidless_pane_untouched() {
+    let mut frame = frame(vec![pane("terminal_1", Some("zsh"), None)]);
+
+    backfill_pane_cwds(&mut frame, &|_| {
+        panic!("must not read /proc without a pane pid")
+    });
+
+    assert_eq!(first(&frame).current.cwd, None);
+}
+
+#[test]
+fn backfill_pane_cwds_repairs_a_command_less_pane() {
+    let mut frame = frame(vec![pane("terminal_1", None, None)]);
+    first_mut(&mut frame).current.pid = Some(100);
+
+    backfill_pane_cwds(&mut frame, &|pid| {
+        assert_eq!(pid, 100);
+        Some(PathBuf::from("/repo/wt"))
+    });
+
+    assert_eq!(first(&frame).current.command, None);
+    assert_eq!(first(&frame).current.cwd.as_deref(), Some("/repo/wt"));
+}
+
+#[test]
+fn backfill_pane_cwds_skips_a_pane_with_no_proc_cwd() {
+    let mut frame = frame(vec![pane("terminal_1", Some("zsh"), None)]);
+    first_mut(&mut frame).current.pid = Some(100);
+
+    backfill_pane_cwds(&mut frame, &|pid| {
+        assert_eq!(pid, 100);
+        None
+    });
+
+    assert_eq!(first(&frame).current.cwd, None);
+}
+
+#[test]
 fn command_handoff_rotates_without_carrying_process_start() {
     let old_start: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
     let mut prior = frame(vec![pane("terminal_1", Some("codex"), Some("/repo"))]);

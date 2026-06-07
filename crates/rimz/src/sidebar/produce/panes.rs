@@ -3,7 +3,7 @@
 //! producer publishes to `snapshot.json` for consumers to fold in process.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::Result;
@@ -134,6 +134,31 @@ fn stamp_pane_process_starts(
     }
 }
 
+/// Fill a pane's raced-empty cwd from `/proc/<pane_pid>/cwd` once the root pid
+/// is known. A fresh `list-panes` can answer a just-born pane with an empty cwd
+/// for a tick; without one the pane groups under `external` and flickers there
+/// until the mux reports the path. Only an empty cwd is ever filled — a
+/// mux-reported cwd is authoritative because it tracks OSC7/foreground chdir,
+/// which can diverge from the root's `/proc` cwd.
+fn backfill_pane_cwds(frame: &mut PaneFrame, proc_cwd: &dyn Fn(u32) -> Option<PathBuf>) {
+    for pane in frame.pane_states_mut() {
+        if pane
+            .current
+            .cwd
+            .as_deref()
+            .is_some_and(|cwd| !cwd.is_empty())
+        {
+            continue;
+        }
+        let Some(pid) = pane.current.pid else {
+            continue;
+        };
+        if let Some(cwd) = proc_cwd(pid).and_then(|path| path.into_os_string().into_string().ok()) {
+            pane.current.cwd = Some(cwd);
+        }
+    }
+}
+
 /// Return the live pane frame for `session` — the pane list plus the
 /// `produced_at_ms` read stamp the renderer's jump guard orders against —
 /// sharing one `list-panes` round-trip across every sidebar via a short-lived
@@ -190,6 +215,9 @@ pub(super) fn cached_panes_or_produce(
             let mut frame = produce_local()?;
             let unstamped = natively_unstamped(&frame);
             rotate_from_cache(&mut frame, &cache_path, session);
+            // Repair a raced-empty cwd from the pane root before this local
+            // frame folds, covering tmux's native pane pid path.
+            backfill_pane_cwds(&mut frame, &|pid| crate::proc::cwd(pid));
             // This unpublished fallback frame feeds its own fold directly, so it
             // needs the stamp the cwd-fallback guard reads just like a published one.
             stamp_pane_process_starts(
@@ -215,6 +243,9 @@ pub(super) fn cached_panes_or_produce(
             // reads `/proc` per tick; the result is in the published pane cache,
             // so consumer tabs never fork their own reads.
             super::metrics::enrich_pane_metrics(&mut frame, session, runtime);
+            // Metrics may bind a Zellij pane to its root pid; use that live
+            // pid to repair a raced-empty cwd before publishing the frame.
+            backfill_pane_cwds(&mut frame, &|pid| crate::proc::cwd(pid));
             // Stamp the in-pane agent process starts before the publish — after
             // the enrich, whose pane→root-pid bindings the stamp's first rung
             // rides — so the cache carries them to every reader: the in-process
