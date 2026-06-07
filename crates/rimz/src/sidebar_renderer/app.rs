@@ -18,6 +18,7 @@ use crate::ledger::paths::PathErr;
 use crate::schema::sidebar_event::{SidebarEvent, SidebarEventEnvelope};
 use crate::sidebar::events::EventStore;
 use crate::sidebar::fuse::fuse;
+use crate::sidebar::timing::HEARTBEAT_WRITE_INTERVAL;
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -665,11 +666,6 @@ fn next_frame_after(scheduled: Instant, now: Instant, frame: Duration) -> Instan
         advanced
     }
 }
-
-/// Write this renderer's heartbeat at most this often. The heartbeat TTL is 5s;
-/// 2s keeps two missed writes of slack while avoiding an atomic file write for
-/// every ledger-delta fetch in a busy fleet.
-const HEARTBEAT_WRITE_INTERVAL: Duration = Duration::from_secs(2);
 
 fn heartbeat_write_due(last_heartbeat: Option<Instant>) -> bool {
     last_heartbeat.is_none_or(|last| last.elapsed() >= HEARTBEAT_WRITE_INTERVAL)

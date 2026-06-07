@@ -114,6 +114,12 @@ pub const CODEX_RATE_LIMIT_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 /// fanout treat the instance as dead and skip it.
 pub const SIDEBAR_HEARTBEAT_TTL: Duration = Duration::from_secs(5);
 
+/// How often a renderer re-stamps its heartbeat. 2s keeps two missed writes of
+/// slack under [`SIDEBAR_HEARTBEAT_TTL`] — the same 2.5× ratio
+/// [`PRESENCE_STAMP_FRESH`] keeps over the plugin keepalive — while avoiding an
+/// atomic file write for every ledger-delta fetch in a busy fleet.
+pub const HEARTBEAT_WRITE_INTERVAL: Duration = Duration::from_secs(2);
+
 /// Watchdog interval for the self-close backstop: when no resize event arrives
 /// (e.g. background Zellij sessions that omit SIGWINCH after a pane closes),
 /// this asks the normal snapshot path for a fresh own-view count. Sized at 2s
