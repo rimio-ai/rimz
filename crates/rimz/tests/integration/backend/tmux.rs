@@ -313,6 +313,109 @@ fn ensure_session_applies_room_options_in_one_batch() {
     );
 }
 
+/// `ensure_session` is idempotent on a live room: tmux answers the second
+/// `new-session -d` with `duplicate session` (exit 1), which the backend
+/// treats as the goal state — `-A` is unusable because on a live session it
+/// switches to the attach path, which needs a terminal on stdin and exits 1
+/// under the backend's piped stdio. The duplicate path skips the birth flags,
+/// so a re-ensure never resizes a live room, and still re-asserts the
+/// identity pin.
+#[test]
+fn ensure_session_is_idempotent_on_a_live_room() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let opts = |size| SessionOptions {
+        session_name: "rimz-twice".to_owned(),
+        workspace_id: WorkspaceId::from_project_root(cwd.path()),
+        project_root: cwd.path().to_path_buf(),
+        cwd: cwd.path().to_path_buf(),
+        config: rimz::config::MultiplexerConfig::default(),
+        detected_size: Some(size),
+    };
+    server
+        .backend
+        .ensure_session(&opts((120, 40)))
+        .expect("first ensure");
+    server
+        .backend
+        .ensure_session(&opts((200, 50)))
+        .expect("a re-ensure on a live room succeeds");
+
+    let listed = server.backend.list_sessions().expect("list_sessions");
+    assert_eq!(
+        listed.iter().filter(|s| s.as_str() == "rimz-twice").count(),
+        1,
+        "one room, no duplicate: {listed:?}",
+    );
+    assert_eq!(
+        server.display("rimz-twice", "#{window_width}"),
+        "120",
+        "the duplicate path skips the birth flags, so a re-ensure never resizes a live room",
+    );
+    // The pin is re-asserted on every ensure.
+    let pin = show_session_environment(&server, "rimz-twice", rimz::workspace::ENV_WORKSPACE_ID);
+    assert_eq!(
+        pin,
+        format!(
+            "{}={}",
+            rimz::workspace::ENV_WORKSPACE_ID,
+            WorkspaceId::from_project_root(cwd.path()),
+        ),
+    );
+}
+
+/// `focus_pane` lands cross-window: tmux's `select-pane` activates within its
+/// window only, so the backend batches `select-window` (a pane id resolves as
+/// a window target to the window holding it) before `select-pane`. The
+/// session's current window must follow the jump.
+#[test]
+fn focus_pane_switches_the_containing_window() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    server.ensure_with_shell("rimz-jump");
+    // A second window, opened without focus so the first stays current.
+    server.tmux(&["new-window", "-d", "-t", "rimz-jump", "-n", "second", "sh"]);
+
+    let target = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some("rimz-jump".to_owned()),
+            ..Default::default()
+        })
+        .expect("list_panes")
+        .into_iter()
+        .find(|pane| pane.view_name.as_deref() == Some("second"))
+        .expect("the second window's pane");
+    let window = target
+        .view_id
+        .clone()
+        .expect("tmux panes carry a window id");
+    assert_ne!(
+        server.display("rimz-jump", "#{window_id}"),
+        window,
+        "the second window must start out not current",
+    );
+
+    server
+        .backend
+        .focus_pane(&target.pane_id)
+        .expect("focus_pane");
+
+    assert_eq!(
+        server.display("rimz-jump", "#{window_id}"),
+        window,
+        "a cross-window jump must switch the session's current window",
+    );
+    assert_eq!(
+        server.display("rimz-jump", "#{pane_id}"),
+        target.pane_id.raw(),
+        "and land on the target pane",
+    );
+}
+
 /// The launch path's width verdict lands at birth, with no post-birth resize:
 /// `ensure_session` sizes the detached session from the probed terminal
 /// (`-x`/`-y`), and `open_sidebar` sizes the split's `-l` from the just-born

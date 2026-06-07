@@ -11,7 +11,6 @@
 
 use std::path::PathBuf;
 
-use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -24,10 +23,13 @@ use crate::config::TmuxConfig;
 use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
 
-/// Minimum tmux version that supports the features Rimz relies on:
-/// `split-window -e KEY=VAL` for `RIMZ_*` injection (3.2),
-/// `display-popup` for the optional popup integration (3.2).
-pub const MIN_TMUX_VERSION: (u32, u32, u32) = (3, 2, 0);
+/// Minimum tmux version that supports the features Rimz relies on. The floor
+/// is set by the room options `ensure_session` applies unconditionally —
+/// `extended-keys-format` (3.5) and `allow-passthrough` (3.3) — since the
+/// option batch fails at the first unknown option; the command surface alone
+/// needs 3.2 (`new-session -e`, `display-popup`). Release floors per feature
+/// live in docs/externals/mux-adapter/tmux-reference.md.
+pub const MIN_TMUX_VERSION: (u32, u32, u32) = (3, 5, 0);
 
 /// Bundle reported by `rimz doctor` when the active backend is tmux.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -47,9 +49,9 @@ pub fn capabilities() -> Result<TmuxCapabilities> {
         binary_version: raw,
         parsed_version: parsed,
         meets_min_version,
-        // Popup landed in the same release as `-e`, so the same gate
-        // controls both. Keeping the flag distinct lets future tmux
-        // capabilities split off without rewriting callers.
+        // Popup landed in 3.2, below the floor, so the floor gate covers it.
+        // Keeping the flag distinct lets future tmux capabilities split off
+        // without rewriting callers.
         popup_supported: meets_min_version,
     })
 }
@@ -494,11 +496,14 @@ impl MuxBackend for TmuxBackend {
 
     fn ensure_session(&self, opts: &SessionOptions) -> Result<()> {
         let pin = crate::workspace::pin_env(&opts.workspace_id, &opts.project_root);
-        // `-A` attaches if the session exists; `-d` keeps us from grabbing
-        // the terminal in the background.
+        // `new-session -d` births detached; an already-live room answers
+        // `duplicate session` (exit 1), which is the goal state and treated as
+        // success below. `-A` is unusable here: on a live session it switches
+        // to the attach path, which ignores `-d`/`-e`/`-x`/`-y` and needs a
+        // terminal on stdin — `CommandSpec` nulls stdin, so it exits 1 with
+        // `open terminal failed` (docs/externals/mux-adapter/tmux-reference.md).
         let mut spec = self.cmd().args([
             "new-session".to_owned(),
-            "-A".to_owned(),
             "-d".to_owned(),
             "-s".to_owned(),
             opts.session_name.clone(),
@@ -513,8 +518,8 @@ impl MuxBackend for TmuxBackend {
         }
         // Birth the detached session at the launching terminal's geometry
         // (instead of tmux's 80×24 default), so a fixed-column sidebar split
-        // is already correct before the client attaches. `-A` on an existing
-        // session ignores the flags, so a reattach never resizes a live room.
+        // is already correct before the client attaches. The duplicate path
+        // skips creation entirely, so a re-ensure never resizes a live room.
         if let Some((cols, rows)) = opts.detected_size {
             spec = spec.args([
                 "-x".to_owned(),
@@ -523,11 +528,16 @@ impl MuxBackend for TmuxBackend {
                 rows.to_string(),
             ]);
         }
-        spec.run().map(|_| ())?;
-        // `-A` on an existing session ignores `-e` (same shape as `-x`/`-y`
-        // above), so the pin is re-asserted idempotently: future panes of a
-        // pre-pin room inherit it; existing panes keep the env they were born
-        // with and their participants fall back to the static ladder.
+        match spec.run() {
+            Ok(_) => {}
+            Err(MuxErr::Command { stderr, .. })
+                if stderr.to_ascii_lowercase().contains("duplicate session") => {}
+            Err(err) => return Err(err),
+        }
+        // The duplicate path never saw `-e`, so the pin is re-asserted
+        // idempotently: future panes of a pre-pin room inherit it; existing
+        // panes keep the env they were born with and their participants fall
+        // back to the static ladder.
         for (key, value) in &pin {
             self.cmd()
                 .args(["set-environment", "-t", &opts.session_name, key, value])
@@ -611,7 +621,7 @@ impl MuxBackend for TmuxBackend {
             "list-panes",
             "-a",
             "-F",
-            "#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_start_time}\t#{pane_active}\t#{window_name}\t#{pane_title}",
+            "#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_active}\t#{window_name}\t#{pane_title}",
         ]);
         if let Some(session) = opts.session_name {
             spec = spec.args(["-t".to_owned(), session]);
@@ -654,10 +664,22 @@ impl MuxBackend for TmuxBackend {
 
     fn focus_pane(&self, pane: &PaneId) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Tmux)?;
-        self.cmd()
-            .args(["select-pane", "-t", pane.raw()])
-            .run()
-            .map(|_| ())
+        // `select-pane` activates within its window only — it never switches
+        // the session's current window — so a cross-window jump needs
+        // `select-window` first. A pane id resolves as a window target to the
+        // window holding it, and both verbs ride one batched client call.
+        self.batch(&[
+            vec![
+                "select-window".to_owned(),
+                "-t".to_owned(),
+                pane.raw().to_owned(),
+            ],
+            vec![
+                "select-pane".to_owned(),
+                "-t".to_owned(),
+                pane.raw().to_owned(),
+            ],
+        ])
     }
 
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture> {
@@ -969,10 +991,10 @@ fn parse_pane_line(line: &str) -> Option<PaneRef> {
         session_name: cols[0].to_owned(),
         view_id: Some(cols[1].to_owned()),
         view_kind: Some(ViewKind::Window),
-        view_name: trimmed_nonempty(8),
-        is_focused: cols.get(7).is_some_and(|value| value.trim() == "1"),
+        view_name: trimmed_nonempty(7),
+        is_focused: cols.get(6).is_some_and(|value| value.trim() == "1"),
         command: if cols
-            .get(9)
+            .get(8)
             .is_some_and(|value| value.trim() == SIDEBAR_PANE_TITLE)
         {
             Some(SIDEBAR_PANE_TITLE.to_owned())
@@ -983,10 +1005,10 @@ fn parse_pane_line(line: &str) -> Option<PaneRef> {
         pane_pid: cols
             .get(5)
             .and_then(|value| value.trim().parse::<u32>().ok()),
-        pane_process_start: cols
-            .get(6)
-            .and_then(|value| value.trim().parse::<i64>().ok())
-            .and_then(|seconds| Timestamp::from_second(seconds).ok()),
+        // tmux has no per-pane process-start format variable; the sidebar
+        // producer derives the stamp from `pane_pid` via `/proc`
+        // (`sidebar::produce::panes::stamp_pane_process_starts`).
+        pane_process_start: None,
         rss_kb: None,
         cpu_pct: None,
         io_bps: None,
@@ -1207,9 +1229,12 @@ mod tests {
 
     #[test]
     fn min_version_threshold_holds() {
-        assert!((3, 2, 0) >= MIN_TMUX_VERSION);
         assert!((3, 5, 0) >= MIN_TMUX_VERSION);
-        assert!((3, 1, 9) < MIN_TMUX_VERSION);
+        assert!((3, 6, 0) >= MIN_TMUX_VERSION);
+        // 3.4 lacks `extended-keys-format`, which the room options set
+        // unconditionally — below the floor.
+        assert!((3, 4, 0) < MIN_TMUX_VERSION);
+        assert!((3, 2, 0) < MIN_TMUX_VERSION);
     }
 
     #[test]
@@ -1258,9 +1283,9 @@ mod tests {
 
     #[test]
     fn parse_pane_line_reads_core_fields() {
-        // session, window_id, pane_id, command, cwd, pid, start, pane_active,
+        // session, window_id, pane_id, command, cwd, pid, pane_active,
         // window_name.
-        let row = "rimz-qe\t@1\t%3\tnvim\t/home/u/qe\t4242\t1700000000\t1\tqe";
+        let row = "rimz-qe\t@1\t%3\tnvim\t/home/u/qe\t4242\t1\tqe";
         let pane = parse_pane_line(row).expect("full row parses");
         assert_eq!(pane.pane_id.raw(), "%3");
         assert_eq!(pane.session_name, "rimz-qe");
@@ -1270,9 +1295,13 @@ mod tests {
         assert_eq!(pane.cwd.as_deref(), Some("/home/u/qe"));
         assert_eq!(pane.pane_pid, Some(4242));
         assert!(pane.is_focused, "pane_active=1 is focused");
+        assert_eq!(
+            pane.pane_process_start, None,
+            "tmux has no per-pane process-start variable; the /proc stamp owns it",
+        );
 
         // A pane_active=0 row is not focused.
-        let other = "rimz-qe\t@1\t%4\tzsh\t/home/u/qe\t4243\t1700000000\t0\tqe";
+        let other = "rimz-qe\t@1\t%4\tzsh\t/home/u/qe\t4243\t0\tqe";
         assert!(!parse_pane_line(other).expect("row parses").is_focused);
     }
 

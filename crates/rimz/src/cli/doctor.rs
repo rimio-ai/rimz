@@ -522,10 +522,11 @@ fn report_tmux_capabilities() {
             };
             let (maj, min, patch) = MIN_TMUX_VERSION;
             println!("  tmux floor    : {floor_status} (>= {maj}.{min}.{patch} required)");
+            // Popup landed in 3.2; the floor gate covers it.
             let popup_status = if caps.popup_supported {
-                "supported"
+                "supported".to_owned()
             } else {
-                "unavailable (requires tmux >= 3.2)"
+                format!("unavailable (requires tmux >= {maj}.{min}.{patch})")
             };
             println!("  tmux popup    : {popup_status}");
         }

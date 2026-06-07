@@ -95,7 +95,7 @@ fn carry_forward_from_cache(panes: &mut [crate::feed::PaneRef], cache_path: &Pat
 
 /// The pane ids a fresh `list-panes` read left without a process start — the
 /// set the `/proc` stamp owns ([`stamp_pane_process_starts`]). Captured before
-/// [`carry_forward_from_cache`] backfills prior values, so a native (tmux)
+/// [`carry_forward_from_cache`] backfills prior values, so a backend-reported
 /// start — including one the carry restores after a raced read — is never
 /// confused with Rimz's own derived stamp and never overwritten by one.
 fn natively_unstamped(panes: &[crate::feed::PaneRef]) -> HashSet<crate::ids::PaneId> {
@@ -106,9 +106,10 @@ fn natively_unstamped(panes: &[crate::feed::PaneRef]) -> HashSet<crate::ids::Pan
         .collect()
 }
 
-/// Stamp the in-pane agent CLI's `/proc` start onto agent panes a backend left
-/// without one (Zellij; tmux reports a start natively and pays nothing).
-/// Backends that report no per-pane process start leave the cwd-fallback guard
+/// Stamp the in-pane agent CLI's `/proc` start onto agent panes the backend
+/// left without one — every pane today: tmux has no per-pane process-start
+/// format variable, and Zellij 0.44 emits no process fields (`RawPane` keeps
+/// reading builds that do). A startless pane leaves the cwd-fallback guard
 /// (`pane_start_allows_bind`) blind, so a stale daemon-mode Codex session would
 /// latch onto a freshly-started pane in the same cwd and project its old stats.
 /// Runs at frame production, in both produce arms, so the published pane frame
