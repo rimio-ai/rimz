@@ -27,6 +27,9 @@ allow = [
     "ISC",
     "BSD-3-Clause",
     "CDLA-Permissive-2.0",
+    # `notify` uses CC0-1.0: a public-domain dedication with no copyleft
+    # obligations, accepted for the local filesystem watcher dependency.
+    "CC0-1.0",
 ]
 confidence-threshold = 0.93
 
