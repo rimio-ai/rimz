@@ -16,6 +16,10 @@ Any process may broadcast typed wakeup events to every fresh node: ledger writer
 
 One file per lane, one writer per lane. This table is the inventory — names, ownership, and what the stamp means; the cadence values live in [`timing.rs`](../../crates/rimz/src/sidebar/timing.rs) and each file's mechanics in the module that writes it.
 
+The pane frame is a typed mux topology: `PaneFrame` contains tabs/windows, each `TabFrame` contains one structural `active_pane`, and each `PaneState` carries the pane's current process record, optional previous process record, child pids, and sampled resource metrics. The view-model fold still projects rows from `PaneRef`s; the frame is the producer/consumer cache shape that preserves view structure and process rotation.
+
+Consumers never produce for freshness on their own. They fold the published pane frame over an event-fresh ledger rollup in process, then read the producer's published enrichment caches.
+
 | File (workspace runtime dir) | Writer | Readers | Freshness semantics |
 | --- | --- | --- | --- |
 | `snapshot.json` | producer ([`sidebar::produce::panes`](../../crates/rimz/src/sidebar/produce/panes.rs)) | every node's consumer fold | the pane frame alone — panes, command/cwd, metrics figures; `produced_at_ms` is the fusion supersession baseline; two-mode TTL, poll vs presence-stamp event mode |
@@ -83,7 +87,7 @@ The table names staleness-budget semantics. Exact values and rationale comments 
 | Presence stamp | `PRESENCE_STAMP_FRESH` | Switches the producer between poll and event-mode pane TTLs |
 | Git diff stats | `DIFF_STATS_TTL` for hot worktrees; `DIFF_STATS_IDLE_TTL` for idle worktrees | Worktree header churn, ahead/behind counts, landed markers |
 | Worktree root enumeration | `WORKTREE_ROOTS_TTL` | Grouping for checkouts added without a session boundary |
-| `/proc` metrics | `METRICS_SAMPLE_TTL` | Process-row CPU, memory, and IO figures |
+| `/proc` metrics | `METRICS_SAMPLE_TTL` | `PaneState` child pids plus process-row CPU, memory, and IO figures |
 | Spending walk | `SPENDING_TTL` | Fleet ledger and the walked floor under the live cockpit spend overlay |
 | Accounts | `ACCOUNTS_TTL` success, `ACCOUNTS_RETRY_TTL` failure | Provider dashboard login, plan, and account state |
 | Codex rate limits | `CODEX_RATE_LIMIT_REFRESH_INTERVAL` | Provider dashboard budget windows |
