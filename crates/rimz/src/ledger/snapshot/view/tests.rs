@@ -2207,6 +2207,46 @@ fn fresh_codex_pane_with_proc_start_shows_idle_not_ghost() {
 }
 
 #[test]
+fn stale_stamped_codex_predating_reused_pane_start_shows_idle_in_live_worktree() {
+    // A recovered focus stamp is still just a pane id. After a mux rebirth, a
+    // stale daemon-routed Codex session from one worktree can carry the same id
+    // as a fresh Codex pane in another worktree. The lazy stamped path must use
+    // the same process-start guard as the cwd fallback so the old tenant does
+    // not capture the new pane and group under the old checkout.
+    let mut ghost = paneless_codex("sess-old", "/repo/main", 1_000)
+        .in_pane("term1")
+        .active_ago(12 * 60 * 60);
+    ghost.status = AgentStatus::Success;
+    ghost.prompt = Some("does using sidebar plugin increase performance?".to_owned());
+    ghost.total_tokens = Some(126_621);
+    let mut snapshot = room(Vec::new(), vec![ghost]);
+    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+    let fresh_pane = PaneRef {
+        pane_process_start: Some(epoch()),
+        ..pane("term1", "codex", "/repo/hook-trace")
+    };
+
+    let snapshot = snapshot.with_live_panes(vec![fresh_pane], None);
+
+    assert_eq!(snapshot.worktree_groups.len(), 1);
+    assert_eq!(
+        snapshot.worktree_groups[0].label, "hook-trace",
+        "the row groups by the live pane cwd, not the ghost's worktree",
+    );
+    let rows = &snapshot.worktree_groups[0].rows;
+    assert_eq!(rows.len(), 1, "one live pane yields one row: {rows:?}");
+    assert_eq!(rows[0].row_kind, SidebarRowKind::Agent);
+    assert_eq!(rows[0].id, "tmux:term1");
+    assert_eq!(rows[0].name, "codex");
+    assert_eq!(rows[0].status, Some(AgentStatus::Idle));
+    assert_eq!(rows[0].worktree_path.as_deref(), Some("/repo/hook-trace"));
+    assert_eq!(
+        rows[0].total_tokens, None,
+        "the reused pane must not inherit stale session stats",
+    );
+}
+
+#[test]
 fn wired_unprompted_codex_pane_renders_as_idle_agent() {
     // Codex registers its session lazily — `SessionStart` rides in with the
     // first prompt — so a launched-but-never-prompted `codex` pane has no

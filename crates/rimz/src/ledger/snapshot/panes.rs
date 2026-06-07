@@ -112,14 +112,16 @@ fn agent_owner_pid(agent: &AgentState) -> Option<u32> {
 /// The agent that stamped this exact pane id, if one is still unbound. Non-lazy
 /// agents bind by stamped pane id alone — never by foreground command or cwd —
 /// so a pane can only ever host the agent that ran in it (`agent_binds_only_by_
-/// stamped_pane_id` pins this). Lazy-registering agents additionally respect a
-/// known live foreground command: when it no longer classifies as that kind, the
-/// pane renders as its process row. A missing command is still treated as an
-/// unknown raced read and keeps the stamped row. When a stale rollup holds more
-/// than one claimant for a pane id (a relaunch the reaper has not yet collapsed),
-/// the most-recently-active wins, keeping the bind deterministic. The one
-/// relaxation — a lazy-registering agent whose session arrives unstamped (Codex)
-/// — lives in the separate, tightly-scoped `lazy_agent_for_pane`, never here.
+/// stamped_pane_id` pins this). Lazy-registering agents additionally respect the
+/// live pane process start and a known live foreground command: when the session
+/// predates the pane start, or the command no longer classifies as that kind, the
+/// pane renders through the later ladder steps. A missing command is still
+/// treated as an unknown raced read and keeps the stamped row. When a stale
+/// rollup holds more than one claimant for a pane id (a relaunch the reaper has
+/// not yet collapsed), the most-recently-active wins, keeping the bind
+/// deterministic. The one relaxation — a lazy-registering agent whose session
+/// arrives unstamped (Codex) — lives in the separate, tightly-scoped
+/// `lazy_agent_for_pane`, never here.
 pub(super) fn agent_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
@@ -149,6 +151,9 @@ fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: 
     };
     if !descriptor.capabilities.registers_lazily {
         return true;
+    }
+    if !pane_start_allows_bind(agent.last_activity, pane) {
+        return false;
     }
     match pane.command.as_deref() {
         Some(command) => command_agent_kind(command) == Some(agent.kind.as_str()),
@@ -211,7 +216,7 @@ pub(super) fn lazy_agent_for_pane<'a>(
         .iter()
         .filter(|agent| agent.pane.is_none() && agent.kind == kind)
         .filter(|agent| agent.worktree_path.as_deref() == Some(cwd))
-        .filter(|agent| pane_start_allows_bind(agent, pane))
+        .filter(|agent| pane_start_allows_bind(agent.last_activity, pane))
         .filter(|agent| !bound.contains(&(agent.kind.clone(), agent.agent_id.clone())))
         .max_by_key(|agent| agent.last_activity)
     {
@@ -230,19 +235,22 @@ pub(super) fn lazy_agent_for_pane<'a>(
     })
 }
 
-/// Defensive guard for the cwd fallback: when the pane's process start is known,
-/// a session whose `last_activity` predates that start belongs to an older
-/// instance that once ran in this worktree, not the process now in the pane — so
-/// it must not bind. A daemon-mode Codex session records the shared app-server
-/// daemon's pid, so process liveness alone cannot tell a stale session from the
-/// live one; this keeps that residue off a freshly-started pane in the same cwd.
-/// The producer supplies the start from `/proc` for backends that report none
+/// Defensive guard for lazy-registering binds: when the pane's process start is
+/// known, a session whose `last_activity` predates that start belongs to an older
+/// instance, not the process now in the pane — so it must not bind. A daemon-mode
+/// Codex session records the shared app-server daemon's pid, so process liveness
+/// alone cannot tell a stale session from the live one; this keeps that residue
+/// off a freshly-started pane even when a mux rebirth reuses the old pane id. The
+/// producer supplies the start from `/proc` for backends that report none
 /// natively (Zellij; see [`crate::remote_control::in_pane_agent_start`]), so the
-/// guard fires on both backends. Only a pane whose cwd has no readable in-pane
-/// agent process — another user's — still falls back to most-recently-active.
-pub(super) fn pane_start_allows_bind(agent: &AgentState, pane: &PaneRef) -> bool {
+/// guard fires on both backends. Only a pane with no readable in-pane agent start
+/// — another user's, or an unrecoverable raced read — still falls back to the
+/// stamped pane id or most-recently-active cwd match. Hook ingestion shares this
+/// predicate to decide when a prior session's stamp still plausibly owns a pane
+/// (`cli::hooks` focus recovery), so the bind and recovery verdicts can't drift.
+pub fn pane_start_allows_bind(last_activity: Timestamp, pane: &PaneRef) -> bool {
     pane.pane_process_start
-        .is_none_or(|start| agent.last_activity >= start)
+        .is_none_or(|start| last_activity >= start)
 }
 
 /// The resting row for a wired lazy-agent pane that no session claimed: `○ <kind>`
