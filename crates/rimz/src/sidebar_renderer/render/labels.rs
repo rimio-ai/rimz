@@ -54,6 +54,7 @@ const WORKING_FRAMES: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "�
 /// lighter than the working fill. The turn's first file edit flips the cell to
 /// the working spinner.
 const THINKING_FRAMES: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✻"];
+const THINKING_FRAME_HOLD: u64 = 4;
 
 /// Resolver answering: a braille spinner while a resolver composes the answer on
 /// the bridge. This is the one "waiting for an answer" motion — it is genuinely
@@ -174,7 +175,7 @@ pub(super) fn working_glyph(animation_phase: u64) -> &'static str {
 }
 
 pub(super) fn thinking_glyph(animation_phase: u64) -> &'static str {
-    frame(&THINKING_FRAMES, animation_phase)
+    frame(&THINKING_FRAMES, animation_phase / THINKING_FRAME_HOLD)
 }
 
 pub(super) fn resolver_glyph(animation_phase: u64) -> &'static str {

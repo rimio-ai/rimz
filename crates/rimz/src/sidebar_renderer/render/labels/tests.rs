@@ -372,10 +372,14 @@ fn animations_cycle_and_wrap() {
     );
     assert_eq!(THINKING_FRAMES, ["·", "✢", "✳", "✶", "✻", "✻"]);
     for (phase, expected) in THINKING_FRAMES.iter().enumerate() {
-        assert_eq!(thinking_glyph(phase as u64), *expected);
+        let held_phase = phase as u64 * THINKING_FRAME_HOLD;
+        assert_eq!(thinking_glyph(held_phase), *expected);
+        assert_eq!(thinking_glyph(held_phase + 1), *expected);
+        assert_eq!(thinking_glyph(held_phase + 2), *expected);
+        assert_eq!(thinking_glyph(held_phase + 3), *expected);
     }
     assert_eq!(
-        thinking_glyph(THINKING_FRAMES.len() as u64),
+        thinking_glyph(THINKING_FRAMES.len() as u64 * THINKING_FRAME_HOLD),
         THINKING_FRAMES[0]
     );
     assert_eq!(
@@ -706,8 +710,8 @@ fn agent_glyph_animates_only_active_states() {
         WORKING_FRAMES[2]
     );
     assert_eq!(
-        agent_glyph(AgentStatus::Running, TurnPhase::Reasoning, 2),
-        THINKING_FRAMES[2]
+        agent_glyph(AgentStatus::Running, TurnPhase::Reasoning, 4),
+        THINKING_FRAMES[1]
     );
     // The sparkle is the running-state indicator — a stale thinking bit on
     // a non-running agent never sparkles.
