@@ -2280,6 +2280,83 @@ fn wired_unprompted_codex_pane_renders_as_idle_agent() {
 }
 
 #[test]
+fn wired_unprompted_supervised_codex_pane_renders_as_idle_agent() {
+    // `rimz agents --worktree` launches Codex through the hidden cleanup
+    // wrapper. During the pre-session window the pane command is still that
+    // wrapper, but it is semantically a Codex pane and must take the same idle
+    // lazy-agent path as a bare `codex` command.
+    let mut snapshot = room(Vec::new(), Vec::new());
+    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+    let snapshot = snapshot.with_live_panes(
+        vec![pane(
+            "term1",
+            "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/main",
+            "/repo/main",
+        )],
+        None,
+    );
+
+    let rows = &snapshot.worktree_groups[0].rows;
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].is_agent());
+    assert_eq!(rows[0].name, "codex");
+    assert_eq!(rows[0].status(), Some(AgentStatus::Idle));
+    assert_eq!(rows[0].id, "tmux:term1");
+}
+
+#[test]
+fn supervised_codex_uses_wrapper_worktree_path_when_cwd_is_missing() {
+    // A first mux read can know the command before it knows the pane cwd. The
+    // wrapper carries the same worktree path Rimz used to launch the pane, so
+    // use it as a grouping fallback instead of flashing the row under external.
+    let root = "/repo/rimz";
+    let worktree = "/repo/rimz/.claude/worktrees/feature-x";
+    let mut pane = pane(
+        "term1",
+        &format!("/home/me/.cargo/bin/rimz agents exec codex --worktree-path {worktree}"),
+        "/ignored",
+    );
+    pane.cwd = None;
+
+    let mut snapshot = room(Vec::new(), Vec::new()).with_project_root(Some(PathBuf::from(root)));
+    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+    let snapshot = snapshot.with_live_panes(vec![pane], None);
+
+    let group = &snapshot.worktree_groups[0];
+    assert_eq!(group.kind, SidebarWorktreeKind::Worktree);
+    assert_eq!(group.key, worktree);
+    assert!(group.rows[0].is_agent());
+    assert_eq!(group.rows[0].name, "codex");
+    assert_eq!(group.rows[0].worktree_path.as_deref(), Some(worktree));
+}
+
+#[test]
+fn unwired_supervised_codex_process_row_uses_wrapper_worktree_path_when_cwd_is_empty() {
+    // Empty-string cwd is the same mux race as a missing cwd. An unwired Codex
+    // pane falls through to the process row, so that path must share the same
+    // wrapper manifest fallback as the lazy-agent path.
+    let root = "/repo/rimz";
+    let worktree = "/repo/rimz/.claude/worktrees/feature-x";
+    let mut pane = pane(
+        "term1",
+        &format!("/home/me/.cargo/bin/rimz agents exec codex --worktree-path {worktree}"),
+        "/ignored",
+    );
+    pane.cwd = Some(String::new());
+
+    let snapshot = room(Vec::new(), Vec::new())
+        .with_project_root(Some(PathBuf::from(root)))
+        .with_live_panes(vec![pane], None);
+
+    let group = &snapshot.worktree_groups[0];
+    assert_eq!(group.kind, SidebarWorktreeKind::Worktree);
+    assert_eq!(group.key, worktree);
+    assert!(!group.rows[0].is_agent());
+    assert_eq!(group.rows[0].name, "codex");
+    assert_eq!(group.rows[0].worktree_path.as_deref(), Some(worktree));
+}
+
+#[test]
 fn wired_unprompted_codex_uses_configured_default_model() {
     let mut snapshot = room(Vec::new(), Vec::new());
     snapshot.wired_lazy_kinds = vec!["codex".to_owned()];

@@ -1,5 +1,5 @@
-//! Non-agent process rows: command classification past launchers and
-//! sudo, and the agent-kind sniffing for wrapped commands.
+//! Non-agent process rows: command classification past launchers, sudo, Rimz's
+//! supervised agent wrapper, and the agent-kind sniffing for wrapped commands.
 
 use jiff::Timestamp;
 
@@ -14,6 +14,17 @@ pub(super) fn pane_command_is_known(pane: &PaneRef) -> bool {
     pane.command
         .as_deref()
         .is_some_and(|command| !command.is_empty())
+}
+
+/// Worktree path for a pane row: prefer the mux-reported cwd when it is
+/// non-empty, then fall back to Rimz's supervised agent wrapper manifest. Used
+/// by both process rows and the lazy-agent pane ladder so empty-cwd races do
+/// not diverge between the two projections.
+pub(crate) fn pane_worktree_path(pane: &PaneRef) -> Option<&str> {
+    pane.cwd
+        .as_deref()
+        .filter(|cwd| !cwd.is_empty())
+        .or_else(|| pane.command.as_deref().and_then(rimz_exec_worktree_path))
 }
 
 pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
@@ -46,11 +57,12 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
         .filter(|_| state.is_busy())
         .map(ToOwned::to_owned)
         .filter(|full| *full != name);
+    let worktree_path = pane_worktree_path(pane).map(ToOwned::to_owned);
     SidebarRow {
         id: pane.pane_id.to_string(),
         name,
         pane: Some(pane.clone()),
-        worktree_path: pane.cwd.clone(),
+        worktree_path,
         worktree_branch: None,
         last_activity: pane.pane_process_start.unwrap_or(now),
         card: RowCard::Process(ProcessCard {
@@ -88,9 +100,10 @@ fn process_is_active(command: &str) -> bool {
 }
 
 /// The base name of the program a command runs, seeing past a `sudo` wrapper and
-/// through a JS launcher to its script: `npm` for `sudo npm install …`, `codex`
-/// for `node /usr/bin/codex`, `cargo` for `/usr/bin/cargo build`. The label a
-/// process row shows and the token its agent-kind match keys off.
+/// through known wrappers to the real command: `npm` for `sudo npm install …`,
+/// `codex` for `node /usr/bin/codex`, `codex` for `rimz agents exec codex`, and
+/// `cargo` for `/usr/bin/cargo build`. The label a process row shows and the
+/// token its agent-kind match keys off.
 pub(crate) fn program_label(command: &str) -> String {
     basename(effective_program(command)).to_owned()
 }
@@ -112,17 +125,9 @@ fn basename(token: &str) -> &str {
         .unwrap_or(token)
 }
 
-/// The program a command names — seeing past a leading `sudo` and its options,
-/// and, for a JS launcher (`node`/`npx`), through to the script it runs. So
-/// `node /usr/bin/codex` is the codex script, while `sudo npm install -g
-/// @openai/codex` is `npm` (an install whose argument is a package, not a program
-/// being run). Falls back to the whole command when nothing names a program (a
-/// bare `sudo`).
-fn effective_program(command: &str) -> &str {
+fn effective_program_and_args(command: &str) -> Option<(&str, std::str::SplitWhitespace<'_>)> {
     let mut tokens = command.split_whitespace();
-    let Some(mut program) = tokens.next() else {
-        return command;
-    };
+    let mut program = tokens.next()?;
     // Step past a `sudo` wrapper and its options to the wrapped program.
     if basename(program) == "sudo" {
         while let Some(token) = tokens.next() {
@@ -138,6 +143,50 @@ fn effective_program(command: &str) -> &str {
                 break;
             }
         }
+    }
+    Some((program, tokens))
+}
+
+fn rimz_exec_kind<'a>(program: &str, mut tokens: std::str::SplitWhitespace<'a>) -> Option<&'a str> {
+    if basename(program) != "rimz" {
+        return None;
+    }
+    (tokens.next() == Some("agents") && tokens.next() == Some("exec"))
+        .then(|| tokens.next())
+        .flatten()
+}
+
+/// Worktree path carried by Rimz's own supervised agent wrapper, when the mux's
+/// live pane read has not reported `cwd` yet. This is intentionally narrower
+/// than command parsing in general: only the hidden `rimz agents exec <kind>
+/// --worktree-path <path>` contract supplies path truth.
+pub(crate) fn rimz_exec_worktree_path(command: &str) -> Option<&str> {
+    let (program, tokens) = effective_program_and_args(command)?;
+    rimz_exec_kind(program, tokens.clone())?;
+    let mut tokens = tokens.skip(3);
+    while let Some(token) = tokens.next() {
+        if let Some(path) = token.strip_prefix("--worktree-path=") {
+            return (!path.is_empty()).then_some(path);
+        }
+        if token == "--worktree-path" {
+            return tokens.next().filter(|path| !path.is_empty());
+        }
+    }
+    None
+}
+
+/// The program a command names — seeing past a leading `sudo` and its options,
+/// Rimz's supervised `agents exec <kind>` wrapper, and, for a JS launcher
+/// (`node`/`npx`), through to the script it runs. So `node /usr/bin/codex` is
+/// the codex script, while `sudo npm install -g @openai/codex` is `npm` (an
+/// install whose argument is a package, not a program being run). Falls back to
+/// the whole command when nothing names a program (a bare `sudo`).
+fn effective_program(command: &str) -> &str {
+    let Some((program, mut tokens)) = effective_program_and_args(command) else {
+        return command;
+    };
+    if let Some(kind) = rimz_exec_kind(program, tokens.clone()) {
+        return kind;
     }
     // A JS launcher runs the script named by its first non-flag argument, so the
     // agent is that script (`node /usr/bin/codex` → codex), not the launcher.
@@ -229,6 +278,26 @@ mod tests {
         );
         // A path-qualified program resolves to its basename.
         assert_eq!(program_label("/usr/bin/cargo build"), "cargo");
+    }
+
+    #[test]
+    fn classifier_sees_past_rimz_supervised_agent_wrapper() {
+        // `rimz agents --worktree` leaves Rimz's supervised wrapper as the pane's
+        // root command while the real agent runs underneath it, so the sidebar
+        // must classify the pane by the wrapped agent during the startup gap.
+        let wrapped = "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt";
+        assert_eq!(program_label(wrapped), "codex");
+        assert_eq!(command_agent_kind(wrapped), Some("codex"));
+        assert_eq!(rimz_exec_worktree_path(wrapped), Some("/repo/wt"));
+        assert_eq!(
+            command_agent_kind("sudo /home/me/.cargo/bin/rimz agents exec codex --prompt hi"),
+            Some("codex")
+        );
+        assert_eq!(
+            rimz_exec_worktree_path("/bin/rimz agents exec codex --worktree-path=/repo/wt"),
+            Some("/repo/wt")
+        );
+        assert_eq!(command_agent_kind("rimz agents exec unknown"), None);
     }
 
     #[test]
