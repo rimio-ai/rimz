@@ -6,6 +6,8 @@ This doc owns the sidebar data plane: the node model every renderer runs, the pe
 
 Every sidebar renderer is a node holding two-part in-memory runtime state: **pulled truth** — the event-fresh ledger rollup folded over the producer's published pane frame on the fetch worker's warm `RollupCursor` — plus a **typed realtime event store**. Every paint reads `fuse(pulled, events, now)` and renders the resulting `SidebarSnapshot`, and fusion is pure, so a node's frame is a function of its two stores and one clock value.
 
+The pane frame admits all cards; ledger, sidecars, and realtime events only enrich admitted cards. `SidebarSnapshot::panes_produced_at_ms: null` marks a frameless fold, so CLI consumers can distinguish rollup metadata from a renderable roster; `worktree_groups` is empty until a frame is folded.
+
 Durable truth feeds every node identically and bypasses the producer: the rollup is read event-fresh in process (`latest.json` plus the unfolded log tail — [ledger.md](./ledger.md#runtime-projection)), and the per-session sidecars (agent context, subagent context, activity) are read fresh from disk on every fold behind stat-gated parse caches.
 
 One elected producer per node set — the eldest fresh heartbeat per workspace — owns every consistent-cadence external pull (panes, git, `/proc`, spending, accounts) and publishes each lane as its own single-writer cache file under the workspace runtime directory, with temp-file-plus-rename writes. Every other node consumes those files in process and never pulls for freshness on its own; the producer consumes its own published fast lane before paying a producing refresh. Realtime events never patch a published file — pulled truth on disk is written only by producer pulls.
@@ -16,7 +18,7 @@ Any process may broadcast typed wakeup events to every fresh node: ledger writer
 
 One file per lane, one writer per lane. This table is the inventory — names, ownership, and what the stamp means; the cadence values live in [`timing.rs`](../../crates/rimz/src/sidebar/timing.rs) and each file's mechanics in the module that writes it.
 
-The pane frame is a typed mux topology: `PaneFrame` contains tabs/windows, each `TabFrame` contains one structural `active_pane`, and each `PaneState` carries the pane's current process record, optional previous process record, child pids, and sampled resource metrics. The view-model fold still projects rows from `PaneRef`s; the frame is the producer/consumer cache shape that preserves view structure and process rotation.
+The pane frame is a typed mux topology: `PaneFrame` contains tabs/windows, each `TabFrame` contains one structural `active_pane`, and each `PaneState` carries the pane's current process record, optional previous process record, child pids, and sampled resource metrics. The view-model fold still projects rows from `PaneRef`s; the frame is both the card-admission boundary and the producer/consumer cache shape that preserves view structure and process rotation.
 
 Consumers never produce for freshness on their own. They fold the published pane frame over an event-fresh ledger rollup in process, then read the producer's published enrichment caches.
 
@@ -44,7 +46,7 @@ The envelope's `session_name` is the scope: `Some` targets the one mux session w
 
 The renderer rejects events outside its workspace or session before appending them. Appended events store both `sent_at_ms` for supersession and `received_at_ms` for TTL, so clock skew cannot make an event immortal.
 
-The store keeps overlay events only: `PaneClosed`, `CommandChanged`, `FocusChanged`, and `PaneOpened` when it carries a command. Nudge-only events drive fetches and do not occupy the store.
+The store keeps overlay/freshness events only: `PaneClosed`, `CommandChanged`, `FocusChanged`, and `PaneOpened` when it carries a command. Pane-open events drive producer verification; they do not admit cards on their own.
 
 ## Event Taxonomy
 
@@ -53,7 +55,7 @@ The store keeps overlay events only: `PaneClosed`, `CommandChanged`, `FocusChang
 | `PaneClosed` | `pane_id` | Delete every rendered row bound to the pane | Zellij plugin through `rimz sidebar wake` |
 | `CommandChanged` | `pane_id`, `command` | Overlay command and reset the pane's row shape until the pull verifies it | Zellij plugin through `rimz sidebar wake` |
 | `FocusChanged` | focused and unfocused pane ids, possibly spanning views | Mirror per-view focus bits onto every row; retarget the own-view baseline only for one of the view's own working panes | Zellij plugin through `rimz sidebar wake` |
-| `PaneOpened` | `pane_id`, optional `command` | Synthesize a placeholder row when command is present; otherwise nudge a producer verification pull | Zellij plugin for exact opens |
+| `PaneOpened` | `pane_id`, optional `command` | Nudge a producer verification pull; the verified pane frame admits the card | Zellij plugin for exact opens |
 | `PanesChanged` | none | Nudge a producer verification pull — topology moved, identity unknown | tmux control-mode watcher, the Zellij plugin's manifest fold, any sparse poke |
 | `LedgerDelta` | optional event method and agent event name | Refetch the ledger rollup; session start/end also request fresh panes | Ledger writers and context sidecar writers |
 | `PaneFramePublished` | none | Fold the just-published producer pane frame from cache | Producer after a pane-frame publish |
@@ -73,7 +75,7 @@ Fusion is pure over pulled truth, event store, and `now_ms`; it performs no IO, 
 
 `SidebarSnapshot::panes_produced_at_ms` is the supersession baseline. An event whose `sent_at_ms` is not newer than the pane frame is skipped because the pull already observed later pane truth.
 
-`PaneClosed` has highest precedence and deletes rows before other overlays run. `PaneOpened` with a command then synthesizes a placeholder row using the same durable pane-id row key the pull uses. `CommandChanged` overlays the command for non-deleted panes. The newest `FocusChanged` event lands last: row bits mirror every per-view mark in the patch, and the own-view baseline retargets only onto one of the view's own working panes (`SidebarOwnView::working_pane_ids`) — a focus move in another tab is that view's mark, never this renderer's selection baseline.
+`PaneClosed` has highest precedence and deletes rows before other overlays run. `PaneOpened` never creates a row; it asks the producer for the verified frame that can admit one. `CommandChanged` overlays the command for non-deleted panes already admitted by the frame. The newest `FocusChanged` event lands last: row bits mirror every per-view mark in the patch, and the own-view baseline retargets only onto one of the view's own working panes (`SidebarOwnView::working_pane_ids`) — a focus move in another tab is that view's mark, never this renderer's selection baseline.
 
 Expired events disappear by receiver-clock TTL. A wrong visual verdict caused by a missed event or clock skew is bounded by the next producer pull.
 
