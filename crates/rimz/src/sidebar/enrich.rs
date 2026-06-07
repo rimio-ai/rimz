@@ -441,7 +441,11 @@ fn refresh_codex_rate_limits(snapshot: &SidebarSnapshot, runtime: &RuntimePaths)
     }
 }
 
-pub(crate) fn refresh_codex_transcript_context(
+/// Refresh one Codex session's transcript-derived tokens/cost into its context
+/// sidecar and wake every renderer. Stat-gated: an unchanged rollout tail is a
+/// no-op, so every trigger — the producer tick here, the renderer's transcript
+/// watcher (`sidebar_renderer::app::transcript_watch`) — can fire freely.
+pub fn refresh_codex_transcript_context(
     runtime: &RuntimePaths,
     session_id: &str,
     model_hint: Option<&str>,

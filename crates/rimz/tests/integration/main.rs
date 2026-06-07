@@ -28,6 +28,7 @@ mod reset;
 mod resolver;
 mod sidebar_launch;
 mod start;
+mod transcript_watch;
 mod trust;
 mod wakeup_pipe;
 mod workspace;

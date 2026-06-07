@@ -42,6 +42,7 @@ mod reload;
 mod selection;
 mod state;
 mod tmux_watch;
+mod transcript_watch;
 
 use fetch::{FetchOutcome, FetchRequest, request_fetch, spawn_fetch_worker};
 use gate::GateState;
@@ -157,6 +158,13 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             config.session_name.clone(),
         );
     }
+
+    // Codex rollout fast path: the elected producer watches each live root
+    // Codex session's transcript file and runs the stat-gated sidecar refresh
+    // on the write, so mid-turn token/cost updates repaint without waiting for
+    // the next hook push or producer tick. Latency only — the tick backstop
+    // stays truth. Backend-independent; the elder gate inside scopes the work.
+    let _ = transcript_watch::spawn(runtime.clone(), config.instance_id.clone());
 
     // Write the heartbeat immediately so the freshness gate never sees a gap.
     // Errors are non-fatal; the gate re-probes after the TTL.
