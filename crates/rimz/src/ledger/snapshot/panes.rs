@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use super::process::{command_agent_kind, program_label};
+use super::process::command_agent_kind;
 use super::process::{pane_command_is_known, row_from_process};
 use super::view::{SidebarRow, SidebarRowKind};
 use crate::agents::AgentDescriptor;
@@ -44,58 +44,6 @@ pub struct SidebarOwnView {
     /// wire shape stable for older producers.
     #[serde(default)]
     pub own_view_is_daemon: bool,
-}
-
-impl SidebarOwnView {
-    /// Summarize the panes sharing `own`'s view (tab/window) from a live pane
-    /// list. Pure and backend-agnostic: callers own pane discovery and pass the
-    /// result in. Returns `None` when `own` is absent from `panes` — the caller
-    /// cannot reason about a view it cannot find itself in, so it must not
-    /// self-close.
-    pub fn from_panes(own: &PaneId, panes: &[PaneRef]) -> Option<Self> {
-        let own_pane = panes.iter().find(|pane| pane.pane_id == *own)?;
-        let own_view = own_pane.view_id.as_deref();
-        let siblings = panes
-            .iter()
-            .filter(|pane| pane.pane_id != *own && pane.view_id.as_deref() == own_view)
-            .collect::<Vec<_>>();
-        // The own view is the daemon view iff, after dropping sidebar panes, its
-        // remaining siblings are non-empty and all managed hosts
-        // (`pane_is_host`: a host command marker or the `rimzd` view name —
-        // both backends report the view name).
-        let non_sidebar_siblings: Vec<&PaneRef> = siblings
-            .iter()
-            .copied()
-            .filter(|pane| {
-                pane.command
-                    .as_deref()
-                    .is_none_or(|command| program_label(command) != "rimz-sidebar")
-            })
-            .collect();
-        // The view's *active* pane (`is_focused` — exactly one per view on both
-        // backends), not the client focus: it is defined even when no client is
-        // viewing this tab, and it stays one deterministic value per tab under
-        // multiplayer Zellij — the only shape a shared sidebar pane can render.
-        let active_pane_id = non_sidebar_siblings
-            .iter()
-            .find(|pane| pane.is_focused)
-            .map(|pane| pane.pane_id.clone());
-        let working_pane_ids = non_sidebar_siblings
-            .iter()
-            .map(|pane| pane.pane_id.clone())
-            .collect();
-        let own_view_is_daemon = !non_sidebar_siblings.is_empty()
-            && non_sidebar_siblings
-                .iter()
-                .all(|&pane| crate::remote_control::pane_is_host(pane));
-        Some(Self {
-            sibling_count: siblings.len(),
-            own_is_active: own_pane.is_focused,
-            active_pane_id,
-            working_pane_ids,
-            own_view_is_daemon,
-        })
-    }
 }
 
 /// Whether `agent` is a daemon-mode Codex session: a root (non-subagent) `codex`
@@ -306,9 +254,9 @@ fn idle_agent_row(
         command_detail: None,
         compacting: false,
         turn_error_label: None,
-        rss_kb: pane.rss_kb,
-        cpu_pct: pane.cpu_pct,
-        io_bps: pane.io_bps,
+        rss_kb: None,
+        cpu_pct: None,
+        io_bps: None,
     }
 }
 
@@ -360,9 +308,6 @@ pub(super) fn pane_ref_from_id(pane_id: PaneId) -> PaneRef {
         cwd: None,
         pane_pid: None,
         pane_process_start: None,
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
     }
 }
 
@@ -374,94 +319,6 @@ mod tests {
     use crate::ids::{MuxName, PaneId};
 
     use crate::ledger::snapshot::SidebarSnapshot;
-
-    /// A sibling fixture whose `focused` flag sets both the per-view active bit
-    /// and the per-client focus bit — the common single-client case where the
-    /// pane the user looks at is also its tab's active pane. The divergence test
-    /// below splits them to prove the active bit alone drives the baseline.
-    fn view_pane(raw: &str, view: &str, focused: bool) -> PaneRef {
-        PaneRef {
-            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
-            session_name: "rimz-test".to_owned(),
-            view_id: Some(view.to_owned()),
-            view_kind: Some(crate::ids::ViewKind::Tab),
-            view_name: None,
-            is_focused: focused,
-            command: Some("zsh".to_owned()),
-            cwd: Some("/repo/main".to_owned()),
-            pane_pid: None,
-            pane_process_start: None,
-            rss_kb: None,
-            cpu_pct: None,
-            io_bps: None,
-        }
-    }
-
-    #[test]
-    fn own_view_counts_only_siblings_sharing_the_view() {
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let focused_here = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let panes = vec![
-            view_pane("terminal_1", "tab_0", false),
-            view_pane("terminal_2", "tab_0", true),
-            view_pane("terminal_3", "tab_1", true), // another tab — not a sibling
-        ];
-
-        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane is present");
-
-        assert_eq!(view.sibling_count, 1);
-        assert!(!view.own_is_active);
-        assert_eq!(view.active_pane_id, Some(focused_here.clone()));
-        assert_eq!(
-            view.working_pane_ids,
-            vec![focused_here],
-            "the working set names only this view's siblings — the fused \
-             focus filter rides it"
-        );
-    }
-
-    #[test]
-    fn own_view_marks_when_the_sidebar_itself_is_active() {
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let panes = vec![
-            view_pane("terminal_1", "tab_0", true),
-            view_pane("terminal_2", "tab_0", false),
-        ];
-
-        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane is present");
-
-        assert!(view.own_is_active);
-        assert_eq!(view.active_pane_id, None);
-    }
-
-    #[test]
-    fn own_view_is_none_when_own_pane_is_absent() {
-        // A view the caller cannot find itself in is unknowable — never close.
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_404");
-        let panes = vec![view_pane("terminal_1", "tab_0", true)];
-
-        assert!(SidebarOwnView::from_panes(&own, &panes).is_none());
-    }
-
-    #[test]
-    fn own_view_picks_the_view_active_pane_without_a_client() {
-        // The tab has an active pane (`is_focused`) but no client is looking at
-        // it. The baseline is the per-view active pane, defined regardless of
-        // where any client is — so the sidebar in an unviewed tab still points
-        // at the pane the user would land on.
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_52");
-        let active = PaneId::from_parts(MuxName::Zellij, "terminal_53");
-        let sibling = PaneRef {
-            is_focused: true, // the active pane of this tab
-            ..view_pane("terminal_53", "tab_11", false)
-        };
-        let panes = vec![view_pane("terminal_52", "tab_11", false), sibling];
-
-        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane is present");
-
-        assert!(!view.own_is_active);
-        assert_eq!(view.active_pane_id, Some(active));
-    }
 
     /// A pane fixture with an explicit command and optional window name, so a
     /// test can build daemon hosts, sidebars, and working shells across views.
@@ -477,9 +334,6 @@ mod tests {
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
             pane_process_start: None,
-            rss_kb: None,
-            cpu_pct: None,
-            io_bps: None,
         }
     }
 
@@ -539,48 +393,5 @@ mod tests {
             pane_cmd("terminal_3", "tab_1", "rimz-sidebar", None),
         ];
         assert!(SidebarSnapshot::only_daemon_view(&panes));
-    }
-
-    #[test]
-    fn own_view_is_daemon_true_in_the_rimzd_view_zellij() {
-        // No view_name on these fixtures: the daemon view is recognised by the
-        // host command markers alone, covering builds that omit tab names.
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_0");
-        let panes = vec![
-            pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
-            pane_cmd(
-                "terminal_1",
-                "tab_0",
-                "claude remote-control --spawn worktree",
-                None,
-            ),
-            pane_cmd("terminal_2", "tab_0", "rimz codex app-server serve", None),
-        ];
-        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane present");
-        assert!(view.own_view_is_daemon);
-    }
-
-    #[test]
-    fn own_view_is_daemon_true_in_the_rimzd_view_tmux() {
-        // tmux: a host pane is recognised by the window-name fallback even when
-        // its command carries no marker.
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_0");
-        let panes = vec![
-            pane_cmd("terminal_0", "rimzd", "rimz-sidebar", Some("rimzd")),
-            pane_cmd("terminal_1", "rimzd", "claude", Some("rimzd")),
-        ];
-        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane present");
-        assert!(view.own_view_is_daemon);
-    }
-
-    #[test]
-    fn own_view_is_daemon_false_in_a_working_view() {
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_0");
-        let panes = vec![
-            pane_cmd("terminal_0", "tab_1", "rimz-sidebar", None),
-            pane_cmd("terminal_1", "tab_1", "zsh", None),
-        ];
-        let view = SidebarOwnView::from_panes(&own, &panes).expect("own pane present");
-        assert!(!view.own_view_is_daemon);
     }
 }

@@ -17,9 +17,6 @@ fn pane(id: &str, command: &str, cwd: &str) -> PaneRef {
         cwd: Some(cwd.to_owned()),
         pane_pid: None,
         pane_process_start: None,
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
     }
 }
 
@@ -38,11 +35,7 @@ fn published_frame_age_is_session_scoped_and_saturating() {
     runtime.ensure_dirs().unwrap();
 
     let produced_at_ms = 1_700_000_000_000;
-    let cache = SnapshotCache {
-        produced_at_ms,
-        session_name: "rimz-test".to_owned(),
-        panes: Vec::new(),
-    };
+    let cache = assemble_frame(Vec::new(), produced_at_ms, "rimz-test");
     atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &cache).unwrap();
 
     assert_eq!(
@@ -97,11 +90,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
         pane("terminal_0", "zsh", &wt),
         pane("terminal_own", "rimz-sidebar", &wt),
     ];
-    let base = SnapshotCache {
-        produced_at_ms: unix_now_ms(),
-        session_name: "rimz-test".to_owned(),
-        panes,
-    };
+    let base = assemble_frame(panes, unix_now_ms(), "rimz-test");
     atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
 
     // Publish diff stats for the worktree path: +7 / -2, 3 commits ahead and
@@ -200,11 +189,7 @@ fn read_published_snapshot_folds_subagent_context() {
     });
     atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
 
-    let base = SnapshotCache {
-        produced_at_ms: unix_now_ms(),
-        session_name: "rimz-test".to_owned(),
-        panes: vec![live_pane],
-    };
+    let base = assemble_frame(vec![live_pane], unix_now_ms(), "rimz-test");
     atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
     let now = Timestamp::now();
     crate::ledger::subagent_context::write(
@@ -260,11 +245,11 @@ fn consumer_own_view_counts_siblings_in_its_own_tab() {
     let main_sb = pane_in_tab("main_sb", "@0");
     let main_term = pane_in_tab("main_term", "@0");
     let orphan_sb = pane_in_tab("orphan_sb", "@1");
-    let base = SnapshotCache {
-        produced_at_ms: unix_now_ms(),
-        session_name: "rimz-test".to_owned(),
-        panes: vec![main_sb, main_term, orphan_sb],
-    };
+    let base = assemble_frame(
+        vec![main_sb, main_term, orphan_sb],
+        unix_now_ms(),
+        "rimz-test",
+    );
     atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
     // The rollup the consumer folds the panes over: an empty room, published
     // to `latest.json` where the consumer reads it fresh.
@@ -324,11 +309,7 @@ fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
     state.ensure_dirs().unwrap();
 
     // A published (and never re-published) pane cache.
-    let panes = SnapshotCache {
-        produced_at_ms: unix_now_ms(),
-        session_name: "rimz-test".to_owned(),
-        panes: Vec::new(),
-    };
+    let panes = assemble_frame(Vec::new(), unix_now_ms(), "rimz-test");
     atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &panes).unwrap();
 
     // A served publish carries the extent stamp; the workspace has no
@@ -376,11 +357,7 @@ fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
 fn read_snapshot_cache_misses_a_different_session() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("snapshot.json");
-    let cache = SnapshotCache {
-        produced_at_ms: unix_now_ms(),
-        session_name: "rimz-one".to_owned(),
-        panes: Vec::new(),
-    };
+    let cache = assemble_frame(Vec::new(), unix_now_ms(), "rimz-one");
     atomic::write_temp_then_rename(&path, &cache).unwrap();
     assert!(read_snapshot_cache(&path, "rimz-one").is_some());
     assert!(read_snapshot_cache(&path, "rimz-other").is_none());
@@ -395,29 +372,25 @@ fn read_snapshot_cache_reflects_a_changed_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("snapshot.json");
 
-    let first = SnapshotCache {
-        produced_at_ms: unix_now_ms(),
-        session_name: "rimz-one".to_owned(),
-        panes: Vec::new(),
-    };
+    let first = assemble_frame(Vec::new(), unix_now_ms(), "rimz-one");
     atomic::write_temp_then_rename_cache(&path, &first).unwrap();
     // Populate this thread's parse cache.
     assert_eq!(
-        read_snapshot_cache(&path, "rimz-one").map(|c| c.panes.len()),
+        read_snapshot_cache(&path, "rimz-one").map(|c| c.to_pane_refs().len()),
         Some(0),
     );
 
     // Republish a longer, different-session frame in place.
-    let second = SnapshotCache {
-        produced_at_ms: unix_now_ms() + 1,
-        session_name: "rimz-two".to_owned(),
-        panes: vec![pane("terminal_0", "zsh", "/tmp")],
-    };
+    let second = assemble_frame(
+        vec![pane("terminal_0", "zsh", "/tmp")],
+        unix_now_ms() + 1,
+        "rimz-two",
+    );
     atomic::write_temp_then_rename_cache(&path, &second).unwrap();
     // The stale (rimz-one) entry must not be served; the fresh frame wins.
     assert!(read_snapshot_cache(&path, "rimz-one").is_none());
     assert_eq!(
-        read_snapshot_cache(&path, "rimz-two").map(|c| c.panes.len()),
+        read_snapshot_cache(&path, "rimz-two").map(|c| c.to_pane_refs().len()),
         Some(1),
     );
 }
@@ -1465,12 +1438,8 @@ fn unreadable_presence_stamp_reads_poll_mode() {
     assert!(!presence_event_mode(presence_stamp_age_ms(&runtime)));
 }
 
-fn cache_produced_at(produced_at_ms: u64) -> SnapshotCache {
-    SnapshotCache {
-        produced_at_ms,
-        session_name: "rimz-test".to_owned(),
-        panes: Vec::new(),
-    }
+fn cache_produced_at(produced_at_ms: u64) -> PaneFrame {
+    assemble_frame(Vec::new(), produced_at_ms, "rimz-test")
 }
 
 #[test]

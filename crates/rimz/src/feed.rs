@@ -294,8 +294,8 @@ pub struct ResolverStep {
     pub reason: Option<String>,
 }
 
-/// Pane location attached to a feed item. Carried for routing humans to the
-/// right pane — never used for correctness-critical state.
+/// Lean pane location attached to a feed item. Carried for routing humans to
+/// the right pane — never used for correctness-critical state.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PaneRef {
     pub pane_id: PaneId,
@@ -333,24 +333,6 @@ pub struct PaneRef {
     /// Used to detect reused pane IDs across mux restarts.
     #[serde(default)]
     pub pane_process_start: Option<Timestamp>,
-    /// Resident set size of the pane's foreground process in kibibytes, sampled
-    /// by the producer. Display-only; `None` when the process is unreadable or
-    /// the platform is non-Linux.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rss_kb: Option<u64>,
-    /// CPU utilisation of the pane's foreground process in integer percent,
-    /// computed by the producer from two consecutive `/proc/<pid>/stat` readings.
-    /// Stored as a whole percent (a 4-core machine peaking at 400% saturates the
-    /// u16 only at 65535%). `None` on the first tick (no prior sample), when the
-    /// process is unreadable, or on a non-Linux platform.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cpu_pct: Option<u16>,
-    /// Combined VFS I/O rate (rchar + wchar bytes/s) of the pane's foreground
-    /// process, computed from two consecutive `/proc/<pid>/io` readings. `None`
-    /// on the first tick, when the file is unreadable (e.g. a different-UID
-    /// process), or on a non-Linux platform.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub io_bps: Option<u64>,
 }
 
 fn is_false(value: &bool) -> bool {

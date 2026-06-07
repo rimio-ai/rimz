@@ -1009,9 +1009,6 @@ fn parse_pane_line(line: &str) -> Option<PaneRef> {
         // producer derives the stamp from `pane_pid` via `/proc`
         // (`sidebar::produce::panes::stamp_pane_process_starts`).
         pane_process_start: None,
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
     })
 }
 
@@ -1163,9 +1160,6 @@ mod tests {
             cwd: None,
             pane_pid: None,
             pane_process_start: None,
-            rss_kb: None,
-            cpu_pct: None,
-            io_bps: None,
         }
     }
 

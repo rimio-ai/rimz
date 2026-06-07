@@ -67,9 +67,6 @@ impl Fixture {
             cwd: Some(worktree.to_string_lossy().into_owned()),
             pane_pid: None,
             pane_process_start: None,
-            rss_kb: None,
-            cpu_pct: None,
-            io_bps: None,
         };
         let panes_path = env.project_root.join("panes.json");
         std::fs::write(

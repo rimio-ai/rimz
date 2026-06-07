@@ -41,11 +41,11 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
     runtime.ensure_dirs().unwrap();
 
     let now_ms = crate::sidebar::snapshot::unix_now_ms();
-    let frame = crate::sidebar::snapshot::SnapshotCache {
-        produced_at_ms: now_ms,
-        session_name: "rimz-test".to_owned(),
-        panes: vec![pane("terminal_7", "tab_1", false)],
-    };
+    let frame = crate::sidebar::snapshot::assemble_frame(
+        vec![pane("terminal_7", "tab_1", false)],
+        now_ms,
+        "rimz-test",
+    );
     std::fs::write(
         runtime.root.join("snapshot.json"),
         serde_json::to_vec(&frame).unwrap(),
@@ -249,11 +249,11 @@ fn pane_frame_published_refolds_a_consumer_from_cache() {
     state.ensure_dirs().unwrap();
     runtime.ensure_dirs().unwrap();
 
-    let frame = crate::sidebar::snapshot::SnapshotCache {
-        produced_at_ms: crate::sidebar::snapshot::unix_now_ms(),
-        session_name: "rimz-test".to_owned(),
-        panes: vec![pane("terminal_7", "tab_1", false)],
-    };
+    let frame = crate::sidebar::snapshot::assemble_frame(
+        vec![pane("terminal_7", "tab_1", false)],
+        crate::sidebar::snapshot::unix_now_ms(),
+        "rimz-test",
+    );
     std::fs::write(
         runtime.root.join("snapshot.json"),
         serde_json::to_vec(&frame).unwrap(),

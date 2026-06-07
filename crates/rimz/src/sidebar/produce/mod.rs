@@ -27,9 +27,10 @@ mod spending;
 use std::path::PathBuf;
 
 use crate::ids::{MuxName, PaneId};
-use crate::sidebar::cache::{SnapshotCache, unix_now_ms};
+use crate::sidebar::cache::unix_now_ms;
 use crate::sidebar::consumer::{RollupCursor, rollup_snapshot};
 use crate::sidebar::enrich::{EnrichMode, enrich, live_row_costs};
+use crate::sidebar::frame::{PaneFrame, assemble_frame};
 use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 
 #[derive(Debug, thiserror::Error)]
@@ -74,11 +75,7 @@ pub fn produce_snapshot(
     let frame = match pane_list_fixture()? {
         // A test fixture stands in for the mux; never touch the shared cache
         // so deterministic tests can neither poison nor read it.
-        Some(fixture) => SnapshotCache {
-            produced_at_ms: unix_now_ms(),
-            session_name: opts.session_name.clone(),
-            panes: fixture,
-        },
+        Some(fixture) => assemble_frame(fixture, unix_now_ms(), opts.session_name.clone()),
         None => panes::cached_panes_or_produce(
             runtime,
             opts.mux,
@@ -161,7 +158,7 @@ fn pane_list_fixture() -> Result<Option<Vec<crate::feed::PaneRef>>> {
 ///   closure takes the preferred trunk from it.
 fn enrich_producing(
     snapshot: SidebarSnapshot,
-    frame: Option<SnapshotCache>,
+    frame: Option<PaneFrame>,
     runtime: &RuntimePaths,
     exclude: Option<&PaneId>,
     min_pane_cache_ms: Option<u64>,
@@ -212,9 +209,6 @@ pub(crate) mod test_support {
             cwd: cwd.map(ToOwned::to_owned),
             pane_pid: None,
             pane_process_start: None,
-            rss_kb: None,
-            cpu_pct: None,
-            io_bps: None,
         }
     }
 }

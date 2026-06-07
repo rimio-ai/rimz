@@ -56,9 +56,6 @@ fn pane(i: usize) -> rimz::feed::PaneRef {
         cwd: None,
         pane_pid: None,
         pane_process_start: None,
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
     }
 }
 

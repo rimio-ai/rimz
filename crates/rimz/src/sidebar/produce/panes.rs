@@ -1,5 +1,5 @@
 //! The live pane frame: the single-flight `list-panes` cache, the raced-read
-//! carry-forward repair, and the `/proc` process-start stamp — everything the
+//! process rotation, and the `/proc` process-start stamp — everything the
 //! producer publishes to `snapshot.json` for consumers to fold in process.
 
 use std::collections::HashSet;
@@ -7,14 +7,15 @@ use std::path::Path;
 use std::time::Duration;
 
 use super::Result;
-use crate::ids::MuxName;
+use crate::ids::{MuxName, PaneId};
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
 use crate::mux::PaneListOptions;
 use crate::sidebar::cache::{
-    SnapshotCache, effective_pane_ttl, presence_stamp_age_ms, read_snapshot_cache,
-    snapshot_cache_is_fresh, unix_now_ms,
+    effective_pane_ttl, presence_stamp_age_ms, read_snapshot_cache, snapshot_cache_is_fresh,
+    unix_now_ms,
 };
+use crate::sidebar::frame::{PaneFrame, assemble_frame};
 
 /// How a non-producing sidebar waits for the single producer's cache write
 /// before giving up and producing locally. ~200ms total (10 × 20ms).
@@ -33,7 +34,7 @@ fn fresh_snapshot_cache(
     session: &str,
     min_produced_at_ms: Option<u64>,
     ttl: Duration,
-) -> Option<SnapshotCache> {
+) -> Option<PaneFrame> {
     let cache = read_snapshot_cache(cache_path, session)?;
     snapshot_cache_is_fresh(&cache, unix_now_ms(), min_produced_at_ms, ttl).then_some(cache)
 }
@@ -51,57 +52,24 @@ fn list_session_panes(mux: MuxName, session: &str) -> Result<Vec<crate::feed::Pa
     })?)
 }
 
-/// Fill any field a fresh `list-panes` read dropped, from the last good read of
-/// the same pane id. A mid-tick race occasionally returns a live pane with a
-/// null `command`/`cwd`/`pane_process_start`; left as-is that relabels a known
-/// pane as a bare `process` row or regroups it under `external` until the next
-/// read. Carrying the missing fields forward by pane id keeps the row steady,
-/// and is unbounded while the pane persists — where a whole-list hold would
-/// also mask genuinely changed panes. Scoped to the exact pane id, so a reused
-/// id (a relaunch reports its own fresh fields) is never backfilled from the
-/// prior tenant.
-fn carry_forward_pane_fields(fresh: &mut [crate::feed::PaneRef], prev: &[crate::feed::PaneRef]) {
-    for pane in fresh.iter_mut() {
-        let Some(prior) = prev.iter().find(|prior| prior.pane_id == pane.pane_id) else {
-            continue;
-        };
-        let command_changed = match (pane.command.as_deref(), prior.command.as_deref()) {
-            (Some(current), Some(previous)) => current != previous,
-            _ => false,
-        };
-        if pane.command.is_none() {
-            pane.command = prior.command.clone();
-        }
-        if pane.cwd.is_none() {
-            pane.cwd = prior.cwd.clone();
-        }
-        if pane.pane_process_start.is_none() && !command_changed {
-            pane.pane_process_start = prior.pane_process_start;
-        }
-    }
-}
-
-/// Backfill any field a fresh read dropped from the last good read of the same
-/// pane id (see [`carry_forward_pane_fields`]). Shared by both produce arms —
-/// the elected producer and a loser falling back to a local produce — so a
-/// raced `list-panes` answer renders no anonymous row on either path. Read-only
-/// on the cache; the winner-only metrics enrich and cache write stay in the
-/// `Produce` arm.
-fn carry_forward_from_cache(panes: &mut [crate::feed::PaneRef], cache_path: &Path, session: &str) {
+/// Join a fresh frame to the last published same-session frame. Raced-null
+/// fields repair only when the process identity stayed stable; a command or
+/// root-pid change rotates the prior current process to `previous` and keeps
+/// the fresh process record clean.
+fn rotate_from_cache(frame: &mut PaneFrame, cache_path: &Path, session: &str) {
     if let Some(prev) = read_snapshot_cache(cache_path, session) {
-        carry_forward_pane_fields(panes, &prev.panes);
+        frame.rotate_against_prior(&prev);
     }
 }
 
 /// The pane ids a fresh `list-panes` read left without a process start — the
 /// set the `/proc` stamp owns ([`stamp_pane_process_starts`]). Captured before
-/// [`carry_forward_from_cache`] backfills prior values, so a backend-reported
-/// start — including one the carry restores after a raced read — is never
-/// confused with Rimz's own derived stamp and never overwritten by one.
-fn natively_unstamped(panes: &[crate::feed::PaneRef]) -> HashSet<crate::ids::PaneId> {
-    panes
-        .iter()
-        .filter(|pane| pane.pane_process_start.is_none())
+/// the frame rotates against the prior publish, so a backend-reported start is
+/// never confused with Rimz's own derived stamp and never overwritten by one.
+fn natively_unstamped(frame: &PaneFrame) -> HashSet<PaneId> {
+    frame
+        .pane_states()
+        .filter(|pane| pane.current.started_at.is_none())
         .map(|pane| pane.pane_id.clone())
         .collect()
 }
@@ -126,8 +94,8 @@ fn natively_unstamped(panes: &[crate::feed::PaneRef]) -> HashSet<crate::ids::Pan
 ///    [`super::metrics::enrich_pane_metrics`]) — per-pane exact, re-derived
 ///    each produce, so a re-tenanted pane (the agent exits and is re-run in
 ///    place) sheds the prior tenant's stamp;
-/// 2. the stamp [`carry_forward_from_cache`] restored from the prior frame —
-///    bridges the windows where the binding is missing or its process is gone
+/// 2. the stamp the frame rotation restored from the prior frame — bridges the
+///    windows where the binding is missing or its process is gone
 ///    (a fresh-window re-tenancy, an exited pane) without rescanning;
 /// 3. the earliest in-pane agent CLI in the pane's cwd — the warmup path for a
 ///    pane no prior frame has stamped and no binding has reached yet.
@@ -136,31 +104,32 @@ fn natively_unstamped(panes: &[crate::feed::PaneRef]) -> HashSet<crate::ids::Pan
 /// [`crate::remote_control::in_pane_agent_start_for_root`] and
 /// [`crate::remote_control::in_pane_agent_start`].
 fn stamp_pane_process_starts(
-    panes: &mut [crate::feed::PaneRef],
-    unstamped: &HashSet<crate::ids::PaneId>,
+    frame: &mut PaneFrame,
+    unstamped: &HashSet<PaneId>,
     root_start: &dyn Fn(&str, u32) -> Option<jiff::Timestamp>,
     cwd_start: &dyn Fn(&str, &str) -> Option<jiff::Timestamp>,
 ) {
-    for pane in panes.iter_mut() {
+    for pane in frame.pane_states_mut() {
         if !unstamped.contains(&pane.pane_id) {
             continue;
         }
         let Some(kind) = pane
+            .current
             .command
             .as_deref()
             .and_then(crate::ledger::snapshot::command_agent_kind)
         else {
             continue;
         };
-        if let Some(start) = pane.pane_pid.and_then(|pid| root_start(kind, pid)) {
-            pane.pane_process_start = Some(start);
+        if let Some(start) = pane.current.pid.and_then(|pid| root_start(kind, pid)) {
+            pane.current.started_at = Some(start);
             continue;
         }
-        if pane.pane_process_start.is_some() {
+        if pane.current.started_at.is_some() {
             continue;
         }
-        if let Some(cwd) = pane.cwd.as_deref().filter(|cwd| !cwd.is_empty()) {
-            pane.pane_process_start = cwd_start(kind, cwd);
+        if let Some(cwd) = pane.current.cwd.as_deref().filter(|cwd| !cwd.is_empty()) {
+            pane.current.started_at = cwd_start(kind, cwd);
         }
     }
 }
@@ -179,7 +148,7 @@ pub(super) fn cached_panes_or_produce(
     mux: MuxName,
     session: &str,
     min_pane_cache_ms: Option<u64>,
-) -> Result<SnapshotCache> {
+) -> Result<PaneFrame> {
     let cache_path = runtime.root.join("snapshot.json");
 
     // Select the pane TTL once per call from the presence stamp: event mode
@@ -200,12 +169,12 @@ pub(super) fn cached_panes_or_produce(
     // local produce rather than block.
     let lock_path = runtime.root.join("snapshot.lock");
     let fresh = || fresh_snapshot_cache(&cache_path, session, min_pane_cache_ms, pane_ttl);
-    let produce_local = || -> Result<SnapshotCache> {
-        Ok(SnapshotCache {
-            produced_at_ms: unix_now_ms(),
-            session_name: session.to_owned(),
-            panes: list_session_panes(mux, session)?,
-        })
+    let produce_local = || -> Result<PaneFrame> {
+        Ok(assemble_frame(
+            list_session_panes(mux, session)?,
+            unix_now_ms(),
+            session.to_owned(),
+        ))
     };
     match single_flight::coalesce(
         &lock_path,
@@ -218,52 +187,52 @@ pub(super) fn cached_panes_or_produce(
         // The raced-read repair still applies — without it a dropped command/cwd
         // on this one path folds the anonymous row the winner path guards against.
         Coalesced::ProduceLocal => {
-            let mut cache = produce_local()?;
-            let unstamped = natively_unstamped(&cache.panes);
-            carry_forward_from_cache(&mut cache.panes, &cache_path, session);
+            let mut frame = produce_local()?;
+            let unstamped = natively_unstamped(&frame);
+            rotate_from_cache(&mut frame, &cache_path, session);
             // This unpublished fallback frame feeds its own fold directly, so it
             // needs the stamp the cwd-fallback guard reads just like a published one.
             stamp_pane_process_starts(
-                &mut cache.panes,
+                &mut frame,
                 &unstamped,
                 &crate::remote_control::in_pane_agent_start_for_root,
                 &crate::remote_control::in_pane_agent_start,
             );
-            Ok(cache)
+            Ok(frame)
         }
         // We won: fork `list-panes` and publish it. The guard holds the lock
         // until this arm returns.
         Coalesced::Produce(_guard) => {
-            let mut cache = produce_local()?;
-            let unstamped = natively_unstamped(&cache.panes);
+            let mut frame = produce_local()?;
+            let unstamped = natively_unstamped(&frame);
             // A mid-tick `list-panes` race can drop a live pane's command/cwd/
             // process-start; rather than fold an anonymous `external`/`process`
             // row that blinks out next tick, backfill the missing fields from
             // the last good read of the same pane id.
-            carry_forward_from_cache(&mut cache.panes, &cache_path, session);
+            rotate_from_cache(&mut frame, &cache_path, session);
             // Enrich each pane with per-process resource metrics (best-effort,
             // Linux-only). Runs inside the produce lock so only one producer
             // reads `/proc` per tick; the result is in the published pane cache,
             // so consumer tabs never fork their own reads.
-            super::metrics::enrich_pane_metrics(&mut cache.panes, session, runtime);
+            super::metrics::enrich_pane_metrics(&mut frame, session, runtime);
             // Stamp the in-pane agent process starts before the publish — after
             // the enrich, whose pane→root-pid bindings the stamp's first rung
             // rides — so the cache carries them to every reader: the in-process
             // produce and the consumer in-process fold alike.
             stamp_pane_process_starts(
-                &mut cache.panes,
+                &mut frame,
                 &unstamped,
                 &crate::remote_control::in_pane_agent_start_for_root,
                 &crate::remote_control::in_pane_agent_start,
             );
-            if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &cache) {
+            if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &frame) {
                 tracing::warn!(path = %cache_path.display(), error = %err, "sidebar snapshot cache write failed");
             } else if let Err(err) =
                 crate::ledger::wakeup::wake_sidebars_pane_frame_published(runtime)
             {
                 tracing::debug!(error = %err, "sidebar pane-frame publication wakeup failed");
             }
-            Ok(cache)
+            Ok(frame)
         }
     }
 }

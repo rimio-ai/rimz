@@ -80,9 +80,6 @@ fn placeholder_pane(pane_id: PaneId, command: String) -> PaneRef {
         cwd: None,
         pane_pid: None,
         pane_process_start: None,
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
     }
 }
 
@@ -109,9 +106,6 @@ mod tests {
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
             pane_process_start: None,
-            rss_kb: None,
-            cpu_pct: None,
-            io_bps: None,
         }
     }
 
@@ -122,7 +116,7 @@ mod tests {
     }
 
     /// An own view whose working set is `working`, mirroring what
-    /// `SidebarOwnView::from_panes` derives from the live pane list.
+    /// `SidebarOwnView::from_frame` derives from the live pane frame.
     fn own_view(working: &[&PaneId], active: Option<PaneId>) -> crate::SidebarOwnView {
         crate::SidebarOwnView {
             sibling_count: working.len(),

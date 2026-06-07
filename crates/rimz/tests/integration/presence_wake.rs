@@ -30,7 +30,7 @@ use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::ledger::RuntimePaths;
 use rimz::schema::heartbeat::SidebarHeartbeat;
 use rimz::sidebar::snapshot::{
-    PresenceStamp, SnapshotCache, presence_stamp_path, read_snapshot_cache, unix_now_ms,
+    PresenceStamp, assemble_frame, presence_stamp_path, read_snapshot_cache, unix_now_ms,
 };
 use tempfile::TempDir;
 
@@ -150,11 +150,11 @@ impl WakeEnv {
     /// Seed the shared pane cache with an empty frame produced `age` ago —
     /// fresh under the event-mode TTL, stale under the poll TTL.
     fn seed_pane_cache(&self, age: Duration) {
-        let cache = SnapshotCache {
-            produced_at_ms: unix_now_ms().saturating_sub(age.as_millis() as u64),
-            session_name: SESSION_NAME.to_owned(),
-            panes: Vec::new(),
-        };
+        let cache = assemble_frame(
+            Vec::new(),
+            unix_now_ms().saturating_sub(age.as_millis() as u64),
+            SESSION_NAME,
+        );
         std::fs::write(
             self.runtime.root.join("snapshot.json"),
             serde_json::to_vec(&cache).expect("serialize pane cache"),
@@ -163,10 +163,8 @@ impl WakeEnv {
     }
 
     fn seed_pane_cache_with_shell(&self, pane_id: &str, produced_at_ms: u64) {
-        let cache = SnapshotCache {
-            produced_at_ms,
-            session_name: SESSION_NAME.to_owned(),
-            panes: vec![PaneRef {
+        let cache = assemble_frame(
+            vec![PaneRef {
                 pane_id: PaneId::from_parts(MuxName::Zellij, pane_id),
                 session_name: SESSION_NAME.to_owned(),
                 view_id: Some("tab_0".to_owned()),
@@ -177,11 +175,10 @@ impl WakeEnv {
                 cwd: Some(self.project_root.to_string_lossy().into_owned()),
                 pane_pid: None,
                 pane_process_start: None,
-                rss_kb: None,
-                cpu_pct: None,
-                io_bps: None,
             }],
-        };
+            produced_at_ms,
+            SESSION_NAME,
+        );
         std::fs::write(
             self.runtime.root.join("snapshot.json"),
             serde_json::to_vec(&cache).expect("serialize pane cache"),
@@ -201,19 +198,16 @@ impl WakeEnv {
             cwd: Some(self.project_root.to_string_lossy().into_owned()),
             pane_pid: None,
             pane_process_start: None,
-            rss_kb: None,
-            cpu_pct: None,
-            io_bps: None,
         };
-        let cache = SnapshotCache {
-            produced_at_ms,
-            session_name: SESSION_NAME.to_owned(),
-            panes: vec![
+        let cache = assemble_frame(
+            vec![
                 mk_pane("terminal_6", "rimz-sidebar", false),
                 mk_pane("terminal_7", "zsh", true),
                 mk_pane("terminal_8", "zsh", false),
             ],
-        };
+            produced_at_ms,
+            SESSION_NAME,
+        );
         std::fs::write(
             self.runtime.root.join("snapshot.json"),
             serde_json::to_vec(&cache).expect("serialize pane cache"),
@@ -484,8 +478,9 @@ fn wake_command_changed_broadcasts_event_without_patching_pane_frame() {
         cached.produced_at_ms, produced_at_ms,
         "typed overlay events must not masquerade as a fresh mux read",
     );
-    assert_eq!(cached.panes[0].command.as_deref(), Some("zsh"));
-    assert!(cached.panes[0].pane_process_start.is_none());
+    let cached_panes = cached.to_pane_refs();
+    assert_eq!(cached_panes[0].command.as_deref(), Some("zsh"));
+    assert!(cached_panes[0].pane_process_start.is_none());
     env.assert_no_mux_fork();
 }
 
@@ -534,18 +529,16 @@ fn wake_focus_changed_broadcasts_event_without_patching_pane_frame() {
         cached.produced_at_ms, produced_at_ms,
         "typed overlay events must not masquerade as a fresh mux read",
     );
-    let terminal_7 = cached
-        .panes
+    let cached_panes = cached.to_pane_refs();
+    let terminal_7 = cached_panes
         .iter()
         .find(|pane| pane.pane_id.raw() == "terminal_7")
         .expect("terminal_7 remains present");
-    let terminal_8 = cached
-        .panes
+    let terminal_8 = cached_panes
         .iter()
         .find(|pane| pane.pane_id.raw() == "terminal_8")
         .expect("terminal_8 remains present");
-    let sidebar = cached
-        .panes
+    let sidebar = cached_panes
         .iter()
         .find(|pane| pane.pane_id.raw() == "terminal_6")
         .expect("sidebar remains present");

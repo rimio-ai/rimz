@@ -4,7 +4,7 @@
 //! arrives through [`EnrichMode::Producing`]; consumer reads project published
 //! runtime caches and sidecars only.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -24,9 +24,9 @@ use crate::{
 };
 
 use super::cache::{
-    AccountsCache, DiffStatsCache, GIT_ACTIVITY_WINDOW, SnapshotCache, read_diff_stats_cache,
-    unix_now_ms,
+    AccountsCache, DiffStatsCache, GIT_ACTIVITY_WINDOW, read_diff_stats_cache, unix_now_ms,
 };
+use super::frame::{PaneFrame, PaneMetrics};
 pub(crate) use crate::sidebar::timing::CODEX_RATE_LIMIT_REFRESH_INTERVAL;
 
 /// Poll cadence and budget for the accounts single-flight: a loser waits up to
@@ -256,7 +256,7 @@ pub enum EnrichMode<'a> {
 /// points.
 pub fn enrich(
     mut snapshot: SidebarSnapshot,
-    frame: Option<SnapshotCache>,
+    frame: Option<PaneFrame>,
     runtime: &RuntimePaths,
     exclude: Option<&PaneId>,
     mut mode: EnrichMode<'_>,
@@ -326,10 +326,11 @@ pub fn enrich(
 
     if let Some(frame) = frame {
         snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
-        let panes = frame.panes;
         if let Some(own) = exclude {
-            snapshot.own_view = SidebarOwnView::from_panes(own, &panes);
+            snapshot.own_view = SidebarOwnView::from_frame(own, &frame);
         }
+        let metrics = frame.pane_metrics().collect::<Vec<_>>();
+        let panes = frame.to_pane_refs();
         // Recomputed from the full pane list (pre-exclusion), before
         // `with_live_panes` consumes `panes` — never trusted from the base,
         // for producer/consumer symmetry. The panes arrive with their
@@ -338,6 +339,7 @@ pub fn enrich(
         // fires identically on every path.
         snapshot.only_daemon_view_remains = SidebarSnapshot::only_daemon_view(&panes);
         snapshot = snapshot.with_live_panes(panes, exclude);
+        apply_pane_metrics(&mut snapshot, metrics);
     }
     snapshot.agent_hooks_ready = agent_hooks_ready();
 
@@ -384,6 +386,26 @@ pub fn enrich(
     // walk's TTL.
     apply_live_today_spend(&mut snapshot, &spending_cache);
     snapshot
+}
+
+fn apply_pane_metrics(snapshot: &mut SidebarSnapshot, metrics: Vec<(PaneId, PaneMetrics)>) {
+    if metrics.is_empty() {
+        return;
+    }
+    let metrics: HashMap<PaneId, PaneMetrics> = metrics.into_iter().collect();
+    for group in &mut snapshot.worktree_groups {
+        for row in &mut group.rows {
+            let Some(pane) = row.pane.as_ref() else {
+                continue;
+            };
+            let Some(metric) = metrics.get(&pane.pane_id) else {
+                continue;
+            };
+            row.rss_kb = metric.rss_kb;
+            row.cpu_pct = metric.cpu_pct;
+            row.io_bps = metric.io_bps;
+        }
+    }
 }
 
 /// Fold the per-machine config and the per-provider dashboard onto a *producer*

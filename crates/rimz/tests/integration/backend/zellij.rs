@@ -1266,12 +1266,14 @@ fn sidebar_serve_command_with_tick(
     )
 }
 
-/// Poll `list_panes` until a terminal pane reports its command metadata, then
-/// return the listing (bounded). A pane can surface in `list-panes` a beat
-/// before Zellij fills in command/cwd/pid — under load that window widens — so a
-/// test that asserts on that metadata waits for it here rather than for the bare
-/// pane to exist.
-fn wait_for_pane_with_command(xdg: &Path, session: &str) -> Vec<PaneRef> {
+/// Poll `list_panes` until a terminal pane reports its cwd metadata, then return
+/// the listing (bounded). A pane can surface in `list-panes` a beat before
+/// Zellij fills in cwd/pid — under load that window widens — so a test that
+/// asserts on that metadata waits for it here rather than for the bare pane to
+/// exist. Zellij 0.44 can still omit command fields for the implicit shell pane;
+/// the adapter preserves that as `None` for the frame rotation layer to repair
+/// from a prior observation when one exists.
+fn wait_for_pane_with_cwd(xdg: &Path, session: &str) -> Vec<PaneRef> {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let panes = ZellijBackend::with_runtime_dir(xdg)
@@ -1280,11 +1282,9 @@ fn wait_for_pane_with_command(xdg: &Path, session: &str) -> Vec<PaneRef> {
                 ..Default::default()
             })
             .unwrap_or_default();
-        let ready = panes.iter().any(|pane| {
-            pane.command
-                .as_deref()
-                .is_some_and(|command| !command.is_empty())
-        });
+        let ready = panes
+            .iter()
+            .any(|pane| pane.cwd.as_deref().is_some_and(|cwd| !cwd.is_empty()));
         if ready || Instant::now() >= deadline {
             return panes;
         }
@@ -1921,11 +1921,11 @@ fn list_panes_with_session_returns_terminals() {
     let name = unique_session_name("panes");
     let session = ZellijSession::spawn(&name);
 
-    // Poll until the implicit shell pane reports its command metadata, not just
-    // until it exists: a pane can surface in `list-panes` a beat before Zellij
-    // fills in command/cwd/pid, and under load that window widens. This test
-    // asserts on that metadata, so it must wait for it.
-    let panes = wait_for_pane_with_command(session.xdg.path(), &name);
+    // Poll until the implicit shell pane reports cwd metadata, not just until it
+    // exists: a pane can surface in `list-panes` a beat before Zellij fills in
+    // cwd/pid, and under load that window widens. Command can still be absent for
+    // the implicit shell pane on Zellij 0.44.
+    let panes = wait_for_pane_with_cwd(session.xdg.path(), &name);
     assert!(
         !panes.is_empty(),
         "expected ≥1 terminal pane in fresh session {name}, got {panes:?}",
@@ -1938,12 +1938,12 @@ fn list_panes_with_session_returns_terminals() {
             pane.pane_id,
         );
         assert_eq!(pane.session_name, name);
-        assert!(
-            pane.command
-                .as_deref()
-                .is_some_and(|command| !command.is_empty()),
-            "zellij should report pane_command into PaneRef::command: {pane:?}",
-        );
+        if let Some(command) = pane.command.as_deref() {
+            assert!(
+                !command.is_empty(),
+                "zellij should not report an empty PaneRef::command: {pane:?}",
+            );
+        }
         assert!(
             pane.cwd.as_deref().is_some_and(|cwd| !cwd.is_empty()),
             "zellij should report pane_cwd into PaneRef::cwd: {pane:?}",

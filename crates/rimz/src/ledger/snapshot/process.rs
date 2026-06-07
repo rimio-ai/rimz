@@ -8,9 +8,9 @@ use crate::agents::lifecycle::TurnPhase;
 use crate::feed::PaneRef;
 
 /// Whether a pane no agent has bound carries enough identity to render a
-/// process row. A live pane always reports a command (mux contract), so a
-/// `None`/empty command after carry-forward is a raced or mid-birth read, not a
-/// real nameless pane — render nothing rather than an anonymous `process` row.
+/// process row. A `None`/empty command after frame rotation is a raced or
+/// mid-birth read, or a backend observation with no command metadata — render
+/// nothing rather than an anonymous `process` row.
 pub(super) fn pane_command_is_known(pane: &PaneRef) -> bool {
     pane.command
         .as_deref()
@@ -77,9 +77,9 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
         command_detail,
         compacting: false,
         turn_error_label: None,
-        rss_kb: pane.rss_kb,
-        cpu_pct: pane.cpu_pct,
-        io_bps: pane.io_bps,
+        rss_kb: None,
+        cpu_pct: None,
+        io_bps: None,
     }
 }
 
@@ -111,8 +111,15 @@ fn process_is_active(command: &str) -> bool {
 /// through a JS launcher to its script: `npm` for `sudo npm install …`, `codex`
 /// for `node /usr/bin/codex`, `cargo` for `/usr/bin/cargo build`. The label a
 /// process row shows and the token its agent-kind match keys off.
-pub(super) fn program_label(command: &str) -> String {
+pub(crate) fn program_label(command: &str) -> String {
     basename(effective_program(command)).to_owned()
+}
+
+/// Whether a pane's foreground command is Rimz's own sidebar — chrome to filter
+/// from rows, sibling counts, and view classification, never to render. One
+/// predicate so the frame's own-view derivation and the daemon-view fold agree.
+pub(crate) fn command_is_sidebar_chrome(command: &str) -> bool {
+    program_label(command) == "rimz-sidebar"
 }
 
 /// The file name of a path-or-bare token (`codex` from `/usr/bin/codex`), or the

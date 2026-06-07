@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::ledger::atomic;
 use crate::sidebar::cache::unix_now_ms;
+use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::METRICS_SAMPLE_TTL;
 
 /// Per-pane CPU and IO tick counters sampled by the producer on the previous
@@ -29,22 +30,22 @@ struct MetricsSampleEntry {
     /// re-matching the pane against the whole process table.
     #[serde(default)]
     pane_pid: Option<u32>,
-    /// The pane's foreground command when the binding was recorded. A changed
-    /// foreground invalidates it: re-tenancy is exactly when the original
-    /// cmdline match could have gone stale, and a transition is when
-    /// `list-panes` already paid for fresh topology anyway.
-    #[serde(default)]
-    pane_command: Option<String>,
     /// `starttime` ticks (stat field 22) of the root pid at record time — the
     /// exact pid-reuse guard: a recycled pid carries a different start time,
     /// so a stale binding can never latch onto a stranger's process.
     #[serde(default)]
     root_start_ticks: Option<u64>,
+    /// The pane's foreground command at sample time — the re-tenancy guard for
+    /// the within-TTL carry. A changed command means the values below belong to
+    /// the prior tenant (on tmux the root pid is the shell and survives every
+    /// foreground change, so pid identity alone cannot tell), and the carry
+    /// skips rather than mislabel the fresh process for a sample window.
+    #[serde(default)]
+    command: Option<String>,
     /// Last computed display values, persisted so a within-TTL produce copies
     /// them onto the matching pane instead of re-reading `/proc`. `cpu_pct` /
     /// `io_bps` are `None` on an entry's first sample (no prior reading to
-    /// rate); `rss_kb` is the last stat read. Carried forward only under the
-    /// `pane_command` re-tenancy guard, mirroring [`cached_root_pid`].
+    /// rate); `rss_kb` is the last stat read.
     #[serde(default)]
     cpu_pct: Option<u16>,
     #[serde(default)]
@@ -94,7 +95,7 @@ fn read_metrics_sample_cache(path: &Path) -> MetricsSampleCache {
 /// runs only while some pane's binding is unknown — pane churn or a foreground
 /// change, exactly the moments a fresh `list-panes` was already paid for.
 pub(super) fn enrich_pane_metrics(
-    panes: &mut [crate::feed::PaneRef],
+    frame: &mut PaneFrame,
     session_name: &str,
     runtime: &crate::RuntimePaths,
 ) {
@@ -105,40 +106,37 @@ pub(super) fn enrich_pane_metrics(
     // Within the sampling window: carry the stored display values forward onto
     // the matching panes and return — zero `/proc` IO (no stat-validated
     // binding restore, no table walk, no stat/io reads) and no cache write.
-    // The carry is keyed by pane id and guarded by the foreground command, so
-    // a pane id re-tenanted inside one window never wears its predecessor's
-    // stats; a pane absent from the cache (or re-tenanted) keeps `None`s —
-    // the same warmup it has today, one window wider.
+    // The carry is keyed by pane id and guarded by the sample-time command:
+    // a changed foreground means the values belong to the prior tenant, so
+    // they stay off the fresh process. A pane absent from the cache keeps
+    // `None`s — the same warmup it has today, one window wider.
     if prior.is_fresh(now_ms) {
-        for pane in panes.iter_mut() {
+        for pane in frame.pane_states_mut() {
             let Some(entry) = prior.entries.get(&pane.pane_id.to_string()) else {
                 continue;
             };
-            if entry.pane_command == pane.command {
-                // The root-pid binding rides with the values: the reducer
-                // anchors an active process row's name on the root's comm, so
-                // a pidless (Zellij) pane left unbound here would flip its
-                // label between shell and program across windows. The command
-                // guard stands in for the due path's starttime revalidation —
-                // a live pane with an unchanged foreground inside one ~3s
-                // window is the same process, and the cost of the rare miss
-                // is a cosmetic label, not an attributed sample.
-                if pane.pane_pid.is_none() {
-                    pane.pane_pid = entry.pane_pid;
-                }
-                pane.cpu_pct = entry.cpu_pct;
-                pane.io_bps = entry.io_bps;
-                pane.rss_kb = entry.rss_kb;
+            if entry.command != pane.current.command {
+                continue;
             }
+            // The root-pid binding rides with the values: the reducer anchors
+            // an active process row's name on the root's comm, so a pidless
+            // (Zellij) pane left unbound here would flip its label between
+            // shell and program across windows.
+            if pane.current.pid.is_none() {
+                pane.current.pid = entry.pane_pid;
+            }
+            pane.metrics.cpu_pct = entry.cpu_pct;
+            pane.metrics.io_bps = entry.io_bps;
+            pane.metrics.rss_kb = entry.rss_kb;
         }
         return;
     }
 
     // Zellij's `list-panes` reports no per-pane pid (tmux fills `#{pane_pid}`
     // natively), so first restore each pidless pane's root pid from the prior
-    // tick's binding — command-stable and starttime-guarded, one stat read per
-    // pane instead of the table walk below.
-    let needs_walk = restore_cached_bindings(panes, &prior, &|pid| {
+    // tick's binding — starttime-guarded, one stat read per pane instead of
+    // the table walk below.
+    let needs_walk = restore_cached_bindings(frame, &prior, &|pid| {
         crate::proc::stat_metrics(pid).map(|stat| stat.start_ticks)
     });
 
@@ -151,7 +149,7 @@ pub(super) fn enrich_pane_metrics(
             children.entry(p.ppid).or_default().push(p.pid);
         }
         backfill_zellij_pane_pids(
-            panes,
+            frame,
             &all_procs,
             &children,
             session_name,
@@ -163,8 +161,8 @@ pub(super) fn enrich_pane_metrics(
     let clk_tck = crate::proc::clk_tck() as f64;
     let mut new_entries: HashMap<String, MetricsSampleEntry> = HashMap::new();
 
-    for pane in panes.iter_mut() {
-        let Some(shell_pid) = pane.pane_pid else {
+    for pane in frame.pane_states_mut() {
+        let Some(shell_pid) = pane.current.pid else {
             continue;
         };
         // If the shell has exactly one child, its stats are more informative
@@ -175,6 +173,7 @@ pub(super) fn enrich_pane_metrics(
             None if !needs_walk => crate::proc::children(shell_pid),
             None => Vec::new(),
         };
+        pane.children = kids.clone();
         let stats_pid = match kids.as_slice() {
             &[child] => child,
             _ => shell_pid,
@@ -183,7 +182,7 @@ pub(super) fn enrich_pane_metrics(
         // One `stat` read serves both CPU ticks and RSS (the separate `status`
         // read for VmRSS was a third file open per pane for one display figure).
         let stat_now = crate::proc::stat_metrics(stats_pid);
-        pane.rss_kb = stat_now.map(|stat| stat.rss_kb);
+        pane.metrics.rss_kb = stat_now.map(|stat| stat.rss_kb);
         let cpu_now = stat_now.map(|stat| stat.cpu_ticks);
         let io_now = crate::proc::io_bytes(stats_pid);
 
@@ -198,11 +197,11 @@ pub(super) fn enrich_pane_metrics(
                     if let Some(ticks) = cpu_now {
                         let delta = ticks.saturating_sub(prior_entry.cpu_ticks);
                         let pct = (delta as f64 / elapsed_secs / clk_tck * 100.0).round();
-                        pane.cpu_pct = Some(pct.clamp(0.0, u16::MAX as f64) as u16);
+                        pane.metrics.cpu_pct = Some(pct.clamp(0.0, u16::MAX as f64) as u16);
                     }
                     if let Some(bytes) = io_now {
                         let delta = bytes.saturating_sub(prior_entry.io_bytes);
-                        pane.io_bps = Some((delta as f64 / elapsed_secs) as u64);
+                        pane.metrics.io_bps = Some((delta as f64 / elapsed_secs) as u64);
                     }
                 }
             }
@@ -224,11 +223,11 @@ pub(super) fn enrich_pane_metrics(
                 io_bytes: io_now.unwrap_or(0),
                 sampled_at_ms: now_ms,
                 pane_pid: Some(shell_pid),
-                pane_command: pane.command.clone(),
                 root_start_ticks,
-                cpu_pct: pane.cpu_pct,
-                io_bps: pane.io_bps,
-                rss_kb: pane.rss_kb,
+                command: pane.current.command.clone(),
+                cpu_pct: pane.metrics.cpu_pct,
+                io_bps: pane.metrics.io_bps,
+                rss_kb: pane.metrics.rss_kb,
             },
         );
     }
@@ -244,24 +243,23 @@ pub(super) fn enrich_pane_metrics(
 
 /// Restore the cached pane→root-pid bindings for pidless (Zellij) panes, and
 /// report whether any pane still needs the full `/proc` table walk. A pane
-/// hits when its cached entry carries a binding, the foreground command is
-/// unchanged, and the root pid is alive with the same `starttime` ticks (the
-/// pid-reuse guard) — `read_start_ticks` is injected so the guard unit-tests
-/// over fixtures. Steady state — stable panes, stable foregrounds — restores
-/// every binding and walks nothing.
+/// hits when its cached entry carries a binding and the root pid is alive with
+/// the same `starttime` ticks (the pid-reuse guard) — `read_start_ticks` is
+/// injected so the guard unit-tests over fixtures. Steady state — stable panes
+/// with live root pids — restores every binding and walks nothing.
 fn restore_cached_bindings(
-    panes: &mut [crate::feed::PaneRef],
+    frame: &mut PaneFrame,
     prior: &MetricsSampleCache,
     read_start_ticks: &dyn Fn(u32) -> Option<u64>,
 ) -> bool {
     let mut needs_walk = false;
-    for pane in panes.iter_mut() {
-        if pane.pane_pid.is_some() {
+    for pane in frame.pane_states_mut() {
+        if pane.current.pid.is_some() {
             continue;
         }
         // The walk could not bind these either — no command to match, or the
         // sidebar's own chrome — so a miss on them never triggers it.
-        let Some(command) = pane.command.as_deref() else {
+        let Some(command) = pane.current.command.as_deref() else {
             continue;
         };
         if command == crate::mux::zellij::SIDEBAR_PANE_NAME {
@@ -270,9 +268,9 @@ fn restore_cached_bindings(
         match prior
             .entries
             .get(&pane.pane_id.to_string())
-            .and_then(|entry| cached_root_pid(entry, command, read_start_ticks))
+            .and_then(|entry| cached_root_pid(entry, read_start_ticks))
         {
-            Some(pid) => pane.pane_pid = Some(pid),
+            Some(pid) => pane.current.pid = Some(pid),
             None => needs_walk = true,
         }
     }
@@ -281,18 +279,14 @@ fn restore_cached_bindings(
 
 /// The still-valid root pid a cache entry binds, or `None` when the binding
 /// must be re-derived through the table walk: no binding recorded (an old
-/// cache shape), the foreground command changed (possible re-tenancy), the
-/// pid is gone, or the pid was recycled (`starttime` mismatch).
+/// cache shape), the pid is gone, or the pid was recycled (`starttime`
+/// mismatch).
 fn cached_root_pid(
     entry: &MetricsSampleEntry,
-    command: &str,
     read_start_ticks: &dyn Fn(u32) -> Option<u64>,
 ) -> Option<u32> {
     let pid = entry.pane_pid?;
     let recorded = entry.root_start_ticks?;
-    if entry.pane_command.as_deref() != Some(command) {
-        return None;
-    }
     (read_start_ticks(pid) == Some(recorded)).then_some(pid)
 }
 
@@ -319,7 +313,7 @@ fn cached_root_pid(
 /// Sidebar chrome panes are skipped outright: every sidebar shares one
 /// cmdline, and they are excluded from rows anyway.
 fn backfill_zellij_pane_pids(
-    panes: &mut [crate::feed::PaneRef],
+    frame: &mut PaneFrame,
     procs: &[crate::proc::ProcInfo],
     children: &HashMap<u32, Vec<u32>>,
     session_name: &str,
@@ -327,7 +321,7 @@ fn backfill_zellij_pane_pids(
     proc_cwd: &dyn Fn(u32) -> Option<PathBuf>,
 ) {
     // Nothing to backfill (tmux, or an empty room): skip the server scan.
-    if panes.iter().all(|pane| pane.pane_pid.is_some()) {
+    if frame.pane_states().all(|pane| pane.current.pid.is_some()) {
         return;
     }
     let Some(server_pid) = zellij_server_pid(procs, session_name, own_uid) else {
@@ -335,11 +329,11 @@ fn backfill_zellij_pane_pids(
     };
     let forest = descendants(children, server_pid);
     let parent_of: HashMap<u32, u32> = procs.iter().map(|p| (p.pid, p.ppid)).collect();
-    for pane in panes.iter_mut() {
-        if pane.pane_pid.is_some() {
+    for pane in frame.pane_states_mut() {
+        if pane.current.pid.is_some() {
             continue;
         }
-        let Some(command) = pane.command.as_deref() else {
+        let Some(command) = pane.current.command.as_deref() else {
             continue;
         };
         if command == crate::mux::zellij::SIDEBAR_PANE_NAME {
@@ -354,7 +348,7 @@ fn backfill_zellij_pane_pids(
             &[only] => Some(only),
             &[] => None,
             many => {
-                let narrowed: Vec<u32> = match pane.cwd.as_deref() {
+                let narrowed: Vec<u32> = match pane.current.cwd.as_deref() {
                     Some(cwd) => many
                         .iter()
                         .copied()
@@ -368,7 +362,8 @@ fn backfill_zellij_pane_pids(
                 }
             }
         };
-        pane.pane_pid = matched.and_then(|pid| walk_to_server_child(&parent_of, server_pid, pid));
+        pane.current.pid =
+            matched.and_then(|pid| walk_to_server_child(&parent_of, server_pid, pid));
     }
 }
 

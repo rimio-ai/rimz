@@ -53,11 +53,7 @@ impl Harness {
     /// pane frame rides the short poll-mode TTL.
     pub fn publish_fresh_produce_inputs(&self, session: &str, panes: Vec<rimz::feed::PaneRef>) {
         let now_ms = rimz::sidebar::snapshot::unix_now_ms();
-        let frame = rimz::sidebar::snapshot::SnapshotCache {
-            produced_at_ms: now_ms,
-            session_name: session.to_owned(),
-            panes,
-        };
+        let frame = rimz::sidebar::snapshot::assemble_frame(panes, now_ms, session);
         std::fs::write(
             self.runtime_paths.root.join("snapshot.json"),
             serde_json::to_vec(&frame).expect("serialize pane frame"),

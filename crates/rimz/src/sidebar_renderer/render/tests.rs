@@ -188,9 +188,6 @@ fn pane(raw: &str, command: &str, cwd: &str) -> PaneRef {
         cwd: Some(cwd.to_owned()),
         pane_pid: None,
         pane_process_start: None,
-        rss_kb: None,
-        cpu_pct: None,
-        io_bps: None,
     }
 }
 
@@ -464,11 +461,12 @@ fn render_agent_card_context_line_pins_age_not_resource_stats() {
     claude.last_activity = fixed_now() - Duration::from_secs(90);
     let stamped = pane("%1", "claude", "/repo/main");
     claude.pane = Some(stamped.clone());
-    let mut live = stamped;
-    live.cpu_pct = Some(11);
-    live.rss_kb = Some(1_153_024); // 1.1 GiB
-    live.io_bps = Some(3 * 1_048_576);
-    let snapshot = snapshot_with(Vec::new(), vec![claude]).with_live_panes(vec![live], None);
+    let live = stamped;
+    let mut snapshot = snapshot_with(Vec::new(), vec![claude]).with_live_panes(vec![live], None);
+    let row = &mut snapshot.worktree_groups[0].rows[0];
+    row.cpu_pct = Some(11);
+    row.rss_kb = Some(1_153_024); // 1.1 GiB
+    row.io_bps = Some(3 * 1_048_576);
 
     let rendered = snapshot_to_screen(&snapshot, 56, 14);
 
@@ -494,11 +492,12 @@ fn render_process_row_pins_resource_stats_at_l2() {
     // command rides the detail line below, so a build's resource load reads
     // at a glance without leaving the sidebar. The fixed-grid shape and tone
     // are asserted separately in `proc_stats_hold_a_fixed_dim_grid`.
-    let mut busy = pane("%1", "cargo build --release", "/repo/main");
-    busy.cpu_pct = Some(34);
-    busy.rss_kb = Some(512 * 1_024);
-    busy.io_bps = Some(8 * 1_048_576);
-    let snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(vec![busy], None);
+    let busy = pane("%1", "cargo build --release", "/repo/main");
+    let mut snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(vec![busy], None);
+    let row = &mut snapshot.worktree_groups[0].rows[0];
+    row.cpu_pct = Some(34);
+    row.rss_kb = Some(512 * 1_024);
+    row.io_bps = Some(8 * 1_048_576);
 
     let rendered = snapshot_to_screen(&snapshot, 56, 14);
 
@@ -521,11 +520,12 @@ fn proc_stats_hold_a_fixed_dim_grid() {
     // walks the cluster sideways.
     use ratatui::style::{Color, Modifier};
 
-    let mut busy = pane("%1", "cargo build --release", "/repo/main");
-    busy.cpu_pct = Some(34);
-    busy.rss_kb = Some(512 * 1_024);
-    busy.io_bps = Some(8 * 1_048_576);
-    let snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(vec![busy], None);
+    let busy = pane("%1", "cargo build --release", "/repo/main");
+    let mut snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(vec![busy], None);
+    let row = &mut snapshot.worktree_groups[0].rows[0];
+    row.cpu_pct = Some(34);
+    row.rss_kb = Some(512 * 1_024);
+    row.io_bps = Some(8 * 1_048_576);
     let row = &snapshot.worktree_groups[0].rows[0];
 
     let theme = Theme::fixed(false);

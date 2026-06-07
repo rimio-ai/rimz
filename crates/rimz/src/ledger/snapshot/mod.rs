@@ -34,6 +34,7 @@ pub(crate) use fold::{
 };
 pub use panes::SidebarOwnView;
 pub use process::command_agent_kind;
+pub(crate) use process::command_is_sidebar_chrome;
 pub use view::{
     SidebarProviderPanel, SidebarResolverState, SidebarRow, SidebarRowKind, SidebarSnapshot,
     SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind,

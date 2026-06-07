@@ -9,7 +9,7 @@
 pub use super::cache::{
     ACCOUNTS_RETRY_TTL, ACCOUNTS_TTL, AccountsCache, DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL,
     DiffStats, DiffStatsCache, DiffStatsCacheEntry, EVENT_PANE_TTL, GIT_ACTIVITY_WINDOW,
-    PRESENCE_STAMP_FRESH, PresenceStamp, SNAPSHOT_CACHE_TTL, SnapshotCache, WORKTREE_ROOTS_TTL,
+    PRESENCE_STAMP_FRESH, PresenceStamp, SNAPSHOT_CACHE_TTL, WORKTREE_ROOTS_TTL,
     WorktreeRootsCache, effective_pane_ttl, presence_event_mode, presence_stamp_age_ms,
     presence_stamp_path, published_frame_age_ms, published_frame_produced_at_ms,
     read_diff_stats_cache, read_snapshot_cache, snapshot_cache_is_fresh, unix_now_ms,
@@ -21,6 +21,7 @@ pub use super::enrich::{
     enrich, hot_worktree_paths, live_row_costs, merge_account_rate_limits, needed_worktree_paths,
     project_diff_stats, wired_lazy_default_models, wired_lazy_kinds,
 };
+pub use super::frame::{PaneFrame, PaneMetrics, PaneProcess, PaneState, TabFrame, assemble_frame};
 
 #[cfg(test)]
 pub(crate) use super::enrich::{

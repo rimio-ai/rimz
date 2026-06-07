@@ -12,8 +12,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
-use crate::feed::PaneRef;
 use crate::ledger::parse_cache::ParseCache;
+use crate::sidebar::frame::PaneFrame;
 pub use crate::sidebar::timing::{
     ACCOUNTS_RETRY_TTL, ACCOUNTS_TTL, DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, EVENT_PANE_TTL,
     GIT_ACTIVITY_WINDOW, PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL, WORKTREE_ROOTS_TTL,
@@ -59,32 +59,17 @@ impl AccountsCache {
     }
 }
 
-/// Shared, single-flight pane-list cache, keyed to one `(workspace, session)` —
-/// the per-workspace runtime root scopes the workspace; `session_name` guards
-/// against serving one session's panes (which the Zellij backend stamps from the
-/// requested session, not the true owner) to a sidebar pinned to another during
-/// a detach or session-rotation handoff.
-///
-/// It caches only the expensive `list-panes` round-trip. The ledger *rollup* is
-/// deliberately **not** stored here: it is cheap and per-event fresh in
-/// `latest.json`, so producer and consumer both read it fresh each fetch
-/// (`consumer_rollup` / `Ledger::snapshot_cached`) and fold these coalesced
-/// panes over it. Fusing the two would pin a status change to the slow pane
-/// cadence — the lag this split removes. Per-sidebar exclusion and own-view are
-/// applied by the reader, so the panes are pre-fold.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct SnapshotCache {
-    pub produced_at_ms: u64,
-    pub session_name: String,
-    pub panes: Vec<PaneRef>,
-}
-
+// The shared pane frame cache is keyed to one `(workspace, session)`: the
+// per-workspace runtime root scopes the workspace, and `session_name` prevents
+// serving one session's panes to another during detach or session rotation. It
+// caches only the expensive `list-panes` round-trip; the ledger rollup stays
+// event-fresh and is folded over this frame by producer and consumer reads.
 thread_local! {
     /// This thread's last `snapshot.json` parse ([`ParseCache`]). The consumer
     /// fetch worker calls [`read_snapshot_cache`] every fetch (~0.75–2s), but
     /// the producer only republishes when something changed — so most reads
     /// hit an unchanged file and skip the 100–500 KB deserialize.
-    static SNAPSHOT_PARSE_CACHE: ParseCache<SnapshotCache> = const { ParseCache::new() };
+    static SNAPSHOT_PARSE_CACHE: ParseCache<PaneFrame> = const { ParseCache::new() };
 }
 
 /// Read a same-session cache entry regardless of coalescing freshness. `None`
@@ -95,7 +80,7 @@ thread_local! {
 /// (same path, mtime, and length). On a stat miss it re-reads and re-caches; a
 /// file replaced (atomic rename) between the stat and the read just costs one
 /// redundant parse next call, never a stale or torn value.
-pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotCache> {
+pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<PaneFrame> {
     let meta = std::fs::metadata(cache_path).ok()?;
     let mtime = meta.modified().ok()?;
     let len = meta.len();
@@ -104,7 +89,7 @@ pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotC
         Some(cache) => cache,
         None => {
             let bytes = std::fs::read(cache_path).ok()?;
-            let parsed: SnapshotCache = serde_json::from_slice(&bytes).ok()?;
+            let parsed: PaneFrame = serde_json::from_slice(&bytes).ok()?;
             SNAPSHOT_PARSE_CACHE.with(|cache| cache.store(cache_path, mtime, len, parsed.clone()));
             parsed
         }
@@ -122,7 +107,7 @@ pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<SnapshotC
 /// call. Pure over its inputs so every caller — the fast path, the
 /// single-flight `fresh` closure, the loser re-check — applies one verdict.
 pub fn snapshot_cache_is_fresh(
-    cache: &SnapshotCache,
+    cache: &PaneFrame,
     now_ms: u64,
     min_produced_at_ms: Option<u64>,
     ttl: Duration,

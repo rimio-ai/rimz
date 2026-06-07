@@ -61,6 +61,30 @@ pub enum ViewKind {
     Window,
 }
 
+/// Multiplexer view identifier: Zellij tab id or tmux window id.
+///
+/// View ids are backend-owned opaque grouping keys. They are distinct from
+/// display names: `tab_15` and a tab named "Tab #15" are unrelated values.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ViewId(String);
+
+impl ViewId {
+    pub fn new_unchecked(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ViewId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// `ws_<24 hex chars>` — SHA-256-of-canonical-project-root.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]

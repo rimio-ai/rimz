@@ -1396,7 +1396,7 @@ fn live_panes_add_process_rows_without_attention_counts() {
 
 #[test]
 fn commandless_unbound_pane_folds_no_row() {
-    // A pane whose command is still unknown after carry-forward — mid-birth,
+    // A pane whose command is still unknown after frame rotation — mid-birth,
     // or a raced first read — is presence without identity: it folds no row
     // rather than an anonymous `process` under `external`.
     let raced = PaneRef {

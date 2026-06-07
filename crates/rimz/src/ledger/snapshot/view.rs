@@ -14,7 +14,7 @@ use super::panes::{
     LazyAgentRow, SidebarOwnView, agent_for_pane, is_daemon_mode_codex, lazy_agent_for_pane,
     placeholder_row_from_pane,
 };
-use super::process::{pane_command_is_known, program_label, row_from_process};
+use super::process::{pane_command_is_known, row_from_process};
 use crate::agent_activity::AgentActivity;
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentAccount, AgentContext, RateLimitWindow, SpendTally};
@@ -966,7 +966,7 @@ impl SidebarSnapshot {
             let is_sidebar = pane
                 .command
                 .as_deref()
-                .is_some_and(|command| program_label(command) == "rimz-sidebar");
+                .is_some_and(super::process::command_is_sidebar_chrome);
             if is_sidebar {
                 continue;
             }
@@ -998,7 +998,7 @@ impl SidebarSnapshot {
             .filter(|pane| {
                 pane.command
                     .as_deref()
-                    .is_none_or(|command| program_label(command) != "rimz-sidebar")
+                    .is_none_or(|command| !super::process::command_is_sidebar_chrome(command))
             })
             // The remote-control host is ambient infrastructure, not work: it no
             // longer renders as a row. Its presence surfaces as the `⇅ rc` flag
@@ -1666,9 +1666,10 @@ fn rows_from_panes(
             rows.push(row_from_process(pane, now));
         }
         // else: a brand-new or raced pane whose command is still unknown after
-        // carry-forward — the third honest-read guard. Presence without identity
-        // folds no row until a read names it; the pane stays in the published
-        // pane list, so the sibling count and selection baseline see it.
+        // frame rotation — the third honest-read guard. Presence without
+        // identity folds no row until a read names it; the pane stays in the
+        // published pane frame, so the sibling count and selection baseline see
+        // it.
     }
 
     // Script/bridge asks raised outside an agent session have no pane to anchor

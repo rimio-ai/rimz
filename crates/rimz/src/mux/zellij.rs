@@ -1062,9 +1062,6 @@ impl MuxBackend for ZellijBackend {
                 // or "session attached" signal, so pane visibility is unknown
                 // here. `None` makes the renderer's visibility gate fall back
                 // to always painting — the deliberate cross-backend floor.
-                rss_kb: None,
-                cpu_pct: None,
-                io_bps: None,
             })
             .collect())
     }
@@ -2080,10 +2077,10 @@ impl RawPane {
     }
 
     /// A terminal pane hosting a live command. Excludes held/exited corpses so a
-    /// dead command never renders a row, and so that — since a live pane always
-    /// reports a command — a missing command reads unambiguously as a raced
-    /// (degraded) `list-panes` answer the caller can hold the last good list
-    /// against rather than flashing an anonymous process row.
+    /// dead command never renders a row. Zellij can omit command fields for a
+    /// live implicit shell pane, so the projection preserves that as `None`; the
+    /// producer's frame rotation repairs raced-null fields from the last good
+    /// observation when one exists.
     fn is_live_terminal(&self) -> bool {
         self.is_terminal() && !self.is_held && !self.exited
     }
