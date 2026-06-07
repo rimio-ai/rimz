@@ -59,9 +59,9 @@ Remaining: gated auto-open of a subagent surface only when preconditions are met
 
 ## M7 — Additional agents
 
-Done: the Pi adapter — a Rimz-authored in-process extension forwarding pi's lifecycle events with the payload-stamped context gauge, gating tools through the blocking `tool_call` bridge, whole-file install, resume, spend, and the account probe (mapping in [hooks.md → Appendix Pi](../internals/hooks.md#appendix--pi); upstream surface in [adapter/pi-reference.md](../internals/adapter/pi-reference.md)).
+Done: the Pi adapter — a Rimz-authored in-process extension forwarding pi's lifecycle events with the payload-stamped context gauge, gating tools through the blocking `tool_call` bridge, whole-file install, resume, spend, and the account probe (mapping in [hooks.md → Appendix Pi](../internals/hooks.md#appendix--pi); upstream surface in [pi-reference.md](../externals/agent-adapter/pi-reference.md)).
 
-Remaining: the OpenCode adapter — upstream surface mirrored and live-verified in [adapter/opencode-reference.md](../internals/adapter/opencode-reference.md), with the proposed mapping and the unsupportable surfaces in its [Mapping feasibility](../internals/adapter/opencode-reference.md#mapping-feasibility) — other agents when their extension APIs and decision contracts are stable enough to test, plus Pi's one unwired increment (a model-change marker — [pi-reference.md → Mapping feasibility](../internals/adapter/pi-reference.md#mapping-feasibility)).
+Remaining: the OpenCode adapter — upstream surface mirrored and live-verified in [opencode-reference.md](../externals/agent-adapter/opencode-reference.md), with the proposed mapping and the unsupportable surfaces in its [Mapping feasibility](../externals/agent-adapter/opencode-reference.md#mapping-feasibility) — other agents when their extension APIs and decision contracts are stable enough to test, plus Pi's one unwired increment (a model-change marker — [pi-reference.md → Mapping feasibility](../externals/agent-adapter/pi-reference.md#mapping-feasibility)).
 
 ## Follow-up — Fleet-room depth
 

@@ -1,6 +1,6 @@
 # Claude Code protocol reference
 
-> The mapping onto Rimz's internal types lives beside this doc: [hooks.md](../hooks.md) maps hook events to lifecycle/feed channels, [transcript.md](../transcript.md) maps the statusline and transcript onto `AgentContext`, [account.md](../account.md) maps the auth surface onto account and balance.
+> The mapping onto Rimz's internal types lives beside this doc: [hooks.md](../../internals/hooks.md) maps hook events to lifecycle/feed channels, [transcript.md](../../internals/transcript.md) maps the statusline and transcript onto `AgentContext`, [account.md](../../internals/account.md) maps the auth surface onto account and balance.
 
 This is the single home for the **Claude Code upstream protocol surface** Rimz binds to — the hook events, their stdin payloads and stdout decision schema, the statusline JSON, and the auth surface. It is a hand-maintained mirror of Anthropic's published docs, kept for fast lookup and pinned to the source URLs below so it can be refreshed when upstream moves. The [`ClaudeAdapter`](../../../crates/rimz/src/agents/claude/mod.rs) adapter is the only code that reads this surface; everything downstream of it speaks Rimz's internal types.
 
@@ -75,7 +75,7 @@ Per-event decision control rides `hookSpecificOutput` (or, for the post-* and st
 
 ### Hooks Rimz wires
 
-These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/claude/mod.rs) `INSTALLED_EVENTS` constant installs. The native-event → Rimz status mapping is the [hooks.md Claude appendix](../hooks.md#appendix--claude-code); the columns here are the upstream fire-time and the event-specific stdin fields the adapter reads.
+These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/claude/mod.rs) `INSTALLED_EVENTS` constant installs. The native-event → Rimz status mapping is the [hooks.md Claude appendix](../../internals/hooks.md#appendix--claude-code); the columns here are the upstream fire-time and the event-specific stdin fields the adapter reads.
 
 | Event | Fires | Event-specific input | Rimz channel |
 | --- | --- | --- | --- |
@@ -93,7 +93,7 @@ These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/claud
 
 `ExitPlanMode` and `AskUserQuestion` have no dedicated install entry — they self-classify off `tool_name` on the broad `PreToolUse` hook.
 
-**Model field format.** The `model` field on `SessionStart` (and hook payloads generally) may carry an extended-context capability marker: `claude-opus-4-8[1m]` signals a 1,000,000-token context window. Later events in the same session carry the bare id. Rimz strips the marker at reduce time ([agent.md → The rollup](../agent.md#the-rollup)) and uses it to derive the window divisor ([transcript.md → Appendix Claude Code](../transcript.md#appendix--claude-code)).
+**Model field format.** The `model` field on `SessionStart` (and hook payloads generally) may carry an extended-context capability marker: `claude-opus-4-8[1m]` signals a 1,000,000-token context window. Later events in the same session carry the bare id. Rimz strips the marker at reduce time ([agent.md → The rollup](../../internals/agent.md#the-rollup)) and uses it to derive the window divisor ([transcript.md → Appendix Claude Code](../../internals/transcript.md#appendix--claude-code)).
 
 **Decision shapes Rimz renders.** A `PermissionRequest` answer:
 
@@ -272,7 +272,7 @@ Claude `exec`s the configured `statusLine` command on every render and pipes thi
 
 **`subagentStatusLine`.** A separate command (`"subagentStatusLine": { "type": "command", "command": "…" }`) renders each subagent row in the agent panel, replacing the default `name · description · token count` body with whatever the script prints. The command runs once per refresh tick with **all visible subagent rows as a single JSON object on stdin**. The input includes the [common hook fields](#common-input) plus `columns` (usable row width) and a `tasks` array, each task carrying `id`, `name`, `type`, `status`, `description`, `label`, `startTime`, `tokenCount`, `tokenSamples`, and `cwd`. Write one JSON line to stdout per row to override: `{"id": "<task id>", "content": "<row body>"}`. The `content` string is rendered as-is, including ANSI escape codes and OSC 8 hyperlinks. Omit a task's `id` to keep its default rendering; emit an empty `content` to hide the row. The same trust and `disableAllHooks` gates that apply to `statusLine` apply here. Plugins can ship a default `subagentStatusLine` in their `settings.json`.
 
-Rimz wraps this command like the session `statusLine` and harvests each task's `description`, `tokenCount`, and `startTime` (keyed by `id`, the child `agent_id`) into a per-subagent sidecar the sidebar folds onto the child's row. It overrides no rows, so Claude's own panel renders unchanged. The harvest path is [`subagent_statusline.rs`](../../../crates/rimz/src/agents/claude/subagent_statusline.rs); the sidebar projection is in [sidebar.md](../sidebar.md).
+Rimz wraps this command like the session `statusLine` and harvests each task's `description`, `tokenCount`, and `startTime` (keyed by `id`, the child `agent_id`) into a per-subagent sidecar the sidebar folds onto the child's row. It overrides no rows, so Claude's own panel renders unchanged. The harvest path is [`subagent_statusline.rs`](../../../crates/rimz/src/agents/claude/subagent_statusline.rs); the sidebar projection is in [sidebar.md](../../internals/sidebar.md).
 
 ## Auth surface
 
@@ -284,11 +284,11 @@ Rimz wraps this command like the session `statusLine` and harvests each task's `
 | `auth_method` | login type; `apiKey` is unmetered, anything else metered |
 | `subscription_type` | plan tier (`max`, `pro`, …) → the account `plan` label |
 
-The 5h/7d balance windows have no source outside a live statusline — there is no idle balance probe for Claude. The semantics (`metered` inference, plan→brand label) are in [account.md](../account.md).
+The 5h/7d balance windows have no source outside a live statusline — there is no idle balance probe for Claude. The semantics (`metered` inference, plan→brand label) are in [account.md](../../internals/account.md).
 
 ## Transcript JSONL
 
-Anthropic publishes **no official schema** for the conversation transcript at `transcript_path`. Rimz reads it best-effort and reverse-engineered: each assistant line carries a `message` object, and the newest `message.usage` (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`) plus `message.model` feed the context gauge. The field → internal mapping and the window-divisor rule are in [transcript.md](../transcript.md#appendix--claude-code); there is no source URL to pin.
+Anthropic publishes **no official schema** for the conversation transcript at `transcript_path`. Rimz reads it best-effort and reverse-engineered: each assistant line carries a `message` object, and the newest `message.usage` (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`) plus `message.model` feed the context gauge. The field → internal mapping and the window-divisor rule are in [transcript.md](../../internals/transcript.md#appendix--claude-code); there is no source URL to pin.
 
 ### Transcript death certificate
 
@@ -299,4 +299,4 @@ A turn Claude aborts on a provider API error fires **no `Stop` hook** (observed 
 {"type": "system", "subtype": "turn_duration", "timestamp": "2026-06-04T02:56:32.923Z"}
 ```
 
-[`detect_turn_error`](../../../crates/rimz/src/agents/claude/statusline.rs) reads the flagged assistant entry off the bounded tail on each statusline push; the decision rule and the internal mapping are [transcript.md → Turn-death marker](../transcript.md#appendix--claude-code). Reverse-engineered like the rest of this section; no source URL to pin.
+[`detect_turn_error`](../../../crates/rimz/src/agents/claude/statusline.rs) reads the flagged assistant entry off the bounded tail on each statusline push; the decision rule and the internal mapping are [transcript.md → Turn-death marker](../../internals/transcript.md#appendix--claude-code). Reverse-engineered like the rest of this section; no source URL to pin.

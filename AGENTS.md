@@ -53,7 +53,7 @@ Full matrix and the invariant list in [docs/contributing/testing.md](./docs/cont
 
 ## Documentation map
 
-Every other document is a leaf from here. The `docs/` tree groups by audience: **guide** (use it), **interface** (see it), **reference** (look it up), **internals** (how it works), **contributing** (work on it).
+Every other document is a leaf from here. The `docs/` tree groups by purpose: **guide** (use it), **interface** (see it), **reference** (look it up), **internals** (how it works), **externals** (upstream surfaces), **contributing** (work on it).
 
 **Root**
 - [README.md](./README.md) — product entry point.
@@ -83,13 +83,15 @@ Every other document is a leaf from here. The `docs/` tree groups by audience: *
 - [transcript.md](./docs/internals/transcript.md) — agent context read-path: transcript discovery, tail parsing, the Claude/Codex JSONL→internal mapping, the statusline / app-server rich-context transports, and the full-history cost/spending read-path.
 - [pricing.md](./docs/internals/pricing.md) — per-model token pricing: the three-layer table (embedded snapshot, remote refresh, builtins), model resolution, and how Codex token counts become dollars.
 - [account.md](./docs/internals/account.md) — agent accounts and balances: the plan/metered model, the per-provider auth and rate-limit mapping, the out-of-band account probe, and the provider-dashboard aggregation.
-- [adapter/claude-reference.md](./docs/internals/adapter/claude-reference.md) — Claude Code upstream protocol reference: hook events and decision schema, the full statusline JSON schema, and the auth surface, each pinned to its source URL for refresh.
-- [adapter/codex-reference.md](./docs/internals/adapter/codex-reference.md) — Codex upstream protocol reference: hooks, the `notify` channel, the app-server JSON-RPC API, the rollout JSONL, and the auth file, each pinned to its source URL for refresh.
-- [adapter/pi-reference.md](./docs/internals/adapter/pi-reference.md) — Pi upstream protocol reference: the in-process extension API (events, payloads, blocking returns, install surface), the session JSONL, the headless RPC/JSON modes, and the auth file, each pinned to its source URL for refresh.
-- [adapter/opencode-reference.md](./docs/internals/adapter/opencode-reference.md) — OpenCode upstream protocol reference: the in-process plugin API (hooks, bus events, blocking returns, install surface), the SQLite session store, the server HTTP API, and the auth file, each pinned to its source URL for refresh.
 - [web.md](./docs/internals/web.md) — Zellij-only browser access and session-route design.
 - [worktrees.md](./docs/internals/worktrees.md) — Rimz-owned git worktrees, agent tab layouts, supervised cleanup, and backend tab rendering.
 - [performance.md](./docs/internals/performance.md) — render-thread hot path, the cost map, and the rules a performance change follows.
+
+**Externals** — `docs/externals/`
+- [claude-reference.md](./docs/externals/agent-adapter/claude-reference.md) — Claude Code upstream protocol reference: hook events and decision schema, the full statusline JSON schema, and the auth surface, each pinned to its source URL for refresh.
+- [codex-reference.md](./docs/externals/agent-adapter/codex-reference.md) — Codex upstream protocol reference: hooks, the `notify` channel, the app-server JSON-RPC API, the rollout JSONL, and the auth file, each pinned to its source URL for refresh.
+- [pi-reference.md](./docs/externals/agent-adapter/pi-reference.md) — Pi upstream protocol reference: the in-process extension API (events, payloads, blocking returns, install surface), the session JSONL, the headless RPC/JSON modes, and the auth file, each pinned to its source URL for refresh.
+- [opencode-reference.md](./docs/externals/agent-adapter/opencode-reference.md) — OpenCode upstream protocol reference: the in-process plugin API (hooks, bus events, blocking returns, install surface), the SQLite session store, the server HTTP API, and the auth file, each pinned to its source URL for refresh.
 
 **Contributing** — `docs/contributing/`
 - [rust-conventions.md](./docs/contributing/rust-conventions.md) — Rust shape: CLI, errors, stdout discipline, actor pattern, test taxonomy, dependency snapshot, toolchain, quality gates.

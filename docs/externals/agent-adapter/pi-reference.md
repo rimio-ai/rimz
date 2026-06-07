@@ -1,10 +1,10 @@
 # Pi protocol reference
 
-> The mapping onto Rimz's internal types lives beside this doc: [hooks.md → Appendix Pi](../hooks.md#appendix--pi) owns the lifecycle mapping and install shape, [transcript.md](../transcript.md) the context read-path, [account.md](../account.md) the account/balance mapping.
+> The mapping onto Rimz's internal types lives beside this doc: [hooks.md → Appendix Pi](../../internals/hooks.md#appendix--pi) owns the lifecycle mapping and install shape, [transcript.md](../../internals/transcript.md) the context read-path, [account.md](../../internals/account.md) the account/balance mapping.
 
 This is the single home for the **Pi upstream protocol surface** the Rimz adapter binds to — the in-process extension API (events, payloads, blocking returns), the session JSONL, the headless RPC/JSON modes, the auth file, and the CLI/env surface. It is a hand-maintained mirror of the pi.dev docs, pinned to the source URLs below; the session and auth shapes are additionally verified against a live `pi` 0.78.0 install (2026-06-04). The code binding this surface is the adapter directory [`pi/`](../../../crates/rimz/src/agents/pi/mod.rs): the embedded [`extension.ts`](../../../crates/rimz/src/agents/pi/extension.ts) forwards the lifecycle events and gates `tool_call` on the blocking bridge, and the read-only spending parser [`pi/spend.rs`](../../../crates/rimz/src/agents/pi/spend.rs) walks the session tree.
 
-Coverage is **depth on what the adapter wires, breadth as an index**: the events, session fields, and decision returns [`src/agents/pi/`](../../../crates/rimz/src/agents/pi/mod.rs) parses or emits are documented in full; the rest of the catalog is listed so a contributor wiring a new path knows it exists. [Mapping feasibility](#mapping-feasibility) closes the doc with what remains unwired; the landed verdict is the [hooks.md appendix](../hooks.md#appendix--pi).
+Coverage is **depth on what the adapter wires, breadth as an index**: the events, session fields, and decision returns [`src/agents/pi/`](../../../crates/rimz/src/agents/pi/mod.rs) parses or emits are documented in full; the rest of the catalog is listed so a contributor wiring a new path knows it exists. [Mapping feasibility](#mapping-feasibility) closes the doc with what remains unwired; the landed verdict is the [hooks.md appendix](../../internals/hooks.md#appendix--pi).
 
 ## Upstream sources
 
@@ -175,7 +175,7 @@ Recorded for breadth; a Rimz adapter targets the interactive TUI in a pane.
 
 OAuth subscription logins: ChatGPT Plus/Pro (`openai-codex`), Claude Pro/Max (`anthropic` — upstream notes third-party usage bills per token as extra usage, outside plan limits), GitHub Copilot. API keys resolve in order: `--api-key` flag → `auth.json` → provider env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, …) → `models.json` custom-provider keys.
 
-**The balance gap.** Pi exposes no rate-limit windows and no plan tier — no statusline, no app-server, no probe-able quota surface. `auth.json` supports exactly one account fact: credential type (`oauth` → metered subscription, `api_key` → unmetered). The only place window data could ever surface is per-response HTTP headers via `after_provider_response`, which is provider-specific and uncontracted. See [account.md → Per-provider mapping](../account.md#per-provider-mapping) for what this means for the dashboard.
+**The balance gap.** Pi exposes no rate-limit windows and no plan tier — no statusline, no app-server, no probe-able quota surface. `auth.json` supports exactly one account fact: credential type (`oauth` → metered subscription, `api_key` → unmetered). The only place window data could ever surface is per-response HTTP headers via `after_provider_response`, which is provider-specific and uncontracted. See [account.md → Per-provider mapping](../../internals/account.md#per-provider-mapping) for what this means for the dashboard.
 
 ## CLI and environment surface
 
@@ -196,9 +196,9 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 
 ## Mapping feasibility
 
-The landed verdict — the native-event → signal table, the blocking `tool_call` gate and its decision shape, the turn-death and identity properties, and the install shape — is [hooks.md → Appendix Pi](../hooks.md#appendix--pi). Upstream's own scope statement ([usage.md](https://pi.dev/docs/latest/usage)) frames the gaps: pi intentionally ships **no built-in MCP, sub-agents, permission popups, plan mode, to-dos, or background bash** — those are extension territory. The context gauge and model/effort enrichment now ride every hook envelope (`ctx.getContextUsage()`, `ctx.model.id`, the thinking level), so no transcript-tail gauge is needed.
+The landed verdict — the native-event → signal table, the blocking `tool_call` gate and its decision shape, the turn-death and identity properties, and the install shape — is [hooks.md → Appendix Pi](../../internals/hooks.md#appendix--pi). Upstream's own scope statement ([usage.md](https://pi.dev/docs/latest/usage)) frames the gaps: pi intentionally ships **no built-in MCP, sub-agents, permission popups, plan mode, to-dos, or background bash** — those are extension territory. The context gauge and model/effort enrichment now ride every hook envelope (`ctx.getContextUsage()`, `ctx.model.id`, the thinking level), so no transcript-tail gauge is needed.
 
-The account probe is wired: [`pi/account.rs`](../../../crates/rimz/src/agents/pi/account.rs) reads `auth.json` (oauth → metered subscription, api_key → unmetered), labels the sub the fleet uses — the freshest session's `message.provider` picks among several credentials, else the first OAuth entry — and attaches the `pi -v` version; mapping summary in [account.md](../account.md#per-provider-mapping).
+The account probe is wired: [`pi/account.rs`](../../../crates/rimz/src/agents/pi/account.rs) reads `auth.json` (oauth → metered subscription, api_key → unmetered), labels the sub the fleet uses — the freshest session's `message.provider` picks among several credentials, else the first OAuth entry — and attaches the `pi -v` version; mapping summary in [account.md](../../internals/account.md#per-provider-mapping).
 
 What remains unwired, for the adapter's next increments:
 
