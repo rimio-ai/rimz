@@ -282,6 +282,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 session_name,
                 instance_id: SidebarInstanceId::new(),
                 tick_seconds,
+                own_pane: rimz::mux::own_pane_id(mux),
             })
             .context("serving sidebar")
         }

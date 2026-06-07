@@ -74,6 +74,9 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         session_name: "rimz-test".to_owned(),
         instance_id: SidebarInstanceId::new(),
         tick_seconds: 2,
+        // No own pane: the fold must admit every published fixture pane even
+        // when the test process itself runs inside a live mux pane.
+        own_pane: None,
     };
     let request = FetchRequest {
         mode: FetchMode::HardRefresh,
@@ -403,6 +406,9 @@ fn pane_frame_published_refolds_a_consumer_from_cache() {
         session_name: "rimz-test".to_owned(),
         instance_id: younger,
         tick_seconds: 2,
+        // No own pane: the fold must admit every published fixture pane even
+        // when the test process itself runs inside a live mux pane.
+        own_pane: None,
     };
     let mut cursor = RollupCursor::new();
     let mut outcomes = Vec::new();

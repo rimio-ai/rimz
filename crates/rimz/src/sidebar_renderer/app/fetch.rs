@@ -94,7 +94,7 @@ fn run_fetch_cycle(
     post: &mut dyn FnMut(FetchOutcome),
 ) {
     let is_producer = !crate::sidebar::elder_sidebar_present(runtime, &config.instance_id);
-    let exclude = crate::mux::own_pane_id(config.mux);
+    let exclude = config.own_pane.clone();
     let now_ms = crate::sidebar::cache::unix_now_ms();
     let published_frame_produced_at_ms =
         crate::sidebar::cache::published_frame_produced_at_ms(runtime, &config.session_name);

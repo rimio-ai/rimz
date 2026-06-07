@@ -64,6 +64,13 @@ pub struct ServeConfig {
     pub session_name: String,
     pub instance_id: SidebarInstanceId,
     pub tick_seconds: u64,
+    /// The sidebar's own mux pane, resolved once from the per-pane env at
+    /// launch (`crate::mux::own_pane_id`) — the fold's self-exclusion and the
+    /// heartbeat's pane claim. `None` outside a pane. Carried here rather than
+    /// re-read ambiently so the fetch worker stays hermetic: a test (or any
+    /// embedder) folds exactly the panes it published, regardless of the env
+    /// the process inherited.
+    pub own_pane: Option<crate::ids::PaneId>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -705,7 +712,7 @@ fn write_heartbeat(config: &ServeConfig, runtime: &RuntimePaths, socket_path: &P
         config.mux,
         &config.session_name,
         socket_path,
-        crate::mux::own_pane_id(config.mux),
+        config.own_pane.clone(),
     )
     .map_err(|err| SidebarAppErr::Heartbeat(err.to_string()))
 }
