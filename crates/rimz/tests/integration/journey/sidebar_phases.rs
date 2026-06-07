@@ -450,7 +450,7 @@ fn running_row(screen: &str, name: &str) -> bool {
 /// sparkle, so a live capture may show any frame — confirm the leading cell is
 /// one of them.
 fn thinking_row(screen: &str, name: &str) -> bool {
-    ['·', '✢', '✳', '✶', '✻', '✽']
+    ['·', '✢', '✳', '✶', '✻']
         .iter()
         .any(|frame| screen.contains(&format!("{frame} {name}")))
 }

@@ -53,7 +53,7 @@ const WORKING_FRAMES: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "�
 /// the agent is reasoning and reading, not yet writing — so its motion reads as
 /// lighter than the working fill. The turn's first file edit flips the cell to
 /// the working spinner.
-const THINKING_FRAMES: [&str; 8] = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶"];
+const THINKING_FRAMES: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✻"];
 
 /// Resolver answering: a braille spinner while a resolver composes the answer on
 /// the bridge. This is the one "waiting for an answer" motion — it is genuinely

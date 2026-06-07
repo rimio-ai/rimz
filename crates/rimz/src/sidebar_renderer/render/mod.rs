@@ -1068,7 +1068,7 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
         Line::styled("system   r reload   x dismiss", faint),
         Line::styled("help     ? close", faint),
         Line::styled("? waiting   ! attention   ⏸ paused", faint),
-        Line::styled("⢿ working  ✽ thinking   ○ idle   ✓ done", faint),
+        Line::styled("⢿ working  ✻ thinking   ○ idle   ✓ done", faint),
     ]
 }
 

@@ -3361,7 +3361,7 @@ fn home_abbreviation_collapses_only_a_home_prefix() {
 /// over the live-agent count (`¤ N`); the cockpit below it splits the
 /// make-up at a fixed height — the left cluster (`? ! ○ ⏸`, each glyph
 /// spaced from its count, a zero reading `? 0`) and the busy/done tail
-/// (`✽ ⢿ ✓`) — so the body never shifts as agents change state.
+/// (`✻ ⢿ ✓`) — so the body never shifts as agents change state.
 #[test]
 fn fleet_header_is_fixed_and_splits_the_make_up() {
     // Borderless layout: row 0 is the name, row 1 a blank line, row 2 the `◎`
@@ -3412,7 +3412,7 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
     // The rate-limited glyph carries the U+FE0E text-presentation selector.
     assert!(buckets.contains("⏸\u{FE0E} 0"), "{buckets}");
     assert!(buckets.contains("⢿ 2"), "{buckets}");
-    assert!(!buckets.contains('✽'), "no thinking bucket: {buckets}");
+    assert!(!buckets.contains('✻'), "no thinking bucket: {buckets}");
     // The default selection lands on the first row, so its worktree reads as
     // one lane: the header gains the dotted seal and a `▏` lane spine.
     assert!(
@@ -3800,7 +3800,7 @@ fn compacting_agent_counts_as_working() {
         buckets.contains("⢿ 1"),
         "compacting counts as working: {buckets}"
     );
-    assert!(!buckets.contains('✽'), "no thinking bucket: {buckets}");
+    assert!(!buckets.contains('✻'), "no thinking bucket: {buckets}");
 }
 
 #[test]

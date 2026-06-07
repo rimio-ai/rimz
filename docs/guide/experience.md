@@ -135,7 +135,7 @@ The reader types `claude` in the shell pane and just looks at its input box — 
  ◎ 1
  ¤ 1
  ────────────────────────────────────────────
- ? 0   ! 0   ○ 1              ✽ 0   ⢿ 0   ✓ 0
+ ? 0   ! 0   ○ 1   ⏸ 0              ⢿ 0   ✓ 0
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌○ claude · Opus · xhigh
@@ -166,7 +166,7 @@ The reader gives Claude a task. The prompt then the first tool call move the row
  ◎ 1
  ¤ 1
  ────────────────────────────────────────────
- ? 0   ! 0   ○ 0              ✽ 0   ⢿ 1   ✓ 0
+ ? 0   ! 0   ○ 0   ⏸ 0              ⢿ 1   ✓ 0
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌⢿ claude · Opus · xhigh
@@ -195,7 +195,7 @@ Claude hits a permission prompt — it wants to run something. A feed item is wr
  ◎ 1
  ¤ 1
  ────────────────────────────────────────────
- ? 1   ! 0   ○ 0              ✽ 0   ⢿ 0   ✓ 0
+ ? 1   ! 0   ○ 0   ⏸ 0              ⢿ 0   ✓ 0
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌? claude · Opus · xhigh
@@ -243,13 +243,13 @@ The reader does exactly what they said they would: spins up four more agents acr
  ◎ 12           ◇ 76k ↘ 12k ↗ 64k ◍ 12k ◌ 68k
  ¤ 6                                    $4.20
  ────────────────────────────────────────────
- ? 2   ! 1   ○ 1              ✽ 1   ⢿ 1   ✓ 0
+ ? 2   ! 1   ○ 1   ⏸ 0              ⢿ 2   ✓ 0
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌? claude · Opus · xhigh
 ▌  fix auth flow
 ▌  ▣ ━━━━━━━━━━━━━━────────────────────   41%
-▏✽ claude · Sonnet · high · 200k
+▏✻ claude · Sonnet · high · 200k
 ▏  add tests
 ▏  ▣ ━━━━━━────────────────────────────   18%
 ▏⢿ codex · GPT 5.5 · high
@@ -300,7 +300,7 @@ The footer advertises `?`. Pressing it overlays the legend and keys, so the glyp
  ↑/↓ select   1-9 jump   ↵ jump
  ␣ next ?!   ←/→ provider tab
  x dismiss   r reload   ? close
- ⢿ working   ✽ thinking   ? waiting
+ ⢿ working   ✻ thinking   ? waiting
  ! attention   ○ idle   ✓ done
 ```
 
@@ -357,7 +357,7 @@ The product's honesty law gets tested when a fetch fails — the binary moved, t
  ◎ 1
  ¤ 1
  ────────────────────────────────────────────
- ? 0   ! 0   ○ 0              ✽ 0   ⢿ 1   ✓ 0
+ ? 0   ! 0   ○ 0   ⏸ 0              ⢿ 1   ✓ 0
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌⢿ claude · Opus · xhigh

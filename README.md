@@ -8,7 +8,7 @@ Rimz pins every repo to one durable room — a Zellij or tmux session with a sid
  ⌘ query-engine            ~/code/query-engine
  ✦ 6   ✧ 2                              $4.20
  ──────────────────────────────────────────────
- ? 2   ! 1   ○ 1            ✽ 1   ⢿ 1   ✓ 0
+ ? 2   ! 1   ○ 1   ⏸ 0            ⢿ 2   ✓ 0
  ◕ 41m · ◇ 486.0k · ◆ 4
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
@@ -16,7 +16,7 @@ Rimz pins every repo to one durable room — a Zellij or tmux session with a sid
 ▌  fix auth flow
 ▌  ▣ ━━━━━━━━━━──────────────── 41%
 ▏
-▏✽ claude · Sonnet · high · plan
+▏✻ claude · Sonnet · high · plan
 ▏  add tests
 ▏  ▣ ━━━━━─────────────────────  18%
 ▏

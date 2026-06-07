@@ -12,14 +12,14 @@ Rimz gives every project one room — a Zellij or tmux session with a sidebar �
  ◎ 12           ◇ 76k ↘ 12k ↗ 64k ◍ 12k ◌ 68k
  ¤ 6                                    $4.20
  ──────────────────────────────────────────────
- ? 2   ! 1   ○ 1            ✽ 1   ⢿ 1   ✓ 0
+ ? 2   ! 1   ○ 1   ⏸ 0            ⢿ 2   ✓ 0
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌? claude · Opus · xhigh
 ▌  fix auth flow
 ▌  ▣ ━━━━━━━━━━──────────────── 41%
 ▏
-▏✽ claude · Sonnet · high · plan
+▏✻ claude · Sonnet · high · plan
 ▏  add tests
 ▏  ▣ ━━━━━─────────────────────  18%
 ▏

@@ -52,7 +52,7 @@ One vocabulary runs through the whole sidebar: a shape carries the meaning, colo
 | `!`   | attention  | a failed turn, a turn dead on a provider API error, or a working agent gone silent past the stall window | yes — yellow, heating amber then red with the age clock; the breath quickens with it, blinking at red |
 | `⏸`   | rate-limited | on an account whose rate-limit window is spent — parked mid-task or at rest until it resets, resumes with a `continue` | waiting on the reset — held amber, never heats |
 | `⢿`   | working    | running and editing — animates `⣾⣽⣻⢿⡿⣟⣯⣷` in clay | no |
-| `✽`   | thinking   | running, before the turn's first file edit — sparkles `· ✢ ✳ ✶ ✻ ✽` in clay | no |
+| `✻`   | thinking   | running, before the turn's first file edit — sparkles `· ✢ ✳ ✶ ✻`, holding `✻` for the peak frame, in clay | no |
 | `⠙`   | resolving  | a resolver is answering on the bridge — braille spin | pending, being handled |
 | `○`   | idle       | alive, nothing to do | no |
 | `✓`   | done       | finished cleanly | no |
@@ -62,7 +62,7 @@ Three short-lived heads ride over the base status on the leading cell, so they n
 
 | head | meaning |
 |------|---------|
-| `✽` thinking | the running turn before its first file edit — the agent is reasoning and reading, not yet writing; a research turn that never edits sparkles end to end |
+| `✻` thinking | the running turn before its first file edit — the agent is reasoning and reading, not yet writing; a research turn that never edits sparkles end to end |
 | `▇` compacting | condensing its context window — pulses `▁▃▄▅▆▇▆▅▄▃` in violet, then returns to its resting head |
 | `´` waiting on subagents | the main agent delegated to its children; the work is in the rows below — a low clay wave (`_` bobbing up to `´` and back) |
 
@@ -188,7 +188,7 @@ The `▣`/`▢` and `▤` glyphs share one lead column, so the card reads as an 
                                   ▌    ⢿ Explore
 ```
 
-The expanded card also lists any **subagents** the agent spawned this turn — a `⧉ subagents (N)` header (the marker violet, the label soft) then, per child in spawn order (creation time ascending, stable across refreshes), the same live head an agent row wears — the `✽` thinking sparkle while the child reasons, the `⢿` working fill while it acts, the static verdict once it lands — and the type with what the parent asked it to do, then a deeper-indented second line carrying its token spend `◇` (the card's whole-unit figure, never a decimal), model, and reasoning effort — one per-card grid, the figure right-aligned and the model padded to the widest sibling, a missing field blank-filling its slot — with elapsed work pinned right under the parent's stats: the clock-fill glyph (filling with the child's worked span) over a fixed three-cell `m`/`h` label — `<1m` under a minute, never seconds — toned by the parent's age ramp, so the metadata stacks into columns across children and a long-running child visibly heats up. A finished child holds its `✓` (or `!`) on the list until the parent's next turn clears it:
+The expanded card also lists any **subagents** the agent spawned this turn — a `⧉ subagents (N)` header (the marker violet, the label soft) then, per child in spawn order (creation time ascending, stable across refreshes), the same live head an agent row wears — the `✻` thinking sparkle while the child reasons, the `⢿` working fill while it acts, the static verdict once it lands — and the type with what the parent asked it to do, then a deeper-indented second line carrying its token spend `◇` (the card's whole-unit figure, never a decimal), model, and reasoning effort — one per-card grid, the figure right-aligned and the model padded to the widest sibling, a missing field blank-filling its slot — with elapsed work pinned right under the parent's stats: the clock-fill glyph (filling with the child's worked span) over a fixed three-cell `m`/`h` label — `<1m` under a minute, never seconds — toned by the parent's age ramp, so the metadata stacks into columns across children and a long-running child visibly heats up. A finished child holds its `✓` (or `!`) on the list until the parent's next turn clears it:
 
 ```
 ▌  ⧉ subagents (2)
@@ -374,7 +374,7 @@ Pinned to the bottom edge, below all three zones. The body is truncated before t
  ↑/↓ select   1-9 jump   ↵ jump
  ␣ next ?!   ←/→ provider tab
  x dismiss   r reload   ? close
- ⢿ working   ✽ thinking   ? waiting
+ ⢿ working   ✻ thinking   ? waiting
  ! attention   ○ idle   ✓ done
 ```
 

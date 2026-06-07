@@ -370,6 +370,10 @@ fn animations_cycle_and_wrap() {
         working_glyph(WORKING_FRAMES.len() as u64),
         WORKING_FRAMES[0]
     );
+    assert_eq!(THINKING_FRAMES, ["·", "✢", "✳", "✶", "✻", "✻"]);
+    for (phase, expected) in THINKING_FRAMES.iter().enumerate() {
+        assert_eq!(thinking_glyph(phase as u64), *expected);
+    }
     assert_eq!(
         thinking_glyph(THINKING_FRAMES.len() as u64),
         THINKING_FRAMES[0]
