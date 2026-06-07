@@ -5,6 +5,7 @@
 
 pub mod event;
 pub mod heartbeat;
+pub mod sidebar_event;
 
 // v2: `agent.lifecycle` params carry a `signal` (the agent-agnostic lifecycle
 // intent folded through `agents::lifecycle::step`) in place of the legacy bare
