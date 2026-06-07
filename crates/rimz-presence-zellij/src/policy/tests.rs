@@ -436,3 +436,44 @@ fn timer_gate_collapses_a_superseded_chain() {
         "a stale fire arms no duplicate chain"
     );
 }
+
+// --- opened_card_panes: which manifest panes earn a card-create poke ---
+
+#[test]
+fn opened_card_panes_reports_only_genuinely_new_card_panes() {
+    let previous = tabs(vec![pane(1)]);
+    let mut sidebar = pane(3);
+    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
+    let mut plugin = pane(4);
+    plugin.is_plugin = true;
+    let next = tabs(vec![pane(1), pane(2), sidebar, plugin]);
+
+    let opened = opened_card_panes(&previous, &next);
+    assert_eq!(
+        opened,
+        vec![pane(2)],
+        "existing, sidebar, and plugin panes never read as opens"
+    );
+}
+
+#[test]
+fn first_manifest_after_load_reports_no_opens() {
+    let next = tabs(vec![pane(1), pane(2)]);
+    assert!(
+        opened_card_panes(&BTreeMap::new(), &next).is_empty(),
+        "the first manifest names every pre-existing pane; the pull covers the room"
+    );
+}
+
+#[test]
+fn a_reused_terminal_id_is_not_an_open_but_a_new_id_space_is() {
+    // Terminal and plugin panes have separate id spaces: a terminal pane whose
+    // id collides with a known plugin pane is still a genuine open.
+    let mut plugin = pane(7);
+    plugin.is_plugin = true;
+    let previous = tabs(vec![plugin.clone()]);
+    let next = tabs(vec![plugin, pane(7)]);
+
+    let opened = opened_card_panes(&previous, &next);
+    assert_eq!(opened, vec![pane(7)]);
+}

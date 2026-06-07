@@ -146,6 +146,34 @@ pub fn focus_shortcut_if_only_focus_changed(
     }
 }
 
+/// The card panes `next` holds that `previous` does not — the genuinely new
+/// panes a manifest reports, each worth one card-create poke. The first
+/// manifest after plugin load has no `previous` and names every pre-existing
+/// pane; those are not opens — the producer's pull already covers the room —
+/// so an empty `previous` reports nothing.
+pub fn opened_card_panes(
+    previous: &BTreeMap<usize, Vec<PaneFields>>,
+    next: &BTreeMap<usize, Vec<PaneFields>>,
+) -> Vec<PaneFields> {
+    if previous.is_empty() {
+        return Vec::new();
+    }
+    let mut opened = Vec::new();
+    for panes in next.values() {
+        for pane in panes {
+            if pane.is_card_pane()
+                && !previous
+                    .values()
+                    .flatten()
+                    .any(|old| old.id == pane.id && old.is_plugin == pane.is_plugin)
+            {
+                opened.push(pane.clone());
+            }
+        }
+    }
+    opened
+}
+
 /// The terminal pane that should take focus after switching to `active_tab`, if
 /// Zellij restored the tab's focus to the sidebar. `None` means the tab is
 /// already on work, has no sidebar focus, or has no live working pane.

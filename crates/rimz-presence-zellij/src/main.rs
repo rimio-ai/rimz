@@ -85,7 +85,7 @@ mod shell {
                     // live on 0.44.3), so this path is load-bearing.
                     self.mark_granted(now);
                     let next_tabs = project(&manifest);
-                    let opened = opened_card_panes(&self.tabs, &next_tabs);
+                    let opened = policy::opened_card_panes(&self.tabs, &next_tabs);
                     let focus_patch =
                         policy::focus_shortcut_if_only_focus_changed(&self.tabs, &next_tabs);
                     self.tabs = next_tabs;
@@ -453,26 +453,6 @@ mod shell {
                 (*tab, fields)
             })
             .collect()
-    }
-
-    fn opened_card_panes(
-        previous: &BTreeMap<usize, Vec<PaneFields>>,
-        next: &BTreeMap<usize, Vec<PaneFields>>,
-    ) -> Vec<PaneFields> {
-        let mut opened = Vec::new();
-        for panes in next.values() {
-            for pane in panes {
-                if pane.is_card_pane()
-                    && !previous
-                        .values()
-                        .flatten()
-                        .any(|old| old.id == pane.id && old.is_plugin == pane.is_plugin)
-                {
-                    opened.push(pane.clone());
-                }
-            }
-        }
-        opened
     }
 
     /// Unix milliseconds via the WASI clock. The policy only compares
