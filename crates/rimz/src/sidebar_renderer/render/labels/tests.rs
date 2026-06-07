@@ -370,13 +370,12 @@ fn animations_cycle_and_wrap() {
         working_glyph(WORKING_FRAMES.len() as u64),
         WORKING_FRAMES[0]
     );
-    assert_eq!(THINKING_FRAMES, ["·", "✢", "✳", "✶", "✻", "✻"]);
+    assert_eq!(THINKING_FRAMES, ["·", "✢", "✳", "✶", "✻", "✶", "✳", "✢"]);
     for (phase, expected) in THINKING_FRAMES.iter().enumerate() {
         let held_phase = phase as u64 * THINKING_FRAME_HOLD;
         assert_eq!(thinking_glyph(held_phase), *expected);
         assert_eq!(thinking_glyph(held_phase + 1), *expected);
         assert_eq!(thinking_glyph(held_phase + 2), *expected);
-        assert_eq!(thinking_glyph(held_phase + 3), *expected);
     }
     assert_eq!(
         thinking_glyph(THINKING_FRAMES.len() as u64 * THINKING_FRAME_HOLD),

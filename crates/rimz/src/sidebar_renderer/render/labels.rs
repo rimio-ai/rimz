@@ -49,12 +49,12 @@ const RATE_LIMITED_GLYPH: &str = "⏸\u{FE0E}";
 /// changes. No frame matches idle `○`, so a frozen frame still reads as "working".
 const WORKING_FRAMES: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 
-/// Thinking: a sparkle that grows and fades. The opening phase of every turn —
-/// the agent is reasoning and reading, not yet writing — so its motion reads as
-/// lighter than the working fill. The turn's first file edit flips the cell to
-/// the working spinner.
-const THINKING_FRAMES: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✻"];
-const THINKING_FRAME_HOLD: u64 = 4;
+/// Thinking: a sparkle that grows, fades back down, then repeats. The opening
+/// phase of every turn — the agent is reasoning and reading, not yet writing —
+/// so its motion reads as lighter than the working fill. The turn's first file
+/// edit flips the cell to the working spinner.
+const THINKING_FRAMES: [&str; 8] = ["·", "✢", "✳", "✶", "✻", "✶", "✳", "✢"];
+const THINKING_FRAME_HOLD: u64 = 3;
 
 /// Resolver answering: a braille spinner while a resolver composes the answer on
 /// the bridge. This is the one "waiting for an answer" motion — it is genuinely
