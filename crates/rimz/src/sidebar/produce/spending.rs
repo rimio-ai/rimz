@@ -35,8 +35,9 @@ pub(super) fn compute_fleet_spending(
 ) -> crate::agents::spending::ProviderSpendingCache {
     use crate::agents::pricing;
     use crate::agents::spending::{
-        ProviderSpendingCache, Spending, compute_spending, read_provider_spending_cache,
-        read_spending_cache, unix_secs_now, write_provider_spending_cache, write_spending_cache,
+        PROVIDER_SPENDING_VERSION, ProviderSpendingCache, Spending, compute_spending,
+        read_provider_spending_cache, read_spending_cache, unix_secs_now,
+        write_provider_spending_cache, write_spending_cache,
     };
     use crate::agents::{ADAPTERS, AgentAdapter};
 
@@ -71,6 +72,7 @@ pub(super) fn compute_fleet_spending(
             live_costs.clone(),
         );
         return ProviderSpendingCache {
+            version: PROVIDER_SPENDING_VERSION,
             refreshed_at_ms: now_ms,
             live_cost_baselines: live_costs,
             spending: Spending::default(),
@@ -88,6 +90,7 @@ pub(super) fn compute_fleet_spending(
     }
     write_provider_spending_cache(&provider_path, now_ms, &spending, live_costs.clone());
     ProviderSpendingCache {
+        version: PROVIDER_SPENDING_VERSION,
         refreshed_at_ms: now_ms,
         live_cost_baselines: live_costs,
         spending,

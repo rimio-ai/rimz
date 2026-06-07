@@ -240,7 +240,7 @@ The reader does exactly what they said they would: spins up four more agents acr
 ```
  ⌘ query-engine
 
- ◎ 12           ◇ 76k ↘ 12k ↗ 64k ◍ 12k ◌ 68k
+ ◎ 12                  ◇ 88k ↘ 24k ↗ 64k ◌ 68k
  ¤ 6                                    $4.20
  ────────────────────────────────────────────
  ? 2   ! 1   ○ 1   ⏸ 0              ⢿ 2   ✓ 0

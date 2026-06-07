@@ -793,10 +793,10 @@ fn file_mtime_rfc3339(path: &Path) -> String {
 /// Codex logs token counts, not dollars, so each event is multiplied through
 /// the price book: uncached input at the input rate, the cached slice at the
 /// cache-read rate, and output (which already includes reasoning tokens) at the
-/// output rate. The recorded `tokens` is `input + output` — the same `◇` total
-/// the rest of the sidebar reads. Events whose model has no known price, or that
-/// price to zero, are dropped. Codex entries carry no message/request IDs, so
-/// they bypass the Claude dedup and bucket directly under the `codex` provider.
+/// output rate. Codex records `cache_write: 0`, so its aggregate `◇` total stays
+/// input + output. Events whose model has no known price, or that price to
+/// zero, are dropped. Codex entries carry no message/request IDs, so they bypass
+/// the Claude dedup and bucket directly under the `codex` provider.
 pub(crate) fn parse_codex_spend(
     path: &Path,
     resume: Option<&SpendCursor>,

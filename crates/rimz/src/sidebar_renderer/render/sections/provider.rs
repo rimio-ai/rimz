@@ -105,9 +105,9 @@ impl WmColumns {
 /// sky blue — distinct from the teal `◎` beside it — and each token marker its
 /// one shared color, with the figures at the soft tier ([`Theme::soft`]).
 /// Every numeric field is right-aligned to the shared [`WmColumns`] width, so
-/// the `W:` and `M:` rows stack into one tidy grid. The `◍` cache-write field
-/// is intentionally omitted here — the ledger keeps to the four headline
-/// figures the all-time read needs.
+/// the `W:` and `M:` rows stack into one tidy grid. Cache-write is folded into
+/// the `↘` input column, so the ledger keeps to the four headline token figures
+/// the all-time read needs.
 fn wm_row(
     theme: &Theme,
     label: &str,
@@ -431,9 +431,9 @@ fn provider_body_lines(
 /// the line above the budget bars is never blank. Every figure is today's
 /// transcript-history burn for this provider, summed across every session from
 /// the JSONL — the accurate cross-session total, and the only cost source for
-/// token-only providers like Codex. The `◍` cache-write figure is omitted like
-/// the ledger rows' — the line keeps to the headline figures so the `◎` count
-/// fits beside the emblem. The summed `+/-` churn is intentionally absent —
+/// token-only providers like Codex. Cache-write is folded into `↘`, so the
+/// line keeps to the headline figures and the `◎` count fits beside the emblem.
+/// The summed `+/-` churn is intentionally absent —
 /// a noisy per-account aggregate; per-worktree churn lives on the group
 /// headers and per-agent churn on the work line.
 fn provider_stats_spans(
@@ -456,10 +456,8 @@ fn provider_stats_spans(
         today.tokens,
         today.input,
         today.output,
-        today.cache_write,
         today.cache_read,
         tokens_int,
-        false,
     ));
     let right = vec![Span::styled(
         dollars2(today.usd),

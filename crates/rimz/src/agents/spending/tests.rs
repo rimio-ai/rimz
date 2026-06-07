@@ -228,16 +228,45 @@ fn token_split_and_session_counts_populate_windows() {
     let mut cache = SpendingDiskCache::default();
     let total = compute_total(&[main, subfile], &mut cache);
 
-    // `◇` is input + output only; the cache split rides its own fields.
-    assert_eq!(total.today.input, 13_000, "12000 + 1000");
+    // `◇` is input, with cache-write folded in, plus output. The raw
+    // cache-write split stays maintained for compatibility and diagnostics.
+    assert_eq!(
+        total.today.input, 25_000,
+        "12000 + 1000 + cache-write 12000"
+    );
     assert_eq!(total.today.output, 64_500, "64000 + 500");
-    assert_eq!(total.today.tokens, 77_500, "◇ = input + output");
+    assert_eq!(total.today.tokens, 89_500, "◇ = folded input + output");
     assert_eq!(total.today.cache_write, 12_000);
     assert_eq!(total.today.cache_read, 70_000, "68000 + 2000");
     // The main + subagent files fold under one `session_id` directory, so the
     // thread counts once across every window its activity falls within.
     assert_eq!(total.today.sessions, 1, "main + subagent = one thread");
     assert_eq!(total.year.sessions, 1);
+}
+
+#[test]
+fn add_folds_cache_write_into_input_and_total() {
+    let mut window = SpendWindow::default();
+    let entry = CachedEntry {
+        ts_secs: NOW_SECS,
+        cost_usd: 0.0,
+        input: 10,
+        output: 30,
+        cache_write: 20,
+        cache_read: 40,
+        message_id: None,
+        request_id: None,
+        is_sidechain: false,
+    };
+
+    window.add(1.25, &entry);
+
+    assert_eq!(window.usd, 1.25);
+    assert_eq!(window.input, 30, "input folds fresh input + cache-write");
+    assert_eq!(window.output, 30);
+    assert_eq!(window.tokens, 60, "◇ folds cache-write through input");
+    assert_eq!(window.cache_write, 20, "raw cache-write split is retained");
+    assert_eq!(window.cache_read, 40, "cache-read stays outside ◇");
 }
 
 #[test]
@@ -724,9 +753,11 @@ fn provider_cache_round_trips_with_stamp() {
     write_provider_spending_cache(&path, 12_345, &spending, baselines.clone());
     let cache = read_provider_spending_cache(&path);
 
+    assert_eq!(cache.version, PROVIDER_SPENDING_VERSION);
     assert_eq!(cache.refreshed_at_ms, 12_345);
     assert_eq!(cache.spending, spending);
     assert_eq!(cache.live_cost_baselines, baselines);
+    assert!(cache.is_fresh(12_345));
 }
 
 #[test]
@@ -751,6 +782,31 @@ fn pre_stamp_provider_cache_reads_values_as_stale() {
 }
 
 #[test]
+fn provider_cache_version_mismatch_reads_as_stale() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("provider-spending.json");
+    let spending = sample_spending();
+    let now_ms = NOW_SECS * 1_000;
+    let stale_shape = ProviderSpendingCache {
+        version: 0,
+        refreshed_at_ms: now_ms,
+        spending: spending.clone(),
+        ..ProviderSpendingCache::default()
+    };
+    std::fs::write(&path, serde_json::to_vec(&stale_shape).unwrap()).unwrap();
+
+    let cache = read_provider_spending_cache(&path);
+
+    assert_eq!(cache.version, 0);
+    assert_eq!(cache.refreshed_at_ms, now_ms);
+    assert_eq!(cache.spending, spending);
+    assert!(
+        !cache.is_fresh(now_ms),
+        "version-0 aggregates recompute once"
+    );
+}
+
+#[test]
 fn provider_cache_missing_or_corrupt_reads_default() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("provider-spending.json");
@@ -765,6 +821,7 @@ fn provider_cache_missing_or_corrupt_reads_default() {
 #[test]
 fn provider_cache_expires_after_spending_ttl() {
     let cache = ProviderSpendingCache {
+        version: PROVIDER_SPENDING_VERSION,
         refreshed_at_ms: 1_000,
         ..ProviderSpendingCache::default()
     };

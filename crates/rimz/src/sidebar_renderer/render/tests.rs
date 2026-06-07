@@ -2583,8 +2583,8 @@ fn provider_panel(
         spending: Some(crate::SpendTally {
             today: crate::SpendWindow {
                 usd: 3.5,
-                tokens: 486_000,
-                input: 422_000,
+                tokens: 498_000,
+                input: 434_000,
                 output: 64_000,
                 cache_write: 12_000,
                 cache_read: 68_000,
@@ -3260,8 +3260,8 @@ fn render_fleet_ledger_pins_week_month_rows_under_the_dashboard() {
     snapshot.value_tally = Some(crate::SpendTally {
         today: crate::SpendWindow {
             usd: 40.23,
-            tokens: 3_300_000,
-            input: 300_000,
+            tokens: 3_420_000,
+            input: 420_000,
             output: 3_000_000,
             cache_write: 120_000,
             cache_read: 6_800_000,
@@ -3269,8 +3269,8 @@ fn render_fleet_ledger_pins_week_month_rows_under_the_dashboard() {
         },
         week: crate::SpendWindow {
             usd: 312.40,
-            tokens: 21_000_000,
-            input: 2_300_000,
+            tokens: 21_900_000,
+            input: 3_200_000,
             output: 18_700_000,
             cache_write: 900_000,
             cache_read: 51_000_000,
@@ -3278,8 +3278,8 @@ fn render_fleet_ledger_pins_week_month_rows_under_the_dashboard() {
         },
         month: crate::SpendWindow {
             usd: 1_240.57,
-            tokens: 33_000_000,
-            input: 4_300_000,
+            tokens: 34_900_000,
+            input: 6_200_000,
             output: 28_700_000,
             cache_write: 1_900_000,
             cache_read: 121_000_000,
@@ -3287,8 +3287,8 @@ fn render_fleet_ledger_pins_week_month_rows_under_the_dashboard() {
         },
         year: crate::SpendWindow {
             usd: 4_821.90,
-            tokens: 47_200_000,
-            input: 7_200_000,
+            tokens: 50_200_000,
+            input: 10_200_000,
             output: 40_000_000,
             cache_write: 3_000_000,
             cache_read: 210_000_000,
@@ -3311,7 +3311,7 @@ fn render_fleet_ledger_pins_week_month_rows_under_the_dashboard() {
     // Session counts and the precise (one-decimal) token total.
     assert!(rendered.contains("212"), "month session count:\n{rendered}");
     assert!(
-        rendered.contains("33.0M"),
+        rendered.contains("34.9M"),
         "month token total, precise form:\n{rendered}"
     );
     // The `year` window is no longer surfaced — the ledger tops out at month.

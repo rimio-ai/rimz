@@ -30,17 +30,18 @@ pub use crate::sidebar::timing::SPENDING_TTL;
 // ── Public types ──────────────────────────────────────────────────────────────
 
 /// Spend (USD) and token throughput accumulated over one time window. `tokens`
-/// is `input + output` — the same `◇` total the rest of the sidebar reads, so
-/// the figure stays consistent with the cockpit and per-card token lines. The
-/// four-way split (`input` / `output` / `cache_write` / `cache_read`) feeds the
-/// `◇ ↘ ↗ ◍ ◌` breakdown on the cockpit, the provider dashboard, and the W/M
-/// ledger rows; `sessions` counts the distinct threads (transcript files, with a
-/// Claude session's subagent files folded under it) that ran in the window.
+/// is the `◇` total: input with cache-write folded in, plus output. The split
+/// fields stay available (`input` / `output` / `cache_write` / `cache_read`);
+/// the fleet lines read `◇ ↘ ↗ ◌`, while `cache_write` remains separate for
+/// debug/cache compatibility. `sessions` counts the distinct threads
+/// (transcript files, with a Claude session's subagent files folded under it)
+/// that ran in the window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SpendWindow {
     pub usd: f64,
-    /// The `◇` total: `input + output`. A maintained field (not derived on read)
-    /// so the many `.tokens` read sites need no change.
+    /// The `◇` total: `input` (cache-write folded in) + `output`. A maintained
+    /// field (not derived on read) so the many `.tokens` read sites need no
+    /// change.
     pub tokens: u64,
     #[serde(default)]
     pub input: u64,
@@ -56,13 +57,13 @@ pub struct SpendWindow {
 }
 
 impl SpendWindow {
-    /// Fold one priced entry's spend and token split into the window. `tokens`
-    /// stays `input + output` (the `◇` total); cache tokens ride their own
-    /// fields, never the total.
+    /// Fold one priced entry's spend and token split into the window. `input`
+    /// includes cache-write at the window level, so `tokens` stays
+    /// `input + output` for the `◇` total; cache-read rides its own field.
     fn add(&mut self, usd: f64, entry: &CachedEntry) {
         self.usd += usd;
-        self.tokens += entry.input + entry.output;
-        self.input += entry.input;
+        self.tokens += entry.input + entry.cache_write + entry.output;
+        self.input += entry.input + entry.cache_write;
         self.output += entry.output;
         self.cache_write += entry.cache_write;
         self.cache_read += entry.cache_read;
@@ -120,6 +121,12 @@ pub struct Spending {
 /// an older version is discarded on read, forcing a clean re-parse under the
 /// current shape. `0` is the implicit pre-versioning shape (no `version` field).
 const SPENDING_CACHE_VERSION: u32 = 5;
+
+/// Gates the aggregate meaning in provider-spending.json, independent of the
+/// raw per-file [`SPENDING_CACHE_VERSION`]. An older stamp reads as stale, so
+/// the producer recomputes once from the still-current entry cache. `0` is the
+/// implicit pre-versioning shape. v1: cache-write folds into `◇`/`↘`.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 1;
 
 /// On-disk cache persisted at `{runtime_root}/spending.json`.
 ///
@@ -187,19 +194,19 @@ pub struct CachedEntry {
     /// in [`accum`].
     pub ts_secs: u64,
     pub cost_usd: f64,
-    /// Fresh input tokens (Claude `input_tokens`; Codex uncached input). The `◇`
-    /// total is `input + output`; cache tokens are tracked apart, never folded in.
-    /// `#[serde(default)]` keeps an older cache parseable; `SPENDING_CACHE_VERSION`
-    /// is what actually heals it — a pre-split cache is discarded on read so every
-    /// file re-parses, since a finalized session's stable mtime would otherwise pin
-    /// these at `0`.
+    /// Fresh input tokens (Claude `input_tokens`; Codex uncached input).
+    /// Per-entry components stay raw; [`SpendWindow::add`] folds `cache_write`
+    /// into aggregate input/total. `#[serde(default)]` keeps an older cache
+    /// parseable; `SPENDING_CACHE_VERSION` is what actually heals it — a
+    /// pre-split cache is discarded on read so every file re-parses, since a
+    /// finalized session's stable mtime would otherwise pin these at `0`.
     #[serde(default)]
     pub input: u64,
     /// Output tokens (Codex `output_tokens` already includes reasoning).
     #[serde(default)]
     pub output: u64,
-    /// Cache-write (Claude `cache_creation_input_tokens`); `0` for providers with
-    /// no cache-creation concept (Codex, Pi).
+    /// Cache-write tokens (Claude `cache_creation_input_tokens`, Pi
+    /// `cacheWrite`); `0` for providers with no cache-creation concept (Codex).
     #[serde(default)]
     pub cache_write: u64,
     /// Cache-read (Claude `cache_read_input_tokens`; Codex `cached_input_tokens`).
@@ -490,10 +497,14 @@ pub fn write_spending_cache(path: &Path, cache: &SpendingDiskCache) {
 /// stamp the producer's [`SPENDING_TTL`] gate reads. A wrapper rather than a
 /// field on [`Spending`] keeps the in-memory value the fold path threads
 /// stamp-free; `#[serde(flatten)]` keeps a pre-stamp file (a bare `Spending`)
-/// readable — its values survive, with `refreshed_at_ms` defaulting to 0 so it
-/// reads as stale and refreshes once.
+/// readable — its values survive, with `version` and `refreshed_at_ms`
+/// defaulting to 0 so it reads as stale and refreshes once. A later aggregate
+/// semantic change bumps `version` without forcing raw JSONL re-parse.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProviderSpendingCache {
+    /// Aggregate semantic version for the TTL gate.
+    #[serde(default)]
+    pub version: u32,
     /// When the producer last walked and published, for the TTL gate.
     #[serde(default)]
     pub refreshed_at_ms: u64,
@@ -514,7 +525,8 @@ impl ProviderSpendingCache {
     /// transcript walk this tick. Saturating, so a clock that ran backwards
     /// reads fresh rather than re-walking every tick.
     pub fn is_fresh(&self, now_ms: u64) -> bool {
-        now_ms.saturating_sub(self.refreshed_at_ms) <= SPENDING_TTL.as_millis() as u64
+        self.version == PROVIDER_SPENDING_VERSION
+            && now_ms.saturating_sub(self.refreshed_at_ms) <= SPENDING_TTL.as_millis() as u64
     }
 }
 
@@ -531,6 +543,7 @@ pub fn write_provider_spending_cache(
     live_cost_baselines: BTreeMap<String, f64>,
 ) {
     let cache = ProviderSpendingCache {
+        version: PROVIDER_SPENDING_VERSION,
         refreshed_at_ms,
         live_cost_baselines,
         spending: spending.clone(),

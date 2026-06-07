@@ -508,38 +508,22 @@ fn activity_age_style_steps_with_the_clock_quarters() {
     );
 }
 
-/// The token breakdown reads `◇ ↘ ↗ ◍ ◌`, each marker in its one color
-/// (`◇` violet, the rest their bar-segment tones) with soft-tier figures;
-/// the `◍` cache-write field drops when excluded (the W/M rows). Under
+/// The token breakdown reads `◇ ↘ ↗ ◌`, each marker in its one color
+/// (`◇` violet, the rest their bar-segment tones) with soft-tier figures. Under
 /// `NO_COLOR` the glyph shapes still spell the split.
 #[test]
-fn token_breakdown_shape_and_optional_cache_write() {
+fn token_breakdown_shape_is_lean() {
     let theme = Theme::fixed(true);
-    let full = token_breakdown_spans(
+    let spans = token_breakdown_spans(
         &theme,
         76_000,
         12_000,
         64_000,
-        12_000,
         68_000,
         super::super::fmt::tokens_int,
-        true,
     );
-    let text: String = full.iter().map(|s| s.content.as_ref()).collect();
-    assert_eq!(text, "◇ 76k ↘ 12k ↗ 64k ◍ 12k ◌ 68k");
-
-    let lean = token_breakdown_spans(
-        &theme,
-        76_000,
-        12_000,
-        64_000,
-        12_000,
-        68_000,
-        super::super::fmt::tokens_int,
-        false,
-    );
-    let text: String = lean.iter().map(|s| s.content.as_ref()).collect();
-    assert_eq!(text, "◇ 76k ↘ 12k ↗ 64k ◌ 68k", "no ◍ when excluded");
+    let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(text, "◇ 76k ↘ 12k ↗ 64k ◌ 68k");
 }
 
 /// With color on, every breakdown marker wears its one tone — the same
@@ -553,10 +537,8 @@ fn token_breakdown_markers_wear_their_segment_colors() {
         76_000,
         12_000,
         64_000,
-        12_000,
         68_000,
         super::super::fmt::tokens_int,
-        true,
     );
     let marker = |glyph: &str| {
         spans
@@ -576,10 +558,6 @@ fn token_breakdown_markers_wear_their_segment_colors() {
     assert_eq!(
         marker(TOKENS_OUT).fg,
         lit.style(SEGMENT_OUTPUT, Modifier::empty()).fg
-    );
-    assert_eq!(
-        marker(TOKENS_CACHE_WRITE).fg,
-        lit.style(SEGMENT_CACHE_WRITE, Modifier::empty()).fg
     );
     assert_eq!(
         marker(TOKENS_CACHED).fg,

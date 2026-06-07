@@ -273,16 +273,17 @@ pub(super) fn attention_glyph_style(
     }
 }
 
-/// Token-composition glyphs for the `◇ ↘ ↗ ◍ ◌` breakdown: a diamond for the
-/// cumulative total (input + output), the directional arrows for input read in /
-/// output generated, a half-filled ring for cache writes, and a hollow ring for
-/// cache reads. The breakdown reads the same on the cockpit, the provider
+/// Token-composition glyphs for the `◇ ↘ ↗ ◌` fleet breakdown: a diamond for
+/// the cumulative total (input with cache-write folded in, plus output), the
+/// directional arrows for input read in / output generated, and a hollow ring
+/// for cache reads. The breakdown reads the same on the cockpit, the provider
 /// dashboard, and the W/M ledger rows — one grammar, built by
 /// [`token_breakdown_spans`], each marker in its one color everywhere (the
 /// `◇` violet, the rest their [`SEGMENT_INPUT`]-family segment tones). The
-/// agent card's stat line answers a different question — what is in the
-/// window, not what the fleet burned — so it leads with `▤` and reorders the
-/// same four columns by how the window filled ([`context_breakdown_spans`]).
+/// `◍` marker belongs to the agent card's context-composition line, which
+/// answers a different question — what is in the window, not what the fleet
+/// burned — so it leads with `▤` and reorders the same four columns by how the
+/// window filled ([`context_breakdown_spans`]).
 pub(super) const TOKENS_TOTAL: &str = "◇";
 pub(super) const TOKENS_IN: &str = "↘";
 pub(super) const TOKENS_OUT: &str = "↗";
@@ -303,7 +304,7 @@ pub(super) const SEGMENT_CACHE_WRITE: Color = Color::Yellow;
 pub(super) const SEGMENT_INPUT: Color = Color::Red;
 pub(super) const SEGMENT_OUTPUT: Color = Color::Green;
 
-/// The `◇ ↘ ↗ ◍ ◌` token breakdown as styled spans — the one shape every fleet
+/// The `◇ ↘ ↗ ◌` token breakdown as styled spans — the one shape every fleet
 /// token line shares (cockpit today line, provider today line, W/M ledger
 /// rows). Each marker wears its one color everywhere: the `◇` total its
 /// soft-violet, the rest the same bar-segment tones the card's context line
@@ -311,20 +312,16 @@ pub(super) const SEGMENT_OUTPUT: Color = Color::Green;
 /// one glyph, one color, across the whole sidebar. The figures read at the
 /// soft tier ([`Theme::soft`]) like every stat figure; under `NO_COLOR` the
 /// glyph shapes still spell the split. `fmt` chooses the magnitude form
-/// (`tokens_int` live, `tokens_short` for the precise W/M rows);
-/// `include_cache_write` drops the `◍` field for the W/M rows, which omit it.
-/// `total` is the caller's `◇` value (input + output), passed in so a row can
-/// read it straight from its accumulated window.
-#[allow(clippy::too_many_arguments)]
+/// (`tokens_int` live, `tokens_short` for the precise W/M rows). `total` is the
+/// caller's `◇` value (`input` with cache-write folded in, plus output), passed
+/// in so a row can read it straight from its accumulated window.
 pub(super) fn token_breakdown_spans(
     theme: &Theme,
     total: u64,
     input: u64,
     output: u64,
-    cache_write: u64,
     cache_read: u64,
     fmt: fn(u64) -> String,
-    include_cache_write: bool,
 ) -> Vec<Span<'static>> {
     let mut spans = tokens_total_spans(theme, total, fmt);
     let mut field = |glyph: &str, color: Color, value: u64| {
@@ -336,9 +333,6 @@ pub(super) fn token_breakdown_spans(
     };
     field(TOKENS_IN, SEGMENT_INPUT, input);
     field(TOKENS_OUT, SEGMENT_OUTPUT, output);
-    if include_cache_write {
-        field(TOKENS_CACHE_WRITE, SEGMENT_CACHE_WRITE, cache_write);
-    }
     field(TOKENS_CACHED, SEGMENT_CACHE_READ, cache_read);
     spans
 }

@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.42).abs() < 1e-9);
         assert_eq!(entries[0].input, 100);
-        assert_eq!(entries[0].output, 50, "◇ total = input 100 + output 50");
+        assert_eq!(entries[0].output, 50);
         assert_eq!(
             entries[0].ts_secs,
             crate::agents::spending::iso_to_unix_secs("2026-06-02T10:00:00.000Z").unwrap()

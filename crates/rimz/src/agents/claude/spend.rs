@@ -282,8 +282,8 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
             continue;
         }
         // Claude reports the four token components separately; `input_tokens` is
-        // already the fresh (uncached) slice. The `◇` total is input + output;
-        // cache creation/reads ride their own fields, never the total.
+        // already the fresh (uncached) slice. Window aggregation folds cache
+        // creation into input/total, while cache reads ride their own field.
         entries.push(CachedEntry {
             ts_secs,
             cost_usd: cost,
@@ -391,8 +391,8 @@ mod tests {
         );
         let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
         assert_eq!(entries.len(), 1);
-        // The components are kept apart — the `◇` total (input + output) and the
-        // cache split are reconstructed downstream, never pre-summed here.
+        // The components are kept apart here; window aggregation folds
+        // cache-write into input/total downstream.
         assert_eq!(entries[0].input, 10);
         assert_eq!(entries[0].output, 5);
         assert_eq!(entries[0].cache_write, 3);

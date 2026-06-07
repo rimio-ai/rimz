@@ -19,7 +19,7 @@ const ACTIVE_AGENTS_GLYPH: &str = "¤";
 /// The cockpit's first summary line, directly beneath the repo identity:
 /// `◎ {sessions}` — the threads that have run today, the glyph in the teal it
 /// shares with the W/M ledger rows — on the left, with today's accumulated
-/// token breakdown `◇ ↘ ↗ ◍ ◌` (integer magnitudes, the live coarse form)
+/// token breakdown `◇ ↘ ↗ ◌` (integer magnitudes, the live coarse form)
 /// pinned to the right edge: both halves read today's window, so the line is
 /// the day at a glance. The breakdown reads the JSONL `value_tally`'s today
 /// window and drops when today recorded no tokens, leaving `◎ {sessions}`
@@ -33,17 +33,15 @@ pub(in crate::sidebar_renderer::render) fn cockpit_summary_line(
 ) -> Line<'static> {
     let left = metric_spans(theme, SESSIONS_GLYPH, Color::Cyan, &sessions.to_string());
     let right = today
-        .filter(|w| w.tokens > 0 || w.cache_write > 0 || w.cache_read > 0)
+        .filter(|w| w.tokens > 0 || w.cache_read > 0)
         .map(|window| {
             token_breakdown_spans(
                 theme,
                 window.tokens,
                 window.input,
                 window.output,
-                window.cache_write,
                 window.cache_read,
                 tokens_int,
-                true,
             )
         })
         .unwrap_or_default();
