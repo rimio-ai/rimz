@@ -120,7 +120,31 @@ fn remote_control_host_pane_is_filtered_not_rendered() {
     );
 }
 
-fn snapshot_with(items: Vec<FeedItem>, agents: Vec<AgentState>) -> SidebarSnapshot {
+fn snapshot_with(items: Vec<FeedItem>, mut agents: Vec<AgentState>) -> SidebarSnapshot {
+    let mut panes = Vec::new();
+    for (idx, agent) in agents.iter_mut().enumerate() {
+        if agent.parent_agent_id.is_some() {
+            continue;
+        }
+        let live = agent.pane.clone().unwrap_or_else(|| {
+            let raw = format!("%agent-{idx}");
+            pane(
+                &raw,
+                agent.kind.as_str(),
+                agent.worktree_path.as_deref().unwrap_or("/repo/main"),
+            )
+        });
+        agent.pane = Some(live.clone());
+        panes.push(live);
+    }
+    for item in &items {
+        if let Some(live) = &item.pane
+            && panes.iter().all(|pane| pane.pane_id != live.pane_id)
+        {
+            panes.push(live.clone());
+        }
+    }
+
     let mut snapshot = SidebarSnapshot::build_with_carryover(
         fixed_workspace(),
         items,
@@ -128,6 +152,9 @@ fn snapshot_with(items: Vec<FeedItem>, agents: Vec<AgentState>) -> SidebarSnapsh
         agents,
         Timestamp::now(),
     );
+    if !panes.is_empty() {
+        snapshot = snapshot.with_live_panes(panes, None);
+    }
     snapshot.display_name = "query-engine".to_owned();
     snapshot
 }
@@ -302,6 +329,7 @@ fn render_worktree_attention_map() {
     );
     native.worktree_path = Some("/home/me/query-engine".to_owned());
     native.updated_at = fixed_now() - Duration::from_secs(12 * 60);
+    native.payload = json!({ "session_id": "claude-1" });
     let mut script = FeedItem::new(
         workspace,
         Surface::Script,
@@ -312,6 +340,18 @@ fn render_worktree_attention_map() {
     );
     script.options = vec!["yes".to_owned(), "no".to_owned()];
     script.updated_at = fixed_now() - Duration::from_secs(5 * 60);
+    let mut deploy_pane = pane("%deploy", "deploy.sh", "");
+    deploy_pane.cwd = None;
+    script.pane = Some(deploy_pane);
+    let mut permission = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Waiting,
+        Some("/home/me/query-engine"),
+        Some("main"),
+        Some("permission"),
+    );
+    permission.last_activity = native.updated_at;
     let mut running = agent(
         "codex-1",
         "codex",
@@ -324,7 +364,7 @@ fn render_worktree_attention_map() {
     running.effort = Some("high".to_owned());
     running.last_activity = fixed_now() - Duration::from_secs(8);
 
-    let snapshot = snapshot_with(vec![native, script], vec![running]);
+    let snapshot = snapshot_with(vec![native, script], vec![permission, running]);
 
     assert_snapshot(
         "worktree_attention_map",
@@ -1803,10 +1843,18 @@ fn render_footer_and_help_overlay() {
         "agent-hook",
     );
     native.worktree_branch = Some("main".to_owned());
-    let snapshot = snapshot_with(vec![native], Vec::new());
+    let codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Waiting,
+        Some("/repo/main"),
+        Some("main"),
+        Some("allow?"),
+    );
+    let snapshot = snapshot_with(vec![native], vec![codex]);
     let rendered = snapshot_to_screen(&snapshot, 80, 18);
-    // A waiting permission is an attention row, so the footer carries the
-    // triage key alongside the resting help hint.
+    // A frame-backed waiting row puts triage on screen, so the footer carries
+    // the triage key alongside the resting help hint.
     assert!(rendered.contains("␣ next ?!"), "{rendered}");
     assert!(rendered.contains("? for help"), "{rendered}");
 

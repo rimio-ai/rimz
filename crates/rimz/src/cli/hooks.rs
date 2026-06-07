@@ -389,26 +389,7 @@ fn attach_agent_pane(observation: &mut AgentLifecycleObservation) {
     if observation.pane_id.is_some() {
         return;
     }
-    observation.pane_id = pane_id_from_env();
-}
-
-fn pane_id_from_env() -> Option<PaneId> {
-    if let Some(raw) = std::env::var("ZELLIJ_PANE_ID")
-        .ok()
-        .filter(|raw| !raw.is_empty())
-    {
-        return Some(PaneId::from_parts(
-            MuxName::Zellij,
-            format!("terminal_{raw}"),
-        ));
-    }
-    if let Some(raw) = std::env::var("TMUX_PANE")
-        .ok()
-        .filter(|raw| !raw.is_empty())
-    {
-        return Some(PaneId::from_parts(MuxName::Tmux, raw));
-    }
-    None
+    observation.pane_id = rimz::mux::ambient_pane_id();
 }
 
 fn attach_agent_owner(source: &str, observation: &mut AgentLifecycleObservation) {

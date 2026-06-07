@@ -247,8 +247,8 @@ pub enum EnrichMode<'a> {
 /// the live pane frame (panes plus the `produced_at_ms` read stamp): the
 /// producer's freshly resolved list, or the published `snapshot.json` a
 /// consumer read back. `None` skips the pane overlay — a cold consumer start
-/// (no publish yet) or a producer call with no live session — and the bare
-/// rollup's groups stand until the next produce.
+/// (no publish yet) or a producer call with no live session — and leaves
+/// `worktree_groups` empty while the rollup metadata remains available.
 ///
 /// [`EnrichMode::Cached`] reads only runtime caches and sidecars;
 /// [`EnrichMode::Producing`] carries the producer inputs in the mode and inserts

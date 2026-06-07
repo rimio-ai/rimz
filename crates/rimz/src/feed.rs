@@ -335,6 +335,26 @@ pub struct PaneRef {
     pub pane_process_start: Option<Timestamp>,
 }
 
+impl PaneRef {
+    /// A minimal reference carrying just the normalized pane id — the ambient
+    /// stamp hooks and script asks record. Live mux truth (command, cwd,
+    /// focus, process start) joins at the pane fold.
+    pub fn from_id(pane_id: PaneId) -> Self {
+        Self {
+            pane_id,
+            session_name: String::new(),
+            view_id: None,
+            view_kind: None,
+            view_name: None,
+            is_focused: false,
+            command: None,
+            cwd: None,
+            pane_pid: None,
+            pane_process_start: None,
+        }
+    }
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }

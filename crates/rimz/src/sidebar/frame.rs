@@ -3,7 +3,9 @@
 //! The mux seam remains a flat [`PaneRef`](crate::feed::PaneRef) list because
 //! non-sidebar callers route by pane. The sidebar producer lifts that list into
 //! tabs/windows, keeps process state as one record, and publishes the topology
-//! as cache-class `snapshot.json`.
+//! as cache-class `snapshot.json`. The frame admits every rendered sidebar
+//! card; ledger, sidecars, and realtime events only enrich cards whose pane is
+//! present here.
 
 use std::collections::{BTreeMap, HashMap};
 

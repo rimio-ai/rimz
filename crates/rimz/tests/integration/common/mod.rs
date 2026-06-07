@@ -18,7 +18,7 @@ mod harness;
 mod payloads;
 
 pub use command::{CommandTimeoutExt, ScrubSessionEnvExt};
-pub use env::{Env, af_unix_bind_sandboxed, canonical};
+pub use env::{Env, af_unix_bind_sandboxed, canonical, tmux_pane};
 pub use harness::Harness;
 pub use payloads::{
     claude_pre_tool_use_payload, codex_permission_payload, example_resolver_script,

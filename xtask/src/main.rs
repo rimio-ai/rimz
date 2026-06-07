@@ -842,6 +842,7 @@ fn invariants(root: &Path) -> Result<()> {
         )?;
     }
     ensure_snapshot_json_writes_stay_in_produce(root, &files)?;
+    ensure_sidebar_enrich_folds_before_live_panes(root)?;
 
     // Durability barriers live in one file: every fsync syscall goes through
     // `ledger/atomic.rs`, so the write-class contract is auditable in one
@@ -966,6 +967,44 @@ fn ensure_no_match(
         return Ok(());
     }
     bail!("{message}\n{}", violations.join("\n"));
+}
+
+fn ensure_sidebar_enrich_folds_before_live_panes(root: &Path) -> Result<()> {
+    let path = root.join("crates/rimz/src/sidebar/enrich.rs");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let Some(live_fold) = text.find("with_live_panes(") else {
+        bail!("sidebar enrich spine must fold a live pane frame through with_live_panes");
+    };
+    let after_live = &text[live_fold..];
+    let mut violations = Vec::new();
+    for needle in [
+        ".with_project_root(",
+        ".with_worktree_roots(",
+        ".with_root_class(",
+        ".with_agent_context(",
+        ".with_subagent_context(",
+        ".with_agent_activity(",
+        ".drop_dead_agents_with(",
+        ".drop_dead_daemon_sessions(",
+        ".reap_stale_sessions(",
+    ] {
+        if let Some(offset) = after_live.find(needle) {
+            let line = text[..live_fold + offset]
+                .bytes()
+                .filter(|byte| *byte == b'\n')
+                .count()
+                + 1;
+            violations.push(format!("{}:{}: {}", path.display(), line, needle));
+        }
+    }
+    if violations.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "sidebar enrich rollup/context/liveness folds must stay before with_live_panes\n{}",
+        violations.join("\n")
+    );
 }
 
 fn ensure_no_core_pane_auto_use(root: &Path, files: &[PathBuf]) -> Result<()> {

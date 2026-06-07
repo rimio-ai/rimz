@@ -260,7 +260,7 @@ fn idle_agent_row(
     }
 }
 
-pub(crate) fn placeholder_row_from_pane(
+pub(crate) fn row_from_frame_pane(
     pane: &PaneRef,
     wired_lazy_kinds: &[String],
     lazy_agent_default_models: &BTreeMap<String, String>,
@@ -290,24 +290,6 @@ pub(super) fn pane_start_matches(expected: &PaneRef, actual: &PaneRef) -> bool {
     match (expected.pane_process_start, actual.pane_process_start) {
         (Some(expected), Some(actual)) => expected == actual,
         _ => true,
-    }
-}
-
-/// Build a minimal `PaneRef` carrying just the normalized pane id. The reducer
-/// only needs identity for binding an agent to its live pane; the live
-/// multiplexer overlay fills in command/cwd/focus when it joins.
-pub(super) fn pane_ref_from_id(pane_id: PaneId) -> PaneRef {
-    PaneRef {
-        pane_id,
-        session_name: String::new(),
-        view_id: None,
-        view_kind: None,
-        view_name: None,
-        is_focused: false,
-        command: None,
-        cwd: None,
-        pane_pid: None,
-        pane_process_start: None,
     }
 }
 

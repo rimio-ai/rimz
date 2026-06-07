@@ -6,9 +6,8 @@ use std::collections::BTreeMap;
 
 use tracing::debug;
 
-use super::panes::pane_ref_from_id;
 use crate::agents::lifecycle::{self, Transition};
-use crate::feed::{AgentState, RuntimeOwner, RuntimeOwnerKind};
+use crate::feed::{AgentState, PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::schema::event::EventEnvelope;
 
@@ -261,7 +260,7 @@ pub(super) fn reduce_agent_states_seeded(
         // rest of `PaneRef` is filled by the live `pane list` overlay.
         let pane = param_string("pane_id")
             .and_then(|raw| PaneId::parse(&raw).ok())
-            .map(pane_ref_from_id)
+            .map(PaneRef::from_id)
             .or_else(|| prior.and_then(|p| p.pane.clone()));
         // Identity, never activity: the first event's instant, carried forward
         // unchanged — the durable spawn key the sidebar's calm tiebreak falls

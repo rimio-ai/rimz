@@ -10,7 +10,6 @@ use std::path::Path;
 
 use jiff::Timestamp;
 
-use super::panes::pane_ref_from_id;
 use super::view::{SidebarRow, SidebarSnapshot};
 use crate::agents::lifecycle::{self, TurnPhase};
 use crate::agents::{AgentContext, AgentRateLimits, AgentTurnError, RateLimitWindow};
@@ -41,6 +40,33 @@ pub(super) fn workspace() -> WorkspaceId {
 /// …) hang off the returned snapshot as in production.
 pub(super) fn room(items: Vec<FeedItem>, agents: Vec<AgentState>) -> SidebarSnapshot {
     SidebarSnapshot::build_with_agents(workspace(), items, agents, epoch())
+}
+
+/// Build a snapshot at the [`epoch`] and admit each root agent through a
+/// synthetic live pane. Tests that assert row projection, ranking, caps, or
+/// display status use this instead of the frameless [`room`] constructor.
+pub(super) fn room_with_agent_panes(
+    items: Vec<FeedItem>,
+    mut agents: Vec<AgentState>,
+) -> SidebarSnapshot {
+    let mut panes = Vec::new();
+    for (idx, agent) in agents.iter_mut().enumerate() {
+        if agent.parent_agent_id.is_some() {
+            continue;
+        }
+        let pane = agent.pane.clone().unwrap_or_else(|| {
+            let raw = format!("%agent-{idx}");
+            pane(
+                &raw,
+                agent.kind.as_str(),
+                agent.worktree_path.as_deref().unwrap_or("/repo/main"),
+            )
+        });
+        agent.pane = Some(pane.clone());
+        panes.push(pane);
+    }
+    SidebarSnapshot::build_with_agents(workspace(), items, agents, epoch())
+        .with_live_panes(panes, None)
 }
 
 /// Every projected row across every worktree group, in render order.
@@ -126,7 +152,7 @@ pub(super) trait AgentStateFx: Sized {
 
 impl AgentStateFx for AgentState {
     fn in_pane(mut self, raw: &str) -> Self {
-        self.pane = Some(pane_ref_from_id(PaneId::from_parts(MuxName::Tmux, raw)));
+        self.pane = Some(PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, raw)));
         self
     }
 

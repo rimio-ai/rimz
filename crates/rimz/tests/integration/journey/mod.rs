@@ -299,6 +299,7 @@ impl<'a> RoomHarness<'a> {
 struct PaneRoster {
     next_index: usize,
     agents: BTreeMap<String, PaneProcess>,
+    extra_panes: BTreeMap<String, PaneRef>,
 }
 
 struct PaneProcess {
@@ -318,6 +319,20 @@ impl PaneRoster {
                 continue;
             };
             roster.start(&agent.agent_id, &agent.kind, cwd);
+        }
+        for item in snapshot
+            .needs_attention
+            .iter()
+            .chain(snapshot.resolver_working.iter())
+        {
+            if item.source_kind == "agent-hook" {
+                continue;
+            }
+            if let Some(pane) = &item.pane {
+                roster
+                    .extra_panes
+                    .insert(item.request_id.to_string(), pane.clone());
+            }
         }
         roster
     }
@@ -353,7 +368,7 @@ impl PaneRoster {
     }
 
     fn panes(&self, mux: MuxName, project_root: &std::path::Path) -> Vec<PaneRef> {
-        if self.agents.is_empty() {
+        if self.agents.is_empty() && self.extra_panes.is_empty() {
             return vec![process_pane(
                 mux,
                 0,
@@ -366,6 +381,7 @@ impl PaneRoster {
             .values()
             .map(|process| process_pane(mux, process.index, &process.command, process.cwd.clone()))
             .collect::<Vec<_>>();
+        panes.extend(self.extra_panes.values().cloned());
         panes.sort_by_key(|pane| pane.pane_id.raw().to_owned());
         panes
     }

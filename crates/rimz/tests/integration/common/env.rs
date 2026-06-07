@@ -12,6 +12,7 @@ use assert_cmd::cargo::CommandCargoExt;
 use jiff::Timestamp;
 
 use super::command::ScrubSessionEnvExt;
+use rimz::feed::PaneRef;
 use rimz::schema::heartbeat::ResolverHeartbeat;
 use rimz::{EventEnvelope, Ledger, RuntimePaths, StatePaths, WorkspaceId, WorkspaceResolver};
 use serde_json::Value;
@@ -22,6 +23,23 @@ use tempfile::TempDir;
 /// canonical root, so harness and binary must agree on the same form.
 pub fn canonical(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// A live tmux pane fixture for `Env::snapshot_json_with_panes`: the given raw
+/// id (`%5`), foreground command, and cwd, in the harness session's one window.
+pub fn tmux_pane(raw: &str, command: &str, cwd: &Path) -> PaneRef {
+    PaneRef {
+        pane_id: rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Tmux, raw),
+        session_name: "rimz-test".to_owned(),
+        view_id: Some("@0".to_owned()),
+        view_kind: Some(rimz::ids::ViewKind::Window),
+        view_name: None,
+        is_focused: false,
+        command: Some(command.to_owned()),
+        cwd: Some(cwd.display().to_string()),
+        pane_pid: None,
+        pane_process_start: None,
+    }
 }
 
 /// Out-of-process CLI harness: a tempdir `HOME` holding `state/runtime/config`
@@ -435,6 +453,37 @@ impl Env {
                 self.workspace_id.as_str(),
                 "--json",
             ])
+            .output()
+            .expect("spawn sidebar snapshot");
+        assert!(
+            out.status.success(),
+            "sidebar snapshot failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).expect("snapshot json")
+    }
+
+    pub fn snapshot_json_with_panes(&self, panes: &[PaneRef]) -> Value {
+        std::fs::create_dir_all(&self.runtime_root).expect("mkdir runtime root");
+        let path = self.runtime_root.join("snapshot-panes.json");
+        let tmp = self.runtime_root.join("snapshot-panes.json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(panes).expect("pane json"))
+            .expect("write pane fixture temp");
+        std::fs::rename(&tmp, &path).expect("publish pane fixture");
+        let out = self
+            .rimz()
+            .args([
+                "sidebar",
+                "snapshot",
+                "--workspace-id",
+                self.workspace_id.as_str(),
+                "--mux",
+                "tmux",
+                "--session-name",
+                "rimz-test",
+                "--json",
+            ])
+            .env("RIMZ_TEST_PANE_LIST", &path)
             .output()
             .expect("spawn sidebar snapshot");
         assert!(

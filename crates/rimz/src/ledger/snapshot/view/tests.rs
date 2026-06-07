@@ -74,15 +74,12 @@ fn build_groups_by_surface_and_status() {
     native.updated_at += std::time::Duration::from_secs(1);
 
     let snap = room(vec![native, bridge, answered, timed], Vec::new());
-    // Pending native + bridge asks surface as attention/working; the
-    // resolved and timed-out items are history, so they are dropped — they
-    // never become rows.
+    // Pending native + bridge asks surface as attention/working metadata; the
+    // resolved and timed-out items are history, so they are dropped. Without a
+    // live frame, none of them become rows.
     assert_eq!(snap.needs_attention.len(), 1);
     assert_eq!(snap.resolver_working.len(), 1);
-    assert_eq!(snap.worktree_groups.len(), 1);
-    assert_eq!(snap.worktree_groups[0].kind, SidebarWorktreeKind::External);
-    assert_eq!(snap.worktree_groups[0].label, "external");
-    assert_eq!(snap.worktree_groups[0].rows.len(), 2);
+    assert!(snap.worktree_groups.is_empty());
 }
 
 #[test]
@@ -103,7 +100,7 @@ fn pending_cli_native_items_do_not_become_sidebar_attention() {
 }
 
 #[test]
-fn pending_script_items_use_worktree_branch_label() {
+fn pending_script_items_wait_for_a_live_frame() {
     let mut item = FeedItem::new(
         workspace(),
         Surface::Script,
@@ -117,12 +114,8 @@ fn pending_script_items_use_worktree_branch_label() {
 
     let snap = room(vec![item], Vec::new());
 
-    assert_eq!(snap.worktree_groups.len(), 1);
-    assert_eq!(snap.worktree_groups[0].label, "main");
-    assert_eq!(
-        snap.worktree_groups[0].rows[0].task.as_deref(),
-        Some("Should I proceed?")
-    );
+    assert_eq!(snap.needs_attention.len(), 1);
+    assert!(snap.worktree_groups.is_empty());
 }
 
 #[test]
@@ -130,13 +123,16 @@ fn multiple_pending_asks_for_one_session_render_one_row() {
     // The live pile-up: a session held several pending native_ui asks, and
     // the no-panes rollup emitted one row each. Read-time dedup collapses
     // them to a single row keyed by `(source, agent_id)`.
-    let session = agent("claude", "sess-1", AgentStatus::Idle, 1_000).worktree("/repo/main");
+    let session = agent("claude", "sess-1", AgentStatus::Idle, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%1");
     let items = vec![
         agent_ask(FeedKind::Permission, "claude", "sess-1"),
         agent_ask(FeedKind::Question, "claude", "sess-1"),
     ];
 
-    let snapshot = room(items, vec![session]);
+    let snapshot =
+        room(items, vec![session]).with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
 
     let rows = &snapshot.worktree_groups[0].rows;
     let agent_rows: Vec<_> = rows
@@ -152,7 +148,7 @@ fn multiple_pending_asks_for_one_session_render_one_row() {
 }
 
 #[test]
-fn pending_attention_survives_without_pane_fold_in() {
+fn pending_attention_survives_as_metadata_without_pane_fold_in() {
     let item = FeedItem::new(
         workspace(),
         Surface::Script,
@@ -164,15 +160,8 @@ fn pending_attention_survives_without_pane_fold_in() {
 
     let snapshot = room(vec![item], Vec::new());
 
-    assert_eq!(snapshot.worktree_groups.len(), 1);
-    assert_eq!(
-        snapshot.worktree_groups[0].rows[0].status,
-        Some(AgentStatus::Waiting)
-    );
-    assert_eq!(
-        snapshot.worktree_groups[0].rows[0].task.as_deref(),
-        Some("approve deploy?")
-    );
+    assert_eq!(snapshot.needs_attention.len(), 1);
+    assert!(snapshot.worktree_groups.is_empty());
 }
 
 // ── Activity heartbeat fold ─────────────────────────────────────────────────
@@ -500,7 +489,7 @@ fn agents_on_different_branches_in_one_path_form_two_groups() {
         .worktree("/repo/shared")
         .branch("main");
 
-    let snapshot = room(Vec::new(), vec![feature, main]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![feature, main]);
 
     assert_eq!(
         snapshot.worktree_groups.len(),
@@ -816,6 +805,7 @@ fn marker_room_root_pod_reads_like_a_directory_room() {
 fn stale_branch_row_never_relabels_the_root_pod() {
     // A row claiming a branch at a non-repo room root is stale by definition
     // (the root has no git story); the pod keeps its directory name.
+    let live = pane("%scratch", "rimz-ask", "/tmp/scratch");
     let mut item = FeedItem::new(
         workspace(),
         Surface::Script,
@@ -826,10 +816,12 @@ fn stale_branch_row_never_relabels_the_root_pod() {
     );
     item.worktree_path = Some("/tmp/scratch".to_owned());
     item.worktree_branch = Some("main".to_owned());
+    item.pane = Some(live.clone());
 
     let snapshot = room(vec![item], Vec::new())
         .with_root_class(RootClass::Directory)
-        .with_project_root(Some(PathBuf::from("/tmp/scratch")));
+        .with_project_root(Some(PathBuf::from("/tmp/scratch")))
+        .with_live_panes(vec![live], None);
 
     assert_eq!(snapshot.worktree_groups.len(), 1);
     let group = &snapshot.worktree_groups[0];
@@ -841,26 +833,32 @@ fn stale_branch_row_never_relabels_the_root_pod() {
 fn fleet_room_tiering_floats_the_attention_child_repo() {
     // Directory-room ordering rides the same tier ladder: the waiting child
     // repo leads, calm pods follow by label, external tails.
-    let snapshot = room(
-        Vec::new(),
-        vec![
-            agent_in(
-                "q1",
-                "/srv/agents/query-engine",
-                AgentStatus::Waiting,
-                1_000,
-            ),
-            agent_in("r1", "/srv/agents", AgentStatus::Idle, 1_000),
-            agent_in("b1", "/srv/agents/billing", AgentStatus::Idle, 1_000),
-            agent("claude", "e1", AgentStatus::Idle, 1_000),
-        ],
-    )
-    .with_root_class(RootClass::Directory)
-    .with_project_root(Some(PathBuf::from("/srv/agents")))
-    .with_worktree_roots(vec![
-        PathBuf::from("/srv/agents/billing"),
-        PathBuf::from("/srv/agents/query-engine"),
-    ]);
+    let q_pane = pane("%q1", "claude", "/srv/agents/query-engine");
+    let r_pane = pane("%r1", "claude", "/srv/agents");
+    let b_pane = pane("%b1", "claude", "/srv/agents/billing");
+    let e_pane = pane("%e1", "claude", "/tmp/outside");
+    let mut q1 = agent_in(
+        "q1",
+        "/srv/agents/query-engine",
+        AgentStatus::Waiting,
+        1_000,
+    );
+    q1.pane = Some(q_pane.clone());
+    let mut r1 = agent_in("r1", "/srv/agents", AgentStatus::Idle, 1_000);
+    r1.pane = Some(r_pane.clone());
+    let mut b1 = agent_in("b1", "/srv/agents/billing", AgentStatus::Idle, 1_000);
+    b1.pane = Some(b_pane.clone());
+    let mut e1 = agent("claude", "e1", AgentStatus::Idle, 1_000);
+    e1.pane = Some(e_pane.clone());
+
+    let snapshot = room(Vec::new(), vec![q1, r1, b1, e1])
+        .with_root_class(RootClass::Directory)
+        .with_project_root(Some(PathBuf::from("/srv/agents")))
+        .with_worktree_roots(vec![
+            PathBuf::from("/srv/agents/billing"),
+            PathBuf::from("/srv/agents/query-engine"),
+        ])
+        .with_live_panes(vec![q_pane, r_pane, b_pane, e_pane], None);
 
     let labels: Vec<&str> = snapshot
         .worktree_groups
@@ -875,8 +873,24 @@ fn fleet_room_tiering_floats_the_attention_child_repo() {
 
 #[test]
 fn group_tiering_floats_attention_and_tails_external() {
-    let labels_for = |agents: Vec<AgentState>| {
+    let labels_for = |mut agents: Vec<AgentState>| {
+        let mut panes = Vec::new();
+        for (idx, agent) in agents.iter_mut().enumerate() {
+            let raw = format!("%tier-{idx}");
+            let mut live = pane(
+                &raw,
+                agent.kind.as_str(),
+                agent.worktree_path.as_deref().unwrap_or("/repo/main"),
+            );
+            if agent.worktree_path.is_none() {
+                live.cwd = None;
+            }
+            agent.pane = Some(live.clone());
+            panes.push(live);
+        }
+
         room(Vec::new(), agents)
+            .with_live_panes(panes, None)
             .worktree_groups
             .iter()
             .map(|group| group.label.clone())
@@ -982,7 +996,7 @@ fn child_activity_advances_parent_displayed_clock() {
     // while the rollup state keeps the parent's own clock.
     let parent = agent("claude", "sess-root", AgentStatus::Running, 100).active_ago(540);
     let child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
-    let snapshot = room(Vec::new(), vec![parent, child]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![parent, child]);
 
     assert_eq!(row(&snapshot, "sess-root").last_activity, ago(5));
     let rollup = snapshot
@@ -1004,7 +1018,7 @@ fn recently_finished_child_holds_off_the_stall() {
     // whose child finished four minutes ago is alive, not wedged.
     let parent = agent("claude", "sess-root", AgentStatus::Running, 100).active_ago(660);
     let child = child_state("sess-root", "child-1", AgentStatus::Success, 240);
-    let snapshot = room(Vec::new(), vec![parent, child]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![parent, child]);
 
     let row = row(&snapshot, "sess-root");
     assert_eq!(row.status, Some(AgentStatus::Running), "not a stall");
@@ -1017,7 +1031,7 @@ fn waiting_parent_keeps_its_ask_clock() {
     // child activity never re-clocks it.
     let parent = agent("claude", "sess-root", AgentStatus::Waiting, 100).active_ago(120);
     let child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
-    let snapshot = room(Vec::new(), vec![parent, child]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![parent, child]);
 
     assert_eq!(row(&snapshot, "sess-root").last_activity, ago(120));
 }
@@ -1031,7 +1045,7 @@ fn turn_dead_parent_keeps_the_death_certificate() {
         .active_ago(120)
         .turn_error(60, "API Error: Overloaded");
     let child = child_state("sess-root", "child-1", AgentStatus::Success, 5);
-    let snapshot = room(Vec::new(), vec![parent, child]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![parent, child]);
 
     let row = row(&snapshot, "sess-root");
     assert_eq!(
@@ -1052,7 +1066,7 @@ fn with_subagent_context_folds_onto_child_by_key() {
     let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
     let child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
     let started = ago(100);
-    let snapshot = room(Vec::new(), vec![parent, child]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![parent, child]);
 
     let record = SubagentContextRecord {
         kind: AgentKind::new_unchecked("claude"),
@@ -1394,6 +1408,195 @@ fn live_panes_add_process_rows_without_attention_counts() {
     assert!(snapshot.worktree_groups[0].status_counts.is_empty());
 }
 
+fn script_ask_for_pane(pane: Option<PaneRef>) -> FeedItem {
+    let mut item = FeedItem::new(
+        workspace(),
+        Surface::Script,
+        FeedKind::Question,
+        "approve deploy?",
+        "deploy",
+        "script",
+    );
+    item.pane = pane;
+    item
+}
+
+#[test]
+fn standalone_script_ask_renders_only_from_matching_frame_pane() {
+    let stale_pane = PaneRef {
+        view_id: Some("@stale".to_owned()),
+        command: Some("old-deploy".to_owned()),
+        cwd: Some("/old".to_owned()),
+        ..pane("%7", "old-deploy", "/old")
+    };
+    let mut frame_pane = pane("%7", "deploy", "/repo/main");
+    frame_pane.view_id = Some("@fresh".to_owned());
+    frame_pane.is_focused = true;
+    let item = script_ask_for_pane(Some(stale_pane));
+    let request_id = item.request_id.clone();
+
+    let snapshot = room(vec![item], Vec::new()).with_live_panes(vec![frame_pane.clone()], None);
+
+    let rows = rows(&snapshot);
+    assert_eq!(rows.len(), 1, "the ask owns the pane row slot");
+    let row = rows[0];
+    assert_eq!(row.request_id.as_ref(), Some(&request_id));
+    assert_eq!(row.task.as_deref(), Some("approve deploy?"));
+    assert_eq!(row.worktree_path.as_deref(), Some("/repo/main"));
+    assert_eq!(row.pane.as_ref(), Some(&frame_pane));
+}
+
+#[test]
+fn standalone_script_ask_without_pane_does_not_render() {
+    let item = script_ask_for_pane(None);
+    let request_id = item.request_id.clone();
+
+    let snapshot =
+        room(vec![item], Vec::new()).with_live_panes(vec![pane("%1", "zsh", "/repo/main")], None);
+
+    let rows = rows(&snapshot);
+    assert_eq!(
+        rows.len(),
+        1,
+        "the live shell still renders as a process row"
+    );
+    assert!(
+        rows.iter()
+            .all(|row| row.request_id.as_ref() != Some(&request_id)),
+        "the unframed ask remains metadata only"
+    );
+}
+
+#[test]
+fn standalone_script_ask_for_absent_pane_does_not_render() {
+    let item = script_ask_for_pane(Some(pane("%7", "deploy", "/repo/main")));
+    let request_id = item.request_id.clone();
+
+    let snapshot =
+        room(vec![item], Vec::new()).with_live_panes(vec![pane("%8", "zsh", "/repo/main")], None);
+
+    let rows = rows(&snapshot);
+    assert_eq!(rows.len(), 1);
+    assert!(
+        rows.iter()
+            .all(|row| row.request_id.as_ref() != Some(&request_id)),
+        "an ask for a pane absent from the frame is not jumpable"
+    );
+}
+
+#[test]
+fn standalone_script_ask_for_reused_pane_id_does_not_render() {
+    let old_start = ago(60);
+    let fresh_start = ago(5);
+    let item = script_ask_for_pane(Some(pane_started("%7", "/repo/main", old_start)));
+    let request_id = item.request_id.clone();
+
+    let snapshot = room(vec![item], Vec::new())
+        .with_live_panes(vec![pane_started("%7", "/repo/main", fresh_start)], None);
+
+    let rows = rows(&snapshot);
+    assert_eq!(rows.len(), 1);
+    assert!(
+        rows.iter()
+            .all(|row| row.request_id.as_ref() != Some(&request_id)),
+        "a reused pane id with a different process start must not route the ask"
+    );
+}
+
+#[test]
+fn standalone_ask_on_an_agents_pane_folds_onto_the_agent_row() {
+    // A script ask raised from inside an agent's pane (the agent shelling out
+    // to `rimz feed ask`) folds onto the agent's row — identity and capability
+    // line kept, the ask's waiting status and request taken — and outranks the
+    // session's own pending agent-hook ask: the script blocks the pane's
+    // foreground right now.
+    let mut claude = agent("claude", "sess-a", AgentStatus::Running, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    claude.model = Some("opus-4".to_owned());
+    let script_ask = script_ask_for_pane(Some(pane("%1", "claude", "/repo/main")));
+    let request_id = script_ask.request_id.clone();
+    let items = vec![
+        agent_ask(FeedKind::Permission, "claude", "sess-a"),
+        script_ask,
+    ];
+
+    let snapshot =
+        room(items, vec![claude]).with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
+
+    let rows = rows(&snapshot);
+    assert_eq!(rows.len(), 1, "one pane, one row: {rows:?}");
+    let row = rows[0];
+    assert_eq!(row.row_kind, SidebarRowKind::Agent);
+    assert_eq!(row.id, "sess-a", "the agent keeps the row identity");
+    assert_eq!(row.name, "claude");
+    assert_eq!(
+        row.model.as_deref(),
+        Some("opus-4"),
+        "the capability line survives the fold"
+    );
+    assert_eq!(row.status, Some(AgentStatus::Waiting));
+    assert_eq!(
+        row.request_id.as_ref(),
+        Some(&request_id),
+        "the pane-blocking script ask outranks the agent-hook ask"
+    );
+    assert_eq!(row.surface, Some(Surface::Script));
+}
+
+#[test]
+fn standalone_bridge_ask_renders_its_resolver_from_the_frame() {
+    let mut item = FeedItem::new(
+        workspace(),
+        Surface::Bridge,
+        FeedKind::Permission,
+        "approve deploy?",
+        "deploy",
+        "script",
+    );
+    item.pane = Some(pane("%7", "deploy", "/repo/main"));
+    item.chain_active_resolver = Some(crate::ids::ResolverId::new_unchecked("auto-approver"));
+    let request_id = item.request_id.clone();
+
+    let snapshot = room(vec![item], Vec::new())
+        .with_live_panes(vec![pane("%7", "deploy", "/repo/main")], None);
+
+    let rows = rows(&snapshot);
+    assert_eq!(rows.len(), 1, "the bridge ask owns the pane row slot");
+    let row = rows[0];
+    assert_eq!(row.status, Some(AgentStatus::Waiting));
+    assert_eq!(row.request_id.as_ref(), Some(&request_id));
+    assert_eq!(
+        row.resolver
+            .as_ref()
+            .map(|resolver| resolver.resolver_id.as_str()),
+        Some("auto-approver"),
+        "a frame-admitted bridge ask carries its active resolver"
+    );
+}
+
+#[test]
+fn standalone_ask_on_a_wired_idle_lazy_pane_folds_onto_the_idle_row() {
+    let item = script_ask_for_pane(Some(pane("term1", "codex", "/repo/main")));
+    let request_id = item.request_id.clone();
+    let mut snapshot = room(vec![item], Vec::new());
+    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+
+    let snapshot = snapshot.with_live_panes(vec![pane("term1", "codex", "/repo/main")], None);
+
+    let rows = rows(&snapshot);
+    assert_eq!(rows.len(), 1, "one pane, one row: {rows:?}");
+    let row = rows[0];
+    assert_eq!(row.row_kind, SidebarRowKind::Agent);
+    assert_eq!(
+        row.name, "codex",
+        "the idle lazy identity survives the fold"
+    );
+    assert_eq!(row.id, "tmux:term1");
+    assert_eq!(row.status, Some(AgentStatus::Waiting));
+    assert_eq!(row.request_id.as_ref(), Some(&request_id));
+}
+
 #[test]
 fn commandless_unbound_pane_folds_no_row() {
     // A pane whose command is still unknown after frame rotation — mid-birth,
@@ -1603,24 +1806,19 @@ fn answered_native_ui_ask_returns_to_running() {
 }
 
 #[test]
-fn answered_native_ui_ask_returns_to_running_without_panes() {
-    // The same recovery as the pane path, but on the ledger-rollup fallback
-    // (`rimz sidebar snapshot` with no live mux). The moved-past guard must
-    // apply here too, or the answered ask falsely pins the row to waiting.
+fn answered_native_ui_ask_without_panes_stays_metadata_only() {
+    // With no live frame, the rollup carries the pending ask as metadata but
+    // emits no row. The pane-backed path above owns the moved-past display
+    // recovery.
     let mut item = agent_ask(FeedKind::Question, "claude", "live-claude");
     item.updated_at = ago(600);
     let session =
         agent("claude", "live-claude", AgentStatus::Running, 2_000).worktree("/repo/main");
 
-    // No `with_live_panes`: the snapshot stays on the ledger-rollup path.
     let snapshot = room(vec![item], vec![session]);
 
-    let row = &snapshot.worktree_groups[0].rows[0];
-    assert_eq!(
-        row.status,
-        Some(AgentStatus::Running),
-        "the moved-past recovery must also apply on the no-pane ledger fallback"
-    );
+    assert_eq!(snapshot.needs_attention.len(), 1);
+    assert!(snapshot.worktree_groups.is_empty());
 }
 
 #[test]
@@ -2373,7 +2571,7 @@ fn spent_account_parks_every_resting_agent_of_the_kind() {
     let fresh = agent("claude", "sess-fresh", AgentStatus::Idle, 1_100).worktree("/repo/main");
     let working = agent("claude", "sess-busy", AgentStatus::Running, 1_200).worktree("/repo/main");
 
-    let snapshot = room(Vec::new(), vec![reporter, fresh, working]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![reporter, fresh, working]);
     assert_eq!(
         row(&snapshot, "sess-spent").status,
         Some(AgentStatus::RateLimited)
@@ -2408,7 +2606,7 @@ fn a_window_spent_but_already_reset_does_not_park() {
         .worktree("/repo/main")
         .limits(vec![window(100, -60)]);
 
-    let snapshot = room(Vec::new(), vec![idle]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![idle]);
     assert_eq!(
         snapshot.worktree_groups[0].rows[0].status,
         Some(AgentStatus::Idle),
@@ -2698,7 +2896,7 @@ fn running_agent_in_spent_account_parks_not_fails() {
         .limits(vec![window(100, 3_600)])
         .active_ago(crate::feed::STALL_WINDOW_SECS + 60);
 
-    let snapshot = room(Vec::new(), vec![stalled]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![stalled]);
     assert_eq!(
         snapshot.worktree_groups[0].rows[0].status,
         Some(AgentStatus::RateLimited),
@@ -2720,7 +2918,7 @@ fn rate_limit_outranks_the_turn_death_marker() {
         .limits(vec![window(100, 3_600)])
         .turn_error(10, "You've hit your usage limit");
 
-    let snapshot = room(Vec::new(), vec![session]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(
         row.status,
@@ -2744,7 +2942,7 @@ fn running_parent_with_live_child_in_spent_account_parks() {
         .limits(vec![window(100, 3_600)]);
     let child = child_state("root", "child-1", AgentStatus::Running, 5);
 
-    let snapshot = room(Vec::new(), vec![parent, child]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![parent, child]);
     assert_eq!(
         snapshot.worktree_groups[0].rows[0].status,
         Some(AgentStatus::RateLimited),
@@ -2771,7 +2969,7 @@ fn compacting_marker_lights_the_head_then_expires() {
         .worktree("/repo/main")
         .compacting_ago(crate::feed::COMPACTING_WINDOW_SECS + 1);
 
-    let snapshot = room(Vec::new(), vec![fresh, inside, stale]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![fresh, inside, stale]);
     assert!(
         row(&snapshot, "compacting-now").compacting,
         "a fresh marker pulses"
@@ -2943,7 +3141,7 @@ fn calm_tail_cap_never_hides_attention_rows() {
         .collect::<Vec<_>>();
     agents.push(agent_in("failed", "/repo/main", AgentStatus::Failed, 2_000));
 
-    let snapshot = room(Vec::new(), agents);
+    let snapshot = room_with_agent_panes(Vec::new(), agents);
 
     assert!(
         snapshot.worktree_groups[0]
@@ -2975,7 +3173,7 @@ fn calm_tail_cap_never_hides_focused_rows() {
         })
         .collect::<Vec<_>>();
 
-    let snapshot = room(Vec::new(), agents);
+    let snapshot = room_with_agent_panes(Vec::new(), agents);
 
     assert!(
         snapshot.worktree_groups[0]
@@ -3002,7 +3200,7 @@ fn bucket_order_puts_attention_first_and_idle_last() {
     .map(|(i, status)| agent_in(&format!("sess-{i}"), "/repo/main", status, 1_000 + i as i64))
     .collect::<Vec<_>>();
 
-    let snapshot = room(Vec::new(), agents);
+    let snapshot = room_with_agent_panes(Vec::new(), agents);
 
     let order = snapshot.worktree_groups[0]
         .rows
@@ -3043,7 +3241,7 @@ fn calm_bucket_holds_stable_spawn_order() {
         })
         .collect::<Vec<_>>();
 
-    let snapshot = room(Vec::new(), agents);
+    let snapshot = room_with_agent_panes(Vec::new(), agents);
 
     let order = snapshot.worktree_groups[0]
         .rows
@@ -3067,7 +3265,7 @@ fn new_idle_agent_appends_below_calm_work() {
     let mut fresh = agent_in("fresh", "/repo/main", AgentStatus::Idle, 1_002);
     fresh.pane = Some(pane_started("%2", "/repo/main", ago(5)));
 
-    let snapshot = room(Vec::new(), vec![fresh, work, done]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![fresh, work, done]);
 
     let order = snapshot.worktree_groups[0]
         .rows
@@ -3087,11 +3285,11 @@ fn paneless_calm_rows_order_by_registration_not_label() {
     // the durable `registered_at` spawn key — never a label: the older session
     // leads even though its kind name sorts after its sibling's.
     let mut older = agent("codex", "older", AgentStatus::Idle, 1_000).worktree("/repo/main");
-    older.pane = Some(pane("%0", "node", "/repo/main"));
+    older.pane = Some(pane("%0", "codex", "/repo/main"));
     let mut newer = agent("claude", "newer", AgentStatus::Idle, 9_000).worktree("/repo/main");
-    newer.pane = Some(pane("%1", "node", "/repo/main"));
+    newer.pane = Some(pane("%1", "claude", "/repo/main"));
 
-    let snapshot = room(Vec::new(), vec![newer, older]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![newer, older]);
 
     let order = snapshot.worktree_groups[0]
         .rows
@@ -3127,7 +3325,7 @@ fn cap_trims_idle_before_running() {
         ));
     }
 
-    let snapshot = room(Vec::new(), agents);
+    let snapshot = room_with_agent_panes(Vec::new(), agents);
 
     let visible = snapshot.worktree_groups[0]
         .rows
@@ -3151,7 +3349,7 @@ fn calm_groups_hold_order_through_member_status_churn() {
         a.pane = Some(pane_started("%0", "/repo/a", ago(600)));
         let mut b = agent_in("sess-b", "/repo/b", b_status, 1_001);
         b.pane = Some(pane_started("%1", "/repo/b", ago(500)));
-        room(Vec::new(), vec![a, b])
+        room_with_agent_panes(Vec::new(), vec![a, b])
     };
 
     let groups = |snapshot: &SidebarSnapshot| {
@@ -3184,7 +3382,7 @@ fn paneless_calm_groups_order_by_registration_not_label() {
     let mut newer = agent_in("sess-a", "/repo/a", AgentStatus::Idle, 9_000);
     newer.pane = Some(pane("%1", "node", "/repo/a"));
 
-    let snapshot = room(Vec::new(), vec![newer, older]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![newer, older]);
 
     let groups = snapshot
         .worktree_groups
@@ -3211,7 +3409,7 @@ fn attention_bucket_sorts_longest_overdue_first() {
     .map(|(id, status, rank)| agent_in(id, "/repo/main", status, rank))
     .collect::<Vec<_>>();
 
-    let snapshot = room(Vec::new(), agents);
+    let snapshot = room_with_agent_panes(Vec::new(), agents);
 
     let order = snapshot.worktree_groups[0]
         .rows
@@ -3225,16 +3423,14 @@ fn attention_bucket_sorts_longest_overdue_first() {
 // ── Process liveness and the session reaper ──────────────────────────────────
 
 #[test]
-fn liveness_drops_dead_agent_pid_and_rebuilds_groups() {
+fn liveness_drops_dead_agent_pid_from_rollup() {
     let mut codex = agent("codex", "sess-1", AgentStatus::Running, 1_000).branch("main");
     codex.agent_pid = Some(424_242);
     codex.agent_process_start = Some("12345".to_owned());
 
     let mut snapshot = room(Vec::new(), vec![codex]);
-    assert_eq!(
-        snapshot.worktree_groups[0].rows[0].status,
-        Some(AgentStatus::Running)
-    );
+    assert_eq!(snapshot.agents.len(), 1);
+    assert!(snapshot.worktree_groups.is_empty());
 
     snapshot.drop_dead_agents_with(|pid, start| {
         assert_eq!(pid, 424_242);
@@ -3462,7 +3658,7 @@ fn call_split_projects_the_lifecycle_rail_composition() {
     codex.cache_read_input_tokens = Some(120_000);
     codex.fresh_input_tokens = Some(9_200);
     codex.output_tokens = Some(800);
-    let snapshot = room(Vec::new(), vec![codex]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![codex]);
 
     let projected = row(&snapshot, "sess-1");
     let split = projected
@@ -3482,7 +3678,7 @@ fn call_split_waits_for_a_known_input_side() {
     let mut codex = agent("codex", "sess-1", AgentStatus::Running, 1_000).worktree("/repo/main");
     codex.total_tokens = Some(5_000);
     codex.cache_read_input_tokens = Some(99);
-    let snapshot = room(Vec::new(), vec![codex]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![codex]);
 
     let projected = row(&snapshot, "sess-1");
     assert_eq!(projected.call_split(), None);

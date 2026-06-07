@@ -11,8 +11,8 @@ use rimz::ids::MuxName;
 use rimz::ledger::runtime::current_process_owner;
 
 use super::{
-    RoomHarness, SETTLE, permission_request, post_tool_use, session_start, session_start_at,
-    user_prompt_submit,
+    RoomHarness, SETTLE, permission_request, post_tool_use, process_pane, session_start,
+    session_start_at, user_prompt_submit,
 };
 use crate::common::Env;
 
@@ -481,6 +481,14 @@ fn push_workspace_script_ask_fixture(env: &Env, title: &str) {
         RuntimeOwnerKind::Script,
         item.request_id.to_string(),
     ));
+    let mut pane = process_pane(
+        MuxName::Tmux,
+        90,
+        "deploy",
+        env.project_root.display().to_string(),
+    );
+    pane.cwd = None;
+    item.pane = Some(pane);
     env.ledger()
         .push_feed_item(&item, "rimz-journey")
         .expect("push script ask");
@@ -499,6 +507,12 @@ fn push_worktree_script_ask_fixture(env: &Env, title: &str) {
     item.runtime_owner = Some(current_process_owner(
         RuntimeOwnerKind::Script,
         item.request_id.to_string(),
+    ));
+    item.pane = Some(process_pane(
+        MuxName::Tmux,
+        90,
+        "deploy",
+        env.project_root.display().to_string(),
     ));
     env.ledger()
         .push_feed_item(&item, "rimz-journey")

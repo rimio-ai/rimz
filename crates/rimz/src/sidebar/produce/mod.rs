@@ -95,8 +95,8 @@ pub fn produce_snapshot(
 
 /// The producer enrichments over the bare rollup, with no pane frame — the
 /// inspection arm for a call with no live session, no detectable mux, or a
-/// failed pane discovery. Group roots, sidecar folds, spending, accounts, and
-/// git all still run; only the pane overlay (gated on a frame) is skipped.
+/// failed pane discovery. Sidecar folds, spending, and accounts still run;
+/// rendered groups stay empty because no pane frame admitted cards.
 pub fn produce_rollup_snapshot(
     cursor: &mut RollupCursor,
     state: &StatePaths,

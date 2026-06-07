@@ -10,8 +10,8 @@ use serde_json::Value;
 use super::{GlobalFlags, open_ledger};
 use rimz::bridge::{self, BridgeOutcome, ExpectedFrame, SocketGuard};
 use rimz::feed::{
-    AbandonReason, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, RuntimeOwnerKind,
-    Surface,
+    AbandonReason, FeedItem, FeedKind, FeedStatus, PaneRef, Resolution, ResolutionMethod,
+    RuntimeOwnerKind, Surface,
 };
 use rimz::ids::{RequestId, ResolverId};
 use rimz::ledger::runtime::{RuntimeScope, current_process_owner};
@@ -149,6 +149,12 @@ pub fn run(args: FeedArgs, globals: &GlobalFlags) -> Result<()> {
             item.options = options;
             attach_worktree(&mut item, &workspace);
             attach_current_owner(&mut item);
+            // The pane the asking script runs inside, when it runs inside one —
+            // the per-pane mux env survives into this CLI child. The stamp is
+            // what renders the ask as a jumpable sidebar card once the live
+            // frame admits the pane; outside any pane (CI, cron) the ask stays
+            // rollup metadata served by `feed list` and `feed resolve`.
+            item.pane = rimz::mux::ambient_pane_id().map(PaneRef::from_id);
             item.hook_wait_timeout_seconds = timeout.map(|d| d.as_secs()).unwrap_or(0);
             if let Some(deadline) = timeout {
                 item.feed_deadline_at = Some(Timestamp::now() + deadline);

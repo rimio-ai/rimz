@@ -1,6 +1,6 @@
 use super::*;
 use crate::agents::TurnPhase;
-use crate::feed::{AgentState, AgentStatus};
+use crate::feed::{AgentState, AgentStatus, FeedItem, FeedKind, Surface};
 use crate::ids::{MuxName, WorkspaceId};
 use crate::ledger::atomic;
 use std::io::Write;
@@ -293,6 +293,37 @@ fn read_published_snapshot_is_none_until_the_producer_publishes() {
         )
         .is_none()
     );
+}
+
+#[test]
+fn no_frame_enrich_preserves_rollup_metadata_but_emits_no_groups() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mut item = FeedItem::new(
+        workspace.clone(),
+        Surface::Script,
+        FeedKind::Question,
+        "approve deploy?",
+        "deploy",
+        "script",
+    );
+    item.pane = Some(pane("terminal_1", "deploy", "/repo/main"));
+    let agent = root_agent("claude", "sess-1", None);
+
+    let snapshot = enrich(
+        SidebarSnapshot::build_with_agents(workspace, vec![item], vec![agent], Timestamp::now()),
+        None,
+        &runtime,
+        None,
+        EnrichMode::Cached,
+    );
+
+    assert_eq!(snapshot.panes_produced_at_ms, None);
+    assert_eq!(snapshot.agents.len(), 1);
+    assert_eq!(snapshot.needs_attention.len(), 1);
+    assert!(snapshot.worktree_groups.is_empty());
 }
 
 #[test]

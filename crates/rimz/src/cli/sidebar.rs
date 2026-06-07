@@ -198,7 +198,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 ) {
                     Some(snapshot) => snapshot,
                     // Cold start: no published panes yet, so own-view is not
-                    // computed — the bare rollup stands until the next tick.
+                    // computed and no cards are frame-admitted yet.
                     None => enrich(
                         rollup_snapshot(&state, &mut RollupCursor::new())?,
                         None,
@@ -215,14 +215,14 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             // plus live pane list, single-flighted across the fleet — folds
             // the producer enrichments, and publishes the caches consumers
             // read. With no session or no detectable mux there is no pane
-            // frame to produce; the rollup-only arm runs the same enrichments
-            // over the bare rollup.
+            // frame to produce; the frameless arm runs the same metadata
+            // enrichments over the bare rollup and emits no groups.
             let mux = mux
                 .or(globals.mux)
                 .or_else(|| rimz::mux::auto_detect_backend(None).ok());
             let rollup_only = |reason: Option<&dyn std::fmt::Display>| -> Result<()> {
                 if let Some(error) = reason {
-                    tracing::warn!(%error, "sidebar snapshot pane discovery failed; showing ledger rollup");
+                    tracing::warn!(%error, "sidebar snapshot pane discovery failed; emitting frameless rollup metadata");
                 }
                 emit(&produce_rollup_snapshot(
                     &mut RollupCursor::new(),

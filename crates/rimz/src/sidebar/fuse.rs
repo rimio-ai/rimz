@@ -7,8 +7,6 @@
 use std::collections::HashSet;
 
 use crate::SidebarSnapshot;
-use crate::feed::PaneRef;
-use crate::ids::PaneId;
 use crate::schema::sidebar_event::SidebarEvent;
 use crate::sidebar::events::EventStore;
 
@@ -28,19 +26,6 @@ pub fn fuse(pulled: &SidebarSnapshot, events: &EventStore, now_ms: u64) -> Sideb
         if let SidebarEvent::PaneClosed { pane_id } = &event.event {
             deleted.insert(pane_id.clone());
             fused.remove_pane_rows(pane_id);
-        }
-    }
-
-    for event in &active {
-        if let SidebarEvent::PaneOpened {
-            pane_id,
-            command: Some(command),
-        } = &event.event
-        {
-            if deleted.contains(pane_id) {
-                continue;
-            }
-            fused.overlay_opened_pane(placeholder_pane(pane_id.clone(), command.clone()));
         }
     }
 
@@ -68,27 +53,13 @@ pub fn fuse(pulled: &SidebarSnapshot, events: &EventStore, now_ms: u64) -> Sideb
     fused
 }
 
-fn placeholder_pane(pane_id: PaneId, command: String) -> PaneRef {
-    PaneRef {
-        pane_id,
-        session_name: String::new(),
-        view_id: None,
-        view_kind: None,
-        view_name: None,
-        is_focused: false,
-        command: Some(command),
-        cwd: None,
-        pane_pid: None,
-        pane_process_start: None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
-    use crate::ids::{MuxName, WorkspaceId};
+    use crate::feed::PaneRef;
+    use crate::ids::{MuxName, PaneId, WorkspaceId};
 
     fn ws() -> WorkspaceId {
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-fuse"))
@@ -246,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_opened_placeholder_shares_the_pulled_row_id() {
+    fn pane_opened_event_without_frame_does_not_create_a_card() {
         let snapshot = pulled(Vec::new(), 10);
         let mut store = EventStore::default();
         append(
@@ -259,7 +230,10 @@ mod tests {
         );
 
         let fused = fuse(&snapshot, &store, 11);
-        assert_eq!(row_ids(&fused), vec!["zellij:terminal_7"]);
+        assert!(
+            row_ids(&fused).is_empty(),
+            "a pane-open event is a wakeup hint; the producer frame admits the card"
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! grouping, ranking, capping, and status projection that fills it.
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
@@ -12,7 +12,7 @@ use tracing::{debug, warn};
 use super::fold::agent_rollup_with_carryover;
 use super::panes::{
     LazyAgentRow, SidebarOwnView, agent_for_pane, is_daemon_mode_codex, lazy_agent_for_pane,
-    placeholder_row_from_pane,
+    pane_start_matches, row_from_frame_pane,
 };
 use super::process::{pane_command_is_known, row_from_process};
 use crate::agent_activity::AgentActivity;
@@ -34,14 +34,15 @@ fn default_root_class() -> RootClass {
     RootClass::Repo
 }
 
-/// Sidebar view-model. The worktree groups are the renderer contract:
-/// grouping, attention ranking, caps, status tallies, and row metadata are
-/// resolved here so renderers only paint semantics into glyphs.
+/// Sidebar view-model. The pane frame admits every rendered card; ledger,
+/// sidecars, and realtime events only enrich rows admitted from live panes.
+/// Worktree groups are the renderer contract: grouping, attention ranking,
+/// caps, status tallies, and row metadata are resolved here so renderers only
+/// paint semantics into glyphs.
 ///
 /// `needs_attention` and `resolver_working` are load-bearing: they are the
-/// reducer inputs the group rebuild reads when panes are folded in
-/// (`with_live_panes`) or dead agents are reaped (`drop_dead_agents_with`).
-/// The sidebar renderer reads `worktree_groups`.
+/// reducer inputs the live-pane fold reads when panes are folded in
+/// (`with_live_panes`). The sidebar renderer reads `worktree_groups`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SidebarSnapshot {
     pub workspace_id: WorkspaceId,
@@ -303,9 +304,9 @@ pub struct SidebarStatusCount {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SidebarRowKind {
-    /// An agent session: a live pane it stamped, or — in the no-pane rollup — a
-    /// session row. A standalone script/bridge ask reuses this kind; it renders
-    /// the same single line when no capability fields are set.
+    /// An agent session admitted by its live pane. A standalone script/bridge
+    /// ask reuses this kind after its pane is admitted by the same frame; it
+    /// renders the same single line when no capability fields are set.
     Agent,
     /// A live pane with no agent bound to it: a shell, an editor, `git`.
     Process,
@@ -642,27 +643,13 @@ impl SidebarSnapshot {
         }
 
         let display_name = workspace_id.as_str().to_owned();
-        // The pure reducer has no project root, worktree set, or root class,
-        // so every cwd keeps per-path grouping here; callers that know them
-        // re-fold via `with_project_root` / `with_worktree_roots` /
-        // `with_root_class`.
-        let worktree_groups = build_worktree_groups(
-            &agents,
-            &needs_attention,
-            &resolver_working,
-            None,
-            &[],
-            default_root_class(),
-            now,
-        );
-
         Self {
             workspace_id,
             display_name,
             generated_at: now,
             panes_produced_at_ms: None,
             now,
-            worktree_groups,
+            worktree_groups: Vec::new(),
             needs_attention,
             resolver_working,
             agents,
@@ -682,63 +669,43 @@ impl SidebarSnapshot {
         }
     }
 
-    /// Re-fold the worktree groups from the current agents, attention/working
-    /// sets, and project root. Called after any mutation of `self.agents`.
-    fn rebuild_groups(&mut self) {
-        self.worktree_groups = build_worktree_groups(
-            &self.agents,
-            &self.needs_attention,
-            &self.resolver_working,
-            self.project_root.as_deref(),
-            &self.worktree_roots,
-            self.root_class,
-            self.now,
-        );
-    }
-
-    /// Record the project root and re-fold groups so a cwd that is neither under
-    /// it nor inside one of the repo's worktrees lands in the `external`
+    /// Record the project root so a frame-admitted row whose cwd is neither
+    /// under it nor inside one of the repo's worktrees lands in the `external`
     /// catch-all instead of its own pod. Callers set this from the workspace
     /// record after construction (the reducer can't read it), mirroring how
     /// `display_name` is filled.
     pub fn with_project_root(mut self, project_root: Option<PathBuf>) -> Self {
         self.project_root = project_root;
-        self.rebuild_groups();
         self
     }
 
-    /// Record the repo's worktree checkout roots and re-fold groups so a
+    /// Record the repo's worktree checkout roots so a
     /// worktree parked *outside* `project_root` still earns its own pod rather
     /// than folding into `external`. Like `with_project_root`, the
     /// `rimz sidebar snapshot` CLI fills this from `git worktree list` after
     /// construction; the pure path leaves it empty.
     pub fn with_worktree_roots(mut self, worktree_roots: Vec<PathBuf>) -> Self {
         self.worktree_roots = worktree_roots;
-        self.rebuild_groups();
         self
     }
 
-    /// Record the room root's class and re-fold groups so a non-repo room's
+    /// Record the room root's class so a non-repo room's
     /// root pod takes the name-only [`SidebarWorktreeKind::Root`] kind. Like
     /// `with_project_root`, filled from the workspace record after
     /// construction (the reducer can't read it); the pure path keeps the
     /// `Repo` default.
     pub fn with_root_class(mut self, root_class: RootClass) -> Self {
         self.root_class = root_class;
-        self.rebuild_groups();
         self
     }
 
     /// Attach each session's rich context sidecar to its `AgentState` by
-    /// `(kind, agent_id)`, then re-fold groups so the rows carry it for the
-    /// renderer (`SidebarRow.context`). Context is display-only — it never
-    /// changes ranking, since `last_activity` is untouched — but rows are built
-    /// from the agents, so a rebuild is what moves the enrichment onto them. The
-    /// live path also rebuilds again under the pane overlay; this rebuild is
-    /// what carries context in the no-pane fallback. A context whose session is
-    /// absent from the (already reaped) rollup is dropped — the session is gone,
-    /// so its context is just history. Records carry no identity of their own;
-    /// the key they're filed under is authority.
+    /// `(kind, agent_id)`. Context is display-only — it never changes ranking,
+    /// since `last_activity` is untouched — and reaches rows only through the
+    /// live-pane fold. A context whose session is absent from the (already
+    /// reaped) rollup is dropped — the session is gone, so its context is just
+    /// history. Records carry no identity of their own; the key they're filed
+    /// under is authority.
     pub fn with_agent_context(mut self, records: Vec<AgentContextRecord>) -> Self {
         if records.is_empty() {
             return self;
@@ -747,26 +714,20 @@ impl SidebarSnapshot {
             .into_iter()
             .map(|record| ((record.kind, record.agent_id), record.context))
             .collect();
-        let mut changed = false;
         for agent in &mut self.agents {
             if let Some(context) = by_key.remove(&(agent.kind.clone(), agent.agent_id.clone())) {
                 agent.context = Some(context);
-                changed = true;
             }
-        }
-        if changed {
-            self.rebuild_groups();
         }
         self
     }
 
     /// Attach each child's `subagentStatusLine` enrichment (description, token
-    /// count, start time) to its `AgentState` by `(kind, agent_id)`, then rebuild
-    /// so the projection picks it up. It must land on the `AgentState`, not the
-    /// already-projected `SidebarSubAgent`: the rebuild re-runs `attach_sub_agents`
-    /// → `sub_agent_from_state`, which would discard anything written on the
-    /// projection. `token_count` claims the otherwise-unused `total_tokens` slot
-    /// (a paneless child reads no transcript). Display-only, like
+    /// count, start time) to its `AgentState` by `(kind, agent_id)`. It must land
+    /// on the `AgentState`, not the already-projected `SidebarSubAgent`: the
+    /// live-pane fold re-runs `attach_sub_agents` → `sub_agent_from_state`.
+    /// `token_count` claims the otherwise-unused `total_tokens` slot (a paneless
+    /// child reads no transcript). Display-only, like
     /// [`with_agent_context`](Self::with_agent_context) — it never touches
     /// `last_activity`, so ranking is untouched. A record whose child is absent
     /// from the rollup is dropped; the key it is filed under is authority.
@@ -778,7 +739,6 @@ impl SidebarSnapshot {
             .into_iter()
             .map(|record| ((record.kind, record.agent_id), record.context))
             .collect();
-        let mut changed = false;
         for agent in &mut self.agents {
             if let Some(context) = by_key.remove(&(agent.kind.clone(), agent.agent_id.clone())) {
                 // Back-fill the type label when the lifecycle hook never provided one.
@@ -793,7 +753,6 @@ impl SidebarSnapshot {
                 if context.token_count.is_some() {
                     agent.total_tokens = context.token_count;
                 }
-                changed = true;
             }
         }
         // Unmatched sidecars mean the task `id` from `subagentStatusLine` doesn't
@@ -807,9 +766,6 @@ impl SidebarSnapshot {
                 "subagent context sidecar has no matching agent row — possible id mismatch",
             );
         }
-        if changed {
-            self.rebuild_groups();
-        }
         self
     }
 
@@ -818,7 +774,6 @@ impl SidebarSnapshot {
     /// command can record the agent process identity, the sidebar uses it to
     /// suppress stale ledger overlays without scraping pane contents.
     pub fn drop_dead_agents_with(&mut self, mut is_alive: impl FnMut(u32, Option<&str>) -> bool) {
-        let previous_len = self.agents.len();
         self.agents.retain(|agent| {
             if let Some(owner) = &agent.runtime_owner {
                 return is_alive(owner.pid, owner.process_start.as_deref());
@@ -827,9 +782,6 @@ impl SidebarSnapshot {
                 .agent_pid
                 .is_none_or(|pid| is_alive(pid, agent.agent_process_start.as_deref()))
         });
-        if self.agents.len() != previous_len {
-            self.rebuild_groups();
-        }
     }
 
     /// Reap daemon-mode Codex sessions the per-user app-server daemon no longer
@@ -861,15 +813,11 @@ impl SidebarSnapshot {
         if daemon_pids.is_empty() {
             return;
         }
-        let previous_len = self.agents.len();
         self.agents.retain(|agent| {
             let reapable = is_daemon_mode_codex(agent, daemon_pids)
                 && !loaded.contains(agent.agent_id.as_str());
             !reapable
         });
-        if self.agents.len() != previous_len {
-            self.rebuild_groups();
-        }
     }
 
     /// Reap ghost sessions from the agent rollup. This filters the *derived*
@@ -888,7 +836,6 @@ impl SidebarSnapshot {
     ///     while never dropping a concurrent agent that owns its own pane.
     pub fn reap_stale_sessions(&mut self) {
         let now = self.now;
-        let previous_len = self.agents.len();
         // Mark each superseded older session by position, borrowing `agents`
         // read-only. Runs on every snapshot rebuild, so the old approach — a
         // `BTreeSet` of owned `(kind, agent_id)` tuples plus a second clone per
@@ -935,9 +882,6 @@ impl SidebarSnapshot {
             }
             !(agent_is_pidless(agent) && session_age_secs(now, agent) > GHOST_SESSION_TTL_SECS)
         });
-        if self.agents.len() != previous_len {
-            self.rebuild_groups();
-        }
     }
 
     /// Whether every live, non-sidebar view in `panes` is the `rimzd` daemon
@@ -1062,7 +1006,7 @@ impl SidebarSnapshot {
                 }
                 pane.command = Some(command.to_owned());
                 pane.pane_process_start = None;
-                if let Some(next) = placeholder_row_from_pane(
+                if let Some(next) = row_from_frame_pane(
                     pane,
                     &self.wired_lazy_kinds,
                     &self.lazy_agent_default_models,
@@ -1130,71 +1074,6 @@ impl SidebarSnapshot {
         changed
     }
 
-    pub(crate) fn overlay_opened_pane(&mut self, mut pane: PaneRef) -> bool {
-        if self.row_for_pane(&pane.pane_id).is_some() {
-            return false;
-        }
-        if pane.cwd.is_none()
-            && let Some(root) = self.project_root.as_ref()
-        {
-            pane.cwd = root.to_str().map(ToOwned::to_owned);
-        }
-        let Some(row) = placeholder_row_from_pane(
-            &pane,
-            &self.wired_lazy_kinds,
-            &self.lazy_agent_default_models,
-            self.now,
-        ) else {
-            return false;
-        };
-        let split_by_branch = false;
-        let (kind, key, label) = worktree_group_key(
-            row.worktree_path.as_deref(),
-            row.worktree_branch.as_deref(),
-            split_by_branch,
-            self.project_root.as_deref(),
-            &self.worktree_roots,
-            self.root_class,
-        );
-        if let Some(group) = self
-            .worktree_groups
-            .iter_mut()
-            .find(|group| group.key == key)
-        {
-            group.rows.push(row);
-            refresh_overlay_group(group);
-        } else {
-            let mut group = SidebarWorktreeGroup {
-                key,
-                label,
-                kind,
-                status_counts: Vec::new(),
-                rows: vec![row],
-                hidden_count: 0,
-                diff_added: None,
-                diff_removed: None,
-                commits_ahead: None,
-                commits_behind: None,
-                trunk: None,
-                clean: None,
-            };
-            refresh_overlay_group(&mut group);
-            self.worktree_groups.push(group);
-            self.worktree_groups.sort_by(compare_groups);
-        }
-        true
-    }
-
-    fn row_for_pane(&self, pane_id: &PaneId) -> Option<&SidebarRow> {
-        self.worktree_groups.iter().find_map(|group| {
-            group.rows.iter().find(|row| {
-                row.pane
-                    .as_ref()
-                    .is_some_and(|pane| pane.pane_id == *pane_id)
-            })
-        })
-    }
-
     /// Fold per-agent activity heartbeats into the rollup. The agent's hook
     /// touches its heartbeat on every progress-proving event, so the freshest
     /// touch is a truer `last_activity` than the turn-grained event log — it
@@ -1205,7 +1084,6 @@ impl SidebarSnapshot {
     /// Apply this before [`Self::with_live_panes`] so age, ranking, the
     /// ask-fold guard, and the stall window all read the accurate value.
     pub fn with_agent_activity(mut self, activity: &[AgentActivity]) -> Self {
-        let mut changed = false;
         for agent in &mut self.agents {
             let Some(touch) = activity
                 .iter()
@@ -1216,11 +1094,7 @@ impl SidebarSnapshot {
             };
             if touch.at > agent.last_activity {
                 agent.last_activity = touch.at;
-                changed = true;
             }
-        }
-        if changed {
-            self.rebuild_groups();
         }
         self
     }
@@ -1585,19 +1459,6 @@ fn agent_hook_session_stale(item: &FeedItem, agents: &[AgentState]) -> bool {
     })
 }
 
-fn build_worktree_groups(
-    agents: &[AgentState],
-    needs_attention: &[FeedItem],
-    resolver_working: &[FeedItem],
-    project_root: Option<&Path>,
-    worktree_roots: &[PathBuf],
-    root_class: RootClass,
-    now: Timestamp,
-) -> Vec<SidebarWorktreeGroup> {
-    let rows = rows_from_ledger(agents, needs_attention, resolver_working, now);
-    build_worktree_groups_from_rows(rows, agents, project_root, worktree_roots, root_class, now)
-}
-
 /// One pane = one row, by construction. Every live pane anchors exactly one
 /// row: it binds the unique agent that stamped this pane id — rendering that
 /// agent with its single most-relevant pending ask folded in — or, with no such
@@ -1607,9 +1468,12 @@ fn build_worktree_groups(
 /// one exception is a pane-less lazy-registering agent (Codex) whose session
 /// arrives unstamped from the app-server daemon: it binds the live agent pane in
 /// its own worktree (`lazy_agent_for_pane`), and a wired such pane with no session
-/// yet renders idle rather than as a process row. The only truly paneless rows are
-/// standalone script/bridge asks, which no agent session raised. `wired_lazy_kinds`
-/// gates the idle-instance synthesis (see `lazy_agent_for_pane`).
+/// yet renders idle rather than as a process row. Standalone script/bridge asks
+/// render only when they name a pane in this frame, and refresh their pane
+/// reference from that frame: on a pane that resolves to an agent row the ask
+/// folds onto that row, and only an agent-less pane renders the bare ask card.
+/// `wired_lazy_kinds` gates the idle-instance synthesis (see
+/// `lazy_agent_for_pane`).
 fn rows_from_panes(
     agents: &[AgentState],
     needs_attention: &[FeedItem],
@@ -1621,16 +1485,17 @@ fn rows_from_panes(
 ) -> Vec<SidebarRow> {
     let mut rows = Vec::new();
     let mut bound_agents: BTreeSet<(AgentKind, AgentSessionId)> = BTreeSet::new();
+    let standalone_items = standalone_items_by_pane(needs_attention, resolver_working, panes);
 
     for pane in panes {
+        let standalone_ask = standalone_items.get(&pane.pane_id).copied();
         if let Some(agent) = agent_for_pane(pane, agents, &bound_agents) {
             push_agent_row(
                 &mut rows,
                 &mut bound_agents,
                 agent,
                 pane,
-                needs_attention,
-                resolver_working,
+                pane_ask(agent, standalone_ask, needs_attention, resolver_working),
                 now,
             );
         } else if let Some(bind) = lazy_agent_for_pane(
@@ -1656,12 +1521,22 @@ fn rows_from_panes(
                     &mut bound_agents,
                     agent,
                     pane,
-                    needs_attention,
-                    resolver_working,
+                    pane_ask(agent, standalone_ask, needs_attention, resolver_working),
                     now,
                 ),
-                LazyAgentRow::Idle(row) => rows.push(*row),
+                LazyAgentRow::Idle(row) => {
+                    // The synthesized idle row is the pane's card, so a frame-
+                    // admitted standalone ask folds onto it exactly as it folds
+                    // onto a bound agent's row.
+                    let mut row = *row;
+                    if let Some(ask) = standalone_ask {
+                        fold_ask_onto_row(&mut row, ask);
+                    }
+                    rows.push(row);
+                }
             }
+        } else if let Some(item) = standalone_ask {
+            rows.push(row_from_standalone_item(item, pane));
         } else if pane_command_is_known(pane) {
             rows.push(row_from_process(pane, now));
         }
@@ -1672,38 +1547,80 @@ fn rows_from_panes(
         // it.
     }
 
-    // Script/bridge asks raised outside an agent session have no pane to anchor
-    // to, so they keep a standalone attention row. Agent-hook asks never do:
-    // they fold onto their pane above, or do not render at all.
-    for item in needs_attention.iter().chain(resolver_working.iter()) {
-        if item.source_kind != "agent-hook"
-            && let Some(row) = row_from_item(item, agents)
-        {
-            rows.push(row);
-        }
-    }
-
     rows
 }
 
+/// The newest pending standalone (non-agent-hook) ask per frame-admitted pane.
+/// Pane-keyed because the ask's card is the pane's card: one pane renders one
+/// row, so two scripts asking from one pane collapse to the newest while the
+/// older stays rollup metadata until that one resolves. An ask naming no pane,
+/// or a pane absent from the frame, is dropped here — no live pane, no card.
+fn standalone_items_by_pane<'a>(
+    needs_attention: &'a [FeedItem],
+    resolver_working: &'a [FeedItem],
+    panes: &[PaneRef],
+) -> HashMap<PaneId, &'a FeedItem> {
+    let mut by_pane = HashMap::new();
+    for item in needs_attention.iter().chain(resolver_working.iter()) {
+        if item.source_kind == "agent-hook" {
+            continue;
+        }
+        let Some(pane) = frame_pane_for_item(item, panes) else {
+            continue;
+        };
+        by_pane
+            .entry(pane.pane_id.clone())
+            .and_modify(|current: &mut &'a FeedItem| {
+                if item.updated_at > current.updated_at {
+                    *current = item;
+                }
+            })
+            .or_insert(item);
+    }
+    by_pane
+}
+
+fn frame_pane_for_item<'a>(item: &FeedItem, panes: &'a [PaneRef]) -> Option<&'a PaneRef> {
+    let requested = item.pane.as_ref()?;
+    panes
+        .iter()
+        .find(|pane| pane.pane_id == requested.pane_id && pane_start_matches(requested, pane))
+}
+
+/// The single pending ask folded onto an agent's pane row. A frame-admitted
+/// standalone script/bridge ask naming the pane outranks the session's own
+/// agent-hook ask: it blocks the pane's foreground right now, and the agent's
+/// activity never settles it — unlike a native ask it clears only when the
+/// request resolves. Without one, the session's most-relevant agent-hook ask
+/// stands ([`most_relevant_ask`]).
+fn pane_ask<'a>(
+    agent: &AgentState,
+    standalone_ask: Option<&'a FeedItem>,
+    needs_attention: &'a [FeedItem],
+    resolver_working: &'a [FeedItem],
+) -> Option<&'a FeedItem> {
+    standalone_ask.or_else(|| most_relevant_ask(agent, needs_attention, resolver_working))
+}
+
 /// Render `agent` on `pane`: mark it bound, project its row, overlay the live
-/// pane cwd as the worktree fallback, attach the pane, and fold the session's
-/// single most-relevant pending ask. Shared by the two binds — the stamped-id
-/// match and the Codex daemon's cwd fallback — so both render identically.
+/// pane cwd as the worktree fallback, attach the pane, and fold the caller-
+/// resolved pending ask ([`pane_ask`]) — keeping the agent's identity and
+/// capability line on the row instead of swapping in a bare ask card. Shared
+/// by the two binds — the stamped-id match and the Codex daemon's cwd
+/// fallback — so both render identically.
 fn push_agent_row(
     rows: &mut Vec<SidebarRow>,
     bound: &mut BTreeSet<(AgentKind, AgentSessionId)>,
     agent: &AgentState,
     pane: &PaneRef,
-    needs_attention: &[FeedItem],
-    resolver_working: &[FeedItem],
+    ask: Option<&FeedItem>,
     now: Timestamp,
 ) {
     bound.insert((agent.kind.clone(), agent.agent_id.clone()));
     let mut row = row_from_agent(agent, now);
     row.worktree_path = row.worktree_path.or_else(|| pane.cwd.clone());
     row.pane = Some(pane.clone());
-    if let Some(ask) = most_relevant_ask(agent, needs_attention, resolver_working) {
+    if let Some(ask) = ask {
         fold_ask_onto_row(&mut row, ask);
     }
     rows.push(row);
@@ -1764,67 +1681,6 @@ fn fold_ask_onto_row(row: &mut SidebarRow, ask: &FeedItem) {
     }
 }
 
-fn rows_from_ledger(
-    agents: &[AgentState],
-    needs_attention: &[FeedItem],
-    resolver_working: &[FeedItem],
-    now: Timestamp,
-) -> Vec<SidebarRow> {
-    let mut rows = Vec::new();
-    let mut replaced_agents = BTreeSet::new();
-
-    for item in needs_attention.iter().chain(resolver_working.iter()) {
-        // Re-check liveness here too: `drop_dead_agents_with` can reap a
-        // process-dead agent after classification, and this rebuild runs
-        // against the reduced set.
-        if agent_hook_session_stale(item, agents) {
-            continue;
-        }
-        // The agent kept working after raising this ask (answered in its own
-        // UI), so it has un-blocked — don't re-raise its calm row to waiting.
-        // Mirrors the pane path's `most_relevant_ask` guard; a bridge ask keeps
-        // the hook blocked, so no progress is recorded and this never fires for
-        // one mid-flight.
-        if let Some(matched) = matching_agent(item, agents)
-            && agent_moved_past_ask(matched, item)
-        {
-            continue;
-        }
-        // One row per session. Items arrive newest-first, so the first ask for
-        // a session wins and any later ask (a sequential permission/question
-        // pair, or a stale duplicate that outran expiry) folds onto it instead
-        // of stacking an identical row. The same set then suppresses the
-        // session's calm agent-rollup row below.
-        if let Some(agent_id) = agent_id_from_item(item)
-            && !replaced_agents.insert((
-                AgentKind::new_unchecked(item.source.clone()),
-                AgentSessionId::from(agent_id),
-            ))
-        {
-            continue;
-        }
-        if let Some(row) = row_from_item(item, agents) {
-            rows.push(row);
-        }
-    }
-
-    for agent in agents {
-        // A subagent is paneless and nests inside its parent's card; it must
-        // never become a standalone top-level row. `attach_sub_agents` folds it
-        // onto the parent later.
-        if agent.parent_agent_id.is_some() {
-            continue;
-        }
-        let key = (agent.kind.clone(), agent.agent_id.clone());
-        if replaced_agents.contains(&key) {
-            continue;
-        }
-        rows.push(row_from_agent(agent, now));
-    }
-
-    rows
-}
-
 fn build_worktree_groups_from_rows(
     mut rows: Vec<SidebarRow>,
     agents: &[AgentState],
@@ -1834,9 +1690,8 @@ fn build_worktree_groups_from_rows(
     now: Timestamp,
 ) -> Vec<SidebarWorktreeGroup> {
     // Nest each subagent under its parent root row before grouping. This is the
-    // one chokepoint both the live (`rows_from_panes`) and no-pane
-    // (`rows_from_ledger`) builders share, so nesting behaves identically on
-    // either path.
+    // one chokepoint every live (`rows_from_panes`) card flows through, so
+    // nesting behaves identically for process, agent, and attention rows.
     attach_sub_agents(&mut rows, agents, now);
     // A delegating parent's work is its children's, so their activity advances
     // the parent row's displayed clock — before the projection below, so the
@@ -1848,9 +1703,10 @@ fn build_worktree_groups_from_rows(
     project_display_status(&mut rows, agents, now);
     // A worktree dir holds one branch at a time, so rows under one path
     // normally share a branch and group together — the agent and its shell
-    // panes alike. Only when stale ledger rows put two distinct branches under
-    // one path do we split that path by branch, so a mislabeled cross-branch
-    // section can't form while the common "agent + its shell" case stays whole.
+    // panes alike. Only when two live-admitted rows carry distinct branches
+    // under one path do we split that path by branch, so a mislabeled
+    // cross-branch section can't form while the common "agent + its shell" case
+    // stays whole.
     let mut branches_per_path: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for row in &rows {
         if let (Some(path), Some(branch)) = (
@@ -1929,8 +1785,8 @@ fn build_worktree_groups_from_rows(
 
 /// Nest each subagent under its parent root row. A subagent is a reduced
 /// `AgentState` carrying `parent_agent_id`; it is paneless, so it built no row
-/// of its own (`rows_from_panes` binds only stamped panes, `rows_from_ledger`
-/// skips it). This pass matches each child to its parent row by
+/// of its own (`rows_from_panes` binds only stamped panes). This pass matches
+/// each child to its parent row by
 /// `(kind, parent_agent_id)` and pushes a compact summary onto it.
 ///
 /// Retention is turn-scoped: a finished (success/failed) child stays listed —
@@ -2297,69 +2153,45 @@ fn agent_context_window(agent: &AgentState) -> Option<u64> {
     })
 }
 
-/// A standalone attention row for a pending ask. Two callers, two shapes: an
-/// agent-hook ask in the no-pane rollup, enriched from its live session; or a
-/// script/bridge ask raised outside any agent, titled by the ask itself.
-/// Pane-bound agent asks never reach here — they fold onto their pane row in
-/// `rows_from_panes`.
-fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
-    if item.status != FeedStatus::Pending {
-        return None;
-    }
-    let is_agent_hook = item.source_kind == "agent-hook";
-    // A non-agent ask has no session to enrich from; leave it bare and titled.
-    let matched = is_agent_hook
-        .then(|| matching_agent(item, agents))
-        .flatten();
-    let task = if is_agent_hook {
-        matched
-            .and_then(|agent| agent.task.clone())
-            .or_else(|| Some(feed_kind_task(item.kind).to_owned()))
-    } else {
-        Some(item.title.clone())
-    };
+/// A standalone attention row for a pending script/bridge ask on a pane no
+/// agent row claims. The caller has already proven `pane` is present in the
+/// current frame; the row refreshes its pane reference from that frame so
+/// jumps, focus, view id, command, cwd, and process start all read from live
+/// mux truth. Infallible by construction: both attention lists hold only
+/// pending items (`build_with_agents` filters), and agent-hook asks fold onto
+/// their session's row instead of standing alone.
+fn row_from_standalone_item(item: &FeedItem, pane: &PaneRef) -> SidebarRow {
+    debug_assert_eq!(item.status, FeedStatus::Pending);
+    debug_assert_ne!(item.source_kind, "agent-hook");
     let id = agent_id_from_item(item).unwrap_or_else(|| item.request_id.to_string());
-    Some(SidebarRow {
+    SidebarRow {
         row_kind: SidebarRowKind::Agent,
         id,
         name: item.source.clone(),
         status: Some(AgentStatus::Waiting),
         // A waiting row is blocked on the human, not reasoning — no turn phase.
         phase: TurnPhase::Idle,
-        pane: item
-            .pane
-            .clone()
-            .or_else(|| matched.and_then(|agent| agent.pane.clone())),
+        pane: Some(pane.clone()),
         request_id: Some(item.request_id.clone()),
         surface: Some(item.surface),
-        task,
-        prompt: matched.and_then(|agent| agent.prompt.clone()),
-        model: matched.and_then(|agent| agent.model.clone()),
-        effort: matched.and_then(|agent| agent.effort.clone()),
-        context_pct: if is_agent_hook {
-            Some(matched.and_then(|agent| agent.context_pct).unwrap_or(0))
-        } else {
-            None
-        },
-        context_window: matched.and_then(agent_context_window),
-        total_tokens: matched.and_then(|agent| agent.total_tokens),
-        cache_read_input_tokens: matched.and_then(|agent| agent.cache_read_input_tokens),
-        fresh_input_tokens: matched.and_then(|agent| agent.fresh_input_tokens),
-        output_tokens: matched.and_then(|agent| agent.output_tokens),
-        todo_done: matched.and_then(|agent| agent.todo_done),
-        todo_total: matched.and_then(|agent| agent.todo_total),
-        context: matched.and_then(|agent| agent.context.clone()),
+        task: Some(item.title.clone()),
+        prompt: None,
+        model: None,
+        effort: None,
+        context_pct: None,
+        context_window: None,
+        total_tokens: None,
+        cache_read_input_tokens: None,
+        fresh_input_tokens: None,
+        output_tokens: None,
+        todo_done: None,
+        todo_total: None,
+        context: None,
         context_severity: None,
-        worktree_path: item
-            .worktree_path
-            .clone()
-            .or_else(|| matched.and_then(|agent| agent.worktree_path.clone())),
-        worktree_branch: item
-            .worktree_branch
-            .clone()
-            .or_else(|| matched.and_then(|agent| agent.worktree_branch.clone())),
+        worktree_path: item.worktree_path.clone().or_else(|| pane.cwd.clone()),
+        worktree_branch: item.worktree_branch.clone(),
         last_activity: item.updated_at,
-        registered_at: matched.and_then(|agent| agent.registered_at),
+        registered_at: None,
         resolver: active_resolver_state(item),
         options: item.options.clone(),
         sub_agents: Vec::new(),
@@ -2370,31 +2202,6 @@ fn row_from_item(item: &FeedItem, agents: &[AgentState]) -> Option<SidebarRow> {
         rss_kb: None,
         cpu_pct: None,
         io_bps: None,
-    })
-}
-
-fn matching_agent<'a>(item: &FeedItem, agents: &'a [AgentState]) -> Option<&'a AgentState> {
-    let item_agent_id = agent_id_from_item(item);
-    if let Some(agent_id) = item_agent_id.as_deref() {
-        return agents
-            .iter()
-            .find(|agent| agent.kind == item.source && agent.agent_id == agent_id);
-    }
-
-    let candidates = agents
-        .iter()
-        .filter(|agent| {
-            agent.kind == item.source
-                && item
-                    .worktree_path
-                    .as_ref()
-                    .is_none_or(|path| agent.worktree_path.as_ref() == Some(path))
-        })
-        .collect::<Vec<_>>();
-    if candidates.len() == 1 {
-        Some(candidates[0])
-    } else {
-        None
     }
 }
 

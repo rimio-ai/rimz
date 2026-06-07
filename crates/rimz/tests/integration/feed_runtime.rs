@@ -4,7 +4,8 @@ use std::io::{BufRead, BufReader};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use crate::common::Env;
+use crate::common::{Env, tmux_pane};
+use serde_json::Value;
 
 #[test]
 fn feed_list_default_hides_dead_owner_pending_record_but_audit_shows_it() {
@@ -93,6 +94,74 @@ fn blocking_feed_ask_is_runtime_only_while_waiter_lives_and_gc_abandons_it() {
         item["resolution"]["reason"], "owner_process_exited",
         "gc records the abandonment reason"
     );
+}
+
+#[test]
+fn blocking_feed_ask_in_a_pane_renders_a_frame_admitted_card() {
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+
+    // The asking script runs inside a mux pane, so the per-pane env survives
+    // into the CLI child and stamps the ask's pane.
+    let mut child = env
+        .rimz()
+        .args([
+            "feed",
+            "ask",
+            "--title",
+            "approve deploy?",
+            "--options",
+            "yes,no",
+        ])
+        .env("TMUX_PANE", "%5")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn blocking feed ask");
+    let stdout = child.stdout.take().expect("feed ask stdout");
+    let mut reader = BufReader::new(stdout);
+    let mut request_id = String::new();
+    reader
+        .read_line(&mut request_id)
+        .expect("read request id line");
+    let request_id = request_id.trim().to_owned();
+    assert!(!request_id.is_empty(), "feed ask printed no request id");
+
+    // The frame admits the stamped pane → the ask renders as its card.
+    let parsed = env.snapshot_json_with_panes(&[tmux_pane("%5", "deploy.sh", &env.project_root)]);
+    let rows: Vec<&Value> = parsed["worktree_groups"]
+        .as_array()
+        .expect("groups")
+        .iter()
+        .flat_map(|group| group["rows"].as_array().expect("rows"))
+        .collect();
+    assert_eq!(rows.len(), 1, "one frame-admitted ask card: {rows:?}");
+    assert_eq!(rows[0]["status"], "waiting");
+    assert_eq!(rows[0]["request_id"], request_id.as_str());
+    assert_eq!(rows[0]["pane"]["pane_id"], "tmux:%5");
+
+    // The stamped pane absent from the frame → metadata, not a card.
+    let parsed = env.snapshot_json_with_panes(&[tmux_pane("%9", "zsh", &env.project_root)]);
+    let groups = parsed["worktree_groups"].as_array().expect("groups");
+    assert!(
+        groups
+            .iter()
+            .flat_map(|group| group["rows"].as_array().expect("rows"))
+            .all(|row| row["request_id"] != request_id.as_str()),
+        "an ask whose pane left the frame renders no card: {groups:?}"
+    );
+    let needs_attention = parsed["needs_attention"].as_array().expect("needs");
+    assert!(
+        needs_attention
+            .iter()
+            .any(|item| item["request_id"] == request_id.as_str()),
+        "the pending ask survives as rollup metadata"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn poll_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {

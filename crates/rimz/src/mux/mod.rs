@@ -123,14 +123,30 @@ pub fn pane_from_env_value(mux: MuxName, raw_env: &str) -> PaneId {
     PaneId::from_parts(mux, raw)
 }
 
+/// The multiplexer's per-pane env var — the one place the key mapping lives.
+fn pane_env_key(mux: MuxName) -> &'static str {
+    match mux {
+        MuxName::Zellij => "ZELLIJ_PANE_ID",
+        MuxName::Tmux => "TMUX_PANE",
+    }
+}
+
 /// This process's normalized pane id, read from the multiplexer's per-pane env
 /// var via [`pane_from_env_value`]. `None` outside a pane.
 pub fn own_pane_id(mux: MuxName) -> Option<PaneId> {
-    let key = match mux {
-        MuxName::Zellij => "ZELLIJ_PANE_ID",
-        MuxName::Tmux => "TMUX_PANE",
-    };
-    Some(pane_from_env_value(mux, &std::env::var(key).ok()?))
+    let raw = std::env::var(pane_env_key(mux))
+        .ok()
+        .filter(|raw| !raw.is_empty())?;
+    Some(pane_from_env_value(mux, &raw))
+}
+
+/// This process's normalized pane id probed from whichever multiplexer's
+/// per-pane env var is present — Zellij first, so a tmux nested inside a
+/// Zellij pane still stamps the outer room's pane. The ambient stamp agent
+/// hooks and script asks share; `None` outside any mux pane (CI, cron, a
+/// detached shell).
+pub fn ambient_pane_id() -> Option<PaneId> {
+    own_pane_id(MuxName::Zellij).or_else(|| own_pane_id(MuxName::Tmux))
 }
 
 #[derive(Clone, Debug)]

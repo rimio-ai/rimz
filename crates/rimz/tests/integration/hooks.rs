@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::common::{
     Env, claude_pre_tool_use_payload, codex_permission_payload, permission_payload,
-    pi_tool_call_payload,
+    pi_tool_call_payload, tmux_pane,
 };
 
 const BRIDGE_ITEM_WAIT: Duration = Duration::from_secs(5);
@@ -665,7 +665,7 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
 }
 
 #[test]
-fn codex_subagent_permission_request_replaces_child_agent_row() {
+fn codex_subagent_permission_without_parent_frame_stays_metadata_only() {
     let env = Env::new();
     let start_payload = serde_json::to_string(&json!({
         "hook_event_name": "SubagentStart",
@@ -693,16 +693,18 @@ fn codex_subagent_permission_request_replaces_child_agent_row() {
 
     let parsed = env.snapshot_json();
     let groups = parsed["worktree_groups"].as_array().expect("groups");
-    assert_eq!(groups.len(), 1, "one worktree group expected: {groups:?}");
-    let rows = groups[0]["rows"].as_array().expect("rows");
     assert_eq!(
-        rows.len(),
-        1,
-        "pending subagent request should replace the running child row: {rows:?}"
+        groups.len(),
+        0,
+        "a child-only ask has no frame-backed parent card: {groups:?}"
     );
-    assert_eq!(rows[0]["id"], "child-thread-1");
-    assert_eq!(rows[0]["status"], "waiting");
-    assert_eq!(rows[0]["task"], "review");
+    let needs_attention = parsed["needs_attention"].as_array().expect("needs");
+    assert_eq!(
+        needs_attention.len(),
+        1,
+        "the pending ask remains ledger metadata"
+    );
+    assert_eq!(needs_attention[0]["payload"]["agent_id"], "child-thread-1");
 }
 
 #[test]
@@ -770,7 +772,7 @@ fn pending_native_ui_ask_survives_backgrounded_child_tool() {
     let env = Env::new();
     let run = |payload: &Value| {
         let payload = serde_json::to_string(payload).expect("payload");
-        let output = env.run_hook("claude", &payload);
+        let output = env.run_installed_hook_in_pane("claude", &payload, &[("TMUX_PANE", "%0")]);
         assert!(
             output.status.success(),
             "stderr: {}",
@@ -808,7 +810,7 @@ fn pending_native_ui_ask_survives_backgrounded_child_tool() {
         "tool_name": "Bash",
     }));
 
-    let parsed = env.snapshot_json();
+    let parsed = env.snapshot_json_with_panes(&[tmux_pane("%0", "claude", &env.project_root)]);
     let groups = parsed["worktree_groups"].as_array().expect("groups");
     let rows: Vec<&Value> = groups
         .iter()
