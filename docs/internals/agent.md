@@ -31,7 +31,7 @@ So the binding test is one question: does a live local pane bind the session? A 
 
 - **identity** — set once when the session registers, stable thereafter (`agent_id`, `kind`, `parent_agent_id`, `agent_pid`).
 - **activity** — replaced by the latest event, and *clearing* it is meaningful — an idle agent has no `task` (`status`, `task`, `last_activity`). A subagent is the one exception: its `task` is its type (`Explore`, …) and carries forward as identity, so a finished child stays labeled when its `SubagentStop` omits the type.
-- **carry-forward** — capability/enrichment that persists until a newer value arrives; a missing value never resets it (`model`, `effort`, `context_pct`, `context_window`, `prompt`).
+- **carry-forward** — capability/enrichment that persists until a newer value arrives; a missing value never resets it (`model`, `effort`, `context_pct`, `context_window`, `prompt`, `transcript_path`, `recent_prompts`).
 - **live-derived** — never stored in the ledger, computed at snapshot time from the live pane or git (`pane`, `worktree_path`, `worktree_branch`). The pane knows its current cwd every tick, so these follow a `git checkout`; pinning them at registration is the branch-tracking bug (see [Liveness and presence](#liveness-and-presence)).
 
 [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs) and [`AgentState`](../../crates/rimz/src/feed.rs) are the field catalog; the lifetimes above are the rule those types do not state.
