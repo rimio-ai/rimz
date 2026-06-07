@@ -12,7 +12,7 @@ mod shell {
 
     use rimz_presence_zellij::policy::{
         self, CorrectionAction, FocusCorrection, FocusPatch, FocusShortcut, PaneFields, Poke,
-        PokePolicy, TimerGate,
+        PokePolicy, TimerGate, TopologyPayload,
     };
     use zellij_tile::prelude::*;
 
@@ -22,6 +22,7 @@ mod shell {
         policy: Option<PokePolicy>,
         /// The projected room shape, refreshed per manifest event.
         tabs: BTreeMap<usize, Vec<PaneFields>>,
+        tab_names: BTreeMap<usize, String>,
         active_tab: Option<usize>,
         active_focused_pane: Option<u32>,
         /// Classifies active-tab changes after Zellij's focus marks settle.
@@ -84,7 +85,7 @@ mod shell {
                     // when the grant comes from the permission cache (verified
                     // live on 0.44.3), so this path is load-bearing.
                     self.mark_granted(now);
-                    let next_tabs = project(&manifest);
+                    let next_tabs = project(&manifest, &self.tab_names);
                     let opened = policy::opened_card_panes(&self.tabs, &next_tabs);
                     let focus_patch =
                         policy::focus_shortcut_if_only_focus_changed(&self.tabs, &next_tabs);
@@ -92,10 +93,12 @@ mod shell {
                     // Poke every opened pane — `fold`, not `any`, so a manifest
                     // carrying two new panes emits both card-create events.
                     let emitted_open = opened.iter().fold(false, |emitted, pane| {
-                        self.poke_pane_opened(pane) || emitted
+                        self.poke_pane_opened(pane, now) || emitted
                     });
                     match focus_patch {
-                        Some(FocusShortcut::Patch(patch)) if self.poke_focus_changed(&patch) => {
+                        Some(FocusShortcut::Patch(patch))
+                            if self.poke_focus_changed(&patch, now) =>
+                        {
                             let hash = policy::manifest_hash(&self.tabs, self.active_tab);
                             if let Some(policy) = self.policy.as_mut() {
                                 policy.accept_manifest(hash);
@@ -126,6 +129,10 @@ mod shell {
                         .active_focused_pane
                         .or_else(|| policy::focused_pane_id(&self.tabs, previous_active));
                     let next_active = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
+                    self.tab_names = tabs
+                        .iter()
+                        .map(|tab| (tab.position, tab.name.clone()))
+                        .collect();
                     self.active_tab = next_active;
                     self.active_focused_pane = policy::focused_pane_id(&self.tabs, self.active_tab);
                     self.focus_correction.on_active_tab_change_with_focus(
@@ -137,8 +144,11 @@ mod shell {
                 }
                 Event::CommandChanged(pane_id, command, is_foreground, _) => {
                     if is_foreground {
-                        if self.poke_command_changed(&pane_id, &command) {
+                        self.patch_pane_command(&pane_id, &command);
+                        if self.poke_command_changed(&pane_id, &command, now) {
                             if let Some(policy) = self.policy.as_mut() {
+                                let hash = policy::manifest_hash(&self.tabs, self.active_tab);
+                                policy.accept_manifest(hash);
                                 policy.on_optimistic_signal(now);
                             }
                         } else {
@@ -148,8 +158,14 @@ mod shell {
                 }
                 Event::PaneClosed(pane_id) => {
                     self.mark_granted(now);
-                    if !self.poke_pane_closed(&pane_id) {
+                    self.remove_pane(&pane_id);
+                    if !self.poke_pane_closed(&pane_id, now) {
                         self.signal_change(now);
+                    } else {
+                        let hash = policy::manifest_hash(&self.tabs, self.active_tab);
+                        if let Some(policy) = self.policy.as_mut() {
+                            policy.accept_manifest(hash);
+                        }
                     }
                 }
                 Event::Timer(_) => {
@@ -194,7 +210,7 @@ mod shell {
             if self.pending_pregrant_change {
                 self.flush_pregrant_change(now);
             } else {
-                self.poke(Poke::Alive);
+                self.poke(Poke::Alive, now);
             }
         }
 
@@ -234,7 +250,7 @@ mod shell {
                 .resolve(&self.tabs, self.active_tab, manifest_fresh, now)
             {
                 CorrectionAction::Broadcast(pane_id) => {
-                    self.poke_focus_stranded(pane_id);
+                    self.poke_focus_stranded(pane_id, now);
                 }
                 CorrectionAction::Wait | CorrectionAction::Clear => {}
             }
@@ -245,7 +261,7 @@ mod shell {
                 return;
             };
             for poke in policy.due(now) {
-                self.poke(poke);
+                self.poke(poke, now);
             }
         }
 
@@ -266,7 +282,7 @@ mod shell {
         /// One fixed argv per poke — the whole host-side surface of this
         /// plugin. Fire-and-forget: a failed wake means no stamp, and the
         /// producer degrades to poll mode on its own.
-        fn poke(&self, poke: Poke) {
+        fn poke(&self, poke: Poke, now: u64) {
             if !self.granted {
                 return;
             }
@@ -275,18 +291,74 @@ mod shell {
                 Poke::Alive => "alive",
             };
             let program = self.rimz_bin.as_deref().unwrap_or("rimz");
-            let mut argv = vec![program, "sidebar", "wake", "--reason", reason];
+            let mut argv = vec![
+                program.to_owned(),
+                "sidebar".to_owned(),
+                "wake".to_owned(),
+                "--reason".to_owned(),
+                reason.to_owned(),
+            ];
             if let Some(workspace_id) = self.workspace_id.as_deref() {
-                argv.extend(["--workspace-id", workspace_id]);
+                argv.push("--workspace-id".to_owned());
+                argv.push(workspace_id.to_owned());
             }
-            run_command(&argv, BTreeMap::new());
+            self.append_topology_arg(&mut argv, now);
+            let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+            run_command(&refs, BTreeMap::new());
+        }
+
+        fn append_topology_arg(&self, argv: &mut Vec<String>, now: u64) {
+            let Some(session_name) = self.session_name.as_deref() else {
+                return;
+            };
+            if self.tabs.is_empty() {
+                return;
+            }
+            let payload = TopologyPayload::from_tabs(session_name, now, &self.tabs);
+            let Ok(json) = serde_json::to_string(&payload) else {
+                return;
+            };
+            argv.push("--topology".to_owned());
+            argv.push(json);
+        }
+
+        fn patch_pane_command(&mut self, pane_id: &PaneId, command: &[String]) {
+            let PaneId::Terminal(id) = pane_id else {
+                return;
+            };
+            let command = command
+                .iter()
+                .filter(|arg| !arg.is_empty())
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(" ");
+            if command.is_empty() {
+                return;
+            }
+            for pane in self.tabs.values_mut().flatten() {
+                if !pane.is_plugin && pane.id == *id {
+                    pane.terminal_command = Some(command);
+                    return;
+                }
+            }
+        }
+
+        fn remove_pane(&mut self, pane_id: &PaneId) {
+            let (is_plugin, id) = match pane_id {
+                PaneId::Terminal(id) => (false, *id),
+                PaneId::Plugin(id) => (true, *id),
+            };
+            for panes in self.tabs.values_mut() {
+                panes.retain(|pane| pane.is_plugin != is_plugin || pane.id != id);
+            }
+            self.tabs.retain(|_, panes| !panes.is_empty());
         }
 
         /// Publish an optimistic command patch for a terminal pane already
         /// known to the native sidebar cache. Returns false when the exact-cache
         /// shortcut is unavailable, so the caller can fall back to a normal
         /// `panes-changed` poke.
-        fn poke_command_changed(&self, pane_id: &PaneId, command: &[String]) -> bool {
+        fn poke_command_changed(&self, pane_id: &PaneId, command: &[String], now: u64) -> bool {
             if !self.granted || command.is_empty() {
                 return false;
             }
@@ -323,12 +395,13 @@ mod shell {
             if !pushed_command_arg {
                 return false;
             }
+            self.append_topology_arg(&mut argv, now);
             let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
             run_command(&refs, BTreeMap::new());
             true
         }
 
-        fn poke_pane_opened(&self, pane: &PaneFields) -> bool {
+        fn poke_pane_opened(&self, pane: &PaneFields, now: u64) -> bool {
             if !self.granted || !pane.is_card_pane() {
                 return false;
             }
@@ -359,12 +432,13 @@ mod shell {
                 argv.push("--command-arg".to_owned());
                 argv.push(command.clone());
             }
+            self.append_topology_arg(&mut argv, now);
             let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
             run_command(&refs, BTreeMap::new());
             true
         }
 
-        fn poke_pane_closed(&self, pane_id: &PaneId) -> bool {
+        fn poke_pane_closed(&self, pane_id: &PaneId, now: u64) -> bool {
             if !self.granted {
                 return false;
             }
@@ -390,12 +464,13 @@ mod shell {
                 argv.push("--workspace-id".to_owned());
                 argv.push(workspace_id.to_owned());
             }
+            self.append_topology_arg(&mut argv, now);
             let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
             run_command(&refs, BTreeMap::new());
             true
         }
 
-        fn poke_focus_stranded(&self, pane_id: u32) {
+        fn poke_focus_stranded(&self, pane_id: u32, now: u64) {
             if !self.granted {
                 return;
             }
@@ -418,6 +493,7 @@ mod shell {
                 argv.push("--workspace-id".to_owned());
                 argv.push(workspace_id.to_owned());
             }
+            self.append_topology_arg(&mut argv, now);
             let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
             run_command(&refs, BTreeMap::new());
         }
@@ -426,7 +502,7 @@ mod shell {
         /// native sidebar cache. Returns false when the exact-cache shortcut is
         /// unavailable, so the caller can fall back to a normal `panes-changed`
         /// poke.
-        fn poke_focus_changed(&self, patch: &[FocusPatch]) -> bool {
+        fn poke_focus_changed(&self, patch: &[FocusPatch], now: u64) -> bool {
             if !self.granted || patch.is_empty() {
                 return false;
             }
@@ -458,13 +534,17 @@ mod shell {
                 );
                 argv.push(format!("terminal_{}", pane.id));
             }
+            self.append_topology_arg(&mut argv, now);
             let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
             run_command(&refs, BTreeMap::new());
             true
         }
     }
 
-    fn project(manifest: &PaneManifest) -> BTreeMap<usize, Vec<PaneFields>> {
+    fn project(
+        manifest: &PaneManifest,
+        tab_names: &BTreeMap<usize, String>,
+    ) -> BTreeMap<usize, Vec<PaneFields>> {
         manifest
             .panes
             .iter()
@@ -478,6 +558,10 @@ mod shell {
                         is_suppressed: pane.is_suppressed,
                         exited: pane.exited,
                         is_held: pane.is_held,
+                        tab_position: *tab as u64,
+                        tab_name: tab_names.get(tab).cloned(),
+                        pane_x: Some(pane.pane_x as u64),
+                        pane_columns: Some(pane.pane_columns as u64),
                         title: pane.title.clone(),
                         terminal_command: pane.terminal_command.clone(),
                     })

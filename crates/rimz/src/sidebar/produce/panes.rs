@@ -45,9 +45,16 @@ fn fresh_snapshot_cache(
 /// One round-trip is the whole cost: the per-view `is_focused` mark rides the
 /// pane list itself, so the sidebar's selection baseline needs no second
 /// per-client probe.
-fn list_session_panes(mux: MuxName, session: &str) -> Result<Vec<crate::feed::PaneRef>> {
+fn list_session_panes(
+    mux: MuxName,
+    session: &str,
+    workspace_id: crate::WorkspaceId,
+    min_topology_produced_at_ms: Option<u64>,
+) -> Result<Vec<crate::feed::PaneRef>> {
     Ok(crate::mux::backend_for(mux).list_panes(PaneListOptions {
         session_name: Some(session.to_owned()),
+        workspace_id: Some(workspace_id),
+        min_topology_produced_at_ms,
         ..Default::default()
     })?)
 }
@@ -215,7 +222,12 @@ pub(super) fn cached_panes_or_produce(
     let fresh = || fresh_snapshot_cache(&cache_path, session, min_pane_cache_ms, pane_ttl);
     let produce_local = || -> Result<PaneFrame> {
         Ok(assemble_frame(
-            list_session_panes(mux, session)?,
+            list_session_panes(
+                mux,
+                session,
+                runtime.workspace_id.clone(),
+                min_pane_cache_ms,
+            )?,
             unix_now_ms(),
             session.to_owned(),
         ))

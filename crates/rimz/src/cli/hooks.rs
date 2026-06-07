@@ -544,6 +544,8 @@ fn live_binding_inputs(
         let backend = rimz::mux::backend_for(mux);
         match backend.list_panes(PaneListOptions {
             session_name: Some(session_name.to_owned()),
+            workspace_id: None,
+            min_topology_produced_at_ms: None,
             command_timeout: Some(FOCUSED_PANE_BIND_TIMEOUT),
         }) {
             Ok(mut listed) => panes.append(&mut listed),

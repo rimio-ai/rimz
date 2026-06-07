@@ -8,6 +8,10 @@ fn pane(id: u32) -> PaneFields {
         is_suppressed: false,
         exited: false,
         is_held: false,
+        tab_position: 0,
+        tab_name: Some("main".to_owned()),
+        pane_x: Some(0),
+        pane_columns: Some(80),
         title: format!("pane-{id}"),
         terminal_command: Some("zsh".to_owned()),
     }
@@ -176,6 +180,33 @@ fn title_is_excluded_by_projection() {
     let a = manifest_hash(&tabs(vec![pane(1)]), Some(0));
     let b = manifest_hash(&tabs(vec![renamed]), Some(0));
     assert_eq!(a, b);
+}
+
+#[test]
+fn topology_payload_flattens_projected_panes() {
+    let mut first = pane(1);
+    first.tab_position = 1;
+    first.tab_name = Some("agent".to_owned());
+    first.pane_x = Some(20);
+    first.pane_columns = Some(100);
+    let payload = TopologyPayload::from_tabs(
+        "rimz-test",
+        42,
+        &tabs_by_index(vec![(1, vec![first.clone()])]),
+    );
+
+    let json = serde_json::to_value(&payload).expect("topology payload serializes");
+    assert_eq!(json["session_name"], "rimz-test");
+    assert_eq!(json["produced_at_ms"], 42);
+    assert_eq!(json["panes"][0]["id"], 1);
+    assert_eq!(json["panes"][0]["tab_position"], 1);
+    assert_eq!(json["panes"][0]["tab_name"], "agent");
+    assert_eq!(json["panes"][0]["pane_x"], 20);
+    assert_eq!(json["panes"][0]["pane_columns"], 100);
+    assert_eq!(
+        json["panes"][0]["terminal_command"],
+        first.terminal_command.unwrap()
+    );
 }
 
 // --- stranded_sidebar_pane: tab-switch classification reports the sidebar ---

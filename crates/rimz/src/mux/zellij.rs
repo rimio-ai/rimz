@@ -34,8 +34,9 @@ use super::{
 };
 use crate::config::ZellijConfig;
 use crate::feed::PaneRef;
-use crate::ids::{MuxName, PaneId, ViewKind};
+use crate::ids::{MuxName, PaneId, ViewKind, WorkspaceId};
 use crate::ledger::{atomic, paths};
+use crate::schema::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 
 const EMBEDDED_PRESENCE_PLUGIN: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/rimz-presence-zellij.wasm"));
@@ -72,11 +73,12 @@ pub const SIDEBAR_PANE_NAME: &str = "rimz-sidebar";
 const LIST_PANES_ATTEMPTS: u32 = 3;
 const LIST_PANES_RETRY_DELAY: Duration = Duration::from_millis(50);
 
-/// Per-attempt bound for the pre-attach health probe. A healthy action client
-/// answers `list-panes` in milliseconds; a wedged one (busy-looping against a
-/// dead session server) is SIGKILLed here and reads as uninspectable so `rimz
-/// start` stops before deleting a room that may still hold live panes.
-const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+/// Per-attempt bound for the pre-attach health probe. Zellij 0.44's JSON
+/// `list-panes` path can spend ~200ms per terminal pane enriching fields Rimz
+/// does not use, so very large rooms can exceed this ceiling and read as
+/// uninspectable. Keep the probe bounded rather than destructively rebirthing a
+/// room Rimz could not inspect.
+const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// `query-tab-names` can hit the same action-client startup race as
 /// `list-panes`. Treat an empty successful response as transient; otherwise
@@ -431,6 +433,24 @@ impl ZellijBackend {
             program: "zellij".to_owned(),
             reason: format!("list-panes returned no output after {LIST_PANES_ATTEMPTS} attempts"),
         })
+    }
+
+    fn list_panes_cached_or_cli(
+        &self,
+        session: Option<&str>,
+        workspace_id: Option<&WorkspaceId>,
+        min_topology_produced_at_ms: Option<u64>,
+        timeout: Duration,
+    ) -> Result<Vec<RawPane>> {
+        if let Some(panes) = session
+            .zip(workspace_id)
+            .and_then(|(session, workspace_id)| {
+                read_fresh_topology_cache(session, workspace_id, min_topology_produced_at_ms)
+            })
+        {
+            return Ok(panes);
+        }
+        self.list_panes_bounded(session, timeout)
     }
 
     /// Classify `name`'s live room from a bounded pane listing. A running
@@ -1042,7 +1062,12 @@ impl MuxBackend for ZellijBackend {
 
     fn list_panes(&self, opts: PaneListOptions) -> Result<Vec<PaneRef>> {
         let timeout = opts.command_timeout.unwrap_or(super::COMMAND_TIMEOUT);
-        let raws = self.list_panes_bounded(opts.session_name.as_deref(), timeout)?;
+        let raws = self.list_panes_cached_or_cli(
+            opts.session_name.as_deref(),
+            opts.workspace_id.as_ref(),
+            opts.min_topology_produced_at_ms,
+            timeout,
+        )?;
         let session_name = opts.session_name.unwrap_or_default();
         Ok(raws
             .into_iter()
@@ -1050,7 +1075,7 @@ impl MuxBackend for ZellijBackend {
             .map(|mut p| PaneRef {
                 pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", p.id)),
                 session_name: session_name.clone(),
-                view_id: Some(format!("tab_{}", p.tab_id)),
+                view_id: Some(format!("tab_{}", p.view_position())),
                 view_kind: Some(ViewKind::Tab),
                 view_name: p.tab_name.take(),
                 is_focused: p.is_focused,
@@ -2032,7 +2057,14 @@ struct RawPane {
     is_suppressed: bool,
     #[serde(default)]
     is_focused: bool,
+    /// Zellij's internal tab id, used by `...-by-id` action verbs. The
+    /// presence-plugin cache cannot observe it, so cache-derived raw panes set
+    /// this to the tab position and only flow through read-only projection.
     tab_id: u64,
+    /// Positional tab index from `list-panes -j`. `PaneRef.view_id` uses this
+    /// value so the CLI and presence-cache projections agree.
+    #[serde(default)]
+    tab_position: Option<u64>,
     /// Name of the tab the pane lives in. Routed into [`PaneRef::view_name`];
     /// also how the `rimzd` daemon view is recognised on Zellij, whose pane list
     /// reports no command fields a classifier could read instead.
@@ -2132,6 +2164,52 @@ impl RawPane {
             .or(self.process_start.as_ref())
             .and_then(timestamp_from_json)
     }
+
+    fn view_position(&self) -> u64 {
+        self.tab_position.unwrap_or(self.tab_id)
+    }
+}
+
+impl From<PaneTopologyPane> for RawPane {
+    fn from(pane: PaneTopologyPane) -> Self {
+        Self {
+            id: pane.id,
+            is_plugin: pane.is_plugin,
+            is_held: pane.is_held,
+            exited: pane.exited,
+            is_suppressed: pane.is_suppressed,
+            is_focused: pane.is_focused,
+            tab_id: pane.tab_position,
+            tab_position: Some(pane.tab_position),
+            tab_name: pane.tab_name,
+            pane_columns: pane.pane_columns,
+            pane_x: pane.pane_x,
+            title: pane.title,
+            terminal_command: pane.terminal_command,
+            pane_command: None,
+            command: None,
+            pane_cwd: None,
+            cwd: None,
+            pane_pid: None,
+            pid: None,
+            pane_process_start: None,
+            process_start: None,
+        }
+    }
+}
+
+fn raw_panes_from_topology(cache: PaneTopologyCache) -> Vec<RawPane> {
+    cache.panes.into_iter().map(Into::into).collect()
+}
+
+fn read_fresh_topology_cache(
+    session: &str,
+    workspace_id: &WorkspaceId,
+    min_produced_at_ms: Option<u64>,
+) -> Option<Vec<RawPane>> {
+    let runtime = paths::RuntimePaths::for_workspace(workspace_id.clone()).ok()?;
+    crate::sidebar::cache::read_fresh_pane_topology_cache(&runtime, session, min_produced_at_ms)
+        .map(raw_panes_from_topology)
 }
 
 fn timestamp_from_json(value: &Value) -> Option<Timestamp> {

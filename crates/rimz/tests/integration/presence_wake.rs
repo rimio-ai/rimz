@@ -29,6 +29,8 @@ use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::ledger::RuntimePaths;
 use rimz::schema::heartbeat::SidebarHeartbeat;
+use rimz::schema::pane_topology::{PaneTopologyCache, PaneTopologyPane};
+use rimz::sidebar::cache::read_pane_topology_cache;
 use rimz::sidebar::snapshot::{
     PresenceStamp, assemble_frame, presence_stamp_path, read_snapshot_cache, unix_now_ms,
 };
@@ -213,6 +215,43 @@ impl WakeEnv {
             serde_json::to_vec(&cache).expect("serialize pane cache"),
         )
         .expect("seed pane cache");
+    }
+
+    fn topology_cache(&self, produced_at_ms: u64) -> PaneTopologyCache {
+        PaneTopologyCache {
+            session_name: SESSION_NAME.to_owned(),
+            produced_at_ms,
+            panes: vec![
+                PaneTopologyPane {
+                    id: 6,
+                    is_plugin: false,
+                    is_held: false,
+                    exited: false,
+                    is_suppressed: false,
+                    is_focused: false,
+                    tab_position: 0,
+                    tab_name: Some("main".to_owned()),
+                    pane_columns: Some(20),
+                    pane_x: Some(0),
+                    title: Some("rimz-sidebar".to_owned()),
+                    terminal_command: Some("rimz sidebar serve".to_owned()),
+                },
+                PaneTopologyPane {
+                    id: 7,
+                    is_plugin: false,
+                    is_held: false,
+                    exited: false,
+                    is_suppressed: false,
+                    is_focused: true,
+                    tab_position: 0,
+                    tab_name: Some("main".to_owned()),
+                    pane_columns: Some(100),
+                    pane_x: Some(20),
+                    title: Some("zsh".to_owned()),
+                    terminal_command: Some("zsh".to_owned()),
+                },
+            ],
+        }
     }
 
     /// Run the producer path (`rimz sidebar snapshot`) with this environment's
@@ -436,6 +475,73 @@ fn wake_alive_stamps_without_a_datagram() {
     let stamp = env.read_stamp().expect("alive writes the stamp");
     assert!(stamp.written_at_ms > 0);
     env.assert_no_mux_fork();
+}
+
+#[test]
+fn wake_with_topology_writes_runtime_cache_without_mux_fork() {
+    let env = WakeEnv::new();
+    let topology = env.topology_cache(unix_now_ms());
+    let topology_json = serde_json::to_string(&topology).expect("serialize topology");
+
+    let output = env.wake_with(
+        "panes-changed",
+        true,
+        &[
+            "--session-name",
+            SESSION_NAME,
+            "--topology",
+            topology_json.as_str(),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "wake failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let cached =
+        read_pane_topology_cache(&env.runtime, SESSION_NAME).expect("topology cache written");
+    assert_eq!(cached, topology);
+    env.assert_no_mux_fork();
+}
+
+#[test]
+fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
+    let env = WakeEnv::new();
+    let topology = env.topology_cache(unix_now_ms());
+    let topology_json = serde_json::to_string(&topology).expect("serialize topology");
+    let wake = env.wake_with(
+        "alive",
+        true,
+        &[
+            "--session-name",
+            SESSION_NAME,
+            "--topology",
+            topology_json.as_str(),
+        ],
+    );
+    assert!(wake.status.success(), "topology wake must succeed");
+
+    let output = env.snapshot();
+    assert!(
+        output.status.success(),
+        "snapshot failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        env.trace_lines(),
+        Vec::<String>::new(),
+        "fresh topology cache must avoid zellij list-panes",
+    );
+    let cached = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
+        .expect("snapshot cache published from topology");
+    let panes = cached.to_pane_refs();
+    assert!(
+        panes.iter().any(|pane| pane.pane_id.raw() == "terminal_7"
+            && pane.command.as_deref() == Some("zsh")
+            && pane.view_name.as_deref() == Some("main")),
+        "snapshot panes should include topology-derived working pane: {panes:?}",
+    );
 }
 
 #[test]

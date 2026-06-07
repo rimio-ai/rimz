@@ -128,6 +128,51 @@ fn raw_pane_deserializes_minimal_shape() {
 }
 
 #[test]
+fn raw_pane_view_position_prefers_list_panes_tab_position() {
+    let json = r#"[
+          {"id": 8, "is_plugin": false, "tab_id": 42, "tab_position": 1}
+        ]"#;
+    let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
+
+    assert_eq!(parsed[0].tab_id, 42);
+    assert_eq!(parsed[0].view_position(), 1);
+}
+
+#[test]
+fn topology_cache_accepts_legacy_tab_id_as_position() {
+    let json = r#"{
+          "session_name": "rimz-test",
+          "produced_at_ms": 1,
+          "panes": [
+            {"id": 8, "is_plugin": false, "tab_id": 3}
+          ]
+        }"#;
+    let cache: PaneTopologyCache = serde_json::from_str(json).unwrap();
+
+    assert_eq!(cache.panes[0].tab_position, 3);
+}
+
+#[test]
+fn topology_cache_freshness_honors_requested_floor() {
+    let cache = PaneTopologyCache {
+        session_name: "rimz-test".to_owned(),
+        produced_at_ms: 100,
+        panes: Vec::new(),
+    };
+
+    assert!(crate::sidebar::cache::pane_topology_cache_is_fresh(
+        &cache,
+        101,
+        Some(100),
+    ));
+    assert!(!crate::sidebar::cache::pane_topology_cache_is_fresh(
+        &cache,
+        101,
+        Some(101),
+    ));
+}
+
+#[test]
 fn parse_focused_client_panes_reads_unique_terminal_ids() {
     let output = b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n\
                    1         terminal_30    codex\n\
@@ -383,6 +428,52 @@ fn session_panes_classify_clean_sidebar_and_suspended_commands() {
         classify_session_panes(&parsed),
         SessionCleanliness::SuspendedCommandPane,
     );
+}
+
+#[test]
+fn topology_cache_panes_feed_the_existing_classifier() {
+    let cache = PaneTopologyCache {
+        session_name: "rimz-test".to_owned(),
+        produced_at_ms: 1,
+        panes: vec![
+            PaneTopologyPane {
+                id: 6,
+                is_plugin: false,
+                is_held: false,
+                exited: false,
+                is_suppressed: false,
+                is_focused: false,
+                tab_position: 0,
+                tab_name: Some("main".to_owned()),
+                pane_columns: Some(20),
+                pane_x: Some(0),
+                title: Some("rimz-sidebar".to_owned()),
+                terminal_command: Some("rimz sidebar serve".to_owned()),
+            },
+            PaneTopologyPane {
+                id: 7,
+                is_plugin: false,
+                is_held: true,
+                exited: false,
+                is_suppressed: false,
+                is_focused: true,
+                tab_position: 0,
+                tab_name: Some("main".to_owned()),
+                pane_columns: Some(100),
+                pane_x: Some(20),
+                title: Some("claude".to_owned()),
+                terminal_command: Some("claude".to_owned()),
+            },
+        ],
+    };
+    let panes = raw_panes_from_topology(cache);
+
+    assert_eq!(
+        classify_session_panes(&panes),
+        SessionCleanliness::SuspendedCommandPane,
+    );
+    assert_eq!(panes[0].pane_ref_command().as_deref(), Some("rimz-sidebar"));
+    assert_eq!(panes[1].reported_command(), Some("claude"));
 }
 
 #[test]

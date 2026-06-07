@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
 use crate::ledger::parse_cache::ParseCache;
+use crate::schema::pane_topology::PaneTopologyCache;
 use crate::sidebar::frame::PaneFrame;
 pub use crate::sidebar::timing::{
     ACCOUNTS_RETRY_TTL, ACCOUNTS_TTL, DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, EVENT_PANE_TTL,
@@ -194,6 +195,60 @@ pub fn effective_pane_ttl(stamp_age_ms: Option<u64>) -> Duration {
     } else {
         SNAPSHOT_CACHE_TTL
     }
+}
+
+/// Path of the Zellij presence-plugin topology cache, beside the producer's
+/// `snapshot.json` pane frame. The topology cache is a pre-producer latency
+/// hint: it lets the Zellij backend skip the slow JSON `list-panes` enrichment
+/// path, then the normal producer frame still carries the rendered view-model.
+pub fn pane_topology_cache_path(runtime: &RuntimePaths) -> PathBuf {
+    runtime.root.join("pane-topology.json")
+}
+
+/// Publish the plugin-provided pane topology. Cache-class: rename atomic, no
+/// fsync, rebuilt by the next presence event or by the CLI fallback.
+pub fn write_pane_topology_cache(
+    runtime: &RuntimePaths,
+    cache: &PaneTopologyCache,
+) -> crate::ledger::atomic::Result<()> {
+    crate::ledger::atomic::write_temp_then_rename_cache(&pane_topology_cache_path(runtime), cache)
+}
+
+/// Read a same-session topology cache regardless of freshness. `None` means
+/// absent, unreadable, or for another session.
+pub fn read_pane_topology_cache(
+    runtime: &RuntimePaths,
+    session: &str,
+) -> Option<PaneTopologyCache> {
+    let bytes = std::fs::read(pane_topology_cache_path(runtime)).ok()?;
+    let cache: PaneTopologyCache = serde_json::from_slice(&bytes).ok()?;
+    (cache.session_name == session).then_some(cache)
+}
+
+/// Whether a same-session plugin topology payload is young enough to use as a
+/// Zellij `list-panes` substitute. The window matches the presence liveness
+/// window so one normal keepalive jitter does not force the slow CLI fallback,
+/// and the optional floor lets lifecycle/resize events require a post-signal
+/// topology just like they require a post-signal pane frame.
+pub fn pane_topology_cache_is_fresh(
+    cache: &PaneTopologyCache,
+    now_ms: u64,
+    min_produced_at_ms: Option<u64>,
+) -> bool {
+    let fresh =
+        now_ms.saturating_sub(cache.produced_at_ms) <= PRESENCE_STAMP_FRESH.as_millis() as u64;
+    let new_enough = min_produced_at_ms.is_none_or(|min| cache.produced_at_ms >= min);
+    fresh && new_enough
+}
+
+/// Read a fresh same-session topology cache, or `None` when absent/stale.
+pub fn read_fresh_pane_topology_cache(
+    runtime: &RuntimePaths,
+    session: &str,
+    min_produced_at_ms: Option<u64>,
+) -> Option<PaneTopologyCache> {
+    let cache = read_pane_topology_cache(runtime, session)?;
+    pane_topology_cache_is_fresh(&cache, unix_now_ms(), min_produced_at_ms).then_some(cache)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

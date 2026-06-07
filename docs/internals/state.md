@@ -10,7 +10,7 @@ The pane frame admits all cards; ledger, sidecars, and realtime events only enri
 
 Durable truth feeds every node identically and bypasses the producer: the rollup is read event-fresh in process (`latest.json` plus the unfolded log tail — [ledger.md](./ledger.md#runtime-projection)), and the per-session sidecars (agent context, subagent context, activity) are read fresh from disk on every fold behind stat-gated parse caches.
 
-One elected producer per node set — the eldest fresh heartbeat per workspace — owns every consistent-cadence external pull (panes, git, `/proc`, spending, accounts) and publishes each lane as its own single-writer cache file under the workspace runtime directory, with temp-file-plus-rename writes. Every other node consumes those files in process and never pulls for freshness on its own; the producer consumes its own published fast lane before paying a producing refresh. Realtime events never patch a published file — pulled truth on disk is written only by producer pulls.
+One elected producer per node set — the eldest fresh heartbeat per workspace — owns every consistent-cadence external pull (panes, git, `/proc`, spending, accounts) and publishes each lane as its own single-writer cache file under the workspace runtime directory, with temp-file-plus-rename writes. Every other node consumes those files in process and never pulls for freshness on its own; the producer consumes its own published fast lane before paying a producing refresh. Realtime overlay events never patch the published pane frame — pulled truth on disk is written only by producer pulls; the Zellij presence plugin separately publishes `pane-topology.json` through the host CLI as a pre-producer latency hint.
 
 Any process may broadcast typed wakeup events to every fresh node: ledger writers, context-sidecar writers, `rimz reload`, the Zellij presence plugin through the CLI, and the elder renderer's own watch threads (the tmux control-mode watcher, the [transcript watcher](#push-channels)). Events are latency hints layered over the pulls; a missed datagram costs staleness bounded by the next pull, never correctness. A dead producer is handled the same way every degradation is — by the heartbeat election ([Failure Modes](#failure-modes)).
 
@@ -25,6 +25,7 @@ Consumers never produce for freshness on their own. They fold the published pane
 | File (workspace runtime dir) | Writer | Readers | Freshness semantics |
 | --- | --- | --- | --- |
 | `snapshot.json` | producer ([`sidebar::produce::panes`](../../crates/rimz/src/sidebar/produce/panes.rs)) | every node's consumer fold | the pane frame alone — panes, command/cwd (raced-empty cwd repaired from the pane root's `/proc` cwd), metrics figures; `produced_at_ms` is the fusion supersession baseline; two-mode TTL, poll vs presence-stamp event mode |
+| `pane-topology.json` | `rimz sidebar wake --topology` (Zellij presence plugin payload; host CLI writes) | Zellij backend | pane topology cache — `is_held`, `is_suppressed`, `exited`, title, spawn command, focus, tab-position grouping, and geometry; fresh while the presence channel is fresh; producer pane listing falls back to `zellij action list-panes -j -a` when absent, stale, before a requested freshness floor, or for another session |
 | `presence.stamp` | `rimz sidebar wake` (Zellij presence plugin) | producer | mtime stamp; fresh stretches the pane TTL to event mode |
 | `diff-stats.json` | producer ([`sidebar::produce::git`](../../crates/rimz/src/sidebar/produce/git.rs)), single-flighted on `diff-stats.lock` | every node | per-root stamps on activity-tiered TTLs; carries the cached group-root enumeration |
 | `metrics-sample.json` | producer ([`sidebar::produce::metrics`](../../crates/rimz/src/sidebar/produce/metrics.rs)) | producer only | per-pane sample stamps plus the pane→root-pid bindings; the displayed values reach consumers on the pane frame |
@@ -67,7 +68,7 @@ The store keeps overlay/freshness events only: `PaneClosed`, `CommandChanged`, `
 Each push channel exists so a change a writer already knows about reaches every node within one wakeup instead of a poll window; the producer's pull stays the structural backstop behind all of them.
 
 - **Ledger and sidecar writers** post a `LedgerDelta` after every durable write or context-sidecar merge — status, tokens, and cost repaint within one wakeup.
-- **The Zellij presence plugin** pushes exact pane events and stamps `presence.stamp`; **the elder's tmux control-mode watcher** broadcasts `PanesChanged` per topology notification ([multiplexers.md](./multiplexers.md)).
+- **The Zellij presence plugin** pushes exact pane events, stamps `presence.stamp`, and publishes `pane-topology.json` through the host CLI; **the elder's tmux control-mode watcher** broadcasts `PanesChanged` per topology notification ([multiplexers.md](./multiplexers.md)).
 - **The elder's transcript watcher** ([`transcript_watch.rs`](../../crates/rimz/src/sidebar_renderer/app/transcript_watch.rs)) holds a filesystem watch on each live Codex session's rollout JSONL and runs the stat-gated context refresh on the write, covering the mid-turn gap between hook pushes — Codex hooks fire only at progress events, so a long generation otherwise goes quiet until the next tick. The refresh merges the sidecar and posts the same `LedgerDelta` the hook path does; only the elected elder watches, demotion drops the watch, and a watcher that never starts costs nothing because the producer-tick refresh stays unconditional.
 
 ## Fusion Rules
@@ -87,6 +88,7 @@ The table names staleness-budget semantics. Exact values and rationale comments 
 | Lane | Cadence | Where Felt |
 | --- | --- | --- |
 | Pane frame | `SNAPSHOT_CACHE_TTL` in poll mode; `EVENT_PANE_TTL` while the presence stamp is fresh | Pane open/close and cwd/command regrouping when no exact event arrived |
+| Zellij topology cache | `PRESENCE_STAMP_FRESH` | Zellij pre-producer pane listing |
 | Presence stamp | `PRESENCE_STAMP_FRESH` | Switches the producer between poll and event-mode pane TTLs |
 | Git diff stats | `DIFF_STATS_TTL` for hot worktrees; `DIFF_STATS_IDLE_TTL` for idle worktrees | Worktree header churn, ahead/behind counts, landed markers |
 | Worktree root enumeration | `WORKTREE_ROOTS_TTL` | Grouping for checkouts added without a session boundary |

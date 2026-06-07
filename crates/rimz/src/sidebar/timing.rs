@@ -203,6 +203,12 @@ pub const PULL_CADENCES: &[PullCadence] = &[
         retry_ttl: None,
     },
     PullCadence {
+        name: "zellij.pane_topology",
+        ttl: PRESENCE_STAMP_FRESH,
+        idle_ttl: None,
+        retry_ttl: None,
+    },
+    PullCadence {
         name: "presence.focus_stranded",
         ttl: FOCUS_STRANDED_EVENT_TTL,
         idle_ttl: None,

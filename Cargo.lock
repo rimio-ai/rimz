@@ -2868,6 +2868,8 @@ dependencies = [
 name = "rimz-presence-zellij"
 version = "0.0.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "zellij-tile",
 ]
 

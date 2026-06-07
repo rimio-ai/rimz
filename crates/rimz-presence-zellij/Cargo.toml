@@ -23,6 +23,10 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
 # The official Zellij plugin API, wasm-only: its shims call extern host
 # functions that exist only inside Zellij's plugin host, so host targets must
 # not link it. Pinned to the 0.44 line — the plugin-load gate

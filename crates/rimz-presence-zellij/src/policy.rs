@@ -7,6 +7,8 @@
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
+use serde::Serialize;
+
 /// Floor between two `panes-changed` pokes — caps host forks under
 /// pathological manifest churn. A change that lands inside the floor is
 /// deferred, never dropped.
@@ -38,7 +40,7 @@ pub const SIDEBAR_PANE_TITLE: &str = "rimz-sidebar";
 /// subset whose change means the sidebar should refetch panes. `title` is
 /// carried for focus correction but deliberately excluded from the hash: agents
 /// mutate titles per output line, and hashing them would re-poke per line.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PaneFields {
     pub id: u32,
     pub is_plugin: bool,
@@ -46,7 +48,15 @@ pub struct PaneFields {
     pub is_suppressed: bool,
     pub exited: bool,
     pub is_held: bool,
+    pub tab_position: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tab_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_x: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_columns: Option<u64>,
     pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_command: Option<String>,
 }
 
@@ -62,15 +72,34 @@ pub enum FocusShortcut {
     Ignore,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TopologyPayload {
+    pub session_name: String,
+    pub produced_at_ms: u64,
+    pub panes: Vec<PaneFields>,
+}
+
+impl TopologyPayload {
+    pub fn from_tabs(
+        session_name: impl Into<String>,
+        produced_at_ms: u64,
+        tabs: &BTreeMap<usize, Vec<PaneFields>>,
+    ) -> Self {
+        Self {
+            session_name: session_name.into(),
+            produced_at_ms,
+            panes: tabs.values().flatten().cloned().collect(),
+        }
+    }
+}
+
 impl PaneFields {
     fn is_live_terminal(&self) -> bool {
         !self.is_plugin && !self.is_suppressed && !self.exited && !self.is_held
     }
 
     fn is_sidebar(&self) -> bool {
-        self.is_live_terminal()
-            && (self.title == SIDEBAR_PANE_TITLE
-                || self.terminal_command.as_deref() == Some(SIDEBAR_PANE_TITLE))
+        self.is_live_terminal() && self.title == SIDEBAR_PANE_TITLE
     }
 
     pub fn is_card_pane(&self) -> bool {
@@ -96,6 +125,10 @@ pub fn manifest_hash(tabs: &BTreeMap<usize, Vec<PaneFields>>, _active_tab: Optio
             pane.is_suppressed.hash(&mut hasher);
             pane.exited.hash(&mut hasher);
             pane.is_held.hash(&mut hasher);
+            pane.tab_position.hash(&mut hasher);
+            pane.tab_name.hash(&mut hasher);
+            pane.pane_x.hash(&mut hasher);
+            pane.pane_columns.hash(&mut hasher);
             pane.terminal_command.hash(&mut hasher);
         }
     }
@@ -129,6 +162,10 @@ pub fn focus_shortcut_if_only_focus_changed(
                 || previous.is_suppressed != next.is_suppressed
                 || previous.exited != next.exited
                 || previous.is_held != next.is_held
+                || previous.tab_position != next.tab_position
+                || previous.tab_name != next.tab_name
+                || previous.pane_x != next.pane_x
+                || previous.pane_columns != next.pane_columns
                 || previous.terminal_command != next.terminal_command
             {
                 return None;

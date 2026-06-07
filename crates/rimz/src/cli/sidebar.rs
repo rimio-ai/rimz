@@ -93,6 +93,8 @@ enum SidebarSubcmd {
         focused_pane_ids: Vec<String>,
         #[arg(long = "unfocused-pane-id")]
         unfocused_pane_ids: Vec<String>,
+        #[arg(long = "topology", hide = true)]
+        topology: Option<String>,
     },
 }
 
@@ -309,6 +311,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             command_args,
             focused_pane_ids,
             unfocused_pane_ids,
+            topology,
         } => {
             // Feather-weight by design: the poke needs only the workspace
             // runtime dir — one stamp write plus at most one datagram — so it
@@ -326,6 +329,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             // TTL to event mode; the write is best-effort cache-class — a miss
             // only means the channel reads as dead one poke longer.
             write_presence_stamp(&runtime);
+            write_topology_cache(&runtime, topology.as_deref());
             let Some(event) = wake_event(
                 reason,
                 pane_id.as_deref(),
@@ -343,6 +347,22 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 tracing::debug!(error = %err, "presence poke: event datagram failed");
             }
             Ok(())
+        }
+    }
+}
+
+fn write_topology_cache(runtime: &RuntimePaths, topology: Option<&str>) {
+    let Some(topology) = topology else {
+        return;
+    };
+    match serde_json::from_str::<rimz::schema::pane_topology::PaneTopologyCache>(topology) {
+        Ok(cache) => {
+            if let Err(err) = rimz::sidebar::cache::write_pane_topology_cache(runtime, &cache) {
+                tracing::debug!(error = %err, "presence poke: topology cache write failed");
+            }
+        }
+        Err(err) => {
+            tracing::debug!(error = %err, "presence poke: topology payload parse failed");
         }
     }
 }

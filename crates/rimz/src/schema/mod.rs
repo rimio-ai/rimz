@@ -5,6 +5,7 @@
 
 pub mod event;
 pub mod heartbeat;
+pub mod pane_topology;
 pub mod sidebar_event;
 
 // v2: `agent.lifecycle` params carry a `signal` (the agent-agnostic lifecycle

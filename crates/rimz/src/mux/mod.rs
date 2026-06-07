@@ -74,6 +74,12 @@ pub struct PaneCapture {
 #[derive(Clone, Debug, Default)]
 pub struct PaneListOptions {
     pub session_name: Option<String>,
+    /// Workspace runtime root to consult for backend-specific latency hints.
+    /// Backends that do not have such a hint ignore it.
+    pub workspace_id: Option<WorkspaceId>,
+    /// Minimum acceptable `produced_at_ms` for backend-specific topology
+    /// caches. Backends without such a cache ignore it.
+    pub min_topology_produced_at_ms: Option<u64>,
     /// Override the backend's default subprocess timeout. `None` uses the
     /// backend's default (30s). Set to a shorter value for latency-sensitive
     /// probes (e.g. the self-close watchdog) where a hung Zellij should not
