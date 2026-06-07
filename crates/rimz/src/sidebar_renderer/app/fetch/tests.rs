@@ -233,6 +233,9 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
         session_name: "rimz-test".to_owned(),
         instance_id: younger,
         tick_seconds: 2,
+        // No own pane: the fold must admit every published fixture pane even
+        // when the test process itself runs inside a live mux pane.
+        own_pane: None,
     };
     let mut cursor = RollupCursor::new();
     let mut outcomes = Vec::new();
@@ -291,6 +294,9 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
         session_name: "rimz-test".to_owned(),
         instance_id: younger,
         tick_seconds: 2,
+        // No own pane: the fold must admit every published fixture pane even
+        // when the test process itself runs inside a live mux pane.
+        own_pane: None,
     };
     let mut cursor = RollupCursor::new();
     let mut outcomes = Vec::new();

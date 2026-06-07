@@ -145,6 +145,7 @@ fn non_final_fast_success_does_not_recover_refresh_health() {
         session_name: "rimz-test".to_owned(),
         instance_id: crate::SidebarInstanceId::new(),
         tick_seconds: 1,
+        own_pane: None,
     };
     let mut last_snapshot = Some(snapshot(&ws));
     let mut current = snapshot(&ws);
