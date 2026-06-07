@@ -32,6 +32,7 @@ pub(crate) fn pane(raw: &str, view: &str, focused: bool) -> PaneRef {
 
 pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> SidebarSnapshot {
     let mut snapshot = snapshot(ws);
+    snapshot.panes_produced_at_ms = Some(1);
     snapshot.worktree_groups = vec![crate::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
@@ -91,6 +92,7 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
 
 pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     let mut snapshot = snapshot(ws);
+    snapshot.panes_produced_at_ms = Some(1);
     let row = crate::SidebarRow {
         row_kind: crate::SidebarRowKind::Agent,
         id: "agent-1".to_owned(),

@@ -1,7 +1,9 @@
 //! The last-known-good commit gate: hold a fetched frame that *succeeded but
-//! regressed transiently* — the phantom Agent→Process flicker — so a one-frame
-//! binding glitch never reaches the screen, bounded by a count and wall-clock
-//! escape hatch so a genuine exit still surfaces promptly.
+//! regressed transiently* — a frameless fallback over a frame-backed render, or
+//! the phantom Agent→Process flicker — so a transient read glitch never reaches
+//! the screen. The Agent→Process hold is bounded by a count and wall-clock
+//! escape hatch so a genuine exit still surfaces promptly; frameless reads stay
+//! held until a verified pane frame returns.
 
 use crate::SidebarSnapshot;
 use crate::ids::PaneId;
@@ -37,7 +39,8 @@ enum CommitDecision {
 /// clock and the streak arrive as arguments so the escape hatch is
 /// deterministic in tests. A regression is held only while the *panel set is
 /// unchanged* and a pane that `prev` rendered as an agent (or remote-control)
-/// host now renders as a bare process — exactly the phantom-`process` flicker.
+/// host now renders as a bare process — exactly the phantom-`process` flicker —
+/// or while a frameless fallback tries to replace a frame-backed render.
 /// Persistence, not the rollup's `agents` list, distinguishes a transient drop
 /// (recovers next read) from a genuine exit (persists until the hatch opens),
 /// because the root-cause race is the agent momentarily *leaving* that list.
@@ -47,6 +50,9 @@ fn gate_commit(
     gate: &GateState,
     now: Timestamp,
 ) -> CommitDecision {
+    if prev.panes_produced_at_ms.is_some() && incoming.panes_produced_at_ms.is_none() {
+        return CommitDecision::KeepPrior;
+    }
     if pane_id_set(prev) != pane_id_set(incoming) {
         // The room genuinely changed (a pane opened or closed); never hold.
         return CommitDecision::Accept;

@@ -48,6 +48,38 @@ fn gate_holds_transient_agent_to_process_demotion() {
 }
 
 #[test]
+fn gate_holds_frameless_snapshot_over_prior_frame() {
+    let ws = workspace();
+    let mut frameless = snapshot(&ws);
+    frameless.agents = agent_snapshot(&ws).agents;
+    assert_eq!(
+        gate_commit(
+            &agent_snapshot(&ws),
+            &frameless,
+            &GateState::default(),
+            gate_now()
+        ),
+        CommitDecision::KeepPrior,
+        "a no-frame fallback must not replace a jumpable frame-backed render"
+    );
+}
+
+#[test]
+fn gate_accepts_frameless_cold_start_against_placeholder() {
+    let ws = workspace();
+    let frameless = snapshot(&ws);
+    assert_eq!(
+        gate_commit(
+            &snapshot(&ws),
+            &frameless,
+            &GateState::default(),
+            gate_now()
+        ),
+        CommitDecision::Accept
+    );
+}
+
+#[test]
 fn gate_releases_demotion_after_reject_count() {
     let ws = workspace();
     let gate = GateState {
@@ -159,6 +191,33 @@ fn reject_holds_prior_frame_as_render_and_baseline() {
     // never arms the degraded alert nor counts toward self-close.
     assert!(state.health.alert.is_none());
     assert_eq!(state.health.failure_streak, 0);
+}
+
+#[test]
+fn reject_holds_prior_frame_over_frameless_fetch() {
+    let ws = workspace();
+    let prior = agent_snapshot(&ws);
+    let computed = compute_next_state(
+        &ws,
+        None,
+        Ok(snapshot(&ws)),
+        Some(prior.clone()),
+        &Health::default(),
+    );
+
+    let (state, gate, rejected) =
+        apply_gate(computed, true, &prior, &GateState::default(), gate_now());
+
+    assert!(rejected);
+    assert_eq!(
+        state.snapshot.panes_produced_at_ms,
+        prior.panes_produced_at_ms
+    );
+    assert!(matches!(
+        state.snapshot.worktree_groups[0].rows[0].row_kind,
+        crate::SidebarRowKind::Agent
+    ));
+    assert_eq!(gate.reject_streak, 1);
 }
 
 #[test]
