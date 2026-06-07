@@ -61,9 +61,9 @@ const TAB_INK: Color = Color::Indexed(16);
 const SELECTED_SPINE: &str = "▌";
 
 /// The selected *worktree's* resting lane spine: a thin `▏` (lighter than the
-/// selected card's `▌`) down the whole selected group — header, every row, and
-/// the inter-card gaps — so the worktree holding the selection reads as one
-/// bracketed lane. Non-selected worktrees carry no spine at all.
+/// selected card's `▌`) down the whole selected group — header and every row —
+/// so the worktree holding the selection reads as one bracketed lane.
+/// Non-selected worktrees carry no spine at all.
 const LANE_SPINE: &str = "▏";
 
 /// Inner content width: the sidebar width less the one-cell left gutter and the

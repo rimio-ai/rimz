@@ -636,8 +636,7 @@ fn proc_stats_hold_a_fixed_dim_grid() {
 fn render_process_rows_below_agents_without_a_seam() {
     // A worktree group holding both agent cards and bare process rows spends
     // no chrome line on the boundary: rows sort agents-first and the command
-    // tail reads apart by its DIM weight, so the gap line alone separates the
-    // last agent card from the first process row.
+    // tail reads apart by its DIM weight.
     let mut claude = agent(
         "claude-1",
         "claude",
@@ -2459,11 +2458,10 @@ fn just_started_idle_agent_sheds_the_gauge_and_zeroed_stats() {
     );
 }
 
-/// Consecutive cards in a group are separated by one blank line. The group is
-/// unselected here, so the separator carries the plain-space gutter (a lane
-/// spine would tint it) — exactly one all-blank line, never more.
+/// Consecutive cards in a group stack without a blank separator. Different
+/// worktrees still get their group-level gap in the scroll composer.
 #[test]
-fn consecutive_cards_get_one_blank_separator() {
+fn consecutive_cards_stack_without_a_blank_separator() {
     let theme = Theme::fixed(true);
     let one = agent(
         "claude-1",
@@ -2504,8 +2502,13 @@ fn consecutive_cards_get_one_blank_separator() {
         .collect();
     assert_eq!(
         blanks,
-        vec![names[1] - 1],
-        "one blank line sits between the cards:\n{}",
+        Vec::<usize>::new(),
+        "no blank line sits between cards in the same worktree:\n{}",
+        rendered.join("\n")
+    );
+    assert!(
+        !rendered[names[1] - 1].trim().is_empty(),
+        "the line before the second card is still card content:\n{}",
         rendered.join("\n")
     );
 }

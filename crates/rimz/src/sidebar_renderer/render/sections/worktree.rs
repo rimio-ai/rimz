@@ -44,10 +44,10 @@ pub(in crate::sidebar_renderer::render) fn worktree_group_lines(
     lines: &mut Vec<Line<'static>>,
     map: &mut Vec<Option<usize>>,
 ) {
-    // Does the selection live in this worktree? If so the whole group reads as one
-    // bracketed lane: the resting `▏` spine on the header, every row, and the
-    // inter-card gaps, with the selected card itself lit bold `▌`. The `external`
-    // catch-all is never a lane.
+    // Does the selection live in this worktree? If so the whole group reads as
+    // one bracketed lane: the resting `▏` spine on the header and every row,
+    // with the selected card itself lit bold `▌`. The `external` catch-all is
+    // never a lane.
     let first_row = *row_index;
     let passing = group
         .rows
@@ -76,19 +76,11 @@ pub(in crate::sidebar_renderer::render) fn worktree_group_lines(
         (group.kind != SidebarWorktreeKind::External && passing > 0).then_some(*row_index);
     map.push(header_target);
     let tier = Tier::for_width(content_width(width));
-    // A blank line separates consecutive cards; it carries the group's lane
-    // gutter so a selected worktree's spine runs unbroken through the gap, and
-    // maps to `None` as structural chrome (never a jump target).
-    for (index, row) in group
+    for row in group
         .rows
         .iter()
         .filter(|row| row_passes_filter(row, filter))
-        .enumerate()
     {
-        if index > 0 {
-            lines.push(with_gutter(theme, Line::from(""), lane));
-            map.push(None);
-        }
         let selected = *row_index == selected_index;
         let this_row = *row_index;
         *row_index += 1;
