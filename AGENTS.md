@@ -43,7 +43,7 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 ## Testing requirements
 
 - Run the suite with `cargo xtask test` (wraps `cargo nextest run`) — nextest is the only suite runner; never bare `cargo test`. Doctests go through `cargo xtask doctest`.
-- Routine validation defaults to the fast relevant nextest subset plus lightweight gates; run journey, live-backend, performance, or full CI only when the change touches those surfaces, their fixtures, or shared infrastructure.
+- Routine validation defaults to the fast relevant nextest subset plus lightweight gates; run journey, live-backend, performance, or full CI (`cargo xtask ci`) only when the change touches those surfaces, their fixtures, or shared infrastructure.
 - Keep test tiers separate: function/unit tests stay in-module and pure, integration tests own subprocess/filesystem behavior, journey tests own rendered user flows, live-backend tests own real tmux/Zellij behavior, and performance tests assert bounded resource use rather than product semantics.
 - A module's unit tests have one home: inline `#[cfg(test)] mod tests` by default; past the size gate the whole module moves to a sibling `tests.rs` (enforced by `cargo xtask invariants`). Doctests stay on public items as minimal usage examples. Shape and threshold in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
 - Do not land ignored tests for future product targets. Capture planned behaviour in docs/roadmap, then add the executable test when the implementation is ready to make it pass under nextest.

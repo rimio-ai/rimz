@@ -12,7 +12,7 @@ Local contract for `crates/rimz/src/ledger/` — durable workspace state. Extend
 
 ## Read path
 
-- Snapshot reducers (`snapshot/`) are pure over the event log plus caller-supplied inputs — `sidebar::produce` supplies the live pane list; nothing under `snapshot/` calls the mux.
+- Snapshot reducers (`snapshot/`) are pure over the event log plus caller-supplied inputs — the sidebar's produce module ([`src/sidebar/produce/`](../sidebar/produce/mod.rs)) supplies the live pane list; nothing under `snapshot/` calls the mux.
 - The fold is resumable: the rollup cache and its extent stamp carry over across log rotation, tombstones included — a rebuild never silently drops an ended agent.
 - [`single_flight.rs`](./single_flight.rs) owns only the lock-and-poll election and imports no ledger-writer module — it sits inside the sidebar's read-only import graph (CI grep).
 
