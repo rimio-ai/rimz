@@ -1,6 +1,6 @@
 //! The Zellij plugin shell: projects host events into the pure policy core,
-//! runs the pokes it returns, and corrects a switched-to tab whose remembered
-//! focus is Rimz's sidebar. Headless — it renders nothing and holds no pane.
+//! runs the pokes it returns, and broadcasts when a switched-to tab restored
+//! focus to Rimz's sidebar. Headless — it renders nothing and holds no pane.
 //! Compiled only for wasm (`register_plugin!` defines the wasip1 `main`); host
 //! targets build a stub so `--workspace` builds, lints, and the policy unit
 //! tests run without the wasm toolchain.
@@ -11,7 +11,8 @@ mod shell {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use rimz_presence_zellij::policy::{
-        self, FocusPatch, FocusShortcut, PaneFields, Poke, PokePolicy, TimerGate,
+        self, CorrectionAction, FocusCorrection, FocusPatch, FocusShortcut, PaneFields, Poke,
+        PokePolicy, TimerGate,
     };
     use zellij_tile::prelude::*;
 
@@ -22,9 +23,9 @@ mod shell {
         /// The projected room shape, refreshed per manifest event.
         tabs: BTreeMap<usize, Vec<PaneFields>>,
         active_tab: Option<usize>,
-        /// Set on active-tab changes, then consumed once a pane manifest proves
-        /// whether Zellij restored that tab's focus to Rimz's sidebar.
-        pending_focus_tab: Option<usize>,
+        active_focused_pane: Option<u32>,
+        /// Classifies active-tab changes after Zellij's focus marks settle.
+        focus_correction: FocusCorrection,
         /// Configuration written by rimz at load time (never user config):
         /// the workspace to poke and the absolute rimz binary, insulating the
         /// poke from the host PATH. Absent (a hand-loaded plugin), the wake
@@ -53,7 +54,6 @@ mod shell {
             self.rimz_bin = configuration.get("rimz_bin").cloned();
             request_permission(&[
                 PermissionType::ReadApplicationState,
-                PermissionType::ChangeApplicationState,
                 PermissionType::RunCommands,
             ]);
             subscribe(&[
@@ -116,16 +116,24 @@ mod shell {
                         }
                         _ => self.fold(now),
                     }
-                    self.correct_switched_tab_focus();
+                    self.resolve_focus_correction(now, true);
+                    self.active_focused_pane = policy::focused_pane_id(&self.tabs, self.active_tab);
                 }
                 Event::TabUpdate(tabs) => {
                     self.mark_granted(now);
+                    let previous_active = self.active_tab;
+                    let previous_focused_pane = self
+                        .active_focused_pane
+                        .or_else(|| policy::focused_pane_id(&self.tabs, previous_active));
                     let next_active = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
-                    if next_active != self.active_tab {
-                        self.pending_focus_tab = next_active;
-                    }
                     self.active_tab = next_active;
-                    self.correct_switched_tab_focus();
+                    self.active_focused_pane = policy::focused_pane_id(&self.tabs, self.active_tab);
+                    self.focus_correction.on_active_tab_change_with_focus(
+                        previous_active,
+                        next_active,
+                        previous_focused_pane,
+                        now,
+                    );
                 }
                 Event::CommandChanged(pane_id, command, is_foreground, _) => {
                     if is_foreground {
@@ -150,6 +158,7 @@ mod shell {
                 _ => {}
             }
             self.dispatch_due(now);
+            self.resolve_focus_correction(now, false);
             self.rearm(now);
             false // headless: never render
         }
@@ -216,21 +225,19 @@ mod shell {
             }
         }
 
-        /// Zellij remembers per-tab focus. When the user switches back to a tab
-        /// whose remembered focus is the sidebar, redirect once to that tab's
-        /// first live working pane. Ordinary same-tab sidebar focus is left
-        /// alone so the native renderer remains interactive.
-        fn correct_switched_tab_focus(&mut self) {
-            let Some(tab) = self.pending_focus_tab else {
-                return;
-            };
-            if self.active_tab != Some(tab) || !self.tabs.contains_key(&tab) {
-                return;
+        /// Resolve a switched-tab focus classification. The plugin broadcasts
+        /// only the stranded sidebar pane; the renderer owning that pane
+        /// chooses the remembered working target.
+        fn resolve_focus_correction(&mut self, now: u64, manifest_fresh: bool) {
+            match self
+                .focus_correction
+                .resolve(&self.tabs, self.active_tab, manifest_fresh, now)
+            {
+                CorrectionAction::Broadcast(pane_id) => {
+                    self.poke_focus_stranded(pane_id);
+                }
+                CorrectionAction::Wait | CorrectionAction::Clear => {}
             }
-            if let Some(target) = policy::switched_tab_focus_target(&self.tabs, Some(tab)) {
-                focus_terminal_pane(target, false, false);
-            }
-            self.pending_focus_tab = None;
         }
 
         fn dispatch_due(&mut self, now: u64) {
@@ -246,10 +253,11 @@ mod shell {
         /// the [`TimerGate`]: event bursts arm one timer, an earlier deadline
         /// supersedes, and a superseded timer's fire is a harmless no-op.
         fn rearm(&mut self, now: u64) {
-            let Some(policy) = self.policy.as_ref() else {
+            let policy_at = self.policy.as_ref().map(PokePolicy::next_wake_at);
+            let correction_at = self.focus_correction.next_deadline();
+            let Some(at) = [policy_at, correction_at].into_iter().flatten().min() else {
                 return;
             };
-            let at = policy.next_wake_at();
             if self.timer_gate.should_arm(at) {
                 set_timeout(at.saturating_sub(now) as f64 / 1_000.0);
             }
@@ -385,6 +393,33 @@ mod shell {
             let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
             run_command(&refs, BTreeMap::new());
             true
+        }
+
+        fn poke_focus_stranded(&self, pane_id: u32) {
+            if !self.granted {
+                return;
+            }
+            let Some(session_name) = self.session_name.as_deref() else {
+                return;
+            };
+            let program = self.rimz_bin.as_deref().unwrap_or("rimz");
+            let mut argv = vec![
+                program.to_owned(),
+                "sidebar".to_owned(),
+                "wake".to_owned(),
+                "--reason".to_owned(),
+                "focus-stranded".to_owned(),
+                "--session-name".to_owned(),
+                session_name.to_owned(),
+                "--pane-id".to_owned(),
+                format!("terminal_{pane_id}"),
+            ];
+            if let Some(workspace_id) = self.workspace_id.as_deref() {
+                argv.push("--workspace-id".to_owned());
+                argv.push(workspace_id.to_owned());
+            }
+            let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+            run_command(&refs, BTreeMap::new());
         }
 
         /// Publish an optimistic focus patch for panes already known to the

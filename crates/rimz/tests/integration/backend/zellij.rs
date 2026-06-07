@@ -1056,6 +1056,18 @@ fn focused_nonplugin_title_in_tab(xdg: &Path, session: &str, tab: u64) -> Option
     })
 }
 
+/// Raw id of the focused non-plugin pane in `tab`, if any.
+fn focused_nonplugin_pane_id_in_tab(xdg: &Path, session: &str, tab: u64) -> Option<u64> {
+    let panes = list_panes_json(xdg, session);
+    panes.as_array()?.iter().find_map(|p| {
+        (p.get("is_plugin").and_then(|v| v.as_bool()) == Some(false)
+            && p.get("tab_id").and_then(|v| v.as_u64()) == Some(tab)
+            && p.get("is_focused").and_then(|v| v.as_bool()) == Some(true))
+        .then(|| p.get("id").and_then(|v| v.as_u64()))
+        .flatten()
+    })
+}
+
 /// Raw terminal pane id in `tab` with `title`, if present.
 fn pane_id_in_tab_with_title(xdg: &Path, session: &str, tab: u64, title: &str) -> Option<u64> {
     let panes = list_panes_json(xdg, session);
@@ -1063,6 +1075,18 @@ fn pane_id_in_tab_with_title(xdg: &Path, session: &str, tab: u64, title: &str) -
         (p.get("is_plugin").and_then(|v| v.as_bool()) == Some(false)
             && p.get("tab_id").and_then(|v| v.as_u64()) == Some(tab)
             && p.get("title").and_then(|v| v.as_str()) == Some(title))
+        .then(|| p.get("id").and_then(|v| v.as_u64()))
+        .flatten()
+    })
+}
+
+/// Raw terminal pane id in `tab` whose title is not `title`, if present.
+fn pane_id_in_tab_without_title(xdg: &Path, session: &str, tab: u64, title: &str) -> Option<u64> {
+    let panes = list_panes_json(xdg, session);
+    panes.as_array()?.iter().find_map(|p| {
+        (p.get("is_plugin").and_then(|v| v.as_bool()) == Some(false)
+            && p.get("tab_id").and_then(|v| v.as_u64()) == Some(tab)
+            && p.get("title").and_then(|v| v.as_str()) != Some(title))
         .then(|| p.get("id").and_then(|v| v.as_u64()))
         .flatten()
     })
@@ -1083,6 +1107,29 @@ fn wait_for_focused_nonplugin_title(
                 return Some(title);
             }
             last = Some(title);
+        }
+        if Instant::now() > deadline {
+            return last;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Poll the focused non-plugin pane id in `tab` until `accept` matches.
+fn wait_for_focused_nonplugin_pane_id(
+    xdg: &Path,
+    session: &str,
+    tab: u64,
+    accept: impl Fn(u64) -> bool,
+) -> Option<u64> {
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    let mut last = None;
+    loop {
+        if let Some(pane_id) = focused_nonplugin_pane_id_in_tab(xdg, session, tab) {
+            if accept(pane_id) {
+                return Some(pane_id);
+            }
+            last = Some(pane_id);
         }
         if Instant::now() > deadline {
             return last;
@@ -1989,11 +2036,30 @@ fn seed_presence_permissions(xdg: &Path, wasm: &Path) {
     std::fs::write(
         cache_dir.join("permissions.kdl"),
         format!(
-            "\"{}\" {{\n    ReadApplicationState\n    ChangeApplicationState\n    RunCommands\n}}\n",
+            "\"{}\" {{\n    ReadApplicationState\n    RunCommands\n}}\n",
             wasm.display()
         ),
     )
     .expect("seed permission grant");
+}
+
+fn write_poke_shim(dir: &Path, log: &Path) -> PathBuf {
+    let rimz_shim = dir.join("rimz-poke-shim");
+    std::fs::write(
+        &rimz_shim,
+        format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\n", log.display()),
+    )
+    .expect("write poke shim");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&rimz_shim)
+            .expect("metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&rimz_shim, perms).expect("chmod");
+    }
+    rimz_shim
 }
 
 /// Poll `log` until it holds at least `at_least` lines (or panic at the
@@ -2002,9 +2068,7 @@ fn seed_presence_permissions(xdg: &Path, wasm: &Path) {
 fn wait_for_poke_lines(log: &Path, at_least: usize) -> Vec<String> {
     let deadline = Instant::now() + SPAWN_TIMEOUT;
     loop {
-        let lines: Vec<String> = std::fs::read_to_string(log)
-            .map(|s| s.lines().map(str::to_owned).collect())
-            .unwrap_or_default();
+        let lines = poke_lines(log);
         if lines.len() >= at_least {
             return lines;
         }
@@ -2016,6 +2080,34 @@ fn wait_for_poke_lines(log: &Path, at_least: usize) -> Vec<String> {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn wait_for_poke_line(log: &Path, accept: impl Fn(&str) -> bool, description: &str) -> Vec<String> {
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    loop {
+        let lines = poke_lines(log);
+        if lines.iter().any(|line| accept(line)) {
+            return lines;
+        }
+        if Instant::now() > deadline {
+            panic!(
+                "expected poke line matching {description} in {}; got {lines:?}",
+                log.display()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn poke_lines(log: &Path) -> Vec<String> {
+    std::fs::read_to_string(log)
+        .map(|s| s.lines().map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+fn wait_for_settle_window_poke_lines(log: &Path) -> Vec<String> {
+    std::thread::sleep(Duration::from_millis(750));
+    poke_lines(log)
 }
 
 /// End to end against a live Zellij: the pipe verb loads the presence plugin
@@ -2049,24 +2141,7 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
 
     // A `rimz` stand-in that logs its argv: the poke's whole host surface.
     let poke_log = xdg.path().join("poke.log");
-    let rimz_shim = xdg.path().join("rimz-poke-shim");
-    std::fs::write(
-        &rimz_shim,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\n",
-            poke_log.display()
-        ),
-    )
-    .expect("write poke shim");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&rimz_shim)
-            .expect("metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&rimz_shim, perms).expect("chmod");
-    }
+    let rimz_shim = write_poke_shim(xdg.path(), &poke_log);
 
     // Born on the pre-seeded dir with a PTY client attached: application
     // state flows only while a client is connected, and the cached grant is
@@ -2114,9 +2189,9 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
 }
 
 /// Zellij remembers each tab's active pane. When a tab was left focused on the
-/// native sidebar, switching back to it should land on the working pane instead
-/// once the presence plugin sees the active-tab move. Same-tab sidebar focus
-/// remains possible; the correction is one-shot per tab switch.
+/// native sidebar, switching back to it should emit a renderer-owned
+/// `focus-stranded` action event. Same-tab sidebar focus remains possible; the
+/// correction is one-shot per tab switch.
 #[test]
 fn presence_plugin_refocuses_working_pane_after_tab_switch() {
     require_zellij!();
@@ -2141,24 +2216,7 @@ fn presence_plugin_refocuses_working_pane_after_tab_switch() {
     let session = ZellijSession::attach_pty(xdg, name.clone(), true);
 
     let poke_log = session.xdg.path().join("poke.log");
-    let rimz_shim = session.xdg.path().join("rimz-poke-shim");
-    std::fs::write(
-        &rimz_shim,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\n",
-            poke_log.display()
-        ),
-    )
-    .expect("write poke shim");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&rimz_shim)
-            .expect("metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&rimz_shim, perms).expect("chmod");
-    }
+    let rimz_shim = write_poke_shim(session.xdg.path(), &poke_log);
 
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id");
     ZellijBackend::with_runtime_dir(session.xdg.path())
@@ -2221,10 +2279,134 @@ fn presence_plugin_refocuses_working_pane_after_tab_switch() {
         .expect("switch back to second tab");
     assert!(switched_second.success(), "switch back to second tab");
 
-    let focused =
-        wait_for_focused_nonplugin_title(session.xdg.path(), &name, second_tab, |title| {
-            title != "rimz-sidebar"
+    let lines = wait_for_poke_line(
+        &poke_log,
+        |line| {
+            line.contains("--reason focus-stranded")
+                && line.contains("--session-name")
+                && line.contains(&name)
+                && line.contains("--pane-id")
+                && line.contains(&sidebar_pane)
+        },
+        "focus-stranded native-switch broadcast",
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("--reason focus-stranded")),
+        "native switch back to a sidebar-stranded tab should broadcast focus-stranded for \
+         {sidebar_pane}; got {lines:?}",
+    );
+}
+
+#[test]
+fn presence_plugin_does_not_flag_cross_tab_jump() {
+    require_zellij!();
+    let Some(wasm) = presence_wasm_artifact() else {
+        eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
+        return;
+    };
+    match zellij::capabilities() {
+        Ok(caps)
+            if caps
+                .parsed_version
+                .is_some_and(|v| v >= zellij::PRESENCE_PLUGIN_MIN_ZELLIJ) => {}
+        _ => {
+            eprintln!("zellij below the presence-plugin floor; skipping test");
+            return;
+        }
+    }
+
+    let xdg = scoped_runtime_dir();
+    seed_presence_permissions(xdg.path(), &wasm);
+    let name = unique_session_name("presence-jump");
+    let session = ZellijSession::attach_pty(xdg, name.clone(), true);
+
+    let poke_log = session.xdg.path().join("poke.log");
+    let rimz_shim = write_poke_shim(session.xdg.path(), &poke_log);
+    let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id");
+    ZellijBackend::with_runtime_dir(session.xdg.path())
+        .ensure_presence_plugin(&rimz::mux::PresencePluginOptions {
+            session_name: name.clone(),
+            workspace_id,
+            wasm,
+            rimz_bin: rimz_shim,
+            converge: false,
         })
-        .expect("presence plugin should move focus off the sidebar");
-    assert_ne!(focused, "rimz-sidebar");
+        .expect("load presence plugin");
+    let initial_lines = wait_for_poke_lines(&poke_log, 1);
+
+    open_new_tab(session.xdg.path(), &name);
+    let tabs = wait_for_tab_count(session.xdg.path(), &name, 2);
+    assert_eq!(tabs.len(), 2, "expected two tabs, got {tabs:?}");
+    let second_tab = *tabs.last().expect("second tab id");
+    let spawned_sidebar = scoped_zellij(session.xdg.path())
+        .args([
+            "--session",
+            &name,
+            "action",
+            "new-pane",
+            "--direction",
+            "right",
+            "--name",
+            "rimz-sidebar",
+            "--",
+            "sleep",
+            "120",
+        ])
+        .bounded_status()
+        .expect("spawn titled sidebar pane");
+    assert!(spawned_sidebar.success(), "spawn titled sidebar pane");
+
+    let sidebar = pane_id_in_tab_with_title(session.xdg.path(), &name, second_tab, "rimz-sidebar")
+        .expect("second tab sidebar pane");
+    let work = pane_id_in_tab_without_title(session.xdg.path(), &name, second_tab, "rimz-sidebar")
+        .expect("second tab working pane");
+    let sidebar_pane = format!("terminal_{sidebar}");
+    let work_pane = format!("terminal_{work}");
+    let focused_sidebar = scoped_zellij(session.xdg.path())
+        .args(["--session", &name, "action", "focus-pane-id", &sidebar_pane])
+        .bounded_status()
+        .expect("focus second tab sidebar");
+    assert!(focused_sidebar.success(), "focus second tab sidebar");
+    assert_eq!(
+        wait_for_focused_nonplugin_title(session.xdg.path(), &name, second_tab, |title| {
+            title == "rimz-sidebar"
+        })
+        .as_deref(),
+        Some("rimz-sidebar"),
+        "same-tab setup should leave the destination tab stranded on the sidebar",
+    );
+
+    let switched_first = scoped_zellij(session.xdg.path())
+        .args(["--session", &name, "action", "go-to-tab", "1"])
+        .bounded_status()
+        .expect("switch to first tab");
+    assert!(switched_first.success(), "switch to first tab");
+    let before_jump = poke_lines(&poke_log).len().max(initial_lines.len());
+    let jumped = scoped_zellij(session.xdg.path())
+        .args(["--session", &name, "action", "focus-pane-id", &work_pane])
+        .bounded_status()
+        .expect("cross-tab focus working pane");
+    assert!(jumped.success(), "cross-tab focus working pane");
+    assert_eq!(
+        wait_for_focused_nonplugin_pane_id(session.xdg.path(), &name, second_tab, |pane_id| {
+            pane_id == work
+        }),
+        Some(work),
+        "cross-tab jump should land on the requested working pane",
+    );
+
+    let lines = wait_for_settle_window_poke_lines(&poke_log);
+    assert!(
+        !lines[before_jump..]
+            .iter()
+            .any(|line| line.contains("--reason focus-stranded")),
+        "explicit cross-tab pane jump must not broadcast focus-stranded; got {lines:?}",
+    );
+    assert_eq!(
+        focused_nonplugin_pane_id_in_tab(session.xdg.path(), &name, second_tab),
+        Some(work),
+        "focus should remain on the jumped-to working pane after the settle window",
+    );
 }

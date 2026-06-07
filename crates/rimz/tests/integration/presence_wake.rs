@@ -388,6 +388,34 @@ fn wake_pane_opened_and_closed_broadcast_card_events() {
 }
 
 #[test]
+fn wake_focus_stranded_broadcasts_renderer_action_event() {
+    let env = WakeEnv::new();
+    if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
+        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        return;
+    }
+    let recv_eldest = env.bind_socket("sidebar.eldest.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
+
+    let output = env.wake_with(
+        "focus-stranded",
+        true,
+        &["--session-name", SESSION_NAME, "--pane-id", "terminal_6"],
+    );
+    assert!(
+        output.status.success(),
+        "wake failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let event = recv_sidebar_event(&recv_eldest, "eldest");
+    assert_sidebar_envelope(&event, &env.workspace_id, Some(SESSION_NAME));
+    assert_eq!(event["event"]["kind"], "focus_stranded");
+    assert_eq!(event["event"]["pane_id"], "zellij:terminal_6");
+    env.assert_no_mux_fork();
+}
+
+#[test]
 fn wake_alive_stamps_without_a_datagram() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {

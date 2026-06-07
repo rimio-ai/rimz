@@ -104,6 +104,7 @@ enum WakeReason {
     PanesChanged,
     PaneOpened,
     PaneClosed,
+    FocusStranded,
     CommandChanged,
     FocusChanged,
     Alive,
@@ -346,9 +347,9 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 /// Map a poke reason onto its typed event. `None` means the poke carries no
-/// event of its own (`alive` is stamp-only); a pane-scoped reason missing its
-/// pane data degrades to the identity-free `PanesChanged` nudge, so a sparse
-/// poke still triggers the producer's verifying pull.
+/// event of its own (`alive` is stamp-only). Producer-verifying pane reasons
+/// missing their pane data degrade to the identity-free `PanesChanged` nudge,
+/// so a sparse poke still triggers the producer's verifying pull.
 fn wake_event(
     reason: WakeReason,
     pane_id: Option<&str>,
@@ -372,6 +373,9 @@ fn wake_event(
                 pane_id: zellij_pane(pane_id),
             },
             None => SidebarEvent::PanesChanged,
+        }),
+        WakeReason::FocusStranded => pane_id.map(|pane_id| SidebarEvent::FocusStranded {
+            pane_id: zellij_pane(pane_id),
         }),
         WakeReason::CommandChanged => Some(match pane_id.zip(command_from_args(command_args)) {
             Some((pane_id, command)) => SidebarEvent::CommandChanged {

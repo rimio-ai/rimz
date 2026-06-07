@@ -106,6 +106,7 @@ fn event_key(event: &SidebarEvent) -> Option<EventKey> {
         } => Some(EventKey::PaneOpened(pane_id.clone())),
         SidebarEvent::FocusChanged { .. } => Some(EventKey::Focus),
         SidebarEvent::PaneOpened { command: None, .. }
+        | SidebarEvent::FocusStranded { .. }
         | SidebarEvent::PanesChanged
         | SidebarEvent::LedgerDelta { .. }
         | SidebarEvent::PaneFramePublished

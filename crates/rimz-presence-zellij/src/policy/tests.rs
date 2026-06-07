@@ -17,6 +17,10 @@ fn tabs(panes: Vec<PaneFields>) -> BTreeMap<usize, Vec<PaneFields>> {
     BTreeMap::from([(0, panes)])
 }
 
+fn tabs_by_index(entries: Vec<(usize, Vec<PaneFields>)>) -> BTreeMap<usize, Vec<PaneFields>> {
+    entries.into_iter().collect()
+}
+
 // --- manifest_hash: what changes the hash and what must not ---
 
 #[test]
@@ -174,36 +178,36 @@ fn title_is_excluded_by_projection() {
     assert_eq!(a, b);
 }
 
-// --- switched_tab_focus_target: only tab-switch sidebar focus is corrected ---
+// --- stranded_sidebar_pane: tab-switch classification reports the sidebar ---
 
 #[test]
-fn switched_tab_focus_target_moves_sidebar_focus_to_working_pane() {
+fn stranded_sidebar_pane_reports_focused_sidebar_with_working_pane() {
     let mut sidebar = pane(1);
     sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
     sidebar.is_focused = true;
     let work = pane(2);
 
     assert_eq!(
-        switched_tab_focus_target(&tabs(vec![sidebar, work]), Some(0)),
-        Some(2),
+        stranded_sidebar_pane(&tabs(vec![sidebar, work]), Some(0)),
+        Some(1),
     );
 }
 
 #[test]
-fn switched_tab_focus_target_leaves_working_focus_alone() {
+fn stranded_sidebar_pane_leaves_working_focus_alone() {
     let mut sidebar = pane(1);
     sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
     let mut work = pane(2);
     work.is_focused = true;
 
     assert_eq!(
-        switched_tab_focus_target(&tabs(vec![sidebar, work]), Some(0)),
+        stranded_sidebar_pane(&tabs(vec![sidebar, work]), Some(0)),
         None,
     );
 }
 
 #[test]
-fn switched_tab_focus_target_requires_a_live_working_pane() {
+fn stranded_sidebar_pane_requires_a_live_working_pane() {
     let mut sidebar = pane(1);
     sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
     sidebar.is_focused = true;
@@ -211,9 +215,170 @@ fn switched_tab_focus_target_requires_a_live_working_pane() {
     held_work.is_held = true;
 
     assert_eq!(
-        switched_tab_focus_target(&tabs(vec![sidebar, held_work]), Some(0)),
+        stranded_sidebar_pane(&tabs(vec![sidebar, held_work]), Some(0)),
         None,
     );
+}
+
+// --- FocusCorrection: settle-gated tab-switch classification ---
+
+#[test]
+fn focus_correction_does_not_arm_on_load() {
+    let mut correction = FocusCorrection::default();
+    correction.on_active_tab_change(None, Some(0), 10);
+
+    assert_eq!(correction.next_deadline(), None);
+    assert_eq!(
+        correction.resolve(&tabs(vec![pane(1)]), Some(0), true, 10),
+        CorrectionAction::Wait,
+    );
+}
+
+#[test]
+fn focus_correction_clears_on_jump_landing_on_work() {
+    let mut correction = FocusCorrection::default();
+    correction.on_active_tab_change(Some(0), Some(1), 1_000);
+
+    let mut sidebar = pane(10);
+    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
+    let mut work = pane(11);
+    work.is_focused = true;
+    let manifest = tabs_by_index(vec![(0, vec![pane(1)]), (1, vec![sidebar, work])]);
+
+    assert_eq!(
+        correction.resolve(&manifest, Some(1), true, 1_001),
+        CorrectionAction::Clear,
+        "a fresh manifest from an explicit jump proves work holds focus before the settle deadline"
+    );
+    assert_eq!(correction.next_deadline(), None);
+}
+
+#[test]
+fn focus_correction_broadcasts_on_native_switch_at_deadline() {
+    let mut correction = FocusCorrection::default();
+    correction.on_active_tab_change(Some(0), Some(1), 1_000);
+
+    let mut sidebar = pane(10);
+    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
+    sidebar.is_focused = true;
+    let manifest = tabs_by_index(vec![(0, vec![pane(1)]), (1, vec![sidebar, pane(11)])]);
+
+    assert_eq!(
+        correction.resolve(&manifest, Some(1), false, 1_000 + FOCUS_SETTLE_MS - 1),
+        CorrectionAction::Wait,
+    );
+    assert_eq!(
+        correction.resolve(&manifest, Some(1), false, 1_000 + FOCUS_SETTLE_MS),
+        CorrectionAction::Broadcast(10),
+    );
+    assert_eq!(correction.next_deadline(), None);
+}
+
+#[test]
+fn focus_correction_waits_until_deadline_on_fresh_sidebar_manifest() {
+    let mut correction = FocusCorrection::default();
+    correction.on_active_tab_change(Some(0), Some(1), 1_000);
+
+    let mut sidebar = pane(10);
+    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
+    sidebar.is_focused = true;
+    let manifest = tabs_by_index(vec![(1, vec![sidebar, pane(11)])]);
+
+    assert_eq!(
+        correction.resolve(&manifest, Some(1), true, 1_001),
+        CorrectionAction::Wait,
+        "a fresh manifest that still shows sidebar focus may predate an explicit jump's focus mark",
+    );
+    assert_eq!(
+        correction.resolve(&manifest, Some(1), false, 1_000 + FOCUS_SETTLE_MS),
+        CorrectionAction::Broadcast(10),
+    );
+}
+
+#[test]
+fn focus_correction_retargets_on_rapid_switches() {
+    let mut correction = FocusCorrection::default();
+    correction.on_active_tab_change(Some(0), Some(1), 1_000);
+    correction.on_active_tab_change(Some(1), Some(2), 1_050);
+
+    assert_eq!(correction.next_deadline(), Some(1_050 + FOCUS_SETTLE_MS));
+
+    let mut sidebar_1 = pane(10);
+    sidebar_1.title = SIDEBAR_PANE_TITLE.to_owned();
+    sidebar_1.is_focused = true;
+    let mut sidebar_2 = pane(20);
+    sidebar_2.title = SIDEBAR_PANE_TITLE.to_owned();
+    sidebar_2.is_focused = true;
+    let manifest = tabs_by_index(vec![
+        (1, vec![sidebar_1, pane(11)]),
+        (2, vec![sidebar_2, pane(21)]),
+    ]);
+
+    assert_eq!(
+        correction.resolve(&manifest, Some(2), false, 1_050 + FOCUS_SETTLE_MS),
+        CorrectionAction::Broadcast(20),
+    );
+}
+
+#[test]
+fn focus_correction_drops_pending_when_tab_closes() {
+    let mut correction = FocusCorrection::default();
+    correction.on_active_tab_change(Some(0), Some(1), 1_000);
+
+    assert_eq!(
+        correction.resolve(
+            &tabs_by_index(vec![(0, vec![pane(1)])]),
+            Some(1),
+            false,
+            1_250
+        ),
+        CorrectionAction::Clear,
+    );
+    assert_eq!(correction.next_deadline(), None);
+}
+
+#[test]
+fn focus_correction_no_broadcast_without_a_live_working_pane() {
+    let mut correction = FocusCorrection::default();
+    correction.on_active_tab_change(Some(0), Some(1), 1_000);
+
+    let mut sidebar = pane(10);
+    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
+    sidebar.is_focused = true;
+    let mut held_work = pane(11);
+    held_work.is_held = true;
+    let manifest = tabs_by_index(vec![(1, vec![sidebar, held_work])]);
+
+    assert_eq!(
+        correction.resolve(&manifest, Some(1), false, 1_000 + FOCUS_SETTLE_MS),
+        CorrectionAction::Clear,
+    );
+}
+
+#[test]
+fn focus_correction_clears_when_tab_position_renumbered_under_same_focused_pane() {
+    let mut correction = FocusCorrection::default();
+    correction.on_active_tab_change_with_focus(Some(2), Some(1), Some(42), 1_000);
+
+    let mut sidebar = pane(42);
+    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
+    sidebar.is_focused = true;
+    let manifest = tabs_by_index(vec![(1, vec![sidebar, pane(43)])]);
+
+    assert_eq!(
+        correction.resolve(&manifest, Some(1), true, 1_001),
+        CorrectionAction::Clear,
+        "the same focused pane under a new tab position is a renumber, not navigation"
+    );
+    assert_eq!(correction.next_deadline(), None);
+}
+
+#[test]
+fn focus_correction_next_deadline_is_settle_after_arm() {
+    let mut correction = FocusCorrection::default();
+    correction.on_active_tab_change(Some(0), Some(1), 7_000);
+
+    assert_eq!(correction.next_deadline(), Some(7_000 + FOCUS_SETTLE_MS));
 }
 
 // --- PokePolicy: immediate change, duplicate floor, keepalive ---

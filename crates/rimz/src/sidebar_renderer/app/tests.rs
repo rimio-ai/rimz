@@ -1,6 +1,28 @@
 use super::*;
-use crate::sidebar_renderer::app::fixtures::{snapshot, workspace};
+use crate::sidebar_renderer::app::fixtures::{pane, snapshot, snapshot_with_panes, workspace};
 use jiff::Timestamp;
+
+fn focus_fixture() -> (SidebarSnapshot, PaneId, PaneId, PaneId) {
+    let ws = workspace();
+    let sidebar = PaneId::from_parts(MuxName::Zellij, "terminal_10");
+    let first_work = PaneId::from_parts(MuxName::Zellij, "terminal_11");
+    let second_work = PaneId::from_parts(MuxName::Zellij, "terminal_12");
+    let mut snapshot = snapshot_with_panes(
+        &ws,
+        vec![
+            pane("terminal_11", "tab_1", false),
+            pane("terminal_12", "tab_1", false),
+        ],
+    );
+    snapshot.own_view = Some(crate::SidebarOwnView {
+        sibling_count: 3,
+        own_is_active: true,
+        active_pane_id: None,
+        working_pane_ids: vec![first_work.clone(), second_work.clone()],
+        own_view_is_daemon: false,
+    });
+    (snapshot, sidebar, first_work, second_work)
+}
 
 #[test]
 fn tick_for_honours_above_two_seconds() {
@@ -86,4 +108,82 @@ fn heartbeat_write_due_on_first_or_aged_write_only() {
     assert!(heartbeat_write_due(Some(
         Instant::now() - HEARTBEAT_WRITE_INTERVAL
     )));
+}
+
+#[test]
+fn focus_stranded_own_pane_match_targets_baseline() {
+    let (snapshot, sidebar, _first_work, second_work) = focus_fixture();
+    let ui = UiState {
+        baseline_pane: Some(second_work.clone()),
+        ..UiState::default()
+    };
+
+    assert_eq!(
+        focus_stranded_target(&snapshot, &ui, &sidebar, Some(&sidebar), 1_000, 1_050),
+        Some(second_work),
+    );
+}
+
+#[test]
+fn focus_stranded_foreign_pane_id_is_ignored() {
+    let (snapshot, sidebar, _first_work, second_work) = focus_fixture();
+    let foreign = PaneId::from_parts(MuxName::Zellij, "terminal_99");
+    let ui = UiState {
+        baseline_pane: Some(second_work),
+        ..UiState::default()
+    };
+
+    assert_eq!(
+        focus_stranded_target(&snapshot, &ui, &sidebar, Some(&foreign), 1_000, 1_050),
+        None,
+    );
+}
+
+#[test]
+fn focus_stranded_stale_event_is_ignored() {
+    let (snapshot, sidebar, _first_work, second_work) = focus_fixture();
+    let ui = UiState {
+        baseline_pane: Some(second_work),
+        ..UiState::default()
+    };
+    let now = 1_000 + duration_millis(FOCUS_STRANDED_EVENT_TTL) + 1;
+
+    assert_eq!(
+        focus_stranded_target(&snapshot, &ui, &sidebar, Some(&sidebar), 1_000, now),
+        None,
+    );
+}
+
+#[test]
+fn focus_stranded_falls_back_to_first_working_sibling() {
+    let (snapshot, sidebar, first_work, _second_work) = focus_fixture();
+    let ui = UiState {
+        baseline_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_99")),
+        ..UiState::default()
+    };
+
+    assert_eq!(
+        focus_stranded_target(&snapshot, &ui, &sidebar, Some(&sidebar), 1_000, 1_050),
+        Some(first_work),
+    );
+}
+
+#[test]
+fn focus_stranded_noops_without_working_sibling() {
+    let (mut snapshot, sidebar, _first_work, _second_work) = focus_fixture();
+    if let Some(view) = &mut snapshot.own_view {
+        view.working_pane_ids.clear();
+    }
+
+    assert_eq!(
+        focus_stranded_target(
+            &snapshot,
+            &UiState::default(),
+            &sidebar,
+            Some(&sidebar),
+            1_000,
+            1_050,
+        ),
+        None,
+    );
 }

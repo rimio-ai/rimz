@@ -46,7 +46,7 @@ The envelope's `session_name` is the scope: `Some` targets the one mux session w
 
 The renderer rejects events outside its workspace or session before appending them. Appended events store both `sent_at_ms` for supersession and `received_at_ms` for TTL, so clock skew cannot make an event immortal.
 
-The store keeps overlay/freshness events only: `PaneClosed`, `CommandChanged`, `FocusChanged`, and `PaneOpened` when it carries a command. Pane-open events drive producer verification; they do not admit cards on their own.
+The store keeps overlay/freshness events only: `PaneClosed`, `CommandChanged`, `FocusChanged`, and `PaneOpened` when it carries a command. Pane-open events drive producer verification; they do not admit cards on their own. `FocusStranded` is consumed by the renderer as an action and is never fused into snapshots.
 
 ## Event Taxonomy
 
@@ -55,6 +55,7 @@ The store keeps overlay/freshness events only: `PaneClosed`, `CommandChanged`, `
 | `PaneClosed` | `pane_id` | Delete every rendered row bound to the pane | Zellij plugin through `rimz sidebar wake` |
 | `CommandChanged` | `pane_id`, `command` | Overlay command and reset the pane's row shape until the pull verifies it | Zellij plugin through `rimz sidebar wake` |
 | `FocusChanged` | focused and unfocused pane ids, possibly spanning views | Mirror per-view focus bits onto every row; retarget the own-view baseline only for one of the view's own working panes | Zellij plugin through `rimz sidebar wake` |
+| `FocusStranded` | stranded sidebar `pane_id` | Renderer action only: the matching sidebar pane refocuses its held baseline or first own-view working sibling | Zellij plugin through `rimz sidebar wake` |
 | `PaneOpened` | `pane_id`, optional `command` | Nudge a producer verification pull; the verified pane frame admits the card | Zellij plugin for exact opens |
 | `PanesChanged` | none | Nudge a producer verification pull — topology moved, identity unknown | tmux control-mode watcher, the Zellij plugin's manifest fold, any sparse poke |
 | `LedgerDelta` | optional event method and agent event name | Refetch the ledger rollup; session start/end also request fresh panes | Ledger writers and context sidecar writers |

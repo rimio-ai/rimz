@@ -17,6 +17,11 @@ use std::time::Duration;
 /// baseline.
 pub const EVENT_STORE_TTL: Duration = Duration::from_secs(EVENT_PANE_TTL.as_secs() + 2);
 
+/// Maximum age of a `FocusStranded` action event. It moves focus rather than
+/// fusing display state, so late delivery must degrade to a no-op instead of
+/// yanking the user's current pane.
+pub const FOCUS_STRANDED_EVENT_TTL: Duration = Duration::from_secs(2);
+
 /// Coalescing window for the shared snapshot cache — the **poll-mode** pane
 /// TTL, in effect whenever the presence push channel is dead or absent. Just
 /// under the default 1s data tick: when one ledger-delta wakeup wakes every
@@ -189,6 +194,12 @@ pub const PULL_CADENCES: &[PullCadence] = &[
     PullCadence {
         name: "presence.stamp",
         ttl: PRESENCE_STAMP_FRESH,
+        idle_ttl: None,
+        retry_ttl: None,
+    },
+    PullCadence {
+        name: "presence.focus_stranded",
+        ttl: FOCUS_STRANDED_EVENT_TTL,
         idle_ttl: None,
         retry_ttl: None,
     },

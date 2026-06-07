@@ -1,7 +1,8 @@
-//! The plugin's pure core: the stable-field manifest hash and the poke-policy
-//! state machine. Time is injected as Unix milliseconds and no `zellij-tile`
-//! type appears, so this module compiles and unit-tests on the host target;
-//! `main.rs` is the thin wasm shell that projects Zellij events into it.
+//! The plugin's pure core: the stable-field manifest hash, poke policy, and
+//! focus-stranding classifier. Time is injected as Unix milliseconds and no
+//! `zellij-tile` type appears, so this module compiles and unit-tests on the
+//! host target; `main.rs` is the thin wasm shell that projects Zellij events
+//! into it.
 
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
@@ -16,6 +17,14 @@ pub const POKE_FLOOR_MS: u64 = 100;
 /// poke forces one settled frame instead of letting the stretched event-mode
 /// pane TTL carry the pre-change command.
 pub const SETTLE_POKE_MS: u64 = 250;
+
+/// Settle window after a tab switch before a stale pane manifest may classify
+/// the tab as stranded on its sidebar. A fresh `PaneUpdate` resolves
+/// non-stranded work immediately, but broadcasts still wait for this deadline
+/// because Zellij does not guarantee TabUpdate/PaneUpdate delivery order. A
+/// jump whose focus-mark manifest arrives after the window can still be
+/// misclassified; the window is the correction latency/risk bound.
+pub const FOCUS_SETTLE_MS: u64 = 250;
 
 /// Keepalive cadence. One host fork per minute per session keeps an
 /// idle-but-healthy channel distinguishable from a dead one; the host's
@@ -174,22 +183,143 @@ pub fn opened_card_panes(
     opened
 }
 
-/// The terminal pane that should take focus after switching to `active_tab`, if
-/// Zellij restored the tab's focus to the sidebar. `None` means the tab is
-/// already on work, has no sidebar focus, or has no live working pane.
-pub fn switched_tab_focus_target(
+/// The focused sidebar pane after switching to `active_tab`, if Zellij restored
+/// the tab's focus to the sidebar while a live working sibling exists. `None`
+/// means the tab is already on work, has no sidebar focus, or has no live
+/// working pane.
+pub fn stranded_sidebar_pane(
     tabs: &BTreeMap<usize, Vec<PaneFields>>,
     active_tab: Option<usize>,
 ) -> Option<u32> {
     let panes = tabs.get(&active_tab?)?;
-    let focused = panes.iter().find(|pane| pane.is_focused)?;
+    let focused = focused_pane(tabs, active_tab)?;
     if !focused.is_sidebar() {
         return None;
     }
     panes
         .iter()
-        .find(|pane| pane.is_live_terminal() && !pane.is_sidebar())
-        .map(|pane| pane.id)
+        .any(|pane| pane.is_live_terminal() && !pane.is_sidebar())
+        .then_some(focused.id)
+}
+
+pub fn focused_pane_id(
+    tabs: &BTreeMap<usize, Vec<PaneFields>>,
+    active_tab: Option<usize>,
+) -> Option<u32> {
+    focused_pane(tabs, active_tab).map(|pane| pane.id)
+}
+
+fn focused_pane(
+    tabs: &BTreeMap<usize, Vec<PaneFields>>,
+    active_tab: Option<usize>,
+) -> Option<&PaneFields> {
+    tabs.get(&active_tab?)?.iter().find(|pane| pane.is_focused)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingFocusCorrection {
+    tab: usize,
+    deadline: u64,
+    previous_focused_pane: Option<u32>,
+}
+
+/// What the plugin shell should do for a switched-tab focus correction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CorrectionAction {
+    /// The pending classification is not ready, or no classification is armed.
+    Wait,
+    /// The pending classification resolved without a stranded sidebar.
+    Clear,
+    /// Broadcast `focus-stranded` for this sidebar pane id.
+    Broadcast(u32),
+}
+
+/// Classifies whether a tab switch restored focus to Rimz's sidebar. The plugin
+/// only reports the stranded sidebar id; the renderer that owns that pane
+/// decides whether and where to move focus.
+#[derive(Debug, Default)]
+pub struct FocusCorrection {
+    pending: Option<PendingFocusCorrection>,
+}
+
+impl FocusCorrection {
+    /// Fold an active-tab observation. Loading the plugin (`None -> Some`) is a
+    /// baseline, not navigation; only real tab switches arm classification.
+    pub fn on_active_tab_change(
+        &mut self,
+        previous_active: Option<usize>,
+        next_active: Option<usize>,
+        now_ms: u64,
+    ) {
+        self.on_active_tab_change_with_focus(previous_active, next_active, None, now_ms);
+    }
+
+    /// Fold an active-tab observation with the pane that was focused in the
+    /// previous active tab. If the new active tab reports the same focused pane,
+    /// Zellij renumbered tab positions rather than moving the user.
+    pub fn on_active_tab_change_with_focus(
+        &mut self,
+        previous_active: Option<usize>,
+        next_active: Option<usize>,
+        previous_focused_pane: Option<u32>,
+        now_ms: u64,
+    ) {
+        match (previous_active, next_active) {
+            (_, None) => self.pending = None,
+            (Some(previous), Some(next)) if previous != next => {
+                self.pending = Some(PendingFocusCorrection {
+                    tab: next,
+                    deadline: now_ms + FOCUS_SETTLE_MS,
+                    previous_focused_pane,
+                });
+            }
+            (None, Some(_)) => {}
+            (Some(_), Some(_)) => {}
+        }
+    }
+
+    /// Resolve the pending classification. A fresh manifest is authoritative
+    /// immediately; a stale manifest is consulted only after the settle
+    /// deadline, giving cross-tab explicit jumps time to land their focus mark.
+    pub fn resolve(
+        &mut self,
+        tabs: &BTreeMap<usize, Vec<PaneFields>>,
+        active_tab: Option<usize>,
+        manifest_fresh: bool,
+        now_ms: u64,
+    ) -> CorrectionAction {
+        let Some(pending) = self.pending else {
+            return CorrectionAction::Wait;
+        };
+        if active_tab != Some(pending.tab) || !tabs.contains_key(&pending.tab) {
+            self.pending = None;
+            return CorrectionAction::Clear;
+        }
+        if !manifest_fresh && now_ms < pending.deadline {
+            return CorrectionAction::Wait;
+        }
+        if focused_pane_id(tabs, Some(pending.tab)) == pending.previous_focused_pane
+            && pending.previous_focused_pane.is_some()
+        {
+            self.pending = None;
+            return CorrectionAction::Clear;
+        }
+        match stranded_sidebar_pane(tabs, Some(pending.tab)) {
+            Some(_) if now_ms < pending.deadline => CorrectionAction::Wait,
+            Some(pane_id) => {
+                self.pending = None;
+                CorrectionAction::Broadcast(pane_id)
+            }
+            None => {
+                self.pending = None;
+                CorrectionAction::Clear
+            }
+        }
+    }
+
+    pub fn next_deadline(&self) -> Option<u64> {
+        self.pending.map(|pending| pending.deadline)
+    }
 }
 
 /// What the shell should do now.

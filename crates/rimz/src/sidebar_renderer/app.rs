@@ -18,7 +18,7 @@ use crate::ledger::paths::PathErr;
 use crate::schema::sidebar_event::{SidebarEvent, SidebarEventEnvelope};
 use crate::sidebar::events::EventStore;
 use crate::sidebar::fuse::fuse;
-use crate::sidebar::timing::HEARTBEAT_WRITE_INTERVAL;
+use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL};
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -49,7 +49,7 @@ use gate::GateState;
 use input::{Wakeup, encode_key, encode_mouse, wait_for_wakeup};
 use lifecycle::{SELF_CLOSE_WATCHDOG, SelfCloseState, resize_grew};
 use reload::{ReloadAction, reexec_self, reload_action};
-use selection::{InputOutcome, handle_key, handle_mouse_click, handle_scroll};
+use selection::{InputOutcome, handle_key, handle_mouse_click, handle_scroll, row_index_of_pane};
 use state::{apply_fetch_outcome, placeholder_snapshot};
 
 pub use health::Health;
@@ -346,6 +346,20 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                             FetchRequest::pane_frame_published(),
                             true,
                         );
+                    }
+                    SidebarEvent::FocusStranded { pane_id } => {
+                        let now_ms = crate::sidebar::cache::unix_now_ms();
+                        let own_pane = crate::mux::own_pane_id(config.mux);
+                        if let Some(target) = focus_stranded_target(
+                            &current,
+                            &ui,
+                            &pane_id,
+                            own_pane.as_ref(),
+                            sent_at_ms,
+                            now_ms,
+                        ) {
+                            spawn_pane_focus(target);
+                        }
                     }
                     // An overlay event fuses into the in-memory state and paints
                     // this frame — the zero-latency path. A topology overlay also
@@ -826,6 +840,38 @@ fn event_targets_this_renderer(envelope: &SidebarEventEnvelope, config: &ServeCo
             .session_name
             .as_deref()
             .is_none_or(|session| session == config.session_name)
+}
+
+fn focus_stranded_target(
+    snapshot: &SidebarSnapshot,
+    ui: &UiState,
+    stranded_pane_id: &PaneId,
+    own_pane_id: Option<&PaneId>,
+    sent_at_ms: u64,
+    now_ms: u64,
+) -> Option<PaneId> {
+    let own_pane_id = own_pane_id?;
+    if own_pane_id != stranded_pane_id {
+        return None;
+    }
+    if now_ms.saturating_sub(sent_at_ms) > duration_millis(FOCUS_STRANDED_EVENT_TTL) {
+        return None;
+    }
+    let view = snapshot.own_view.as_ref()?;
+    if let Some(baseline) = ui.baseline_pane.as_ref()
+        && view.working_pane_ids.contains(baseline)
+        && row_index_of_pane(snapshot, None, baseline).is_some()
+    {
+        return Some(baseline.clone());
+    }
+    view.working_pane_ids
+        .iter()
+        .find(|pane| row_index_of_pane(snapshot, None, pane).is_some())
+        .cloned()
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 /// Resolve a reload request — the `r` keypress and the typed `Reload` event

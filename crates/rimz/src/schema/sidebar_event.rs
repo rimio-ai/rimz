@@ -54,6 +54,12 @@ pub enum SidebarEvent {
     PaneClosed {
         pane_id: PaneId,
     },
+    /// Latency hint that a switched-to tab restored focus to its sidebar pane.
+    /// The renderer whose own pane matches decides whether to refocus a working
+    /// sibling; other renderers ignore it.
+    FocusStranded {
+        pane_id: PaneId,
+    },
     CommandChanged {
         pane_id: PaneId,
         command: String,
@@ -141,6 +147,9 @@ mod tests {
                 pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
                 command: "codex".to_owned(),
             },
+            SidebarEvent::FocusStranded {
+                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_2"),
+            },
             SidebarEvent::FocusChanged {
                 focused: vec![PaneId::from_parts(MuxName::Zellij, "terminal_1")],
                 unfocused: vec![PaneId::from_parts(MuxName::Zellij, "terminal_2")],
@@ -165,6 +174,16 @@ mod tests {
             assert_eq!(decoded, expected);
             assert!(decoded.is_current_version());
         }
+    }
+
+    #[test]
+    fn focus_stranded_is_a_renderer_action_not_an_overlay_or_verification_request() {
+        let event = SidebarEvent::FocusStranded {
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_2"),
+        };
+
+        assert!(!event.is_overlay());
+        assert!(!event.requests_producer_verification());
     }
 
     #[test]
