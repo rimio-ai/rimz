@@ -115,6 +115,24 @@ mod tests {
         }
     }
 
+    fn pane_in_view(raw: &str, command: &str, view: &str) -> PaneRef {
+        let mut pane = pane(raw, command);
+        pane.view_id = Some(view.to_owned());
+        pane
+    }
+
+    /// An own view whose working set is `working`, mirroring what
+    /// `SidebarOwnView::from_panes` derives from the live pane list.
+    fn own_view(working: &[&PaneId], active: Option<PaneId>) -> crate::SidebarOwnView {
+        crate::SidebarOwnView {
+            sibling_count: working.len(),
+            own_is_active: false,
+            active_pane_id: active,
+            working_pane_ids: working.iter().map(|&pane_id| pane_id.clone()).collect(),
+            own_view_is_daemon: false,
+        }
+    }
+
     fn pulled(panes: Vec<PaneRef>, produced_at_ms: u64) -> SidebarSnapshot {
         let mut snapshot = SidebarSnapshot::build_with_agents(
             ws(),
@@ -252,23 +270,19 @@ mod tests {
 
     #[test]
     fn latest_focus_event_sets_the_active_baseline() {
+        let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let mut snapshot = pulled(
             vec![pane("terminal_1", "zsh"), pane("terminal_2", "zsh")],
             10,
         );
-        snapshot.own_view = Some(crate::SidebarOwnView {
-            sibling_count: 2,
-            own_is_active: false,
-            active_pane_id: None,
-            own_view_is_daemon: false,
-        });
+        snapshot.own_view = Some(own_view(&[&first, &active], None));
         let mut store = EventStore::default();
         append(
             &mut store,
             11,
             SidebarEvent::FocusChanged {
-                focused: vec![PaneId::from_parts(MuxName::Zellij, "terminal_1")],
+                focused: vec![first.clone()],
                 unfocused: Vec::new(),
             },
         );
@@ -277,7 +291,7 @@ mod tests {
             12,
             SidebarEvent::FocusChanged {
                 focused: vec![active.clone()],
-                unfocused: vec![PaneId::from_parts(MuxName::Zellij, "terminal_1")],
+                unfocused: vec![first],
             },
         );
 
@@ -285,6 +299,114 @@ mod tests {
         assert_eq!(
             fused.own_view.and_then(|view| view.active_pane_id),
             Some(active)
+        );
+    }
+
+    #[test]
+    fn a_foreign_view_focus_mark_never_retargets_the_own_view_baseline() {
+        let sibling = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let own_active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let foreign = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+        let mut snapshot = pulled(
+            vec![
+                pane("terminal_1", "zsh"),
+                pane("terminal_2", "zsh"),
+                pane_in_view("terminal_9", "zsh", "tab_2"),
+            ],
+            10,
+        );
+        snapshot.own_view = Some(own_view(&[&sibling, &own_active], Some(own_active.clone())));
+        let mut store = EventStore::default();
+        append(
+            &mut store,
+            11,
+            SidebarEvent::FocusChanged {
+                focused: vec![foreign],
+                unfocused: Vec::new(),
+            },
+        );
+
+        let fused = fuse(&snapshot, &store, 11);
+        let foreign_row = fused
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .find(|row| row.id == "zellij:terminal_9")
+            .expect("foreign pane renders");
+        assert!(
+            foreign_row.pane.as_ref().expect("pane ref").is_focused,
+            "per-view marks mirror onto every row"
+        );
+        let view = fused.own_view.expect("own view kept");
+        assert_eq!(
+            view.active_pane_id,
+            Some(own_active),
+            "another view's focus move is never this view's baseline"
+        );
+    }
+
+    #[test]
+    fn a_session_wide_focus_patch_takes_the_own_view_pane_for_the_baseline() {
+        let sibling = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let own_active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let foreign = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+        let mut snapshot = pulled(
+            vec![
+                pane("terminal_1", "zsh"),
+                pane("terminal_2", "zsh"),
+                pane_in_view("terminal_9", "zsh", "tab_2"),
+            ],
+            10,
+        );
+        snapshot.own_view = Some(own_view(&[&sibling, &own_active], Some(sibling.clone())));
+        let mut store = EventStore::default();
+        // The plugin's declarative patch lists every view's marks; the foreign
+        // pane deliberately sorts last so a `focused.last()` regression fails.
+        append(
+            &mut store,
+            11,
+            SidebarEvent::FocusChanged {
+                focused: vec![own_active.clone(), foreign],
+                unfocused: vec![sibling],
+            },
+        );
+
+        let fused = fuse(&snapshot, &store, 11);
+        assert_eq!(
+            fused.own_view.and_then(|view| view.active_pane_id),
+            Some(own_active)
+        );
+    }
+
+    #[test]
+    fn unfocusing_the_own_baseline_clears_it_to_the_hold_last_derivation() {
+        let sibling = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let own_active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let foreign = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+        let mut snapshot = pulled(
+            vec![
+                pane("terminal_1", "zsh"),
+                pane("terminal_2", "zsh"),
+                pane_in_view("terminal_9", "zsh", "tab_2"),
+            ],
+            10,
+        );
+        snapshot.own_view = Some(own_view(&[&sibling, &own_active], Some(own_active.clone())));
+        let mut store = EventStore::default();
+        append(
+            &mut store,
+            11,
+            SidebarEvent::FocusChanged {
+                focused: vec![foreign],
+                unfocused: vec![own_active],
+            },
+        );
+
+        let fused = fuse(&snapshot, &store, 11);
+        assert_eq!(
+            fused.own_view.and_then(|view| view.active_pane_id),
+            None,
+            "the renderer holds its last selection on a None derivation"
         );
     }
 

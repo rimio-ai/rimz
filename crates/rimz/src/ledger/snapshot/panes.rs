@@ -30,6 +30,14 @@ pub struct SidebarOwnView {
     /// from it (see `sidebar_renderer::app::selection`) — same-tab by
     /// construction, defined whether or not a client is viewing the tab.
     pub active_pane_id: Option<PaneId>,
+    /// The view's working (non-sidebar) sibling pane ids — the only panes a
+    /// fused focus event may retarget `active_pane_id` onto. A `FocusChanged`
+    /// patch is session-broadcast and carries every view's per-view marks, so
+    /// fusion filters against this set; empty (an older producer's frame)
+    /// degrades to pull-only baseline updates. `#[serde(default)]` keeps the
+    /// wire shape stable.
+    #[serde(default)]
+    pub working_pane_ids: Vec<PaneId>,
     /// Whether the caller's own view is the `rimzd` daemon view: its siblings,
     /// after dropping any sidebar pane, are non-empty and all managed hosts
     /// ([`crate::remote_control::pane_is_host`]). `#[serde(default)]` keeps the
@@ -72,6 +80,10 @@ impl SidebarOwnView {
             .iter()
             .find(|pane| pane.is_focused)
             .map(|pane| pane.pane_id.clone());
+        let working_pane_ids = non_sidebar_siblings
+            .iter()
+            .map(|pane| pane.pane_id.clone())
+            .collect();
         let own_view_is_daemon = !non_sidebar_siblings.is_empty()
             && non_sidebar_siblings
                 .iter()
@@ -80,6 +92,7 @@ impl SidebarOwnView {
             sibling_count: siblings.len(),
             own_is_active: own_pane.is_focused,
             active_pane_id,
+            working_pane_ids,
             own_view_is_daemon,
         })
     }
@@ -398,7 +411,13 @@ mod tests {
 
         assert_eq!(view.sibling_count, 1);
         assert!(!view.own_is_active);
-        assert_eq!(view.active_pane_id, Some(focused_here));
+        assert_eq!(view.active_pane_id, Some(focused_here.clone()));
+        assert_eq!(
+            view.working_pane_ids,
+            vec![focused_here],
+            "the working set names only this view's siblings — the fused \
+             focus filter rides it"
+        );
     }
 
     #[test]

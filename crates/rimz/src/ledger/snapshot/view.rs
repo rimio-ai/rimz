@@ -1082,6 +1082,12 @@ impl SidebarSnapshot {
         changed
     }
 
+    /// Apply a fused per-view focus patch. Row `is_focused` bits mirror the
+    /// patch for every listed pane — per-view marks are session-wide truth the
+    /// pull would also report — while the own-view baseline retargets only when
+    /// the patch names one of this view's own working panes: a focus move in
+    /// another tab is that view's mark, never this renderer's selection
+    /// baseline.
     pub(crate) fn overlay_focus(&mut self, focused: &[PaneId], unfocused: &[PaneId]) -> bool {
         if focused.is_empty() && unfocused.is_empty() {
             return false;
@@ -1103,10 +1109,15 @@ impl SidebarSnapshot {
             }
         }
         if let Some(view) = &mut self.own_view {
-            if let Some(last_focused) = focused.last() {
-                view.active_pane_id = Some(last_focused.clone());
-                view.own_is_active = false;
-                changed = true;
+            if let Some(own_focused) = focused
+                .iter()
+                .find(|&pane_id| view.working_pane_ids.contains(pane_id))
+            {
+                if view.active_pane_id.as_ref() != Some(own_focused) || view.own_is_active {
+                    view.active_pane_id = Some(own_focused.clone());
+                    view.own_is_active = false;
+                    changed = true;
+                }
             } else if view
                 .active_pane_id
                 .as_ref()

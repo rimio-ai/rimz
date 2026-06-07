@@ -58,6 +58,11 @@ pub enum SidebarEvent {
         pane_id: PaneId,
         command: String,
     },
+    /// Per-view focus marks changed. The patch may span several views — both
+    /// backends keep one active pane per view, so a multi-tab session carries
+    /// one focused pane per tab. Fusion mirrors the bits onto every row and
+    /// retargets a renderer's own-view baseline only when the patch names one
+    /// of that view's own working panes.
     FocusChanged {
         focused: Vec<PaneId>,
         unfocused: Vec<PaneId>,
