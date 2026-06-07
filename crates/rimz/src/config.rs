@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::ledger::paths::config_home;
+use crate::sidebar::timing::{DEFAULT_REFRESH_MS, MAX_REFRESH_MS, MIN_REFRESH_MS};
 
 const CONFIG_FILE: &str = "config.toml";
 const RIMZ_CONFIG_SUBDIR: &str = "rimz";
@@ -449,6 +450,9 @@ pub enum GlowMode {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SidebarConfig {
+    /// Base render cadence in milliseconds. This controls animation and
+    /// event-coalesced paint timing; data polling stays on `--tick-seconds`.
+    pub refresh_ms: u16,
     /// Per-provider styling for the bottom dashboard panel, keyed by agent kind
     /// (`claude`/`codex`/`pi`/…). Any field a user omits falls back to the
     /// built-in default for that kind, so overriding just the color leaves the
@@ -510,6 +514,7 @@ impl Default for SidebarConfig {
     fn default() -> Self {
         Self {
             providers: BTreeMap::new(),
+            refresh_ms: DEFAULT_REFRESH_MS,
             max_provider_blocks: default_max_provider_blocks(),
             max_cols: default_sidebar_max_cols(),
             context: ContextSeverityConfig::default(),
@@ -519,6 +524,12 @@ impl Default for SidebarConfig {
             scrollbar: ScrollbarMode::default(),
             glow: GlowMode::default(),
         }
+    }
+}
+
+impl SidebarConfig {
+    pub fn resolved_refresh_ms(&self) -> u16 {
+        self.refresh_ms.clamp(MIN_REFRESH_MS, MAX_REFRESH_MS)
     }
 }
 
@@ -843,6 +854,33 @@ mod tests {
         // A zero-width sidebar can never work: fail at config load, with the
         // parse error naming the field, rather than launching a broken pane.
         assert!(MachineConfig::load_from(&write(&dir, "[sidebar]\nmax_cols = 0\n")).is_err());
+    }
+
+    #[test]
+    fn sidebar_refresh_ms_defaults_parses_and_clamps_at_use() {
+        let dir = tempdir().expect("tempdir");
+        let config =
+            MachineConfig::load_from(&write(&dir, "[sidebar]\nrefresh_ms = 80\n")).expect("load");
+        assert_eq!(config.sidebar.refresh_ms, 80);
+        assert_eq!(config.sidebar.resolved_refresh_ms(), 80);
+        assert_eq!(
+            MachineConfig::default().sidebar.refresh_ms,
+            crate::sidebar::timing::DEFAULT_REFRESH_MS
+        );
+
+        let too_low =
+            MachineConfig::load_from(&write(&dir, "[sidebar]\nrefresh_ms = 1\n")).expect("load");
+        assert_eq!(
+            too_low.sidebar.resolved_refresh_ms(),
+            crate::sidebar::timing::MIN_REFRESH_MS
+        );
+
+        let too_high =
+            MachineConfig::load_from(&write(&dir, "[sidebar]\nrefresh_ms = 5000\n")).expect("load");
+        assert_eq!(
+            too_high.sidebar.resolved_refresh_ms(),
+            crate::sidebar::timing::MAX_REFRESH_MS
+        );
     }
 
     #[test]

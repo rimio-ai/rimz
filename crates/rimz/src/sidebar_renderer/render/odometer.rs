@@ -23,10 +23,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-/// Animation phases per roll click. The wall-clock phase advances every
-/// `ANIMATION_FRAME` (100ms); the roll clicks on every second phase, so each
-/// click holds for 200ms — and a room where only money moves rides the serve
-/// loop's matching 200ms money grid rather than the fast one.
+/// Animation phases per roll click. The wall-clock phase advances on the
+/// configured base render grid; the roll clicks on every second phase, so the
+/// default 100ms grid yields a 200ms click — and a room where only money moves
+/// rides the serve loop's matching money grid rather than the fast one.
 pub(crate) const CLICK_PHASES: u64 = 2;
 
 /// The fixed climb window: every jump completes within this many clicks

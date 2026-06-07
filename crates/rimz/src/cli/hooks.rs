@@ -338,10 +338,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                             "lifecycle: failed to merge local context sidecar",
                         );
                     } else {
-                        let _ = rimz::ledger::wakeup::wake_sidebars_for_context(
-                            ledger.runtime_paths(),
-                            &workspace.workspace_id,
-                        );
+                        let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
                     }
                 }
             }

@@ -229,15 +229,16 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
         .recv_from(&mut buf)
         .expect("fresh sidebar should receive");
     let parsed: serde_json::Value = serde_json::from_slice(&buf[..n]).expect("parse envelope");
-    assert_eq!(parsed["kind"], "ledger_delta");
+    assert_eq!(
+        parsed["v"],
+        rimz::schema::sidebar_event::SIDEBAR_EVENT_VERSION
+    );
     assert_eq!(
         parsed["workspace_id"],
         serde_json::to_value(&h.workspace_id).expect("ws json"),
     );
-    assert_eq!(
-        parsed["protocol_version"],
-        rimz::schema::SIDEBAR_PROTOCOL_VERSION
-    );
+    assert_eq!(parsed["event"]["kind"], "ledger_delta");
+    assert!(parsed["sent_at_ms"].as_u64().is_some());
 
     let mut buf2 = [0u8; 4096];
     let stale_result = stale_recv.recv_from(&mut buf2);

@@ -14,8 +14,11 @@
 pub mod cache;
 pub mod consumer;
 pub mod enrich;
+pub mod events;
+pub mod fuse;
 pub mod produce;
 pub mod snapshot;
+pub mod timing;
 
 use std::collections::HashSet;
 use std::fs;
@@ -28,10 +31,10 @@ use crate::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use crate::ledger::RuntimePaths;
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
-use crate::ledger::wakeup::SIDEBAR_HEARTBEAT_TTL;
 use crate::mux::{DaemonView, MuxBackend, SidebarLiveness, SidebarPaneOptions};
 use crate::schema::SIDEBAR_PROTOCOL_VERSION;
 use crate::schema::heartbeat::SidebarHeartbeat;
+use crate::sidebar::timing::SIDEBAR_HEARTBEAT_TTL;
 
 /// Launch-lock poll cadence: the producer holds the election lock while the
 /// daemon it spawned starts and publishes its first heartbeat, and a peer queued

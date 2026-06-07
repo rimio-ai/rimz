@@ -13,7 +13,7 @@ use tracing::warn;
 use crate::feed::{
     AbandonReason, FeedItem, FeedStatus, Resolution, ResolutionMethod, ResolverStepState,
 };
-use crate::ids::{RequestId, ResolverId, WorkspaceId};
+use crate::ids::{RequestId, ResolverId};
 use crate::schema::event::EventEnvelope;
 use crate::workspace::ResolvedWorkspace;
 
@@ -200,7 +200,7 @@ fn retract_publish_stamp(paths: &StatePaths) {
 fn sweep_dead_owned_items_debounced(
     paths: &StatePaths,
     session_name: &str,
-) -> Result<Vec<(WorkspaceId, RequestId)>> {
+) -> Result<Vec<RequestId>> {
     if !abandon_sweep_due(paths) {
         return Ok(Vec::new());
     }
@@ -219,7 +219,7 @@ fn expire_agent_asks_locked(
     agent_id: &str,
     session_name: &str,
     expiry: AskExpiry,
-) -> Result<Vec<(WorkspaceId, RequestId)>> {
+) -> Result<Vec<RequestId>> {
     let reason = expiry.reason();
     let mut expired = Vec::new();
     for mut item in feed_store::list_pending(&paths.feed_dir)? {
@@ -255,7 +255,7 @@ fn expire_agent_asks_locked(
                 }),
             ),
         )?;
-        expired.push((item.workspace_id.clone(), item.request_id.clone()));
+        expired.push(item.request_id.clone());
     }
     Ok(expired)
 }
@@ -263,7 +263,7 @@ fn expire_agent_asks_locked(
 fn abandon_dead_owned_items_locked(
     paths: &StatePaths,
     session_name: &str,
-) -> Result<Vec<(WorkspaceId, RequestId)>> {
+) -> Result<Vec<RequestId>> {
     let mut abandoned = Vec::new();
     for mut item in feed_store::list_pending(&paths.feed_dir)? {
         if item.status != FeedStatus::Pending {
@@ -300,7 +300,7 @@ fn abandon_dead_owned_items_locked(
                 }),
             ),
         )?;
-        abandoned.push((item.workspace_id.clone(), item.request_id.clone()));
+        abandoned.push(item.request_id.clone());
     }
     Ok(abandoned)
 }
@@ -402,8 +402,8 @@ impl Ledger {
             };
             (abandoned, expired)
         };
-        for (workspace_id, request_id) in abandoned.iter().chain(expired.iter()) {
-            self.wake_sidebars_best_effort(workspace_id, request_id);
+        for request_id in abandoned.iter().chain(expired.iter()) {
+            self.wake_sidebars_best_effort(request_id);
         }
         self.wake_sidebars_for_event_best_effort(event);
         self.publish_snapshot_best_effort();
@@ -450,10 +450,10 @@ impl Ledger {
             )?;
             (abandoned, expired)
         };
-        for (workspace_id, request_id) in abandoned.iter().chain(expired.iter()) {
-            self.wake_sidebars_best_effort(workspace_id, request_id);
+        for request_id in abandoned.iter().chain(expired.iter()) {
+            self.wake_sidebars_best_effort(request_id);
         }
-        self.wake_sidebars_best_effort(&item.workspace_id, &item.request_id);
+        self.wake_sidebars_best_effort(&item.request_id);
         self.publish_snapshot_best_effort();
         Ok(())
     }
@@ -466,8 +466,8 @@ impl Ledger {
             touch_stamp(&abandon_sweep_stamp(&self.inner.paths));
             abandoned
         };
-        for (workspace_id, request_id) in &abandoned {
-            self.wake_sidebars_best_effort(workspace_id, request_id);
+        for request_id in &abandoned {
+            self.wake_sidebars_best_effort(request_id);
         }
         if !abandoned.is_empty() {
             // Forced: gc reports from the checkpoint right after the sweep.
@@ -576,7 +576,7 @@ impl Ledger {
 
         if let Some(item) = &item_to_wake {
             self.wake_per_request_best_effort(item);
-            self.wake_sidebars_best_effort(&item.workspace_id, &item.request_id);
+            self.wake_sidebars_best_effort(&item.request_id);
         }
         self.publish_snapshot_best_effort();
 
@@ -634,11 +634,11 @@ impl Ledger {
                     }),
                 ),
             )?;
-            Some((item.workspace_id.clone(), item.request_id.clone()))
+            Some(item.request_id.clone())
         };
 
-        if let Some((workspace_id, request_id)) = &wake_target {
-            self.wake_sidebars_best_effort(workspace_id, request_id);
+        if let Some(request_id) = &wake_target {
+            self.wake_sidebars_best_effort(request_id);
         }
         self.publish_snapshot_best_effort();
 
@@ -725,13 +725,10 @@ impl Ledger {
                 request_id: request_id.clone(),
                 next_resolver: next,
             };
-            (
-                outcome,
-                (item.workspace_id.clone(), item.request_id.clone()),
-            )
+            (outcome, item.request_id.clone())
         };
 
-        self.wake_sidebars_best_effort(&wake_target.0, &wake_target.1);
+        self.wake_sidebars_best_effort(&wake_target);
         self.publish_snapshot_best_effort();
         Ok(outcome)
     }
@@ -804,13 +801,10 @@ impl Ledger {
                 request_id: request_id.clone(),
                 next_resolver: next,
             };
-            (
-                outcome,
-                (item.workspace_id.clone(), item.request_id.clone()),
-            )
+            (outcome, item.request_id.clone())
         };
 
-        self.wake_sidebars_best_effort(&wake_target.0, &wake_target.1);
+        self.wake_sidebars_best_effort(&wake_target);
         self.publish_snapshot_best_effort();
         Ok(outcome)
     }
@@ -859,11 +853,11 @@ impl Ledger {
                     }),
                 ),
             )?;
-            Some((item.workspace_id.clone(), item.request_id.clone()))
+            Some(item.request_id.clone())
         };
 
-        if let Some((workspace_id, request_id)) = &wake_target {
-            self.wake_sidebars_best_effort(workspace_id, request_id);
+        if let Some(request_id) = &wake_target {
+            self.wake_sidebars_best_effort(request_id);
         }
         self.publish_snapshot_best_effort();
         Ok(())
@@ -917,8 +911,8 @@ impl Ledger {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             expire_agent_asks_locked(&self.inner.paths, source, agent_id, session_name, expiry)?
         };
-        for (workspace_id, request_id) in &expired {
-            self.wake_sidebars_best_effort(workspace_id, request_id);
+        for request_id in &expired {
+            self.wake_sidebars_best_effort(request_id);
         }
         if !expired.is_empty() {
             // Forced: the standalone expiry's caller reads the checkpoint
@@ -1141,8 +1135,8 @@ impl Ledger {
         }
     }
 
-    fn wake_sidebars_best_effort(&self, workspace_id: &WorkspaceId, request_id: &RequestId) {
-        if let Err(err) = wakeup::wake_sidebars(&self.inner.runtime, workspace_id, request_id) {
+    fn wake_sidebars_best_effort(&self, request_id: &RequestId) {
+        if let Err(err) = wakeup::wake_sidebars(&self.inner.runtime) {
             warn!(
                 request_id = %request_id,
                 error = %err,

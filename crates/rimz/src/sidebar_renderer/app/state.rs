@@ -57,6 +57,7 @@ pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot
         workspace_id,
         display_name,
         generated_at: now,
+        panes_produced_at_ms: None,
         now,
         worktree_groups: Vec::new(),
         needs_attention: Vec::new(),
@@ -154,7 +155,7 @@ pub(super) fn apply_fetch_outcome(
         .and_then(|view| view.active_pane_id.clone())
         .filter(|pane| row_index_of_pane(current, None, pane).is_some());
     reconcile_selection(ui, current, derived);
-    ui.animation_phase = wall_clock_phase(anim_start);
+    ui.animation_phase = wall_clock_phase(anim_start, current.sidebar.resolved_refresh_ms());
     // Fold the fresh today-spend into the count-up: a higher figure starts a
     // stepped roll that the next frames paint, a reset or first value snaps,
     // and an unchanged one is a no-op that leaves a climb in flight. The live

@@ -151,6 +151,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         workspace_id,
         display_name: "query-engine".to_owned(),
         generated_at: now,
+        panes_produced_at_ms: None,
         now,
         worktree_groups: (0..groups)
             .map(|group| SidebarWorktreeGroup {

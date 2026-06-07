@@ -15,25 +15,21 @@ fn tick_for_clamps_zero_to_one() {
 #[test]
 fn frame_grid_advances_one_frame_when_on_time() {
     let base = Instant::now();
+    let frame = crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS);
     // Painted at the scheduled boundary: the next boundary is exactly one
     // frame later, holding the fixed cadence.
-    assert_eq!(
-        next_frame_after(base, base, ANIMATION_FRAME),
-        base + ANIMATION_FRAME
-    );
+    assert_eq!(next_frame_after(base, base, frame), base + frame);
 }
 
 #[test]
 fn frame_grid_snaps_forward_when_behind() {
     let base = Instant::now();
+    let frame = crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS);
     // Scheduled several frames in the past relative to `now`: rather than
     // replaying every missed boundary, the grid snaps to one frame ahead of
     // `now`, so a slow paint never spirals into a burst of catch-up paints.
-    let now = base + ANIMATION_FRAME * 5;
-    assert_eq!(
-        next_frame_after(base, now, ANIMATION_FRAME),
-        now + ANIMATION_FRAME
-    );
+    let now = base + frame * 5;
+    assert_eq!(next_frame_after(base, now, frame), now + frame);
 }
 
 #[test]
@@ -94,11 +90,14 @@ fn frame_interval_slows_cosmetic_animation_only() {
 
     assert_eq!(
         frame_interval(&slow, &UiState::default()),
-        SLOW_ANIMATION_FRAME
+        crate::sidebar::timing::SLOW_ANIMATION_FRAME
     );
 
     slow.worktree_groups[0].rows[0].status = Some(crate::feed::AgentStatus::Running);
-    assert_eq!(frame_interval(&slow, &UiState::default()), ANIMATION_FRAME);
+    assert_eq!(
+        frame_interval(&slow, &UiState::default()),
+        crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS)
+    );
 }
 
 #[test]

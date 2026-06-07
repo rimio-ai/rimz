@@ -27,6 +27,7 @@ use super::cache::{
     AccountsCache, DiffStatsCache, GIT_ACTIVITY_WINDOW, SnapshotCache, read_diff_stats_cache,
     unix_now_ms,
 };
+pub(crate) use crate::sidebar::timing::CODEX_RATE_LIMIT_REFRESH_INTERVAL;
 
 /// Poll cadence and budget for the accounts single-flight: a loser waits up to
 /// `STEP * STEPS` for the elected prober's publish before forking its own probe.
@@ -324,6 +325,7 @@ pub fn enrich(
     }
 
     if let Some(frame) = frame {
+        snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
         let panes = frame.panes;
         if let Some(own) = exclude {
             snapshot.own_view = SidebarOwnView::from_panes(own, &panes);
@@ -472,7 +474,7 @@ pub(crate) fn refresh_codex_transcript_context(
         tracing::warn!(error = %err, "sidebar: failed to merge codex transcript context");
         return;
     }
-    let _ = crate::ledger::wakeup::wake_sidebars_for_context(runtime, &runtime.workspace_id);
+    let _ = crate::ledger::wakeup::wake_sidebars(runtime);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -844,11 +846,6 @@ fn write_accounts_cache(path: &Path, cache: &AccountsCache) {
         tracing::warn!(path = %path.display(), error = %err, "sidebar accounts cache write failed");
     }
 }
-
-/// Minimum gap between out-of-band Codex rate-limit refreshes for one target
-/// (active session sidecar or idle account cache). The producer checks every
-/// sidebar data tick, but budget windows move on the scale of minutes.
-pub(crate) const CODEX_RATE_LIMIT_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// The producer's published per-provider rate-limit windows, account-scoped so
 /// the budgets outlive a session ending or going idle: the first frame

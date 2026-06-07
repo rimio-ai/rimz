@@ -17,6 +17,7 @@ use super::GlobalFlags;
 use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
 use rimz::ledger::paths::env_path;
 use rimz::ledger::workspace_record;
+use rimz::schema::sidebar_event::SidebarEvent;
 use rimz::sidebar::produce::{
     ProduceOptions, pane_fixture_active, produce_rollup_snapshot, produce_snapshot,
 };
@@ -102,6 +103,8 @@ enum SidebarSubcmd {
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 enum WakeReason {
     PanesChanged,
+    PaneOpened,
+    PaneClosed,
     CommandChanged,
     FocusChanged,
     Alive,
@@ -134,8 +137,8 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             };
             let state =
                 StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
-            let runtime =
-                RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
+            let runtime = RuntimePaths::for_workspace(workspace_id.clone())
+                .context("preparing runtime paths")?;
             state.ensure_dirs().context("preparing state paths")?;
             runtime.ensure_dirs().context("preparing runtime paths")?;
             let session_name = session_name
@@ -332,85 +335,66 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             // TTL to event mode; the write is best-effort cache-class — a miss
             // only means the channel reads as dead one poke longer.
             write_presence_stamp(&runtime);
-            if let WakeReason::CommandChanged = reason
-                && let (Some(session_name), Some(pane_id)) =
-                    (session_name.as_deref(), pane_id.as_deref())
-                && let Some(command) = command_from_args(&command_args)
-            {
-                let pane_id = rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, pane_id);
-                match rimz::sidebar::cache::patch_snapshot_pane_command(
-                    &runtime,
-                    session_name,
-                    &pane_id,
-                    &command,
-                ) {
-                    Ok(true) => {
-                        if let Err(err) =
-                            rimz::ledger::wakeup::wake_sidebars_pane_frame_published(&runtime)
-                        {
-                            tracing::debug!(
-                                error = %err,
-                                "presence command patch: publication datagram failed",
-                            );
-                        }
-                        return Ok(());
-                    }
-                    Ok(false) => {}
-                    Err(err) => {
-                        tracing::debug!(
-                            error = %err,
-                            "presence command patch: cache update failed",
-                        );
-                    }
-                }
-            }
-            if let WakeReason::FocusChanged = reason
-                && let Some(session_name) = session_name.as_deref()
-            {
-                let focused = zellij_pane_ids(&focused_pane_ids);
-                let unfocused = zellij_pane_ids(&unfocused_pane_ids);
-                match rimz::sidebar::cache::patch_snapshot_pane_focus(
-                    &runtime,
-                    session_name,
-                    &focused,
-                    &unfocused,
-                ) {
-                    Ok(true) => {
-                        if let Err(err) =
-                            rimz::ledger::wakeup::wake_sidebars_pane_frame_published(&runtime)
-                        {
-                            tracing::debug!(
-                                error = %err,
-                                "presence focus patch: publication datagram failed",
-                            );
-                        }
-                        return Ok(());
-                    }
-                    Ok(false) => {}
-                    Err(err) => {
-                        tracing::debug!(
-                            error = %err,
-                            "presence focus patch: cache update failed",
-                        );
-                    }
-                }
-            }
-            if matches!(
+            let Some(event) = wake_event(
                 reason,
-                WakeReason::PanesChanged | WakeReason::CommandChanged | WakeReason::FocusChanged
+                pane_id.as_deref(),
+                &command_args,
+                &focused_pane_ids,
+                &unfocused_pane_ids,
+            ) else {
+                return Ok(());
+            };
+            if let Err(err) = rimz::ledger::wakeup::broadcast_sidebar_event(
+                &runtime,
+                session_name.as_deref(),
+                event,
             ) {
-                // The exact-cache shortcut missed, or this is a topology
-                // signal: nudge the eldest sidebar (the elected producer) into
-                // a producer-only fresh-panes fetch. The producer broadcasts
-                // after publication, so consumers fold from cache instead of
-                // turning the poke into N local produces.
-                if let Err(err) = rimz::ledger::wakeup::wake_eldest_sidebar_panes_changed(&runtime)
-                {
-                    tracing::debug!(error = %err, "presence poke: eldest datagram failed");
-                }
+                tracing::debug!(error = %err, "presence poke: event datagram failed");
             }
             Ok(())
         }
+    }
+}
+
+/// Map a poke reason onto its typed event. `None` means the poke carries no
+/// event of its own (`alive` is stamp-only); a pane-scoped reason missing its
+/// pane data degrades to the identity-free `PanesChanged` nudge, so a sparse
+/// poke still triggers the producer's verifying pull.
+fn wake_event(
+    reason: WakeReason,
+    pane_id: Option<&str>,
+    command_args: &[String],
+    focused_pane_ids: &[String],
+    unfocused_pane_ids: &[String],
+) -> Option<SidebarEvent> {
+    let zellij_pane = |raw: &str| rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, raw);
+    match reason {
+        WakeReason::Alive => None,
+        WakeReason::PanesChanged => Some(SidebarEvent::PanesChanged),
+        WakeReason::PaneOpened => Some(match pane_id {
+            Some(pane_id) => SidebarEvent::PaneOpened {
+                pane_id: zellij_pane(pane_id),
+                command: command_from_args(command_args),
+            },
+            None => SidebarEvent::PanesChanged,
+        }),
+        WakeReason::PaneClosed => Some(match pane_id {
+            Some(pane_id) => SidebarEvent::PaneClosed {
+                pane_id: zellij_pane(pane_id),
+            },
+            None => SidebarEvent::PanesChanged,
+        }),
+        WakeReason::CommandChanged => Some(match pane_id.zip(command_from_args(command_args)) {
+            Some((pane_id, command)) => SidebarEvent::CommandChanged {
+                pane_id: zellij_pane(pane_id),
+                command,
+            },
+            None => SidebarEvent::PanesChanged,
+        }),
+        WakeReason::FocusChanged => Some(SidebarEvent::FocusChanged {
+            focused: zellij_pane_ids(focused_pane_ids),
+            unfocused: zellij_pane_ids(unfocused_pane_ids),
+        }),
     }
 }
 

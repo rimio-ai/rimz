@@ -64,7 +64,7 @@ impl PaneFields {
                 || self.terminal_command.as_deref() == Some(SIDEBAR_PANE_TITLE))
     }
 
-    fn is_card_pane(&self) -> bool {
+    pub fn is_card_pane(&self) -> bool {
         self.is_live_terminal() && !self.is_sidebar()
     }
 }

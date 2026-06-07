@@ -7,6 +7,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::process::{command_agent_kind, program_label};
+use super::process::{pane_command_is_known, row_from_process};
 use super::view::{SidebarRow, SidebarRowKind};
 use crate::agents::AgentDescriptor;
 use crate::agents::lifecycle::TurnPhase;
@@ -296,6 +297,32 @@ fn idle_agent_row(
         cpu_pct: pane.cpu_pct,
         io_bps: pane.io_bps,
     }
+}
+
+pub(crate) fn placeholder_row_from_pane(
+    pane: &PaneRef,
+    wired_lazy_kinds: &[String],
+    lazy_agent_default_models: &BTreeMap<String, String>,
+    now: Timestamp,
+) -> Option<SidebarRow> {
+    let command = pane.command.as_deref()?;
+    let kind = command_agent_kind(command);
+    if let Some(kind) = kind
+        && let Some(descriptor) = crate::agents::descriptor_by_kind(kind)
+        && descriptor.capabilities.registers_lazily
+        && wired_lazy_kinds.iter().any(|wired| wired == kind)
+    {
+        return Some(idle_agent_row(
+            pane,
+            descriptor,
+            lazy_agent_default_models
+                .get(kind)
+                .map(String::as_str)
+                .or(descriptor.default_model),
+            now,
+        ));
+    }
+    pane_command_is_known(pane).then(|| row_from_process(pane, now))
 }
 
 pub(super) fn pane_start_matches(expected: &PaneRef, actual: &PaneRef) -> bool {

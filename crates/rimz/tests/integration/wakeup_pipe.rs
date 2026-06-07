@@ -131,7 +131,7 @@ fn wakeup_walk_sends_datagram_and_spawns_no_zellij_pipe() {
 
     // The datagram — the channel of record — reaches *both* fresh sidebars on the
     // session: the walk fans out one datagram per instance, which is what replaced
-    // the old per-session pipe dedup. Each payload is the `ledger_delta` envelope
+    // the old per-session pipe dedup. Each payload is the typed `LedgerDelta` event
     // the renderer folds.
     let assert_ledger_delta = |recv: &std::os::unix::net::UnixDatagram, who: &str| {
         let mut buf = [0u8; 4096];
@@ -140,15 +140,18 @@ fn wakeup_walk_sends_datagram_and_spawns_no_zellij_pipe() {
             .unwrap_or_else(|err| panic!("the wakeup walk sends a datagram to {who}: {err}"));
         let parsed: serde_json::Value =
             serde_json::from_slice(&buf[..len]).expect("datagram payload is JSON");
-        assert_eq!(parsed["kind"], "ledger_delta");
         assert_eq!(
-            parsed["protocol_version"],
-            rimz::schema::SIDEBAR_PROTOCOL_VERSION
+            parsed["v"],
+            rimz::schema::sidebar_event::SIDEBAR_EVENT_VERSION
         );
         assert_eq!(
             parsed["workspace_id"],
             serde_json::to_value(&workspace_id).expect("workspace_id JSON"),
         );
+        // Ledger deltas are workspace-scoped: no session_name on the envelope.
+        assert!(parsed.get("session_name").is_none());
+        assert!(parsed["sent_at_ms"].as_u64().is_some());
+        assert_eq!(parsed["event"]["kind"], "ledger_delta");
     };
     assert_ledger_delta(&recv_a, "sidebar.a");
     assert_ledger_delta(&recv_b, "sidebar.b");

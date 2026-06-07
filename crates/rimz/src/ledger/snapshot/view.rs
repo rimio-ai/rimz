@@ -12,6 +12,7 @@ use tracing::{debug, warn};
 use super::fold::agent_rollup_with_carryover;
 use super::panes::{
     LazyAgentRow, SidebarOwnView, agent_for_pane, is_daemon_mode_codex, lazy_agent_for_pane,
+    placeholder_row_from_pane,
 };
 use super::process::{pane_command_is_known, program_label, row_from_process};
 use crate::agent_activity::AgentActivity;
@@ -46,6 +47,10 @@ pub struct SidebarSnapshot {
     pub workspace_id: WorkspaceId,
     pub display_name: String,
     pub generated_at: Timestamp,
+    /// Producer timestamp of the pane frame folded into this snapshot. Realtime
+    /// events older than this baseline are superseded by pulled truth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panes_produced_at_ms: Option<u64>,
     /// The single instant every time-window verdict in this projection reads —
     /// the compaction head, the stall escalation, rate-limit resets, and
     /// subagent retention all agree on one clock, captured once at
@@ -655,6 +660,7 @@ impl SidebarSnapshot {
             workspace_id,
             display_name,
             generated_at: now,
+            panes_produced_at_ms: None,
             now,
             worktree_groups,
             needs_attention,
@@ -1016,6 +1022,166 @@ impl SidebarSnapshot {
             self.now,
         );
         self
+    }
+
+    pub(crate) fn remove_pane_rows(&mut self, pane_id: &PaneId) -> bool {
+        let mut changed = false;
+        for group in &mut self.worktree_groups {
+            let before = group.rows.len();
+            group.rows.retain(|row| {
+                !row.pane
+                    .as_ref()
+                    .is_some_and(|pane| pane.pane_id == *pane_id)
+            });
+            changed |= group.rows.len() != before;
+            refresh_overlay_group(group);
+        }
+        self.worktree_groups
+            .retain(|group| !group.rows.is_empty() || group.hidden_count > 0);
+        if self
+            .own_view
+            .as_ref()
+            .and_then(|view| view.active_pane_id.as_ref())
+            .is_some_and(|active| active == pane_id)
+            && let Some(view) = &mut self.own_view
+        {
+            view.active_pane_id = None;
+        }
+        changed
+    }
+
+    pub(crate) fn overlay_pane_command(&mut self, pane_id: &PaneId, command: &str) -> bool {
+        let mut changed = false;
+        for group in &mut self.worktree_groups {
+            for row in &mut group.rows {
+                let Some(pane) = row.pane.as_mut() else {
+                    continue;
+                };
+                if pane.pane_id != *pane_id {
+                    continue;
+                }
+                pane.command = Some(command.to_owned());
+                pane.pane_process_start = None;
+                if let Some(next) = placeholder_row_from_pane(
+                    pane,
+                    &self.wired_lazy_kinds,
+                    &self.lazy_agent_default_models,
+                    self.now,
+                ) {
+                    let worktree_path = row
+                        .worktree_path
+                        .clone()
+                        .or_else(|| next.worktree_path.clone());
+                    *row = next;
+                    row.worktree_path = row.worktree_path.clone().or(worktree_path);
+                }
+                changed = true;
+            }
+            refresh_overlay_group(group);
+        }
+        changed
+    }
+
+    pub(crate) fn overlay_focus(&mut self, focused: &[PaneId], unfocused: &[PaneId]) -> bool {
+        if focused.is_empty() && unfocused.is_empty() {
+            return false;
+        }
+        let mut changed = false;
+        for group in &mut self.worktree_groups {
+            for row in &mut group.rows {
+                let Some(pane) = row.pane.as_mut() else {
+                    continue;
+                };
+                if focused.iter().any(|pane_id| pane_id == &pane.pane_id) {
+                    changed |= !pane.is_focused;
+                    pane.is_focused = true;
+                }
+                if unfocused.iter().any(|pane_id| pane_id == &pane.pane_id) {
+                    changed |= pane.is_focused;
+                    pane.is_focused = false;
+                }
+            }
+        }
+        if let Some(view) = &mut self.own_view {
+            if let Some(last_focused) = focused.last() {
+                view.active_pane_id = Some(last_focused.clone());
+                view.own_is_active = false;
+                changed = true;
+            } else if view
+                .active_pane_id
+                .as_ref()
+                .is_some_and(|active| unfocused.iter().any(|pane_id| pane_id == active))
+            {
+                view.active_pane_id = None;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    pub(crate) fn overlay_opened_pane(&mut self, mut pane: PaneRef) -> bool {
+        if self.row_for_pane(&pane.pane_id).is_some() {
+            return false;
+        }
+        if pane.cwd.is_none()
+            && let Some(root) = self.project_root.as_ref()
+        {
+            pane.cwd = root.to_str().map(ToOwned::to_owned);
+        }
+        let Some(row) = placeholder_row_from_pane(
+            &pane,
+            &self.wired_lazy_kinds,
+            &self.lazy_agent_default_models,
+            self.now,
+        ) else {
+            return false;
+        };
+        let split_by_branch = false;
+        let (kind, key, label) = worktree_group_key(
+            row.worktree_path.as_deref(),
+            row.worktree_branch.as_deref(),
+            split_by_branch,
+            self.project_root.as_deref(),
+            &self.worktree_roots,
+            self.root_class,
+        );
+        if let Some(group) = self
+            .worktree_groups
+            .iter_mut()
+            .find(|group| group.key == key)
+        {
+            group.rows.push(row);
+            refresh_overlay_group(group);
+        } else {
+            let mut group = SidebarWorktreeGroup {
+                key,
+                label,
+                kind,
+                status_counts: Vec::new(),
+                rows: vec![row],
+                hidden_count: 0,
+                diff_added: None,
+                diff_removed: None,
+                commits_ahead: None,
+                commits_behind: None,
+                trunk: None,
+                clean: None,
+            };
+            refresh_overlay_group(&mut group);
+            self.worktree_groups.push(group);
+            self.worktree_groups.sort_by(compare_groups);
+        }
+        true
+    }
+
+    fn row_for_pane(&self, pane_id: &PaneId) -> Option<&SidebarRow> {
+        self.worktree_groups.iter().find_map(|group| {
+            group.rows.iter().find(|row| {
+                row.pane
+                    .as_ref()
+                    .is_some_and(|pane| pane.pane_id == *pane_id)
+            })
+        })
     }
 
     /// Fold per-agent activity heartbeats into the rollup. The agent's hook
@@ -2396,6 +2562,15 @@ fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
         (count > 0).then_some(SidebarStatusCount { status, count })
     })
     .collect()
+}
+
+fn refresh_overlay_group(group: &mut SidebarWorktreeGroup) {
+    group.rows.sort_by(compare_rows);
+    group.status_counts = status_counts(&group.rows);
+    let total = group.rows.len().saturating_add(group.hidden_count);
+    let rows = std::mem::take(&mut group.rows);
+    group.rows = capped_rows(rows);
+    group.hidden_count = total.saturating_sub(group.rows.len());
 }
 
 /// Trim a group's calm tail to `WORKTREE_ROW_CAP`, always keeping the rows that

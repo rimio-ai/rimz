@@ -9,7 +9,7 @@
 //! * **Sidebar wakeup sockets** — each live sidebar instance writes a
 //!   heartbeat JSON under `runtime/heartbeat/sidebar.*.json` carrying the
 //!   path of a datagram socket it owns. After every mutation we walk the
-//!   heartbeat directory and post a `ledger_delta` envelope to each fresh
+//!   heartbeat directory and post a typed `LedgerDelta` event to each fresh
 //!   socket.
 //!
 //! Per the docs: "Sidebar wakeups are latency, not truth." Per-target send
@@ -24,37 +24,16 @@ use std::path::Path;
 use std::time::Duration;
 
 use jiff::Timestamp;
-use serde::Serialize;
 use tracing::debug;
 
 use crate::bridge::{WakeupFrame, feed_socket_path};
 use crate::feed::FeedItem;
-use crate::ids::{EventId, RequestId, WorkspaceId};
 use crate::ledger::RuntimePaths;
 use crate::schema::SIDEBAR_PROTOCOL_VERSION;
 use crate::schema::event::EventEnvelope;
 use crate::schema::heartbeat::SidebarHeartbeat;
-
-/// Maximum age of a sidebar heartbeat before we treat it as dead and skip
-/// it. Matches the `~5s` figure in `docs/internals/ledger.md`.
-pub const SIDEBAR_HEARTBEAT_TTL: Duration = Duration::from_secs(5);
-
-/// Sidebar wakeup envelope per `docs/internals/ledger.md`. Sent on every
-/// ledger mutation to every fresh sidebar heartbeat's `wakeup_socket`.
-#[derive(Clone, Debug, Serialize)]
-pub struct SidebarWakeup {
-    pub kind: &'static str,
-    pub workspace_id: WorkspaceId,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<RequestId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_id: Option<EventId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_method: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_event_name: Option<String>,
-    pub protocol_version: &'static str,
-}
+use crate::schema::sidebar_event::{SidebarEvent, SidebarEventEnvelope};
+pub use crate::sidebar::timing::SIDEBAR_HEARTBEAT_TTL;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WakeupErr {
@@ -95,60 +74,34 @@ pub fn wake_per_request(rt: &RuntimePaths, item: &FeedItem) -> Result<()> {
     Ok(())
 }
 
-/// Walk the runtime heartbeat dir and post a `ledger_delta` envelope to
+/// Walk the runtime heartbeat dir and post a typed `LedgerDelta` event to
 /// each fresh sidebar's `wakeup_socket`. Per-target failures are logged
-/// and skipped — they never error the ledger write that triggered us.
-pub fn wake_sidebars(
-    rt: &RuntimePaths,
-    workspace_id: &WorkspaceId,
-    request_id: &RequestId,
-) -> Result<()> {
-    wake_sidebars_inner(rt, workspace_id, Some(request_id), None, None, None)
+/// and skipped — they never error the write that triggered us. Feed
+/// mutations and context-sidecar writes (Claude's statusline `$`/token
+/// update, the Codex rollout refresh) both land here, so a cost change
+/// repaints within a wakeup instead of waiting for the renderer's next
+/// poll tick.
+pub fn wake_sidebars(rt: &RuntimePaths) -> Result<()> {
+    broadcast_sidebar_event(
+        rt,
+        None,
+        SidebarEvent::LedgerDelta {
+            event_method: None,
+            agent_event_name: None,
+        },
+    )?;
+    Ok(())
 }
 
 pub fn wake_sidebars_for_event(rt: &RuntimePaths, event: &EventEnvelope) -> Result<()> {
-    wake_sidebars_inner(
+    broadcast_sidebar_event(
         rt,
-        &event.workspace_id,
         None,
-        Some(&event.event_id),
-        Some(&event.method),
-        agent_event_name(event),
-    )
-}
-
-/// Wake every fresh sidebar after a context-sidecar write (Claude's statusline
-/// `$`/token/rate-limit update). The sidecar is not the ledger, so it fires no
-/// request/event delta on its own; this posts the same `ledger_delta` envelope
-/// the renderer folds into one refetch, so a cost change repaints within a
-/// wakeup instead of waiting for the renderer's next poll tick.
-pub fn wake_sidebars_for_context(rt: &RuntimePaths, workspace_id: &WorkspaceId) -> Result<()> {
-    wake_sidebars_inner(rt, workspace_id, None, None, None, None)
-}
-
-fn wake_sidebars_inner(
-    rt: &RuntimePaths,
-    workspace_id: &WorkspaceId,
-    request_id: Option<&RequestId>,
-    event_id: Option<&EventId>,
-    event_method: Option<&str>,
-    agent_event_name: Option<&str>,
-) -> Result<()> {
-    let payload = serde_json::to_vec(&SidebarWakeup {
-        kind: "ledger_delta",
-        workspace_id: workspace_id.clone(),
-        request_id: request_id.cloned(),
-        event_id: event_id.cloned(),
-        event_method: event_method.map(str::to_owned),
-        agent_event_name: agent_event_name.map(str::to_owned),
-        protocol_version: crate::schema::SIDEBAR_PROTOCOL_VERSION,
-    })?;
-
-    let sidebars = collect_fresh_sidebars(rt)?;
-    send_datagrams(
-        &payload,
-        sidebars.iter().map(|hb| hb.wakeup_socket.as_path()),
-    );
+        SidebarEvent::LedgerDelta {
+            event_method: Some(event.method.clone()),
+            agent_event_name: agent_event_name(event).map(str::to_owned),
+        },
+    )?;
     Ok(())
 }
 
@@ -171,68 +124,41 @@ fn agent_event_name(event: &EventEnvelope) -> Option<&str> {
 /// signaled. A wedged or already-dead sidebar receives nothing; relaunch it via
 /// `rimz start`/`rimz attach` instead.
 pub fn reload_sidebars(rt: &RuntimePaths) -> Result<usize> {
+    broadcast_sidebar_event(rt, None, SidebarEvent::Reload)
+}
+
+/// Post one typed event envelope to every fresh, protocol-current sidebar of
+/// this workspace. `session_name: Some` scopes the event to the mux session
+/// whose pane ids it names; `None` is workspace-scoped. Returns the number of
+/// sidebars targeted; send failures are absorbed per target.
+pub fn broadcast_sidebar_event(
+    rt: &RuntimePaths,
+    session_name: Option<&str>,
+    event: SidebarEvent,
+) -> Result<usize> {
     let sidebars = collect_fresh_sidebars(rt)?;
     let signaled = sidebars.len();
-    send_datagrams(
-        RELOAD_WAKEUP,
-        sidebars.iter().map(|hb| hb.wakeup_socket.as_path()),
-    );
-    Ok(signaled)
-}
-
-/// Control word the renderer decodes into a re-exec. Shared so the wakeup
-/// sender and the sidebar's decoder cannot drift.
-pub const RELOAD_WAKEUP: &[u8] = b"reload";
-
-/// Control word the tmux presence watch and the Zellij presence plugin both
-/// pulse on a pane-topology change; the renderer decodes it into a
-/// fresh-panes refetch. The renderer keeps its own byte-identical copy in
-/// `sidebar_renderer::app::input::PANES_CHANGED_WAKEUP`, so a unit test here
-/// pins the literal against drift.
-pub const PANES_CHANGED_WAKEUP: &[u8] = b"panes_changed";
-
-/// Control word a producer posts after publishing a fresh `snapshot.json` pane
-/// frame. Consumer renderers decode it into an immediate read-only cache fold,
-/// so producer-side pane truth reaches every tab without making each tab
-/// locally fork `list-panes`/git.
-pub const PANE_FRAME_PUBLISHED_WAKEUP: &[u8] = b"pane_frame_published";
-
-/// The eldest fresh heartbeat: the minimum instance id — UUIDv7 ids sort by
-/// birth, the same order the producer election
-/// (`crate::sidebar::elder_sidebar_present`) relies on.
-fn eldest_heartbeat(sidebars: Vec<SidebarHeartbeat>) -> Option<SidebarHeartbeat> {
-    sidebars
-        .into_iter()
-        .min_by(|a, b| a.instance_id.as_str().cmp(b.instance_id.as_str()))
-}
-
-/// Post the `panes_changed` wire word to the eldest fresh, protocol-current
-/// sidebar of this workspace — and only that one. The renderer maps the word
-/// to a producer-only fresh-panes fetch. The eldest is the elected producer, so
-/// the one fork lands where the shared pane cache is published; the publication
-/// broadcast then wakes consumers to refold from cache. A poke that races the
-/// elder's death is lost — the event-mode pane TTL bounds the staleness and the
-/// next poke targets the new eldest. Returns whether a datagram was sent
-/// (`false`: no live sidebar).
-pub fn wake_eldest_sidebar_panes_changed(rt: &RuntimePaths) -> Result<bool> {
-    let Some(eldest) = eldest_heartbeat(collect_fresh_sidebars(rt)?) else {
-        return Ok(false);
+    let Some(sender) = sender_socket() else {
+        return Ok(signaled);
     };
-    send_datagram(PANES_CHANGED_WAKEUP, &eldest.wakeup_socket);
-    Ok(true)
-}
-
-/// Broadcast the `pane_frame_published` word to every fresh, protocol-current
-/// sidebar after the producer publishes a fresh shared pane frame. Returns the
-/// number of sidebars targeted; send failures are absorbed per target.
-pub fn wake_sidebars_pane_frame_published(rt: &RuntimePaths) -> Result<usize> {
-    let sidebars = collect_fresh_sidebars(rt)?;
-    let signaled = sidebars.len();
-    send_datagrams(
-        PANE_FRAME_PUBLISHED_WAKEUP,
+    let payload = serde_json::to_vec(&SidebarEventEnvelope::new(
+        rt.workspace_id.clone(),
+        session_name.map(str::to_owned),
+        crate::sidebar::cache::unix_now_ms(),
+        event,
+    ))?;
+    send_datagrams_with(
+        &sender,
+        &payload,
         sidebars.iter().map(|hb| hb.wakeup_socket.as_path()),
     );
     Ok(signaled)
+}
+
+/// Broadcast a typed `PaneFramePublished` event to every fresh, protocol-current
+/// sidebar after the producer publishes a fresh shared pane frame.
+pub fn wake_sidebars_pane_frame_published(rt: &RuntimePaths) -> Result<usize> {
+    broadcast_sidebar_event(rt, None, SidebarEvent::PaneFramePublished)
 }
 
 /// Walk the runtime heartbeat dir and return every sidebar heartbeat that is
@@ -336,12 +262,13 @@ fn send_datagram(payload: &[u8], target: &Path) {
     send_datagram_with(&sender, payload, target);
 }
 
-fn send_datagrams<'a>(payload: &[u8], targets: impl IntoIterator<Item = &'a Path>) {
-    let Some(sender) = sender_socket() else {
-        return;
-    };
+fn send_datagrams_with<'a>(
+    sender: &UnixDatagram,
+    payload: &[u8],
+    targets: impl IntoIterator<Item = &'a Path>,
+) {
     for target in targets {
-        send_datagram_with(&sender, payload, target);
+        send_datagram_with(sender, payload, target);
     }
 }
 
@@ -365,51 +292,5 @@ fn send_datagram_with(sender: &UnixDatagram, payload: &[u8], target: &Path) {
                 "wakeup: send_to failed (target may have exited)"
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use super::*;
-    use crate::ids::{MuxName, SidebarInstanceId};
-
-    /// The renderer's decoder keeps a private, byte-identical copy of this word,
-    /// so this pin is the drift guard.
-    #[test]
-    fn panes_changed_wire_word_is_pinned() {
-        assert_eq!(PANES_CHANGED_WAKEUP, b"panes_changed");
-    }
-
-    #[test]
-    fn pane_frame_published_wire_word_is_pinned() {
-        assert_eq!(PANE_FRAME_PUBLISHED_WAKEUP, b"pane_frame_published");
-    }
-
-    fn heartbeat(id: &str, socket: &str) -> SidebarHeartbeat {
-        SidebarHeartbeat::new(
-            WorkspaceId::from_project_root(Path::new("/tmp/eldest-test")),
-            SidebarInstanceId::parse(id).unwrap(),
-            MuxName::Zellij,
-            "rimz-test",
-            PathBuf::from(socket),
-            None,
-        )
-    }
-
-    #[test]
-    fn eldest_heartbeat_is_the_lowest_instance_id() {
-        // UUIDv7 ids sort by birth: the lower id is the elder regardless of
-        // the candidates' order, matching `elder_sidebar_present`.
-        let young = heartbeat("sb_019e8c565bbd7b22854f93a905e1034c", "/sock/young");
-        let old = heartbeat("sb_019e8c565bbd708097fce9514f79da04", "/sock/old");
-        let eldest = eldest_heartbeat(vec![young, old]).expect("two candidates");
-        assert_eq!(eldest.wakeup_socket, PathBuf::from("/sock/old"));
-    }
-
-    #[test]
-    fn eldest_heartbeat_of_none_is_none() {
-        assert!(eldest_heartbeat(Vec::new()).is_none());
     }
 }

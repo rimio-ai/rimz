@@ -53,7 +53,7 @@ pub fn rollup_snapshot(
 /// until the producer has published a pane set (or if the ledger is unreadable),
 /// so the caller holds its last good frame.
 ///
-/// Pairing fresh rollup + coalesced panes is the lag fix: a `ledger_delta` folds
+/// Pairing fresh rollup + coalesced panes is the lag fix: a `LedgerDelta` folds
 /// the new agent/status in this tab within one wakeup, while the slower
 /// `list-panes` cadence only governs genuine pane open/close.
 ///

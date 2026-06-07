@@ -75,7 +75,7 @@ pub(super) struct FetchOutcome {
 /// workspace — the eldest live instance — and on it the produce is gated to
 /// the data tick: a ledger-delta storm paints per delta but produces at most
 /// once per tick. Topology freshness is producer-only: consumers wait for the
-/// producer's `pane_frame_published` broadcast and fold the new cache without
+/// producer's `PaneFramePublished` event and fold the new cache without
 /// locally producing. Only a hard refresh (reload/manual recovery) lets a
 /// consumer produce. Stale-frame recovery belongs to the election, not the
 /// consumers — a dead elder's heartbeat ages out within one TTL and the

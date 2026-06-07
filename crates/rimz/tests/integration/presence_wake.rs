@@ -1,11 +1,12 @@
 //! Verifies the presence channel end to end at the CLI seam.
 //!
 //! The poke contract (`rimz sidebar wake`): every reason refreshes the presence
-//! stamp that flips the producer's pane TTL to event mode. `panes-changed`
-//! datagrams the **eldest** fresh heartbeat alone; exact-cache shortcuts
-//! (`command-changed`, `focus-changed`) patch `snapshot.json` and broadcast
-//! `pane_frame_published` to every fresh sidebar. A producer publication uses
-//! the same broadcast so consumers refold from cache instead of producing.
+//! stamp that flips the producer's pane TTL to event mode. Every reason but
+//! `alive` broadcasts a typed sidebar event to every fresh heartbeat — exact
+//! command/focus/open/close events update renderer-owned overlays and never
+//! patch `snapshot.json`; a sparse poke degrades to the identity-free
+//! `PanesChanged` nudge. A producer publication broadcasts the same typed
+//! event envelope so consumers refold from cache instead of producing.
 //!
 //! The producer contract (`rimz sidebar snapshot`): with a fresh stamp, a
 //! pane cache far past the poll TTL is served with **zero** mux forks — the
@@ -290,8 +291,39 @@ fn assert_no_datagram(recv: &std::os::unix::net::UnixDatagram, who: &str) {
     }
 }
 
+fn recv_sidebar_event(recv: &std::os::unix::net::UnixDatagram, who: &str) -> serde_json::Value {
+    let mut buf = [0u8; 4096];
+    let len = recv
+        .recv(&mut buf)
+        .unwrap_or_else(|err| panic!("{who} receives sidebar event: {err}"));
+    serde_json::from_slice(&buf[..len]).expect("sidebar event is JSON")
+}
+
+fn assert_sidebar_envelope(
+    event: &serde_json::Value,
+    workspace_id: &WorkspaceId,
+    session: Option<&str>,
+) {
+    assert_eq!(
+        event["v"],
+        rimz::schema::sidebar_event::SIDEBAR_EVENT_VERSION
+    );
+    assert_eq!(
+        event["workspace_id"],
+        serde_json::to_value(workspace_id).expect("workspace id serializes"),
+    );
+    match session {
+        Some(session) => assert_eq!(event["session_name"], session),
+        None => assert!(
+            event.get("session_name").is_none(),
+            "a workspace-scoped envelope carries no session_name: {event}"
+        ),
+    }
+    assert!(event["sent_at_ms"].as_u64().is_some());
+}
+
 #[test]
-fn wake_panes_changed_datagrams_the_eldest_only_and_stamps() {
+fn wake_panes_changed_broadcasts_topology_nudge_and_stamps() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
         tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
@@ -303,6 +335,9 @@ fn wake_panes_changed_datagrams_the_eldest_only_and_stamps() {
     env.plant_heartbeat("sidebar.younger.json", YOUNGER_ID, "sidebar.younger.sock");
     env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
 
+    // The plugin's generic topology poke carries no session or pane id — the
+    // identity-free nudge must still reach every fresh sidebar so the producer
+    // pulls fresh panes within one poke, never the event-mode pane TTL.
     let output = env.wake("panes-changed", true);
     assert!(
         output.status.success(),
@@ -310,15 +345,56 @@ fn wake_panes_changed_datagrams_the_eldest_only_and_stamps() {
         String::from_utf8_lossy(&output.stderr),
     );
 
-    let mut buf = [0u8; 256];
-    let len = recv_eldest
-        .recv(&mut buf)
-        .expect("the eldest sidebar receives the panes_changed poke");
-    assert_eq!(&buf[..len], b"panes_changed");
-    assert_no_datagram(&recv_younger, "the younger sidebar");
+    for (name, recv) in [("eldest", recv_eldest), ("younger", recv_younger)] {
+        let event = recv_sidebar_event(&recv, name);
+        assert_sidebar_envelope(&event, &env.workspace_id, None);
+        assert_eq!(event["event"]["kind"], "panes_changed");
+    }
 
     let stamp = env.read_stamp().expect("panes-changed writes the stamp");
     assert!(stamp.written_at_ms > 0);
+    env.assert_no_mux_fork();
+}
+
+#[test]
+fn wake_pane_opened_and_closed_broadcast_card_events() {
+    let env = WakeEnv::new();
+    if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
+        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        return;
+    }
+    let recv_eldest = env.bind_socket("sidebar.eldest.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
+
+    let output = env.wake_with(
+        "pane-opened",
+        true,
+        &[
+            "--session-name",
+            SESSION_NAME,
+            "--pane-id",
+            "terminal_9",
+            "--command-arg",
+            "zsh",
+        ],
+    );
+    assert!(output.status.success());
+    let event = recv_sidebar_event(&recv_eldest, "eldest");
+    assert_sidebar_envelope(&event, &env.workspace_id, Some(SESSION_NAME));
+    assert_eq!(event["event"]["kind"], "pane_opened");
+    assert_eq!(event["event"]["pane_id"], "zellij:terminal_9");
+    assert_eq!(event["event"]["command"], "zsh");
+
+    let output = env.wake_with(
+        "pane-closed",
+        true,
+        &["--session-name", SESSION_NAME, "--pane-id", "terminal_9"],
+    );
+    assert!(output.status.success());
+    let event = recv_sidebar_event(&recv_eldest, "eldest");
+    assert_sidebar_envelope(&event, &env.workspace_id, Some(SESSION_NAME));
+    assert_eq!(event["event"]["kind"], "pane_closed");
+    assert_eq!(event["event"]["pane_id"], "zellij:terminal_9");
     env.assert_no_mux_fork();
 }
 
@@ -362,19 +438,14 @@ fn pane_frame_publication_broadcasts_to_all_fresh_sidebars() {
     assert_eq!(count, 2);
 
     for (name, recv) in [("eldest", recv_eldest), ("younger", recv_younger)] {
-        let mut buf = [0u8; 256];
-        let len = recv
-            .recv(&mut buf)
-            .unwrap_or_else(|err| panic!("{name} receives publication wakeup: {err}"));
-        assert_eq!(
-            &buf[..len],
-            rimz::ledger::wakeup::PANE_FRAME_PUBLISHED_WAKEUP
-        );
+        let event = recv_sidebar_event(&recv, name);
+        assert_sidebar_envelope(&event, &env.workspace_id, None);
+        assert_eq!(event["event"]["kind"], "pane_frame_published");
     }
 }
 
 #[test]
-fn wake_command_changed_patches_existing_pane_frame_and_broadcasts() {
+fn wake_command_changed_broadcasts_event_without_patching_pane_frame() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
         tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
@@ -406,28 +477,25 @@ fn wake_command_changed_patches_existing_pane_frame_and_broadcasts() {
     );
 
     for (name, recv) in [("eldest", recv_eldest), ("younger", recv_younger)] {
-        let mut buf = [0u8; 256];
-        let len = recv
-            .recv(&mut buf)
-            .unwrap_or_else(|err| panic!("{name} receives publication wakeup: {err}"));
-        assert_eq!(
-            &buf[..len],
-            rimz::ledger::wakeup::PANE_FRAME_PUBLISHED_WAKEUP
-        );
+        let event = recv_sidebar_event(&recv, name);
+        assert_sidebar_envelope(&event, &env.workspace_id, Some(SESSION_NAME));
+        assert_eq!(event["event"]["kind"], "command_changed");
+        assert_eq!(event["event"]["pane_id"], "zellij:terminal_7");
+        assert_eq!(event["event"]["command"], "codex");
     }
-    let patched = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
-        .expect("patched pane cache remains readable");
+    let cached = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
+        .expect("pane cache remains readable");
     assert_eq!(
-        patched.produced_at_ms, produced_at_ms,
-        "optimistic patches must not masquerade as a fresh mux read",
+        cached.produced_at_ms, produced_at_ms,
+        "typed overlay events must not masquerade as a fresh mux read",
     );
-    assert_eq!(patched.panes[0].command.as_deref(), Some("codex"));
-    assert!(patched.panes[0].pane_process_start.is_some());
+    assert_eq!(cached.panes[0].command.as_deref(), Some("zsh"));
+    assert!(cached.panes[0].pane_process_start.is_none());
     env.assert_no_mux_fork();
 }
 
 #[test]
-fn wake_focus_changed_patches_existing_pane_frame_and_broadcasts() {
+fn wake_focus_changed_broadcasts_event_without_patching_pane_frame() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
         tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
@@ -459,39 +527,36 @@ fn wake_focus_changed_patches_existing_pane_frame_and_broadcasts() {
     );
 
     for (name, recv) in [("eldest", recv_eldest), ("younger", recv_younger)] {
-        let mut buf = [0u8; 256];
-        let len = recv
-            .recv(&mut buf)
-            .unwrap_or_else(|err| panic!("{name} receives publication wakeup: {err}"));
-        assert_eq!(
-            &buf[..len],
-            rimz::ledger::wakeup::PANE_FRAME_PUBLISHED_WAKEUP
-        );
+        let event = recv_sidebar_event(&recv, name);
+        assert_sidebar_envelope(&event, &env.workspace_id, Some(SESSION_NAME));
+        assert_eq!(event["event"]["kind"], "focus_changed");
+        assert_eq!(event["event"]["focused"][0], "zellij:terminal_8");
+        assert_eq!(event["event"]["unfocused"][0], "zellij:terminal_7");
     }
-    let patched = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
-        .expect("patched pane cache remains readable");
+    let cached = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
+        .expect("pane cache remains readable");
     assert_eq!(
-        patched.produced_at_ms, produced_at_ms,
-        "optimistic patches must not masquerade as a fresh mux read",
+        cached.produced_at_ms, produced_at_ms,
+        "typed overlay events must not masquerade as a fresh mux read",
     );
-    let terminal_7 = patched
+    let terminal_7 = cached
         .panes
         .iter()
         .find(|pane| pane.pane_id.raw() == "terminal_7")
         .expect("terminal_7 remains present");
-    let terminal_8 = patched
+    let terminal_8 = cached
         .panes
         .iter()
         .find(|pane| pane.pane_id.raw() == "terminal_8")
         .expect("terminal_8 remains present");
-    let sidebar = patched
+    let sidebar = cached
         .panes
         .iter()
         .find(|pane| pane.pane_id.raw() == "terminal_6")
         .expect("sidebar remains present");
     assert!(!sidebar.is_focused);
-    assert!(!terminal_7.is_focused);
-    assert!(terminal_8.is_focused);
+    assert!(terminal_7.is_focused);
+    assert!(!terminal_8.is_focused);
     env.assert_no_mux_fork();
 }
 

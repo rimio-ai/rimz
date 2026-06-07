@@ -85,9 +85,15 @@ mod shell {
                     // live on 0.44.3), so this path is load-bearing.
                     self.mark_granted(now);
                     let next_tabs = project(&manifest);
+                    let opened = opened_card_panes(&self.tabs, &next_tabs);
                     let focus_patch =
                         policy::focus_shortcut_if_only_focus_changed(&self.tabs, &next_tabs);
                     self.tabs = next_tabs;
+                    // Poke every opened pane — `fold`, not `any`, so a manifest
+                    // carrying two new panes emits both card-create events.
+                    let emitted_open = opened.iter().fold(false, |emitted, pane| {
+                        self.poke_pane_opened(pane) || emitted
+                    });
                     match focus_patch {
                         Some(FocusShortcut::Patch(patch)) if self.poke_focus_changed(&patch) => {
                             let hash = policy::manifest_hash(&self.tabs, self.active_tab);
@@ -97,6 +103,12 @@ mod shell {
                             }
                         }
                         Some(FocusShortcut::Ignore) => {
+                            let hash = policy::manifest_hash(&self.tabs, self.active_tab);
+                            if let Some(policy) = self.policy.as_mut() {
+                                policy.accept_manifest(hash);
+                            }
+                        }
+                        _ if emitted_open => {
                             let hash = policy::manifest_hash(&self.tabs, self.active_tab);
                             if let Some(policy) = self.policy.as_mut() {
                                 policy.accept_manifest(hash);
@@ -126,9 +138,11 @@ mod shell {
                         }
                     }
                 }
-                Event::PaneClosed(_) => {
+                Event::PaneClosed(pane_id) => {
                     self.mark_granted(now);
-                    self.signal_change(now);
+                    if !self.poke_pane_closed(&pane_id) {
+                        self.signal_change(now);
+                    }
                 }
                 Event::Timer(_) => {
                     self.timer_gate.on_fire(now);
@@ -306,6 +320,73 @@ mod shell {
             true
         }
 
+        fn poke_pane_opened(&self, pane: &PaneFields) -> bool {
+            if !self.granted || !pane.is_card_pane() {
+                return false;
+            }
+            let Some(session_name) = self.session_name.as_deref() else {
+                return false;
+            };
+            let program = self.rimz_bin.as_deref().unwrap_or("rimz");
+            let mut argv = vec![
+                program.to_owned(),
+                "sidebar".to_owned(),
+                "wake".to_owned(),
+                "--reason".to_owned(),
+                "pane-opened".to_owned(),
+                "--session-name".to_owned(),
+                session_name.to_owned(),
+                "--pane-id".to_owned(),
+                format!("terminal_{}", pane.id),
+            ];
+            if let Some(workspace_id) = self.workspace_id.as_deref() {
+                argv.push("--workspace-id".to_owned());
+                argv.push(workspace_id.to_owned());
+            }
+            if let Some(command) = pane
+                .terminal_command
+                .as_ref()
+                .filter(|command| !command.is_empty())
+            {
+                argv.push("--command-arg".to_owned());
+                argv.push(command.clone());
+            }
+            let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+            run_command(&refs, BTreeMap::new());
+            true
+        }
+
+        fn poke_pane_closed(&self, pane_id: &PaneId) -> bool {
+            if !self.granted {
+                return false;
+            }
+            let PaneId::Terminal(_) = pane_id else {
+                return false;
+            };
+            let Some(session_name) = self.session_name.as_deref() else {
+                return false;
+            };
+            let program = self.rimz_bin.as_deref().unwrap_or("rimz");
+            let mut argv = vec![
+                program.to_owned(),
+                "sidebar".to_owned(),
+                "wake".to_owned(),
+                "--reason".to_owned(),
+                "pane-closed".to_owned(),
+                "--session-name".to_owned(),
+                session_name.to_owned(),
+                "--pane-id".to_owned(),
+                pane_id.to_string(),
+            ];
+            if let Some(workspace_id) = self.workspace_id.as_deref() {
+                argv.push("--workspace-id".to_owned());
+                argv.push(workspace_id.to_owned());
+            }
+            let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+            run_command(&refs, BTreeMap::new());
+            true
+        }
+
         /// Publish an optimistic focus patch for panes already known to the
         /// native sidebar cache. Returns false when the exact-cache shortcut is
         /// unavailable, so the caller can fall back to a normal `panes-changed`
@@ -372,6 +453,26 @@ mod shell {
                 (*tab, fields)
             })
             .collect()
+    }
+
+    fn opened_card_panes(
+        previous: &BTreeMap<usize, Vec<PaneFields>>,
+        next: &BTreeMap<usize, Vec<PaneFields>>,
+    ) -> Vec<PaneFields> {
+        let mut opened = Vec::new();
+        for panes in next.values() {
+            for pane in panes {
+                if pane.is_card_pane()
+                    && !previous
+                        .values()
+                        .flatten()
+                        .any(|old| old.id == pane.id && old.is_plugin == pane.is_plugin)
+                {
+                    opened.push(pane.clone());
+                }
+            }
+        }
+        opened
     }
 
     /// Unix milliseconds via the WASI clock. The policy only compares

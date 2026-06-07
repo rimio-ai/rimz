@@ -1,8 +1,6 @@
 //! Exit latches: self-close when the tab empties, and the grow-resize
 //! classification behind the full-width-flash guard.
 
-use std::time::Duration;
-
 /// Decide whether the sidebar should exit so its own pane closes. The sidebar
 /// shares a tab/view with the user's working pane(s); when the last of them
 /// exits, the sidebar is alone and has no reason to stay.
@@ -55,11 +53,8 @@ impl SelfCloseState {
 }
 
 const EMPTY_STARTUP_OBSERVATIONS_BEFORE_CLOSE: u8 = 2;
-/// Watchdog interval for the self-close backstop: when no resize event arrives
-/// (e.g. background Zellij sessions that omit SIGWINCH after a pane closes),
-/// this asks the normal snapshot path for a fresh own-view count. Sized at 2s
-/// so cleanup stays prompt even when a caller configured a much slower data tick.
-pub(super) const SELF_CLOSE_WATCHDOG: Duration = Duration::from_secs(2);
+
+pub(super) use crate::sidebar::timing::SELF_CLOSE_WATCHDOG;
 
 #[cfg(test)]
 mod tests;

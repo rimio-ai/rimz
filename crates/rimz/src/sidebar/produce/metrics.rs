@@ -4,10 +4,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use crate::ledger::atomic;
 use crate::sidebar::cache::unix_now_ms;
+use crate::sidebar::timing::METRICS_SAMPLE_TTL;
 
 /// Per-pane CPU and IO tick counters sampled by the producer on the previous
 /// tick, plus the pane's root-pid binding. Two consecutive readings plus the
@@ -52,14 +52,6 @@ struct MetricsSampleEntry {
     #[serde(default)]
     rss_kb: Option<u64>,
 }
-
-/// How often the producer takes a fresh two-sample `/proc` reading per pane.
-/// Rate sampling needs a steady clock of its own — never the pane-read cadence,
-/// which event-paced pane updates make a topology clock — and the carried
-/// display values bound `/proc` IO to once per window regardless of produce
-/// rate. A ~3s two-sample window also smooths the rates a 1s window made
-/// jumpy; a new pane's stats warm up one window later, same as before.
-const METRICS_SAMPLE_TTL: Duration = Duration::from_secs(3);
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct MetricsSampleCache {

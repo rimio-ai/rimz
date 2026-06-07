@@ -15,6 +15,9 @@ use std::time::{Duration, Instant};
 
 use crate::ids::PaneId;
 use crate::ledger::paths::PathErr;
+use crate::schema::sidebar_event::{SidebarEvent, SidebarEventEnvelope};
+use crate::sidebar::events::EventStore;
+use crate::sidebar::fuse::fuse;
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -110,6 +113,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
 
     let mut last_snapshot: Option<SidebarSnapshot> = None;
     let mut current = placeholder_snapshot(config.workspace_id.clone());
+    let mut last_pulled = current.clone();
+    let mut event_store = EventStore::default();
     let mut health = Health::default();
     let mut gate = GateState::default();
     let mut self_close = SelfCloseState::default();
@@ -149,7 +154,6 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             runtime.clone(),
             config.instance_id.clone(),
             config.session_name.clone(),
-            socket_path.clone(),
         );
     }
 
@@ -179,15 +183,15 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     );
 
     // One fixed-timestep event loop. Events fold into the in-process model and
-    // mark the frame dirty; the loop paints at most once per `ANIMATION_FRAME`
-    // boundary, coalescing every change that landed mid-frame into a single
-    // paint. Data and animation ride this frame grid; input paints synchronously
-    // for instant feedback (see `apply_input`). The grid runs at `ANIMATION_FRAME`
-    // while there is something to show (`active`) and relaxes to the `tick`
-    // backstop when idle, snapping back the instant an event or animation
-    // arrives. The loop blocks only in `recv`, so no path forks a subprocess on
-    // the render thread and a busy fetch never freezes the spin or swallows a
-    // keypress.
+    // mark the frame dirty; the loop paints at most once per configured base
+    // frame boundary, coalescing every change that landed mid-frame into a
+    // single paint. Data and animation ride this frame grid; input paints
+    // synchronously for instant feedback (see `apply_input`). The grid stays
+    // warm while there is something to show (`active`) and relaxes to the
+    // `tick` backstop when idle, snapping back the instant an event or
+    // animation arrives. The loop blocks only in `recv`, so no path forks a
+    // subprocess on the render thread and a busy fetch never freezes the spin
+    // or swallows a keypress.
     let mut dirty = true;
     let mut next_frame = Instant::now();
     let mut last_self_close_check = Instant::now();
@@ -204,7 +208,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         // A live row's spinner or a value-corner count-up keeps the frame grid
         // warm; a pending fold (`dirty`) does too. With neither, drop to the
         // slow data backstop until the next wakeup re-arms the grid.
-        let phase = wall_clock_phase(anim_start);
+        let phase = wall_clock_phase(anim_start, current.sidebar.resolved_refresh_ms());
         let animating = render::has_live_animation(&current)
             || ui.tally.any_rolling(phase)
             || ui.cost_rolls.any_rolling(phase)
@@ -240,9 +244,15 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     in_flight = false;
                 }
                 let mut rejected = false;
-                if let Some(outcome) = latest {
+                if let Some(mut outcome) = latest {
                     let snapshot_ok = outcome.snapshot.is_ok();
                     let fresh_pane_frame = outcome.fresh_pane_frame;
+                    if let Ok(pulled) = outcome.snapshot {
+                        last_pulled = pulled;
+                        let now_ms = crate::sidebar::cache::unix_now_ms();
+                        event_store.prune(now_ms);
+                        outcome.snapshot = Ok(fuse(&last_pulled, &event_store, now_ms));
+                    }
                     fetched_at = Instant::now();
                     let applied = apply_fetch_outcome(
                         &config,
@@ -297,54 +307,102 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     );
                 }
             }
+            Wakeup::Event(envelope) => {
+                if !event_targets_this_renderer(&envelope, &config) {
+                    continue;
+                }
+                let requests_verification = envelope.event.requests_producer_verification();
+                let sent_at_ms = envelope.sent_at_ms;
+                match envelope.event {
+                    SidebarEvent::Reload => {
+                        if let Some(target) = reload_or_refetch(
+                            &config.session_name,
+                            &request_tx,
+                            &mut in_flight,
+                            &mut pending_refetch,
+                        ) {
+                            reexec_to = Some(target);
+                            break;
+                        }
+                    }
+                    // The producer published a fresh shared pane frame: fold it
+                    // from cache immediately; consumers stay read-only and the
+                    // producer's own receipt is cheap because the frame is
+                    // just-published.
+                    SidebarEvent::PaneFramePublished => {
+                        request_fetch(
+                            &request_tx,
+                            &mut in_flight,
+                            &mut pending_refetch,
+                            FetchRequest::pane_frame_published(),
+                            true,
+                        );
+                    }
+                    // An overlay event fuses into the in-memory state and paints
+                    // this frame — the zero-latency path. A topology overlay also
+                    // asks the producer to verify with a real pull, which
+                    // supersedes the overlay once its fresh frame folds in. The
+                    // resize-grow `paint_held` deliberately stays held: only a
+                    // *pulled* sibling-count verdict may release it, so a fused
+                    // close never paints the grown full-width frame on its way out.
+                    event if event.is_overlay() => {
+                        let topology_event = matches!(
+                            event,
+                            SidebarEvent::PaneClosed { .. } | SidebarEvent::PaneOpened { .. }
+                        );
+                        let now_ms = crate::sidebar::cache::unix_now_ms();
+                        event_store.append(event, sent_at_ms, now_ms);
+                        let fused = fuse(&last_pulled, &event_store, now_ms);
+                        let applied = apply_fetch_outcome(
+                            &config,
+                            FetchOutcome {
+                                snapshot: Ok(fused),
+                                final_for_request: false,
+                                fresh_pane_frame: false,
+                            },
+                            &mut last_snapshot,
+                            &mut current,
+                            &mut health,
+                            &mut gate,
+                            &mut self_close,
+                            &mut ui,
+                            anim_start,
+                        )?;
+                        should_exit = applied.should_exit;
+                        dirty = true;
+                        if !should_exit && (topology_event || requests_verification) {
+                            request_fetch(
+                                &request_tx,
+                                &mut in_flight,
+                                &mut pending_refetch,
+                                FetchRequest::producer_fresh_panes(),
+                                true,
+                            );
+                        }
+                    }
+                    // Identity-free nudges — `LedgerDelta`, `PanesChanged`, a
+                    // `PaneOpened` without a command: nothing to fuse, so refetch,
+                    // bypassing the pane cache when the event says topology moved.
+                    _ => {
+                        request_fetch(
+                            &request_tx,
+                            &mut in_flight,
+                            &mut pending_refetch,
+                            if requests_verification {
+                                FetchRequest::producer_fresh_panes()
+                            } else {
+                                FetchRequest::default()
+                            },
+                            true,
+                        );
+                    }
+                }
+            }
             // A recv timeout: the active grid reached a frame boundary, or the
             // idle backstop interval elapsed. It carries no state of its own —
             // the frame phase below advances the spin and paints, and the
             // backstop poll runs there too.
             Wakeup::Tick => {}
-            // A ledger delta means new committed data: refetch, forcing one more
-            // run if a fetch is already in flight so the delta is never lost.
-            // Pane-sensitive lifecycle deltas bypass the pane cache so a
-            // just-started or just-ended agent is not pinned to the next TTL.
-            // A burst of deltas collapses to a single fetch via `in_flight`.
-            Wakeup::Ledger { fresh_panes } => {
-                request_fetch(
-                    &request_tx,
-                    &mut in_flight,
-                    &mut pending_refetch,
-                    if fresh_panes {
-                        FetchRequest::producer_fresh_panes()
-                    } else {
-                        FetchRequest::default()
-                    },
-                    true,
-                );
-            }
-            // The tmux/Zellij presence path saw topology change: ask the elected
-            // producer for a pane frame produced after the signal. A burst (one
-            // split fans out as several control lines) coalesces through
-            // `in_flight`/`pending_refetch` like any wakeup storm.
-            Wakeup::PanesChanged => {
-                request_fetch(
-                    &request_tx,
-                    &mut in_flight,
-                    &mut pending_refetch,
-                    FetchRequest::producer_fresh_panes(),
-                    true,
-                );
-            }
-            // The producer published a new shared pane frame. Fold it from the
-            // cache immediately; consumers stay read-only and the producer's
-            // own receipt is cheap because the frame is just-published.
-            Wakeup::PaneFramePublished => {
-                request_fetch(
-                    &request_tx,
-                    &mut in_flight,
-                    &mut pending_refetch,
-                    FetchRequest::pane_frame_published(),
-                    true,
-                );
-            }
             Wakeup::Resize => {
                 // A grow is the mux handing the sidebar a freed sibling's space —
                 // the precondition for the self-close full-width flash. Hold the
@@ -394,51 +452,20 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     true,
                 );
             }
-            Wakeup::Reload => match reload_action() {
-                ReloadAction::Reexec(target) => {
-                    debug!(
-                        session = %config.session_name,
-                        target = %target.display(),
-                        "reload: on-disk binary differs; re-execing the renderer in place",
-                    );
+            // The `r` keypress rides the local `reload` control word; an
+            // external `rimz reload` arrives as the typed event. Both resolve
+            // through the same helper.
+            Wakeup::Reload => {
+                if let Some(target) = reload_or_refetch(
+                    &config.session_name,
+                    &request_tx,
+                    &mut in_flight,
+                    &mut pending_refetch,
+                ) {
                     reexec_to = Some(target);
                     break;
                 }
-                // The binary on disk is byte-identical to the one we run — a
-                // reload that installed no new renderer, or a reproducible
-                // rebuild. Skip the re-exec churn, but still honour the reload
-                // intent with an immediate producing refetch so `r` always pulls
-                // live data and un-sticks a tab whose producer stalled.
-                ReloadAction::AlreadyCurrent => {
-                    debug!(
-                        session = %config.session_name,
-                        "reload: binary unchanged; refetching in place without re-exec",
-                    );
-                    request_fetch(
-                        &request_tx,
-                        &mut in_flight,
-                        &mut pending_refetch,
-                        FetchRequest::hard_refresh(),
-                        true,
-                    );
-                }
-                // A reload that cannot find its replacement (a partial or
-                // in-flight install) must never make the sidebar vanish — keep
-                // serving the current build and refetch as above.
-                ReloadAction::Missing => {
-                    warn!(
-                        session = %config.session_name,
-                        "reload requested but no renderer binary is on disk; refetching in place",
-                    );
-                    request_fetch(
-                        &request_tx,
-                        &mut in_flight,
-                        &mut pending_refetch,
-                        FetchRequest::hard_refresh(),
-                        true,
-                    );
-                }
-            },
+            }
             wakeup => {
                 // Key/mouse input paints synchronously for instant feedback; a
                 // paint settles any frame the loop owed.
@@ -504,10 +531,10 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         // every change that landed this frame into a single draw. Paint when the
         // model changed (`dirty`) or a row is animating; an idle frame is a bare
         // timer wake with no recompose. While idle, keep the grid armed so the
-        // next event paints within one `ANIMATION_FRAME`.
+        // next event paints within one base frame.
         let now = Instant::now();
         if dirty {
-            let dirty_deadline = now + ANIMATION_FRAME;
+            let dirty_deadline = now + animation_frame(&current);
             if next_frame > dirty_deadline {
                 next_frame = dirty_deadline;
             }
@@ -517,7 +544,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         // way out. `!paint_held`: a grow resize defers its paint until the
         // sibling-count verdict releases the hold (see the resize handler).
         if !should_exit && !paint_held && active && now >= next_frame {
-            ui.animation_phase = wall_clock_phase(anim_start);
+            ui.animation_phase =
+                wall_clock_phase(anim_start, current.sidebar.resolved_refresh_ms());
             let animating = render::animation_cadence(&current) != render::AnimationCadence::None
                 || ui.tally.any_rolling(ui.animation_phase)
                 || ui.cost_rolls.any_rolling(ui.animation_phase)
@@ -534,7 +562,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             }
             next_frame = next_frame_after(next_frame, now, frame_interval(&current, &ui));
         } else if !active {
-            next_frame = now + ANIMATION_FRAME;
+            next_frame = now + animation_frame(&current);
         }
     }
     if let Some(target) = reexec_to {
@@ -562,21 +590,6 @@ fn set_terminal_title() -> io::Result<()> {
 /// fetch latency. Clamped against the data tick so a slow `tick_seconds` never
 /// stutters, and only used while [`render::has_live_animation`] reports
 /// something to move.
-const ANIMATION_FRAME: Duration = Duration::from_millis(100);
-
-/// Slow cosmetic animation tick for attention breathing. The breath already
-/// holds the same rendered frame for several base phases, so redrawing it at
-/// 10fps wastes CPU in a blocked room.
-const SLOW_ANIMATION_FRAME: Duration = Duration::from_millis(300);
-
-/// Money animation tick — one paint per roll click, derived from the odometer's
-/// [`render::CLICK_PHASES`] so the sampling grid and the click grid can never
-/// drift apart. A room where only money moves rides this 200ms grid; anything
-/// slower would skip clicks and could drop the one-click settle flash between
-/// samples.
-const MONEY_ANIMATION_FRAME: Duration =
-    Duration::from_millis(ANIMATION_FRAME.as_millis() as u64 * render::CLICK_PHASES);
-
 /// Floor for the frame-boundary recv timeout. When the loop is at or past the
 /// next frame boundary, the time-to-boundary is zero; a 1ms floor lets an
 /// already-queued datagram drain on this turn without a zero-timeout busy spin.
@@ -586,17 +599,19 @@ const FRAME_MIN_TIMEOUT: Duration = Duration::from_millis(1);
 /// the serve loop's monotonic base. Every redraw path sets the phase from this,
 /// so the spin advances on real time and survives re-fetches and ledger deltas
 /// without a per-tick counter that a break-and-refetch could reset.
-fn wall_clock_phase(start: Instant) -> u64 {
-    (start.elapsed().as_millis() / ANIMATION_FRAME.as_millis()) as u64
+fn wall_clock_phase(start: Instant, refresh_ms: u16) -> u64 {
+    (start.elapsed().as_millis() / u128::from(refresh_ms)) as u64
 }
 
 fn frame_interval(snapshot: &SidebarSnapshot, ui: &UiState) -> Duration {
+    let refresh_ms = snapshot.sidebar.resolved_refresh_ms();
+    let base = crate::sidebar::timing::animation_frame(refresh_ms);
     // A decaying one-shot flash needs the fast grid to read as motion; it is
     // brief and self-terminating, so the cost is bounded to the transition
     // window. The continuous attention glow deliberately rides the slow
     // cosmetic cadence below — the breath already keeps it warm.
     if ui.scrollbar.fading(ui.animation_phase) || ui.effects.any_active() {
-        return ANIMATION_FRAME;
+        return base;
     }
     // The money rolls click once per `CLICK_PHASES` phases, so a rolling room
     // samples on the matching money grid — one paint per distinct click, and
@@ -608,11 +623,17 @@ fn frame_interval(snapshot: &SidebarSnapshot, ui: &UiState) -> Duration {
     let money_rolling =
         ui.tally.any_rolling(ui.animation_phase) || ui.cost_rolls.any_rolling(ui.animation_phase);
     match render::animation_cadence(snapshot) {
-        render::AnimationCadence::Fast => ANIMATION_FRAME,
-        _ if money_rolling => MONEY_ANIMATION_FRAME,
-        render::AnimationCadence::Slow => SLOW_ANIMATION_FRAME,
-        render::AnimationCadence::None => ANIMATION_FRAME,
+        render::AnimationCadence::Fast => base,
+        _ if money_rolling => {
+            crate::sidebar::timing::money_animation_frame(refresh_ms, render::CLICK_PHASES)
+        }
+        render::AnimationCadence::Slow => crate::sidebar::timing::slow_animation_frame(refresh_ms),
+        render::AnimationCadence::None => base,
     }
+}
+
+fn animation_frame(snapshot: &SidebarSnapshot) -> Duration {
+    crate::sidebar::timing::animation_frame(snapshot.sidebar.resolved_refresh_ms())
 }
 
 fn tick_for(seconds: u64) -> Duration {
@@ -755,7 +776,7 @@ fn apply_input(
     if outcome.redraw {
         // Carry the live spin phase into the instant paint so a keypress mid-spin
         // never rewinds the animation to a stale frame.
-        ui.animation_phase = wall_clock_phase(anim_start);
+        ui.animation_phase = wall_clock_phase(anim_start, snapshot.sidebar.resolved_refresh_ms());
         render::draw_to_terminal_with_ui(terminal, snapshot, health.alert.as_ref(), ui)?;
     }
     if let Some(pane) = outcome.focus {
@@ -774,15 +795,70 @@ fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -
         Wakeup::Scroll { down } => handle_scroll(down, ui),
         Wakeup::Resize => InputOutcome::redraw(),
         // The serve loop intercepts these before dispatching here: a tick, a
-        // ledger delta, or a presence nudge is a re-fetch trigger, worker
+        // typed sidebar event is a re-fetch trigger, worker
         // completions are folded, and a reload re-execs.
-        Wakeup::Tick
-        | Wakeup::Ledger { .. }
-        | Wakeup::PanesChanged
-        | Wakeup::PaneFramePublished
-        | Wakeup::Reload
-        | Wakeup::Snapshot => InputOutcome::default(),
+        Wakeup::Tick | Wakeup::Event(_) | Wakeup::Reload | Wakeup::Snapshot => {
+            InputOutcome::default()
+        }
     }
+}
+
+/// A workspace-scoped envelope (`session_name: None`) targets every renderer
+/// of the workspace; a session-scoped one only the renderers of that session
+/// — pane ids are meaningless outside the session that issued them.
+fn event_targets_this_renderer(envelope: &SidebarEventEnvelope, config: &ServeConfig) -> bool {
+    envelope.workspace_id == config.workspace_id
+        && envelope
+            .session_name
+            .as_deref()
+            .is_none_or(|session| session == config.session_name)
+}
+
+/// Resolve a reload request — the `r` keypress and the typed `Reload` event
+/// share this. `Some(target)` means a differing on-disk binary: the caller
+/// re-execs onto it and exits the loop. A byte-identical or missing binary
+/// skips the re-exec churn but still honours the reload intent with an
+/// immediate producing refetch, so a reload always pulls live data and
+/// un-sticks a tab whose producer has stalled.
+fn reload_or_refetch(
+    session_name: &str,
+    request_tx: &std::sync::mpsc::Sender<FetchRequest>,
+    in_flight: &mut bool,
+    pending_refetch: &mut Option<FetchRequest>,
+) -> Option<std::path::PathBuf> {
+    match reload_action() {
+        ReloadAction::Reexec(target) => {
+            debug!(
+                session = %session_name,
+                target = %target.display(),
+                "reload: on-disk binary differs; re-execing the renderer in place",
+            );
+            return Some(target);
+        }
+        ReloadAction::AlreadyCurrent => {
+            debug!(
+                session = %session_name,
+                "reload: binary unchanged; refetching in place without re-exec",
+            );
+        }
+        // A reload that cannot find its replacement (a partial or in-flight
+        // install) must never make the sidebar vanish — keep serving the
+        // current build and refetch.
+        ReloadAction::Missing => {
+            warn!(
+                session = %session_name,
+                "reload requested but no renderer binary is on disk; refetching in place",
+            );
+        }
+    }
+    request_fetch(
+        request_tx,
+        in_flight,
+        pending_refetch,
+        FetchRequest::hard_refresh(),
+        true,
+    );
+    None
 }
 
 /// Focus the pane on a detached thread so the keypress/click returns instantly:

@@ -158,7 +158,7 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
     let prior = rimz::ledger::agent_context::read_one(&runtime, "codex", session_id);
     if !app_server_due(prior.as_ref(), REFRESH_THROTTLE_SECS) {
         if wrote {
-            let _ = rimz::ledger::wakeup::wake_sidebars_for_context(&runtime, &workspace_id);
+            let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
         }
         return Ok(());
     }
@@ -172,13 +172,13 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
         // App-server unreachable / nothing to record. Transcript context, if it
         // changed, was already written above.
         if wrote {
-            let _ = rimz::ledger::wakeup::wake_sidebars_for_context(&runtime, &workspace_id);
+            let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
         }
         return Ok(());
     };
     merge_app_server_context(&runtime, session_id, context)
         .context("writing app-server agent-context sidecar")?;
-    let _ = rimz::ledger::wakeup::wake_sidebars_for_context(&runtime, &workspace_id);
+    let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
     Ok(())
 }
 
@@ -200,7 +200,7 @@ fn refresh_rate_limits(workspace_id: &str) -> Result<()> {
     };
     if let Some(rate_limits) = context.rate_limits {
         rimz::sidebar::enrich::merge_account_rate_limits(&runtime, "codex", rate_limits);
-        let _ = rimz::ledger::wakeup::wake_sidebars_for_context(&runtime, &workspace_id);
+        let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
     }
     Ok(())
 }

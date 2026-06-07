@@ -45,15 +45,11 @@ use super::theme::{ORANGE, Theme};
 /// breath rather than a strobe.
 const GLOW_MAX_LIGHTNESS: f32 = 16.0;
 
-/// One animation tick in milliseconds — mirrors `app::ANIMATION_FRAME`, the
-/// grid `animation_phase` counts on.
-const FRAME_MS: u64 = 100;
-
 /// Cap on the elapsed time fed into a one-shot per painted frame. A calm room
 /// paints rarely, so a raw phase delta can span seconds; clamping means a
 /// flash spawned after a quiet stretch still plays out over visible frames
 /// instead of expiring inside its first one.
-const MAX_STEP_MS: u64 = 300;
+const MAX_STEP_MS: u64 = crate::sidebar::timing::EFFECT_MAX_STEP_MS;
 
 const FLASH_ENTERED_MS: u32 = 250;
 const FLASH_RESOLVED_MS: u32 = 300;
@@ -167,7 +163,11 @@ impl EffectState {
         buf: &mut Buffer,
         area: Rect,
     ) {
-        let elapsed = Duration::from_millis(step_ms(self.last_phase, phase));
+        let elapsed = Duration::from_millis(step_ms(
+            self.last_phase,
+            phase,
+            u64::from(snapshot.sidebar.resolved_refresh_ms()),
+        ));
         self.last_phase = Some(phase);
 
         let rows: Vec<&SidebarRow> = snapshot
@@ -275,8 +275,8 @@ impl EffectState {
 /// Elapsed milliseconds to feed the effects this frame: the phase delta on the
 /// 100ms grid, zero on the very first pass (nothing jumps), capped so a flash
 /// spawned after a calm stretch still plays out on screen.
-fn step_ms(last: Option<u64>, phase: u64) -> u64 {
-    last.map_or(0, |last| phase.saturating_sub(last) * FRAME_MS)
+fn step_ms(last: Option<u64>, phase: u64, frame_ms: u64) -> u64 {
+    last.map_or(0, |last| phase.saturating_sub(last) * frame_ms)
         .min(MAX_STEP_MS)
 }
 
@@ -520,6 +520,7 @@ mod tests {
             workspace_id,
             display_name: "query-engine".to_owned(),
             generated_at: now,
+            panes_produced_at_ms: None,
             now,
             worktree_groups: vec![SidebarWorktreeGroup {
                 key: "/repo/main".to_owned(),
@@ -596,13 +597,14 @@ mod tests {
 
     #[test]
     fn step_is_zero_first_then_the_phase_delta_capped() {
-        assert_eq!(step_ms(None, 42), 0);
-        assert_eq!(step_ms(Some(7), 8), 100);
-        assert_eq!(step_ms(Some(5), 8), 300);
+        let frame_ms = u64::from(crate::sidebar::timing::DEFAULT_REFRESH_MS);
+        assert_eq!(step_ms(None, 42, frame_ms), 0);
+        assert_eq!(step_ms(Some(7), 8, frame_ms), 100);
+        assert_eq!(step_ms(Some(5), 8, frame_ms), 300);
         // A calm stretch clamps so a fresh flash still plays out on screen.
-        assert_eq!(step_ms(Some(0), 1_000), 300);
+        assert_eq!(step_ms(Some(0), 1_000, frame_ms), 300);
         // A restarted phase base saturates instead of jumping.
-        assert_eq!(step_ms(Some(50), 10), 0);
+        assert_eq!(step_ms(Some(50), 10, frame_ms), 0);
     }
 
     #[test]

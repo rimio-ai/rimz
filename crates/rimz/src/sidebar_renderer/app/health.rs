@@ -1,10 +1,9 @@
 //! Debounced, sticky health of the refresh loop, and the give-up rule that
 //! exits a renderer degraded past rescue.
 
-use std::time::Duration;
-
 use jiff::Timestamp;
 
+pub(super) use crate::sidebar::timing::GIVE_UP_AFTER_DEGRADED;
 use crate::sidebar_renderer::render::Alert;
 
 /// A single transient fetch hiccup must not flash a scary banner: the loop
@@ -70,14 +69,6 @@ pub(super) fn next_health(previous: &Health, failure: Option<String>) -> Health 
         }
     }
 }
-
-/// How long the refresh loop may stay continuously degraded before the renderer
-/// gives up and exits. Generous so a transient mux hiccup or the sub-second gap
-/// while `cargo install` swaps `rimz` never closes a healthy sidebar; short
-/// enough that a genuinely broken renderer (deleted ledger, dead mux, or an old
-/// build past the current runtime contract) heals on the next reload/attach
-/// instead of lingering for minutes.
-pub(super) const GIVE_UP_AFTER_DEGRADED: Duration = Duration::from_secs(30);
 
 /// Whether the refresh loop has been *continuously* degraded past
 /// [`GIVE_UP_AFTER_DEGRADED`]. Keys off the sticky health alert: `since` is

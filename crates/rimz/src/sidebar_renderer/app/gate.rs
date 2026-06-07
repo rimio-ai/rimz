@@ -3,14 +3,13 @@
 //! binding glitch never reaches the screen, bounded by a count and wall-clock
 //! escape hatch so a genuine exit still surfaces promptly.
 
-use std::collections::HashSet;
-use std::time::Duration;
-
 use crate::SidebarSnapshot;
 use crate::ids::PaneId;
 use jiff::Timestamp;
+use std::collections::HashSet;
 
 use super::state::RenderState;
+use crate::sidebar::timing::{ACCEPT_REGRESSION_AFTER, ACCEPT_REGRESSION_AFTER_REJECTS};
 
 /// Sticky state for the last-known-good commit gate, kept beside
 /// [`Health`](super::health::Health) but deliberately orthogonal to it:
@@ -25,22 +24,6 @@ pub struct GateState {
     pub reject_streak: u32,
     pub rejecting_since: Option<Timestamp>,
 }
-
-/// Consecutive holds before the escape hatch accepts a regression anyway. Each
-/// reject fires one immediate self-heal refetch. The rollup is now read fresh
-/// from the atomic `latest.json` each fold (it only ever reflects committed
-/// events), so a multi-frame transient agent-drop no longer occurs — the gate
-/// needs to absorb only a single slipped frame. Two holds confirm a *genuine*
-/// exit (its shell pane survives) and demote it promptly, while a true one-frame
-/// flicker recovers on the first reject's refetch and is never accepted.
-const ACCEPT_REGRESSION_AFTER_REJECTS: u32 = 2;
-
-/// Hard wall-clock ceiling on a hold episode — the load-bearing hatch, since a
-/// slow poll cadence could otherwise stretch the count out. One second caps a
-/// genuine exit on the producer tab (whose reject-refetches each pay a
-/// `list-panes` round-trip) while staying above a single such round-trip, and
-/// well under [`GIVE_UP_AFTER_DEGRADED`](super::health::GIVE_UP_AFTER_DEGRADED).
-const ACCEPT_REGRESSION_AFTER: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CommitDecision {

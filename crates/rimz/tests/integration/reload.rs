@@ -1,7 +1,6 @@
-//! Verifies `rimz reload` delivery: `reload_sidebars` posts the `reload`
-//! control word to every fresh sidebar's wakeup socket and skips stale ones,
-//! returning the count it signaled. The renderer decodes `reload` into a
-//! re-exec (covered by the renderer input unit tests).
+//! Verifies `rimz reload` delivery: `reload_sidebars` posts a typed `Reload`
+//! event to every fresh sidebar's wakeup socket and skips stale ones, returning
+//! the count it signaled. The renderer decodes the event into a re-exec.
 //!
 //! No live mux needed — we plant heartbeats and bound sockets directly under a
 //! `RuntimePaths::under` root and call the library function.
@@ -14,7 +13,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
 use rimz::ledger::RuntimePaths;
-use rimz::ledger::wakeup::{RELOAD_WAKEUP, reload_sidebars};
+use rimz::ledger::wakeup::reload_sidebars;
 use rimz::schema::heartbeat::SidebarHeartbeat;
 use tempfile::TempDir;
 
@@ -73,9 +72,21 @@ fn reload_signals_fresh_sidebars_and_skips_stale() {
 
     recv.set_read_timeout(Some(Duration::from_secs(2)))
         .expect("set read timeout");
-    let mut buf = [0_u8; 64];
+    let mut buf = [0_u8; 4096];
     let n = recv.recv(&mut buf).expect("fresh sidebar receives reload");
-    assert_eq!(&buf[..n], RELOAD_WAKEUP);
+    let parsed: serde_json::Value = serde_json::from_slice(&buf[..n]).expect("parse reload event");
+    assert_eq!(
+        parsed["v"],
+        rimz::schema::sidebar_event::SIDEBAR_EVENT_VERSION
+    );
+    assert_eq!(
+        parsed["workspace_id"],
+        serde_json::to_value(&workspace_id).expect("workspace id json"),
+    );
+    // A reload is workspace-scoped: the envelope carries no session_name.
+    assert!(parsed.get("session_name").is_none());
+    assert!(parsed["sent_at_ms"].as_u64().is_some());
+    assert_eq!(parsed["event"]["kind"], "reload");
 
     // The stale sidebar must not have received anything.
     stale_recv

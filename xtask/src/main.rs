@@ -841,6 +841,7 @@ fn invariants(root: &Path) -> Result<()> {
             "crates/rimz/src/sidebar is read-only on the ledger: no writer, feed-store, bridge, or broker imports",
         )?;
     }
+    ensure_snapshot_json_writes_stay_in_produce(root, &files)?;
 
     // Durability barriers live in one file: every fsync syscall goes through
     // `ledger/atomic.rs`, so the write-class contract is auditable in one
@@ -988,6 +989,98 @@ fn ensure_no_core_pane_auto_use(root: &Path, files: &[PathBuf]) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+fn ensure_snapshot_json_writes_stay_in_produce(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let producer_root = root.join("crates/rimz/src/sidebar/produce");
+    let source_root = root.join("crates/rimz/src");
+    let snapshot_file = concat!("snapshot", ".json");
+    let write_helper = concat!("write_temp_then_", "rename_cache");
+    let mut violations = Vec::new();
+
+    for path in files {
+        if path.extension().and_then(OsStr::to_str) != Some("rs")
+            || !path.starts_with(&source_root)
+            || path.starts_with(&producer_root)
+            || path.file_name().and_then(OsStr::to_str) == Some("tests.rs")
+        {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for block in function_blocks(&text) {
+            if block.body.contains(snapshot_file)
+                && (block.body.contains(write_helper)
+                    || block.body.contains("std::fs::write")
+                    || block.body.contains("fs::write"))
+            {
+                violations.push(format!(
+                    "{}:{}: {}",
+                    path.display(),
+                    block.line,
+                    block.signature.trim()
+                ));
+            }
+        }
+    }
+
+    if violations.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "published pane-frame writes belong in sidebar::produce; realtime events must not patch snapshot.json\n{}",
+        violations.join("\n")
+    );
+}
+
+struct FunctionBlock<'a> {
+    line: usize,
+    signature: &'a str,
+    body: String,
+}
+
+fn function_blocks(text: &str) -> Vec<FunctionBlock<'_>> {
+    let mut blocks = Vec::new();
+    let lines: Vec<&str> = text.lines().collect();
+    let mut idx = 0;
+    while idx < lines.len() {
+        let line = lines[idx];
+        if !line.contains("fn ") {
+            idx += 1;
+            continue;
+        }
+
+        let start = idx;
+        let mut body = String::new();
+        let mut depth = 0_i32;
+        let mut saw_open = false;
+        while idx < lines.len() {
+            let current = lines[idx];
+            body.push_str(current);
+            body.push('\n');
+            for ch in current.chars() {
+                match ch {
+                    '{' => {
+                        depth += 1;
+                        saw_open = true;
+                    }
+                    '}' if saw_open => depth -= 1,
+                    _ => {}
+                }
+            }
+            idx += 1;
+            if saw_open && depth <= 0 {
+                break;
+            }
+        }
+        blocks.push(FunctionBlock {
+            line: start + 1,
+            signature: line,
+            body,
+        });
+    }
+    blocks
 }
 
 /// An inline `mod tests { … }` past this many lines moves to a sibling

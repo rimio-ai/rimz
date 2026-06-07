@@ -1,0 +1,306 @@
+//! Pure fusion of pulled sidebar truth with realtime events.
+//!
+//! Pulled truth remains authoritative. Events newer than the pane frame overlay
+//! latency-sensitive topology, command, and focus changes until the next pull
+//! supersedes them.
+
+use std::collections::HashSet;
+
+use crate::SidebarSnapshot;
+use crate::feed::PaneRef;
+use crate::ids::PaneId;
+use crate::schema::sidebar_event::SidebarEvent;
+use crate::sidebar::events::EventStore;
+
+pub fn fuse(pulled: &SidebarSnapshot, events: &EventStore, now_ms: u64) -> SidebarSnapshot {
+    let baseline = pulled.panes_produced_at_ms.unwrap_or(0);
+    let active = events
+        .active(now_ms)
+        .filter(|event| event.sent_at_ms > baseline)
+        .collect::<Vec<_>>();
+    if active.is_empty() {
+        return pulled.clone();
+    }
+
+    let mut fused = pulled.clone();
+    let mut deleted = HashSet::new();
+    for event in &active {
+        if let SidebarEvent::PaneClosed { pane_id } = &event.event {
+            deleted.insert(pane_id.clone());
+            fused.remove_pane_rows(pane_id);
+        }
+    }
+
+    for event in &active {
+        if let SidebarEvent::PaneOpened {
+            pane_id,
+            command: Some(command),
+        } = &event.event
+        {
+            if deleted.contains(pane_id) {
+                continue;
+            }
+            fused.overlay_opened_pane(placeholder_pane(pane_id.clone(), command.clone()));
+        }
+    }
+
+    for event in &active {
+        if let SidebarEvent::CommandChanged { pane_id, command } = &event.event
+            && !deleted.contains(pane_id)
+        {
+            fused.overlay_pane_command(pane_id, command);
+        }
+    }
+
+    if let Some(focus) = active
+        .iter()
+        .filter_map(|event| match &event.event {
+            SidebarEvent::FocusChanged { focused, unfocused } => {
+                Some((event.sent_at_ms, focused, unfocused))
+            }
+            _ => None,
+        })
+        .max_by_key(|(sent_at_ms, _, _)| *sent_at_ms)
+    {
+        fused.overlay_focus(focus.1, focus.2);
+    }
+
+    fused
+}
+
+fn placeholder_pane(pane_id: PaneId, command: String) -> PaneRef {
+    PaneRef {
+        pane_id,
+        session_name: String::new(),
+        view_id: None,
+        view_kind: None,
+        view_name: None,
+        is_focused: false,
+        command: Some(command),
+        cwd: None,
+        pane_pid: None,
+        pane_process_start: None,
+        rss_kb: None,
+        cpu_pct: None,
+        io_bps: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::ids::{MuxName, WorkspaceId};
+
+    fn ws() -> WorkspaceId {
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-fuse"))
+    }
+
+    fn pane(raw: &str, command: &str) -> PaneRef {
+        PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
+            session_name: "rimz-test".to_owned(),
+            view_id: Some("tab_1".to_owned()),
+            view_kind: Some(crate::ids::ViewKind::Tab),
+            view_name: None,
+            is_focused: false,
+            command: Some(command.to_owned()),
+            cwd: Some("/repo/main".to_owned()),
+            pane_pid: None,
+            pane_process_start: None,
+            rss_kb: None,
+            cpu_pct: None,
+            io_bps: None,
+        }
+    }
+
+    fn pulled(panes: Vec<PaneRef>, produced_at_ms: u64) -> SidebarSnapshot {
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            ws(),
+            Vec::new(),
+            Vec::new(),
+            jiff::Timestamp::now(),
+        )
+        .with_project_root(Some(std::path::PathBuf::from("/repo/main")))
+        .with_live_panes(panes, None);
+        snapshot.panes_produced_at_ms = Some(produced_at_ms);
+        snapshot
+    }
+
+    fn append(store: &mut EventStore, sent_at_ms: u64, event: SidebarEvent) {
+        store.append(event, sent_at_ms, sent_at_ms);
+    }
+
+    fn row_ids(snapshot: &SidebarSnapshot) -> Vec<String> {
+        snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| group.rows.iter().map(|row| row.id.clone()))
+            .collect()
+    }
+
+    fn fuse_n(
+        snapshot: &SidebarSnapshot,
+        store: &EventStore,
+        now_ms: u64,
+        rounds: u32,
+    ) -> Duration {
+        let start = Instant::now();
+        for _ in 0..rounds {
+            let _ = fuse(snapshot, store, now_ms);
+        }
+        start.elapsed()
+    }
+
+    fn fleet_panes(count: usize) -> Vec<PaneRef> {
+        (0..count)
+            .map(|idx| {
+                let mut pane = pane(&format!("terminal_{idx}"), "zsh");
+                pane.cwd = Some(format!("/repo/wt{}", idx / 25));
+                pane
+            })
+            .collect()
+    }
+
+    fn fleet_events(count: usize, baseline_ms: u64) -> EventStore {
+        let mut store = EventStore::default();
+        for idx in 0..count {
+            let pane_id = PaneId::from_parts(MuxName::Zellij, format!("terminal_{idx}"));
+            let event = if idx % 2 == 0 {
+                SidebarEvent::CommandChanged {
+                    pane_id,
+                    command: "cargo build".to_owned(),
+                }
+            } else {
+                SidebarEvent::PaneClosed { pane_id }
+            };
+            append(&mut store, baseline_ms + 1 + idx as u64, event);
+        }
+        store
+    }
+
+    #[test]
+    fn pane_closed_newer_than_pull_deletes_the_card() {
+        let snapshot = pulled(vec![pane("terminal_1", "zsh")], 10);
+        let mut store = EventStore::default();
+        append(
+            &mut store,
+            11,
+            SidebarEvent::PaneClosed {
+                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
+            },
+        );
+
+        assert!(row_ids(&fuse(&snapshot, &store, 11)).is_empty());
+    }
+
+    #[test]
+    fn pull_newer_than_event_supersedes_it() {
+        let snapshot = pulled(vec![pane("terminal_1", "zsh")], 20);
+        let mut store = EventStore::default();
+        append(
+            &mut store,
+            19,
+            SidebarEvent::PaneClosed {
+                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
+            },
+        );
+
+        assert_eq!(
+            row_ids(&fuse(&snapshot, &store, 20)),
+            vec!["zellij:terminal_1"]
+        );
+    }
+
+    #[test]
+    fn command_changed_overlays_process_row_identity() {
+        let snapshot = pulled(vec![pane("terminal_1", "zsh")], 10);
+        let mut store = EventStore::default();
+        append(
+            &mut store,
+            11,
+            SidebarEvent::CommandChanged {
+                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
+                command: "cargo build".to_owned(),
+            },
+        );
+
+        let fused = fuse(&snapshot, &store, 11);
+        let row = &fused.worktree_groups[0].rows[0];
+        assert_eq!(row.id, "zellij:terminal_1");
+        assert_eq!(row.name, "cargo");
+        assert!(row.process_active);
+    }
+
+    #[test]
+    fn pane_opened_placeholder_shares_the_pulled_row_id() {
+        let snapshot = pulled(Vec::new(), 10);
+        let mut store = EventStore::default();
+        append(
+            &mut store,
+            11,
+            SidebarEvent::PaneOpened {
+                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_7"),
+                command: Some("zsh".to_owned()),
+            },
+        );
+
+        let fused = fuse(&snapshot, &store, 11);
+        assert_eq!(row_ids(&fused), vec!["zellij:terminal_7"]);
+    }
+
+    #[test]
+    fn latest_focus_event_sets_the_active_baseline() {
+        let active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let mut snapshot = pulled(
+            vec![pane("terminal_1", "zsh"), pane("terminal_2", "zsh")],
+            10,
+        );
+        snapshot.own_view = Some(crate::SidebarOwnView {
+            sibling_count: 2,
+            own_is_active: false,
+            active_pane_id: None,
+            own_view_is_daemon: false,
+        });
+        let mut store = EventStore::default();
+        append(
+            &mut store,
+            11,
+            SidebarEvent::FocusChanged {
+                focused: vec![PaneId::from_parts(MuxName::Zellij, "terminal_1")],
+                unfocused: Vec::new(),
+            },
+        );
+        append(
+            &mut store,
+            12,
+            SidebarEvent::FocusChanged {
+                focused: vec![active.clone()],
+                unfocused: vec![PaneId::from_parts(MuxName::Zellij, "terminal_1")],
+            },
+        );
+
+        let fused = fuse(&snapshot, &store, 12);
+        assert_eq!(
+            fused.own_view.and_then(|view| view.active_pane_id),
+            Some(active)
+        );
+    }
+
+    #[test]
+    fn fuse_stays_inside_the_frame_bucket_at_fleet_scale() {
+        let snapshot = pulled(fleet_panes(500), 1_000);
+        let store = fleet_events(crate::sidebar::events::MAX_EVENTS, 1_000);
+        let now_ms = 2_000;
+
+        fuse_n(&snapshot, &store, now_ms, 5); // warm
+        let elapsed = fuse_n(&snapshot, &store, now_ms, 20) / 20;
+
+        assert!(
+            elapsed < Duration::from_millis(50),
+            "one fleet-scale fuse took {elapsed:?}; the default 100ms frame grid \
+             leaves no headroom for this"
+        );
+    }
+}

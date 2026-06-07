@@ -18,13 +18,14 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 use super::AgentAdapter;
 use super::descriptor::ThreadKey;
 use super::pricing::PriceBook;
+pub use crate::sidebar::timing::SPENDING_TTL;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -484,17 +485,6 @@ pub fn write_spending_cache(path: &Path, cache: &SpendingDiskCache) {
 }
 
 // ── Provider-spending cache ───────────────────────────────────────────────────
-
-/// How long the producer trusts a published fleet-spending walk before
-/// re-walking every provider's transcript tree. Spend is display-only (the
-/// eased odometer roll absorbs the step) and the walk — discovery readdirs,
-/// per-file stats, the cursor-map parse, the price-book load — is the
-/// producer's largest steady cost, so a coarse TTL pays for itself. One TTL,
-/// no retry split like `ACCOUNTS_RETRY_TTL`: the walk is per-file best-effort
-/// and an empty fleet prices to zero cheaply, so there is no
-/// infrastructure-failure state to re-probe fast — a partial read is a
-/// smaller-than-true figure that heals on the next due walk.
-pub const SPENDING_TTL: Duration = Duration::from_secs(15);
 
 /// The published provider-spending cache: the aggregated [`Spending`] plus the
 /// stamp the producer's [`SPENDING_TTL`] gate reads. A wrapper rather than a
