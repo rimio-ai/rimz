@@ -116,14 +116,22 @@ pub(super) fn apply_fetch_outcome(
     // The gate compares the incoming snapshot against the last frame we actually
     // committed; `current` still holds it until we overwrite it below.
     let fetch_was_ok = outcome.snapshot.is_ok();
+    let final_for_request = outcome.final_for_request;
     let prev_good = current.clone();
-    let computed = compute_next_state(
+    let mut computed = compute_next_state(
         &config.workspace_id,
         None,
         outcome.snapshot,
         last_snapshot.take(),
         health,
     );
+    if fetch_was_ok && !final_for_request {
+        // A fast-lane frame inside an open fetch cycle is paintable data, not a
+        // health verdict. Let the final produce outcome recover or extend the
+        // refresh episode so a repeated produce failure is not masked by the
+        // frameless/status-only fast fold that precedes it.
+        computed.health = health.clone();
+    }
     let (state, next_gate, rejected) =
         apply_gate(computed, fetch_was_ok, &prev_good, gate, Timestamp::now());
     *gate = next_gate;

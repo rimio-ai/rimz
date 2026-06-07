@@ -13,27 +13,19 @@ use super::enrich::{EnrichMode, enrich};
 /// behind this module's read-only boundary and never import `crate::ledger`.
 pub use crate::ledger::snapshot::RollupCursor;
 
-/// The event-fresh ledger rollup for a consumer, read in process: `latest.json`
-/// when it reflects the log (lock-free, O(snapshot)), else a re-projection
-/// folded through the caller's [`RollupCursor`] — O(new log bytes) per delta
-/// from the in-memory base, and a fresh cursor folds cold, so a one-shot
-/// caller just passes `&mut RollupCursor::new()`. The read-only twin of the
+/// The event-fresh ledger rollup, read in process: `latest.json` when it
+/// reflects the log (lock-free, O(snapshot)), else a re-projection folded
+/// through the caller's [`RollupCursor`] — O(new log bytes) per delta from
+/// the in-memory base, and a fresh cursor folds cold, so a one-shot caller
+/// just passes `&mut RollupCursor::new()`. The read-only twin of the
 /// producer's `Ledger::snapshot_cached`, exposed so a consumer tab folds the
 /// freshest rollup over the producer's coalesced panes without holding a
 /// writer handle — the rollup is what makes a status change or a new agent in
 /// an existing pane repaint within one wakeup, independent of the slower
-/// pane-list cadence. `None` only when the ledger itself is unreadable, which
-/// the caller treats as a soft miss and holds the last good frame.
-fn consumer_rollup(state: &StatePaths, cursor: &mut RollupCursor) -> Option<SidebarSnapshot> {
-    rollup_snapshot(state, cursor).ok()
-}
-
-/// [`consumer_rollup`] with the error chain preserved: the produce pipeline and
-/// one-shot CLI reads surface *why* the ledger was unreadable (a torn frame, a
-/// permissions failure) instead of folding it into a soft miss. One
-/// implementation under both shapes — the loop-shaped consumer read swallows
-/// the error because its recovery is "hold the last good frame", where a
-/// produce or inspection call reports it.
+/// pane-list cadence. `Err` preserves *why* the ledger was unreadable (a torn
+/// frame, a permissions failure): the serve loop treats it as a soft miss —
+/// hold the last good frame, name the cause on the health line — where a
+/// produce or inspection call propagates it.
 pub fn rollup_snapshot(
     state: &StatePaths,
     cursor: &mut RollupCursor,
@@ -44,14 +36,17 @@ pub fn rollup_snapshot(
     }
 }
 
-/// Render the published snapshot for a consumer renderer, entirely from runtime
-/// caches and sidecars — no `list-panes`, no git. Reads the producer's coalesced
-/// pane list from `snapshot.json`, pairs it with the **event-fresh** rollup read
-/// in process from `latest.json` (`consumer_rollup`), folds the session and
-/// subagent statusline context plus per-tool activity, overlays the panes with
-/// this renderer's own-pane exclusion, and projects the cached diff stats. `None`
-/// until the producer has published a pane set (or if the ledger is unreadable),
-/// so the caller holds its last good frame.
+/// Render the consumer snapshot entirely from runtime caches and sidecars — no
+/// `list-panes`, no git. Reads the **event-fresh** rollup in process from
+/// `latest.json` (`consumer_rollup`), folds the producer's coalesced pane list
+/// from `snapshot.json` when one exists, folds the session and subagent
+/// statusline context plus per-tool activity, overlays the panes with this
+/// renderer's own-pane exclusion, and projects the cached diff stats. Before
+/// the producer's first pane-frame publish, the fold is intentionally
+/// frameless: `panes_produced_at_ms == None` and no pane-admitted cards render,
+/// while ledger metadata can still paint. `Err` means the ledger rollup itself
+/// was unreadable and carries why; the serve loop holds its last good frame
+/// and surfaces the reason.
 ///
 /// Pairing fresh rollup + coalesced panes is the lag fix: a `LedgerDelta` folds
 /// the new agent/status in this tab within one wakeup, while the slower
@@ -70,15 +65,8 @@ pub fn read_published_snapshot(
     runtime: &RuntimePaths,
     session: &str,
     exclude: Option<&PaneId>,
-) -> Option<SidebarSnapshot> {
-    let cache_path = runtime.root.join("snapshot.json");
-    let cache = read_snapshot_cache(&cache_path, session)?;
-    let base = consumer_rollup(state, cursor)?;
-    Some(enrich(
-        base,
-        Some(cache),
-        runtime,
-        exclude,
-        EnrichMode::Cached,
-    ))
+) -> crate::ledger::snapshot::Result<SidebarSnapshot> {
+    let base = rollup_snapshot(state, cursor)?;
+    let cache = read_snapshot_cache(&runtime.root.join("snapshot.json"), session);
+    Ok(enrich(base, cache, runtime, exclude, EnrichMode::Cached))
 }

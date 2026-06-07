@@ -63,8 +63,9 @@ pub(super) struct FetchOutcome {
 /// no git. This is the paint that lands a status flip or a cost update within
 /// one wakeup, in single-digit milliseconds — and it runs even over an aged
 /// pane frame, so a dead producer stales only pane *presence* while status
-/// keeps flowing. Skipped only when no usable frame exists (cold start); the
-/// produce below recovers that.
+/// keeps flowing. On cold start, before any usable frame exists, this still
+/// returns a frameless rollup snapshot so startup waits do not read as refresh
+/// failures; the produce below recovers the pane frame.
 ///
 /// **Produce lane (the elder's reconciliation):**
 /// [`crate::sidebar::produce::produce_snapshot`] runs in process on this same
@@ -112,6 +113,7 @@ fn run_fetch_cycle(
     // never coast on a young stamp it could not use.
     let frame_age_ms = fast
         .as_ref()
+        .ok()
         .and(published_frame_produced_at_ms)
         .map(|produced_at_ms| now_ms.saturating_sub(produced_at_ms));
     let produce = produce_this_cycle(
@@ -120,19 +122,32 @@ fn run_fetch_cycle(
         frame_age_ms,
         tick_for(config.tick_seconds).as_millis() as u64,
     );
-    let fast_has_request_fresh_frame = fast.as_ref().is_some_and(|_| {
-        request.published_frame_hint
-            || request.min_pane_cache_ms.is_some_and(|min| {
-                published_frame_produced_at_ms.is_some_and(|produced_at_ms| produced_at_ms >= min)
-            })
+    let fast_has_request_fresh_frame = fast.as_ref().is_ok_and(|snapshot| {
+        snapshot.panes_produced_at_ms.is_some()
+            && (request.published_frame_hint
+                || request.min_pane_cache_ms.is_some_and(|min| {
+                    published_frame_produced_at_ms
+                        .is_some_and(|produced_at_ms| produced_at_ms >= min)
+                }))
     });
-    let fast_posted = fast.is_some();
-    if let Some(snapshot) = fast {
-        post(FetchOutcome {
+    match fast {
+        Ok(snapshot) => post(FetchOutcome {
             snapshot: Ok(snapshot),
             final_for_request: !produce,
             fresh_pane_frame: fast_has_request_fresh_frame,
-        });
+        }),
+        // The consumer lane only misses when the ledger rollup itself could
+        // not be read — a missing pane frame is a successful frameless fold.
+        // With no produce to deliver the cycle's verdict, the miss is final
+        // and carries the rollup error so the health line names the cause.
+        Err(err) if !produce => post(FetchOutcome {
+            snapshot: Err(err.to_string()),
+            final_for_request: true,
+            fresh_pane_frame: false,
+        }),
+        // An unreadable rollup on a producing cycle defers to the produce
+        // below, which folds the same ledger and reports its own error.
+        Err(_) => {}
     }
     if produce {
         let opts = crate::sidebar::produce::ProduceOptions {
@@ -147,14 +162,6 @@ fn run_fetch_cycle(
             }),
             final_for_request: true,
             fresh_pane_frame: request.mode.produces_fresh_panes(),
-        });
-    } else if !fast_posted {
-        // Consumer with no published frame yet (cold start): report the soft
-        // miss so the gate holds its last good frame.
-        post(FetchOutcome {
-            snapshot: Err("waiting for the producer's first published snapshot".to_owned()),
-            final_for_request: true,
-            fresh_pane_frame: false,
         });
     }
 }

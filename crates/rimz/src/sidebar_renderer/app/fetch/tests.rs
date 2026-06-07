@@ -189,6 +189,131 @@ fn consumer_never_produces_unforced_however_stale_the_frame() {
 }
 
 #[test]
+fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = workspace();
+    let state = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
+    let runtime = RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap();
+    state.ensure_dirs().unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mut rollup = SidebarSnapshot::build(
+        workspace_id.clone(),
+        Vec::new(),
+        Vec::new(),
+        jiff::Timestamp::now(),
+    );
+    rollup.display_name = "cold-room".to_owned();
+    rollup.reflects_log = Some(crate::ledger::event_log::LogExtent {
+        generation: 0,
+        offset: 0,
+    });
+    // A plain test-fixture write: the renderer's import graph stays free of
+    // ledger writer APIs (`cargo xtask invariants`).
+    std::fs::write(&state.latest_snapshot, serde_json::to_vec(&rollup).unwrap()).unwrap();
+
+    let elder = SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da04").unwrap();
+    let younger = SidebarInstanceId::parse("sb_019e8c565bbd7b22854f93a905e1034c").unwrap();
+    crate::sidebar::write_heartbeat(
+        &runtime,
+        workspace_id.clone(),
+        &elder,
+        MuxName::Zellij,
+        "rimz-test",
+        &runtime.sock_dir.join("elder.sock"),
+        None,
+    )
+    .unwrap();
+
+    let config = ServeConfig {
+        workspace_id,
+        mux: MuxName::Zellij,
+        session_name: "rimz-test".to_owned(),
+        instance_id: younger,
+        tick_seconds: 2,
+    };
+    let mut cursor = RollupCursor::new();
+    let mut outcomes = Vec::new();
+    run_fetch_cycle(
+        &config,
+        &runtime,
+        &state,
+        FetchRequest::default(),
+        &mut cursor,
+        &mut |outcome| outcomes.push(outcome),
+    );
+
+    assert_eq!(outcomes.len(), 1);
+    let outcome = outcomes.pop().unwrap();
+    assert!(outcome.final_for_request);
+    assert!(!outcome.fresh_pane_frame);
+    let snapshot = outcome
+        .snapshot
+        .expect("waiting for the first pane frame is not a failed fetch");
+    assert_eq!(snapshot.display_name, "cold-room");
+    assert_eq!(snapshot.panes_produced_at_ms, None);
+    assert!(
+        snapshot.worktree_groups.is_empty(),
+        "frameless folds carry rollup metadata but admit no pane cards"
+    );
+}
+
+#[test]
+fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = workspace();
+    let state = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
+    let runtime = RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap();
+    state.ensure_dirs().unwrap();
+    runtime.ensure_dirs().unwrap();
+    // A directory where the event log should be: the row scan's read fails,
+    // and with no `latest.json` the rollup read has no fallback.
+    std::fs::create_dir_all(&state.events_log).unwrap();
+
+    let elder = SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da04").unwrap();
+    let younger = SidebarInstanceId::parse("sb_019e8c565bbd7b22854f93a905e1034c").unwrap();
+    crate::sidebar::write_heartbeat(
+        &runtime,
+        workspace_id.clone(),
+        &elder,
+        MuxName::Zellij,
+        "rimz-test",
+        &runtime.sock_dir.join("elder.sock"),
+        None,
+    )
+    .unwrap();
+
+    let config = ServeConfig {
+        workspace_id,
+        mux: MuxName::Zellij,
+        session_name: "rimz-test".to_owned(),
+        instance_id: younger,
+        tick_seconds: 2,
+    };
+    let mut cursor = RollupCursor::new();
+    let mut outcomes = Vec::new();
+    run_fetch_cycle(
+        &config,
+        &runtime,
+        &state,
+        FetchRequest::default(),
+        &mut cursor,
+        &mut |outcome| outcomes.push(outcome),
+    );
+
+    assert_eq!(outcomes.len(), 1);
+    let outcome = outcomes.pop().unwrap();
+    assert!(outcome.final_for_request);
+    assert!(!outcome.fresh_pane_frame);
+    let reason = outcome
+        .snapshot
+        .expect_err("an unreadable ledger rollup is the one failed consumer read");
+    assert!(
+        reason.contains(&state.events_log.display().to_string()),
+        "the outcome names the unreadable path, got: {reason}"
+    );
+}
+
+#[test]
 fn fetch_request_sends_immediately_when_idle() {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut in_flight = false;

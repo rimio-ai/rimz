@@ -18,12 +18,11 @@ use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
 use rimz::ledger::paths::env_path;
 use rimz::ledger::workspace_record;
 use rimz::schema::sidebar_event::SidebarEvent;
+use rimz::sidebar::consumer::read_published_snapshot;
 use rimz::sidebar::produce::{
     ProduceOptions, pane_fixture_active, produce_rollup_snapshot, produce_snapshot,
 };
 use rimz::sidebar::{cache::write_presence_stamp, consumer::RollupCursor};
-use rimz::sidebar::{consumer::read_published_snapshot, consumer::rollup_snapshot};
-use rimz::sidebar::{enrich::EnrichMode, enrich::enrich};
 use rimz::workspace::WorkspaceResolver;
 use rimz::{RuntimePaths, StatePaths};
 
@@ -180,33 +179,23 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             };
 
             // Consumer: render the producer's published frame in process. A
-            // cold cache (no publish yet) falls back to the bare rollup with
-            // the same read-only enrichments until the next tick. One-shot
-            // CLI process, so a fresh cursor (a cold fold) is the only kind.
+            // cold cache (no publish yet) returns the bare rollup with the
+            // same read-only enrichments until the next tick. One-shot CLI
+            // process, so a fresh cursor (a cold fold) is the only kind.
             // A pane fixture defers to the produce path, which short-circuits
             // on it — deterministic tests neither poison nor read the cache.
             if !produce
                 && !pane_fixture_active()
                 && let Some(session) = session_name.as_deref()
             {
-                let snapshot = match read_published_snapshot(
+                let snapshot = read_published_snapshot(
                     &mut RollupCursor::new(),
                     &state,
                     &runtime,
                     session,
                     exclude.as_ref(),
-                ) {
-                    Some(snapshot) => snapshot,
-                    // Cold start: no published panes yet, so own-view is not
-                    // computed and no cards are frame-admitted yet.
-                    None => enrich(
-                        rollup_snapshot(&state, &mut RollupCursor::new())?,
-                        None,
-                        &runtime,
-                        exclude.as_ref(),
-                        EnrichMode::Cached,
-                    ),
-                };
+                )
+                .context("reading the consumer snapshot")?;
                 return emit(&snapshot);
             }
 

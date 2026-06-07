@@ -275,23 +275,62 @@ fn consumer_own_view_counts_siblings_in_its_own_tab() {
 }
 
 #[test]
-fn read_published_snapshot_is_none_until_the_producer_publishes() {
+fn read_published_snapshot_is_frameless_until_the_producer_publishes() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
     // No published pane set yet (the producer hasn't run), so the consumer
-    // read is `None` regardless of the rollup — the caller holds last-good.
+    // read folds the ledger rollup without pane-admitted cards rather than
+    // reporting a failed snapshot.
+    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    state.ensure_dirs().unwrap();
+    let mut rollup = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
+    rollup.display_name = "cold-room".to_owned();
+    rollup.reflects_log = Some(crate::ledger::event_log::LogExtent {
+        generation: 0,
+        offset: 0,
+    });
+    atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
+
+    let snapshot = read_published_snapshot(
+        &mut RollupCursor::new(),
+        &state,
+        &runtime,
+        "rimz-test",
+        None,
+    )
+    .expect("frameless rollup");
+
+    assert_eq!(snapshot.display_name, "cold-room");
+    assert_eq!(snapshot.panes_produced_at_ms, None);
+    assert!(snapshot.worktree_groups.is_empty());
+}
+
+#[test]
+fn read_published_snapshot_reports_why_the_ledger_was_unreadable() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
     let state = StatePaths::under(workspace, dir.path()).unwrap();
+    state.ensure_dirs().unwrap();
+    // A directory where the event log should be: the row scan's read fails,
+    // and with no `latest.json` the rollup read has no fallback.
+    std::fs::create_dir_all(&state.events_log).unwrap();
+
+    let err = read_published_snapshot(
+        &mut RollupCursor::new(),
+        &state,
+        &runtime,
+        "rimz-test",
+        None,
+    )
+    .expect_err("an unreadable ledger rollup is the one failed consumer read");
     assert!(
-        read_published_snapshot(
-            &mut RollupCursor::new(),
-            &state,
-            &runtime,
-            "rimz-test",
-            None
-        )
-        .is_none()
+        err.to_string()
+            .contains(&state.events_log.display().to_string()),
+        "the error names the unreadable path, got: {err}"
     );
 }
 

@@ -135,3 +135,46 @@ fn recovery_marks_alert_recovered_and_keeps_it_sticky() {
     assert!(alert.recovered_at.is_some());
     assert_eq!(recovered.health.failure_streak, 0);
 }
+
+#[test]
+fn non_final_fast_success_does_not_recover_refresh_health() {
+    let ws = workspace();
+    let config = ServeConfig {
+        workspace_id: ws.clone(),
+        mux: crate::MuxName::Zellij,
+        session_name: "rimz-test".to_owned(),
+        instance_id: crate::SidebarInstanceId::new(),
+        tick_seconds: 1,
+    };
+    let mut last_snapshot = Some(snapshot(&ws));
+    let mut current = snapshot(&ws);
+    let mut health = degraded_health("snapshot failed: produce");
+    let mut gate = GateState::default();
+    let mut self_close = SelfCloseState::default();
+    let mut ui = UiState::default();
+
+    let applied = apply_fetch_outcome(
+        &config,
+        FetchOutcome {
+            snapshot: Ok(snapshot(&ws)),
+            final_for_request: false,
+            fresh_pane_frame: false,
+        },
+        &mut last_snapshot,
+        &mut current,
+        &mut health,
+        &mut gate,
+        &mut self_close,
+        &mut ui,
+        std::time::Instant::now(),
+    )
+    .expect("apply non-final fast frame");
+
+    assert!(!applied.should_exit);
+    assert!(!applied.rejected);
+    assert_eq!(health.failure_streak, ALERT_AFTER_FAILURES);
+    assert!(
+        health.alert.as_ref().is_some_and(|alert| alert.is_active()),
+        "only a final success may mark the refresh loop recovered"
+    );
+}
