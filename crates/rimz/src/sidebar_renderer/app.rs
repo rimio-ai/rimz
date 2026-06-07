@@ -346,10 +346,6 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     // *pulled* sibling-count verdict may release it, so a fused
                     // close never paints the grown full-width frame on its way out.
                     event if event.is_overlay() => {
-                        let topology_event = matches!(
-                            event,
-                            SidebarEvent::PaneClosed { .. } | SidebarEvent::PaneOpened { .. }
-                        );
                         let now_ms = crate::sidebar::cache::unix_now_ms();
                         event_store.append(event, sent_at_ms, now_ms);
                         let fused = fuse(&last_pulled, &event_store, now_ms);
@@ -370,7 +366,14 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                         )?;
                         should_exit = applied.should_exit;
                         dirty = true;
-                        if !should_exit && (topology_event || requests_verification) {
+                        // Snap the frame deadline so this turn's frame phase
+                        // paints the fused frame now — the same instant
+                        // feedback input gets — instead of waiting out a grid
+                        // boundary armed before this event landed. The grid
+                        // re-anchors off this paint, so a burst of events
+                        // still coalesces to one paint per base frame.
+                        next_frame = Instant::now();
+                        if !should_exit && requests_verification {
                             request_fetch(
                                 &request_tx,
                                 &mut in_flight,
@@ -543,7 +546,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         // what stops the last frame from flashing at the grown/full width on the
         // way out. `!paint_held`: a grow resize defers its paint until the
         // sibling-count verdict releases the hold (see the resize handler).
-        if !should_exit && !paint_held && active && now >= next_frame {
+        // `active || dirty`: `active` is the turn-entry view, so a fold this
+        // turn re-activates the phase through the `dirty` it set — without it,
+        // an overlay event landing in an idle room would wait out one more
+        // recv before its snapped deadline could paint.
+        if !should_exit && !paint_held && (active || dirty) && now >= next_frame {
             ui.animation_phase =
                 wall_clock_phase(anim_start, current.sidebar.resolved_refresh_ms());
             let animating = render::animation_cadence(&current) != render::AnimationCadence::None
@@ -561,7 +568,10 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 dirty = false;
             }
             next_frame = next_frame_after(next_frame, now, frame_interval(&current, &ui));
-        } else if !active {
+        } else if !active && !dirty {
+            // Idle re-arm only: with a fold pending (`dirty`), the armed
+            // boundary must hold — re-arming here would push a paint already
+            // due within one frame out by another.
             next_frame = now + animation_frame(&current);
         }
     }

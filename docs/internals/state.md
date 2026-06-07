@@ -82,7 +82,7 @@ Any node may broadcast typed events to every fresh sidebar heartbeat: ledger wri
 
 `[sidebar] refresh_ms` is the base render grid and defaults to `DEFAULT_REFRESH_MS`. It rides `snapshot.sidebar`, so the renderer uses the default until the first fold and picks up config changes on later folds without reading config itself.
 
-Money rolls sample on `refresh_ms * CLICK_PHASES`, matching the odometer phase counter. Cosmetic attention breath keeps its absolute `SLOW_ANIMATION_FRAME` floor and clamps to at least the configured base. Input paints synchronously off-grid; an overlay event fuses on arrival and paints within one base frame — immediately in an idle room, coalesced to the next boundary while animating.
+Money rolls sample on `refresh_ms * CLICK_PHASES`, matching the odometer phase counter. Cosmetic attention breath keeps its absolute `SLOW_ANIMATION_FRAME` floor and clamps to at least the configured base. Input paints synchronously off-grid; an overlay event fuses on arrival and paints on the spot, and a burst of events still coalesces to one paint per base frame.
 
 The data backstop remains `rimz sidebar serve --tick-seconds`. Changing `refresh_ms` changes paint cadence, not pull cadence.
 
