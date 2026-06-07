@@ -46,6 +46,24 @@ impl EventEnvelope {
         }
     }
 
+    /// Constructor for the `session.rebirth` boundary a genuine mux-session
+    /// birth appends. A reborn session renumbers panes from zero, so every
+    /// pane stamp recorded before this instant names a pane that no longer
+    /// exists — the agent rollup fold clears them all at this point in the
+    /// log ([`crate::ledger::snapshot`]'s reducer), keeping a prior
+    /// incarnation's session off a reused pane id. The sessions themselves
+    /// stay: the boundary unstamps, it never tombstones.
+    pub fn session_rebirth(workspace_id: WorkspaceId, session_name: impl Into<String>) -> Self {
+        Self::new(
+            workspace_id,
+            session_name,
+            "rimz",
+            "runtime",
+            "session.rebirth",
+            json!({}),
+        )
+    }
+
     /// Convenience constructor for a `feed.push` event from a `FeedItem`.
     pub fn feed_pushed(item: &FeedItem, session_name: impl Into<String>) -> Self {
         Self::new(

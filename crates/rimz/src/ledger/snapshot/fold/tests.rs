@@ -690,3 +690,30 @@ proptest::proptest! {
         );
     }
 }
+
+#[test]
+fn rebirth_boundary_unstamps_carryover_agents() {
+    // The carryover predates every event in the current log, so a rebirth
+    // boundary anywhere in the window clears its stamps too — a rotated-out
+    // session can no more own a reborn pane id than an in-log one.
+    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+    let carried = agent("codex", "sess-old", AgentStatus::Success, 1_000).in_pane("terminal_6");
+    let boundary = EventEnvelope::session_rebirth(workspace, "session");
+
+    let merged = agent_rollup_with_carryover(&[boundary], vec![carried.clone()]);
+    assert_eq!(
+        merged.len(),
+        1,
+        "the boundary unstamps, it never tombstones"
+    );
+    assert!(
+        merged[0].pane.is_none(),
+        "a carryover stamp predates the boundary and clears"
+    );
+
+    let untouched = agent_rollup_with_carryover(&[], vec![carried]);
+    assert!(
+        untouched[0].pane.is_some(),
+        "no boundary in the window keeps the carryover stamp"
+    );
+}

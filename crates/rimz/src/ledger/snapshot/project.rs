@@ -45,17 +45,31 @@ pub(super) fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
         .collect()
 }
 
-/// [`reduce_agent_states`] resuming from a prior fold map. Each event reads
-/// only its own key's prior state, so folding a delta onto the map the
-/// earlier prefix produced equals folding the whole log from scratch — the
-/// property the incremental [`catch_up_rollup`] and the rotation carryover
-/// both stand on.
+/// [`reduce_agent_states`] resuming from a prior fold map. Each lifecycle
+/// event reads only its own key's prior state, and the rebirth boundary is a
+/// pointwise transform of the whole map at its log position — either way,
+/// folding a delta onto the map the earlier prefix produced equals folding
+/// the whole log from scratch, the property the incremental
+/// [`catch_up_rollup`] and the rotation carryover both stand on.
 pub(super) fn reduce_agent_states_seeded(
     seed: BTreeMap<(AgentKind, AgentSessionId), AgentState>,
     events: &[EventEnvelope],
 ) -> BTreeMap<(AgentKind, AgentSessionId), AgentState> {
     let mut map = seed;
     for event in events {
+        // A mux rebirth renumbers panes from zero, so every stamp recorded
+        // before the boundary names a pane that no longer exists — and the
+        // reborn session reuses those ids for new panes. Clear them all here,
+        // in log order, so a prior incarnation's session can never bind (or
+        // block recovery of) a reused pane id; a stamp recorded by a later
+        // event is the new incarnation's and stays. Sessions themselves are
+        // kept — the boundary unstamps, it never tombstones.
+        if event.method == "session.rebirth" {
+            for state in map.values_mut() {
+                state.pane = None;
+            }
+            continue;
+        }
         if event.method != "agent.lifecycle" {
             continue;
         }

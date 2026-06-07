@@ -549,12 +549,14 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     let resume_plan = if was_live {
         rimz::resume::ResumePlan::default()
     } else {
-        plan_room_resume(
+        let plan = plan_room_resume(
             &workspace.workspace_id,
             &workspace.session_name,
             &machine_config.resume,
             args.no_resume,
-        )
+        );
+        record_rebirth_boundary(&workspace.workspace_id, &workspace.session_name);
+        plan
     };
     launch_sidebar_for_workspace(backend.as_ref(), &room, daemon.as_ref(), &resume_plan.panes);
     maybe_launch_remote_control(
@@ -763,12 +765,14 @@ fn attach_cwd(mode: AttachMode, no_resume: bool, globals: &GlobalFlags) -> Resul
     let resume_plan = if was_live {
         rimz::resume::ResumePlan::default()
     } else {
-        plan_room_resume(
+        let plan = plan_room_resume(
             &workspace.workspace_id,
             &workspace.session_name,
             &machine_config.resume,
             no_resume,
-        )
+        );
+        record_rebirth_boundary(&workspace.workspace_id, &workspace.session_name);
+        plan
     };
     let room = RoomTarget {
         workspace_id: &workspace.workspace_id,
@@ -824,12 +828,14 @@ fn attach_named(
             let resume_plan = if was_live {
                 rimz::resume::ResumePlan::default()
             } else {
-                plan_room_resume(
+                let plan = plan_room_resume(
                     &record.workspace_id,
                     &record.session_name,
                     &machine_config.resume,
                     no_resume,
-                )
+                );
+                record_rebirth_boundary(&record.workspace_id, &record.session_name);
+                plan
             };
             let room = RoomTarget {
                 workspace_id: &record.workspace_id,
@@ -1027,6 +1033,28 @@ fn plan_room_resume(
         tracing::warn!(workspace = %workspace_id, error = %err, "resume planning skipped");
         rimz::resume::ResumePlan::default()
     })
+}
+
+/// Draw the rebirth boundary in the ledger: a reborn mux session renumbers
+/// panes from zero, so every pane stamp in the rollup now names a pane that no
+/// longer exists — and the new session reuses those ids. The appended
+/// `session.rebirth` event makes the fold clear all prior stamps, so a stale
+/// session can never bind (or block stamp recovery of) a reborn pane id.
+/// Called only on a genuine birth (`!was_live`), *after* resume planning —
+/// the planner reads the old stamps to pick its candidates. Best-effort like
+/// the plan itself: boundary hygiene never blocks the launch.
+fn record_rebirth_boundary(workspace_id: &rimz::WorkspaceId, session_name: &str) {
+    let appended = (|| -> Result<()> {
+        let paths = StatePaths::for_workspace(workspace_id.clone())?;
+        let runtime = RuntimePaths::for_workspace(workspace_id.clone())?;
+        let ledger = Ledger::open(paths, runtime)?;
+        let event = rimz::EventEnvelope::session_rebirth(workspace_id.clone(), session_name);
+        ledger.append_event(&event)?;
+        Ok(())
+    })();
+    if let Err(err) = appended {
+        tracing::warn!(workspace = %workspace_id, error = %err, "rebirth boundary skipped");
+    }
 }
 
 /// Tell the user which prior agents the reborn room brought back, and which it

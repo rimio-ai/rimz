@@ -49,8 +49,17 @@ pub(crate) fn write_carryover(path: &Path, carryover: &EventCarryover) -> Result
 
 pub(crate) fn agent_rollup_with_carryover(
     events: &[EventEnvelope],
-    carryover_agents: Vec<AgentState>,
+    mut carryover_agents: Vec<AgentState>,
 ) -> Vec<AgentState> {
+    // The carryover predates every event in the current log, so a rebirth
+    // boundary anywhere in `events` postdates every carryover stamp — clear
+    // them here, mirroring the in-order clear the seeded reducer applies to
+    // within-log stamps (`reduce_agent_states_seeded`).
+    if events.iter().any(|event| event.method == "session.rebirth") {
+        for agent in &mut carryover_agents {
+            agent.pane = None;
+        }
+    }
     let live = reduce_agent_states(events);
     let tombstones = agent_tombstones_for_events(events);
     merge_agent_rollups_with_tombstones(&carryover_agents, &live, &tombstones)
