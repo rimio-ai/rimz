@@ -139,7 +139,9 @@ fn stamp_pane_process_starts(
 /// for a tick; without one the pane groups under `external` and flickers there
 /// until the mux reports the path. Only an empty cwd is ever filled — a
 /// mux-reported cwd is authoritative because it tracks OSC7/foreground chdir,
-/// which can diverge from the root's `/proc` cwd.
+/// which can diverge from the root's `/proc` cwd. A `/proc` cwd that no longer
+/// exists is also skipped, since Linux annotates deleted cwd targets with a
+/// publish-unsafe `" (deleted)"` suffix.
 fn backfill_pane_cwds(frame: &mut PaneFrame, proc_cwd: &dyn Fn(u32) -> Option<PathBuf>) {
     for pane in frame.pane_states_mut() {
         if pane
@@ -153,7 +155,10 @@ fn backfill_pane_cwds(frame: &mut PaneFrame, proc_cwd: &dyn Fn(u32) -> Option<Pa
         let Some(pid) = pane.current.pid else {
             continue;
         };
-        if let Some(cwd) = proc_cwd(pid).and_then(|path| path.into_os_string().into_string().ok()) {
+        if let Some(cwd) = proc_cwd(pid)
+            .filter(|path| path.exists())
+            .and_then(|path| path.into_os_string().into_string().ok())
+        {
             pane.current.cwd = Some(cwd);
         }
     }

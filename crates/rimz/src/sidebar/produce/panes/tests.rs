@@ -45,30 +45,42 @@ fn rotate_from_cache_is_noop_without_prior() {
 
 #[test]
 fn backfill_pane_cwds_repairs_a_raced_empty_cwd_from_proc() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().to_path_buf();
+    let expected = cwd.to_string_lossy().into_owned();
     let seen = std::cell::Cell::new(None);
     let mut frame = frame(vec![pane("terminal_1", Some("zsh"), None)]);
     first_mut(&mut frame).current.pid = Some(100);
 
     backfill_pane_cwds(&mut frame, &|pid| {
         seen.set(Some(pid));
-        Some(PathBuf::from("/repo/wt"))
+        Some(cwd.clone())
     });
 
     assert_eq!(seen.get(), Some(100));
-    assert_eq!(first(&frame).current.cwd.as_deref(), Some("/repo/wt"));
+    assert_eq!(
+        first(&frame).current.cwd.as_deref(),
+        Some(expected.as_str())
+    );
 }
 
 #[test]
 fn backfill_pane_cwds_repairs_an_empty_string_cwd() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().to_path_buf();
+    let expected = cwd.to_string_lossy().into_owned();
     let mut frame = frame(vec![pane("terminal_1", Some("zsh"), Some(""))]);
     first_mut(&mut frame).current.pid = Some(100);
 
     backfill_pane_cwds(&mut frame, &|pid| {
         assert_eq!(pid, 100);
-        Some(PathBuf::from("/repo/wt"))
+        Some(cwd.clone())
     });
 
-    assert_eq!(first(&frame).current.cwd.as_deref(), Some("/repo/wt"));
+    assert_eq!(
+        first(&frame).current.cwd.as_deref(),
+        Some(expected.as_str())
+    );
 }
 
 #[test]
@@ -96,16 +108,22 @@ fn backfill_pane_cwds_leaves_a_pidless_pane_untouched() {
 
 #[test]
 fn backfill_pane_cwds_repairs_a_command_less_pane() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().to_path_buf();
+    let expected = cwd.to_string_lossy().into_owned();
     let mut frame = frame(vec![pane("terminal_1", None, None)]);
     first_mut(&mut frame).current.pid = Some(100);
 
     backfill_pane_cwds(&mut frame, &|pid| {
         assert_eq!(pid, 100);
-        Some(PathBuf::from("/repo/wt"))
+        Some(cwd.clone())
     });
 
     assert_eq!(first(&frame).current.command, None);
-    assert_eq!(first(&frame).current.cwd.as_deref(), Some("/repo/wt"));
+    assert_eq!(
+        first(&frame).current.cwd.as_deref(),
+        Some(expected.as_str())
+    );
 }
 
 #[test]
@@ -116,6 +134,23 @@ fn backfill_pane_cwds_skips_a_pane_with_no_proc_cwd() {
     backfill_pane_cwds(&mut frame, &|pid| {
         assert_eq!(pid, 100);
         None
+    });
+
+    assert_eq!(first(&frame).current.cwd, None);
+}
+
+#[test]
+fn backfill_pane_cwds_skips_a_proc_cwd_that_no_longer_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let deleted = dir.path().join("gone");
+    std::fs::create_dir(&deleted).unwrap();
+    std::fs::remove_dir(&deleted).unwrap();
+    let mut frame = frame(vec![pane("terminal_1", Some("zsh"), None)]);
+    first_mut(&mut frame).current.pid = Some(100);
+
+    backfill_pane_cwds(&mut frame, &|pid| {
+        assert_eq!(pid, 100);
+        Some(deleted.clone())
     });
 
     assert_eq!(first(&frame).current.cwd, None);
