@@ -1502,16 +1502,18 @@ fn build_worktree_groups_from_rows(
 /// each child to its parent row by
 /// `(kind, parent_agent_id)` and pushes a compact summary onto it.
 ///
-/// Retention is turn-scoped: a finished (success/failed) child stays listed —
-/// however long ago it finished — until its work predates the parent's
-/// *current* turn (`turn_started_at`, advanced only by `UserPromptSubmit`),
-/// when it belongs to a past turn and is dropped. A *running* child superseded
-/// by a newer parent turn, or silent past the generous
-/// [`GHOST_SESSION_TTL_SECS`] backstop, is a ghost that never sent `Stop` —
-/// reaped so it can't freeze the parent's delegated-wait head. A child whose
-/// parent row is absent (parent ended, reaped, or has no live pane) is an
-/// orphan and never renders. Survivors are deduped by child id so a child can
-/// never appear twice, then ordered running-first for a deterministic list.
+/// Retention is turn-scoped: a finished (success/failed) child stays listed
+/// until its work predates the parent's *current* turn (`turn_started_at`,
+/// advanced only by a turn start, the `TurnStarted` signal, never a turn end),
+/// when it belongs to a past turn and is dropped. The generous
+/// [`GHOST_SESSION_TTL_SECS`] backstop covers the no-turn-boundary case, so a
+/// finished child cannot linger forever when the parent never recorded the next
+/// turn start. A *running* child superseded by a newer parent turn, or silent
+/// past that same backstop, is a ghost that never sent `Stop` — reaped so it
+/// can't freeze the parent's delegated-wait head. A child whose parent row is
+/// absent (parent ended, reaped, or has no live pane) is an orphan and never
+/// renders. Survivors are deduped by child id so a child can never appear
+/// twice, then ordered by creation time for a deterministic list.
 pub(super) fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState], now: Timestamp) {
     let parent_turn_start = |kind: &str, id: &str| -> Option<Timestamp> {
         agents
@@ -1524,8 +1526,10 @@ pub(super) fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState], 
         let Some(parent_id) = child.parent_agent_id.as_deref() else {
             continue;
         };
-        let superseded = parent_turn_start(&child.kind, parent_id)
-            .is_some_and(|started| started > child.last_activity);
+        let parent_turn_started_at = parent_turn_start(&child.kind, parent_id);
+        let parent_has_turn_boundary = parent_turn_started_at.is_some();
+        let superseded =
+            parent_turn_started_at.is_some_and(|started| started > child.last_activity);
         let keep = if child.status == AgentStatus::Running {
             if superseded {
                 warn!(
@@ -1549,9 +1553,12 @@ pub(super) fn attach_sub_agents(rows: &mut [SidebarRow], agents: &[AgentState], 
                 true
             }
         } else {
-            // Finished: kept for the whole turn that spawned it; history once
-            // the parent moves on to its next turn.
-            !superseded
+            // Finished: turn-scoped — kept until the parent's next turn
+            // supersedes it (its work predates `turn_started_at`). The
+            // generous ghost TTL is the backstop for a parent that never
+            // recorded a turn boundary, so a finished child can never linger
+            // forever in the gap.
+            !superseded && (parent_has_turn_boundary || idle_secs(child) < GHOST_SESSION_TTL_SECS)
         };
         if !keep {
             continue;

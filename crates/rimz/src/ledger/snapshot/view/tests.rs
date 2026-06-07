@@ -1263,6 +1263,28 @@ fn finished_sub_agent_of_current_turn_is_kept() {
 }
 
 #[test]
+fn finished_sub_agent_of_current_turn_survives_ghost_ttl() {
+    let mut parent = agent("claude", "sess-root", AgentStatus::Running, 100);
+    // The parent has a known current turn that began before the child
+    // finished. Finished children are scoped by that turn boundary, not by
+    // age, so an idle-between-turns parent keeps the verdict past the TTL.
+    parent.turn_started_at = Some(ago(GHOST_SESSION_TTL_SECS + 20));
+    let child = child_state(
+        "sess-root",
+        "child-1",
+        AgentStatus::Success,
+        GHOST_SESSION_TTL_SECS + 10,
+    );
+    let mut rows = vec![row_from_agent(&parent, epoch())];
+    attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
+    assert_eq!(
+        rows[0].sub_agents().len(),
+        1,
+        "a finished child with a known same-turn boundary survives the ghost TTL"
+    );
+}
+
+#[test]
 fn sub_agents_sort_by_creation_time_ascending() {
     // Spawn order, not activity, keys the list: the child that started
     // first leads however fresh its siblings' activity is, so the list
@@ -1340,11 +1362,11 @@ fn running_child_past_ghost_ttl_is_reaped() {
 }
 
 #[test]
-fn finished_child_is_kept_however_long_ago_it_finished() {
+fn finished_child_inside_ghost_ttl_is_kept_without_turn_boundary() {
     // The regression: a finished child used to clear on a 5-minute TTL even
-    // mid-turn, vanishing from the list while its siblings still ran. With
-    // retention purely turn-scoped, a finished child stays — however stale —
-    // until the parent's next turn supersedes it.
+    // mid-turn, vanishing from the list while its siblings still ran. A
+    // finished child stays through the parent's turn; the ghost TTL is only
+    // the age backstop when no turn boundary exists.
     let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
     assert!(parent.turn_started_at.is_none());
     let child = child_state("sess-root", "child-1", AgentStatus::Success, 60 * 60);
@@ -1353,7 +1375,27 @@ fn finished_child_is_kept_however_long_ago_it_finished() {
     assert_eq!(
         rows[0].sub_agents().len(),
         1,
-        "a finished child never clears on age, only on the next turn"
+        "a finished child inside the ghost TTL is kept without a turn boundary"
+    );
+}
+
+#[test]
+fn finished_child_without_turn_boundary_reaped_past_ghost_ttl() {
+    // If the parent never recorded a turn boundary, the ghost TTL is the
+    // fallback that keeps a finished child from becoming ledger-scoped.
+    let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
+    assert!(parent.turn_started_at.is_none());
+    let child = child_state(
+        "sess-root",
+        "child-1",
+        AgentStatus::Success,
+        GHOST_SESSION_TTL_SECS + 10,
+    );
+    let mut rows = vec![row_from_agent(&parent, epoch())];
+    attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
+    assert!(
+        rows[0].sub_agents().is_empty(),
+        "a finished child silent past the ghost TTL is reaped without a turn boundary"
     );
 }
 
