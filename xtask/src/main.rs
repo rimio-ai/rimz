@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
 
+const PRESENCE_PLUGIN_TARGET: &str = "wasm32-wasip1";
+
 struct TaskInfo {
     name: &'static str,
     summary: &'static str,
@@ -41,7 +43,7 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "stage-install",
         summary: "Build release artifacts into target/xtask/install/bin.",
-        runs: "cargo build -p rimz --bin rimz --release --locked",
+        runs: "build-plugin, then cargo build -p rimz --bin rimz --release --locked",
     },
     TaskInfo {
         name: "fmt",
@@ -297,6 +299,7 @@ fn build(root: &Path) -> Result<()> {
 /// workspace build only compiles the crate's pure policy core and a stub bin;
 /// this produces the `.wasm` Zellij actually loads.
 fn build_plugin(root: &Path) -> Result<()> {
+    ensure_rust_target(root, PRESENCE_PLUGIN_TARGET)?;
     run(
         root,
         "cargo",
@@ -305,7 +308,7 @@ fn build_plugin(root: &Path) -> Result<()> {
             "-p",
             "rimz-presence-zellij",
             "--target",
-            "wasm32-wasip1",
+            PRESENCE_PLUGIN_TARGET,
             "--release",
             "--locked",
         ],
@@ -315,9 +318,67 @@ fn build_plugin(root: &Path) -> Result<()> {
 /// The built presence-plugin artifact, honoring a `CARGO_TARGET_DIR` override.
 fn plugin_artifact(root: &Path) -> PathBuf {
     target_dir(root)
-        .join("wasm32-wasip1")
+        .join(PRESENCE_PLUGIN_TARGET)
         .join("release")
         .join("rimz-presence-zellij.wasm")
+}
+
+fn ensure_rust_target(root: &Path, target: &str) -> Result<()> {
+    if rust_target_std_available(root, target)? {
+        return Ok(());
+    }
+
+    let status = Command::new("rustup")
+        .args(["target", "add", target])
+        .current_dir(root)
+        .status()
+        .with_context(|| {
+            format!(
+                "Rust target `{target}` is missing and `rustup` could not be run; install it with `rustup target add {target}`"
+            )
+        })?;
+    if !status.success() {
+        bail!("Rust target `{target}` is missing and `rustup target add {target}` failed");
+    }
+
+    if rust_target_std_available(root, target)? {
+        return Ok(());
+    }
+    bail!("Rust target `{target}` is still unavailable after `rustup target add {target}`");
+}
+
+fn rust_target_std_available(root: &Path, target: &str) -> Result<bool> {
+    let output = Command::new("rustc")
+        .args(["--print", "target-libdir", "--target", target])
+        .current_dir(root)
+        .output()
+        .with_context(|| format!("checking Rust target `{target}`"))?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+
+    let target_libdir =
+        String::from_utf8(output.stdout).context("reading rustc target libdir output")?;
+    let target_libdir = PathBuf::from(target_libdir.trim());
+    let entries = match fs::read_dir(&target_libdir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => {
+            return Err(err).with_context(|| format!("reading {}", target_libdir.display()));
+        }
+    };
+    for entry in entries {
+        let name = entry
+            .with_context(|| format!("reading {}", target_libdir.display()))?
+            .file_name();
+        if let Some(name) = name.to_str()
+            && name.starts_with("libcore-")
+            && name.ends_with(".rlib")
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn target_dir(root: &Path) -> PathBuf {
