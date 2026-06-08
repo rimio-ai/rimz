@@ -1,6 +1,5 @@
 ---
 source: crates/rimz/src/sidebar_renderer/render/mod.rs
-assertion_line: 749
 expression: screen
 ---
  ⌘ query-engine
@@ -8,7 +7,7 @@ expression: screen
  ◎ 0
  ¤ 1
  ────────────────────────────────────────────────────
- ? 0   ! 0   ⏸︎ 0   ✓ 0                     ⢿ 1   ○ 0
+ ? 0   ! 0   ○ 0   ⏸︎ 0                     ⢿ 1   ✓ 0
 
 ▏⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +127 -43
 ▌⣾ claude · Opus 4.8 · xhigh · 200k             $1.27

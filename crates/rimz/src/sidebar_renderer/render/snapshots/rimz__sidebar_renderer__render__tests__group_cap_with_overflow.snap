@@ -1,6 +1,5 @@
 ---
 source: crates/rimz/src/sidebar_renderer/render/tests.rs
-assertion_line: 83
 expression: screen
 ---
  ⌘ query-engine
@@ -8,7 +7,7 @@ expression: screen
  ◎ 0
  ¤ 9
  ──────────────────────────────────
- ? 0   ! 0   ⏸︎ 0   ✓ 0   ⢿ 9   ○ 0
+ ? 0   ! 0   ○ 0   ⏸︎ 0   ⢿ 9   ✓ 0
 
 ▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌⣾ codex · 258k
