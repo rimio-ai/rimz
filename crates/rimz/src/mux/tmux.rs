@@ -401,7 +401,7 @@ const SIDEBAR_PANE_TITLE: &str = "rimz-sidebar";
 /// The `rimz sidebar serve …` argv a tmux sidebar pane runs. Shared by initial
 /// launch and in-place recovery so the two cannot drift.
 fn sidebar_serve_command(opts: &SidebarPaneOptions) -> Vec<String> {
-    vec![
+    let mut command = vec![
         opts.rimz_bin.to_string_lossy().into_owned(),
         "sidebar".to_owned(),
         "serve".to_owned(),
@@ -411,7 +411,11 @@ fn sidebar_serve_command(opts: &SidebarPaneOptions) -> Vec<String> {
         opts.workspace_id.as_str().to_owned(),
         "--session-name".to_owned(),
         opts.session_name.clone(),
-    ]
+    ];
+    if let Some(refresh_ms) = opts.refresh_ms {
+        command.extend(["--refresh-ms".to_owned(), refresh_ms.to_string()]);
+    }
+    command
 }
 
 fn is_tmux_sidebar(pane: &PaneRef) -> bool {
@@ -1151,6 +1155,25 @@ fn is_presence_event(line: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn sidebar_opts(refresh_ms: Option<u16>) -> SidebarPaneOptions {
+        let width = crate::mux::SidebarWidth::default();
+        SidebarPaneOptions {
+            session_name: "room".to_owned(),
+            workspace_id: crate::ids::WorkspaceId::from_project_root(std::path::Path::new(
+                "/tmp/rimz-tmux-refresh",
+            )),
+            project_root: PathBuf::from("/tmp/rimz-tmux-refresh"),
+            cwd: PathBuf::from("/tmp/rimz-tmux-refresh"),
+            width,
+            birth_size: width.birth_size(None),
+            rimz_bin: PathBuf::from("/usr/bin/rimz"),
+            replace_existing: false,
+            config: crate::config::MultiplexerConfig::default(),
+            resume_panes: Vec::new(),
+            refresh_ms,
+        }
+    }
+
     fn tmux_pane(id: &str, view: &str, command: &str) -> PaneRef {
         PaneRef {
             pane_id: PaneId::from_parts(MuxName::Tmux, id),
@@ -1167,6 +1190,21 @@ mod tests {
             resumed_session_id: None,
             elevated_agent: None,
         }
+    }
+
+    #[test]
+    fn sidebar_command_threads_refresh_override() {
+        let command = sidebar_serve_command(&sidebar_opts(Some(75)));
+        assert_eq!(
+            &command[command.len() - 2..],
+            ["--refresh-ms".to_owned(), "75".to_owned()],
+        );
+
+        let without = sidebar_serve_command(&sidebar_opts(None));
+        assert!(
+            !without.iter().any(|arg| arg == "--refresh-ms"),
+            "default launch leaves refresh cadence config-driven: {without:?}",
+        );
     }
 
     #[test]

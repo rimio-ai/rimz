@@ -64,6 +64,10 @@ pub struct ServeConfig {
     pub session_name: String,
     pub instance_id: SidebarInstanceId,
     pub tick_seconds: u64,
+    /// One-shot render-cadence override from the launch argv. It is applied to
+    /// this renderer's folded snapshots only; shared producer caches stay
+    /// config-shaped so recovery can fall back to `[sidebar].refresh_ms`.
+    pub refresh_ms_override: Option<u16>,
     /// The sidebar's own mux pane, resolved once from the per-pane env at
     /// launch (`crate::mux::own_pane_id`) — the fold's self-exclusion and the
     /// heartbeat's pane claim. `None` outside a pane. Carried here rather than

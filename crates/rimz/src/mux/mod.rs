@@ -181,6 +181,10 @@ pub struct SidebarPaneOptions {
     /// the durable agent rollup by [`crate::resume::plan_resume`]; the backend
     /// seeds the panes and stays ignorant of agents and the ledger.
     pub resume_panes: Vec<ResumePane>,
+    /// One-shot render-cadence override passed to newly spawned sidebars. This
+    /// is intentionally not persisted; crash recovery rebuilds argv from
+    /// workspace state and returns to `[sidebar].refresh_ms`.
+    pub refresh_ms: Option<u16>,
 }
 
 /// One prior agent the reborn session re-seeds: a fresh pane running the

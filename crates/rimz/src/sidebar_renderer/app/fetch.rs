@@ -51,6 +51,12 @@ pub(super) struct FetchOutcome {
     pub(super) fresh_pane_frame: bool,
 }
 
+pub(super) fn apply_refresh_override(config: &ServeConfig, snapshot: &mut SidebarSnapshot) {
+    if let Some(refresh_ms) = config.refresh_ms_override {
+        snapshot.sidebar.refresh_ms = refresh_ms;
+    }
+}
+
 /// One fetch cycle, posting one or two outcomes. Runs on the fetch worker
 /// thread, keeping the produce's `list-panes` + git round-trips off the
 /// render/input loop so animation never stalls on them. `state` is resolved
@@ -299,7 +305,10 @@ pub(super) fn spawn_fetch_worker(
             // fast in-process frame paints while the produce (if any) still
             // runs.
             let mut disconnected = false;
-            let mut post = |outcome: FetchOutcome| {
+            let mut post = |mut outcome: FetchOutcome| {
+                if let Ok(snapshot) = &mut outcome.snapshot {
+                    apply_refresh_override(&config, snapshot);
+                }
                 if result_tx.send(outcome).is_err() {
                     disconnected = true;
                     return;

@@ -18,7 +18,7 @@ rimz event emit --kind build.started --title web   # any script can post
 rimz feed ask --title "Promote staging → prod?" \
               --options yes,no --timeout 1h         # blocks until answered
 
-rimz attach --remote dev-box:query-engine          # reattach from anywhere over ssh
+rimz remote connect dev-box:query-engine          # reattach from anywhere over ssh
 rimz agents claude codex --worktree                 # launch agents in fresh worktree tabs
 ```
 
@@ -27,10 +27,9 @@ That is the whole loop. For the five-minute tour and the why, see [the product g
 ## Start and attach a workspace
 
 ```sh
-rimz [--attach|--no-attach|--print] [--no-resume] [PATH]
-rimz start [--attach|--no-attach|--print] [--no-resume] [PATH]
-rimz attach [--attach|--no-attach|--print] [--no-resume] [SESSION]
-rimz attach --remote [user@]host:<session-or-path> [--no-reconnect]
+rimz [--attach|--no-attach|--print] [--no-resume] [--refresh-ms <ms>] [PATH]
+rimz start [--attach|--no-attach|--print] [--no-resume] [--refresh-ms <ms>] [PATH]
+rimz attach [--attach|--no-attach|--print] [--no-resume] [--refresh-ms <ms>] [SESSION]
 rimz list [--all] [--json]        # running + recently-active workspaces; --all adds dormant ones
 rimz doctor [--audit]             # diagnose backend, hooks, trust, resolvers
 ```
@@ -41,13 +40,26 @@ The root resolves through one ladder, richest tier first: an explicit `--root`, 
 
 Inside a room, identity is pinned: session birth stamps `RIMZ_WORKSPACE_ID`/`RIMZ_PROJECT_ROOT` into the session environment, and participating commands — agent hooks, `rimz tab`/`agents`, `rimz event`/`feed`, the statusline helpers — resolve through the verified pin before the static ladder (an explicit `--root` beats both), so an agent working in a nested repo inside a directory room writes to the room it lives in ([hooks.md](../internals/hooks.md#hooks-resolve-the-room-they-live-in)). Room-choosing commands (`rimz start`/`attach`) resolve fresh, keeping a deliberate per-repo room one `rimz start` away.
 
-When a session is reborn — after a reboot, a multiplexer crash, or a reset — Rimz re-seeds the prior agents it remembers, each restored idle in its own pane (`claude --resume`, `codex resume`); the conversation is back, no tokens spent until you type. `--no-resume` comes up empty for a deliberately fresh start (`resume.on_rebirth` in [configuration.md](./configuration.md) is the persistent switch). Details: [resume-on-rebirth](../internals/sidebar.md#resume-on-rebirth).
+When a session is reborn — after a reboot, a multiplexer crash, or a reset — Rimz re-seeds the prior agents it remembers, each restored idle in its own pane (`claude --resume`, `codex resume`); the conversation is back, no tokens spent until you type. `--no-resume` comes up empty for a deliberately fresh start (`resume.on_rebirth` in [configuration.md](./configuration.md) is the persistent switch). `--refresh-ms <ms>` overrides the sidebar render grid for sidebars spawned by that launch; persistent cadence stays in `[sidebar].refresh_ms`. Details: [resume-on-rebirth](../internals/sidebar.md#resume-on-rebirth).
 
 `rimz attach <session>` reattaches by exact session name; `rimz attach` with no name uses the cwd's workspace. `rimz list` joins each known workspace against the live Zellij and tmux sessions so you see which mux currently hosts it, running first.
 
-`rimz attach --remote [user@]host:<target>` attaches a room on another machine: rimz builds the guarded `ssh -t` invocation, the host's own `rimz` starts or reattaches the room, and it renders in your terminal — sidebar, feed, and all. A `<target>` containing `/` (or starting with `~`) is a path the host starts a room for (`dev-box:~/code/query-engine`); a bare word is a session name to reattach (`dev-box:query-engine`); IPv6 hosts keep their brackets (`user@[::1]:…`). The same attach rule applies — an interactive TTY connects, anything else prints the full ssh command (`--print` needs no local ssh) — and `~/.ssh/config` aliases, ports, keys, and jump hosts apply as-is because rimz runs your `ssh`. The remote snippet repairs a non-login shell's PATH and, when the host has no `rimz`, fails with the install command instead of a bare `command not found`.
+Remote rooms have their own command group:
 
-A dropped link reconnects by itself. Keepalives (`ServerAliveInterval=5`, three strikes) detect a dead link in about fifteen seconds, and rimz reattaches with capped exponential backoff — the remote room survives the drop by design, so pickup is where you left it. A clean detach ends the session, a first connection that fails (auth, unknown host) surfaces immediately rather than looping a password prompt, and a remote failure that isn't a link drop reports the remote's own error. `--no-reconnect` hands the link to a single ssh run. `--no-resume` and `--mux` ride into the remote `rimz`.
+```sh
+rimz remote add <name> <target> [--no-reconnect] [--no-resume] [--mux <name>]
+rimz remote connect <alias|target> [--reset] [--no-reconnect] [--attach|--print]
+rimz remote reset <alias|target> [--no-reconnect] [--attach|--print]
+rimz remote del <name>      # alias: rm
+rimz remote rename <old> <new>
+rimz remote list [--json]   # alias: ls
+```
+
+`rimz remote connect [user@]host:<target>` attaches a room on another machine: rimz builds the guarded `ssh -t` invocation, the host's own `rimz` starts or reattaches the room, and it renders in your terminal — sidebar, feed, and all. A `<target>` containing `/` (or starting with `~`) is a path the host starts a room for (`dev-box:~/code/query-engine`); a bare word is a session name to reattach (`dev-box:query-engine`); IPv6 hosts keep their brackets (`user@[::1]:…`). The same attach rule applies — an interactive TTY connects, anything else prints the full ssh command (`--print` needs no local ssh) — and `~/.ssh/config` aliases, ports, keys, and jump hosts apply as-is because rimz runs your `ssh`. The remote snippet repairs a non-login shell's PATH and, when the host has no `rimz`, fails with the install command instead of a bare `command not found`.
+
+`rimz remote add prod agent@prod-box:query-engine` saves a named alias in `~/.config/rimz/remote.toml`; `rimz remote connect prod` resolves it. `--mux <name>` on `remote add` or on `remote` before `add` pins that alias's remote backend, while a top-level `rimz --mux <name> remote add …` is only this invocation's backend override and is not saved. A connect positional containing `:` is always a raw target, and every other value is an alias. Alias defaults (`reconnect`, `no_resume`, `mux`) are overlaid by connect flags: `--no-reconnect` hands the link to a single ssh run, and `--reset` / `rimz remote reset` passes `--no-resume` to the remote `rimz` for a fresh remote room.
+
+A dropped link reconnects by itself when reconnect is enabled. Keepalives (`ServerAliveInterval=5`, three strikes) detect a dead link in about fifteen seconds, and rimz reattaches with capped exponential backoff — the remote room survives the drop by design, so pickup is where you left it. A clean detach ends the session, a first connection that fails (auth, unknown host) surfaces immediately rather than looping a password prompt, and a remote failure that isn't a link drop reports the remote's own error.
 
 `rimz doctor` reports the backend, installed hooks, trust state, enrolled resolvers, and the machine's room tree — every recorded workspace with its root, root class, and liveness, the current directory's room starred and nesting live rooms flagged — and names the fix for anything misconfigured. Run it first when something looks wrong.
 

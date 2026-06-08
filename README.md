@@ -59,7 +59,7 @@ rimz event emit --kind build.started --title "web"  # any script can post
 rimz feed ask --title "Promote staging → prod?" \
               --options yes,no --timeout 1h
 
-rimz attach --remote dev-box:query-engine           # reattach from anywhere; the link reconnects itself
+rimz remote connect dev-box:query-engine           # reattach from anywhere; the link reconnects itself
 rimz pane split && claude                           # start an agent in a new pane
 ```
 

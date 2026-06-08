@@ -103,6 +103,7 @@ impl SidebarHarness {
             replace_existing: false,
             config: rimz::config::MultiplexerConfig::default(),
             resume_panes: Vec::new(),
+            refresh_ms: None,
         }
     }
 

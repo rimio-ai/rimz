@@ -4,7 +4,7 @@
 
 Rimz runs with no configuration. Everything here is optional tuning.
 
-Two per-machine files configure how Rimz drives *your* box: `~/.config/rimz/config.toml` (room, sidebar, remote-control) and `~/.config/rimz/resolvers.toml` (the resolver chain). A project may also commit a `.rimz/config.toml`; today Rimz reads that file only to compute the project's trust hash — the workspace shape it declares is on the roadmap, and the last section explains exactly what is and isn't live.
+Three per-machine files configure how Rimz drives *your* box: `~/.config/rimz/config.toml` (room, sidebar, remote-control), `~/.config/rimz/resolvers.toml` (the resolver chain), and `~/.config/rimz/remote.toml` (named SSH room aliases). A project may also commit a `.rimz/config.toml`; today Rimz reads that file only to compute the project's trust hash — the workspace shape it declares is on the roadmap, and the last section explains exactly what is and isn't live.
 
 ## What configures Rimz today
 
@@ -12,6 +12,7 @@ Two per-machine files configure how Rimz drives *your* box: `~/.config/rimz/conf
 | --- | --- | --- |
 | `~/.config/rimz/config.toml` | per-machine | worktree defaults, agent layouts, room options, sidebar look, remote-control auto-launch |
 | `~/.config/rimz/resolvers.toml` | per-machine | the resolver allowlist and chain order |
+| `~/.config/rimz/remote.toml` | per-machine | named remote room aliases used by `rimz remote connect` |
 | `~/.config/rimz/projects/<id>/trust.toml` | per-machine | the project's trust grant — written by `rimz trust grant`, not by hand |
 | `<root>/.rimz/config.toml` | committed | the declared workspace shape; trust-tracked, [not yet applied](#project-config) |
 
@@ -20,6 +21,21 @@ The per-machine tier is personal and never committed — a clone never inherits 
 ## Per-machine config — `~/.config/rimz/config.toml`
 
 Seven sections, each optional: `[worktree]`, `[agents.layouts]`, `[remote_control]`, `[sidebar]`, `[zellij]`, `[tmux]`, `[resume]`.
+
+## Remote aliases — `~/.config/rimz/remote.toml`
+
+`rimz remote add`, `del`, and `rename` maintain this sidecar with atomic rewrites. It is hand-editable TOML and stays separate from `config.toml` so saving a remote target never clobbers room settings.
+
+```toml
+[[remote]]
+name = "prod"
+target = "agent@prod-box:query-engine"
+reconnect = true
+no_resume = false
+mux = "tmux"
+```
+
+`target` uses the same `[user@]host:<session-or-path>` grammar as `rimz remote connect`; `rimz remote add` validates it before saving. `reconnect` defaults to true, `no_resume` defaults to false, and `mux` is optional. Alias names use 1..=64 ASCII alphanumeric, `-`, or `_` characters and start with an alphanumeric or `_`, so `rimz remote connect <value>` can treat values with `:` as raw targets and flag-like values as CLI flags.
 
 ### Remote control auto-launch
 
@@ -124,7 +140,7 @@ Every sidebar pane targets 30% of the view at the `max_cols` cap, on both backen
 refresh_ms = 100   # base render grid in milliseconds (default 100)
 ```
 
-`refresh_ms` sets the sidebar's in-process animation and dirty-frame grid. It defaults to 100ms, clamps to the supported range internally, and resolves onto the snapshot like the rest of `[sidebar]`, so a change lands on the next fold. It does not change the data backstop or any producer pull cadence; those timing lanes live in [internals/state.md](../internals/state.md).
+`refresh_ms` sets the sidebar's in-process animation and dirty-frame grid. It defaults to 100ms, clamps to the supported range internally, and resolves onto the snapshot like the rest of `[sidebar]`, so a change lands on the next fold. `rimz start --refresh-ms <ms>` and `rimz attach --refresh-ms <ms>` override it for sidebars spawned by that launch only; crash recovery and later launches return to this config value. It does not change the data backstop or any producer pull cadence; those timing lanes live in [internals/state.md](../internals/state.md).
 
 #### Attention timing
 

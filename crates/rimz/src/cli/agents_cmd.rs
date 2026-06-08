@@ -85,6 +85,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             mux_config: &mux_config,
             width,
             detected_size,
+            refresh_ms: None,
         };
         let sidebar = super::build_sidebar_opts(&room, Vec::new())?;
         let panes = super::tab::layout_panes(

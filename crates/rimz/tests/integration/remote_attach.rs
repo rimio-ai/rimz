@@ -1,9 +1,9 @@
-//! `rimz attach --remote`: the SSH launcher and its reconnect supervisor.
+//! `rimz remote connect`: the SSH launcher and its reconnect supervisor.
 //!
 //! No real ssh or host anywhere: the print form needs no binary at all, and
 //! the exec form drives the `ssh-trace` shim through `RIMZ_SSH_BIN`,
 //! asserting the exact argv handed to ssh and scripting link drops via
-//! `$RIMZ_TEST_SSH_PLAN`. Quoting precision lives in `remote.rs` unit tests;
+//! `$RIMZ_TEST_SSH_PLAN`. Quoting precision lives in `remote/mod.rs` unit tests;
 //! these prove the CLI surface end to end.
 
 use std::path::{Path, PathBuf};
@@ -51,9 +51,9 @@ fn print_form_emits_the_full_ssh_command() {
     let env = Env::new();
     let out = env
         .rimz()
-        .args(["attach", "--remote", "dev-box:query-engine", "--print"])
+        .args(["remote", "connect", "dev-box:query-engine", "--print"])
         .bounded_output()
-        .expect("run rimz attach --remote --print");
+        .expect("run rimz remote connect --print");
     let line = stdout_line(&out);
     assert!(
         line.starts_with("ssh -o ServerAliveInterval=5 -o ServerAliveCountMax=3"),
@@ -83,13 +83,13 @@ fn path_form_starts_the_remote_room() {
     let out = env
         .rimz()
         .args([
-            "attach",
-            "--remote",
+            "remote",
+            "connect",
             "dev-box:~/code/query-engine",
             "--print",
         ])
         .bounded_output()
-        .expect("run rimz attach --remote --print");
+        .expect("run rimz remote connect --print");
     let line = stdout_line(&out);
     assert!(
         line.contains("rimz start --attach"),
@@ -109,9 +109,9 @@ fn auto_mode_without_a_tty_prints() {
     // testing.md attach invariant, unchanged for remote targets.
     let out = env
         .rimz()
-        .args(["attach", "--remote", "dev-box:query-engine"])
+        .args(["remote", "connect", "dev-box:query-engine"])
         .bounded_output()
-        .expect("run rimz attach --remote");
+        .expect("run rimz remote connect");
     let line = stdout_line(&out);
     assert!(line.starts_with("ssh "), "non-TTY auto prints: {line}");
 }
@@ -121,10 +121,10 @@ fn print_form_needs_no_ssh_binary() {
     let env = Env::new();
     let out = env
         .rimz()
-        .args(["attach", "--remote", "dev-box:query-engine", "--print"])
+        .args(["remote", "connect", "dev-box:query-engine", "--print"])
         .env("PATH", "")
         .bounded_output()
-        .expect("run rimz attach --remote --print");
+        .expect("run rimz remote connect --print");
     assert!(
         out.status.success(),
         "print never resolves ssh: {}",
@@ -138,11 +138,11 @@ fn exec_hands_ssh_the_expected_argv() {
     let log = env.project_root.join("ssh-trace.log");
     let out = env
         .rimz()
-        .args(["attach", "--remote", "dev-box:query-engine", "--attach"])
+        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
         .env("RIMZ_SSH_BIN", ssh_shim())
         .env("RIMZ_TEST_SSH_LOG", &log)
         .bounded_output()
-        .expect("run rimz attach --remote --attach");
+        .expect("run rimz remote connect --attach");
     assert!(
         out.status.success(),
         "shim exits 0 → clean exit\nstderr:\n{}",
@@ -168,7 +168,7 @@ fn link_drop_on_an_established_session_reconnects() {
     std::fs::write(&plan, "255\n0\n").expect("write plan");
     let out = env
         .rimz()
-        .args(["attach", "--remote", "dev-box:query-engine", "--attach"])
+        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
         .env("RIMZ_SSH_BIN", ssh_shim())
         .env("RIMZ_TEST_SSH_LOG", &log)
         .env("RIMZ_TEST_SSH_PLAN", &plan)
@@ -176,7 +176,7 @@ fn link_drop_on_an_established_session_reconnects() {
         .env("RIMZ_REMOTE_GATETIME_MS", "0")
         .env("RIMZ_REMOTE_BACKOFF_MS", "1")
         .bounded_output()
-        .expect("run rimz attach --remote --attach");
+        .expect("run rimz remote connect --attach");
     assert!(
         out.status.success(),
         "reconnect ends on the clean detach\nstderr:\n{}",
@@ -208,12 +208,12 @@ fn first_connection_failure_never_retries() {
     // failure, not a drop — fatal, no password-prompt loop.
     let out = env
         .rimz()
-        .args(["attach", "--remote", "dev-box:query-engine", "--attach"])
+        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
         .env("RIMZ_SSH_BIN", ssh_shim())
         .env("RIMZ_TEST_SSH_LOG", &log)
         .env("RIMZ_TEST_SSH_PLAN", &plan)
         .bounded_output()
-        .expect("run rimz attach --remote --attach");
+        .expect("run rimz remote connect --attach");
     assert!(!out.status.success(), "transport failure surfaces");
     assert_eq!(shim_invocations(&log).len(), 1, "no retry");
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -228,13 +228,13 @@ fn missing_remote_rimz_is_fatal() {
     std::fs::write(&plan, "127\n").expect("write plan");
     let out = env
         .rimz()
-        .args(["attach", "--remote", "dev-box:query-engine", "--attach"])
+        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
         .env("RIMZ_SSH_BIN", ssh_shim())
         .env("RIMZ_TEST_SSH_LOG", &log)
         .env("RIMZ_TEST_SSH_PLAN", &plan)
         .env("RIMZ_REMOTE_GATETIME_MS", "0")
         .bounded_output()
-        .expect("run rimz attach --remote --attach");
+        .expect("run rimz remote connect --attach");
     assert!(
         !out.status.success(),
         "missing remote rimz is not a link drop"
@@ -255,8 +255,8 @@ fn no_reconnect_hands_the_link_to_one_ssh() {
     let out = env
         .rimz()
         .args([
-            "attach",
-            "--remote",
+            "remote",
+            "connect",
             "dev-box:query-engine",
             "--attach",
             "--no-reconnect",
@@ -264,7 +264,7 @@ fn no_reconnect_hands_the_link_to_one_ssh() {
         .env("RIMZ_SSH_BIN", ssh_shim())
         .env("RIMZ_TEST_SSH_LOG", &log)
         .bounded_output()
-        .expect("run rimz attach --remote --no-reconnect");
+        .expect("run rimz remote connect --no-reconnect");
     assert!(
         out.status.success(),
         "exec'd shim exits 0\nstderr:\n{}",
@@ -279,16 +279,16 @@ fn no_resume_and_mux_ride_the_remote_invocation() {
     let out = env
         .rimz()
         .args([
-            "attach",
-            "--remote",
+            "remote",
+            "connect",
             "dev-box:query-engine",
-            "--no-resume",
+            "--reset",
             "--mux",
             "tmux",
             "--print",
         ])
         .bounded_output()
-        .expect("run rimz attach --remote --print");
+        .expect("run rimz remote connect --print");
     let line = stdout_line(&out);
     assert!(
         line.contains("--no-resume --mux tmux"),
@@ -297,34 +297,173 @@ fn no_resume_and_mux_ride_the_remote_invocation() {
 }
 
 #[test]
-fn remote_conflicts_with_a_positional_session() {
+fn attach_remote_flag_is_gone() {
     let env = Env::new();
     let out = env
         .rimz()
-        .args(["attach", "query-engine", "--remote", "dev-box:other"])
+        .args(["attach", "--remote", "dev-box:query-engine"])
         .bounded_output()
-        .expect("run rimz attach SESSION --remote");
+        .expect("run rimz attach --remote");
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("cannot be used with"),
-        "clap rejects the combination: {stderr}"
+        stderr.contains("unexpected argument '--remote'")
+            || stderr.contains("unrecognized")
+            || stderr.contains("unknown"),
+        "`attach --remote` is no longer a CLI surface: {stderr}"
     );
 }
 
 #[test]
-fn no_reconnect_requires_remote() {
+fn remote_alias_round_trip_connects_lists_resets_and_deletes() {
     let env = Env::new();
-    let out = env
+    let add = env
         .rimz()
-        .args(["attach", "--no-reconnect"])
+        .args(["remote", "add", "prod", "agent@prod-box:query-engine"])
         .bounded_output()
-        .expect("run rimz attach --no-reconnect");
-    assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
+        .expect("run rimz remote add");
     assert!(
-        stderr.contains("--remote"),
-        "names the missing flag: {stderr}"
+        add.status.success(),
+        "add succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&add.stderr),
+    );
+    let remote_file = env.config_root().join("rimz").join("remote.toml");
+    let text = std::fs::read_to_string(&remote_file).expect("read remote.toml");
+    assert!(text.contains("name = \"prod\""), "{text}");
+    assert!(
+        text.contains("target = \"agent@prod-box:query-engine\""),
+        "{text}"
+    );
+
+    let printed = env
+        .rimz()
+        .args(["remote", "connect", "prod", "--print"])
+        .bounded_output()
+        .expect("run rimz remote connect alias --print");
+    let line = stdout_line(&printed);
+    assert!(
+        line.contains("agent@prod-box"),
+        "alias target rides into ssh: {line}"
+    );
+    assert!(
+        line.contains("query-engine"),
+        "alias session rides into remote rimz: {line}"
+    );
+
+    let list = env
+        .rimz()
+        .args(["remote", "list", "--json"])
+        .bounded_output()
+        .expect("run rimz remote list --json");
+    assert!(
+        list.status.success(),
+        "list succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&list.stderr),
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&list.stdout).expect("remote list json parses");
+    assert_eq!(json["remotes"][0]["name"], "prod");
+    assert_eq!(json["remotes"][0]["reconnect"], true);
+
+    let reset = env
+        .rimz()
+        .args(["remote", "reset", "prod", "--print"])
+        .bounded_output()
+        .expect("run rimz remote reset --print");
+    let line = stdout_line(&reset);
+    assert!(
+        line.contains("--no-resume"),
+        "remote reset injects --no-resume: {line}"
+    );
+
+    let del = env
+        .rimz()
+        .args(["remote", "del", "prod"])
+        .bounded_output()
+        .expect("run rimz remote del");
+    assert!(
+        del.status.success(),
+        "delete succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&del.stderr),
+    );
+}
+
+#[test]
+fn remote_add_persists_only_remote_scoped_mux_flags() {
+    let env = Env::new();
+    let add_global = env
+        .rimz()
+        .args([
+            "--mux",
+            "tmux",
+            "remote",
+            "add",
+            "global",
+            "global-box:query-engine",
+        ])
+        .bounded_output()
+        .expect("run rimz --mux tmux remote add");
+    assert!(
+        add_global.status.success(),
+        "global add succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&add_global.stderr),
+    );
+    let remote_file = env.config_root().join("rimz").join("remote.toml");
+    let text = std::fs::read_to_string(&remote_file).expect("read remote.toml");
+    assert!(text.contains("name = \"global\""), "{text}");
+    assert!(
+        !text.contains("mux ="),
+        "global --mux is a per-invocation override, not persisted alias state: {text}",
+    );
+
+    let add_remote_scoped = env
+        .rimz()
+        .args([
+            "remote",
+            "--mux",
+            "tmux",
+            "add",
+            "scoped",
+            "scoped-box:query-engine",
+        ])
+        .bounded_output()
+        .expect("run rimz remote --mux tmux add");
+    assert!(
+        add_remote_scoped.status.success(),
+        "remote-scoped add succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&add_remote_scoped.stderr),
+    );
+    let text = std::fs::read_to_string(&remote_file).expect("read remote.toml");
+    assert!(text.contains("name = \"scoped\""), "{text}");
+    assert_eq!(
+        text.matches("mux = \"tmux\"").count(),
+        1,
+        "remote-scoped --mux pins the alias mux: {text}",
+    );
+
+    let add_local = env
+        .rimz()
+        .args([
+            "remote",
+            "add",
+            "local",
+            "local-box:query-engine",
+            "--mux",
+            "tmux",
+        ])
+        .bounded_output()
+        .expect("run rimz remote add --mux");
+    assert!(
+        add_local.status.success(),
+        "local add succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&add_local.stderr),
+    );
+    let text = std::fs::read_to_string(&remote_file).expect("read remote.toml");
+    assert!(text.contains("name = \"local\""), "{text}");
+    assert_eq!(
+        text.matches("mux = \"tmux\"").count(),
+        2,
+        "local --mux pins the alias mux: {text}",
     );
 }
 
@@ -332,7 +471,6 @@ fn no_reconnect_requires_remote() {
 fn malformed_targets_fail_with_the_fix() {
     let env = Env::new();
     let cases = [
-        ("dev-box", "missing the"),
         ("dev-box:", "nothing after"),
         (":query-engine", "empty host"),
         ("[::1:query-engine", "unclosed"),
@@ -341,9 +479,9 @@ fn malformed_targets_fail_with_the_fix() {
     for (target, needle) in cases {
         let out = env
             .rimz()
-            .args(["attach", "--remote", target, "--print"])
+            .args(["remote", "connect", target, "--print"])
             .bounded_output()
-            .expect("run rimz attach --remote");
+            .expect("run rimz remote connect");
         assert!(!out.status.success(), "`{target}` must not parse");
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(

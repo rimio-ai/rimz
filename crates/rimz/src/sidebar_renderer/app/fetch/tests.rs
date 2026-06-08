@@ -24,6 +24,27 @@ fn produce_guard_maps_a_panic_to_a_degraded_outcome() {
     assert_eq!(result.unwrap_err(), "sidebar produce panicked");
 }
 
+#[test]
+fn refresh_override_stamps_folded_snapshot() {
+    let workspace_id = workspace();
+    let mut snapshot = super::super::state::placeholder_snapshot(workspace_id.clone());
+    snapshot.sidebar.refresh_ms = 250;
+    let config = ServeConfig {
+        workspace_id,
+        mux: MuxName::Zellij,
+        session_name: "rimz-test".to_owned(),
+        instance_id: SidebarInstanceId::new(),
+        tick_seconds: 2,
+        refresh_ms_override: Some(50),
+        own_pane: None,
+    };
+
+    apply_refresh_override(&config, &mut snapshot);
+
+    assert_eq!(snapshot.sidebar.refresh_ms, 50);
+    assert_eq!(snapshot.sidebar.resolved_refresh_ms(), 50);
+}
+
 /// One forced cycle over a tempdir workspace, end to end and entirely in
 /// process: the fast lane folds the published frame and posts a non-final
 /// outcome, then the produce arm runs [`produce_snapshot`] on the same warm
@@ -73,6 +94,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         session_name: "rimz-test".to_owned(),
         instance_id: SidebarInstanceId::new(),
         tick_seconds: 2,
+        refresh_ms_override: None,
         // No own pane: the fold must admit every published fixture pane even
         // when the test process itself runs inside a live mux pane.
         own_pane: None,
@@ -232,6 +254,7 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
         session_name: "rimz-test".to_owned(),
         instance_id: younger,
         tick_seconds: 2,
+        refresh_ms_override: None,
         // No own pane: the fold must admit every published fixture pane even
         // when the test process itself runs inside a live mux pane.
         own_pane: None,
@@ -293,6 +316,7 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
         session_name: "rimz-test".to_owned(),
         instance_id: younger,
         tick_seconds: 2,
+        refresh_ms_override: None,
         // No own pane: the fold must admit every published fixture pane even
         // when the test process itself runs inside a live mux pane.
         own_pane: None,
@@ -411,6 +435,7 @@ fn pane_frame_published_refolds_a_consumer_from_cache() {
         session_name: "rimz-test".to_owned(),
         instance_id: younger,
         tick_seconds: 2,
+        refresh_ms_override: None,
         // No own pane: the fold must admit every published fixture pane even
         // when the test process itself runs inside a live mux pane.
         own_pane: None,

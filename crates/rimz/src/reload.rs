@@ -165,6 +165,7 @@ fn reconcile_live(
         replace_existing: false,
         config: MultiplexerConfig::from(machine_config),
         resume_panes: Vec::new(),
+        refresh_ms: None,
     };
     let mut liveness = crate::sidebar::sidebar_liveness(runtime);
     liveness.young_panes = young_sidebar_panes(mux, ws, jiff::Timestamp::now());

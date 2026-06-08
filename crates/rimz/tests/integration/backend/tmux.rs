@@ -471,6 +471,7 @@ fn sidebar_split_is_born_at_the_birth_size() {
                     replace_existing: false,
                     config: rimz::config::MultiplexerConfig::default(),
                     resume_panes: Vec::new(),
+                    refresh_ms: None,
                 },
                 None,
             )
@@ -536,6 +537,7 @@ fn new_window_pins_the_start_verdict_after_a_resize() {
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_panes: Vec::new(),
+                refresh_ms: None,
             },
             None,
         )
@@ -676,6 +678,7 @@ fn open_background_view_creates_named_window_idempotently() {
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_panes: Vec::new(),
+        refresh_ms: None,
     };
     // Install the `after-new-window` sidebar hook the way `rimz start` does
     // before launching the host.
@@ -768,6 +771,7 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
             cwd: std::env::temp_dir(),
             label: "claude:feature".to_owned(),
         }],
+        refresh_ms: None,
     };
 
     server
@@ -928,6 +932,7 @@ fn open_sidebar_split_window_succeeds() {
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_panes: Vec::new(),
+                refresh_ms: None,
             },
             None,
         )
@@ -984,6 +989,7 @@ fn reconcile_sidebars_adds_one_to_a_sidebarless_window() {
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_panes: Vec::new(),
+                refresh_ms: None,
             },
             &rimz::mux::SidebarLiveness::default(),
         )
@@ -1056,6 +1062,7 @@ fn reconcile_sidebars_collapses_an_orphan_sidebar_only_window() {
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_panes: Vec::new(),
+                refresh_ms: None,
             },
             // No live sidebars known: the orphan's pane is unclaimed, so it closes.
             &rimz::mux::SidebarLiveness::default(),
@@ -1147,6 +1154,7 @@ fn new_window_is_born_with_a_sidebar_and_focused_terminal() {
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_panes: Vec::new(),
+                refresh_ms: None,
             },
             None,
         )

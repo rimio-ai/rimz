@@ -2,12 +2,14 @@
 //! guarded `ssh` command it compiles to, and the autossh-style reconnect
 //! policy.
 //!
-//! `rimz attach --remote` makes the local rimz a thin SSH launcher and link
+//! `rimz remote connect` makes the local rimz a thin SSH launcher and link
 //! supervisor: everything room-shaped — workspace resolution, session birth,
 //! sidebar, health gate — runs on the remote host's own `rimz`, and the room
 //! renders here because `ssh -t` carries the terminal. This module is pure:
 //! it parses targets, builds `CommandSpec`s, and decides reconnects; the cli
 //! owns process I/O.
+
+pub mod aliases;
 
 use std::time::Duration;
 

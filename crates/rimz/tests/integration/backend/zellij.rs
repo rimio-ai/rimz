@@ -417,6 +417,7 @@ fn open_sidebar_births_native_layout_and_template() {
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_panes: Vec::new(),
+                refresh_ms: None,
             },
             None,
         )
@@ -490,6 +491,7 @@ fn open_sidebar_on_live_session_is_idempotent() {
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_panes: Vec::new(),
+        refresh_ms: None,
     };
 
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
@@ -542,6 +544,7 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_panes: Vec::new(),
+        refresh_ms: None,
     };
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
 
@@ -641,6 +644,7 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_panes: Vec::new(),
+                refresh_ms: None,
             },
             None,
         )
@@ -742,6 +746,7 @@ fn reconcile_defers_the_add_on_a_detached_session() {
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_panes: Vec::new(),
+                refresh_ms: None,
             },
             &rimz::mux::SidebarLiveness::default(),
         )
@@ -898,6 +903,7 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_panes: Vec::new(),
+                refresh_ms: None,
             },
             &liveness,
         )
@@ -1561,6 +1567,7 @@ fn capped_birth_size_lands_the_cap_in_every_tab() {
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_panes: Vec::new(),
+                refresh_ms: None,
             },
             None,
         )
@@ -1627,6 +1634,7 @@ fn under_cap_birth_pins_the_start_verdict_in_new_tabs() {
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_panes: Vec::new(),
+                refresh_ms: None,
             },
             None,
         )
@@ -1669,6 +1677,7 @@ fn under_cap_birth_pins_the_start_verdict_in_new_tabs() {
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_panes: Vec::new(),
+                refresh_ms: None,
             },
             &sidebar_liveness_for_session(xdg.path(), &name),
         )
@@ -1714,6 +1723,7 @@ fn custom_tab_layout_uses_the_new_tab_template_sidebar_width() {
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_panes: Vec::new(),
+        refresh_ms: None,
     };
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
     backend.open_sidebar(&sidebar, None).expect("open_sidebar");
@@ -1781,6 +1791,7 @@ fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundView
             replace_existing: false,
             config: rimz::config::MultiplexerConfig::default(),
             resume_panes: Vec::new(),
+            refresh_ms: None,
         },
     }
 }
@@ -1881,6 +1892,7 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_panes: Vec::new(),
+                refresh_ms: None,
             },
             Some(&daemon),
         )

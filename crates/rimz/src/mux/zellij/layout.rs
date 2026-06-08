@@ -88,10 +88,14 @@ fn sidebar_pane_kdl(
         Some(cwd) => format!(" cwd={}", kdl_string(&cwd.to_string_lossy())?),
         None => String::new(),
     };
+    let refresh_args = opts
+        .refresh_ms
+        .map(|ms| format!(r#" "--refresh-ms" "{ms}""#))
+        .unwrap_or_default();
     Ok(format!(
         r#"pane size={size} name={pane_name}{cwd_attr} {{
             command {rimz_bin}
-            args "sidebar" "serve" "--mux" "zellij" "--workspace-id" {workspace_id} "--session-name" {session_name}
+            args "sidebar" "serve" "--mux" "zellij" "--workspace-id" {workspace_id} "--session-name" {session_name}{refresh_args}
             start_suspended false
             close_on_exit true
         }}"#,
@@ -399,6 +403,7 @@ mod tests {
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),
             resume_panes: Vec::new(),
+            refresh_ms: None,
         };
         let layout = render_sidebar_layout(&opts).expect("render layout");
         assert!(
@@ -422,6 +427,7 @@ mod tests {
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),
             resume_panes: Vec::new(),
+            refresh_ms: None,
         };
         let layout = render_sidebar_layout(&opts).expect("render layout");
         // The template must spell out the focused terminal instead of relying
@@ -461,6 +467,7 @@ mod tests {
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),
             resume_panes: Vec::new(),
+            refresh_ms: None,
         };
         let layout = render_sidebar_layout(&opts).expect("render layout");
         // The birth tab spells the verdict's percentage share — a fixed size
@@ -532,6 +539,7 @@ mod tests {
                 replace_existing: false,
                 config: crate::config::MultiplexerConfig::default(),
                 resume_panes: Vec::new(),
+                refresh_ms: None,
             },
         }
     }
@@ -789,6 +797,7 @@ mod tests {
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),
             resume_panes: Vec::new(),
+            refresh_ms: None,
         };
         let layout = render_sidebar_layout(&opts).expect("render layout");
         assert!(
@@ -799,6 +808,29 @@ mod tests {
         assert!(
             !layout.contains("start_suspended true"),
             "the sidebar pane must never be born suspended:\n{layout}",
+        );
+    }
+
+    #[test]
+    fn sidebar_layout_threads_refresh_override() {
+        use crate::ids::WorkspaceId;
+        let opts = SidebarPaneOptions {
+            session_name: "rimz-refresh".to_owned(),
+            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-refresh")),
+            project_root: PathBuf::from("/tmp/rimz-refresh"),
+            cwd: PathBuf::from("/tmp/rimz-refresh"),
+            width: SidebarWidth::default(),
+            birth_size: SidebarWidth::default().birth_size(None),
+            rimz_bin: PathBuf::from("/usr/bin/rimz"),
+            replace_existing: false,
+            config: crate::config::MultiplexerConfig::default(),
+            resume_panes: Vec::new(),
+            refresh_ms: Some(50),
+        };
+        let layout = render_sidebar_layout(&opts).expect("render layout");
+        assert!(
+            layout.contains(r#""--refresh-ms" "50""#),
+            "the sidebar argv carries the one-shot refresh override:\n{layout}",
         );
     }
 }

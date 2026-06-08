@@ -66,6 +66,8 @@ enum SidebarSubcmd {
         session_name: Option<String>,
         #[arg(long, default_value_t = 1)]
         tick_seconds: u64,
+        #[arg(long)]
+        refresh_ms: Option<u16>,
     },
     /// Read a snapshot JSON from stdin and render one fixed frame.
     Render {
@@ -248,6 +250,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             mux,
             session_name,
             tick_seconds,
+            refresh_ms,
         } => {
             let needs_workspace_resolve = workspace_id.is_none() || session_name.is_none();
             let resolved = if needs_workspace_resolve {
@@ -284,6 +287,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 session_name,
                 instance_id: SidebarInstanceId::new(),
                 tick_seconds,
+                refresh_ms_override: refresh_ms,
                 own_pane: rimz::mux::own_pane_id(mux),
             })
             .context("serving sidebar")
