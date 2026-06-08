@@ -209,7 +209,8 @@ pub fn command_is_host(command: &str) -> bool {
 }
 
 pub fn pane_is_host(pane: &PaneRef) -> bool {
-    pane.command.as_deref().is_some_and(command_is_host)
+    pane.spawn_command.as_deref().is_some_and(command_is_host)
+        || pane.command.as_deref().is_some_and(command_is_host)
         || pane.view_name.as_deref() == Some(VIEW_NAME)
 }
 
@@ -314,6 +315,7 @@ mod tests {
             view_name: view_name.map(ToOwned::to_owned),
             is_focused: false,
             command: command.map(ToOwned::to_owned),
+            spawn_command: None,
             cwd: None,
             pane_pid: None,
             pane_process_start: None,
@@ -406,6 +408,17 @@ mod tests {
             Some("rimz codex app-server serve --workspace-id w"),
             None,
         )));
+    }
+
+    #[test]
+    fn detects_hosts_by_spawn_command() {
+        let host = PaneRef {
+            command: Some("claude".to_owned()),
+            spawn_command: Some("claude remote-control --spawn worktree".to_owned()),
+            ..pane(Some("claude"), None)
+        };
+
+        assert!(pane_is_host(&host));
     }
 
     #[test]

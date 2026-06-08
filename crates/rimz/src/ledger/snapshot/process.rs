@@ -7,31 +7,31 @@ use super::row::{ProcessCard, ProcessState, RowCard, SidebarRow};
 use crate::feed::PaneRef;
 
 /// Whether a pane no agent has bound carries enough identity to render a
-/// process row. A `None`/empty command after frame rotation is a raced or
-/// mid-birth read, or a backend observation with no command metadata — render
-/// nothing rather than an anonymous `process` row.
+/// process row. Foreground display wins, but a spawn command also admits the
+/// pane so a single foreground race cannot erase a known pane.
 pub(super) fn pane_command_is_known(pane: &PaneRef) -> bool {
-    pane.command
-        .as_deref()
-        .is_some_and(|command| !command.is_empty())
+    display_command(pane).is_some()
 }
 
 /// Worktree path for a pane row: prefer the mux-reported cwd when it is
-/// non-empty, then fall back to Rimz's supervised agent wrapper manifest. Used
-/// by both process rows and the lazy-agent pane ladder so empty-cwd races do
-/// not diverge between the two projections.
+/// non-empty, then fall back to Rimz's supervised agent wrapper manifest from
+/// the spawn command and finally the foreground command. Used by both process
+/// rows and the lazy-agent pane ladder so empty-cwd races do not diverge
+/// between the two projections.
 pub(crate) fn pane_worktree_path(pane: &PaneRef) -> Option<&str> {
     pane.cwd
         .as_deref()
         .filter(|cwd| !cwd.is_empty())
+        .or_else(|| {
+            pane.spawn_command
+                .as_deref()
+                .and_then(rimz_exec_worktree_path)
+        })
         .or_else(|| pane.command.as_deref().and_then(rimz_exec_worktree_path))
 }
 
 pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
-    let command = pane
-        .command
-        .as_deref()
-        .filter(|command| !command.is_empty());
+    let command = display_command(pane);
     let program = command
         .map(program_label)
         .unwrap_or_else(|| "process".to_owned());
@@ -73,6 +73,24 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
             io_bps: None,
         }),
     }
+}
+
+pub fn pane_agent_kind(pane: &PaneRef) -> Option<&'static str> {
+    pane.spawn_command
+        .as_deref()
+        .and_then(command_agent_kind)
+        .or_else(|| pane.command.as_deref().and_then(command_agent_kind))
+}
+
+fn display_command(pane: &PaneRef) -> Option<&str> {
+    pane.command
+        .as_deref()
+        .filter(|command| !command.is_empty())
+        .or_else(|| {
+            pane.spawn_command
+                .as_deref()
+                .filter(|command| !command.is_empty())
+        })
 }
 
 /// Whether a `process` pane is doing genuine work — worth the running spinner —
@@ -225,16 +243,18 @@ mod tests {
 
     #[test]
     fn pane_command_is_known_requires_a_nonempty_command() {
-        // The fold's third honest-read guard: a `None`/empty command is a raced
-        // or mid-birth read, so the pane folds no row until a read names it.
+        // Foreground is the display source, but spawn identity is enough to
+        // keep a known pane from disappearing during a raced foreground read.
         assert!(pane_command_is_known(&pane("%1", "zsh", "/repo/main")));
         let raced = crate::feed::PaneRef {
             command: None,
+            spawn_command: Some("rimz agents exec codex --worktree-path /repo/main".to_owned()),
             ..pane("%1", "zsh", "/repo/main")
         };
-        assert!(!pane_command_is_known(&raced));
+        assert!(pane_command_is_known(&raced));
         let empty = crate::feed::PaneRef {
             command: Some(String::new()),
+            spawn_command: Some(String::new()),
             ..pane("%1", "zsh", "/repo/main")
         };
         assert!(!pane_command_is_known(&empty));
@@ -301,6 +321,17 @@ mod tests {
     }
 
     #[test]
+    fn pane_agent_kind_tries_spawn_before_foreground() {
+        let pane = crate::feed::PaneRef {
+            command: Some("zsh".to_owned()),
+            spawn_command: Some("rimz agents exec codex --worktree-path /repo/wt".to_owned()),
+            ..pane("%1", "zsh", "/repo/wt")
+        };
+
+        assert_eq!(pane_agent_kind(&pane), Some("codex"));
+    }
+
+    #[test]
     fn process_activity_follows_the_real_program() {
         // A sudo-wrapped build is real work; an agent host and bare shells are not.
         assert!(process_is_active("sudo npm install -g @openai/codex"));
@@ -347,5 +378,15 @@ mod tests {
                 .and_then(|process| process.command_detail.as_ref()),
             None
         );
+
+        let spawn_only = row_from_process(
+            &crate::feed::PaneRef {
+                command: None,
+                spawn_command: Some("rimz agents exec codex --worktree-path /repo".to_owned()),
+                ..pane("%4", "zsh", "/repo")
+            },
+            Timestamp::now(),
+        );
+        assert_eq!(spawn_only.name, "codex");
     }
 }

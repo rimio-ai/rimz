@@ -53,6 +53,7 @@ fn pane(i: usize) -> rimz::feed::PaneRef {
         view_name: None,
         is_focused: false,
         command: Some("zsh".to_owned()),
+        spawn_command: None,
         cwd: None,
         pane_pid: None,
         pane_process_start: None,

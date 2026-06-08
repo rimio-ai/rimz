@@ -7,7 +7,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::process::{
-    command_agent_kind, pane_command_is_known, pane_worktree_path, row_from_process,
+    pane_agent_kind, pane_command_is_known, pane_worktree_path, row_from_process,
 };
 use super::row::{AgentCard, RowCard, SidebarRow};
 use crate::agents::AgentDescriptor;
@@ -156,9 +156,9 @@ fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: 
     if !pane_start_allows_bind(agent.last_activity, pane) {
         return false;
     }
-    match pane.command.as_deref() {
-        Some(command) => command_agent_kind(command) == Some(agent.kind.as_str()),
-        None => true,
+    match pane_agent_kind(pane) {
+        Some(kind) => kind == agent.kind.as_str(),
+        None => !pane_command_is_known(pane),
     }
 }
 
@@ -240,7 +240,7 @@ pub(super) fn lazy_agent_for_pane<'a>(
 fn lazy_agent_pane_identity(
     pane: &PaneRef,
 ) -> Option<(&'static str, &'static AgentDescriptor, &str)> {
-    let kind = command_agent_kind(pane.command.as_deref()?)?;
+    let kind = pane_agent_kind(pane)?;
     let descriptor = crate::agents::descriptor_by_kind(kind)?;
     if !descriptor.capabilities.registers_lazily {
         return None;
@@ -373,6 +373,7 @@ mod tests {
             view_name: view_name.map(str::to_owned),
             is_focused: false,
             command: Some(command.to_owned()),
+            spawn_command: None,
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
             pane_process_start: None,

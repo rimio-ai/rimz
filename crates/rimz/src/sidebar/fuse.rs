@@ -74,6 +74,7 @@ mod tests {
             view_name: None,
             is_focused: false,
             command: Some(command.to_owned()),
+            spawn_command: None,
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
             pane_process_start: None,

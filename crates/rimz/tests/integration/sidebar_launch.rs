@@ -191,6 +191,7 @@ impl MuxBackend for FakeBackend {
             view_name: None,
             is_focused: false,
             command: Some("sh".to_owned()),
+            spawn_command: None,
             cwd: None,
             pane_pid: None,
             pane_process_start: None,

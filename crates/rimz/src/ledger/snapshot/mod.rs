@@ -34,7 +34,7 @@ pub(crate) use fold::{
     reseed_rollup_cache_for_rotation, write_carryover,
 };
 pub use panes::{SidebarOwnView, pane_start_allows_bind};
-pub use process::command_agent_kind;
+pub use process::{command_agent_kind, pane_agent_kind};
 pub(crate) use process::{command_is_sidebar_chrome, process_is_active};
 pub use row::{
     AgentCard, ProcessCard, ProcessState, RowCallSplit, RowCard, SidebarResolverState, SidebarRow,

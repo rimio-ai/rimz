@@ -53,6 +53,8 @@ pub struct PaneProcess {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawn_command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<Timestamp>,
@@ -130,6 +132,7 @@ impl PaneFrame {
             view_name: tab.name.clone(),
             is_focused: tab.active_pane.as_ref() == Some(&pane.pane_id),
             command: pane.current.command.clone(),
+            spawn_command: pane.current.spawn_command.clone(),
             cwd: pane.current.cwd.clone(),
             pane_pid: pane.current.pid,
             pane_process_start: pane.current.started_at,
@@ -139,19 +142,20 @@ impl PaneFrame {
 
 impl PaneState {
     /// Join this fresh pane state to the prior frame's state for the same pane
-    /// id. A changed command, pid, or process start is a new tenant: the prior
-    /// current process rotates to `previous` and the fresh record stands clean.
-    /// A stable identity repairs raced-null mux fields (`command`, `cwd`,
-    /// `started_at`) from the prior read and carries `previous` along.
+    /// id. A changed spawn command, pid, or process start is a new tenant: the
+    /// prior current process rotates to `previous` and the fresh record stands
+    /// clean. A stable identity repairs raced-null mux fields (`command`,
+    /// `spawn_command`, `cwd`, `started_at`) from the prior read and carries
+    /// `previous` along.
     ///
     /// `current.pid` is never backfilled here: on Zellij the pid is a
     /// metrics-layer derivation, and only that layer's `starttime` pid-reuse
     /// guard may restore it ([`super::produce`]'s metrics module) — a rotation
     /// carry would republish a stale binding without ever revalidating it.
     pub fn rotate_on_process_change(&mut self, prior: &PaneState) {
-        let command_changed = match (
-            self.current.command.as_deref(),
-            prior.current.command.as_deref(),
+        let spawn_changed = match (
+            self.current.spawn_command.as_deref(),
+            prior.current.spawn_command.as_deref(),
         ) {
             (Some(fresh), Some(previous)) => fresh != previous,
             _ => false,
@@ -164,7 +168,7 @@ impl PaneState {
             (Some(fresh), Some(previous)) => fresh != previous,
             _ => false,
         };
-        if command_changed || pid_changed || start_changed {
+        if spawn_changed || pid_changed || start_changed {
             self.previous = Some(prior.current.clone());
             return;
         }
@@ -172,6 +176,9 @@ impl PaneState {
         self.previous = prior.previous.clone();
         if self.current.command.is_none() {
             self.current.command = prior.current.command.clone();
+        }
+        if self.current.spawn_command.is_none() {
+            self.current.spawn_command = prior.current.spawn_command.clone();
         }
         if self.current.cwd.is_none() {
             self.current.cwd = prior.current.cwd.clone();
@@ -267,6 +274,7 @@ pub fn assemble_frame(
             current: PaneProcess {
                 pid: pane.pane_pid,
                 command: pane.command,
+                spawn_command: pane.spawn_command,
                 cwd: pane.cwd,
                 started_at: pane.pane_process_start,
             },
@@ -310,6 +318,7 @@ mod tests {
             view_name: None,
             is_focused: focused,
             command: command.map(ToOwned::to_owned),
+            spawn_command: None,
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
             pane_process_start: None,
@@ -343,32 +352,41 @@ mod tests {
     }
 
     #[test]
-    fn command_change_rotates_current_to_previous_without_carrying_start() {
+    fn foreground_change_with_stable_spawn_does_not_rotate() {
         let old_start: Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
         let mut prior = assemble_frame(
-            vec![pane("terminal_1", "tab_0", Some("codex"), false)],
+            vec![PaneRef {
+                command: Some("codex".to_owned()),
+                spawn_command: Some(
+                    "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/main"
+                        .to_owned(),
+                ),
+                ..pane("terminal_1", "tab_0", Some("codex"), false)
+            }],
             1,
             "rimz-test",
         );
         prior.tabs[0].panes[0].current.started_at = Some(old_start);
         let mut fresh = assemble_frame(
-            vec![pane("terminal_1", "tab_0", Some("zsh"), false)],
+            vec![PaneRef {
+                command: Some("/usr/bin/codex".to_owned()),
+                spawn_command: Some(
+                    "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/main"
+                        .to_owned(),
+                ),
+                ..pane("terminal_1", "tab_0", Some("codex"), false)
+            }],
             2,
             "rimz-test",
         );
+        fresh.tabs[0].panes[0].current.started_at = Some(old_start);
 
         fresh.rotate_against_prior(&prior);
 
         let state = &fresh.tabs[0].panes[0];
-        assert_eq!(state.current.command.as_deref(), Some("zsh"));
-        assert_eq!(state.current.started_at, None);
-        assert_eq!(
-            state
-                .previous
-                .as_ref()
-                .and_then(|previous| previous.command.as_deref()),
-            Some("codex")
-        );
+        assert_eq!(state.current.command.as_deref(), Some("/usr/bin/codex"));
+        assert_eq!(state.current.started_at, Some(old_start));
+        assert!(state.previous.is_none());
     }
 
     #[test]
@@ -379,9 +397,11 @@ mod tests {
             "rimz-test",
         );
         prior.tabs[0].panes[0].current.pid = Some(42);
+        prior.tabs[0].panes[0].current.spawn_command = Some("rimz agents exec claude".to_owned());
         prior.tabs[0].panes[0].previous = Some(PaneProcess {
             pid: Some(41),
             command: Some("zsh".to_owned()),
+            spawn_command: None,
             cwd: Some("/repo/main".to_owned()),
             started_at: None,
         });
@@ -400,6 +420,10 @@ mod tests {
 
         let state = &fresh.tabs[0].panes[0];
         assert_eq!(state.current.command.as_deref(), Some("claude"));
+        assert_eq!(
+            state.current.spawn_command.as_deref(),
+            Some("rimz agents exec claude")
+        );
         assert_eq!(state.current.cwd.as_deref(), Some("/repo/main"));
         // The pid is never rotation-carried: only the metrics layer restores
         // it, behind its starttime pid-reuse guard.

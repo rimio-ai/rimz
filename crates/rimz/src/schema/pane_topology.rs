@@ -2,8 +2,11 @@
 //! `rimz sidebar wake`.
 //!
 //! The cache is a latency hint for Zellij's expensive JSON `list-panes` path:
-//! it carries the topology fields Rimz needs for pane projection, while
-//! process/cwd enrichment still comes from the existing `/proc` lanes.
+//! it carries the topology fields Rimz needs for pane projection, plus the
+//! plugin-retained live foreground command. `terminal_command` remains the
+//! pane's spawn command; `pane_command` is the foreground display command.
+//! Process id, cwd, and resource enrichment still come from the existing
+//! `/proc` lanes.
 
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +41,8 @@ pub struct PaneTopologyPane {
     pub pane_x: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_command: Option<String>,
 }

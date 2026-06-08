@@ -23,6 +23,7 @@ mod shell {
         /// The projected room shape, refreshed per manifest event.
         tabs: BTreeMap<usize, Vec<PaneFields>>,
         tab_names: BTreeMap<usize, String>,
+        foreground: BTreeMap<u32, String>,
         active_tab: Option<usize>,
         active_focused_pane: Option<u32>,
         /// Classifies active-tab changes after Zellij's focus marks settle.
@@ -85,7 +86,8 @@ mod shell {
                     // when the grant comes from the permission cache (verified
                     // live on 0.44.3), so this path is load-bearing.
                     self.mark_granted(now);
-                    let next_tabs = project(&manifest, &self.tab_names);
+                    let mut next_tabs = project(&manifest, &self.tab_names);
+                    policy::apply_foreground_commands(&mut next_tabs, &self.foreground);
                     let opened = policy::opened_card_panes(&self.tabs, &next_tabs);
                     let focus_patch =
                         policy::focus_shortcut_if_only_focus_changed(&self.tabs, &next_tabs);
@@ -144,15 +146,17 @@ mod shell {
                 }
                 Event::CommandChanged(pane_id, command, is_foreground, _) => {
                     if is_foreground {
-                        self.patch_pane_command(&pane_id, &command);
-                        if self.poke_command_changed(&pane_id, &command, now) {
-                            if let Some(policy) = self.policy.as_mut() {
-                                let hash = policy::manifest_hash(&self.tabs, self.active_tab);
-                                policy.accept_manifest(hash);
-                                policy.on_optimistic_signal(now);
+                        if let Some(command_text) = policy::joined_foreground_command(&command) {
+                            self.remember_foreground_command(&pane_id, command_text);
+                            if self.poke_command_changed(&pane_id, &command, now) {
+                                if let Some(policy) = self.policy.as_mut() {
+                                    let hash = policy::manifest_hash(&self.tabs, self.active_tab);
+                                    policy.accept_manifest(hash);
+                                    policy.on_optimistic_signal(now);
+                                }
+                            } else {
+                                self.signal_change(now);
                             }
-                        } else {
-                            self.signal_change(now);
                         }
                     }
                 }
@@ -322,22 +326,14 @@ mod shell {
             argv.push(json);
         }
 
-        fn patch_pane_command(&mut self, pane_id: &PaneId, command: &[String]) {
+        fn remember_foreground_command(&mut self, pane_id: &PaneId, command: String) {
             let PaneId::Terminal(id) = pane_id else {
                 return;
             };
-            let command = command
-                .iter()
-                .filter(|arg| !arg.is_empty())
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                .join(" ");
-            if command.is_empty() {
-                return;
-            }
+            self.foreground.insert(*id, command.clone());
             for pane in self.tabs.values_mut().flatten() {
                 if !pane.is_plugin && pane.id == *id {
-                    pane.terminal_command = Some(command);
+                    pane.pane_command = Some(command);
                     return;
                 }
             }
@@ -352,6 +348,9 @@ mod shell {
                 panes.retain(|pane| pane.is_plugin != is_plugin || pane.id != id);
             }
             self.tabs.retain(|_, panes| !panes.is_empty());
+            if !is_plugin {
+                self.foreground.remove(&id);
+            }
         }
 
         /// Publish an optimistic command patch for a terminal pane already
@@ -425,8 +424,9 @@ mod shell {
                 argv.push(workspace_id.to_owned());
             }
             if let Some(command) = pane
-                .terminal_command
+                .pane_command
                 .as_ref()
+                .or(pane.terminal_command.as_ref())
                 .filter(|command| !command.is_empty())
             {
                 argv.push("--command-arg".to_owned());
@@ -563,6 +563,7 @@ mod shell {
                         pane_x: Some(pane.pane_x as u64),
                         pane_columns: Some(pane.pane_columns as u64),
                         title: pane.title.clone(),
+                        pane_command: None,
                         terminal_command: pane.terminal_command.clone(),
                     })
                     .collect();

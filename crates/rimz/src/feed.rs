@@ -323,6 +323,11 @@ pub struct PaneRef {
     /// Foreground command as reported by the multiplexer, if available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// Spawn command used to launch the pane, if the backend reports it.
+    /// Advisory identity/classification metadata; display prefers
+    /// [`Self::command`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawn_command: Option<String>,
     /// Current working directory as reported by the multiplexer, if available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
@@ -348,6 +353,7 @@ impl PaneRef {
             view_name: None,
             is_focused: false,
             command: None,
+            spawn_command: None,
             cwd: None,
             pane_pid: None,
             pane_process_start: None,

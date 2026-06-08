@@ -214,6 +214,7 @@ fn pane(raw: &str, command: &str, cwd: &str) -> PaneRef {
         view_name: None,
         is_focused: false,
         command: Some(command.to_owned()),
+        spawn_command: None,
         cwd: Some(cwd.to_owned()),
         pane_pid: None,
         pane_process_start: None,

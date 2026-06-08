@@ -199,6 +199,7 @@ mod tests {
             view_name: None,
             is_focused: false,
             command: None,
+            spawn_command: None,
             cwd: None,
             pane_pid: None,
             pane_process_start: None,

@@ -157,11 +157,13 @@ fn backfill_pane_cwds_skips_a_proc_cwd_that_no_longer_exists() {
 }
 
 #[test]
-fn command_handoff_rotates_without_carrying_process_start() {
+fn spawn_handoff_rotates_without_carrying_process_start() {
     let old_start: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
     let mut prior = frame(vec![pane("terminal_1", Some("codex"), Some("/repo"))]);
+    first_mut(&mut prior).current.spawn_command = Some("rimz agents exec codex".to_owned());
     first_mut(&mut prior).current.started_at = Some(old_start);
     let mut fresh = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
+    first_mut(&mut fresh).current.spawn_command = Some("zsh".to_owned());
 
     fresh.rotate_against_prior(&prior);
 
@@ -174,6 +176,29 @@ fn command_handoff_rotates_without_carrying_process_start() {
             .and_then(|previous| previous.command.as_deref()),
         Some("codex")
     );
+}
+
+#[test]
+fn foreground_handoff_with_stable_spawn_keeps_process_start() {
+    let old_start: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
+    let mut prior = frame(vec![pane("terminal_1", Some("codex"), Some("/repo"))]);
+    first_mut(&mut prior).current.spawn_command = Some("rimz agents exec codex".to_owned());
+    first_mut(&mut prior).current.started_at = Some(old_start);
+    let mut fresh = frame(vec![pane(
+        "terminal_1",
+        Some("/usr/bin/codex"),
+        Some("/repo"),
+    )]);
+    first_mut(&mut fresh).current.spawn_command = Some("rimz agents exec codex".to_owned());
+
+    fresh.rotate_against_prior(&prior);
+
+    assert_eq!(
+        first(&fresh).current.command.as_deref(),
+        Some("/usr/bin/codex")
+    );
+    assert_eq!(first(&fresh).current.started_at, Some(old_start));
+    assert!(first(&fresh).previous.is_none());
 }
 
 #[test]
@@ -190,6 +215,23 @@ fn stamp_pane_process_starts_stamps_a_codex_pane_lacking_a_native_start() {
         assert_eq!(cwd, "/repo");
         Some(start)
     });
+    assert_eq!(first(&frame).current.started_at, Some(start));
+}
+
+#[test]
+fn stamp_pane_process_starts_classifies_from_spawn_command() {
+    let start: jiff::Timestamp = "2026-06-05T13:54:33Z".parse().unwrap();
+    let mut pane = pane("terminal_30", None, Some("/repo"));
+    pane.spawn_command = Some("rimz agents exec codex --worktree-path /repo".to_owned());
+    let mut frame = frame(vec![pane]);
+    let unstamped = natively_unstamped(&frame);
+
+    stamp_pane_process_starts(&mut frame, &unstamped, &|_, _| None, &|kind, cwd| {
+        assert_eq!(kind, "codex");
+        assert_eq!(cwd, "/repo");
+        Some(start)
+    });
+
     assert_eq!(first(&frame).current.started_at, Some(start));
 }
 

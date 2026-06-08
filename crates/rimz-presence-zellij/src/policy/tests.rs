@@ -13,6 +13,7 @@ fn pane(id: u32) -> PaneFields {
         pane_x: Some(0),
         pane_columns: Some(80),
         title: format!("pane-{id}"),
+        pane_command: None,
         terminal_command: Some("zsh".to_owned()),
     }
 }
@@ -122,6 +123,16 @@ fn focus_patch_rejects_non_focus_changes() {
         None,
         "title-only changes are not focus changes and do not need a shortcut"
     );
+
+    let foreground_changed = PaneFields {
+        pane_command: Some("codex".to_owned()),
+        ..pane(1)
+    };
+    assert_eq!(
+        focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![foreground_changed])),
+        None,
+        "foreground changes are not focus-only patches"
+    );
 }
 
 #[test]
@@ -183,6 +194,15 @@ fn title_is_excluded_by_projection() {
 }
 
 #[test]
+fn foreground_command_is_excluded_by_projection() {
+    let mut changed = pane(1);
+    changed.pane_command = Some("codex".to_owned());
+    let a = manifest_hash(&tabs(vec![pane(1)]), Some(0));
+    let b = manifest_hash(&tabs(vec![changed]), Some(0));
+    assert_eq!(a, b);
+}
+
+#[test]
 fn topology_payload_flattens_projected_panes() {
     let mut first = pane(1);
     first.tab_position = 1;
@@ -206,6 +226,63 @@ fn topology_payload_flattens_projected_panes() {
     assert_eq!(
         json["panes"][0]["terminal_command"],
         first.terminal_command.unwrap()
+    );
+    assert!(json["panes"][0].get("pane_command").is_none());
+}
+
+#[test]
+fn topology_payload_carries_retained_foreground_without_replacing_spawn() {
+    let mut foreground = BTreeMap::new();
+    foreground.insert(7, "codex".to_owned());
+    let mut projected = tabs(vec![PaneFields {
+        id: 7,
+        terminal_command: Some(
+            "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt".to_owned(),
+        ),
+        ..pane(7)
+    }]);
+
+    apply_foreground_commands(&mut projected, &foreground);
+
+    let pane = &projected[&0][0];
+    assert_eq!(pane.pane_command.as_deref(), Some("codex"));
+    assert_eq!(
+        pane.terminal_command.as_deref(),
+        Some("/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt")
+    );
+    let payload = TopologyPayload::from_tabs("rimz-test", 42, &projected);
+    let json = serde_json::to_value(&payload).expect("topology payload serializes");
+    assert_eq!(json["panes"][0]["pane_command"], "codex");
+    assert_eq!(
+        json["panes"][0]["terminal_command"],
+        "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt"
+    );
+}
+
+#[test]
+fn foreground_retention_survives_rebuild_and_clears_on_close() {
+    let command = joined_foreground_command(&["codex".to_owned(), "--foo".to_owned()])
+        .expect("joined foreground");
+    let mut foreground = BTreeMap::from([(9, command)]);
+
+    let mut rebuilt = tabs(vec![pane(9)]);
+    apply_foreground_commands(&mut rebuilt, &foreground);
+    assert_eq!(rebuilt[&0][0].pane_command.as_deref(), Some("codex --foo"));
+
+    let mut rebuilt_again = tabs(vec![pane(9)]);
+    apply_foreground_commands(&mut rebuilt_again, &foreground);
+    assert_eq!(
+        rebuilt_again[&0][0].pane_command.as_deref(),
+        Some("codex --foo"),
+        "a manifest rebuild does not wipe the retained foreground command"
+    );
+
+    foreground.remove(&9);
+    let mut reused = tabs(vec![pane(9)]);
+    apply_foreground_commands(&mut reused, &foreground);
+    assert_eq!(
+        reused[&0][0].pane_command, None,
+        "a pane id reused after close does not inherit stale foreground"
     );
 }
 

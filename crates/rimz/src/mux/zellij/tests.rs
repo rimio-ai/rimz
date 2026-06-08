@@ -197,7 +197,7 @@ fn parse_focused_client_panes_ignores_headers_and_plugins() {
 }
 
 #[test]
-fn raw_pane_command_uses_terminal_command_and_sidebar_title() {
+fn raw_pane_splits_foreground_spawn_and_sidebar_title() {
     let json = r#"[
           {
             "id": 0,
@@ -233,24 +233,34 @@ fn raw_pane_command_uses_terminal_command_and_sidebar_title() {
     let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
 
     assert_eq!(
-        parsed[0].pane_ref_command().as_deref(),
+        parsed[0].display_command().as_deref(),
         Some("rimz-sidebar"),
         "a title-identified sidebar stays chrome even when command fields are missing or point at the launcher",
     );
     assert_eq!(
-        parsed[1].pane_ref_command().as_deref(),
-        Some("claude remote-control --spawn worktree"),
-        "Zellij's full terminal command is the host-process signal",
+        parsed[1].display_command().as_deref(),
+        None,
+        "the spawn command no longer masquerades as foreground display",
     );
     assert_eq!(
-        parsed[2].pane_ref_command().as_deref(),
+        parsed[1].spawn_command(),
+        Some("claude remote-control --spawn worktree"),
+        "Zellij's full terminal command remains the host-process identity signal",
+    );
+    assert_eq!(
+        parsed[2].display_command().as_deref(),
         Some("zsh"),
         "pane_command remains the foreground-command source when present",
     );
+    assert_eq!(parsed[2].spawn_command(), Some("ignored"));
     assert_eq!(
-        parsed[3].pane_ref_command().as_deref(),
-        Some("claude remote-control --spawn worktree"),
-        "a present-but-empty field falls through the ladder instead of masking a later one",
+        parsed[3].display_command().as_deref(),
+        None,
+        "an empty foreground field does not fall through to spawn display",
+    );
+    assert_eq!(
+        parsed[3].spawn_command(),
+        Some("claude remote-control --spawn worktree")
     );
 }
 
@@ -448,6 +458,7 @@ fn topology_cache_panes_feed_the_existing_classifier() {
                 pane_columns: Some(20),
                 pane_x: Some(0),
                 title: Some("rimz-sidebar".to_owned()),
+                pane_command: Some("rimz-sidebar".to_owned()),
                 terminal_command: Some("rimz sidebar serve".to_owned()),
             },
             PaneTopologyPane {
@@ -462,7 +473,8 @@ fn topology_cache_panes_feed_the_existing_classifier() {
                 pane_columns: Some(100),
                 pane_x: Some(20),
                 title: Some("claude".to_owned()),
-                terminal_command: Some("claude".to_owned()),
+                pane_command: Some("claude".to_owned()),
+                terminal_command: Some("rimz agents exec claude".to_owned()),
             },
         ],
     };
@@ -472,8 +484,9 @@ fn topology_cache_panes_feed_the_existing_classifier() {
         classify_session_panes(&panes),
         SessionCleanliness::SuspendedCommandPane,
     );
-    assert_eq!(panes[0].pane_ref_command().as_deref(), Some("rimz-sidebar"));
-    assert_eq!(panes[1].reported_command(), Some("claude"));
+    assert_eq!(panes[0].display_command().as_deref(), Some("rimz-sidebar"));
+    assert_eq!(panes[1].foreground_command(), Some("claude"));
+    assert_eq!(panes[1].spawn_command(), Some("rimz agents exec claude"));
 }
 
 #[test]

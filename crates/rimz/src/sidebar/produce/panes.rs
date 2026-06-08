@@ -122,9 +122,15 @@ fn stamp_pane_process_starts(
         }
         let Some(kind) = pane
             .current
-            .command
+            .spawn_command
             .as_deref()
             .and_then(crate::ledger::snapshot::command_agent_kind)
+            .or_else(|| {
+                pane.current
+                    .command
+                    .as_deref()
+                    .and_then(crate::ledger::snapshot::command_agent_kind)
+            })
         else {
             continue;
         };

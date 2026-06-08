@@ -1001,6 +1001,7 @@ fn parse_pane_line(line: &str) -> Option<PaneRef> {
         } else {
             trimmed_nonempty(3)
         },
+        spawn_command: None,
         cwd: trimmed_nonempty(4),
         pane_pid: cols
             .get(5)
@@ -1157,6 +1158,7 @@ mod tests {
             view_name: None,
             is_focused: false,
             command: Some(command.to_owned()),
+            spawn_command: None,
             cwd: None,
             pane_pid: None,
             pane_process_start: None,

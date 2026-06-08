@@ -37,9 +37,10 @@ pub const KEEPALIVE_MS: u64 = 60_000;
 pub const SIDEBAR_PANE_TITLE: &str = "rimz-sidebar";
 
 /// The pane fields the plugin projects. The manifest hash folds only the stable
-/// subset whose change means the sidebar should refetch panes. `title` is
-/// carried for focus correction but deliberately excluded from the hash: agents
-/// mutate titles per output line, and hashing them would re-poke per line.
+/// subset whose change means the sidebar should refetch panes. `title` and
+/// `pane_command` are carried for focus correction and topology publication but
+/// deliberately excluded from the hash: agents mutate titles per output line,
+/// and foreground command changes already publish through `CommandChanged`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PaneFields {
     pub id: u32,
@@ -56,6 +57,8 @@ pub struct PaneFields {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pane_columns: Option<u64>,
     pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_command: Option<String>,
 }
@@ -166,6 +169,7 @@ pub fn focus_shortcut_if_only_focus_changed(
                 || previous.tab_name != next.tab_name
                 || previous.pane_x != next.pane_x
                 || previous.pane_columns != next.pane_columns
+                || previous.pane_command != next.pane_command
                 || previous.terminal_command != next.terminal_command
             {
                 return None;
@@ -218,6 +222,30 @@ pub fn opened_card_panes(
         }
     }
     opened
+}
+
+pub fn joined_foreground_command(command: &[String]) -> Option<String> {
+    let joined = command
+        .iter()
+        .filter(|arg| !arg.is_empty())
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!joined.is_empty()).then_some(joined)
+}
+
+pub fn apply_foreground_commands(
+    tabs: &mut BTreeMap<usize, Vec<PaneFields>>,
+    foreground: &BTreeMap<u32, String>,
+) {
+    for pane in tabs.values_mut().flatten() {
+        if pane.is_plugin {
+            continue;
+        }
+        if let Some(command) = foreground.get(&pane.id) {
+            pane.pane_command = Some(command.clone());
+        }
+    }
 }
 
 /// The focused sidebar pane after switching to `active_tab`, if Zellij restored

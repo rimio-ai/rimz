@@ -1647,6 +1647,27 @@ fn commandless_unbound_pane_folds_no_row() {
 }
 
 #[test]
+fn spawn_only_unbound_pane_still_renders() {
+    // Regression for Zellij topology/CLI source races: a frame with no
+    // foreground command but a stable spawn command remains a known pane.
+    let raced = PaneRef {
+        command: None,
+        spawn_command: Some("rimz agents exec codex --worktree-path /repo/main".to_owned()),
+        cwd: None,
+        ..pane("%1", "x", "/repo/main")
+    };
+    let snapshot = room(Vec::new(), Vec::new()).with_live_panes(vec![raced], None);
+
+    let rows = rows(&snapshot);
+    assert_eq!(
+        rows.len(),
+        1,
+        "spawn identity keeps the row visible: {rows:?}"
+    );
+    assert_eq!(rows[0].name, "codex");
+}
+
+#[test]
 fn commandless_pane_with_agent_still_renders_agent_row() {
     // Agent rows bind by stamped pane id, never by command, so a raced read
     // that drops the command never demotes or hides the agent's row.

@@ -174,6 +174,7 @@ impl WakeEnv {
                 view_name: None,
                 is_focused: true,
                 command: Some("zsh".to_owned()),
+                spawn_command: None,
                 cwd: Some(self.project_root.to_string_lossy().into_owned()),
                 pane_pid: None,
                 pane_process_start: None,
@@ -197,6 +198,7 @@ impl WakeEnv {
             view_name: None,
             is_focused,
             command: Some(command.to_owned()),
+            spawn_command: None,
             cwd: Some(self.project_root.to_string_lossy().into_owned()),
             pane_pid: None,
             pane_process_start: None,
@@ -234,6 +236,7 @@ impl WakeEnv {
                     pane_columns: Some(20),
                     pane_x: Some(0),
                     title: Some("rimz-sidebar".to_owned()),
+                    pane_command: Some("rimz-sidebar".to_owned()),
                     terminal_command: Some("rimz sidebar serve".to_owned()),
                 },
                 PaneTopologyPane {
@@ -248,7 +251,8 @@ impl WakeEnv {
                     pane_columns: Some(100),
                     pane_x: Some(20),
                     title: Some("zsh".to_owned()),
-                    terminal_command: Some("zsh".to_owned()),
+                    pane_command: Some("zsh".to_owned()),
+                    terminal_command: Some("/bin/zsh".to_owned()),
                 },
             ],
         }

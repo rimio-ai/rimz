@@ -1080,7 +1080,8 @@ impl MuxBackend for ZellijBackend {
                 is_focused: p.is_focused,
                 pane_pid: p.pid(),
                 pane_process_start: p.process_start(),
-                command: p.pane_ref_command(),
+                command: p.display_command(),
+                spawn_command: p.spawn_command().map(str::to_owned),
                 cwd: p.reported_cwd().map(str::to_owned),
                 // Zellij's `list-panes -j` exposes no per-pane "tab is active"
                 // or "session attached" signal, so pane visibility is unknown
@@ -1920,16 +1921,16 @@ fn tabs_with_sidebars(panes: &[RawPane]) -> std::collections::HashSet<String> {
         .collect()
 }
 
-/// A managed daemon-host pane: any pane in the `rimzd` tab, or one whose
-/// command carries a host marker. The tab name is the signal that works on
-/// Zellij 0.44 — its pane list emits no live command fields, and the
-/// `reported_command` ladder bottoms out at `terminal_command`, the spawn
-/// command, so a host that re-execs (the Claude remote-control host does)
-/// keeps its marker only there.
+/// A managed daemon-host pane: any pane in the `rimzd` tab, or one whose spawn
+/// or foreground command carries a host marker. The spawn command is the
+/// authoritative Zellij signal for hosts that re-exec after launch.
 fn is_daemon_host_pane(pane: &RawPane) -> bool {
     pane.tab_name.as_deref() == Some(crate::remote_control::VIEW_NAME)
         || pane
-            .reported_command()
+            .spawn_command()
+            .is_some_and(crate::remote_control::command_is_host)
+        || pane
+            .foreground_command()
             .is_some_and(crate::remote_control::command_is_host)
 }
 
@@ -2120,32 +2121,33 @@ impl RawPane {
         self.is_terminal() && !self.is_held && !self.exited
     }
 
-    /// The command the pane reports, by the field ladder Zellij has emitted
-    /// across versions: `pane_command` (the foreground program) wins, falling
-    /// back through the older `command` to the newer full `terminal_command`.
-    /// A present-but-empty field falls through rather than masking a later
-    /// one. The one ladder shared by the `PaneRef` projection and the raw-pane
-    /// classifiers, so the two layers always agree on a pane.
-    fn reported_command(&self) -> Option<&str> {
-        [
-            self.pane_command.as_deref(),
-            self.command.as_deref(),
-            self.terminal_command.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        .find(|value| !value.is_empty())
+    /// The live foreground command the pane reports. `pane_command` is the
+    /// current Zellij pty-enriched field; `command` is the older field name.
+    /// Present-but-empty fields fall through rather than masking the next
+    /// source.
+    fn foreground_command(&self) -> Option<&str> {
+        [self.pane_command.as_deref(), self.command.as_deref()]
+            .into_iter()
+            .flatten()
+            .find(|value| !value.is_empty())
     }
 
-    /// The command the pane's `PaneRef` carries. A title-identified sidebar
-    /// wins: Zellij can omit command fields for the layout pane, and it must
-    /// still be filtered as chrome rather than rendered as an anonymous
-    /// process row. Otherwise the reported-command ladder decides.
-    fn pane_ref_command(&self) -> Option<String> {
+    /// The launch command Zellij was given when the pane was spawned.
+    fn spawn_command(&self) -> Option<&str> {
+        self.terminal_command
+            .as_deref()
+            .filter(|command| !command.is_empty())
+    }
+
+    /// The display command the pane's `PaneRef` carries. A title-identified
+    /// sidebar wins: Zellij can omit command fields for the layout pane, and it
+    /// must still be filtered as chrome rather than rendered as an anonymous
+    /// process row. Otherwise the foreground command decides.
+    fn display_command(&self) -> Option<String> {
         if is_sidebar_pane(self) {
             return Some(SIDEBAR_PANE_NAME.to_owned());
         }
-        self.reported_command().map(str::to_owned)
+        self.foreground_command().map(str::to_owned)
     }
 
     /// The cwd the pane reports; `pane_cwd` wins, falling back to `cwd`, with
@@ -2189,7 +2191,7 @@ impl From<PaneTopologyPane> for RawPane {
             pane_x: pane.pane_x,
             title: pane.title,
             terminal_command: pane.terminal_command,
-            pane_command: None,
+            pane_command: pane.pane_command,
             command: None,
             pane_cwd: None,
             cwd: None,

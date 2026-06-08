@@ -666,11 +666,7 @@ struct FocusedPaneBindingSelection {
 
 fn pane_matches_lazy_agent(kind: &str, worktree_path: &str, pane: &PaneRef) -> bool {
     pane.cwd.as_deref() == Some(worktree_path)
-        && pane
-            .command
-            .as_deref()
-            .and_then(rimz::ledger::snapshot::command_agent_kind)
-            == Some(kind)
+        && rimz::ledger::snapshot::pane_agent_kind(pane) == Some(kind)
 }
 
 /// Whether another session's durable stamp still plausibly owns this pane. A
@@ -1260,6 +1256,7 @@ mod tests {
             view_name: None,
             is_focused: focused,
             command: Some(command.to_owned()),
+            spawn_command: None,
             cwd: Some(cwd.to_owned()),
             pane_pid: None,
             pane_process_start: None,

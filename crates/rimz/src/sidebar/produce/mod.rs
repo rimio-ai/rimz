@@ -206,6 +206,7 @@ pub(crate) mod test_support {
             view_name: None,
             is_focused: false,
             command: command.map(ToOwned::to_owned),
+            spawn_command: None,
             cwd: cwd.map(ToOwned::to_owned),
             pane_pid: None,
             pane_process_start: None,
