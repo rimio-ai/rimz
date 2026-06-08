@@ -363,13 +363,26 @@ fn write_topology_cache(runtime: &RuntimePaths, topology: Option<&str>) {
         return;
     };
     match serde_json::from_str::<rimz::schema::pane_topology::PaneTopologyCache>(topology) {
-        Ok(cache) => {
+        Ok(mut cache) => {
+            sanitize_topology_cache(&mut cache);
             if let Err(err) = rimz::sidebar::cache::write_pane_topology_cache(runtime, &cache) {
                 tracing::debug!(error = %err, "presence poke: topology cache write failed");
             }
         }
         Err(err) => {
             tracing::debug!(error = %err, "presence poke: topology payload parse failed");
+        }
+    }
+}
+
+fn sanitize_topology_cache(cache: &mut rimz::schema::pane_topology::PaneTopologyCache) {
+    for pane in &mut cache.panes {
+        if pane
+            .pane_command
+            .as_deref()
+            .is_some_and(command_is_launch_chrome)
+        {
+            pane.pane_command = None;
         }
     }
 }
@@ -406,6 +419,9 @@ fn wake_event(
             pane_id: zellij_pane(pane_id),
         }),
         WakeReason::CommandChanged => Some(match pane_id.zip(command_from_args(command_args)) {
+            Some((_pane_id, command)) if command_is_launch_chrome(&command) => {
+                SidebarEvent::PanesChanged
+            }
             Some((pane_id, command)) => SidebarEvent::CommandChanged {
                 pane_id: zellij_pane(pane_id),
                 command,
@@ -434,6 +450,22 @@ fn command_from_args(args: &[String]) -> Option<String> {
         .collect::<Vec<_>>()
         .join(" ");
     (!command.is_empty()).then_some(command)
+}
+
+fn command_is_launch_chrome(command: &str) -> bool {
+    let mut tokens = command.split_whitespace().filter(|token| !token.is_empty());
+    let Some(program) = tokens.next() else {
+        return false;
+    };
+    program_basename(program) == "rimz" && tokens.next() == Some("tab")
+}
+
+fn program_basename(program: &str) -> &str {
+    std::path::Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(program)
 }
 
 fn session_name_from_record(state: &StatePaths) -> Option<String> {

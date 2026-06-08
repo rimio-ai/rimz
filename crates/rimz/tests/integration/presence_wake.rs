@@ -723,6 +723,62 @@ fn wake_command_changed_broadcasts_event_without_patching_pane_frame() {
 }
 
 #[test]
+fn wake_command_changed_treats_rimz_tab_as_nudge_and_strips_topology_command() {
+    let env = WakeEnv::new();
+    if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
+        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        return;
+    }
+    let launch = "rimz tab --layout claude,codex --worktree quality-pass";
+    let mut topology = env.topology_cache(unix_now_ms());
+    topology
+        .panes
+        .iter_mut()
+        .find(|pane| pane.id == 7)
+        .expect("fixture working pane exists")
+        .pane_command = Some(launch.to_owned());
+    let topology_json = serde_json::to_string(&topology).expect("serialize topology");
+    let recv = env.bind_socket("sidebar.eldest.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
+
+    let output = env.wake_with(
+        "command-changed",
+        true,
+        &[
+            "--session-name",
+            SESSION_NAME,
+            "--pane-id",
+            "terminal_7",
+            "--command-arg",
+            launch,
+            "--topology",
+            topology_json.as_str(),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "wake failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let event = recv_sidebar_event(&recv, "eldest");
+    assert_sidebar_envelope(&event, &env.workspace_id, Some(SESSION_NAME));
+    assert_eq!(event["event"]["kind"], "panes_changed");
+    let cached =
+        read_pane_topology_cache(&env.runtime, SESSION_NAME).expect("topology cache written");
+    let working = cached
+        .panes
+        .iter()
+        .find(|pane| pane.id == 7)
+        .expect("working pane remains cached");
+    assert_eq!(
+        working.pane_command, None,
+        "rimz tab launch chrome must not republish as foreground process truth"
+    );
+    env.assert_no_mux_fork();
+}
+
+#[test]
 fn wake_focus_changed_broadcasts_event_without_patching_pane_frame() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {

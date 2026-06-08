@@ -146,7 +146,12 @@ mod shell {
                 }
                 Event::CommandChanged(pane_id, command, is_foreground, _) => {
                     if is_foreground {
-                        if let Some(command_text) = policy::joined_foreground_command(&command) {
+                        if policy::command_args_are_launch_chrome(&command) {
+                            self.forget_foreground_command(&pane_id);
+                            self.signal_change(now);
+                        } else if let Some(command_text) =
+                            policy::joined_foreground_command(&command)
+                        {
                             self.remember_foreground_command(&pane_id, command_text);
                             if self.poke_command_changed(&pane_id, &command, now) {
                                 if let Some(policy) = self.policy.as_mut() {
@@ -338,6 +343,19 @@ mod shell {
             for pane in self.tabs.values_mut().flatten() {
                 if !pane.is_plugin && pane.id == *id {
                     pane.pane_command = Some(command);
+                    return;
+                }
+            }
+        }
+
+        fn forget_foreground_command(&mut self, pane_id: &PaneId) {
+            let PaneId::Terminal(id) = pane_id else {
+                return;
+            };
+            self.foreground.remove(id);
+            for pane in self.tabs.values_mut().flatten() {
+                if !pane.is_plugin && pane.id == *id {
+                    pane.pane_command = None;
                     return;
                 }
             }

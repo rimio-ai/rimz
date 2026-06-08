@@ -285,6 +285,10 @@ pub fn joined_foreground_command(command: &[String]) -> Option<String> {
     (!joined.is_empty()).then_some(joined)
 }
 
+pub fn command_args_are_launch_chrome(command: &[String]) -> bool {
+    joined_foreground_command(command).is_some_and(|command| foreground_is_launch_chrome(&command))
+}
+
 pub fn apply_foreground_commands(
     tabs: &mut BTreeMap<usize, Vec<PaneFields>>,
     foreground: &BTreeMap<u32, String>,
@@ -293,10 +297,36 @@ pub fn apply_foreground_commands(
         if pane.is_plugin {
             continue;
         }
-        if let Some(command) = foreground.get(&pane.id) {
+        if pane
+            .pane_command
+            .as_deref()
+            .is_some_and(foreground_is_launch_chrome)
+        {
+            pane.pane_command = None;
+        }
+        if let Some(command) = foreground
+            .get(&pane.id)
+            .filter(|command| !foreground_is_launch_chrome(command))
+        {
             pane.pane_command = Some(command.clone());
         }
     }
+}
+
+fn foreground_is_launch_chrome(command: &str) -> bool {
+    let mut tokens = command.split_whitespace().filter(|token| !token.is_empty());
+    let Some(program) = tokens.next() else {
+        return false;
+    };
+    program_basename(program) == "rimz" && tokens.next() == Some("tab")
+}
+
+fn program_basename(program: &str) -> &str {
+    std::path::Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(program)
 }
 
 /// The focused sidebar pane after switching to `active_tab`, if Zellij restored

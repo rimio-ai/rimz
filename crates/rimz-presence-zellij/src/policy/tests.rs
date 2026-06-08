@@ -361,6 +361,49 @@ fn foreground_overlay_reaches_live_roster_payload() {
 }
 
 #[test]
+fn launch_chrome_foreground_does_not_reach_live_roster_payload() {
+    let launch = "rimz tab --layout claude,codex --worktree quality-pass";
+    let foreground = BTreeMap::from([(7, launch.to_owned())]);
+    let live_roster = tabs(vec![PaneFields {
+        id: 7,
+        pane_command: Some(launch.to_owned()),
+        terminal_command: Some("zsh".to_owned()),
+        ..pane(7)
+    }]);
+
+    let payload = published_topology_payload("rimz-test", 42, Some(&live_roster), &foreground)
+        .expect("live roster publishes");
+
+    assert_eq!(payload.panes[0].pane_command, None);
+    assert_eq!(payload.panes[0].terminal_command.as_deref(), Some("zsh"));
+}
+
+#[test]
+fn launch_chrome_classifier_scopes_to_rimz_tab() {
+    assert!(command_args_are_launch_chrome(&[
+        "rimz".to_owned(),
+        "tab".to_owned(),
+        "--layout".to_owned(),
+        "claude,codex".to_owned(),
+        "--worktree".to_owned(),
+        "quality-pass".to_owned(),
+    ]));
+    assert!(command_args_are_launch_chrome(&[
+        "/home/me/.cargo/bin/rimz tab --layout claude,codex --worktree quality-pass".to_owned(),
+    ]));
+    assert!(!command_args_are_launch_chrome(&[
+        "rimz".to_owned(),
+        "agents".to_owned(),
+        "exec".to_owned(),
+        "codex".to_owned(),
+    ]));
+    assert!(!command_args_are_launch_chrome(&[
+        "cargo".to_owned(),
+        "build".to_owned(),
+    ]));
+}
+
+#[test]
 fn foreground_retention_survives_rebuild_and_clears_on_close() {
     let command = joined_foreground_command(&["codex".to_owned(), "--foo".to_owned()])
         .expect("joined foreground");
