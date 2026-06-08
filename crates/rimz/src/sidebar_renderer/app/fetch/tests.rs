@@ -1,4 +1,6 @@
 use super::*;
+use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::sidebar::notify::{Notification, NotificationAgent, NotificationKind};
 use crate::sidebar_renderer::app::fixtures::{pane, workspace};
 use crate::{MuxName, SidebarInstanceId};
 
@@ -44,6 +46,24 @@ fn refresh_override_stamps_folded_snapshot() {
 
     assert_eq!(snapshot.sidebar.refresh_ms, 50);
     assert_eq!(snapshot.sidebar.resolved_refresh_ms(), 50);
+}
+
+#[test]
+fn notification_panes_keeps_live_agent_panes() {
+    let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let notification = Notification {
+        agents: vec![
+            notification_agent("a1", Some(first.clone())),
+            notification_agent("a2", None),
+            notification_agent("a3", Some(second.clone())),
+        ],
+        notification_kind: NotificationKind::Coalesced,
+        title: "Rimz: 3 agents need attention".to_owned(),
+        body: "a1: waiting | a2: failed | a3: waiting".to_owned(),
+    };
+
+    assert_eq!(notification_panes(&notification), vec![first, second]);
 }
 
 /// One forced cycle over a tempdir workspace, end to end and entirely in
@@ -222,6 +242,15 @@ fn consumer_never_produces_unforced_however_stale_the_frame() {
         !produce_this_cycle(false, FetchMode::Normal, None, 1000),
         "even a missing frame waits for the elected producer"
     );
+}
+
+fn notification_agent(id: &str, pane_id: Option<PaneId>) -> NotificationAgent {
+    NotificationAgent {
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: AgentSessionId::from(id),
+        label: format!("claude {id}"),
+        pane_id,
+    }
 }
 
 #[test]

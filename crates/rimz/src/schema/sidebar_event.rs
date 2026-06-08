@@ -92,6 +92,8 @@ pub enum SidebarEvent {
     Notify {
         title: String,
         body: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        panes: Vec<PaneId>,
     },
     Reload,
 }
@@ -171,6 +173,7 @@ mod tests {
             SidebarEvent::Notify {
                 title: "Rimz: claude needs you".to_owned(),
                 body: "claude sess-1 is waiting for input".to_owned(),
+                panes: vec![PaneId::from_parts(MuxName::Zellij, "terminal_4")],
             },
             SidebarEvent::Reload,
         ];
@@ -200,6 +203,21 @@ mod tests {
         expected.session_name = None;
         let encoded = serde_json::to_vec(&expected).expect("serialize event envelope");
         assert!(!String::from_utf8_lossy(&encoded).contains("session_name"));
+        let decoded: SidebarEventEnvelope =
+            serde_json::from_slice(&encoded).expect("decode event envelope");
+        assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn notify_omits_empty_panes_and_defaults_old_events() {
+        let expected = envelope(SidebarEvent::Notify {
+            title: "Rimz: claude needs you".to_owned(),
+            body: "claude sess-1 is waiting for input".to_owned(),
+            panes: Vec::new(),
+        });
+        let encoded = serde_json::to_vec(&expected).expect("serialize event envelope");
+        assert!(!String::from_utf8_lossy(&encoded).contains("panes"));
+
         let decoded: SidebarEventEnvelope =
             serde_json::from_slice(&encoded).expect("decode event envelope");
         assert_eq!(decoded, expected);

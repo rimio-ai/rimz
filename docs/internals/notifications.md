@@ -19,15 +19,15 @@ The first observation after election seeds the baseline without firing. That pre
 
 The producer applies trigger filtering, per-agent debounce, burst coalescing, and focus suppression. Focus suppression reads the same live pane focus bit the sidebar already folds into snapshots; it is a conservative visibility hint, not ledger truth.
 
-For each notification, the producer spawns `[notifications].command` if configured and broadcasts `SidebarEvent::Notify` to the sidebar socket. The command receives `RIMZ_NOTIFY_TITLE`, `RIMZ_NOTIFY_BODY`, `RIMZ_NOTIFY_AGENT`, and `RIMZ_NOTIFY_KIND`, inherits no hook stdout, and is handed to the global child reaper.
+For each notification, the producer spawns `[notifications].command` if configured and broadcasts `SidebarEvent::Notify` to the sidebar socket with the triggering agent pane ids. The command receives `RIMZ_NOTIFY_TITLE`, `RIMZ_NOTIFY_BODY`, `RIMZ_NOTIFY_AGENT`, and `RIMZ_NOTIFY_KIND`, inherits no hook stdout, and is handed to the global child reaper.
 
-The renderer is the terminal mouth. On `SidebarEvent::Notify`, pane-resident renderers write terminal-local bytes outside the Ratatui draw cycle: OSC 777 for the desktop banner, DCS-wrapped under tmux, plus a separate BEL when sound is enabled. Detached sessions have no attached terminal stream, and inactive-pane passthrough is mux/client-defined, so command delivery is the deterministic off-screen path.
+The renderer is the terminal mouth. On `SidebarEvent::Notify`, BEL is emitted only by a pane-resident renderer whose tab or window contains one of the triggering agent panes, so mux tab and window bell markers point at the work that needs you. Desktop OSC is a reachability channel: under tmux, pane-resident renderers with their own view emit the DCS-wrapped OSC 777 banner so the active client stream can carry it even when the agent is in a background window. Detached sessions have no attached terminal stream, and inactive-pane passthrough is mux/client-defined, so command delivery is the deterministic off-screen path.
 
 ## Backend Behavior
 
-tmux forwards OSC notifications when `allow-passthrough` is on; Rimz enables that room option by default. The renderer wraps the OSC payload as `DCS tmux; ... ST` so the local terminal emulator receives it through tmux and SSH.
+tmux forwards OSC notifications when `allow-passthrough` is on; Rimz enables that room option by default. The renderer wraps the OSC payload as `DCS tmux; ... ST` so the local terminal emulator receives it through tmux and SSH. BEL stays targeted to the triggering agent's window; desktop OSC stays broad enough to reach the active client.
 
-Zellij currently drops OSC 9, 777, and 99 notification sequences. `desktop = "auto"` therefore disables desktop OSC under Zellij and leaves `[notifications].command` as the portable route. `desktop = "osc"` forces emission for users testing a future Zellij or terminal path.
+Zellij currently drops OSC 9, 777, and 99 notification sequences. `desktop = "auto"` therefore disables desktop OSC under Zellij and leaves `[notifications].command` as the portable route. The targeted BEL still marks only the Zellij tab whose sidebar shares the triggering agent's tab, so the tab bar `[!]` points at the agent that needs you. `desktop = "osc"` forces emission for users testing a future Zellij or terminal path.
 
 ## Configuration
 

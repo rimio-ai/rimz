@@ -8,9 +8,10 @@ use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
 
 use crate::config::NotificationsPrefs;
+use crate::ids::PaneId;
 use crate::schema::sidebar_event::SidebarEvent;
 use crate::sidebar::consumer::RollupCursor;
-use crate::sidebar::notify::NotificationState;
+use crate::sidebar::notify::{Notification, NotificationState};
 use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 
 use super::input::SNAPSHOT_WAKEUP;
@@ -222,17 +223,27 @@ fn evaluate_and_deliver_notifications(
         {
             tracing::debug!(error = %err, "notify-command spawn failed");
         }
+        let panes = notification_panes(&notification);
         if let Err(err) = crate::ledger::wakeup::broadcast_sidebar_event(
             runtime,
             Some(&config.session_name),
             SidebarEvent::Notify {
                 title: notification.title,
                 body: notification.body,
+                panes,
             },
         ) {
             tracing::debug!(error = %err, "notification event broadcast failed");
         }
     }
+}
+
+fn notification_panes(notification: &Notification) -> Vec<PaneId> {
+    notification
+        .agents
+        .iter()
+        .filter_map(|agent| agent.pane_id.clone())
+        .collect()
 }
 
 /// Whether this cycle pays the produce, decided from cheap pre-reads. Pure, so

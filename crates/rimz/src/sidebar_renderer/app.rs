@@ -359,7 +359,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                             true,
                         );
                     }
-                    SidebarEvent::Notify { title, body } => {
+                    SidebarEvent::Notify { title, body, panes } => {
                         if let Err(err) = emit_terminal_notification(
                             &config,
                             &mut terminal,
@@ -367,6 +367,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                             &config.notification_prefs,
                             &title,
                             &body,
+                            &panes,
                         ) {
                             debug!(error = %err, "terminal notification emit failed");
                         }
@@ -759,11 +760,20 @@ fn emit_terminal_notification(
     prefs: &NotificationsPrefs,
     title: &str,
     body: &str,
+    panes: &[PaneId],
 ) -> io::Result<()> {
-    if !renderer_has_own_terminal_view(snapshot) {
-        return Ok(());
+    let mut bytes = Vec::new();
+    if desktop_notification_targets_renderer(config.mux, snapshot, panes) {
+        bytes.extend(osc::desktop_notification_bytes(
+            config.mux,
+            prefs.desktop,
+            title,
+            body,
+        ));
     }
-    let bytes = osc::notification_bytes(config.mux, prefs.desktop, prefs.sound, title, body);
+    if notification_targets_own_view(snapshot, panes) {
+        bytes.extend(osc::sound_notification_bytes(prefs.sound));
+    }
     if bytes.is_empty() {
         return Ok(());
     }
@@ -772,10 +782,23 @@ fn emit_terminal_notification(
     backend.flush()
 }
 
-fn renderer_has_own_terminal_view(snapshot: &SidebarSnapshot) -> bool {
-    // `own_view` separates real pane renderers from placeholder/off-pane
-    // renders. It is not an attached-client active-tab signal.
-    snapshot.own_view.is_some()
+fn desktop_notification_targets_renderer(
+    mux: MuxName,
+    snapshot: &SidebarSnapshot,
+    panes: &[PaneId],
+) -> bool {
+    match mux {
+        MuxName::Tmux => snapshot.own_view.is_some(),
+        MuxName::Zellij => notification_targets_own_view(snapshot, panes),
+    }
+}
+
+fn notification_targets_own_view(snapshot: &SidebarSnapshot, panes: &[PaneId]) -> bool {
+    snapshot.own_view.as_ref().is_some_and(|view| {
+        panes
+            .iter()
+            .any(|pane| view.working_pane_ids.contains(pane))
+    })
 }
 
 /// How long the resize watcher blocks per poll. A resize event wakes it

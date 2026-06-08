@@ -11,21 +11,20 @@ use crate::ids::MuxName;
 const ESC: u8 = 0x1b;
 const BEL: u8 = 0x07;
 
-pub(super) fn notification_bytes(
+pub(super) fn desktop_notification_bytes(
     mux: MuxName,
     desktop: DesktopNotificationMode,
-    sound: NotificationSoundMode,
     title: &str,
     body: &str,
 ) -> Vec<u8> {
-    let mut out = Vec::new();
-    if let Some(payload) = desktop_payload(mux, desktop, title, body) {
-        out.extend(payload);
+    desktop_payload(mux, desktop, title, body).unwrap_or_default()
+}
+
+pub(super) fn sound_notification_bytes(sound: NotificationSoundMode) -> Vec<u8> {
+    match sound {
+        NotificationSoundMode::Bell => vec![BEL],
+        NotificationSoundMode::Off => Vec::new(),
     }
-    if sound == NotificationSoundMode::Bell {
-        out.push(BEL);
-    }
-    out
 }
 
 fn desktop_payload(
@@ -78,36 +77,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tmux_auto_wraps_osc_and_adds_separate_bell() {
-        let bytes = notification_bytes(
+    fn tmux_auto_wraps_osc() {
+        let bytes = desktop_notification_bytes(
             MuxName::Tmux,
             DesktopNotificationMode::Auto,
-            NotificationSoundMode::Bell,
             "Title",
             "Body",
         );
-        assert!(bytes.starts_with(b"\x1bPtmux;\x1b\x1b]777;notify;Title;Body\x07\x1b\\"));
-        assert_eq!(bytes.last(), Some(&BEL));
+        assert_eq!(
+            bytes,
+            b"\x1bPtmux;\x1b\x1b]777;notify;Title;Body\x07\x1b\\".to_vec()
+        );
     }
 
     #[test]
-    fn zellij_auto_skips_desktop_but_keeps_bell() {
-        let bytes = notification_bytes(
+    fn zellij_auto_skips_desktop() {
+        let bytes = desktop_notification_bytes(
             MuxName::Zellij,
             DesktopNotificationMode::Auto,
-            NotificationSoundMode::Bell,
             "Title",
             "Body",
         );
-        assert_eq!(bytes, vec![BEL]);
+        assert!(bytes.is_empty());
+    }
+
+    #[test]
+    fn bell_sound_emits_bel() {
+        assert_eq!(
+            sound_notification_bytes(NotificationSoundMode::Bell),
+            vec![BEL]
+        );
+        assert!(sound_notification_bytes(NotificationSoundMode::Off).is_empty());
     }
 
     #[test]
     fn off_modes_emit_nothing() {
-        let bytes = notification_bytes(
+        let bytes = desktop_notification_bytes(
             MuxName::Tmux,
             DesktopNotificationMode::Off,
-            NotificationSoundMode::Off,
             "Title",
             "Body",
         );
@@ -116,10 +123,9 @@ mod tests {
 
     #[test]
     fn osc_text_strips_controls_and_separator_semicolons() {
-        let bytes = notification_bytes(
+        let bytes = desktop_notification_bytes(
             MuxName::Zellij,
             DesktopNotificationMode::Osc,
-            NotificationSoundMode::Off,
             "A;B\x1b",
             "line\nnext;tail",
         );

@@ -111,6 +111,71 @@ fn heartbeat_write_due_on_first_or_aged_write_only() {
 }
 
 #[test]
+fn notification_targets_only_matching_own_view() {
+    let (targeted_snapshot, _sidebar, first_work, _second_work) = focus_fixture();
+    assert!(notification_targets_own_view(
+        &targeted_snapshot,
+        std::slice::from_ref(&first_work)
+    ));
+    assert!(!notification_targets_own_view(&targeted_snapshot, &[]));
+
+    let foreign = PaneId::from_parts(MuxName::Zellij, "terminal_99");
+    assert!(!notification_targets_own_view(
+        &targeted_snapshot,
+        &[foreign]
+    ));
+
+    let no_own_view = snapshot(&workspace());
+    assert!(!notification_targets_own_view(&no_own_view, &[first_work]));
+}
+
+#[test]
+fn desktop_notification_targets_tmux_own_view_for_reachability() {
+    let (targeted_snapshot, _sidebar, first_work, _second_work) = focus_fixture();
+    assert!(desktop_notification_targets_renderer(
+        MuxName::Tmux,
+        &targeted_snapshot,
+        &[]
+    ));
+
+    let foreign = PaneId::from_parts(MuxName::Tmux, "%99");
+    assert!(desktop_notification_targets_renderer(
+        MuxName::Tmux,
+        &targeted_snapshot,
+        &[foreign]
+    ));
+
+    let no_own_view = snapshot(&workspace());
+    assert!(!desktop_notification_targets_renderer(
+        MuxName::Tmux,
+        &no_own_view,
+        &[first_work]
+    ));
+}
+
+#[test]
+fn desktop_notification_targets_zellij_matching_own_view() {
+    let (targeted_snapshot, _sidebar, first_work, _second_work) = focus_fixture();
+    assert!(desktop_notification_targets_renderer(
+        MuxName::Zellij,
+        &targeted_snapshot,
+        std::slice::from_ref(&first_work)
+    ));
+
+    let foreign = PaneId::from_parts(MuxName::Zellij, "terminal_99");
+    assert!(!desktop_notification_targets_renderer(
+        MuxName::Zellij,
+        &targeted_snapshot,
+        &[foreign]
+    ));
+    assert!(!desktop_notification_targets_renderer(
+        MuxName::Zellij,
+        &targeted_snapshot,
+        &[]
+    ));
+}
+
+#[test]
 fn focus_stranded_own_pane_match_targets_baseline() {
     let (snapshot, sidebar, _first_work, second_work) = focus_fixture();
     let ui = UiState {
