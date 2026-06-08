@@ -4,133 +4,107 @@
 
 Rimz runs with no configuration. Everything here is optional tuning.
 
-Three per-machine files configure how Rimz drives *your* box: `~/.config/rimz/config.toml` (room, sidebar, notifications, remote-control), `~/.config/rimz/resolvers.toml` (the resolver chain), and `~/.config/rimz/remote.toml` (named SSH room aliases). A project may also commit a `.rimz/config.toml`; today Rimz reads that file only to compute the project's trust hash — the workspace shape it declares is on the roadmap, and the last section explains exactly what is and isn't live.
+Configuration has two tiers. The per-machine tier under `~/.config/rimz/` drives your terminal, accounts, notification routes, sidecars, and room preferences; it stays personal, uncommitted, and outside the project trust hash. The project tier at `<root>/.rimz/config.toml` declares a shared workspace shape; Rimz trust-tracks it today, and applying that shape is on the roadmap.
 
-## What configures Rimz today
+## Get Started
 
-| File | Scope | What it does today |
-| --- | --- | --- |
-| `~/.config/rimz/config.toml` | per-machine | worktree defaults, agent layouts, room options, sidebar look, notifications, remote-control auto-launch |
-| `~/.config/rimz/resolvers.toml` | per-machine | the resolver allowlist and chain order |
-| `~/.config/rimz/remote.toml` | per-machine | named remote room aliases used by `rimz remote connect` |
-| `~/.config/rimz/projects/<id>/trust.toml` | per-machine | the project's trust grant — written by `rimz trust grant`, not by hand |
-| `<root>/.rimz/config.toml` | committed | the declared workspace shape; trust-tracked, [not yet applied](#project-config) |
-
-The per-machine tier is personal and never committed — a clone never inherits it, and none of it enters the trust hash. Settings load best-effort: a missing file is the default, and unknown keys are ignored so a newer file never breaks an older binary.
-
-## Per-machine config — `~/.config/rimz/config.toml`
-
-Eight sections, each optional: `[worktree]`, `[agents.layouts]`, `[remote_control]`, `[notifications]`, `[sidebar]`, `[zellij]`, `[tmux]`, `[resume]`.
-
-## Remote aliases — `~/.config/rimz/remote.toml`
-
-`rimz remote add`, `del`, and `rename` maintain this sidecar with atomic rewrites. It is hand-editable TOML and stays separate from `config.toml` so saving a remote target never clobbers room settings.
-
-```toml
-[[remote]]
-name = "prod"
-target = "agent@prod-box:query-engine"
-reconnect = true
-no_resume = false
-mux = "tmux"
+```sh
+rimz setup                         # detect this machine and offer a default config write
+rimz setup --yes                   # non-interactive default config write; no hook or trust side effects
+rimz config init --print           # print the commented field reference
+rimz config init                   # write ~/.config/rimz/config.toml
 ```
 
-`target` uses the same `[user@]host:<session-or-path>` grammar as `rimz remote connect`; `rimz remote add` validates it before saving. `reconnect` defaults to true, `no_resume` defaults to false, and `mux` is optional. Alias names use 1..=64 ASCII alphanumeric, `-`, or `_` characters and start with an alphanumeric or `_`, so `rimz remote connect <value>` can treat values with `:` as raw targets and flag-like values as CLI flags.
+Most users start with `rimz setup` or `rimz config init`, then edit only the few lines they need. The generated template is the exhaustive field reference: every persisted section and default scalar is shown as commented TOML. Leaving a line commented keeps following the defaults shipped by future Rimz versions; uncommenting makes it this machine's override.
 
-### Remote control auto-launch
+## The Files
 
-```toml
-[remote_control]
-claude = true          # off when unset
-codex  = true          # off when unset
+| File | Scope | What it does | Who writes it |
+| --- | --- | --- | --- |
+| `~/.config/rimz/config.toml` | per-machine | worktree defaults, agent layouts, room options, sidebar display, notifications, remote-control auto-launch | you, `rimz setup`, `rimz config` |
+| `~/.config/rimz/resolvers.toml` | per-machine | resolver allowlist and chain order | `rimz resolver` |
+| `~/.config/rimz/remote.toml` | per-machine | named SSH room aliases | `rimz remote` |
+| `~/.config/rimz/projects/<id>/trust.toml` | per-machine | project executable-surface trust grant | `rimz trust` |
+| `<root>/.rimz/config.toml` | committed | declared workspace shape, trust-tracked today | humans and project automation |
+
+Per-machine settings load leniently: a missing file is the default config, and unknown keys are ignored so an older binary can tolerate a newer file. `rimz config set` is stricter than the loader and rejects unknown dotted keys before it writes.
+
+## `config.toml` Per Machine
+
+Eight sections make up the per-machine file:
+
+| Section | Purpose |
+| --- | --- |
+| `[worktree]` | where Rimz-owned Git worktrees live and which base ref new ones branch from |
+| `[agents.layouts]` | named tab layouts for `rimz tab --layout` |
+| `[remote_control]` | per-agent remote-control auto-launch opt-ins |
+| `[notifications]` | best-effort desktop, bell, and command notifications |
+| `[sidebar]` | sidebar width, render timing, ordering, scroll, glow, and display bands |
+| `[zellij]` | Rimz-owned Zellij room defaults |
+| `[tmux]` | Rimz-owned tmux room defaults |
+| `[resume]` | agent re-seeding policy when a room is reborn |
+
+Every field, its default, and an inline note lives in the generated template:
+
+```sh
+rimz config init --print
 ```
 
-Each toggle is independent and off by default — Rimz never links an account or starts a remote-control host without opt-in. This tier is per-machine on purpose: remote control links *your* agent accounts and accepts remote spawn commands.
-
-`claude = true` runs `claude remote-control` in the managed daemon tab when `claude` is on PATH (best-effort — a missing `claude` is skipped). `codex = true` ensures the per-user Codex remote-control daemon once per start. The Codex daemon boots from the managed standalone install at `$CODEX_HOME` (default `~/.codex`), not a distro `codex` on PATH; when `codex = true` and that install is absent, `rimz start` refuses up front with the fix, and `rimz doctor` reports it ahead of time. How each host links its account is in [internals/account.md](../internals/account.md); how enrichment connects is in [internals/transcript.md](../internals/transcript.md).
-
-`rimz start` parks both hosts in one dedicated `rimzd` tab, focus returned to your working pane. Neither is a coding agent, so the sidebar filters both out of the room — Claude's link surfaces as a `⇅ rc` flag on its provider block instead ([interface/sidebar.md](../interface/sidebar.md)).
+The sections below explain the model and the knobs whose behavior is easy to misread.
 
 ### Notifications
 
 ```toml
 [notifications]
-enabled = true
-triggers = ["waiting", "failed", "paused", "success"]   # default: all four
-desktop = "auto"                                         # "auto" | "osc" | "off"
-sound = "bell"                                           # "bell" | "off"
-suppress_focused = true
-debounce_ms = 5000
-coalesce_ms = 1000
-command = "ntfy publish rimz"                            # optional
+triggers = ["waiting", "failed"]
+desktop = "auto"
+sound = "bell"
+command = "ntfy publish rimz"
 ```
 
-Notifications are best-effort attention delivery layered over the sidebar. `waiting`, `failed`, `paused`, and `success` transitions notify by default; `running` and `idle` stay quiet. `debounce_ms` limits repeat notifications for the same agent, and `coalesce_ms` groups a burst into one banner.
+Notifications are best-effort attention delivery layered over the sidebar. `waiting`, `failed`, `paused`, and `success` transitions can notify; `running` and `idle` stay quiet. `debounce_ms` limits repeat notifications for the same agent, and `coalesce_ms` groups bursts into one banner.
 
-`desktop = "auto"` emits OSC desktop notifications under tmux and disables them under Zellij, which drops notification OSCs today. `desktop = "osc"` forces emission for testing or future terminal paths. `sound = "bell"` writes a separate BEL byte; your local terminal decides whether that is audible.
+`desktop = "auto"` emits terminal OSC notifications under tmux and skips them under Zellij, which drops notification OSCs today. `desktop = "osc"` forces emission for testing or future terminal paths. `sound = "bell"` writes a separate BEL byte and your local terminal decides whether that is audible.
 
-`command` runs on this machine through `sh -c` and receives `RIMZ_NOTIFY_TITLE`, `RIMZ_NOTIFY_BODY`, `RIMZ_NOTIFY_AGENT`, and `RIMZ_NOTIFY_KIND`. Use it for host-specific routing such as ntfy, Slack, Pushover, or a local OS notifier. It is per-machine and outside project trust; a cloned repo never inherits your notification command or its credentials. Mechanics in [internals/notifications.md](../internals/notifications.md).
+`command` runs locally through `sh -c` with `RIMZ_NOTIFY_TITLE`, `RIMZ_NOTIFY_BODY`, `RIMZ_NOTIFY_AGENT`, and `RIMZ_NOTIFY_KIND` in its environment. Use it for machine-local routing such as ntfy, Slack, Pushover, or an OS notifier. Mechanics live in [internals/notifications.md](../internals/notifications.md).
 
-### Multiplexer room options
+### Multiplexer Room Options
 
-Rimz applies a small set of room defaults when it creates or reattaches a session, so the room has the mouse, clipboard, rich-key, and scrollback behaviour agents need without editing your global Zellij or tmux config.
+Rimz applies room-scoped defaults when it creates or reattaches a session, so the room gets the mouse, clipboard, rich-key, and scrollback behavior agents need without editing your global Zellij or tmux files.
 
 ```toml
 [zellij]
-mouse_mode = true
-mouse_click_through = true
-advanced_mouse_actions = false
-mouse_hover_effects = false
-focus_follows_mouse = false
-pane_frames = false
-on_force_close = "detach"              # "detach" | "quit"
-scroll_buffer_size = 100000
-show_startup_tips = false
-show_release_notes = false
-copy_clipboard = "system"              # "system" | "primary"
-copy_on_select = true
-support_kitty_keyboard_protocol = true
-osc8_hyperlinks = true
-session_serialization = false          # Rimz owns rebirth; a resurrected room comes back suspended
+session_serialization = false
+copy_clipboard = "system"
 
 [tmux]
-mouse = true
-focus_events = true
-history_limit = 100000
-allow_passthrough = true
-set_clipboard = "on"                   # "on" | "external" | "off"
-extended_keys = true
-extended_keys_format = "csi-u"         # "csi-u" | "xterm"
-escape_time_ms = 0
-renumber_windows = true
-aggressive_resize = true
-pane_border_status = "off"             # "off" | "top" | "bottom"
-pane_border_lines = "simple"           # "simple" | "single" | "double" | "heavy"
+set_clipboard = "on"
+extended_keys_format = "csi-u"
 ```
 
-Zellij receives these as `zellij attach … options …` on session birth and attach, so they never touch `~/.config/zellij/config.kdl`. Rimz always adds `--default-mode locked` for Zellij rooms so ordinary typing reaches the focused pane; enter a Zellij mode deliberately when you need multiplexer commands. tmux applies its options across the right scopes — session, window, and the few that are server-global (clipboard and rich-key handling have no per-session equivalent). The backend-by-backend mapping is in [internals/multiplexers.md](../internals/multiplexers.md).
+Zellij receives its settings as `zellij attach ... options ...` on room birth and attach, and Rimz adds locked mode so ordinary typing reaches the focused pane. tmux receives session, window, and server-scoped options as required by tmux itself; clipboard and rich-key handling are server-scoped in tmux. The backend mapping is in [internals/multiplexers.md](../internals/multiplexers.md).
 
-### Resume on rebirth
+### Resume On Rebirth
 
 ```toml
 [resume]
-on_rebirth = true   # re-seed prior agents when a session is reborn (default true)
-max = 8             # cap auto-resumed agents per birth (default 8); overflow is reported
+on_rebirth = true
+max = 8
 ```
 
-When a session is reborn — reboot, multiplexer crash, or a Rimz-initiated rebirth of a stuck room — Rimz re-seeds the prior agents from the durable rollup, each restored idle in its own pane (`claude --resume`, `codex resume`, `pi --session`), so the room comes up where you left off. `on_rebirth = false` (or `--no-resume` per invocation) comes up empty for a deliberately fresh start; `max` bounds how many agents one birth relaunches so a long-lived workspace never fork-bombs a fleet of processes. Mechanics in [internals/sidebar.md](../internals/sidebar.md#resume-on-rebirth).
+When a session is reborn after a reboot, multiplexer crash, reset, or clean Rimz rebirth, Rimz re-seeds prior agents from the durable rollup. Each restored agent starts idle in its own pane, so no model work happens until you type. `on_rebirth = false` or `--no-resume` comes up empty for a fresh room, and `max` bounds how many agents one birth relaunches. Mechanics live in [internals/sidebar.md](../internals/sidebar.md#resume-on-rebirth).
 
-### Worktree launch defaults
+### Worktrees
 
 ```toml
 [worktree]
-dir = "../{repo}-worktrees"   # relative to the repo root; {repo} expands to the root basename
-base = "head"                 # "head" | "fresh" | any git ref
+dir = "../{repo}-worktrees"
+base = "fresh"
 ```
 
-`rimz worktree`, `rimz tab --worktree`, and `rimz agents --worktree` use this section when creating Rimz-owned Git worktrees. The branch name is the worktree name unless `rimz worktree new --branch` supplies an explicit name. `head` branches from local `HEAD`; `fresh` branches from `origin/HEAD`; any other string is passed to Git as the base ref. The marker lives in the worktree's Git admin directory, not the checkout. Mechanics in [internals/worktrees.md](../internals/worktrees.md).
+`rimz worktree`, `rimz tab --worktree`, and `rimz agents --worktree` use this section when creating Rimz-owned Git worktrees. Relative `dir` values resolve from the repository root, and `{repo}` expands to the root directory basename. `base = "head"` branches from local `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. Cleanup state lives in [internals/worktrees.md](../internals/worktrees.md).
 
-### Agent tab layouts
+### Agent Tab Layouts
 
 ```toml
 [agents.layouts]
@@ -138,156 +112,72 @@ dual = "claude,codex"
 review = "claude,codex+term"
 ```
 
-Named layouts feed `rimz tab --layout <name>`. Commas split columns, plus signs stack rows in a column, and cells are registered agent kinds or `term`. The built-in `dual = "claude,codex"` exists even when unset; defining it here overrides the built-in for your machine.
+Named layouts feed `rimz tab --layout <name>`. Commas split columns, plus signs stack rows in a column, and cells are registered agent kinds or `term`. The built-in `dual = "claude,codex"` exists even when unset; defining it here overrides the built-in for this machine.
 
-### Sidebar appearance
-
-Per-machine, display-only tuning of how the sidebar paints. None of it affects ledger correctness.
-
-#### Pane width
-
-```toml
-[sidebar]
-max_cols = 72     # column cap on the 30% sidebar split (default 72)
-```
-
-Every sidebar pane targets 30% of the view at the `max_cols` cap, on both backends — on an ultra-wide terminal 30% alone is a hundred-column sidebar. The launch path reads your terminal's width once and resolves the verdict — `min(30%, max_cols)` in columns — into the session's pane templates, constant for the session's life; a `max_cols` edit applies at the next room birth. tmux panes and Zellij tabs opened after attach are born at the fixed verdict. Zellij's first birth tab is born detached, so it uses a percentage spelling that can read wider on the attached client; `rimz reload` shrinks any live Zellij sidebar above the cap once an attached client exposes its geometry. The sidebar always renders at the pane's full width. (A launch outside a terminal resolves to the bare `max_cols`; how each backend spells the verdict is in [internals/multiplexers.md](../internals/multiplexers.md).)
-
-#### Render tick
-
-```toml
-[sidebar]
-refresh_ms = 100   # base render grid in milliseconds (default 100)
-```
-
-`refresh_ms` sets the sidebar's in-process animation and dirty-frame grid. It defaults to 100ms, clamps to the supported range internally, and resolves onto the snapshot like the rest of `[sidebar]`, so a change lands on the next fold. `rimz start --refresh-ms <ms>` and `rimz attach --refresh-ms <ms>` override it for sidebars spawned by that launch only; crash recovery and later launches return to this config value. It does not change the data backstop or any producer pull cadence; those timing lanes live in [internals/state.md](../internals/state.md).
-
-#### Attention timing
-
-```toml
-[sidebar.attention]
-stalled_after_secs = 1800   # silent running agent -> ! after 30 minutes
-```
-
-`stalled_after_secs` controls when a `running` agent that records no completed tool or turn activity is projected to the actionable `!` bucket. The default is 1800 seconds. The next heartbeat self-clears the projection, and a running parent with a live subagent keeps its child-work exemption. This does not tune the `?`/`!` visual heat ramp; that renderer grammar remains the glyph legend's yellow/amber/red age clock.
-
-#### Context meter
+### Sidebar Bands
 
 ```toml
 [sidebar.context]
-yellow = { percent = 60, tokens = 160000 }   # the meter leaves calm blue
-amber  = { percent = 80, tokens = 258000 }   # yellow deepens to amber
-red    = { percent = 95, tokens = 420000 }   # amber escalates to red
-```
+red = { percent = 95, tokens = 420000 }
 
-The agent card's context meter — the bar, the `▣` glyph, and the `▤` head — ramps calm blue → yellow → amber → red on these bands. Each tier names the inclusive lower bound where it begins, on two axes at once: the window's fill `percent` and the absolute `tokens` occupying it. The meter wears the worse of the two axes, so a large-window model calm by percentage still warms by sheer volume. The defaults above are the shipped values (the 258k amber edge matches Codex's effective GPT-5.5 window); a tier you omit keeps its default, and within a tier both fields are stated together.
-
-#### Budget bars
-
-```toml
 [sidebar.budget]
-yellow = 50   # remaining % below which the bar leaves green
-amber  = 25   # remaining % below which yellow deepens to amber
-red    = 10   # remaining % below which the bar goes red
+red = 10
 ```
 
-The provider dashboard's budget bars — and the `5h`/`7d` labels that mirror them — drain green → yellow → amber → red on these zones. Each tier names the exclusive upper bound of *remaining* budget where it applies, so the bar crosses into the tier as what's left drops below the bound — the mirror of the context meter's bands above, which bound a rising fill from below; at or above `yellow` the bar stays green, and a tier you omit keeps its default. A fully-spent window's full-width red track is shape, independent of the zones, and the tones themselves stay `[sidebar.theme]`'s job. Resolved producer-side onto the snapshot like the rest of `[sidebar]`, so every renderer of the workspace agrees and a change lands with the next snapshot.
+The agent card context meter ramps by the worse of two axes: fill percentage and absolute tokens in the window. A large-window model can still warm by sheer token count even when its percentage looks calm.
 
-#### Theme
+The provider dashboard budget zones work in the opposite direction: they bound remaining budget from above. At or above `yellow` the bar stays green; below each threshold it moves through yellow, amber, and red. The template carries the shipped numbers.
 
-```toml
-[sidebar.theme]
-good      = 108   # calm/positive — running tallies, low gauges, additions, cache reads
-warn      = 179   # caution — waiting glyphs at rest, mid gauges
-alarm     = 167   # alarm — failed glyphs, high gauges, removals, fresh input
-accent    = 73    # structure — worktree headers and the selected lane spine
-cool      = 75    # cool informational — the plan posture pill, window tags
-meta      = 141   # delegation/meta — cache writes, the ⇅ rc flag, the subagent ⧉ marker
-soft      = 246   # soft content text — stat figures, capability tokens, subagent lines
-dim       = 242   # dim chrome — labels, ages, seams
-faint     = 238   # faintest chrome — bar tracks, · separators, dotted dividers
-rule      = 238   # darkest chrome (the scrollbar track) — faint's gray a DIM-weighted step deeper
-selection = 110   # the selected-row ▌ accent bar
-```
-
-Every renderer tone is a named semantic slot over a 256-color index; the values above are the shipped palette, and a slot you omit keeps its default — an absent section paints exactly the built-ins. Slots are semantic (`good`/`warn`/`alarm`), not hue names, so a light-terminal retheme stays readable. The overrides resolve producer-side onto the snapshot like `[sidebar.providers]`, so every renderer of the workspace paints the same tones, and a change lands with the next snapshot — no renderer restart. Provider brand colors stay with `[sidebar.providers.<kind>]`, and `NO_COLOR` still strips every tone while the glyph shapes carry the states.
-
-#### Glow
+### Sidebar Rendering
 
 ```toml
 [sidebar]
-glow = "auto"    # the truecolor glow-and-flash tier: "auto" (default) | "always" | "never"
+max_cols = 72
+refresh_ms = 100
+scrollbar = "auto"
+glow = "auto"
+trunk = "develop"
 ```
 
-On a 24-bit terminal the renderer layers smooth color motion over the composed frame — the attention glow and the brief transition flashes ([interface/sidebar.md](../interface/sidebar.md)). `auto` (default) follows the terminal's advertisement (`COLORTERM=truecolor`); `always` forces the tier on a truecolor terminal whose advertisement went missing — an SSH hop forwards `TERM` but drops `COLORTERM`, so a remote room reads plain under `auto` even in a truecolor emulator; `never` switches the tier off, keeping the plain 256-color render with the modifier-based attention breath. The mode resolves onto the snapshot like the theme, so a change lands with the next snapshot — no renderer restart — and `NO_COLOR` beats every mode: the pass is color-only, so it never runs over a colorless frame.
+`max_cols` caps the creation-time sidebar pane width so a percentage split does not swallow ultra-wide terminals. `refresh_ms` controls the renderer's animation grid, not the producer's data cadence. `scrollbar` controls only the right-margin overflow indicator.
 
-#### Trunk branch
+`glow = "auto"` follows `COLORTERM` for the truecolor attention glow and transition flashes. `always` is useful when a real truecolor terminal under-advertises, such as an SSH hop that forwards `TERM` but drops `COLORTERM`; `never` keeps the plain 256-color render. `NO_COLOR` still disables color effects.
+
+`trunk` is a preferred comparison target for the worktree header's git stats. A repo where that branch does not resolve falls back to the detection ladder: `main`, then `master`, then the remote's advertised default.
+
+### Provider Dashboard
 
 ```toml
 [sidebar]
-trunk = "develop"   # preferred comparison target for the worktree header's git stats (default: auto-detect)
-```
-
-The worktree header's git stats — the `+/-` diff, the `⇡`/`⇣` commit delta, and the `≡`/`✓` landed markers — compare against the repo's trunk. `trunk` names the preferred target, tried first per repo: a repo without that branch falls back to the auto-detection (`main` → `master` → the remote's advertised default), so one machine-wide value never costs another project its stats.
-
-#### Scrollbar
-
-```toml
-[sidebar]
-scrollbar = "auto"   # the agent cards' scrollbar: "auto" (default) | "always" | "never"
-```
-
-When the agent cards overflow their viewport, a thin `▐`/`▕` scrollbar rides the right margin. `auto` (the default) shows it only while the viewport is moving — a wheel scroll or the selection-driven auto-follow — and hides it about a second after the view settles; `always` keeps it up whenever the cards overflow; `never` removes it. Resolved producer-side onto the snapshot like the rest of `[sidebar]`, so every renderer of the workspace agrees and a change lands with the next snapshot.
-
-#### Provider dashboard
-
-```toml
-[sidebar]
-provider_tabs = "auto"         # provider dashboard layout: "auto" (default) | "always" | "never"
-provider_list = []             # ordered provider kinds; [] discovers all providers
-max_provider_blocks = 3        # cap discovered dashboard blocks when provider_list is empty (default 3)
+provider_tabs = "auto"
+provider_list = ["codex", "all"]
+max_provider_blocks = 3
 
 [sidebar.providers.claude]
-product_name = "Claude Code"   # header label (default per kind)
-color = 173                    # 256-colour index for the brand emblem
-ascii_art = """
- ▐▛███▜▌
-▝▜█████▛▘
-  ▘▘ ▝▝
-"""
+color = 173
 ```
 
-The dashboard pinned at the bottom of the sidebar carries one block per agent kind. `provider_tabs = "auto"` stacks one or two providers so both accounts stay visible and switches to tabs at three or more providers; `always` tabs whenever more than one provider is present; `never` stacks every provider block. Resolved producer-side onto the snapshot like the rest of `[sidebar]`, so every renderer of the workspace agrees and a change lands with the next snapshot.
+The dashboard shows one block per discovered provider. `provider_tabs = "auto"` stacks one or two providers and switches to tabs at three or more. `provider_list` chooses kinds and order; `"all"` expands to every remaining discovered provider at that position. Empty discovery uses today's spend to choose up to `max_provider_blocks`, then orders the retained providers stably by kind.
 
-`provider_list` picks which provider kinds show and their order. Empty or omitted discovers all providers, ranks them by today's spend, applies `max_provider_blocks`, and orders the retained set stably by kind. A non-empty list is explicit and bypasses `max_provider_blocks`: without `"all"` it is a strict allowlist (`["codex"]` shows only Codex); with `"all"` the named kinds pin to their positions and `"all"` expands to every remaining discovered provider there (`["codex", "all"]` shows Codex first, then the rest). Unknown names are skipped.
+`[sidebar.providers.<kind>]` overrides the built-in display name, ASCII art, or brand color for that provider. Each field is optional, so a color override can leave the shipped art intact. Account and budget sourcing is in [internals/account.md](../internals/account.md).
 
-`[sidebar.providers.<kind>]` overrides the built-in style — `<kind>` is `claude`, `codex`, `pi`, …; each field is optional and falls back to the shipped default, so you can recolour without restating the art. How each block's account, plan, and usage budgets are sourced is in [internals/account.md](../internals/account.md).
+## Changing Values
 
-## Resolver allowlist — `~/.config/rimz/resolvers.toml`
-
-The per-machine chain of resolvers allowed to answer ahead of you. `rimz resolver add` writes this file; you can also hand-edit it.
-
-```toml
-[[resolver]]
-id = "opus-policy"
-order = 10
-budget_seconds = 30
-binary = "/home/me/bin/opus-resolver"   # optional; pins the heartbeat's executable path
-display_name = "Opus policy"            # optional
-
-[[resolver]]
-id = "slack-on-call"
-order = 20
-budget_seconds = 300
+```sh
+rimz config path
+rimz config get
+rimz config get sidebar.max_cols
+rimz config get sidebar --json
+rimz config set sidebar.max_cols 80
+rimz config set worktree.base fresh
+rimz config set notifications.triggers '["waiting", "failed"]'
 ```
 
-`order` sets the chain position (low → high); `budget_seconds` is the time each link holds a request before the chain advances. A resolver engages the bridge only when it is on this list *and* heartbeating freshly. The protocol, the heartbeat, and the chain are in [internals/resolvers.md](../internals/resolvers.md); the trust boundary is in [security.md](../guide/security.md).
+`rimz config get` loads the effective per-machine config over built-in defaults. `rimz config set` edits one key in `config.toml`, preserves comments through `toml_edit`, rejects unknown keys, deserializes the whole result as `MachineConfig`, then writes with Rimz's temp-file-plus-rename durability primitive.
 
-## Project trust record — `~/.config/rimz/projects/<id>/trust.toml`
+Bare `config set` values become TOML values when they parse (`80`, `false`, arrays, inline tables); otherwise they become strings (`fresh`, `always`). For context bands, set the whole band as an inline table: `rimz config set sidebar.context.red '{ percent = 90, tokens = 400000 }'`.
 
-Written by `rimz trust grant`, not by hand. It pins the project's executable-surface hash so an edit to a command-running config field auto-revokes the grant. The four states and the hash contract are in [internals/trust.md](../internals/trust.md); the threat model is in [security.md](../guide/security.md).
-
-## Merge order
+## Merge Order
 
 Later layers win:
 
@@ -296,50 +186,31 @@ Later layers win:
 3. per-machine config (`~/.config/rimz/config.toml`),
 4. CLI flags and `RIMZ_*` environment variables.
 
-This is the designed model. Today only the per-machine layer and the trust hash are live; the project layer is parsed for the trust hash and otherwise not yet applied (next section).
+This is the designed model. Today the per-machine layer is live, CLI/env overrides are applied by the commands that define them, and the project layer is read for the trust hash.
 
-## Project config
+## Project Config
 
-The committed `<root>/.rimz/config.toml`.
-
-> **Declared and trust-tracked today; not yet applied.** Rimz reads this file only to compute the project's trust hash (see [internals/trust.md](../internals/trust.md)). Applying the workspace shape it declares — opening the layout, launching agents, and running hooks and env — is on the [roadmap](../contributing/roadmap.md). Every section below carries this caveat.
-
-Commit `.rimz/config.toml` so a team shares one declared workspace shape; per-machine settings stay in `~/.config/rimz/`. The command-running fields below enter the trust hash, so a clone shows `untrusted` until someone runs `rimz trust grant` — that gate works today even though the shape is not yet applied.
+The committed `<root>/.rimz/config.toml` declares the workspace shape a team wants to share. Rimz reads it today to compute the executable-surface trust hash; launch-time application of the declared layout, agents, hooks, and env remains on the [roadmap](../contributing/roadmap.md).
 
 ```toml
 [[layout.initial_panes]]
 name = "shell"
 command = "$SHELL"
 cwd = "$RIMZ_PROJECT_ROOT"
-env = { EDITOR = "vim" }
-
-[layout.tmux]
-status_left = "session"
-status_right = "time"
-popup_command = "fzf-projects"
-
-[layout.zellij]
-plugin_command = "/opt/sidebar.wasm"
 
 [[agents]]
 name = "claude"
 launch_command = "claude"
-env = { CLAUDE_HOME = "/opt/claude" }
 
 [[hooks]]
 event = "PreToolUse"
 command = "notify-send rimz"
-
-[env]
-RUST_LOG = "debug"
 ```
 
-- `[layout]` — `initial_panes` (each with `name`/`command`/`cwd`/`env`) plus the backend-only `[layout.tmux]` and `[layout.zellij]` fragments.
-- `[[agents]]` — `name` (a known agent), optional `launch_command`, and `env`.
-- `[[hooks]]` — `event` → `command` pairs. This is a *declared, trust-hashed* project hook, distinct from `rimz hooks install`, which wires an agent's own native hooks and works today (see [cli.md](./cli.md) and [internals/hooks.md](../internals/hooks.md)).
-- `[env]` — workspace-wide environment variables.
-Which of these fields the trust hash covers is in [internals/trust.md](../internals/trust.md).
+Command-running fields enter the trust hash, so a clone with project config shows `untrusted` until `rimz trust grant` pins the current executable surface on this machine. The hash contract is in [internals/trust.md](../internals/trust.md); the threat model is in [security.md](../guide/security.md).
 
-## Privacy
+## Sidecars And Privacy
 
-Payload-fidelity and retention controls are a planned project surface — Rimz does not yet read a `[privacy]` section or redact hook payloads. The design and the intended `payload_mode` / `retention_days` keys live in [security.md](../guide/security.md); the gate point, once live, is the agent hook path in [internals/hooks.md](../internals/hooks.md).
+Resolver configuration lives with `rimz resolver` and the protocol details in [internals/resolvers.md](../internals/resolvers.md). Remote aliases live with `rimz remote` and are documented in [cli.md](./cli.md). Trust records live with `rimz trust` and [internals/trust.md](../internals/trust.md).
+
+Payload-fidelity and retention controls are a planned project surface. The design and intended privacy keys live in [security.md](../guide/security.md), and the hook boundary they will govern is in [internals/hooks.md](../internals/hooks.md).

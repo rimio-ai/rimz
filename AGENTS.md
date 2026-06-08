@@ -70,7 +70,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 
 **Reference** — `docs/reference/`
 - [cli.md](./docs/reference/cli.md) — every command, grouped by intent.
-- [configuration.md](./docs/reference/configuration.md) — project/per-machine config, layout IR, privacy.
+- [configuration.md](./docs/reference/configuration.md) — config tiers, generated per-machine template, project trust shape, privacy.
 
 **Internals** — `docs/internals/`
 - [ledger.md](./docs/internals/ledger.md) — durable state and the blocking decision bridge.

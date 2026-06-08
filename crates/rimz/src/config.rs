@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::num::{NonZeroU16, NonZeroU32};
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::feed::AgentStatus;
 use crate::ledger::paths::config_home;
@@ -21,6 +21,7 @@ use crate::sidebar::timing::{DEFAULT_REFRESH_MS, MAX_REFRESH_MS, MIN_REFRESH_MS}
 
 const CONFIG_FILE: &str = "config.toml";
 const RIMZ_CONFIG_SUBDIR: &str = "rimz";
+pub const MACHINE_CONFIG_TEMPLATE: &str = include_str!("config.template.toml");
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigErr {
@@ -43,7 +44,7 @@ pub type Result<T> = std::result::Result<T, ConfigErr>;
 /// Per-machine configuration. Lenient on unknown keys so a newer config never
 /// breaks an older binary, and every field defaults so the smallest useful file
 /// is a single section.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct MachineConfig {
     pub worktree: WorktreeConfig,
@@ -59,7 +60,7 @@ pub struct MachineConfig {
 /// Best-effort attention delivery preferences. These are per-machine because
 /// they describe how this terminal or host should reach this user; a clone never
 /// inherits them and they do not enter project trust.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct NotificationsPrefs {
     pub enabled: bool,
@@ -220,7 +221,7 @@ impl Default for WorktreeConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum WorktreeBase {
     #[default]
     Head,
@@ -228,11 +229,28 @@ pub enum WorktreeBase {
     Explicit(String),
 }
 
+impl Serialize for WorktreeBase {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_config_value())
+    }
+}
+
 impl WorktreeBase {
     pub fn as_refspec(&self) -> &str {
         match self {
             Self::Head => "HEAD",
             Self::Fresh => "origin/HEAD",
+            Self::Explicit(value) => value,
+        }
+    }
+
+    pub fn as_config_value(&self) -> &str {
+        match self {
+            Self::Head => "head",
+            Self::Fresh => "fresh",
             Self::Explicit(value) => value,
         }
     }
@@ -807,7 +825,7 @@ pub struct SidebarProviderStyle {
 /// opt-in, so the absence of this section reads as "do nothing". Each agent has
 /// its own toggle because each links a different account and is detected
 /// independently — Claude on PATH, Codex by its managed standalone install.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct RemoteControlConfig {
     /// Auto-launch `claude remote-control` (the worktree spawn mode) in the
@@ -824,6 +842,12 @@ pub struct RemoteControlConfig {
 }
 
 impl MachineConfig {
+    /// The generated per-machine config reference: every persisted section and
+    /// default scalar lives here as commented TOML.
+    pub fn template() -> &'static str {
+        MACHINE_CONFIG_TEMPLATE
+    }
+
     /// The per-machine config path: `$XDG_CONFIG_HOME/rimz/config.toml`
     /// (`~/.config/rimz/config.toml`).
     pub fn path() -> PathBuf {
@@ -851,6 +875,10 @@ impl MachineConfig {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "config/template_tests.rs"]
+mod template_tests;
 
 #[cfg(test)]
 mod tests {

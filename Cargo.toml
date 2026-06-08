@@ -28,6 +28,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1"
+# Format-preserving TOML edits for `rimz config set`; keeps the generated
+# config template's comments intact while changing one key.
+toml_edit = "0.23"
 
 # Error handling
 thiserror = "2"

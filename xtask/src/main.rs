@@ -927,6 +927,7 @@ fn invariants(root: &Path) -> Result<()> {
     ensure_snapshot_json_writes_stay_in_produce(root, &files)?;
     ensure_sidebar_enrich_folds_before_live_panes(root)?;
     ensure_card_admission_predicate(root)?;
+    ensure_config_template_sections(root)?;
 
     // Durability barriers live in one file: every fsync syscall goes through
     // `ledger/atomic.rs`, so the write-class contract is auditable in one
@@ -1131,6 +1132,38 @@ fn ensure_card_admission_predicate(root: &Path) -> Result<()> {
     bail!(
         "with_live_panes card-admission filtering must stay behind pane_admits_card\n{}",
         violations.join("\n")
+    );
+}
+
+fn ensure_config_template_sections(root: &Path) -> Result<()> {
+    let path = root.join("crates/rimz/src/config.template.toml");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let required = [
+        "[worktree]",
+        "[agents.layouts]",
+        "[remote_control]",
+        "[notifications]",
+        "[sidebar]",
+        "[sidebar.context]",
+        "[sidebar.budget]",
+        "[sidebar.attention]",
+        "[sidebar.theme]",
+        "[sidebar.providers]",
+        "[zellij]",
+        "[tmux]",
+        "[resume]",
+    ];
+    let missing: Vec<&str> = required
+        .into_iter()
+        .filter(|section| !text.contains(section))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "config template is missing required sections: {}",
+        missing.join(", ")
     );
 }
 

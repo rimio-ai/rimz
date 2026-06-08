@@ -16,7 +16,7 @@ M0 closes only when all three pass the same synthetic-hook matrix in [testing.md
 
 ## M1 — Useful without agents
 
-Workspace start/attach/list, setup and doctor, trust gate, `event emit`, `feed push/ask/wait`, `pane split/focus/list`, the sidebar renderer (worktree-keyed attention map), resolver allowlist commands, first-run setup status.
+Workspace start/attach/list, first-run setup report and config bootstrap, doctor, trust gate, `event emit`, `feed push/ask/wait`, `pane split/focus/list`, the sidebar renderer (worktree-keyed attention map), resolver allowlist commands, first-run setup status.
 
 At M1, scripts and remote workflows work without any agent integrations.
 

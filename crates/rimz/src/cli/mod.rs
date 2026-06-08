@@ -3,6 +3,7 @@
 
 mod agents_cmd;
 mod codex;
+mod config;
 mod doctor;
 mod event;
 mod feed;
@@ -16,6 +17,7 @@ mod reload;
 mod remote;
 mod reset;
 mod resolver;
+mod setup;
 mod sidebar;
 mod statusline;
 mod tab;
@@ -61,8 +63,10 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
         Some(Subcmd::Codex(args)) => codex::run(args, &globals),
+        Some(Subcmd::Config(args)) => config::run(args, &globals),
         Some(Subcmd::Trust(args)) => trust::run(args, &globals),
         Some(Subcmd::Doctor(args)) => doctor::run(args, &globals),
+        Some(Subcmd::Setup(args)) => setup::run(args, &globals),
         Some(Subcmd::Ping) => doctor::ping(),
         Some(Subcmd::Start(args)) => start(args, &globals),
         Some(Subcmd::Attach(args)) => attach(args, &globals),
@@ -165,10 +169,14 @@ enum Subcmd {
     /// Codex helper API. The Codex hook calls these; humans usually do not.
     #[command(hide = true)]
     Codex(codex::CodexArgs),
+    /// Inspect and edit the per-machine config.
+    Config(config::ConfigArgs),
     /// Manage the project's executable-surface trust grant.
     Trust(trust::TrustArgs),
     /// Environment + backend report.
     Doctor(doctor::DoctorArgs),
+    /// First-run setup report and default config bootstrap.
+    Setup(setup::SetupArgs),
     /// Machine-readable liveness check (prints `ok`).
     Ping,
 }

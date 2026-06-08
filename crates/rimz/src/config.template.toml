@@ -1,0 +1,111 @@
+# Rimz per-machine configuration.
+#
+# Save as ~/.config/rimz/config.toml, or run `rimz config init`.
+# Every key below is optional. Defaults stay commented so an untouched file
+# keeps following defaults shipped by future Rimz versions; uncomment a line
+# only when this machine needs an override.
+
+[worktree]
+# dir = "../{repo}-worktrees"          # where Rimz-owned Git worktrees live; {repo} is the root basename
+# base = "head"                        # "head", "fresh", or any Git ref for new worktrees
+
+[agents.layouts]
+# Named tab layouts for `rimz tab --layout <name>`. Commas split columns, plus
+# signs stack rows, and cells are agent kinds or `term`.
+## dual = "claude,codex"
+## review = "claude,codex+term"
+
+[remote_control]
+# claude = false                       # auto-launch `claude remote-control` in the managed daemon tab
+# codex = false                        # ensure the per-user Codex remote-control daemon on start
+
+[notifications]
+# enabled = true
+# triggers = ["waiting", "failed", "paused", "success"]
+# desktop = "auto"                    # "auto", "osc", or "off"
+# sound = "bell"                      # "bell" or "off"
+# suppress_focused = true
+# debounce_ms = 5000
+# coalesce_ms = 1000
+## command = "ntfy publish rimz"       # optional shell command; receives RIMZ_NOTIFY_* environment variables
+
+[sidebar]
+# refresh_ms = 100                    # render/animation grid; clamped internally
+# max_provider_blocks = 3             # cap discovered provider blocks when provider_list is empty
+# provider_tabs = "auto"              # "auto", "always", or "never"
+# provider_list = []                  # explicit provider order; include "all" to expand remaining providers
+# max_cols = 72                       # creation-time cap for sidebar pane width
+# scrollbar = "auto"                  # "auto", "always", or "never"
+# glow = "auto"                       # "auto", "always", or "never"
+## trunk = "develop"                  # optional preferred branch for worktree comparison stats
+
+[sidebar.context]
+# yellow = { percent = 60, tokens = 160000 }
+# amber = { percent = 80, tokens = 258000 }
+# red = { percent = 95, tokens = 420000 }
+
+[sidebar.budget]
+# yellow = 50                         # remaining percent below which the bar leaves green
+# amber = 25                          # remaining percent below which yellow deepens
+# red = 10                            # remaining percent below which the bar goes red
+
+[sidebar.attention]
+# stalled_after_secs = 1800           # silent running agent becomes actionable after this many seconds
+
+[sidebar.theme]
+# Palette slots are optional 256-color overrides. Omitted slots use the built-in
+# renderer palette. The example values below mirror the renderer's Palette::BUILTIN
+# tones, but stay double-commented because they are optional overrides, not config defaults.
+## good = 108
+## warn = 179
+## alarm = 167
+## accent = 73
+## cool = 75
+## meta = 141
+## soft = 246
+## dim = 242
+## faint = 238
+## rule = 238
+## selection = 110
+
+[sidebar.providers]
+# Provider styles are keyed by agent kind and every field is optional.
+## [sidebar.providers.claude]
+## product_name = "Claude Code"
+## color = 173
+## ascii_art = "CLAUDE"
+
+[zellij]
+# mouse_mode = true
+# mouse_click_through = true
+# advanced_mouse_actions = false
+# mouse_hover_effects = false
+# focus_follows_mouse = false
+# pane_frames = false
+# on_force_close = "detach"           # "detach" or "quit"
+# scroll_buffer_size = 100000
+# show_startup_tips = false
+# show_release_notes = false
+# copy_clipboard = "system"           # "system" or "primary"
+# copy_on_select = true
+# support_kitty_keyboard_protocol = true
+# osc8_hyperlinks = true
+# session_serialization = false       # Rimz owns rebirth instead of Zellij resurrection
+
+[tmux]
+# mouse = true
+# focus_events = true
+# history_limit = 100000
+# allow_passthrough = true
+# set_clipboard = "on"                # "on", "external", or "off"
+# extended_keys = true
+# extended_keys_format = "csi-u"      # "csi-u" or "xterm"
+# escape_time_ms = 0
+# renumber_windows = true
+# aggressive_resize = true
+# pane_border_status = "off"          # "off", "top", or "bottom"
+# pane_border_lines = "simple"        # "simple", "single", "double", or "heavy"
+
+[resume]
+# on_rebirth = true                   # re-seed prior agents when a room is reborn
+# max = 8                             # cap auto-resumed agents per rebirth
