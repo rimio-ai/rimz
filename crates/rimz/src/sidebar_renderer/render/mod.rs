@@ -349,13 +349,14 @@ pub(crate) fn active_provider_kind(snapshot: &SidebarSnapshot, ui: &UiState) -> 
 }
 
 /// Lay out the frame as three vertical zones: the top-pinned cockpit (identity,
-/// summary, make-up line), a scroll viewport over the agent cards, and the
-/// bottom chrome pinned to the bottom edge like a status bar — the provider
-/// dashboard, the centered navigation footer, and beneath it the sticky health
-/// alert. Space for the pinned zones is always reserved — the scroll zone is
-/// windowed before either is ever clipped — so the cockpit and the footer can
-/// never scroll off a full sidebar. While an alert is *active* the body is a
-/// stale/empty fetch, so the footer steps aside and the alert speaks alone.
+/// summary, make-up line, and fixed separator), a scroll viewport over the
+/// agent cards, and the bottom chrome pinned to the bottom edge like a status
+/// bar — the provider dashboard, ledger, centered navigation footer, and
+/// beneath them the sticky health alert. Space for the pinned zones is always
+/// reserved — including the fixed separators under the cockpit and above the
+/// provider dashboard — so the scroll zone is windowed before either pinned
+/// edge is ever clipped. While an alert is *active* the body is a stale/empty
+/// fetch, so the footer steps aside and the alert speaks alone.
 ///
 /// The viewport window is `UiState::scroll_offset`, resolved here each frame:
 /// clamped to the zone, then minimally auto-scrolled so the selected card —
@@ -399,13 +400,14 @@ pub(crate) fn compose_lines(
     let (mut lines, mut map, mut make_up_hits) = top_lines(snapshot, ui, cells, &theme);
     let (scroll, scroll_map) = scroll_lines(snapshot, alert, ui, cells, &theme);
 
-    // Bottom-pinned chrome, top to bottom: the per-provider dashboard (account-
-    // scoped budgets + brand emblem, which opens with its own top hairline — the
-    // tab rail when several accounts register), the navigation footer (centered),
-    // then the sticky health alert. While an alert is active the body is a
-    // stale/empty fetch, so the panel and footer step aside and the alert speaks
-    // alone. Every chrome line is gutter-padded so it breathes in the same
-    // one-cell frame as the body.
+    // Bottom-pinned chrome, top to bottom: a fixed separator when the provider
+    // dashboard is present, the per-provider dashboard (account-scoped budgets
+    // + brand emblem, which opens with its own top hairline — the tab rail when
+    // several accounts register), the fleet ledger, the navigation footer
+    // (centered), then the sticky health alert. While an alert is active the
+    // body is a stale/empty fetch, so the panel and footer step aside and the
+    // alert speaks alone. Every chrome line is gutter-padded so it breathes in
+    // the same one-cell frame as the body.
     let active = alert.is_some_and(Alert::is_active);
     let mut bottom: Vec<Line<'static>> = Vec::new();
     // The tab hits arrive from the panel relative to its own lines; they are
@@ -414,8 +416,11 @@ pub(crate) fn compose_lines(
     let mut tab_hits: Vec<ProviderTabHit> = Vec::new();
     let dashboard_present = !active && !snapshot.providers.is_empty();
     if dashboard_present {
+        // The pinned separator lifts the dashboard off the cards. It is part
+        // of bottom chrome, so the viewport reserves it before windowing.
+        bottom.push(Line::from(""));
         // The panel owns its top hairline (the tab rail when several accounts
-        // register), so its line 0 lands directly at the block base.
+        // register), so its line 0 lands after the separator.
         let panel_base = bottom.len();
         let active_kind = active_provider_kind(snapshot, ui);
         let (panel_lines, panel_hits) = provider_panel_lines(
@@ -697,6 +702,8 @@ pub fn render_fixed<W: Write>(
 }
 
 /// Compose the top-pinned cockpit zone and, in lockstep, its hit-test maps.
+/// Populated rooms end this fixed zone with a separator blank, so scrolled
+/// cards never touch the cockpit make-up line.
 /// Every row-map entry is `None` — identity, summary, and the make-up line are
 /// never jump targets — but the make-up line's status buckets are *filter*
 /// targets, returned as [`MakeUpHit`]s already translated to this zone's line
@@ -767,17 +774,21 @@ fn top_lines(
         hit.col_end += 1;
     }
     extend_inert(&mut lines, &mut map, fleet_lines);
+    if !snapshot.worktree_groups.is_empty() {
+        lines.push(Line::from(""));
+        map.push(None);
+    }
     (lines, map, make_up_hits)
 }
 
 /// Compose the scrollable agent-cards zone and, in lockstep, its hit-test map:
 /// every content line gets one map entry, `Some(row)` for an agent/process row
 /// line and the worktree header that jumps into it, `None` for structural
-/// chrome (gaps, the external divider, first-run hint, help, `+K more`). The
-/// zone opens with its own section gap — the top zone always ends on a
-/// non-empty line — so an unscrolled frame composes exactly as the unsplit
-/// body did. [`compose_lines`] windows this zone by the scroll offset and pins
-/// the cockpit above it and the footer chrome below.
+/// chrome (gaps, the external divider, first-run hint, help, `+K more`).
+/// Populated rooms take their opening gap from the pinned cockpit separator;
+/// empty rooms keep a scroll-zone gap before the first-run hint. [`compose_lines`]
+/// windows this zone by the scroll offset and pins the cockpit above it and the
+/// bottom chrome below.
 fn scroll_lines(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
@@ -803,8 +814,6 @@ fn scroll_lines(
             );
         }
     } else {
-        lines.push(Line::from(""));
-        map.push(None);
         let mut row_index = 0;
         // A group the make-up filter empties is skipped whole — header,
         // rows, and separator — so the filtered body holds only worktrees

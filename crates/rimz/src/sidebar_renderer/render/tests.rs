@@ -2024,9 +2024,8 @@ fn render_l0_density_keeps_identity_when_narrow() {
     codex.last_activity = fixed_now() - Duration::from_secs(3);
     let snapshot = snapshot_with(Vec::new(), vec![codex]);
     // Tall enough that the card clears the bottom-pinned footer after the
-    // cockpit's blank-line + two-line summary header (the agent row is what we
-    // measure).
-    let rendered = snapshot_to_screen(&snapshot, 24, 11);
+    // cockpit's pinned separator (the agent row is what we measure).
+    let rendered = snapshot_to_screen(&snapshot, 24, 12);
 
     assert!(
         // phase 0 of the working spinner is the first frame `⣾`.
@@ -3247,6 +3246,45 @@ fn render_provider_dashboard_tab_follows_the_selected_agent() {
     );
 }
 
+#[test]
+fn render_scroll_keeps_gap_above_provider_dashboard() {
+    let mut snapshot = overflowing_fleet();
+    snapshot.providers = two_provider_panels();
+    let frame = compose_lines(
+        &snapshot,
+        None,
+        &UiState {
+            scroll_offset: 6,
+            manual_scroll: Some(ManualScroll {
+                selection_at_start: None,
+            }),
+            ..Default::default()
+        },
+        54,
+        20,
+    );
+    let lines = line_texts(&frame.lines);
+    let rendered = lines.join("\n");
+    let rail = lines
+        .iter()
+        .position(|line| line.contains("Claude") && line.contains("Codex"))
+        .expect("the tab rail renders");
+
+    assert!(
+        lines[rail - 1].trim().is_empty(),
+        "a fixed blank separates scrolled cards from the dashboard:\n{rendered}"
+    );
+    assert!(
+        !lines[rail - 2].trim().is_empty(),
+        "the separator is not body padding; cards reach it while overflowing:\n{rendered}"
+    );
+    assert!(
+        !frame.tab_hits.is_empty() && frame.tab_hits.iter().all(|hit| hit.line == rail),
+        "dashboard tab hits stay on the rail row after the separator ({} hits):\n{rendered}",
+        frame.tab_hits.len()
+    );
+}
+
 /// A dashboard with a single account keeps its block bare — no tab rail, a
 /// plain hairline: there is nothing to switch to, so the header line alone
 /// names the provider (the one place the de-named tabbed header never applies).
@@ -4018,12 +4056,12 @@ fn render_scroll_pins_tall_expanded_card_top() {
 
     let rendered =
         snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 54, 13);
-    // The viewport opens on the worktree header (the card block's first line)
-    // — the gap above it scrolled off — and the subagent list fills down.
+    // The viewport opens below the pinned cockpit separator, so the card
+    // block's first line holds one row lower while the subagent list fills down.
     let lines: Vec<&str> = rendered.lines().collect();
     assert!(
-        lines[6].contains("⑂ main"),
-        "the tall card's first line pins to the viewport top:\n{rendered}"
+        lines[7].contains("⑂ main"),
+        "the tall card's first line pins below the cockpit separator:\n{rendered}"
     );
     assert!(
         rendered.contains("⧉ subagents (4)"),
