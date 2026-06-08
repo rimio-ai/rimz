@@ -224,6 +224,26 @@ pub fn opened_card_panes(
     opened
 }
 
+/// Merge a Zellij pane manifest without letting omitted whole tabs delete
+/// known room state. Zellij can deliver a `PaneUpdate` that carries only part
+/// of the room, so carried tabs overwrite exactly and absent tabs remain until
+/// a pane-close event removes them. The first manifest after plugin load is
+/// the baseline and is accepted as-is; a partial first manifest self-heals on
+/// the next manifest that carries the omitted tabs.
+pub fn merged_room(
+    previous: &BTreeMap<usize, Vec<PaneFields>>,
+    next: &BTreeMap<usize, Vec<PaneFields>>,
+) -> BTreeMap<usize, Vec<PaneFields>> {
+    if previous.is_empty() {
+        return next.clone();
+    }
+    let mut merged = previous.clone();
+    for (tab, panes) in next {
+        merged.insert(*tab, panes.clone());
+    }
+    merged
+}
+
 pub fn joined_foreground_command(command: &[String]) -> Option<String> {
     let joined = command
         .iter()

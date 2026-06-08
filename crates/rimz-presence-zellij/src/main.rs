@@ -86,7 +86,10 @@ mod shell {
                     // when the grant comes from the permission cache (verified
                     // live on 0.44.3), so this path is load-bearing.
                     self.mark_granted(now);
-                    let mut next_tabs = project(&manifest, &self.tab_names);
+                    let projected = project(&manifest, &self.tab_names);
+                    // Zellij can deliver partial pane manifests; omitted tabs
+                    // retain their previous state instead of collapsing the room.
+                    let mut next_tabs = policy::merged_room(&self.tabs, &projected);
                     policy::apply_foreground_commands(&mut next_tabs, &self.foreground);
                     let opened = policy::opened_card_panes(&self.tabs, &next_tabs);
                     let focus_patch =

@@ -26,6 +26,14 @@ fn tabs_by_index(entries: Vec<(usize, Vec<PaneFields>)>) -> BTreeMap<usize, Vec<
     entries.into_iter().collect()
 }
 
+fn pane_in_tab(id: u32, tab: usize) -> PaneFields {
+    PaneFields {
+        tab_position: tab as u64,
+        tab_name: Some(format!("tab-{tab}")),
+        ..pane(id)
+    }
+}
+
 // --- manifest_hash: what changes the hash and what must not ---
 
 #[test]
@@ -283,6 +291,167 @@ fn foreground_retention_survives_rebuild_and_clears_on_close() {
     assert_eq!(
         reused[&0][0].pane_command, None,
         "a pane id reused after close does not inherit stale foreground"
+    );
+}
+
+// --- manifest merging: partial Zellij manifests must not collapse the room ---
+
+#[test]
+fn partial_manifest_merge_retains_absent_tabs() {
+    let previous = tabs_by_index(vec![
+        (0, vec![pane_in_tab(10, 0)]),
+        (1, vec![pane_in_tab(20, 1)]),
+        (2, vec![pane_in_tab(30, 2)]),
+    ]);
+    let mut updated = pane_in_tab(10, 0);
+    updated.pane_columns = Some(120);
+    let next = tabs_by_index(vec![(0, vec![updated.clone()])]);
+
+    let merged = merged_room(&previous, &next);
+
+    assert_eq!(merged.keys().copied().collect::<Vec<_>>(), vec![0, 1, 2]);
+    assert_eq!(merged[&0], vec![updated]);
+    assert_eq!(merged.get(&1), previous.get(&1));
+    assert_eq!(merged.get(&2), previous.get(&2));
+}
+
+#[test]
+fn carried_tabs_replace_and_prune_closed_panes() {
+    let removed = pane_in_tab(11, 0);
+    let previous = tabs_by_index(vec![
+        (0, vec![pane_in_tab(10, 0), removed.clone()]),
+        (1, vec![pane_in_tab(20, 1)]),
+    ]);
+    let next = tabs_by_index(vec![
+        (0, vec![pane_in_tab(10, 0)]),
+        (1, vec![pane_in_tab(20, 1)]),
+    ]);
+
+    let merged = merged_room(&previous, &next);
+
+    assert_eq!(merged, next);
+    assert!(!merged.values().flatten().any(|pane| pane.id == removed.id));
+}
+
+#[test]
+fn empty_manifest_never_prunes() {
+    let previous = tabs_by_index(vec![
+        (0, vec![pane_in_tab(10, 0)]),
+        (1, vec![pane_in_tab(20, 1)]),
+    ]);
+    let next = BTreeMap::new();
+
+    let merged = merged_room(&previous, &next);
+
+    assert_eq!(merged.keys().copied().collect::<Vec<_>>(), vec![0, 1]);
+}
+
+#[test]
+fn manifest_missing_known_tab_merges_not_collapses() {
+    let previous = tabs_by_index(vec![
+        (0, vec![pane_in_tab(10, 0)]),
+        (1, vec![pane_in_tab(20, 1)]),
+        (2, vec![pane_in_tab(30, 2)]),
+    ]);
+    let next = tabs_by_index(vec![
+        (0, vec![pane_in_tab(10, 0)]),
+        (1, vec![pane_in_tab(20, 1)]),
+    ]);
+
+    let merged = merged_room(&previous, &next);
+
+    assert_eq!(merged.keys().copied().collect::<Vec<_>>(), vec![0, 1, 2]);
+    assert_eq!(merged.get(&2), previous.get(&2));
+}
+
+#[test]
+fn first_manifest_replaces_regardless_of_coverage() {
+    let next = tabs_by_index(vec![(0, vec![pane_in_tab(10, 0)])]);
+
+    let merged = merged_room(&BTreeMap::new(), &next);
+
+    assert_eq!(merged, next);
+}
+
+#[test]
+fn topology_payload_from_merged_room_never_shrinks() {
+    let previous = tabs_by_index(vec![
+        (0, vec![pane_in_tab(10, 0)]),
+        (1, vec![pane_in_tab(20, 1)]),
+        (2, vec![pane_in_tab(30, 2)]),
+    ]);
+    let mut updated = pane_in_tab(10, 0);
+    updated.is_focused = true;
+    let partial = tabs_by_index(vec![(0, vec![updated])]);
+
+    let merged = merged_room(&previous, &partial);
+    let payload = TopologyPayload::from_tabs("rimz-test", 42, &merged);
+
+    let known_live = previous.values().map(Vec::len).sum::<usize>();
+    assert!(payload.panes.len() >= known_live);
+}
+
+#[test]
+fn opened_card_panes_no_spurious_opens_on_partial() {
+    let previous = tabs_by_index(vec![
+        (0, vec![pane_in_tab(10, 0)]),
+        (1, vec![pane_in_tab(20, 1)]),
+    ]);
+    let mut focused = pane_in_tab(10, 0);
+    focused.is_focused = true;
+    let partial = tabs_by_index(vec![(0, vec![focused])]);
+
+    let merged = merged_room(&previous, &partial);
+
+    assert!(opened_card_panes(&previous, &merged).is_empty());
+}
+
+#[test]
+fn focus_only_partial_still_takes_shortcut() {
+    let mut previous_focused = pane_in_tab(10, 0);
+    previous_focused.is_focused = true;
+    let previous = tabs_by_index(vec![
+        (0, vec![previous_focused, pane_in_tab(11, 0)]),
+        (1, vec![pane_in_tab(20, 1)]),
+    ]);
+    let mut next_focused = pane_in_tab(11, 0);
+    next_focused.is_focused = true;
+    let partial = tabs_by_index(vec![(0, vec![pane_in_tab(10, 0), next_focused])]);
+
+    let merged = merged_room(&previous, &partial);
+
+    assert_eq!(
+        focus_shortcut_if_only_focus_changed(&previous, &merged),
+        Some(FocusShortcut::Patch(vec![
+            FocusPatch {
+                id: 10,
+                is_focused: false,
+            },
+            FocusPatch {
+                id: 11,
+                is_focused: true,
+            },
+            FocusPatch {
+                id: 20,
+                is_focused: false,
+            },
+        ]))
+    );
+}
+
+#[test]
+fn genuine_open_in_carried_tab_is_reported() {
+    let previous = tabs_by_index(vec![
+        (0, vec![pane_in_tab(10, 0)]),
+        (1, vec![pane_in_tab(20, 1)]),
+    ]);
+    let partial = tabs_by_index(vec![(0, vec![pane_in_tab(10, 0), pane_in_tab(11, 0)])]);
+
+    let merged = merged_room(&previous, &partial);
+
+    assert_eq!(
+        opened_card_panes(&previous, &merged),
+        vec![pane_in_tab(11, 0)]
     );
 }
 
