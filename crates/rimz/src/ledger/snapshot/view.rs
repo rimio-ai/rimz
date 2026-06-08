@@ -22,7 +22,7 @@ use crate::agents::TurnErrorClass;
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentAccount, AgentContext, AgentTurnError, RateLimitWindow, SpendTally};
 use crate::feed::{
-    AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, PaneRef, ResolverStepState, Surface,
+    AgentState, AgentStatus, FeedItem, FeedStatus, PaneRef, ResolverStepState, Surface,
 };
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::ledger::agent_context::AgentContextRecord;
@@ -1494,9 +1494,6 @@ fn fold_ask_onto_row(row: &mut SidebarRow, ask: &FeedItem) {
     agent.surface = Some(ask.surface);
     agent.resolver = active_resolver_state(ask);
     agent.options = ask.options.clone();
-    if agent.task.is_none() {
-        agent.task = Some(feed_kind_task(ask.kind).to_owned());
-    }
 }
 
 fn build_worktree_groups_from_rows(
@@ -2093,21 +2090,6 @@ fn active_resolver_state(item: &FeedItem) -> Option<SidebarResolverState> {
         display_name,
         budget_until: item.chain_active_until,
     })
-}
-
-fn feed_kind_task(kind: FeedKind) -> &'static str {
-    match kind {
-        FeedKind::Permission => "permission",
-        FeedKind::PlanApproval => "plan approval",
-        FeedKind::Question => "question",
-        FeedKind::NeedsInput => "needs input",
-        FeedKind::Completion => "completion",
-        FeedKind::Failure => "failure",
-        FeedKind::ToolEvent => "tool",
-        FeedKind::SubAgentStarted => "sub-agent started",
-        FeedKind::SubAgentStopped => "sub-agent stopped",
-        FeedKind::Generic => "activity",
-    }
 }
 
 /// The branch shared by a group's branched rows, if any. Returns `None` for a

@@ -1951,6 +1951,38 @@ fn live_panes_keep_agent_attention_with_process() {
 }
 
 #[test]
+fn pending_agent_ask_preserves_session_prompt_description() {
+    let item = agent_ask(FeedKind::Permission, "claude", "live-claude");
+    let request_id = item.request_id.clone();
+    let mut session = agent("claude", "live-claude", AgentStatus::Idle, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    session.prompt = Some("read architecture docs and map agent state".to_owned());
+
+    let snapshot = room(vec![item], vec![session])
+        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+
+    let row = &snapshot.worktree_groups[0].rows[0];
+    let agent = row.as_agent().expect("ask folds onto the agent card");
+    assert_eq!(
+        row.status(),
+        Some(AgentStatus::Waiting),
+        "the ask still marks the row as waiting"
+    );
+    assert_eq!(row.request_id(), Some(&request_id));
+    assert_eq!(
+        agent.task.as_deref(),
+        None,
+        "ask kind is not an activity task"
+    );
+    assert_eq!(
+        agent.prompt.as_deref(),
+        Some("read architecture docs and map agent state"),
+        "the prompt remains the card's fallback description"
+    );
+}
+
+#[test]
 fn answered_native_ui_ask_returns_to_running() {
     // The live bug: a native_ui ask is answered in the agent's own UI and
     // the agent keeps working the same turn. The ask stays pending in the
@@ -2865,8 +2897,8 @@ fn superseded_zombie_ask_yields_pane_to_the_fresh_session() {
     // Live reproduction: a pidless `SessionStart`-only claude never ends and
     // never gets reaped, so it lingers in the rollup with an old pending
     // ask. A freshly launched claude shares the worktree. The ask must not
-    // render as attention or pin the dead session's "permission" task and
-    // stale timestamp onto the live pane — the fresh session binds it idle.
+    // render as attention or pin the dead session's stale timestamp onto the
+    // live pane — the fresh session binds it idle.
     let stale = agent_ask(FeedKind::Permission, "claude", "zombie-claude");
 
     let zombie = agent("claude", "zombie-claude", AgentStatus::Idle, 1_000).worktree("/repo/main");

@@ -355,8 +355,9 @@ fn render_worktree_attention_map() {
         AgentStatus::Waiting,
         Some("/home/me/query-engine"),
         Some("main"),
-        Some("permission"),
+        None,
     );
+    permission.prompt = Some("investigate destructive query guard".to_owned());
     permission.last_activity = native.updated_at;
     let mut running = agent(
         "codex-1",
