@@ -2164,9 +2164,9 @@ fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
         AgentStatus::Waiting,
         AgentStatus::Failed,
         AgentStatus::Paused,
+        AgentStatus::Success,
         AgentStatus::Running,
         AgentStatus::Idle,
-        AgentStatus::Success,
     ]
     .into_iter()
     .filter_map(|status| {

@@ -3411,16 +3411,28 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
     // make-up (row 1 is the blank line, row 4 the hairline rule).
     assert!(screen.lines().nth(3).unwrap().contains("¤ 2"), "{screen}");
     let buckets = screen.lines().nth(5).unwrap();
-    // Left cluster: waiting/failed/idle and paused each show
-    // their count (a zero reads `? 0`); both running agents tally into the
-    // one working (⢿) bucket.
+    // The make-up shows the attention and parked/done buckets first, then the
+    // live-capacity tail; both running agents tally into the one working (⢿)
+    // bucket.
     assert!(buckets.contains("? 0"), "{buckets}");
     assert!(buckets.contains("! 0"), "{buckets}");
-    assert!(buckets.contains("○ 0"), "{buckets}");
     // The paused glyph carries the U+FE0E text-presentation selector.
     assert!(buckets.contains("⏸\u{FE0E} 0"), "{buckets}");
     assert!(buckets.contains("✓ 0"), "{buckets}");
     assert!(buckets.contains("⢿ 2"), "{buckets}");
+    assert!(buckets.contains("○ 0"), "{buckets}");
+    let bucket_positions = [
+        buckets.find("? 0").expect("waiting bucket"),
+        buckets.find("! 0").expect("failed bucket"),
+        buckets.find("⏸\u{FE0E} 0").expect("paused bucket"),
+        buckets.find("✓ 0").expect("success bucket"),
+        buckets.find("⢿ 2").expect("running bucket"),
+        buckets.find("○ 0").expect("idle bucket"),
+    ];
+    assert!(
+        bucket_positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "make-up order is ? ! ⏸ ✓ | ⢿ ○: {buckets}"
+    );
     assert!(!buckets.contains('✻'), "no thinking bucket: {buckets}");
     // The default selection lands on the first row, so its worktree reads as
     // one lane: the header gains the dotted seal and a `▏` lane spine.

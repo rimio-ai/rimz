@@ -130,7 +130,7 @@ The reader types `claude` in the shell pane and just looks at its input box — 
  ◎ 1
  ¤ 1
  ────────────────────────────────────────────
- ? 0   ! 0   ○ 1   ⏸ 0              ⢿ 0   ✓ 0
+ ? 0   ! 0   ⏸ 0   ✓ 0              ⢿ 0   ○ 1
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌○ claude · Opus · xhigh
@@ -160,7 +160,7 @@ The reader gives Claude a task. The prompt then the first tool call move the row
  ◎ 1
  ¤ 1
  ────────────────────────────────────────────
- ? 0   ! 0   ○ 0   ⏸ 0              ⢿ 1   ✓ 0
+ ? 0   ! 0   ⏸ 0   ✓ 0              ⢿ 1   ○ 0
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌⢿ claude · Opus · xhigh
@@ -188,7 +188,7 @@ Claude hits a permission prompt — it wants to run something. A feed item is wr
  ◎ 1
  ¤ 1
  ────────────────────────────────────────────
- ? 1   ! 0   ○ 0   ⏸ 0              ⢿ 0   ✓ 0
+ ? 1   ! 0   ⏸ 0   ✓ 0              ⢿ 0   ○ 0
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌? claude · Opus · xhigh
@@ -232,7 +232,7 @@ The reader does exactly what they said they would: spins up four more agents acr
  ◎ 12                  ◇ 88k ↘ 24k ↗ 64k ◌ 68k
  ¤ 6                                    $4.20
  ────────────────────────────────────────────
- ? 2   ! 1   ○ 1   ⏸ 0              ⢿ 2   ✓ 0
+ ? 2   ! 1   ⏸ 0   ✓ 0              ⢿ 2   ○ 1
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌? claude · Opus · xhigh
@@ -337,7 +337,7 @@ The product's honesty law gets tested when a fetch fails — the binary moved, t
  ◎ 1
  ¤ 1
  ────────────────────────────────────────────
- ? 0   ! 0   ○ 0   ⏸ 0              ⢿ 1   ✓ 0
+ ? 0   ! 0   ⏸ 0   ✓ 0              ⢿ 1   ○ 0
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌⢿ claude · Opus · xhigh

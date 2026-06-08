@@ -3682,6 +3682,7 @@ fn bucket_order_puts_attention_first_and_idle_last() {
         AgentStatus::Running,
         AgentStatus::Success,
         AgentStatus::Idle,
+        AgentStatus::Paused,
         AgentStatus::Failed,
         AgentStatus::Waiting,
     ]
@@ -3702,11 +3703,30 @@ fn bucket_order_puts_attention_first_and_idle_last() {
         vec![
             Some(AgentStatus::Waiting),
             Some(AgentStatus::Failed),
+            Some(AgentStatus::Paused),
             Some(AgentStatus::Success),
             Some(AgentStatus::Running),
             Some(AgentStatus::Idle),
         ],
         "attention leads; parked idle agents sink to the bottom of the group"
+    );
+
+    let counts = snapshot.worktree_groups[0]
+        .status_counts
+        .iter()
+        .map(|count| count.status)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        counts,
+        vec![
+            AgentStatus::Waiting,
+            AgentStatus::Failed,
+            AgentStatus::Paused,
+            AgentStatus::Success,
+            AgentStatus::Running,
+            AgentStatus::Idle,
+        ],
+        "status tallies stay in cockpit make-up order"
     );
 }
 
