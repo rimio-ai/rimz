@@ -324,7 +324,7 @@ fn plugin_artifact(root: &Path) -> PathBuf {
 }
 
 fn ensure_rust_target(root: &Path, target: &str) -> Result<()> {
-    if rust_target_std_available(root, target)? {
+    if rustup_target_installed(root, target)? || rust_target_std_available(root, target)? {
         return Ok(());
     }
 
@@ -341,10 +341,33 @@ fn ensure_rust_target(root: &Path, target: &str) -> Result<()> {
         bail!("Rust target `{target}` is missing and `rustup target add {target}` failed");
     }
 
-    if rust_target_std_available(root, target)? {
+    if rustup_target_installed(root, target)? || rust_target_std_available(root, target)? {
         return Ok(());
     }
     bail!("Rust target `{target}` is still unavailable after `rustup target add {target}`");
+}
+
+fn rustup_target_installed(root: &Path, target: &str) -> Result<bool> {
+    let output = match Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .current_dir(root)
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err).context("checking installed rustup targets"),
+    };
+    if !output.status.success() {
+        return Ok(false);
+    }
+
+    let installed =
+        String::from_utf8(output.stdout).context("reading installed rustup targets output")?;
+    Ok(target_list_contains(&installed, target))
+}
+
+fn target_list_contains(installed: &str, target: &str) -> bool {
+    installed.lines().any(|line| line.trim() == target)
 }
 
 fn rust_target_std_available(root: &Path, target: &str) -> Result<bool> {
@@ -372,8 +395,7 @@ fn rust_target_std_available(root: &Path, target: &str) -> Result<bool> {
             .with_context(|| format!("reading {}", target_libdir.display()))?
             .file_name();
         if let Some(name) = name.to_str()
-            && name.starts_with("libcore-")
-            && name.ends_with(".rlib")
+            && (name == "libcore.rlib" || (name.starts_with("libcore-") && name.ends_with(".rlib")))
         {
             return Ok(true);
         }
@@ -1303,5 +1325,13 @@ mod tests {
             err.contains("xtask `test` takes no arguments"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn rustup_target_list_match_is_exact() {
+        let installed = "wasm32-unknown-unknown\nwasm32-wasip1\n";
+
+        assert!(target_list_contains(installed, "wasm32-wasip1"));
+        assert!(!target_list_contains(installed, "wasm32-wasi"));
     }
 }
