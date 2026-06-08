@@ -3294,7 +3294,7 @@ fn render_scroll_keeps_gap_above_provider_dashboard() {
 }
 
 /// In `auto` mode, two providers stay stacked: both account blocks paint at
-/// once and there is no tab rail or tab hit surface.
+/// once, separated by a blank row, with no tab rail or tab hit surface.
 #[test]
 fn render_provider_dashboard_auto_stacks_two_provider_blocks() {
     let mut claude = agent(
@@ -3312,7 +3312,7 @@ fn render_provider_dashboard_auto_stacks_two_provider_blocks() {
 
     assert!(
         !rendered.contains("─ Claude ─") && !rendered.contains("─ Codex ─"),
-        "stacked mode paints plain rules, not a rail:\n{rendered}"
+        "stacked mode paints no tab rail:\n{rendered}"
     );
     assert!(
         rendered.contains("Claude v2.1.158 · Claude Max"),
@@ -3327,6 +3327,15 @@ fn render_provider_dashboard_auto_stacks_two_provider_blocks() {
     assert!(
         rendered.contains('∞'),
         "codex block paints too:\n{rendered}"
+    );
+    let lines: Vec<&str> = rendered.lines().collect();
+    let codex_header = lines
+        .iter()
+        .position(|line| line.contains("Codex v0.135.0"))
+        .expect("codex header");
+    assert!(
+        lines[codex_header - 1].trim().is_empty(),
+        "a blank row separates stacked provider blocks:\n{rendered}"
     );
     assert_snapshot("provider_dashboard_stacked", rendered);
 }

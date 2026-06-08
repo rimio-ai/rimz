@@ -174,8 +174,8 @@ pub(crate) struct ProviderTabHit {
 }
 
 /// The pinned per-provider dashboard. In stacked mode every account paints its
-/// own block — a hairline rule, then a header line, then the brand emblem
-/// zipped against the aggregate stats and account-scoped budget bars. In
+/// own block — the dashboard's top hairline, then each provider header and
+/// brand/stat body separated from the next by a blank row. In
 /// tabbed mode the top hairline becomes a [tab rail](provider_tab_rail) — each
 /// account set into the rule, the active one a brand-filled bold chip — over
 /// the active provider's block alone, so the budgets read one account at a time;
@@ -199,13 +199,16 @@ pub(in crate::sidebar_renderer::render) fn provider_panel_lines(
         return (lines, Vec::new());
     };
     if !tabbed {
-        return (
-            providers
-                .iter()
-                .flat_map(|panel| single_block_lines(theme, panel, width, zones))
-                .collect(),
-            Vec::new(),
-        );
+        let mut blocks = Vec::new();
+        for (index, panel) in providers.iter().enumerate() {
+            if index == 0 {
+                blocks.push(super::super::hairline_rule(theme, width));
+            } else {
+                blocks.push(Line::from(""));
+            }
+            blocks.extend(single_block_lines(theme, panel, width, zones));
+        }
+        return (blocks, Vec::new());
     }
 
     let active = active_kind
@@ -229,9 +232,6 @@ fn single_block_lines(
     zones: &BudgetZonesConfig,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    // The dashboard's top hairline is a plain rule, and the header keeps the
-    // product name no rail carries.
-    lines.push(super::super::hairline_rule(theme, width));
     lines.push(provider_header_line(theme, panel, width, false));
     // A blank line below the provider name sets the identity apart from
     // the emblem + stats body, matching the cockpit's breathing room.

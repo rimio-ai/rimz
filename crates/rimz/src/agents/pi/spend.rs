@@ -71,8 +71,10 @@ struct PiCost {
 
 /// Collect all Pi session `*.jsonl` files from `~/.pi/agent/sessions/`.
 ///
-/// Respects `PI_AGENT_DIR` (comma-separated) when set.  Pi sessions are not
-/// project-scoped, so all sessions are included regardless of worktree paths.
+/// Respects `PI_AGENT_DIR` (comma-separated Rimz test override) first, then
+/// Pi's own `PI_CODING_AGENT_SESSION_DIR`, then the session directory below
+/// `PI_CODING_AGENT_DIR` / `~/.pi/agent`. Pi sessions are not project-scoped,
+/// so all sessions are included regardless of worktree paths.
 pub fn pi_session_files() -> Vec<PathBuf> {
     let mut roots = Vec::new();
 
@@ -83,8 +85,13 @@ pub fn pi_session_files() -> Vec<PathBuf> {
                 roots.push(p);
             }
         }
+    } else if let Ok(raw) = std::env::var("PI_CODING_AGENT_SESSION_DIR") {
+        let candidate = PathBuf::from(raw);
+        if candidate.is_dir() {
+            roots.push(candidate);
+        }
     } else {
-        let candidate = home_dir().join(".pi/agent/sessions");
+        let candidate = pi_config_dir().join("sessions");
         if candidate.is_dir() {
             roots.push(candidate);
         }
@@ -97,6 +104,12 @@ pub fn pi_session_files() -> Vec<PathBuf> {
     files.sort();
     files.dedup();
     files
+}
+
+pub(crate) fn pi_config_dir() -> PathBuf {
+    std::env::var("PI_CODING_AGENT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| home_dir().join(".pi/agent"))
 }
 
 // ── Parser ────────────────────────────────────────────────────────────────────

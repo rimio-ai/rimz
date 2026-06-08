@@ -1,5 +1,5 @@
-//! Pi's out-of-band account probe: the `~/.pi/agent/auth.json` credential map
-//! plus a `pi -v` version read.
+//! Pi's out-of-band account probe: the `auth.json` credential map under Pi's
+//! config root plus a `pi -v` version read.
 //!
 //! Pi exposes no plan tier and no rate-limit windows (the balance gap in
 //! [docs/internals/adapter/pi-reference.md]); its one account fact is the
@@ -19,18 +19,17 @@ use std::process::{Command, Stdio};
 
 use serde::Deserialize;
 
-use super::spend::pi_session_files;
+use super::spend::{pi_config_dir, pi_session_files};
 use crate::agents::account::AccountProbe;
 use crate::agents::context::AgentAccount;
 use crate::agents::read_transcript_tail;
-use crate::agents::transcript_fs::home_dir;
 
 /// Probe Pi's account: parse the auth file, label the used subscription, and
 /// attach the `pi -v` version. The missing-file fast path skips the session
 /// walk and the version fork — the common Pi-less machine pays one `stat`;
 /// `probe_auth` re-handles a racing removal on its own read.
 pub(crate) fn probe() -> AccountProbe {
-    let path = home_dir().join(".pi/agent/auth.json");
+    let path = pi_config_dir().join("auth.json");
     if !path.exists() {
         return AccountProbe::LoggedOut;
     }

@@ -473,6 +473,34 @@ fn pi_on_a_metered_sub_borrows_the_sibling_kinds_windows() {
 }
 
 #[test]
+fn probed_pi_version_reaches_the_provider_panel() {
+    let pi = agent("pi", "p1", AgentStatus::Idle, 20);
+    let mut probed: BTreeMap<String, AgentAccount> = BTreeMap::new();
+    probed.insert(
+        "pi".to_owned(),
+        AgentAccount {
+            plan: Some("OpenAI OAuth".to_owned()),
+            metered: Some(true),
+            version: Some("0.78.0".to_owned()),
+            sub_provider: Some("openai".to_owned()),
+        },
+    );
+
+    let snapshot = room(Vec::new(), vec![pi]).with_provider_aggregates(
+        &probed,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    );
+
+    let pi_panel = snapshot
+        .providers
+        .iter()
+        .find(|panel| panel.kind == "pi")
+        .expect("pi panel present");
+    assert_eq!(pi_panel.version.as_deref(), Some("0.78.0"));
+}
+
+#[test]
 fn pi_sub_without_borrowable_windows_stays_bar_less() {
     // A metered Pi sub whose sibling has no readings (no codex session ever
     // reported), or whose provider maps to no kind, keeps the bar-less block.
