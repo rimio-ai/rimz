@@ -29,6 +29,7 @@ pub mod sidebar;
 pub mod sidebar_renderer;
 pub mod tab_layout;
 pub mod trust;
+pub mod tui;
 pub mod workspace;
 pub mod worktree;
 

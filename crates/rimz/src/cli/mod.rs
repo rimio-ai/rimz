@@ -7,6 +7,7 @@ mod doctor;
 mod event;
 mod feed;
 mod gc;
+mod hook_consent;
 mod hooks;
 mod list;
 mod pane;
@@ -289,7 +290,13 @@ fn ensure_detected_agent_hooks() -> Result<()> {
         return Ok(());
     }
 
-    for name in approve_hook_install(&missing)? {
+    let agents_to_install = if std::io::stderr().is_terminal() {
+        hook_consent::run_consent_gate(&missing)?
+    } else {
+        approve_hook_install_text(&missing)?
+    };
+
+    for name in agents_to_install {
         let agent = rimz::agents::adapter_by_kind(name)?;
         let report = agent.install_hooks()?;
         {
@@ -328,11 +335,11 @@ fn warn_untrusted_hooks(kind: &str, untrusted: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn approve_hook_install(previews: &[HookInstallPreview]) -> Result<Vec<&'static str>> {
+fn approve_hook_install_text(previews: &[HookInstallPreview]) -> Result<Vec<&'static str>> {
     print_hook_consent_gate(previews, true)?;
     loop {
         let mut stderr = std::io::stderr().lock();
-        write!(stderr, "Choose [Enter/d/c/s]: ")?;
+        write!(stderr, "Choose [Enter/d/s]: ")?;
         stderr.flush()?;
         drop(stderr);
 
@@ -343,16 +350,16 @@ fn approve_hook_install(previews: &[HookInstallPreview]) -> Result<Vec<&'static 
                 return Ok(previews.iter().map(|preview| preview.agent).collect());
             }
             "d" | "D" => {
-                print_hook_diffs(previews)?;
-            }
-            "c" | "C" => {
-                return choose_hook_agents(previews);
+                let mut stderr = std::io::stderr().lock();
+                for preview in previews {
+                    writeln!(stderr, "{}", hook_consent::preview_diff(preview))?;
+                }
             }
             "s" | "S" | "n" | "N" | "no" | "NO" | "No" => return Ok(Vec::new()),
             _ => {
                 writeln!(
                     std::io::stderr().lock(),
-                    "Enter installs all, d shows the diff, c chooses per agent, s skips."
+                    "Enter installs all, d shows the diff, s skips."
                 )?;
             }
         }
@@ -389,14 +396,8 @@ fn print_hook_consent_gate(previews: &[HookInstallPreview], interactive: bool) -
         "Rimz: agent hooks are not currently installed for {}.",
         join_agent_names(previews.iter().map(|preview| preview.agent)),
     )?;
-    writeln!(
-        stderr,
-        "Rimz will make an additive, reversible per-user config change so runs appear in the sidebar.",
-    )?;
-    writeln!(
-        stderr,
-        "These hooks only report events to Rimz. They never answer a prompt for you.",
-    )?;
+    writeln!(stderr, "{}", hook_consent::CONSENT_TEXT_CHANGE_SUMMARY)?;
+    writeln!(stderr, "{}", hook_consent::CONSENT_BOUNDARY)?;
     for preview in previews {
         writeln!(
             stderr,
@@ -418,14 +419,13 @@ fn print_hook_consent_gate(previews: &[HookInstallPreview], interactive: bool) -
             &preview.subagent_status_line_change,
         )?;
     }
-    writeln!(
-        stderr,
-        "Reversible any time with `rimz hooks uninstall <agent>`."
-    )?;
-    writeln!(
-        stderr,
-        "[Enter] install all    [d] show full diff    [c] choose per agent    [s] skip",
-    )?;
+    writeln!(stderr, "{}", hook_consent::CONSENT_REVERSIBLE)?;
+    if interactive {
+        writeln!(
+            stderr,
+            "[Enter] install all    [d] show full diff    [s] skip",
+        )?;
+    }
     if !interactive {
         writeln!(
             stderr,
@@ -433,57 +433,6 @@ fn print_hook_consent_gate(previews: &[HookInstallPreview], interactive: bool) -
         )?;
     }
     Ok(())
-}
-
-fn print_hook_diffs(previews: &[HookInstallPreview]) -> Result<()> {
-    let mut stderr = std::io::stderr().lock();
-    for preview in previews {
-        writeln!(stderr, "{}", preview_diff(preview))?;
-    }
-    Ok(())
-}
-
-fn choose_hook_agents(previews: &[HookInstallPreview]) -> Result<Vec<&'static str>> {
-    let mut selected = Vec::new();
-    for preview in previews {
-        let mut stderr = std::io::stderr().lock();
-        write!(stderr, "Install {} hooks? [y/N] ", preview.agent)?;
-        stderr.flush()?;
-        drop(stderr);
-        let mut answer = String::new();
-        std::io::stdin().read_line(&mut answer)?;
-        if matches!(answer.trim(), "y" | "Y" | "yes" | "YES" | "Yes") {
-            selected.push(preview.agent);
-        }
-    }
-    Ok(selected)
-}
-
-fn preview_diff(preview: &HookInstallPreview) -> String {
-    let mut out = String::new();
-    out.push_str(&format!(
-        "--- {}\n+++ {}\n",
-        preview.config_path.display(),
-        preview.config_path.display()
-    ));
-    let original = preview.original_config.as_deref().unwrap_or("");
-    if original.is_empty() {
-        out.push_str("@@ new file @@\n");
-    } else {
-        out.push_str("@@ original @@\n");
-        for line in original.lines() {
-            out.push('-');
-            out.push_str(line);
-            out.push('\n');
-        }
-        out.push_str("@@ candidate @@\n");
-    }
-    for line in preview.candidate_config.lines() {
-        out.push('+');
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
 }
 
 fn join_agent_names(names: impl IntoIterator<Item = &'static str>) -> String {

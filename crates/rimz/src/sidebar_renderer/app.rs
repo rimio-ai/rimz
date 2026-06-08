@@ -22,14 +22,11 @@ use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL}
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind,
-};
-use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal;
+use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use tracing::{debug, warn};
 
 use crate::sidebar_renderer::render::{self, UiState};
+use crate::tui::{MouseCapture, TerminalModeGuard};
 
 mod fetch;
 #[cfg(test)]
@@ -118,7 +115,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // time. The watcher nudges this loop through the same wakeup socket the
     // ledger uses, so a resize is just another wakeup; without it the first
     // usable frame waits for the next `tick`, reading as a blank sidebar.
-    let _input_mode = InputModeGuard::enable()?;
+    let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout)?;
     spawn_event_waker(socket_path.clone());
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -949,26 +946,6 @@ fn spawn_pane_focus(pane_id: PaneId) {
             warn!(pane = %pane_id, error = %err, "sidebar pane focus failed");
         }
     });
-}
-
-struct InputModeGuard;
-
-impl InputModeGuard {
-    fn enable() -> io::Result<Self> {
-        terminal::enable_raw_mode()?;
-        if let Err(err) = execute!(io::stdout(), EnableMouseCapture) {
-            let _ = terminal::disable_raw_mode();
-            return Err(err);
-        }
-        Ok(Self)
-    }
-}
-
-impl Drop for InputModeGuard {
-    fn drop(&mut self) {
-        let _ = execute!(io::stdout(), DisableMouseCapture);
-        let _ = terminal::disable_raw_mode();
-    }
 }
 
 /// Removes a per-instance runtime file (wakeup socket, heartbeat) when the

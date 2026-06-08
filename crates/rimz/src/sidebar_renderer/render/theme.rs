@@ -21,10 +21,9 @@
 //! renderer of the same workspace paints the same tones with zero config
 //! knowledge of its own.
 
-use std::sync::OnceLock;
-
 use crate::config::{GlowMode, SidebarConfig, SidebarThemeConfig};
 use ratatui::style::{Color, Modifier, Style};
+use std::sync::OnceLock;
 
 /// Claude clay — the running agent's animated working/thinking head, so the
 /// live cell reads in the agent's own brand orange. Closest muted 256-color
@@ -137,7 +136,7 @@ impl Theme {
     /// next produced snapshot, no renderer restart.
     pub(crate) fn for_sidebar(sidebar: &SidebarConfig) -> Self {
         Self {
-            no_color: no_color_env(),
+            no_color: crate::tui::no_color(),
             truecolor: truecolor_env(),
             glow: sidebar.glow,
             palette: Palette::resolve(&sidebar.theme),
@@ -278,18 +277,6 @@ impl Theme {
             other => other,
         }
     }
-}
-
-/// Read the environment once. The shell sets `NO_COLOR` when the user opts out
-/// of ANSI color (the [no-color.org](https://no-color.org/) convention); the
-/// renderer honors any non-empty value.
-///
-/// `NO_COLOR` cannot change mid-process, so the result is cached — the render
-/// path asks for it on every frame (≈8×/s while a spinner animates), and an
-/// env lookup per frame is pure waste.
-fn no_color_env() -> bool {
-    static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()))
 }
 
 /// Read the terminal's 24-bit color capability once. `COLORTERM=truecolor` (or

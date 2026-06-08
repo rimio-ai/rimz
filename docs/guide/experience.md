@@ -40,45 +40,49 @@ rimz
 
 This is the single most important screen in the product, because it's where trust is won or lost. Running `rimz` the first time on a machine means Rimz wants to add hooks to the agents the reader already has — and modifying their agent config is exactly the thing they were nervous about in Phase 0.
 
-So the first thing they see is the consent gate: a clean, full-terminal, terminal-native screen that treats the modification as a security surface and turns their nervousness into trust.
+So the first thing they see is not the room. It's a clean inline consent gate — terminal-native, left in scrollback, not a popup — that treats the modification as a security surface and turns their nervousness into trust.
 
 ```
-  rimz · first run on this machine
+  rimz hook install
 
   Rimz routes attention across your coding agents into one sidebar.
-  To show what an agent is doing, it adds reporting hooks to the
-  agents you already have on this machine.
+  To show what an agent is doing, it adds reporting hooks to the agents on this machine.
+  These hooks only report events to Rimz. They never answer a prompt for you.
 
-  Detected:
-    ● Claude Code     ~/.claude/settings.json
-    ● Codex           ~/.codex/config.toml
+  Detected agents (space toggles):
+  > [x] claude  8 events  ~/.claude/settings.json
+    [x] codex   6 events  ~/.codex/config.toml
 
-  What changes — additive, your existing hooks are kept:
+  What changes: additive config edits; existing hooks are kept.
+    + claude: 8 events at ~/.claude/settings.json
+    + codex: 6 events at ~/.codex/config.toml
 
-    ~/.claude/settings.json
-      + SessionStart   → rimz hooks feed --source claude
-      + UserPromptSubmit, PreToolUse, PostToolUse, Stop, … (8 total)
+  Diff  1/24
+  --- ~/.claude/settings.json
+  +++ ~/.claude/settings.json
+  @@ -8,6 +8,14 @@
+       "UserPromptSubmit": [
+         { "hooks": [{ "type": "command", "command": "my-existing-hook" }] }
+       ],
+  +    "SessionStart": [
+  +      { "hooks": [{ "type": "command", "command": "rimz hooks feed --source claude" }] }
+  +    ],
 
-  These hooks *report* what your agents do to Rimz; your agent's own
-  UI stays where you answer. Reversible any time with
-  `rimz hooks uninstall <agent>`.
-
-    [↵] install all             [d] show full diff
-    [c] choose per agent        [s] skip — I'll set up later
+  [Enter] install selected   [Space] toggle   [d] hide diff   [s/Esc] skip
 ```
 
-**Does:** Reads it in five seconds. Maybe hits `d` to see the literal diff, confirms it's additive and boring, hits Enter.
+**Does:** Reads it in five seconds. Maybe hits `d` to expand the scrollable real diff, uses Space if one agent should stay unwired, confirms the change is additive and boring, hits Enter.
 
 **Feels:** Reassured. The screen answered both Phase-0 questions before they asked — *additive*, *reversible*, *my own UI stays where I answer.*
 
 **Thinks:** *"OK, it's not going to hijack my agents. It just watches. Fine."*
 
 > **Design laws for the consent gate.**
-> - **Show the exact diff, framed as additive.** The fear is that it overwrites your hooks; naming the preserved keys kills that fear in one line. The frame above is illustrative — the authoritative wired set and config shape are in [hooks.md](../internals/hooks.md#hook-install--the-visible-security-step).
-> - **State the boundary in the consent itself:** hooks *report*; your agent's UI is where you answer. This is the [product invariant](../../DESIGN.md), surfaced at the exact moment the reader decides whether to trust it.
-> - **Always offer `skip`.** Declining installs nothing and still drops them into the room — the agent shows up as a plain process row with no status, and the empty-room hint tells them how to wire it later. Consent stays a door, not a wall.
-> - **Once per machine.** Hook install is per-machine, per-agent state; later `rimz` runs go straight to the room, and `rimz doctor` reports per-agent install status for anyone who forgets where they're at.
-> - **Project config is a *separate*, later gate.** A committed `.rimz/config.toml` gets its own trust prompt with its own diff (see [trust.md](../internals/trust.md)) — a toy project has none, so the reader never sees it on day one.
+> - **Show the exact diff, framed as additive.** The fear is "it overwrites my hooks." Naming the preserved keys kills that fear in one line, and the diff is a real unified diff with unchanged regions collapsed. The frame above is illustrative; the authoritative wired set and config shape are in [hooks.md](../internals/hooks.md#hook-install--the-visible-security-step).
+> - **State the boundary in the consent itself:** hooks *report*, they don't *answer*. This is the product invariant, surfaced at the exact moment the reader is deciding whether to trust it.
+> - **Always offer `skip`.** Declining installs nothing and still drops them into the room — an agent then shows up as a plain process row with no status, and the empty-room hint tells them how to wire it later. Consent is never a wall.
+> - **Once per machine, never again.** Hook install is per-machine, per-agent state. Subsequent `rimz` runs go straight to the room. `rimz doctor` reports per-agent install status for anyone who forgets where they're at.
+> - **Project config is a *separate*, later gate.** If this repo ever carries a committed `.rimz/config.toml`, trusting it is its own prompt with its own diff (see [trust.md](../internals/trust.md)) — a toy project has none, so the reader never sees it on day one.
 
 ---
 

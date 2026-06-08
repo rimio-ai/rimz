@@ -45,6 +45,12 @@ clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 # Already in the tree transitively via clap's `wrap_help`; trivial API.
 terminal_size = "0.4"
 
+# Hook consent diffs — `similar` gives a minimal line-level unified diff for
+# the config install gate. It is already in the tree transitively via `insta`;
+# making it direct lets the user-visible security diff use the library rather
+# than a hand-rolled approximation.
+similar = "2"
+
 # HTTP — pricing refresh: the runtime LiteLLM/models.dev fetch and the
 # build-time embed both GET a static JSON document. `ureq` is a small,
 # synchronous, rustls-backed client — the right shape for a one-shot
