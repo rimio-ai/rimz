@@ -227,7 +227,7 @@ Decided with the change, recorded so the next pass does not re-litigate:
 
 - **A latency hint, never truth.** The watcher adds only a trigger over the refresh the hook path and producer tick already run; the stat gate makes a redundant or racing fire a no-op, and the tick backstop stays unconditional, so a watcher that never starts (an inotify limit, an unsupported filesystem) costs exactly nothing.
 - **Elder-only, election-scoped.** The same eldest-heartbeat election that scopes the produce and the tmux control watch scopes this thread; demotion drops every OS watch, and both the rescan and the flush re-check election first.
-- **Not driven end-to-end in tests.** Platform watcher semantics (inotify vs FSEvents) vary too much for a reliable cross-platform event test; the integration suite asserts the trigger→refresh wiring on a simulated event, and the pure flush policy unit-tests without `notify` or a clock.
+- **Not driven end-to-end in tests.** Platform watcher semantics (inotify vs kqueue) vary too much for a reliable cross-platform event test; the integration suite asserts the trigger→refresh wiring on a simulated event, and the pure flush policy unit-tests without `notify` or a clock.
 
 ## Adding a performance change
 
