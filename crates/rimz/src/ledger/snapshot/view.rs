@@ -1775,11 +1775,11 @@ fn project_display_status(
     }
 }
 
-fn active_turn_error<'a>(
+fn active_turn_error(
     status: AgentStatus,
-    context: Option<&'a AgentContext>,
+    context: Option<&AgentContext>,
     last_activity: Timestamp,
-) -> Option<&'a AgentTurnError> {
+) -> Option<&AgentTurnError> {
     if status != AgentStatus::Running {
         return None;
     }
