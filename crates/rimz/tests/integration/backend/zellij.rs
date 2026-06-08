@@ -2460,7 +2460,7 @@ fn presence_plugin_topology_payloads_stay_full_after_session_update() {
         }
         assert!(
             Instant::now() <= deadline,
-            "expected a SessionUpdate-sourced topology covering all live tabs; got {lines:?}",
+            "expected live-roster topology covering all live tabs; got {lines:?}",
         );
         let tab_arg = tab.to_string();
         let switched = scoped_zellij(session.xdg.path())
@@ -2502,7 +2502,7 @@ fn presence_plugin_topology_payloads_stay_full_after_session_update() {
     );
     assert!(
         topology_counts.iter().all(|count| *count >= 3),
-        "SessionUpdate-sourced topology must not collapse under later PaneUpdate churn: \
+        "live-roster topology must not collapse under later PaneUpdate churn: \
          counts={topology_counts:?}, lines={lines:?}",
     );
     assert!(
@@ -2511,7 +2511,7 @@ fn presence_plugin_topology_payloads_stay_full_after_session_update() {
                 .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
                 .is_some_and(|payload| topology_terminal_ids(&payload).contains(&opened_pane_id))
         }),
-        "SessionUpdate must publish the newly opened pane without manual churn: \
+        "live-roster topology must publish the newly opened pane without manual churn: \
          terminal_{opened_pane_id}, lines={lines:?}",
     );
 }

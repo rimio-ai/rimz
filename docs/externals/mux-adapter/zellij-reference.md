@@ -62,7 +62,7 @@ Full `Event` catalog as defined in `zellij-utils 0.44.3 src/data.rs` (46 variant
 | `CustomMessage` | `(message: String, payload: String)` — from a worker | — | |
 | `FileSystemCreate` / `FileSystemRead` / `FileSystemUpdate` / `FileSystemDelete` | `Vec<(PathBuf, Option<FileMetadata>)>` | — (after `watch_filesystem()`) | |
 | `PermissionRequestResult` | `PermissionStatus` (`Granted` \| `Denied`) | — | ✓ |
-| `SessionUpdate` | `Vec<SessionInfo>`, `Vec<(String, Duration)>` resurrectable sessions | ReadApplicationState | ✓ |
+| `SessionUpdate` | `Vec<SessionInfo>`, `Vec<(String, Duration)>` resurrectable sessions | ReadApplicationState | |
 | `RunCommandResult` | `Option<i32>` exit code, `Vec<u8>` stdout, `Vec<u8>` stderr, `Context` | — (reply to `run_command`) | |
 | `WebRequestResult` | `u16` status, `BTreeMap` headers, `Vec<u8>` body, `Context` | — (reply to `web_request`) | |
 | `CommandPaneOpened` | `u32` terminal pane id, `Context` | ReadApplicationState | |
@@ -91,6 +91,8 @@ Full `Event` catalog as defined in `zellij-utils 0.44.3 src/data.rs` (46 variant
 | `HostTerminalThemeChanged` | `HostTerminalThemeMode` (`Dark` \| `Light`) via CSI 2031 / DSR 997 | — | |
 
 `Context` is `BTreeMap<String, String>` — the caller-supplied dictionary echoed back on the matching reply event; it is how a plugin correlates async replies to requests.
+
+Verified Rimz caveat: the `SessionUpdate` pane manifest for the current session can arrive transiently partial on Zellij's roughly 60s serialization cadence while `PaneUpdate`, `list-panes -j -a`, and the serialized session metadata still reflect the full live room. Rimz treats `PaneUpdate` as the authoritative pane roster and uses `SessionUpdate` only as an upstream session-info event reference.
 
 **`CommandChanged` is the load-bearing event for Rimz**: it pushes the foreground-command handoff with the full argv, the foreground bit, and the focused clients — exactly the live process state `list-panes -j` does not report ([caveats](../../internals/multiplexers.md#zellij-backend-caveats)). A cached permission grant produces **no** `PermissionRequestResult`; application state flowing is the proof of grant (verified live, 0.44.3).
 

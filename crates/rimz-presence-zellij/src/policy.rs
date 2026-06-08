@@ -99,10 +99,10 @@ impl TopologyPayload {
 pub fn published_topology_payload(
     session_name: impl Into<String>,
     produced_at_ms: u64,
-    session_tabs: Option<&BTreeMap<usize, Vec<PaneFields>>>,
+    tabs: Option<&BTreeMap<usize, Vec<PaneFields>>>,
     foreground: &BTreeMap<u32, String>,
 ) -> Option<TopologyPayload> {
-    let mut tabs = session_tabs?.clone();
+    let mut tabs = tabs?.clone();
     if tabs.is_empty() {
         return None;
     }
@@ -247,9 +247,9 @@ pub fn opened_card_panes(
 /// the room, so carried tabs overwrite exactly and absent tabs remain until a
 /// pane-close event removes them. The first manifest after plugin load is the
 /// baseline and is accepted as-is; a partial first manifest self-heals on the
-/// next manifest that carries the omitted tabs. Publication uses
-/// `SessionUpdate`; this merge keeps partial `PaneUpdate` bursts from emitting
-/// spurious `panes-changed` pokes.
+/// next manifest that carries the omitted tabs. Publication uses this merged
+/// room, so partial `PaneUpdate` bursts neither shrink the topology cache nor
+/// emit spurious `panes-changed` pokes.
 pub fn merged_room(
     previous: &BTreeMap<usize, Vec<PaneFields>>,
     next: &BTreeMap<usize, Vec<PaneFields>>,

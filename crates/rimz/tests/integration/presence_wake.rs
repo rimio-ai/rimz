@@ -582,7 +582,7 @@ fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
 }
 
 #[test]
-fn session_update_shaped_topology_prunes_previously_present_tab() {
+fn pane_closed_pruned_topology_publishes_without_a_list_panes_fork() {
     let env = WakeEnv::new();
     let full = env.topology_cache_for_tabs(unix_now_ms(), &[(7, 0, "main"), (8, 1, "agent")]);
     let full_json = serde_json::to_string(&full).expect("serialize full topology");
@@ -621,7 +621,10 @@ fn session_update_shaped_topology_prunes_previously_present_tab() {
             pruned_json.as_str(),
         ],
     );
-    assert!(wake.status.success(), "pruned topology wake must succeed");
+    assert!(
+        wake.status.success(),
+        "PaneClosed-pruned topology wake must succeed"
+    );
     std::fs::remove_file(env.runtime.root.join("snapshot.json")).expect("drop old pane frame");
 
     let output = env.snapshot();
@@ -633,7 +636,7 @@ fn session_update_shaped_topology_prunes_previously_present_tab() {
     assert_eq!(
         env.trace_lines(),
         Vec::<String>::new(),
-        "fresh replacement topology must avoid zellij list-panes",
+        "fresh PaneClosed-pruned topology must avoid zellij list-panes",
     );
     let cached = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
         .expect("snapshot cache published from pruned topology");
@@ -641,7 +644,7 @@ fn session_update_shaped_topology_prunes_previously_present_tab() {
     assert!(panes.iter().any(|pane| pane.pane_id.raw() == "terminal_7"));
     assert!(
         !panes.iter().any(|pane| pane.pane_id.raw() == "terminal_8"),
-        "authoritative replacement topology prunes absent tabs: {panes:?}",
+        "PaneClosed-pruned topology drops the closed pane: {panes:?}",
     );
 }
 

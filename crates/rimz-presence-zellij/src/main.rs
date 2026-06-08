@@ -22,9 +22,6 @@ mod shell {
         policy: Option<PokePolicy>,
         /// The projected room shape, refreshed per manifest event.
         tabs: BTreeMap<usize, Vec<PaneFields>>,
-        /// The authoritative published roster from `SessionUpdate`; absent
-        /// until Zellij has delivered the first full per-session manifest.
-        session_tabs: Option<BTreeMap<usize, Vec<PaneFields>>>,
         tab_names: BTreeMap<usize, String>,
         foreground: BTreeMap<u32, String>,
         active_tab: Option<usize>,
@@ -63,7 +60,6 @@ mod shell {
             ]);
             subscribe(&[
                 EventType::PaneUpdate,
-                EventType::SessionUpdate,
                 EventType::TabUpdate,
                 EventType::CommandChanged,
                 EventType::PaneClosed,
@@ -130,35 +126,6 @@ mod shell {
                     }
                     self.resolve_focus_correction(now, true);
                     self.active_focused_pane = policy::focused_pane_id(&self.tabs, self.active_tab);
-                }
-                Event::SessionUpdate(sessions, _) => {
-                    let mut roster_changed = false;
-                    if let Some(info) = sessions
-                        .iter()
-                        .find(|info| info.is_current_session)
-                        .or_else(|| {
-                            self.session_name.as_deref().and_then(|session_name| {
-                                sessions.iter().find(|info| info.name == session_name)
-                            })
-                        })
-                    {
-                        // `TabUpdate` owns active-tab and focus-correction timing;
-                        // `SessionUpdate` backfills names for the published roster.
-                        let names = tab_names(&info.tabs);
-                        let projected = project(&info.panes, &names);
-                        let previous_hash = self
-                            .session_tabs
-                            .as_ref()
-                            .map(|tabs| policy::manifest_hash(tabs, None));
-                        let next_hash = policy::manifest_hash(&projected, None);
-                        roster_changed = previous_hash != Some(next_hash);
-                        self.tab_names = names;
-                        self.session_tabs = Some(projected);
-                    }
-                    self.mark_granted(now);
-                    if roster_changed {
-                        self.signal_change(now);
-                    }
                 }
                 Event::TabUpdate(tabs) => {
                     self.mark_granted(now);
@@ -351,7 +318,7 @@ mod shell {
             let Some(payload) = policy::published_topology_payload(
                 session_name,
                 now,
-                self.session_tabs.as_ref(),
+                Some(&self.tabs),
                 &self.foreground,
             ) else {
                 return;
@@ -382,9 +349,6 @@ mod shell {
                 PaneId::Plugin(id) => (true, *id),
             };
             policy::remove_pane_from_tabs(&mut self.tabs, is_plugin, id);
-            if let Some(session_tabs) = self.session_tabs.as_mut() {
-                policy::remove_pane_from_tabs(session_tabs, is_plugin, id);
-            }
             if !is_plugin {
                 self.foreground.remove(&id);
             }

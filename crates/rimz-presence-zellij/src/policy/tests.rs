@@ -239,70 +239,72 @@ fn topology_payload_flattens_projected_panes() {
 }
 
 #[test]
-fn topology_payload_waits_for_session_roster() {
+fn topology_payload_waits_for_live_roster() {
     assert_eq!(
         published_topology_payload("rimz-test", 42, None, &BTreeMap::new()),
         None,
-        "bootstrap pokes omit --topology until SessionUpdate supplies the full roster"
+        "bootstrap pokes omit --topology until PaneUpdate supplies a live roster"
     );
 }
 
 #[test]
-fn topology_payload_skips_empty_session_roster() {
+fn topology_payload_skips_empty_live_roster() {
     assert_eq!(
         published_topology_payload("rimz-test", 42, Some(&BTreeMap::new()), &BTreeMap::new()),
         None,
-        "an empty authoritative roster falls back to list-panes instead of publishing emptiness"
+        "an empty live roster falls back to list-panes instead of publishing emptiness"
     );
 }
 
 #[test]
-fn session_roster_payload_full_replacement_prunes_absent_tabs() {
+fn session_update_does_not_shrink_the_published_roster() {
+    let full_roster = tabs_by_index(vec![
+        (0, vec![pane_in_tab(10, 0)]),
+        (1, vec![pane_in_tab(20, 1)]),
+        (2, vec![pane_in_tab(30, 2)]),
+    ]);
+    let partial_manifest = tabs_by_index(vec![
+        (0, vec![pane_in_tab(10, 0)]),
+        (1, vec![pane_in_tab(20, 1)]),
+    ]);
+    let published_roster = merged_room(&full_roster, &partial_manifest);
+
+    let previous_payload =
+        published_topology_payload("rimz-test", 41, Some(&full_roster), &BTreeMap::new())
+            .expect("previous roster publishes");
+    let partial_payload =
+        published_topology_payload("rimz-test", 42, Some(&published_roster), &BTreeMap::new())
+            .expect("merged roster publishes");
+
+    assert_eq!(previous_payload.panes.len(), 3);
+    assert!(
+        partial_payload
+            .panes
+            .iter()
+            .any(|pane| pane.tab_position == 2),
+        "partial session-like manifests retain tabs already known through PaneUpdate"
+    );
+    assert_eq!(partial_payload.panes.len(), 3);
+}
+
+#[test]
+fn topology_payload_publishes_the_merged_detection_map() {
     let previous = tabs_by_index(vec![
         (0, vec![pane_in_tab(10, 0)]),
         (1, vec![pane_in_tab(20, 1)]),
         (2, vec![pane_in_tab(30, 2)]),
     ]);
-    let replacement = tabs_by_index(vec![
-        (0, vec![pane_in_tab(10, 0)]),
-        (1, vec![pane_in_tab(20, 1)]),
-    ]);
-
-    let previous_payload =
-        published_topology_payload("rimz-test", 41, Some(&previous), &BTreeMap::new())
-            .expect("previous roster publishes");
-    let replacement_payload =
-        published_topology_payload("rimz-test", 42, Some(&replacement), &BTreeMap::new())
-            .expect("replacement roster publishes");
-
-    assert_eq!(previous_payload.panes.len(), 3);
-    assert_eq!(replacement_payload.panes.len(), 2);
-    assert!(
-        !replacement_payload
-            .panes
-            .iter()
-            .any(|pane| pane.tab_position == 2),
-        "SessionUpdate full replacement drops a closed tab"
-    );
-}
-
-#[test]
-fn topology_payload_uses_session_roster_not_partial_detection_map() {
-    let session_roster = tabs_by_index(vec![
-        (0, vec![pane_in_tab(10, 0)]),
-        (1, vec![pane_in_tab(20, 1)]),
-        (2, vec![pane_in_tab(30, 2)]),
-    ]);
-    let first_partial_detection = merged_room(
-        &BTreeMap::new(),
-        &tabs_by_index(vec![(0, vec![pane_in_tab(10, 0)])]),
-    );
+    let mut resized = pane_in_tab(10, 0);
+    resized.pane_columns = Some(120);
+    let partial_detection = tabs_by_index(vec![(0, vec![resized.clone()])]);
+    let merged_detection = merged_room(&previous, &partial_detection);
 
     let payload =
-        published_topology_payload("rimz-test", 42, Some(&session_roster), &BTreeMap::new())
-            .expect("session roster publishes");
+        published_topology_payload("rimz-test", 42, Some(&merged_detection), &BTreeMap::new())
+            .expect("merged detection map publishes");
 
-    assert_eq!(first_partial_detection.len(), 1);
+    assert_eq!(partial_detection.len(), 1);
+    assert_eq!(payload.panes[0], resized);
     assert_eq!(
         payload
             .panes
@@ -310,6 +312,38 @@ fn topology_payload_uses_session_roster_not_partial_detection_map() {
             .map(|pane| pane.tab_position)
             .collect::<Vec<_>>(),
         vec![0, 1, 2],
+    );
+}
+
+#[test]
+fn partial_session_update_after_full_roster_keeps_every_tab_published() {
+    let live_roster = tabs_by_index(vec![
+        (0, vec![pane_in_tab(10, 0)]),
+        (1, vec![pane_in_tab(20, 1)]),
+        (2, vec![pane_in_tab(30, 2)]),
+        (3, vec![pane_in_tab(40, 3)]),
+    ]);
+    let partial_session_update = tabs_by_index(vec![
+        (0, vec![pane_in_tab(10, 0)]),
+        (1, vec![pane_in_tab(20, 1)]),
+    ]);
+
+    let payload = published_topology_payload("rimz-test", 42, Some(&live_roster), &BTreeMap::new())
+        .expect("live roster publishes");
+
+    assert_eq!(
+        partial_session_update.keys().copied().collect::<Vec<_>>(),
+        vec![0, 1],
+        "the modeled SessionUpdate omits later worktree tabs",
+    );
+    assert_eq!(
+        payload
+            .panes
+            .iter()
+            .map(|pane| pane.tab_position)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2, 3],
+        "publication follows the live PaneUpdate roster, not SessionUpdate"
     );
 }
 
@@ -343,16 +377,16 @@ fn topology_payload_carries_retained_foreground_without_replacing_spawn() {
 }
 
 #[test]
-fn foreground_overlay_reaches_session_roster_payload() {
+fn foreground_overlay_reaches_live_roster_payload() {
     let foreground = BTreeMap::from([(7, "codex".to_owned())]);
-    let session_roster = tabs(vec![PaneFields {
+    let live_roster = tabs(vec![PaneFields {
         id: 7,
         terminal_command: Some("zsh".to_owned()),
         ..pane(7)
     }]);
 
-    let payload = published_topology_payload("rimz-test", 42, Some(&session_roster), &foreground)
-        .expect("session roster publishes");
+    let payload = published_topology_payload("rimz-test", 42, Some(&live_roster), &foreground)
+        .expect("live roster publishes");
 
     assert_eq!(payload.panes[0].pane_command.as_deref(), Some("codex"));
     assert_eq!(payload.panes[0].terminal_command.as_deref(), Some("zsh"));
@@ -386,16 +420,16 @@ fn foreground_retention_survives_rebuild_and_clears_on_close() {
 }
 
 #[test]
-fn remove_pane_from_session_roster_prunes_empty_tab() {
-    let mut session_roster = tabs_by_index(vec![
+fn remove_pane_from_live_roster_prunes_empty_tab() {
+    let mut live_roster = tabs_by_index(vec![
         (0, vec![pane_in_tab(10, 0)]),
         (1, vec![pane_in_tab(20, 1)]),
     ]);
 
-    remove_pane_from_tabs(&mut session_roster, false, 20);
+    remove_pane_from_tabs(&mut live_roster, false, 20);
 
     assert_eq!(
-        session_roster.keys().copied().collect::<Vec<_>>(),
+        live_roster.keys().copied().collect::<Vec<_>>(),
         vec![0],
         "PaneClosed prunes the published roster immediately"
     );
