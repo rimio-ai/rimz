@@ -93,6 +93,17 @@ fn parse_comm(raw: &str) -> Option<String> {
 #[cfg(target_os = "linux")]
 fn read_proc(pid: u32) -> Option<ProcInfo> {
     let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let (ppid, real_uid) = parse_status_identity(&status)?;
+    Some(ProcInfo {
+        pid,
+        ppid,
+        real_uid,
+        cmdline: cmdline(pid)?,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn parse_status_identity(status: &str) -> Option<(u32, u32)> {
     let mut ppid = None;
     let mut real_uid = None;
     for line in status.lines() {
@@ -109,12 +120,7 @@ fn read_proc(pid: u32) -> Option<ProcInfo> {
             break;
         }
     }
-    Some(ProcInfo {
-        pid,
-        ppid: ppid?,
-        real_uid: real_uid?,
-        cmdline: cmdline(pid)?,
-    })
+    Some((ppid?, real_uid?))
 }
 
 /// The flattened command line of `pid` — `/proc/<pid>/cmdline`'s NUL-separated
@@ -135,6 +141,21 @@ pub fn cmdline(pid: u32) -> Option<String> {
 
 #[cfg(not(target_os = "linux"))]
 pub fn cmdline(_pid: u32) -> Option<String> {
+    None
+}
+
+/// The real uid of `pid` from `/proc/<pid>/status`. `cmdline`, `comm`, and
+/// `stat` are normally readable across uids; `cwd`/`environ` are not. This lets
+/// the sidebar distinguish an elevated descendant without crossing into that
+/// user's private environment or config.
+#[cfg(target_os = "linux")]
+pub fn real_uid(pid: u32) -> Option<u32> {
+    parse_status_identity(&std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?)
+        .map(|(_, uid)| uid)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn real_uid(_pid: u32) -> Option<u32> {
     None
 }
 
@@ -177,6 +198,21 @@ pub fn own_uid() -> Option<u32> {
 
 #[cfg(not(target_os = "linux"))]
 pub fn own_uid() -> Option<u32> {
+    None
+}
+
+/// Best-effort account name for a real uid. UI-only; a missing name falls back
+/// to a numeric uid at the row projection layer.
+#[cfg(unix)]
+pub fn user_name(uid: u32) -> Option<String> {
+    nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
+        .ok()
+        .flatten()
+        .map(|user| user.name)
+}
+
+#[cfg(not(unix))]
+pub fn user_name(_uid: u32) -> Option<String> {
     None
 }
 
@@ -395,6 +431,26 @@ mod tests {
         assert_eq!(parse_environ(blob, "ZELLIJ_PANE_ID"), None);
         // A bare key with no `=` never matches the `key=` prefix.
         assert_eq!(parse_environ(b"ZELLIJ_PANE_ID\0", "ZELLIJ_PANE_ID"), None);
+    }
+
+    #[test]
+    fn parse_status_identity_reads_ppid_and_real_uid() {
+        let status = "\
+Name:\tclaude
+State:\tS (sleeping)
+PPid:\t42
+Uid:\t0\t0\t0\t0
+";
+        assert_eq!(parse_status_identity(status), Some((42, 0)));
+    }
+
+    #[test]
+    fn parse_status_identity_rejects_missing_fields() {
+        assert_eq!(parse_status_identity("PPid:\t42\n"), None);
+        assert_eq!(
+            parse_status_identity("Uid:\t1000\t1000\t1000\t1000\n"),
+            None
+        );
     }
 
     #[test]

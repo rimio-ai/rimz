@@ -440,6 +440,51 @@ fn stamp_pane_process_starts_skips_non_agent_and_cwdless_panes() {
     );
 }
 
+#[test]
+fn annotate_elevated_agents_marks_only_wrapper_panes_with_a_pid() {
+    let mut frame = frame(vec![
+        pane("terminal_1", Some("sudo su"), Some("/repo")),
+        pane("terminal_2", Some("zsh"), Some("/repo")),
+        pane("terminal_3", Some("sudo su"), Some("/repo")),
+    ]);
+    let pane_ids: Vec<_> = frame
+        .pane_states()
+        .map(|pane| pane.pane_id.clone())
+        .collect();
+    for pane in frame.pane_states_mut() {
+        match pane.pane_id.raw() {
+            "terminal_1" => pane.current.pid = Some(100),
+            "terminal_2" => pane.current.pid = Some(200),
+            _ => {}
+        }
+    }
+
+    annotate_elevated_agents(&mut frame, &|pid| {
+        assert_eq!(pid, 100, "only the wrapper pane with a pid is scanned");
+        Some(crate::feed::ElevatedAgent {
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            uid: 0,
+        })
+    });
+
+    let by_id = |id: &crate::ids::PaneId| {
+        frame
+            .pane_states()
+            .find(|pane| pane.pane_id == *id)
+            .expect("pane present")
+    };
+    assert_eq!(
+        by_id(&pane_ids[0])
+            .current
+            .elevated_agent
+            .as_ref()
+            .map(|agent| (agent.kind.as_str(), agent.uid)),
+        Some(("claude", 0))
+    );
+    assert_eq!(by_id(&pane_ids[1]).current.elevated_agent, None);
+    assert_eq!(by_id(&pane_ids[2]).current.elevated_agent, None);
+}
+
 fn write_snapshot_cache(path: &Path, session: &str, produced_at_ms: u64) {
     let cache = crate::sidebar::frame::assemble_frame(Vec::new(), produced_at_ms, session);
     atomic::write_temp_then_rename(path, &cache).expect("write snapshot cache");

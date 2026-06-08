@@ -35,8 +35,8 @@ pub mod worktree;
 pub use crate::agents::{SpendTally, SpendWindow};
 pub use crate::bridge::{BridgeErr, BridgeOutcome, ExpectedFrame};
 pub use crate::feed::{
-    AbandonReason, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, ResolverStep,
-    ResolverStepState, RuntimeOwner, RuntimeOwnerKind, Surface,
+    AbandonReason, ElevatedAgent, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod,
+    ResolverStep, ResolverStepState, RuntimeOwner, RuntimeOwnerKind, Surface,
 };
 pub use crate::ids::{
     EventId, MuxName, PaneId, RequestId, ResolverId, SidebarInstanceId, ViewKind, WorkspaceId,

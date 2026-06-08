@@ -32,10 +32,14 @@ pub(crate) fn pane_worktree_path(pane: &PaneRef) -> Option<&str> {
 
 pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
     let command = display_command(pane);
-    let program = command
-        .map(program_label)
+    let elevated = pane.elevated_agent.as_ref();
+    let program = elevated
+        .map(|agent| agent.kind.as_str().to_owned())
+        .or_else(|| command.map(program_label))
         .unwrap_or_else(|| "process".to_owned());
-    let state = if command.is_some_and(process_is_active) {
+    let state = if elevated.is_some() {
+        ProcessState::Idle
+    } else if command.is_some_and(process_is_active) {
         ProcessState::Busy
     } else {
         ProcessState::Idle
@@ -44,7 +48,9 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
     // process), so the line stays put as commands come and go while the live
     // command rides the second line. An idle pane keeps its foreground program as
     // its one label. Where `/proc` can't name the shell, fall back to the program.
-    let name = if state.is_busy() {
+    let name = if elevated.is_some() {
+        program.clone()
+    } else if state.is_busy() {
         pane.pane_pid
             .and_then(crate::proc::comm)
             .unwrap_or_else(|| program.clone())
@@ -54,10 +60,11 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
     // The full command earns a second line only when it adds something past the
     // primary label — an active pane whose command isn't already its whole name.
     let command_detail = command
-        .filter(|_| state.is_busy())
+        .filter(|_| state.is_busy() || elevated.is_some())
         .map(ToOwned::to_owned)
         .filter(|full| *full != name);
     let worktree_path = pane_worktree_path(pane).map(ToOwned::to_owned);
+    let foreign_user = elevated.map(|agent| uid_marker(agent.uid));
     SidebarRow {
         id: pane.pane_id.to_string(),
         name,
@@ -68,6 +75,7 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
         card: RowCard::Process(ProcessCard {
             state,
             command_detail,
+            foreign_user,
             rss_kb: None,
             cpu_pct: None,
             io_bps: None,
@@ -91,6 +99,12 @@ fn display_command(pane: &PaneRef) -> Option<&str> {
                 .as_deref()
                 .filter(|command| !command.is_empty())
         })
+}
+
+fn uid_marker(uid: u32) -> String {
+    crate::proc::user_name(uid)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| format!("#{uid}"))
 }
 
 /// Whether a `process` pane is doing genuine work — worth the running spinner —
@@ -200,20 +214,42 @@ pub(crate) fn rimz_exec_worktree_path(command: &str) -> Option<&str> {
 /// install whose argument is a package, not a program being run). Falls back to
 /// the whole command when nothing names a program (a bare `sudo`).
 fn effective_program(command: &str) -> &str {
+    effective_program_info(command).program
+}
+
+#[derive(Clone, Copy)]
+struct EffectiveProgram<'a> {
+    program: &'a str,
+    from_launcher: bool,
+}
+
+fn effective_program_info(command: &str) -> EffectiveProgram<'_> {
     let Some((program, mut tokens)) = effective_program_and_args(command) else {
-        return command;
+        return EffectiveProgram {
+            program: command,
+            from_launcher: false,
+        };
     };
     if let Some(kind) = rimz_exec_kind(program, tokens.clone()) {
-        return kind;
+        return EffectiveProgram {
+            program: kind,
+            from_launcher: false,
+        };
     }
     // A JS launcher runs the script named by its first non-flag argument, so the
     // agent is that script (`node /usr/bin/codex` → codex), not the launcher.
     if LAUNCHERS.contains(&basename(program))
         && let Some(script) = tokens.find(|token| !token.starts_with('-'))
     {
-        return script;
+        return EffectiveProgram {
+            program: script,
+            from_launcher: true,
+        };
     }
-    program
+    EffectiveProgram {
+        program,
+        from_launcher: false,
+    }
 }
 
 /// Single-letter `sudo` options that consume the following token as their value,
@@ -230,8 +266,45 @@ const LAUNCHERS: &[&str] = &["node", "nodejs", "npx"];
 /// install target, so `sudo npm install -g @openai/codex` is an npm process while
 /// `codex`, `sudo codex`, and `node /usr/bin/codex` are codex.
 pub fn command_agent_kind(command: &str) -> Option<&'static str> {
-    let program = program_label(command);
-    crate::agents::known_kinds().find(|agent| program == *agent)
+    command_agent_kind_with_comm(command, None)
+}
+
+pub(crate) fn command_agent_kind_with_comm(
+    command: &str,
+    comm: Option<&str>,
+) -> Option<&'static str> {
+    let program = effective_program_info(command);
+    command_agent_kind_from_program(program).or_else(|| comm.and_then(command_agent_kind_from_comm))
+}
+
+fn command_agent_kind_from_program(program: EffectiveProgram<'_>) -> Option<&'static str> {
+    let label = basename(program.program);
+    crate::agents::known_kinds().find(|kind| {
+        label == *kind
+            || (program.from_launcher && agent_script_path_names_kind(program.program, kind))
+    })
+}
+
+fn command_agent_kind_from_comm(comm: &str) -> Option<&'static str> {
+    let comm = basename(comm.trim());
+    let mut matches = crate::agents::known_kinds().filter(|kind| {
+        crate::agents::descriptor_by_kind(kind).is_some_and(|descriptor| {
+            descriptor.process_names.contains(&comm)
+                // Launchers are precise only when their cmdline names the agent script.
+                && (comm == descriptor.kind || !LAUNCHERS.contains(&comm))
+        })
+    });
+    let kind = matches.next()?;
+    matches.next().is_none().then_some(kind)
+}
+
+fn agent_script_path_names_kind(script: &str, kind: &str) -> bool {
+    std::path::Path::new(script).components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|part| part == kind || part.strip_suffix("-code") == Some(kind))
+    })
 }
 
 #[cfg(test)]
@@ -296,8 +369,27 @@ mod tests {
             command_agent_kind("sudo node /usr/bin/codex"),
             Some("codex")
         );
+        assert_eq!(
+            command_agent_kind("node /opt/claude/cli.js"),
+            Some("claude")
+        );
+        assert_eq!(
+            command_agent_kind("sudo node /opt/node_modules/@anthropic-ai/claude-code/cli.js"),
+            Some("claude")
+        );
+        assert_eq!(command_agent_kind("node /tmp/claude-test/cli.js"), None);
         // A path-qualified program resolves to its basename.
         assert_eq!(program_label("/usr/bin/cargo build"), "cargo");
+    }
+
+    #[test]
+    fn classifier_can_use_precise_proc_comm_as_a_fallback() {
+        assert_eq!(
+            command_agent_kind_with_comm("", Some("claude")),
+            Some("claude")
+        );
+        assert_eq!(command_agent_kind_with_comm("node", Some("node")), None);
+        assert_eq!(command_agent_kind_with_comm("zsh", Some("zsh")), None);
     }
 
     #[test]
@@ -388,5 +480,34 @@ mod tests {
             Timestamp::now(),
         );
         assert_eq!(spawn_only.name, "codex");
+    }
+
+    #[test]
+    fn elevated_agent_marker_relabels_only_the_process_row() {
+        let mut pane = pane("%4", "sudo su", "/repo");
+        pane.elevated_agent = Some(crate::feed::ElevatedAgent {
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            uid: 0,
+        });
+
+        let row = row_from_process(&pane, Timestamp::now());
+
+        assert!(row.is_process());
+        assert_eq!(row.name, "claude");
+        assert_eq!(row.process_state(), Some(ProcessState::Idle));
+        let process = row.as_process().expect("process card");
+        assert!(
+            process
+                .foreign_user
+                .as_deref()
+                .is_some_and(|marker| marker == "root" || marker == "#0"),
+            "root should render by name when the platform can resolve it: {process:?}",
+        );
+        assert_eq!(process.command_detail.as_deref(), Some("sudo su"));
+        assert_eq!(
+            row.pane.as_ref().and_then(|pane| pane.command.as_deref()),
+            Some("sudo su"),
+            "the relabel never rewrites pane.command"
+        );
     }
 }

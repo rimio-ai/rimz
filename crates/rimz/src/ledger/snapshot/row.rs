@@ -276,6 +276,8 @@ pub struct ProcessCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreign_user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rss_kb: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_pct: Option<u16>,
@@ -389,6 +391,7 @@ mod tests {
             card: RowCard::Process(ProcessCard {
                 state: ProcessState::Stuck,
                 command_detail: Some("cargo build --release".to_owned()),
+                foreign_user: None,
                 rss_kb: Some(512 * 1_024),
                 cpu_pct: Some(42),
                 io_bps: Some(1_024),

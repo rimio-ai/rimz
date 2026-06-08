@@ -121,9 +121,9 @@ fn agent_owner_pid(agent: &AgentState) -> Option<u32> {
 /// treated as an unknown raced read and keeps the stamped row. When a stale
 /// rollup holds more than one claimant for a pane id (a relaunch the reaper has
 /// not yet collapsed), the most-recently-active wins, keeping the bind
-/// deterministic. The one relaxation — a lazy-registering agent whose session
-/// arrives unstamped (Codex) — lives in the separate, tightly-scoped
-/// `lazy_agent_for_pane`, never here.
+/// deterministic. The one relaxation — an agent whose stamp was cleared by a
+/// mux rebirth while its process kept running — lives in the separate,
+/// tightly-scoped `agent_pane_for_pane`, never here.
 pub(super) fn agent_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
@@ -163,44 +163,42 @@ fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: 
     }
 }
 
-/// What a live pane running a lazy-registering agent resolves to. Such an agent
-/// ([`crate::agents::Capabilities::registers_lazily`]) can be present without a stamped
-/// session — it registers lazily and/or routes hooks through a daemon — so it
-/// can't bind through `agent_for_pane` (stamped-id only); this is where its pane
-/// resolves instead. Codex is the only such agent today.
-pub(super) enum LazyAgentRow<'a> {
+/// What a live pane running an agent command resolves to when no stamped agent
+/// claimed its pane id.
+pub(super) enum AgentPaneRow<'a> {
     /// An unstamped session bound to this pane by exact worktree cwd (most-
     /// recently-active wins; the reaper collapses a stale one). Rendered through the
     /// shared `push_agent_row`, so it reads identically to a stamped agent — its
     /// real status, model, and pending ask.
     Agent(&'a AgentState),
-    /// A wired instance with no session bound yet — a lazy agent registers its
-    /// session on the first turn, so the pane has no rollup entry. Synthesize an
-    /// idle row so it reads as a proper idle *agent* at rest — `○ <kind>` with its
-    /// started-session gauge and a cockpit tally — instead of a bare, dim process
-    /// row. The first turn then swaps in the real bound `Agent` row. Boxed so the
-    /// rare synthesized row doesn't bloat the common `Agent` (a thin reference).
+    /// A wired lazy-registering instance with no session bound yet. Synthesize
+    /// an idle row so it reads as a proper idle *agent* at rest — `○ <kind>`
+    /// with its started-session gauge and a cockpit tally — instead of a bare,
+    /// dim process row. The first turn then swaps in the real bound `Agent` row.
+    /// Boxed so the rare synthesized row doesn't bloat the common `Agent` (a
+    /// thin reference).
     Idle(Box<SidebarRow>),
 }
 
-/// Resolve a live pane running a lazy-registering agent ([`LazyAgentRow`]) to its
+/// Resolve a live pane running a known agent command ([`AgentPaneRow`]) to its
 /// row — the relaxation of stamped-id binding, kept tightly scoped here:
-/// - the pane's own command must read a lazy agent kind, so a shell or a `git` the
-///   session spawned in the worktree never binds, and a non-lazy agent (Claude)
-///   returns `None` and falls through to a process row — a pane-less Claude agent
-///   is genuinely gone, since Claude always stamps a live pane;
+/// - the pane's own command must read an agent kind, so a shell or a `git` the
+///   session spawned in the worktree never binds;
 /// - a pane-less session of that kind whose worktree equals the pane's worktree
 ///   path *exactly* (not containment, so a parent checkout never captures a
-///   nested worktree's pane) binds as the real `Agent`;
-/// - failing that, when the kind is wired (`wired_lazy_kinds`) a pane with no
-///   session yet synthesizes an `Idle` row; an *unwired* agent reports no status,
-///   so it stays a process row (agents are invisible until their hooks are wired).
+///   nested worktree's pane) binds as the real `Agent`. This covers lazy
+///   sessions and non-lazy sessions whose pane stamp was cleared by a mux
+///   rebirth while the process kept running;
+/// - failing that, when the kind registers lazily and is wired
+///   (`wired_lazy_kinds`) a pane with no session yet synthesizes an `Idle` row;
+///   an *unwired* lazy agent reports no status, and a non-lazy agent with no
+///   session stays a process row.
 ///
-/// `None` for a non-agent pane, a non-lazy agent, no worktree path, or an
-/// unwired lazy agent with no session. Broker / remote-control / `rimzd` host
-/// panes carry an agent name in their command but are dropped upstream by
-/// `with_live_panes`, so they never reach here.
-pub(super) fn lazy_agent_for_pane<'a>(
+/// `None` for a non-agent pane, a foreign-user elevated agent marker, no
+/// worktree path, or no eligible session / idle synthesis. Broker /
+/// remote-control / `rimzd` host panes carry an agent name in their command but
+/// are dropped upstream by `with_live_panes`, so they never reach here.
+pub(super) fn agent_pane_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
     pairings: &LazyAgentPairingResult,
@@ -208,8 +206,8 @@ pub(super) fn lazy_agent_for_pane<'a>(
     wired_lazy_kinds: &[String],
     lazy_agent_default_models: &BTreeMap<String, String>,
     now: Timestamp,
-) -> Option<LazyAgentRow<'a>> {
-    let (kind, descriptor, cwd) = lazy_agent_pane_identity(pane)?;
+) -> Option<AgentPaneRow<'a>> {
+    let (kind, descriptor, cwd) = agent_pane_identity(pane)?;
     if let Some(agent) = pairings
         .pairings
         .get(&pane.pane_id)
@@ -220,10 +218,13 @@ pub(super) fn lazy_agent_for_pane<'a>(
                 && agent.worktree_path.as_deref() == Some(cwd)
         })
     {
-        return Some(LazyAgentRow::Agent(agent));
+        return Some(AgentPaneRow::Agent(agent));
+    }
+    if !descriptor.capabilities.registers_lazily {
+        return None;
     }
     wired_lazy_kinds.iter().any(|wired| wired == kind).then(|| {
-        LazyAgentRow::Idle(Box::new(idle_agent_row(
+        AgentPaneRow::Idle(Box::new(idle_agent_row(
             pane,
             descriptor,
             cwd,
@@ -294,7 +295,7 @@ pub(crate) fn compute_lazy_agent_pairings(
             live_stamped_agents.insert((agent.kind.clone(), agent.agent_id.clone()));
             continue;
         }
-        let Some((kind, _, cwd)) = lazy_agent_pane_identity(pane) else {
+        let Some((kind, _, cwd)) = agent_pane_identity(pane) else {
             continue;
         };
         candidates.push(LazyPaneCandidate { pane, kind, cwd });
@@ -436,35 +437,37 @@ fn lazy_pairing_diagnostic(
     }
 }
 
-/// The common live-pane identity for lazy-registering agents: foreground command
-/// names a lazy agent kind and the pane has a non-empty worktree path from the
-/// mux cwd or Rimz's supervised-wrapper manifest. Session binding stays outside
-/// this helper because only the verified pull path has the rollup and bound-set
-/// context needed to attach a pane-less session.
-fn lazy_agent_pane_identity(
-    pane: &PaneRef,
-) -> Option<(&'static str, &'static AgentDescriptor, &str)> {
-    let kind = pane_agent_kind(pane)?;
-    let descriptor = crate::agents::descriptor_by_kind(kind)?;
-    if !descriptor.capabilities.registers_lazily {
+/// The common live-pane identity for agent commands: foreground command names a
+/// known agent kind, the pane is not marked as a foreign-user elevated agent,
+/// and the pane has a non-empty worktree path from the mux cwd or Rimz's
+/// supervised-wrapper manifest. Session binding stays outside this helper
+/// because only the verified pull path has the rollup and bound-set context
+/// needed to attach a pane-less session.
+fn agent_pane_identity(pane: &PaneRef) -> Option<(&'static str, &'static AgentDescriptor, &str)> {
+    if pane.elevated_agent.is_some() {
         return None;
     }
+    let kind = pane_agent_kind(pane)?;
+    let descriptor = crate::agents::descriptor_by_kind(kind)?;
     let worktree_path = pane_worktree_path(pane)?;
     Some((kind, descriptor, worktree_path))
 }
 
-/// Defensive guard for lazy-registering binds: when the pane's process start is
-/// known, a session whose `last_activity` predates that start belongs to an older
-/// instance, not the process now in the pane — so it must not bind. A daemon-mode
-/// Codex session records the shared app-server daemon's pid, so process liveness
-/// alone cannot tell a stale session from the live one; this keeps that residue
-/// off a freshly-started pane even when a mux rebirth reuses the old pane id. The
-/// producer supplies the start from `/proc` for backends that report none
-/// natively (Zellij; see [`crate::remote_control::in_pane_agent_start`]), so the
-/// guard fires on both backends. Only a pane with no readable in-pane agent start
-/// — another user's, or an unrecoverable raced read — still reaches the resume
-/// and deterministic same-cwd pairing rungs. Hook ingestion shares this
-/// predicate to decide when a prior session's stamp still plausibly owns a pane
+/// Defensive guard for read-time binds: when the pane's process start is known,
+/// a session whose `last_activity` predates that start belongs to an older
+/// instance, not the process now in the pane — so it must not bind. A
+/// daemon-mode Codex session records the shared app-server daemon's pid, so
+/// process liveness alone cannot tell a stale session from the live one; this
+/// keeps that residue off a freshly-started pane even when a mux rebirth reuses
+/// the old pane id. The same guard protects non-lazy rebirth recovery: a
+/// paneless Claude row binds a live Claude pane only when the session is at
+/// least as fresh as that pane process. The producer supplies the start from
+/// `/proc` for backends that report none natively (Zellij; see
+/// [`crate::remote_control::in_pane_agent_start`]), so the guard fires on both
+/// backends. Only a pane with no readable in-pane agent start — another user's,
+/// or an unrecoverable raced read — still reaches the resume and deterministic
+/// same-cwd pairing rungs. Hook ingestion shares this predicate to decide when a
+/// prior session's stamp still plausibly owns a pane
 /// (`cli::hooks` focus recovery), so the bind and recovery verdicts can't drift.
 pub fn pane_start_allows_bind(last_activity: Timestamp, pane: &PaneRef) -> bool {
     pane.pane_process_start
@@ -523,17 +526,18 @@ fn idle_agent_row(
 }
 
 /// Project a realtime command overlay for an already frame-admitted pane. This
-/// uses the same lazy-agent identity gate as the verified pull path, but only
-/// synthesizes the unbound idle row; it never binds a pane-less session because
-/// command events do not carry the rollup and bound-set context required for a
-/// session attachment.
+/// uses the same agent-pane identity gate as the verified pull path, but only
+/// synthesizes the unbound idle row for lazy-registering agents; it never binds
+/// a pane-less session because command events do not carry the rollup and
+/// bound-set context required for a session attachment.
 pub(crate) fn row_from_frame_pane(
     pane: &PaneRef,
     wired_lazy_kinds: &[String],
     lazy_agent_default_models: &BTreeMap<String, String>,
     now: Timestamp,
 ) -> Option<SidebarRow> {
-    if let Some((kind, descriptor, worktree_path)) = lazy_agent_pane_identity(pane)
+    if let Some((kind, descriptor, worktree_path)) = agent_pane_identity(pane)
+        && descriptor.capabilities.registers_lazily
         && wired_lazy_kinds.iter().any(|wired| wired == kind)
     {
         return Some(idle_agent_row(
@@ -591,6 +595,7 @@ mod tests {
             pane_pid: None,
             pane_process_start: None,
             resumed_session_id: None,
+            elevated_agent: None,
         }
     }
 

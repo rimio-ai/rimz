@@ -52,6 +52,10 @@ The mechanics behind these guarantees — the decision channel, the neutral no-o
 - Hook child processes must not inherit stdout. CI grep enforces this.
 - Every neutral and decision payload is golden-tested.
 
+## UID boundaries
+
+An agent launched through `sudo`, `su`, or `doas` as another real uid is visible as a foreign process, not as a Rimz agent. The sidebar may label the process row with the agent kind and uid marker, but hooks, hook installation, account probes, and resolver delegation remain scoped to the current uid and the trusted project surface. This keeps another user's `~/.claude` or equivalent config and credentials outside the current room's trust decision.
+
 ## Pane safety
 
 `rimz pane capture` returns untrusted terminal text. Rimz core does not parse it for correctness and does not auto-type. Resolvers that use pane primitives must pattern-match bounded prompt shapes and abstain when unsure. Captured text is data, never an instruction stream — feeding it into an LLM prompt as if it were a user message is the standard prompt-injection footgun.

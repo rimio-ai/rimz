@@ -2113,17 +2113,90 @@ fn paneless_codex_does_not_bind_a_non_codex_pane() {
 }
 
 #[test]
-fn paneless_claude_agent_is_never_rescued_by_cwd() {
-    // Only Codex is daemon-backed and pane-less by construction. A pane-less
-    // Claude agent is genuinely gone (Claude always stamps a live pane), so
-    // the fallback must leave a matching `claude` pane a process row.
+fn paneless_claude_agent_recovers_by_exact_cwd_after_rebirth() {
+    // A session.rebirth clears pane stamps even while the pane's Claude process
+    // keeps running. The read-time cwd bind recovers that live non-lazy session
+    // before the next hook re-stamps the pane.
     let claude = agent("claude", "sess-1", AgentStatus::Running, 1_000).worktree("/repo/main");
     let snapshot = room(Vec::new(), vec![claude])
         .with_live_panes(vec![pane("term1", "claude", "/repo/main")], None);
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
+    assert!(rows[0].is_agent());
+    assert_eq!(rows[0].id, "sess-1");
+    assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "term1");
+}
+
+#[test]
+fn paneless_claude_predating_pane_start_does_not_bind() {
+    let stale = agent("claude", "sess-old", AgentStatus::Running, 1_000)
+        .worktree("/repo/main")
+        .active_ago(60);
+    let fresh_pane = PaneRef {
+        pane_process_start: Some(epoch()),
+        elevated_agent: None,
+        ..pane("term1", "claude", "/repo/main")
+    };
+    let snapshot = room(Vec::new(), vec![stale]).with_live_panes(vec![fresh_pane], None);
+
+    let rows = &snapshot.worktree_groups[0].rows;
+    assert_eq!(rows.len(), 1);
     assert!(rows[0].is_process());
+    assert_eq!(rows[0].name, "claude");
+}
+
+#[test]
+fn paneless_claude_does_not_bind_a_bare_node_pane() {
+    // A bare node process is ambiguous; only a command that classifies as
+    // Claude can recover the paneless session.
+    let claude = agent("claude", "sess-1", AgentStatus::Running, 1_000).worktree("/repo/main");
+    let snapshot = room(Vec::new(), vec![claude])
+        .with_live_panes(vec![pane("term1", "node", "/repo/main")], None);
+
+    let rows = &snapshot.worktree_groups[0].rows;
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].is_process());
+    assert_eq!(rows[0].name, "node");
+}
+
+#[test]
+fn stamped_claude_wins_over_paneless_cwd_recovery() {
+    let paneless = agent("claude", "paneless", AgentStatus::Running, 1_000).worktree("/repo/main");
+    let stamped = agent("claude", "stamped", AgentStatus::Idle, 2_000)
+        .worktree("/repo/main")
+        .in_pane("term1");
+    let snapshot = room(Vec::new(), vec![paneless, stamped])
+        .with_live_panes(vec![pane("term1", "claude", "/repo/main")], None);
+
+    let rows = &snapshot.worktree_groups[0].rows;
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].is_agent());
+    assert_eq!(rows[0].id, "stamped");
+}
+
+#[test]
+fn elevated_foreign_claude_marker_blocks_cwd_recovery() {
+    let claude = agent("claude", "sess-1", AgentStatus::Running, 1_000).worktree("/repo/main");
+    let mut pane = pane("term1", "sudo claude", "/repo/main");
+    pane.elevated_agent = Some(crate::feed::ElevatedAgent {
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        uid: 0,
+    });
+    let snapshot = room(Vec::new(), vec![claude]).with_live_panes(vec![pane], None);
+
+    let rows = &snapshot.worktree_groups[0].rows;
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].is_process());
+    assert_eq!(rows[0].name, "claude");
+    assert!(
+        rows[0]
+            .as_process()
+            .and_then(|process| process.foreign_user.as_deref())
+            .is_some(),
+        "foreign-user marker stays on the process card"
+    );
+    assert!(snapshot.worktree_groups[0].status_counts.is_empty());
 }
 
 #[test]
@@ -2191,6 +2264,7 @@ fn paneless_codex_predating_pane_start_does_not_bind() {
     let stale = paneless_codex("sess-old", "/repo/main", 1_000).active_ago(60);
     let fresh_pane = PaneRef {
         pane_process_start: Some(epoch()),
+        elevated_agent: None,
         ..pane("term1", "codex", "/repo/main")
     };
     let snapshot = room(Vec::new(), vec![stale]).with_live_panes(vec![fresh_pane], None);
@@ -2210,6 +2284,7 @@ fn paneless_codex_active_after_pane_start_binds() {
     let live = paneless_codex("sess-1", "/repo/main", 1_000).active_ago(-5);
     let started_pane = PaneRef {
         pane_process_start: Some(epoch()),
+        elevated_agent: None,
         ..pane("term1", "codex", "/repo/main")
     };
     let snapshot = room(Vec::new(), vec![live]).with_live_panes(vec![started_pane], None);
@@ -2332,6 +2407,7 @@ fn fresh_codex_pane_with_proc_start_shows_idle_not_ghost() {
     snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
     let fresh_pane = PaneRef {
         pane_process_start: Some(epoch()),
+        elevated_agent: None,
         ..pane("term1", "codex", "/repo/main")
     };
     let snapshot = snapshot.with_live_panes(vec![fresh_pane], None);
@@ -2378,6 +2454,7 @@ fn stale_stamped_codex_predating_reused_pane_start_shows_idle_in_live_worktree()
     snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
     let fresh_pane = PaneRef {
         pane_process_start: Some(epoch()),
+        elevated_agent: None,
         ..pane("term1", "codex", "/repo/hook-trace")
     };
 

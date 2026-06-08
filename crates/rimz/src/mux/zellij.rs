@@ -1086,6 +1086,7 @@ impl MuxBackend for ZellijBackend {
                     spawn_command: p.spawn_command().map(str::to_owned),
                     cwd: p.reported_cwd().map(str::to_owned),
                     resumed_session_id: None,
+                    elevated_agent: None,
                     // Zellij's `list-panes -j` exposes no per-pane "tab is active"
                     // or "session attached" signal, so pane visibility is unknown
                     // here. `None` makes the renderer's visibility gate fall back

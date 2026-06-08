@@ -269,12 +269,14 @@ pub(super) fn pane(raw: &str, command: &str, cwd: &str) -> PaneRef {
         pane_pid: None,
         pane_process_start: None,
         resumed_session_id: None,
+        elevated_agent: None,
     }
 }
 
 pub(super) fn pane_started(raw: &str, cwd: &str, start: Timestamp) -> PaneRef {
     PaneRef {
         pane_process_start: Some(start),
+        elevated_agent: None,
         ..pane(raw, "claude", cwd)
     }
 }

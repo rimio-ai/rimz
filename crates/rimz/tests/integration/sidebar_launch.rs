@@ -196,6 +196,7 @@ impl MuxBackend for FakeBackend {
             pane_pid: None,
             pane_process_start: None,
             resumed_session_id: None,
+            elevated_agent: None,
         }])
     }
 

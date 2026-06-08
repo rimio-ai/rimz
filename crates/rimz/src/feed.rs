@@ -61,6 +61,16 @@ impl RuntimeOwner {
     }
 }
 
+/// A pane-local process hint for an agent CLI running under another real uid.
+/// This is display metadata only: it never mutates [`PaneRef::command`], so
+/// agent binding and idle synthesis continue to read only mux-reported process
+/// identity.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ElevatedAgent {
+    pub kind: AgentKind,
+    pub uid: u32,
+}
+
 /// Which UI is responsible for collecting the answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -343,6 +353,11 @@ pub struct PaneRef {
     /// cwd or process-start heuristic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed_session_id: Option<AgentSessionId>,
+    /// Best-effort marker for an agent descendant running through an elevation
+    /// wrapper as another real uid. It stays separate from `command` so the row
+    /// can be relabelled without ever binding as a local agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elevated_agent: Option<ElevatedAgent>,
 }
 
 impl PaneRef {
@@ -363,6 +378,7 @@ impl PaneRef {
             pane_pid: None,
             pane_process_start: None,
             resumed_session_id: None,
+            elevated_agent: None,
         }
     }
 }

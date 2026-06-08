@@ -127,6 +127,7 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
             pane_id,
             session_name,
             pane_process_start,
+            ..
         } => {
             let pane = PaneId::parse(&pane_id)?;
             if let Some(expected_start) = pane_process_start.as_deref() {

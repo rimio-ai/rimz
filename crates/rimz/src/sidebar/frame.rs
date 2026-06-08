@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::feed::PaneRef;
+use crate::feed::{ElevatedAgent, PaneRef};
 use crate::ids::{AgentSessionId, MuxName, PaneId, ViewId, ViewKind};
 use crate::ledger::snapshot::SidebarOwnView;
 
@@ -60,6 +60,8 @@ pub struct PaneProcess {
     pub started_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed_session_id: Option<AgentSessionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elevated_agent: Option<ElevatedAgent>,
 }
 
 /// Producer-sampled resource figures for one pane's foreground process —
@@ -139,6 +141,7 @@ impl PaneFrame {
             pane_pid: pane.current.pid,
             pane_process_start: pane.current.started_at,
             resumed_session_id: pane.current.resumed_session_id.clone(),
+            elevated_agent: pane.current.elevated_agent.clone(),
         }
     }
 }
@@ -191,6 +194,9 @@ impl PaneState {
         }
         if self.current.resumed_session_id.is_none() {
             self.current.resumed_session_id = prior.current.resumed_session_id.clone();
+        }
+        if self.current.pid.is_some() && self.current.elevated_agent.is_none() {
+            self.current.elevated_agent = prior.current.elevated_agent.clone();
         }
     }
 }
@@ -289,6 +295,7 @@ pub fn assemble_frame(
                 cwd: pane.cwd,
                 started_at: pane.pane_process_start,
                 resumed_session_id,
+                elevated_agent: pane.elevated_agent,
             },
             previous: None,
             children: Vec::new(),
@@ -335,6 +342,7 @@ mod tests {
             pane_pid: None,
             pane_process_start: None,
             resumed_session_id: None,
+            elevated_agent: None,
         }
     }
 
@@ -418,6 +426,7 @@ mod tests {
             cwd: Some("/repo/main".to_owned()),
             started_at: None,
             resumed_session_id: None,
+            elevated_agent: None,
         });
         let mut fresh = assemble_frame(
             vec![PaneRef {

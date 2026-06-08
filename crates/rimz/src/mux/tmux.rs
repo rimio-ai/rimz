@@ -1011,6 +1011,7 @@ fn parse_pane_line(line: &str) -> Option<PaneRef> {
         // (`sidebar::produce::panes::stamp_pane_process_starts`).
         pane_process_start: None,
         resumed_session_id: None,
+        elevated_agent: None,
     })
 }
 
@@ -1164,6 +1165,7 @@ mod tests {
             pane_pid: None,
             pane_process_start: None,
             resumed_session_id: None,
+            elevated_agent: None,
         }
     }
 

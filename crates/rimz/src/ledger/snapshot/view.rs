@@ -11,9 +11,9 @@ use tracing::{debug, warn};
 
 use super::fold::agent_rollup_with_carryover;
 use super::panes::{
-    LazyAgentPairingResult, LazyAgentRow, SidebarOwnView, agent_for_pane,
-    compute_lazy_agent_pairings, is_daemon_mode_codex, lazy_agent_for_pane, pane_admits_card,
-    pane_start_matches, row_from_frame_pane,
+    AgentPaneRow, LazyAgentPairingResult, SidebarOwnView, agent_for_pane, agent_pane_for_pane,
+    compute_lazy_agent_pairings, is_daemon_mode_codex, pane_admits_card, pane_start_matches,
+    row_from_frame_pane,
 };
 use super::process::{pane_command_is_known, row_from_process};
 use super::row::{AgentCard, RowCard, SidebarResolverState, SidebarRow, SidebarSubAgent};
@@ -78,14 +78,16 @@ pub struct SidebarSnapshot {
     pub agent_hooks_ready: bool,
     /// The lazy-registering agent kinds whose Rimz hooks are wired
     /// ([`crate::agents::Capabilities::registers_lazily`] ∩ installed). Gates the
-    /// idle-instance synthesis in `rows_from_panes`: a launched-but-unbound pane of
-    /// such an agent has no ledger session yet (it registers lazily on the first
-    /// turn), and only a wired agent can ever report status, so only a wired lazy
-    /// agent's bare pane is promoted from a process row to an idle agent. Codex is
-    /// the only such agent today. Environment, not ledger — the pure reducer leaves
-    /// it empty; the `rimz sidebar snapshot` CLI and consumer enrichment fill it
-    /// before folding live panes. The placeholder/persisted snapshot keeps it empty
-    /// (a process row).
+    /// idle-instance synthesis in `rows_from_panes`: a launched-but-unbound pane
+    /// of such an agent has no ledger session yet (it registers lazily on the
+    /// first turn), and only a wired agent can ever report status, so only a
+    /// wired lazy agent's bare pane is promoted from a process row to an idle
+    /// agent. Cwd binding for an existing paneless session is separate and can
+    /// also recover a non-lazy agent after a mux rebirth clears pane stamps.
+    /// Codex is the only lazy-registering agent today. Environment, not ledger
+    /// — the pure reducer leaves it empty; the `rimz sidebar snapshot` CLI and
+    /// consumer enrichment fill it before folding live panes. The
+    /// placeholder/persisted snapshot keeps it empty (a process row).
     #[serde(default)]
     pub wired_lazy_kinds: Vec<String>,
     /// Per-kind launch model defaults for idle synthesized lazy-agent rows,
@@ -509,9 +511,9 @@ impl SidebarSnapshot {
     /// holds in memory. A daemon-backed session records the shared daemon's pid,
     /// not its own CLI's, so process liveness — which keeps it while the daemon
     /// lives ([`drop_dead_agents_with`]) — can never reap it. Without this a closed
-    /// remote-control conversation lingers as a ghost and binds its stale status,
-    /// model, tokens, and pending ask onto a live `codex` pane by cwd
-    /// ([`lazy_agent_for_pane`]).
+    /// remote-control conversation lingers as a ghost and binds its stale
+    /// status, model, tokens, and pending ask onto a live `codex` pane by cwd
+    /// ([`agent_pane_for_pane`]).
     ///
     /// Tri-state, and fail-safe by construction (the loaded-thread set is a
     /// liveness improvement, not a perfect pane signal, so it never mass-reaps):
@@ -1204,15 +1206,16 @@ fn agent_hook_session_stale(item: &FeedItem, agents: &[AgentState]) -> bool {
 /// agent, renders as a plain process row. Agents with no live pane (ghosts,
 /// sub-agents, a relaunch the reaper has not yet collapsed) do not render, so a
 /// dead session can never resurrect a row or latch onto a stranger's pane. The
-/// one exception is a pane-less lazy-registering agent (Codex) whose session
-/// arrives unstamped from the app-server daemon: it binds the live agent pane in
-/// its own worktree (`lazy_agent_for_pane`), and a wired such pane with no session
-/// yet renders idle rather than as a process row. Standalone script/bridge asks
-/// render only when they name a pane in this frame, and refresh their pane
-/// reference from that frame: on a pane that resolves to an agent row the ask
-/// folds onto that row, and only an agent-less pane renders the bare ask card.
-/// `wired_lazy_kinds` gates the idle-instance synthesis (see
-/// `lazy_agent_for_pane`).
+/// one exception is an unstamped live agent command in its own worktree
+/// (`agent_pane_for_pane`): lazy-registering agents bind their session by cwd,
+/// and non-lazy agents use the same guarded bind to recover after a mux rebirth
+/// clears pane stamps while the process keeps running. A wired lazy pane with
+/// no session yet renders idle rather than as a process row. Standalone
+/// script/bridge asks render only when they name a pane in this frame, and
+/// refresh their pane reference from that frame: on a pane that resolves to an
+/// agent row the ask folds onto that row, and only an agent-less pane renders
+/// the bare ask card. `wired_lazy_kinds` gates the idle-instance synthesis (see
+/// `agent_pane_for_pane`).
 struct LazyAgentPaneProjection<'a> {
     wired_kinds: &'a [String],
     default_models: &'a BTreeMap<String, String>,
@@ -1249,7 +1252,7 @@ fn rows_from_panes(
                 pane_ask(agent, standalone_ask, needs_attention, resolver_working),
                 now,
             );
-        } else if let Some(bind) = lazy_agent_for_pane(
+        } else if let Some(bind) = agent_pane_for_pane(
             pane,
             agents,
             lazy_pairings,
@@ -1258,17 +1261,17 @@ fn rows_from_panes(
             lazy_agents.default_models,
             now,
         ) {
-            // The lazy-agent relaxation of stamped-id binding. A lazy-registering
-            // agent (Codex) can be present without a stamped session — it registers
-            // lazily and routes hooks through the pane-less app-server — so it can't
-            // bind through `agent_for_pane`. `lazy_agent_for_pane` owns the whole
-            // case: an unstamped session binds the live agent pane in its worktree
-            // by cwd, and a wired-but-unbound pane (no session yet) renders as an
-            // idle agent rather than a bare process row. Remote-control and
+            // The cwd relaxation of stamped-id binding. A lazy-registering
+            // agent (Codex) can be present without a stamped session, and a
+            // non-lazy agent can lose its stamp across a mux rebirth while its
+            // process keeps running. `agent_pane_for_pane` owns the whole case:
+            // an unstamped session binds the live agent pane in its worktree by
+            // cwd, and a wired-but-unbound lazy pane (no session yet) renders as
+            // an idle agent rather than a bare process row. Remote-control and
             // app-server broker host panes are filtered out upstream
             // (`with_live_panes`), so they never reach here.
             match bind {
-                LazyAgentRow::Agent(agent) => push_agent_row(
+                AgentPaneRow::Agent(agent) => push_agent_row(
                     &mut rows,
                     &mut bound_agents,
                     agent,
@@ -1276,7 +1279,7 @@ fn rows_from_panes(
                     pane_ask(agent, standalone_ask, needs_attention, resolver_working),
                     now,
                 ),
-                LazyAgentRow::Idle(row) => {
+                AgentPaneRow::Idle(row) => {
                     // The synthesized idle row is the pane's card, so a frame-
                     // admitted standalone ask folds onto it exactly as it folds
                     // onto a bound agent's row.

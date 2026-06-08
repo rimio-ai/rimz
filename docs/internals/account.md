@@ -35,6 +35,8 @@ A kind's account and balance reach the dashboard two ways, mirroring the [transc
 
 A live session always wins where both exist: its reading is richer and current.
 
+An agent launched through an elevation wrapper as another real uid stays outside account aggregation. Its hooks and credentials live under that other user's home directory, and the current user's out-of-band probe reads only the current user's account surface, so the sidebar presents it as a flagged process row only and leaves it out of the provider dashboard.
+
 ## Per-provider mapping
 
 Each provider maps its native account and balance surfaces onto the two internal types. A new provider implements one or both rows of this table and the rest of Rimz is unchanged.

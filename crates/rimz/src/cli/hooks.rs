@@ -1557,6 +1557,7 @@ mod tests {
             pane_pid: None,
             pane_process_start: None,
             resumed_session_id: None,
+            elevated_agent: None,
         }
     }
 
@@ -1731,6 +1732,7 @@ mod tests {
         }];
         let reborn = PaneRef {
             pane_process_start: Some(jiff::Timestamp::from_second(60).unwrap()),
+            elevated_agent: None,
             ..pane("terminal_30", "codex", "/repo/main", true)
         };
         let focused = vec![terminal_30.clone()];
@@ -1762,6 +1764,7 @@ mod tests {
         }];
         let occupied = PaneRef {
             pane_process_start: Some(jiff::Timestamp::UNIX_EPOCH),
+            elevated_agent: None,
             ..pane("terminal_30", "codex", "/repo/main", true)
         };
         let focused = vec![terminal_30.clone()];

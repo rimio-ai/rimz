@@ -26,25 +26,39 @@ pub(super) fn process_row_line(
     // sets the group's command tail apart from the agent cards above it, and
     // under `NO_COLOR` it survives as the soft tier's DIM weight.
     let state = row.process_state().unwrap_or(ProcessState::Idle);
-    let (lead, lead_style) = match state {
-        ProcessState::Busy => (
-            working_glyph(animation_phase),
+    let foreign_user = row
+        .as_process()
+        .and_then(|process| process.foreign_user.as_deref());
+    let (lead, lead_style) = if foreign_user.is_some() && state.is_idle() {
+        (
+            status_glyph(AgentStatus::Running),
             theme.style(ORANGE, Modifier::DIM),
-        ),
-        ProcessState::Stuck => (
-            status_glyph(AgentStatus::Failed),
-            status_style(theme, AgentStatus::Failed).add_modifier(Modifier::BOLD),
-        ),
-        ProcessState::Idle => (
-            status_glyph(AgentStatus::Idle),
-            status_style(theme, AgentStatus::Idle).add_modifier(Modifier::DIM),
-        ),
+        )
+    } else {
+        match state {
+            ProcessState::Busy => (
+                working_glyph(animation_phase),
+                theme.style(ORANGE, Modifier::DIM),
+            ),
+            ProcessState::Stuck => (
+                status_glyph(AgentStatus::Failed),
+                status_style(theme, AgentStatus::Failed).add_modifier(Modifier::BOLD),
+            ),
+            ProcessState::Idle => (
+                status_glyph(AgentStatus::Idle),
+                status_style(theme, AgentStatus::Idle).add_modifier(Modifier::DIM),
+            ),
+        }
     };
-    let left = vec![
+    let mut left = vec![
         Span::styled(lead, lead_style),
         Span::raw(" "),
         Span::styled(row.name.clone(), theme.soft()),
     ];
+    if let Some(user) = foreign_user {
+        left.push(Span::raw(" "));
+        left.push(Span::styled(format!("({user})"), theme.dim()));
+    }
     // At L2 width, resource stats pin right: `C  11%  M 1.1G  ⇅   3M/s`.
     // The whole cluster drops at L0/L1, or until every metric has reported.
     if Tier::for_width(width) == Tier::L2 {

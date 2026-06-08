@@ -32,7 +32,8 @@ use std::process::{Command, Stdio};
 
 use crate::agents::codex::app_server::codex_home;
 use crate::config::RemoteControlConfig;
-use crate::feed::PaneRef;
+use crate::feed::{ElevatedAgent, PaneRef};
+use crate::ids::AgentKind;
 
 /// View name for the managed daemon tab. Shared by the launcher (the idempotency
 /// key for the tmux window / Zellij tab) and the sidebar classifier
@@ -48,6 +49,12 @@ const COMMAND_MARKER: &str = "remote-control";
 /// (`rimz codex app-server serve …`). The broker is a per-session host pane in
 /// the same view, distinct from the per-user daemon [`ensure_codex_daemon`] runs.
 const APP_SERVER_MARKER: &str = "app-server";
+
+/// Maximum process-tree depth walked below a pane root when looking for an
+/// elevated agent. `sudo su` + login shell + node launcher + agent is shallow;
+/// this cap keeps a pathological pane from turning a sidebar tick into an
+/// unbounded tree walk.
+const ELEVATED_AGENT_DESCENT_DEPTH: usize = 8;
 
 /// The Claude Remote Control argv (program first). `--spawn worktree` isolates
 /// each on-demand remote session in its own git worktree — the worktree mode.
@@ -214,6 +221,81 @@ pub fn pane_is_host(pane: &PaneRef) -> bool {
         || pane.view_name.as_deref() == Some(VIEW_NAME)
 }
 
+/// Whether a mux foreground command is an elevation entrypoint. The producer
+/// uses this as the cheap gate before walking descendants of a pane root.
+pub(crate) fn command_starts_with_elevation_wrapper(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .next()
+        .map(basename)
+        .is_some_and(is_elevation_wrapper)
+}
+
+/// A different-real-uid agent descendant under an elevation wrapper in this
+/// pane, if one is visible through `/proc`. The marker is display-only; callers
+/// must keep the pane's original command unchanged so the sidebar never binds a
+/// foreign-user agent as a local ledger session.
+pub fn elevated_in_pane_agent(pane_pid: u32) -> Option<ElevatedAgent> {
+    elevated_in_pane_agent_with(
+        pane_pid,
+        crate::proc::own_uid()?,
+        &|pid| crate::proc::children(pid),
+        &|pid| crate::proc::cmdline(pid),
+        &|pid| crate::proc::comm(pid),
+        &|pid| crate::proc::real_uid(pid),
+    )
+}
+
+fn elevated_in_pane_agent_with(
+    pane_pid: u32,
+    own_uid: u32,
+    children: &dyn Fn(u32) -> Vec<u32>,
+    cmdline: &dyn Fn(u32) -> Option<String>,
+    comm: &dyn Fn(u32) -> Option<String>,
+    real_uid: &dyn Fn(u32) -> Option<u32>,
+) -> Option<ElevatedAgent> {
+    let mut stack = vec![(pane_pid, 0, false)];
+    let mut seen = std::collections::HashSet::new();
+    while let Some((pid, depth, wrapper_seen)) = stack.pop() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        let command = cmdline(pid).unwrap_or_default();
+        let comm = comm(pid);
+        let wrapper_seen = wrapper_seen || command_starts_with_elevation_wrapper(&command);
+        if wrapper_seen
+            && let Some(kind) =
+                crate::ledger::snapshot::command_agent_kind_with_comm(&command, comm.as_deref())
+            && let Some(uid) = real_uid(pid)
+            && uid != own_uid
+        {
+            return Some(ElevatedAgent {
+                kind: AgentKind::new_unchecked(kind),
+                uid,
+            });
+        }
+        if depth >= ELEVATED_AGENT_DESCENT_DEPTH {
+            continue;
+        }
+        for child in children(pid) {
+            stack.push((child, depth + 1, wrapper_seen));
+        }
+    }
+    None
+}
+
+fn is_elevation_wrapper(program: &str) -> bool {
+    matches!(program, "sudo" | "su" | "doas")
+}
+
+fn basename(token: &str) -> &str {
+    Path::new(token)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(token)
+}
+
 /// PIDs of the per-user Codex app-server daemon — the process a remote-control
 /// Codex session records as its hook owner (`$PPID`). A daemon-mode session's
 /// recorded pid is the shared daemon, which outlives any one conversation, so
@@ -367,6 +449,7 @@ fn is_codex_cli_cmdline(cmdline: &str) -> bool {
 mod tests {
     use super::*;
     use crate::ids::{MuxName, PaneId};
+    use std::collections::BTreeMap;
 
     fn pane(command: Option<&str>, view_name: Option<&str>) -> PaneRef {
         PaneRef {
@@ -382,6 +465,7 @@ mod tests {
             pane_pid: None,
             pane_process_start: None,
             resumed_session_id: None,
+            elevated_agent: None,
         }
     }
 
@@ -502,6 +586,82 @@ mod tests {
     }
 
     #[test]
+    fn elevation_wrapper_gate_reads_the_entrypoint() {
+        assert!(command_starts_with_elevation_wrapper("sudo su"));
+        assert!(command_starts_with_elevation_wrapper(
+            "/usr/bin/doas claude"
+        ));
+        assert!(command_starts_with_elevation_wrapper("su -"));
+        assert!(!command_starts_with_elevation_wrapper("claude"));
+        assert!(!command_starts_with_elevation_wrapper("zsh"));
+    }
+
+    #[test]
+    fn elevated_agent_scan_detects_foreign_uid_descendant_past_sudo_su() {
+        let fixture = ProcFixture::new([
+            ProcNode::new(10, 1_000, "zsh", &[20]),
+            ProcNode::new(20, 1_000, "sudo su", &[21]),
+            ProcNode::new(21, 0, "-bash", &[22]),
+            ProcNode::new(
+                22,
+                0,
+                "node /opt/node_modules/@anthropic-ai/claude-code/cli.js",
+                &[],
+            )
+            .with_comm("node"),
+        ]);
+
+        let elevated = fixture.elevated_agent(10, 1_000).expect("foreign agent");
+
+        assert_eq!(elevated.kind.as_str(), "claude");
+        assert_eq!(elevated.uid, 0);
+    }
+
+    #[test]
+    fn elevated_agent_scan_can_fall_back_to_precise_comm() {
+        let fixture = ProcFixture::new([
+            ProcNode::new(10, 1_000, "zsh", &[20]),
+            ProcNode::new(20, 1_000, "sudo su", &[21]),
+            ProcNode::new(21, 0, "-bash", &[22]),
+            ProcNode::new(22, 0, "", &[]).with_comm("claude"),
+        ]);
+
+        let elevated = fixture.elevated_agent(10, 1_000).expect("foreign agent");
+
+        assert_eq!(elevated.kind.as_str(), "claude");
+        assert_eq!(elevated.uid, 0);
+    }
+
+    #[test]
+    fn elevated_agent_scan_detects_direct_sudo_agent() {
+        let fixture = ProcFixture::new([
+            ProcNode::new(10, 1_000, "zsh", &[20]),
+            ProcNode::new(20, 0, "sudo -u root claude", &[]),
+        ]);
+
+        let elevated = fixture.elevated_agent(10, 1_000).expect("foreign agent");
+
+        assert_eq!(elevated.kind.as_str(), "claude");
+        assert_eq!(elevated.uid, 0);
+    }
+
+    #[test]
+    fn elevated_agent_scan_ignores_same_uid_and_non_wrapper_paths() {
+        let same_uid = ProcFixture::new([
+            ProcNode::new(10, 1_000, "zsh", &[20]),
+            ProcNode::new(20, 1_000, "sudo su", &[21]),
+            ProcNode::new(21, 1_000, "claude", &[]),
+        ]);
+        assert_eq!(same_uid.elevated_agent(10, 1_000), None);
+
+        let no_wrapper = ProcFixture::new([
+            ProcNode::new(10, 1_000, "zsh", &[20]),
+            ProcNode::new(20, 0, "claude", &[]),
+        ]);
+        assert_eq!(no_wrapper.elevated_agent(10, 1_000), None);
+    }
+
+    #[test]
     fn codex_daemon_cmdline_matches_the_app_server_surface() {
         // The per-user daemon runs the codex binary on its daemon surface.
         assert!(is_codex_daemon_cmdline(
@@ -593,5 +753,62 @@ mod tests {
             ),
             None
         );
+    }
+
+    struct ProcNode {
+        pid: u32,
+        uid: u32,
+        comm: Option<&'static str>,
+        cmdline: &'static str,
+        children: &'static [u32],
+    }
+
+    impl ProcNode {
+        const fn new(pid: u32, uid: u32, cmdline: &'static str, children: &'static [u32]) -> Self {
+            Self {
+                pid,
+                uid,
+                comm: None,
+                cmdline,
+                children,
+            }
+        }
+
+        const fn with_comm(mut self, comm: &'static str) -> Self {
+            self.comm = Some(comm);
+            self
+        }
+    }
+
+    struct ProcFixture {
+        nodes: BTreeMap<u32, ProcNode>,
+    }
+
+    impl ProcFixture {
+        fn new(nodes: impl IntoIterator<Item = ProcNode>) -> Self {
+            Self {
+                nodes: nodes.into_iter().map(|node| (node.pid, node)).collect(),
+            }
+        }
+
+        fn elevated_agent(&self, root: u32, own_uid: u32) -> Option<ElevatedAgent> {
+            elevated_in_pane_agent_with(
+                root,
+                own_uid,
+                &|pid| {
+                    self.nodes
+                        .get(&pid)
+                        .map(|node| node.children.to_vec())
+                        .unwrap_or_default()
+                },
+                &|pid| self.nodes.get(&pid).map(|node| node.cmdline.to_owned()),
+                &|pid| {
+                    self.nodes
+                        .get(&pid)
+                        .and_then(|node| node.comm.map(str::to_owned))
+                },
+                &|pid| self.nodes.get(&pid).map(|node| node.uid),
+            )
+        }
     }
 }

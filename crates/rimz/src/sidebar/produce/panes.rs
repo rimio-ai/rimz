@@ -306,6 +306,7 @@ fn repair_pane_frame(
         &crate::remote_control::in_pane_agent_start_for_root,
         &crate::remote_control::in_pane_agent_starts,
     );
+    annotate_elevated_agents(frame, &crate::remote_control::elevated_in_pane_agent);
 }
 
 pub fn repaired_pane_frame_for_binding(
@@ -356,6 +357,28 @@ fn backfill_pane_cwds(frame: &mut PaneFrame, proc_cwd: &dyn Fn(u32) -> Option<Pa
             .and_then(|path| path.into_os_string().into_string().ok())
         {
             pane.current.cwd = Some(cwd);
+        }
+    }
+}
+
+/// Mark panes whose foreground command is an elevation wrapper and whose
+/// descendant tree contains a known agent CLI running as another real uid. The
+/// marker is display-only: it does not rewrite the pane command, so the snapshot
+/// bind ladder cannot mistake the foreign user's agent for a local session.
+fn annotate_elevated_agents(
+    frame: &mut PaneFrame,
+    elevated_agent: &dyn Fn(u32) -> Option<crate::feed::ElevatedAgent>,
+) {
+    for pane in frame.pane_states_mut() {
+        pane.current.elevated_agent = None;
+        let Some(command) = pane.current.command.as_deref() else {
+            continue;
+        };
+        if !crate::remote_control::command_starts_with_elevation_wrapper(command) {
+            continue;
+        }
+        if let Some(pid) = pane.current.pid {
+            pane.current.elevated_agent = elevated_agent(pid);
         }
     }
 }
@@ -489,6 +512,10 @@ fn refresh_cached_metrics(
             let mut latest = fresh_snapshot_cache(cache_path, session, min_pane_cache_ms, pane_ttl)
                 .unwrap_or(frame);
             if super::metrics::enrich_pane_metrics(&mut latest, session, runtime) {
+                annotate_elevated_agents(
+                    &mut latest,
+                    &crate::remote_control::elevated_in_pane_agent,
+                );
                 publish_frame(runtime, cache_path, &latest);
             }
             latest
