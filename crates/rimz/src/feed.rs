@@ -582,6 +582,17 @@ pub enum AgentStatus {
 }
 
 impl AgentStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Waiting => "waiting",
+            Self::Idle => "idle",
+            Self::Success => "success",
+            Self::Failed => "failed",
+            Self::Paused => "paused",
+        }
+    }
+
     /// Attention-class: a human (or a resolver) may want this row. `Waiting`
     /// and `Failed` are actionable; `Paused` is attention-class but parked. The
     /// producer's ranking buckets use the full set; the renderer's

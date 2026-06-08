@@ -89,6 +89,10 @@ pub enum SidebarEvent {
         agent_event_name: Option<String>,
     },
     PaneFramePublished,
+    Notify {
+        title: String,
+        body: String,
+    },
     Reload,
 }
 
@@ -164,6 +168,10 @@ mod tests {
                 agent_event_name: Some("SessionStart".to_owned()),
             },
             SidebarEvent::PaneFramePublished,
+            SidebarEvent::Notify {
+                title: "Rimz: claude needs you".to_owned(),
+                body: "claude sess-1 is waiting for input".to_owned(),
+            },
             SidebarEvent::Reload,
         ];
         for event in variants {

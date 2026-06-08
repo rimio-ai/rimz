@@ -4,13 +4,13 @@
 
 Rimz runs with no configuration. Everything here is optional tuning.
 
-Three per-machine files configure how Rimz drives *your* box: `~/.config/rimz/config.toml` (room, sidebar, remote-control), `~/.config/rimz/resolvers.toml` (the resolver chain), and `~/.config/rimz/remote.toml` (named SSH room aliases). A project may also commit a `.rimz/config.toml`; today Rimz reads that file only to compute the project's trust hash — the workspace shape it declares is on the roadmap, and the last section explains exactly what is and isn't live.
+Three per-machine files configure how Rimz drives *your* box: `~/.config/rimz/config.toml` (room, sidebar, notifications, remote-control), `~/.config/rimz/resolvers.toml` (the resolver chain), and `~/.config/rimz/remote.toml` (named SSH room aliases). A project may also commit a `.rimz/config.toml`; today Rimz reads that file only to compute the project's trust hash — the workspace shape it declares is on the roadmap, and the last section explains exactly what is and isn't live.
 
 ## What configures Rimz today
 
 | File | Scope | What it does today |
 | --- | --- | --- |
-| `~/.config/rimz/config.toml` | per-machine | worktree defaults, agent layouts, room options, sidebar look, remote-control auto-launch |
+| `~/.config/rimz/config.toml` | per-machine | worktree defaults, agent layouts, room options, sidebar look, notifications, remote-control auto-launch |
 | `~/.config/rimz/resolvers.toml` | per-machine | the resolver allowlist and chain order |
 | `~/.config/rimz/remote.toml` | per-machine | named remote room aliases used by `rimz remote connect` |
 | `~/.config/rimz/projects/<id>/trust.toml` | per-machine | the project's trust grant — written by `rimz trust grant`, not by hand |
@@ -20,7 +20,7 @@ The per-machine tier is personal and never committed — a clone never inherits 
 
 ## Per-machine config — `~/.config/rimz/config.toml`
 
-Seven sections, each optional: `[worktree]`, `[agents.layouts]`, `[remote_control]`, `[sidebar]`, `[zellij]`, `[tmux]`, `[resume]`.
+Eight sections, each optional: `[worktree]`, `[agents.layouts]`, `[remote_control]`, `[notifications]`, `[sidebar]`, `[zellij]`, `[tmux]`, `[resume]`.
 
 ## Remote aliases — `~/.config/rimz/remote.toml`
 
@@ -50,6 +50,26 @@ Each toggle is independent and off by default — Rimz never links an account or
 `claude = true` runs `claude remote-control` in the managed daemon tab when `claude` is on PATH (best-effort — a missing `claude` is skipped). `codex = true` ensures the per-user Codex remote-control daemon once per start. The Codex daemon boots from the managed standalone install at `$CODEX_HOME` (default `~/.codex`), not a distro `codex` on PATH; when `codex = true` and that install is absent, `rimz start` refuses up front with the fix, and `rimz doctor` reports it ahead of time. How each host links its account is in [internals/account.md](../internals/account.md); how enrichment connects is in [internals/transcript.md](../internals/transcript.md).
 
 `rimz start` parks both hosts in one dedicated `rimzd` tab, focus returned to your working pane. Neither is a coding agent, so the sidebar filters both out of the room — Claude's link surfaces as a `⇅ rc` flag on its provider block instead ([interface/sidebar.md](../interface/sidebar.md)).
+
+### Notifications
+
+```toml
+[notifications]
+enabled = true
+triggers = ["waiting", "failed", "paused", "success"]   # default: all four
+desktop = "auto"                                         # "auto" | "osc" | "off"
+sound = "bell"                                           # "bell" | "off"
+suppress_focused = true
+debounce_ms = 5000
+coalesce_ms = 1000
+command = "ntfy publish rimz"                            # optional
+```
+
+Notifications are best-effort attention delivery layered over the sidebar. `waiting`, `failed`, `paused`, and `success` transitions notify by default; `running` and `idle` stay quiet. `debounce_ms` limits repeat notifications for the same agent, and `coalesce_ms` groups a burst into one banner.
+
+`desktop = "auto"` emits OSC desktop notifications under tmux and disables them under Zellij, which drops notification OSCs today. `desktop = "osc"` forces emission for testing or future terminal paths. `sound = "bell"` writes a separate BEL byte; your local terminal decides whether that is audible.
+
+`command` runs on this machine through `sh -c` and receives `RIMZ_NOTIFY_TITLE`, `RIMZ_NOTIFY_BODY`, `RIMZ_NOTIFY_AGENT`, and `RIMZ_NOTIFY_KIND`. Use it for host-specific routing such as ntfy, Slack, Pushover, or a local OS notifier. It is per-machine and outside project trust; a cloned repo never inherits your notification command or its credentials. Mechanics in [internals/notifications.md](../internals/notifications.md).
 
 ### Multiplexer room options
 
@@ -282,7 +302,7 @@ This is the designed model. Today only the per-machine layer and the trust hash 
 
 The committed `<root>/.rimz/config.toml`.
 
-> **Declared and trust-tracked today; not yet applied.** Rimz reads this file only to compute the project's trust hash (see [internals/trust.md](../internals/trust.md)). Applying the workspace shape it declares — opening the layout, launching agents, running hooks and env, firing notifications — is on the [roadmap](../contributing/roadmap.md). Every section below carries this caveat.
+> **Declared and trust-tracked today; not yet applied.** Rimz reads this file only to compute the project's trust hash (see [internals/trust.md](../internals/trust.md)). Applying the workspace shape it declares — opening the layout, launching agents, and running hooks and env — is on the [roadmap](../contributing/roadmap.md). Every section below carries this caveat.
 
 Commit `.rimz/config.toml` so a team shares one declared workspace shape; per-machine settings stay in `~/.config/rimz/`. The command-running fields below enter the trust hash, so a clone shows `untrusted` until someone runs `rimz trust grant` — that gate works today even though the shape is not yet applied.
 
@@ -312,17 +332,12 @@ command = "notify-send rimz"
 
 [env]
 RUST_LOG = "debug"
-
-[notifications]
-command = "notify-send rimz"
 ```
 
 - `[layout]` — `initial_panes` (each with `name`/`command`/`cwd`/`env`) plus the backend-only `[layout.tmux]` and `[layout.zellij]` fragments.
 - `[[agents]]` — `name` (a known agent), optional `launch_command`, and `env`.
 - `[[hooks]]` — `event` → `command` pairs. This is a *declared, trust-hashed* project hook, distinct from `rimz hooks install`, which wires an agent's own native hooks and works today (see [cli.md](./cli.md) and [internals/hooks.md](../internals/hooks.md)).
 - `[env]` — workspace-wide environment variables.
-- `[notifications]` — a notification helper `command`.
-
 Which of these fields the trust hash covers is in [internals/trust.md](../internals/trust.md).
 
 ## Privacy

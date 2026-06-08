@@ -110,6 +110,7 @@ fn event_key(event: &SidebarEvent) -> Option<EventKey> {
         | SidebarEvent::PanesChanged
         | SidebarEvent::LedgerDelta { .. }
         | SidebarEvent::PaneFramePublished
+        | SidebarEvent::Notify { .. }
         | SidebarEvent::Reload => None,
     }
 }

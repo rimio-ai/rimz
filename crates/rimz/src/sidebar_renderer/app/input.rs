@@ -192,7 +192,7 @@ fn decode_mouse_click(raw: &str) -> Option<Wakeup> {
 }
 
 pub(super) fn wait_for_wakeup(socket: &UnixDatagram) -> io::Result<Wakeup> {
-    let mut buf = [0_u8; 4096];
+    let mut buf = [0_u8; 16 * 1024];
     match socket.recv(&mut buf) {
         Ok(n) => Ok(decode_wakeup(&buf[..n])),
         // Timeout (a frame boundary or the idle backstop interval), or a signal

@@ -25,9 +25,10 @@ Every field that can cause a process to run enters the hash. The current project
 - `[[agents]]` — `name`, `launch_command`, `env`.
 - `[[hooks]]` — `event`, `command`.
 - `[env]` — every key/value (PATH-affecting overrides included).
-- `[notifications]` — `command`.
 
 The hash input is canonical JSON over `ExecutableSurface`. Struct field order is fixed, `BTreeMap` keys sort, `Option::None` serializes as `null`. The wire format is `sha256:<hex>`.
+
+Per-machine commands such as `[notifications].command` in `~/.config/rimz/config.toml` are outside this hash. They are personal machine policy, not cloned project policy.
 
 Adding a command-running field that isn't projected into `ExecutableSurface` is a CI invariant violation — the `hash_covers_every_documented_surface_field` unit test will collide and the `docs/guide/security.md` doc gate will not match.
 

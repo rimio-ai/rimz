@@ -288,6 +288,9 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 instance_id: SidebarInstanceId::new(),
                 tick_seconds,
                 refresh_ms_override: refresh_ms,
+                notification_prefs: rimz::config::MachineConfig::load()
+                    .unwrap_or_default()
+                    .notifications,
                 own_pane: rimz::mux::own_pane_id(mux),
             })
             .context("serving sidebar")

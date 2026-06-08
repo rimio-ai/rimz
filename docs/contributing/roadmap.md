@@ -42,7 +42,9 @@ Detach/reattach polish, sidebar reload recovery, protocol-version doctor checks,
 
 ## M5 — Attention polish
 
-OS notifications, sounds, user/project notification policy.
+Done: best-effort desktop notifications, terminal bell sound, per-machine notification policy, and notify-command routing over the sidebar producer/renderer split ([notifications.md](../internals/notifications.md)).
+
+Remaining: tab-bar markers and any future project-side team routing policy.
 
 ## Follow-up — Sidebar interaction polish
 

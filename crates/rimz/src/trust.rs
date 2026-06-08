@@ -273,7 +273,6 @@ pub struct ProjectConfig {
     pub agents: Vec<AgentConfig>,
     pub hooks: Vec<HookConfig>,
     pub env: BTreeMap<String, String>,
-    pub notifications: NotificationsConfig,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -322,12 +321,6 @@ pub struct HookConfig {
     pub command: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct NotificationsConfig {
-    pub command: Option<String>,
-}
-
 /// Canonical projection of [`ProjectConfig`] into just the fields the trust
 /// hash covers. Serialized as JSON so the byte order is stable across runs
 /// (struct field order is fixed, `BTreeMap` keys sort, `Option::None`
@@ -340,7 +333,6 @@ struct ExecutableSurface<'a> {
     agents: Vec<ExecutableAgent<'a>>,
     hooks: Vec<ExecutableHook<'a>>,
     env: &'a BTreeMap<String, String>,
-    notifications: ExecutableNotifications<'a>,
 }
 
 #[derive(Serialize)]
@@ -374,11 +366,6 @@ struct ExecutableAgent<'a> {
 struct ExecutableHook<'a> {
     event: &'a str,
     command: &'a str,
-}
-
-#[derive(Serialize)]
-struct ExecutableNotifications<'a> {
-    command: Option<&'a str>,
 }
 
 impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
@@ -421,9 +408,6 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                 })
                 .collect(),
             env: &config.env,
-            notifications: ExecutableNotifications {
-                command: config.notifications.command.as_deref(),
-            },
         }
     }
 }
@@ -512,7 +496,7 @@ mod tests {
 
     #[test]
     fn revoke_drops_record_and_returns_untrusted() {
-        let dir = project_with("[notifications]\ncommand = \"notify-send rimz\"\n");
+        let dir = project_with("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks\"\n");
         let config = tempdir().expect("config root");
         grant_with_roots(dir.path(), config.path()).expect("grant");
         let revoked = revoke_with_roots(dir.path(), config.path()).expect("revoke");
@@ -522,7 +506,7 @@ mod tests {
 
     #[test]
     fn revoke_with_no_record_is_noop() {
-        let dir = project_with("[notifications]\ncommand = \"notify-send rimz\"\n");
+        let dir = project_with("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks\"\n");
         let config = tempdir().expect("config root");
         let report = revoke_with_roots(dir.path(), config.path()).expect("revoke");
         assert_eq!(report.state, TrustState::Untrusted);
@@ -545,7 +529,6 @@ mod tests {
             "[[agents]]\nname = \"claude\"\nenv = { PATH = \"/opt/llms/bin\" }\n",
             "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
             "[env]\nPATH_PREPEND = \"/opt/rimz/bin\"\n",
-            "[notifications]\ncommand = \"notify-send\"\n",
         ];
         let mut hashes = std::collections::HashSet::new();
         for text in cases {

@@ -7,7 +7,10 @@
 use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
 
+use crate::config::NotificationsPrefs;
+use crate::schema::sidebar_event::SidebarEvent;
 use crate::sidebar::consumer::RollupCursor;
+use crate::sidebar::notify::NotificationState;
 use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 
 use super::input::SNAPSHOT_WAKEUP;
@@ -97,6 +100,8 @@ fn run_fetch_cycle(
     state: &StatePaths,
     request: FetchRequest,
     cursor: &mut RollupCursor,
+    notification_prefs: &NotificationsPrefs,
+    notifications: &mut NotificationState,
     post: &mut dyn FnMut(FetchOutcome),
 ) {
     let is_producer = !crate::sidebar::elder_sidebar_present(runtime, &config.instance_id);
@@ -137,11 +142,22 @@ fn run_fetch_cycle(
                 }))
     });
     match fast {
-        Ok(snapshot) => post(FetchOutcome {
-            snapshot: Ok(snapshot),
-            final_for_request: !produce,
-            fresh_pane_frame: fast_has_request_fresh_frame,
-        }),
+        Ok(snapshot) => {
+            if is_producer && !produce {
+                evaluate_and_deliver_notifications(
+                    config,
+                    runtime,
+                    notification_prefs,
+                    notifications,
+                    &snapshot,
+                );
+            }
+            post(FetchOutcome {
+                snapshot: Ok(snapshot),
+                final_for_request: !produce,
+                fresh_pane_frame: fast_has_request_fresh_frame,
+            });
+        }
         // The consumer lane only misses when the ledger rollup itself could
         // not be read — a missing pane frame is a successful frameless fold.
         // With no produce to deliver the cycle's verdict, the miss is final
@@ -162,13 +178,49 @@ fn run_fetch_cycle(
             exclude,
             min_pane_cache_ms: request.min_pane_cache_ms,
         };
+        let produced = run_produce_guarded(cursor, |cursor| {
+            crate::sidebar::produce::produce_snapshot(cursor, state, runtime, &opts)
+        });
+        if is_producer && let Ok(snapshot) = &produced {
+            evaluate_and_deliver_notifications(
+                config,
+                runtime,
+                notification_prefs,
+                notifications,
+                snapshot,
+            );
+        }
         post(FetchOutcome {
-            snapshot: run_produce_guarded(cursor, |cursor| {
-                crate::sidebar::produce::produce_snapshot(cursor, state, runtime, &opts)
-            }),
+            snapshot: produced,
             final_for_request: true,
             fresh_pane_frame: request.mode.produces_fresh_panes(),
         });
+    }
+}
+
+fn evaluate_and_deliver_notifications(
+    config: &ServeConfig,
+    runtime: &RuntimePaths,
+    prefs: &NotificationsPrefs,
+    state: &mut NotificationState,
+    snapshot: &SidebarSnapshot,
+) {
+    for notification in state.evaluate(snapshot, prefs, crate::sidebar::cache::unix_now_ms()) {
+        if let Some(command) = prefs.command()
+            && let Err(err) = crate::sidebar::notify::spawn_notify_command(command, &notification)
+        {
+            tracing::debug!(error = %err, "notify-command spawn failed");
+        }
+        if let Err(err) = crate::ledger::wakeup::broadcast_sidebar_event(
+            runtime,
+            Some(&config.session_name),
+            SidebarEvent::Notify {
+                title: notification.title,
+                body: notification.body,
+            },
+        ) {
+            tracing::debug!(error = %err, "notification event broadcast failed");
+        }
     }
 }
 
@@ -284,6 +336,7 @@ pub(super) fn spawn_fetch_worker(
     config: ServeConfig,
     runtime: RuntimePaths,
     socket_path: PathBuf,
+    notification_prefs: NotificationsPrefs,
     request_rx: std::sync::mpsc::Receiver<FetchRequest>,
     result_tx: std::sync::mpsc::Sender<FetchOutcome>,
 ) -> std::thread::JoinHandle<()> {
@@ -294,6 +347,7 @@ pub(super) fn spawn_fetch_worker(
         // since the last one, instead of re-parsing the persisted base per
         // delta — and promotion to producer inherits the warm base.
         let mut cursor = RollupCursor::new();
+        let mut notifications = NotificationState::default();
         while let Ok(first) = request_rx.recv() {
             // Coalesce any requests that piled up into one run, keeping the
             // strongest intent and the newest pane-freshness floor.
@@ -321,7 +375,16 @@ pub(super) fn spawn_fetch_worker(
             // `workspace migrate` repoints the ledger without a restart.
             match StatePaths::for_workspace(config.workspace_id.clone()) {
                 Ok(state) => {
-                    run_fetch_cycle(&config, &runtime, &state, request, &mut cursor, &mut post);
+                    run_fetch_cycle(
+                        &config,
+                        &runtime,
+                        &state,
+                        request,
+                        &mut cursor,
+                        &notification_prefs,
+                        &mut notifications,
+                        &mut post,
+                    );
                 }
                 Err(err) => post(FetchOutcome {
                     snapshot: Err(format!("resolving workspace state paths: {err}")),

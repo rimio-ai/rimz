@@ -30,7 +30,9 @@ Project config is read inertly until trusted.
 - Command-running fields are disabled until trust is granted again.
 - Auto-revoke is implicit: every `rimz trust status` and `rimz doctor` re-hashes the live `.rimz/config.toml` and reports `stale` without a separate sweep.
 
-The **executable surface** is every field that can cause a process to run: agent launch commands, hook commands, PATH-affecting env overrides, layout-launched commands, tmux status `#(...)`, tmux popup `display-popup -E`, notification commands, and any future command string. A single hash over all of these is what `rimz trust grant` pins. Adding a new command-running field that isn't in the hash is a CI invariant violation. Implementation detail in [`docs/internals/trust.md`](../internals/trust.md).
+The **executable surface** is every project field that can cause a process to run: agent launch commands, hook commands, PATH-affecting env overrides, layout-launched commands, tmux status `#(...)`, tmux popup `display-popup -E`, and any future project command string. A single hash over all of these is what `rimz trust grant` pins. Adding a new project command-running field that isn't in the hash is a CI invariant violation. Implementation detail in [`docs/internals/trust.md`](../internals/trust.md).
+
+The per-machine `[notifications].command` lives in `~/.config/rimz/config.toml`, outside project trust. It is personal routing on this host, often with local push credentials, and a cloned repository never supplies it.
 
 ## Resolver trust
 

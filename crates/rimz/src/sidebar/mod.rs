@@ -17,6 +17,7 @@ pub mod enrich;
 pub mod events;
 pub mod frame;
 pub mod fuse;
+pub mod notify;
 pub mod produce;
 pub mod snapshot;
 pub mod timing;

@@ -77,6 +77,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 - [multiplexers.md](./docs/internals/multiplexers.md) — Zellij and tmux backend contracts.
 - [state.md](./docs/internals/state.md) — sidebar pulled truth, typed realtime events, fusion, process roles, and timing cadences.
 - [sidebar.md](./docs/internals/sidebar.md) — sidebar mechanics: presence, ranking, launch, reload recovery, and view-model behaviour (the on-screen look lives in [interface/sidebar.md](./docs/interface/sidebar.md)).
+- [notifications.md](./docs/internals/notifications.md) — best-effort desktop, bell, and command notifications layered over the sidebar attention model.
 - [resolvers.md](./docs/internals/resolvers.md) — resolver protocol, chain, pane primitives.
 - [trust.md](./docs/internals/trust.md) — executable-surface hash, trust states, auto-revoke.
 - [hooks.md](./docs/internals/hooks.md) — the agent boundary: the integration trait, the two hook channels, install, and the Claude/Codex/Pi native-event mappings.

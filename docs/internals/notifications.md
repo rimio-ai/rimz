@@ -1,0 +1,48 @@
+# Notifications
+
+Rimz sends best-effort attention alerts from the same state that drives the sidebar. The ledger remains truth; notifications are latency and reachability.
+
+## Channels
+
+| Channel | Mechanism | Crosses SSH | tmux | Zellij | Notes |
+| --- | --- | --- | --- | --- | --- |
+| In-band attention | sidebar rows, ranking, and glyphs | n/a | yes | yes | The authoritative user-facing surface. |
+| Desktop banner | OSC 777 written by pane renderers; DCS-wrapped under tmux | yes | yes | no | Ghostty, iTerm2, and WezTerm turn the OSC into a native desktop banner. Zellij drops notification OSCs today. |
+| Sound | BEL written by the renderer | yes | yes | partial | The terminal owns whether BEL is audible. |
+| Notify command | per-machine shell command spawned by the elected producer | command-defined | yes | yes | The portable escape hatch for push services, detached rooms, and Zellij. |
+
+## Producer And Renderer Split
+
+The elected sidebar producer is the notification brain. Each fetch cycle folds the latest agent rollup, compares each root agent's current `AgentStatus` with the previous observation, applies the per-machine `[notifications]` policy, and emits notifications only from that elected process.
+
+The first observation after election seeds the baseline without firing. That prevents a renderer restart or producer handoff from replaying every existing `waiting`, `failed`, `paused`, or `success` state as a fresh transition.
+
+The producer applies trigger filtering, per-agent debounce, burst coalescing, and focus suppression. Focus suppression reads the same live pane focus bit the sidebar already folds into snapshots; it is a conservative visibility hint, not ledger truth.
+
+For each notification, the producer spawns `[notifications].command` if configured and broadcasts `SidebarEvent::Notify` to the sidebar socket. The command receives `RIMZ_NOTIFY_TITLE`, `RIMZ_NOTIFY_BODY`, `RIMZ_NOTIFY_AGENT`, and `RIMZ_NOTIFY_KIND`, inherits no hook stdout, and is handed to the global child reaper.
+
+The renderer is the terminal mouth. On `SidebarEvent::Notify`, pane-resident renderers write terminal-local bytes outside the Ratatui draw cycle: OSC 777 for the desktop banner, DCS-wrapped under tmux, plus a separate BEL when sound is enabled. Detached sessions have no attached terminal stream, and inactive-pane passthrough is mux/client-defined, so command delivery is the deterministic off-screen path.
+
+## Backend Behavior
+
+tmux forwards OSC notifications when `allow-passthrough` is on; Rimz enables that room option by default. The renderer wraps the OSC payload as `DCS tmux; ... ST` so the local terminal emulator receives it through tmux and SSH.
+
+Zellij currently drops OSC 9, 777, and 99 notification sequences. `desktop = "auto"` therefore disables desktop OSC under Zellij and leaves `[notifications].command` as the portable route. `desktop = "osc"` forces emission for users testing a future Zellij or terminal path.
+
+## Configuration
+
+Notification preferences live in `~/.config/rimz/config.toml`, not in `.rimz/config.toml`.
+
+```toml
+[notifications]
+enabled = true
+triggers = ["waiting", "failed", "paused", "success"]
+desktop = "auto"          # "auto" | "osc" | "off"
+sound = "bell"            # "bell" | "off"
+suppress_focused = true
+debounce_ms = 5000
+coalesce_ms = 1000
+command = "ntfy publish rimz"
+```
+
+The command is per-machine and outside project trust. It is personal routing, often carrying host-specific push credentials, and a cloned repository never inherits it.

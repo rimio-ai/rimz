@@ -5,4 +5,5 @@
 //! decisions; those stay in [`crate::sidebar`] and [`crate::ledger`].
 
 pub mod app;
+mod osc;
 pub mod render;

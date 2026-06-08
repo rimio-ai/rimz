@@ -146,6 +146,7 @@ fn non_final_fast_success_does_not_recover_refresh_health() {
         instance_id: crate::SidebarInstanceId::new(),
         tick_seconds: 1,
         refresh_ms_override: None,
+        notification_prefs: crate::config::NotificationsPrefs::default(),
         own_pane: None,
     };
     let mut last_snapshot = Some(snapshot(&ws));

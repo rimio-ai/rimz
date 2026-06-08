@@ -36,6 +36,7 @@ fn refresh_override_stamps_folded_snapshot() {
         instance_id: SidebarInstanceId::new(),
         tick_seconds: 2,
         refresh_ms_override: Some(50),
+        notification_prefs: NotificationsPrefs::default(),
         own_pane: None,
     };
 
@@ -95,6 +96,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         instance_id: SidebarInstanceId::new(),
         tick_seconds: 2,
         refresh_ms_override: None,
+        notification_prefs: NotificationsPrefs::default(),
         // No own pane: the fold must admit every published fixture pane even
         // when the test process itself runs inside a live mux pane.
         own_pane: None,
@@ -105,10 +107,18 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         published_frame_hint: false,
     };
     let mut cursor = RollupCursor::new();
+    let mut notifications = NotificationState::default();
     let mut outcomes = Vec::new();
-    run_fetch_cycle(&config, &runtime, &state, request, &mut cursor, &mut |o| {
-        outcomes.push(o)
-    });
+    run_fetch_cycle(
+        &config,
+        &runtime,
+        &state,
+        request,
+        &mut cursor,
+        &NotificationsPrefs::default(),
+        &mut notifications,
+        &mut |o| outcomes.push(o),
+    );
 
     assert_eq!(
         outcomes.len(),
@@ -255,11 +265,13 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
         instance_id: younger,
         tick_seconds: 2,
         refresh_ms_override: None,
+        notification_prefs: NotificationsPrefs::default(),
         // No own pane: the fold must admit every published fixture pane even
         // when the test process itself runs inside a live mux pane.
         own_pane: None,
     };
     let mut cursor = RollupCursor::new();
+    let mut notifications = NotificationState::default();
     let mut outcomes = Vec::new();
     run_fetch_cycle(
         &config,
@@ -267,6 +279,8 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
         &state,
         FetchRequest::default(),
         &mut cursor,
+        &NotificationsPrefs::default(),
+        &mut notifications,
         &mut |outcome| outcomes.push(outcome),
     );
 
@@ -317,11 +331,13 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
         instance_id: younger,
         tick_seconds: 2,
         refresh_ms_override: None,
+        notification_prefs: NotificationsPrefs::default(),
         // No own pane: the fold must admit every published fixture pane even
         // when the test process itself runs inside a live mux pane.
         own_pane: None,
     };
     let mut cursor = RollupCursor::new();
+    let mut notifications = NotificationState::default();
     let mut outcomes = Vec::new();
     run_fetch_cycle(
         &config,
@@ -329,6 +345,8 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
         &state,
         FetchRequest::default(),
         &mut cursor,
+        &NotificationsPrefs::default(),
+        &mut notifications,
         &mut |outcome| outcomes.push(outcome),
     );
 
@@ -436,11 +454,13 @@ fn pane_frame_published_refolds_a_consumer_from_cache() {
         instance_id: younger,
         tick_seconds: 2,
         refresh_ms_override: None,
+        notification_prefs: NotificationsPrefs::default(),
         // No own pane: the fold must admit every published fixture pane even
         // when the test process itself runs inside a live mux pane.
         own_pane: None,
     };
     let mut cursor = RollupCursor::new();
+    let mut notifications = NotificationState::default();
     let mut outcomes = Vec::new();
     run_fetch_cycle(
         &config,
@@ -448,6 +468,8 @@ fn pane_frame_published_refolds_a_consumer_from_cache() {
         &state,
         FetchRequest::pane_frame_published(),
         &mut cursor,
+        &NotificationsPrefs::default(),
+        &mut notifications,
         &mut |outcome| outcomes.push(outcome),
     );
 

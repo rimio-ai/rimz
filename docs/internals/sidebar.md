@@ -219,9 +219,9 @@ The backend seeds those panes at birth and stays ignorant of agents and the ledg
 
 ## Notifications
 
-Native notifications are best-effort polish; the ledger remains authoritative. Opt-in per workspace via `[notifications]` in project or per-machine config. Notify on: an agent entering `waiting`, a resolver picking up or handing off, a bridge falling back to native prompt, an item answered, an agent resuming after waiting, or an agent staying `waiting` past a threshold.
+Notifications are best-effort polish over the same attention model this document describes; the ledger remains authoritative. The elected producer detects root-agent status transitions into the per-machine trigger set (`waiting`, `failed`, `paused`, and `success` by default), applies debounce, focus suppression, and burst coalescing, then spawns the optional notify command and broadcasts `SidebarEvent::Notify`.
 
-**Coalesce, then escalate.** Several agents entering `waiting` together produce one notification (*"3 agents need you · query-engine"*), not one each; an agent that stays `waiting` past the threshold earns a single nudge, not a stream. **A notification routes you to the pane.** Its text names *who* needs you and *what task* — the prompt itself stays in the agent's pane. Activating one focuses the terminal best-effort and pre-selects that row, so even when the OS cannot focus an exact pane the sidebar already has it highlighted for the jump. A missed notification loses nothing; the ledger and the attention line stay authoritative.
+The renderer writes terminal-local OSC/BEL bytes outside the draw cycle. tmux can forward desktop banners through SSH with passthrough enabled; Zellij currently uses the command path for portable delivery. The full contract lives in [notifications.md](./notifications.md).
 
 ## Zellij plugin rail (planned)
 

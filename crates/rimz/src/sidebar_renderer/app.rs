@@ -13,12 +13,14 @@ use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::config::NotificationsPrefs;
 use crate::ids::PaneId;
 use crate::ledger::paths::PathErr;
 use crate::schema::sidebar_event::{SidebarEvent, SidebarEventEnvelope};
 use crate::sidebar::events::EventStore;
 use crate::sidebar::fuse::fuse;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL};
+use crate::sidebar_renderer::osc;
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -65,6 +67,7 @@ pub struct ServeConfig {
     /// this renderer's folded snapshots only; shared producer caches stay
     /// config-shaped so recovery can fall back to `[sidebar].refresh_ms`.
     pub refresh_ms_override: Option<u16>,
+    pub notification_prefs: NotificationsPrefs,
     /// The sidebar's own mux pane, resolved once from the per-pane env at
     /// launch (`crate::mux::own_pane_id`) — the fold's self-exclusion and the
     /// heartbeat's pane claim. `None` outside a pane. Carried here rather than
@@ -148,6 +151,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         config.clone(),
         runtime.clone(),
         socket_path.clone(),
+        config.notification_prefs.clone(),
         request_rx,
         result_tx,
     );
@@ -354,6 +358,18 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                             FetchRequest::pane_frame_published(),
                             true,
                         );
+                    }
+                    SidebarEvent::Notify { title, body } => {
+                        if let Err(err) = emit_terminal_notification(
+                            &config,
+                            &mut terminal,
+                            &current,
+                            &config.notification_prefs,
+                            &title,
+                            &body,
+                        ) {
+                            debug!(error = %err, "terminal notification emit failed");
+                        }
                     }
                     SidebarEvent::FocusStranded { pane_id } => {
                         let now_ms = crate::sidebar::cache::unix_now_ms();
@@ -734,6 +750,32 @@ fn bind_socket(path: &Path) -> io::Result<UnixDatagram> {
         Err(err) => return Err(err),
     }
     UnixDatagram::bind(path)
+}
+
+fn emit_terminal_notification(
+    config: &ServeConfig,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    snapshot: &SidebarSnapshot,
+    prefs: &NotificationsPrefs,
+    title: &str,
+    body: &str,
+) -> io::Result<()> {
+    if !renderer_has_own_terminal_view(snapshot) {
+        return Ok(());
+    }
+    let bytes = osc::notification_bytes(config.mux, prefs.desktop, prefs.sound, title, body);
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    let backend = terminal.backend_mut();
+    backend.write_all(&bytes)?;
+    backend.flush()
+}
+
+fn renderer_has_own_terminal_view(snapshot: &SidebarSnapshot) -> bool {
+    // `own_view` separates real pane renderers from placeholder/off-pane
+    // renders. It is not an attached-client active-tab signal.
+    snapshot.own_view.is_some()
 }
 
 /// How long the resize watcher blocks per poll. A resize event wakes it
