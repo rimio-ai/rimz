@@ -2131,6 +2131,29 @@ fn write_poke_shim(dir: &Path, log: &Path) -> PathBuf {
     rimz_shim
 }
 
+fn write_poke_args_shim(dir: &Path, log: &Path) -> PathBuf {
+    let rimz_shim = dir.join("rimz-poke-args-shim");
+    std::fs::write(
+        &rimz_shim,
+        format!(
+            "#!/bin/sh\nfor arg in \"$@\"; do\n  printf '%s\\0' \"$arg\" >> {}\ndone\nprintf '\\n' >> {}\n",
+            log.display(),
+            log.display()
+        ),
+    )
+    .expect("write poke args shim");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&rimz_shim)
+            .expect("metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&rimz_shim, perms).expect("chmod");
+    }
+    rimz_shim
+}
+
 /// Poll `log` until it holds at least `at_least` lines (or panic at the
 /// deadline). The presence plugin pokes through Zellij's `run_command`, so
 /// arrival is asynchronous to the load verb returning.
@@ -2172,6 +2195,131 @@ fn poke_lines(log: &Path) -> Vec<String> {
     std::fs::read_to_string(log)
         .map(|s| s.lines().map(str::to_owned).collect())
         .unwrap_or_default()
+}
+
+fn wait_for_poke_arg_lines(log: &Path, at_least: usize) -> Vec<Vec<String>> {
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    loop {
+        let lines = poke_arg_lines(log);
+        if lines.len() >= at_least {
+            return lines;
+        }
+        if Instant::now() > deadline {
+            panic!(
+                "expected {at_least}+ poke arg lines in {}; got {lines:?}",
+                log.display()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn wait_for_topology_arg_line(
+    log: &Path,
+    start_at: usize,
+    accept: impl Fn(&serde_json::Value) -> bool,
+    description: &str,
+) -> Vec<Vec<String>> {
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    loop {
+        let lines = poke_arg_lines(log);
+        if lines[start_at.min(lines.len())..].iter().any(|args| {
+            topology_arg(args)
+                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                .is_some_and(|payload| accept(&payload))
+        }) {
+            return lines;
+        }
+        if Instant::now() > deadline {
+            panic!(
+                "expected topology arg line matching {description} in {}; got {lines:?}",
+                log.display()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn poke_arg_lines(log: &Path) -> Vec<Vec<String>> {
+    std::fs::read(log)
+        .map(|bytes| {
+            bytes
+                .split(|byte| *byte == b'\n')
+                .filter(|line| !line.is_empty())
+                .map(|line| {
+                    line.split(|byte| *byte == b'\0')
+                        .filter(|arg| !arg.is_empty())
+                        .map(|arg| String::from_utf8_lossy(arg).into_owned())
+                        .collect()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn topology_arg(args: &[String]) -> Option<&str> {
+    args.windows(2)
+        .find(|window| window[0] == "--topology")
+        .map(|window| window[1].as_str())
+}
+
+fn topology_tab_count(payload: &serde_json::Value) -> usize {
+    let mut tabs: Vec<u64> = payload["panes"]
+        .as_array()
+        .map(|panes| {
+            panes
+                .iter()
+                .filter_map(|pane| pane["tab_position"].as_u64())
+                .collect()
+        })
+        .unwrap_or_default();
+    tabs.sort_unstable();
+    tabs.dedup();
+    tabs.len()
+}
+
+fn topology_terminal_ids(payload: &serde_json::Value) -> Vec<u64> {
+    payload["panes"]
+        .as_array()
+        .map(|panes| {
+            panes
+                .iter()
+                .filter(|pane| pane["is_plugin"].as_bool() == Some(false))
+                .filter_map(|pane| pane["id"].as_u64())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn terminal_ids(xdg: &Path, session: &str) -> Vec<u64> {
+    let panes = list_panes_json(xdg, session);
+    panes
+        .as_array()
+        .map(|panes| {
+            panes
+                .iter()
+                .filter(|pane| pane.get("is_plugin").and_then(|v| v.as_bool()) == Some(false))
+                .filter_map(|pane| pane.get("id").and_then(|v| v.as_u64()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn wait_for_new_terminal_id(xdg: &Path, session: &str, before: &[u64]) -> u64 {
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    loop {
+        if let Some(id) = terminal_ids(xdg, session)
+            .into_iter()
+            .find(|id| !before.contains(id))
+        {
+            return id;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "expected a new terminal pane in {session}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn wait_for_settle_window_poke_lines(log: &Path) -> Vec<String> {
@@ -2254,6 +2402,117 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
             .iter()
             .any(|line| line.contains("--reason alive")),
         "a converged (reloaded-in-place) plugin re-pokes alive; got {lines:?}",
+    );
+}
+
+#[test]
+fn presence_plugin_topology_payloads_stay_full_after_session_update() {
+    require_zellij!();
+    let Some(wasm) = presence_wasm_artifact() else {
+        eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
+        return;
+    };
+    match zellij::capabilities() {
+        Ok(caps)
+            if caps
+                .parsed_version
+                .is_some_and(|v| v >= zellij::PRESENCE_PLUGIN_MIN_ZELLIJ) => {}
+        _ => {
+            eprintln!("zellij below the presence-plugin floor; skipping test");
+            return;
+        }
+    }
+
+    let xdg = scoped_runtime_dir();
+    seed_presence_permissions(xdg.path(), &wasm);
+    let name = unique_session_name("presence-topology");
+    let session = ZellijSession::attach_pty(xdg, name.clone(), true);
+
+    let poke_log = session.xdg.path().join("poke-args.log");
+    let rimz_shim = write_poke_args_shim(session.xdg.path(), &poke_log);
+    let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id");
+    ZellijBackend::with_runtime_dir(session.xdg.path())
+        .ensure_presence_plugin(&rimz::mux::PresencePluginOptions {
+            session_name: name.clone(),
+            workspace_id,
+            wasm,
+            rimz_bin: rimz_shim,
+            converge: false,
+        })
+        .expect("load presence plugin");
+    wait_for_poke_arg_lines(&poke_log, 1);
+
+    open_new_tab(session.xdg.path(), &name);
+    open_new_tab(session.xdg.path(), &name);
+    let tabs = wait_for_tab_count(session.xdg.path(), &name, 3);
+    assert_eq!(tabs.len(), 3, "expected three live tabs, got {tabs:?}");
+
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    let mut tab = 1;
+    let lines = loop {
+        let lines = poke_arg_lines(&poke_log);
+        if lines.iter().any(|args| {
+            topology_arg(args)
+                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                .is_some_and(|payload| topology_tab_count(&payload) >= 3)
+        }) {
+            break lines;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "expected a SessionUpdate-sourced topology covering all live tabs; got {lines:?}",
+        );
+        let tab_arg = tab.to_string();
+        let switched = scoped_zellij(session.xdg.path())
+            .args(["--session", &name, "action", "go-to-tab", &tab_arg])
+            .bounded_status()
+            .expect("switch tab while waiting for full topology");
+        assert!(switched.success(), "switch to tab {tab_arg}");
+        tab = if tab == 3 { 1 } else { tab + 1 };
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let stable_start = lines.len();
+
+    let terminal_ids_before_open = terminal_ids(session.xdg.path(), &name);
+    let opened = scoped_zellij(session.xdg.path())
+        .args(["--session", &name, "action", "new-pane", "--", "zsh"])
+        .bounded_status()
+        .expect("open pane after topology stabilization");
+    assert!(opened.success(), "open pane after topology stabilization");
+    let opened_pane_id =
+        wait_for_new_terminal_id(session.xdg.path(), &name, &terminal_ids_before_open);
+
+    let lines = wait_for_topology_arg_line(
+        &poke_log,
+        stable_start,
+        |payload| topology_terminal_ids(payload).contains(&opened_pane_id),
+        "post-stabilization topology carrying the opened pane",
+    );
+    let topology_counts: Vec<usize> = lines[stable_start.min(lines.len())..]
+        .iter()
+        .filter_map(|args| {
+            topology_arg(args)
+                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                .map(|payload| topology_tab_count(&payload))
+        })
+        .collect();
+    assert!(
+        !topology_counts.is_empty(),
+        "pane churn should emit at least one topology-bearing poke: {lines:?}",
+    );
+    assert!(
+        topology_counts.iter().all(|count| *count >= 3),
+        "SessionUpdate-sourced topology must not collapse under later PaneUpdate churn: \
+         counts={topology_counts:?}, lines={lines:?}",
+    );
+    assert!(
+        lines[stable_start.min(lines.len())..].iter().any(|args| {
+            topology_arg(args)
+                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                .is_some_and(|payload| topology_terminal_ids(&payload).contains(&opened_pane_id))
+        }),
+        "SessionUpdate must publish the newly opened pane without manual churn: \
+         terminal_{opened_pane_id}, lines={lines:?}",
     );
 }
 

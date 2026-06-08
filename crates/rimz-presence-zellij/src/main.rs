@@ -12,7 +12,7 @@ mod shell {
 
     use rimz_presence_zellij::policy::{
         self, CorrectionAction, FocusCorrection, FocusPatch, FocusShortcut, PaneFields, Poke,
-        PokePolicy, TimerGate, TopologyPayload,
+        PokePolicy, TimerGate,
     };
     use zellij_tile::prelude::*;
 
@@ -22,6 +22,9 @@ mod shell {
         policy: Option<PokePolicy>,
         /// The projected room shape, refreshed per manifest event.
         tabs: BTreeMap<usize, Vec<PaneFields>>,
+        /// The authoritative published roster from `SessionUpdate`; absent
+        /// until Zellij has delivered the first full per-session manifest.
+        session_tabs: Option<BTreeMap<usize, Vec<PaneFields>>>,
         tab_names: BTreeMap<usize, String>,
         foreground: BTreeMap<u32, String>,
         active_tab: Option<usize>,
@@ -60,6 +63,7 @@ mod shell {
             ]);
             subscribe(&[
                 EventType::PaneUpdate,
+                EventType::SessionUpdate,
                 EventType::TabUpdate,
                 EventType::CommandChanged,
                 EventType::PaneClosed,
@@ -127,6 +131,35 @@ mod shell {
                     self.resolve_focus_correction(now, true);
                     self.active_focused_pane = policy::focused_pane_id(&self.tabs, self.active_tab);
                 }
+                Event::SessionUpdate(sessions, _) => {
+                    let mut roster_changed = false;
+                    if let Some(info) = sessions
+                        .iter()
+                        .find(|info| info.is_current_session)
+                        .or_else(|| {
+                            self.session_name.as_deref().and_then(|session_name| {
+                                sessions.iter().find(|info| info.name == session_name)
+                            })
+                        })
+                    {
+                        // `TabUpdate` owns active-tab and focus-correction timing;
+                        // `SessionUpdate` backfills names for the published roster.
+                        let names = tab_names(&info.tabs);
+                        let projected = project(&info.panes, &names);
+                        let previous_hash = self
+                            .session_tabs
+                            .as_ref()
+                            .map(|tabs| policy::manifest_hash(tabs, None));
+                        let next_hash = policy::manifest_hash(&projected, None);
+                        roster_changed = previous_hash != Some(next_hash);
+                        self.tab_names = names;
+                        self.session_tabs = Some(projected);
+                    }
+                    self.mark_granted(now);
+                    if roster_changed {
+                        self.signal_change(now);
+                    }
+                }
                 Event::TabUpdate(tabs) => {
                     self.mark_granted(now);
                     let previous_active = self.active_tab;
@@ -134,10 +167,7 @@ mod shell {
                         .active_focused_pane
                         .or_else(|| policy::focused_pane_id(&self.tabs, previous_active));
                     let next_active = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
-                    self.tab_names = tabs
-                        .iter()
-                        .map(|tab| (tab.position, tab.name.clone()))
-                        .collect();
+                    self.tab_names = tab_names(&tabs);
                     self.active_tab = next_active;
                     self.active_focused_pane = policy::focused_pane_id(&self.tabs, self.active_tab);
                     self.focus_correction.on_active_tab_change_with_focus(
@@ -318,10 +348,14 @@ mod shell {
             let Some(session_name) = self.session_name.as_deref() else {
                 return;
             };
-            if self.tabs.is_empty() {
+            let Some(payload) = policy::published_topology_payload(
+                session_name,
+                now,
+                self.session_tabs.as_ref(),
+                &self.foreground,
+            ) else {
                 return;
-            }
-            let payload = TopologyPayload::from_tabs(session_name, now, &self.tabs);
+            };
             let Ok(json) = serde_json::to_string(&payload) else {
                 return;
             };
@@ -347,10 +381,10 @@ mod shell {
                 PaneId::Terminal(id) => (false, *id),
                 PaneId::Plugin(id) => (true, *id),
             };
-            for panes in self.tabs.values_mut() {
-                panes.retain(|pane| pane.is_plugin != is_plugin || pane.id != id);
+            policy::remove_pane_from_tabs(&mut self.tabs, is_plugin, id);
+            if let Some(session_tabs) = self.session_tabs.as_mut() {
+                policy::remove_pane_from_tabs(session_tabs, is_plugin, id);
             }
-            self.tabs.retain(|_, panes| !panes.is_empty());
             if !is_plugin {
                 self.foreground.remove(&id);
             }
@@ -575,6 +609,12 @@ mod shell {
                 fields.sort_unstable_by_key(|pane| (pane.is_plugin, pane.id));
                 (*tab, fields)
             })
+            .collect()
+    }
+
+    fn tab_names(tabs: &[TabInfo]) -> BTreeMap<usize, String> {
+        tabs.iter()
+            .map(|tab| (tab.position, tab.name.clone()))
             .collect()
     }
 

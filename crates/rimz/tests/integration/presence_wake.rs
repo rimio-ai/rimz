@@ -262,6 +262,35 @@ impl WakeEnv {
         }
     }
 
+    fn topology_cache_for_tabs(
+        &self,
+        produced_at_ms: u64,
+        panes: &[(u64, u64, &str)],
+    ) -> PaneTopologyCache {
+        PaneTopologyCache {
+            session_name: SESSION_NAME.to_owned(),
+            produced_at_ms,
+            panes: panes
+                .iter()
+                .map(|(id, tab_position, tab_name)| PaneTopologyPane {
+                    id: *id,
+                    is_plugin: false,
+                    is_held: false,
+                    exited: false,
+                    is_suppressed: false,
+                    is_focused: *id == 7,
+                    tab_position: *tab_position,
+                    tab_name: Some((*tab_name).to_owned()),
+                    pane_columns: Some(100),
+                    pane_x: Some(0),
+                    title: Some("zsh".to_owned()),
+                    pane_command: Some("zsh".to_owned()),
+                    terminal_command: Some("/bin/zsh".to_owned()),
+                })
+                .collect(),
+        }
+    }
+
     /// Run the producer path (`rimz sidebar snapshot`) with this environment's
     /// scoped roots and the trace shim standing in for every mux fork.
     fn snapshot(&self) -> std::process::Output {
@@ -549,6 +578,70 @@ fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
             && pane.command.as_deref() == Some("zsh")
             && pane.view_name.as_deref() == Some("main")),
         "snapshot panes should include topology-derived working pane: {panes:?}",
+    );
+}
+
+#[test]
+fn session_update_shaped_topology_prunes_previously_present_tab() {
+    let env = WakeEnv::new();
+    let full = env.topology_cache_for_tabs(unix_now_ms(), &[(7, 0, "main"), (8, 1, "agent")]);
+    let full_json = serde_json::to_string(&full).expect("serialize full topology");
+    let wake = env.wake_with(
+        "alive",
+        true,
+        &[
+            "--session-name",
+            SESSION_NAME,
+            "--topology",
+            full_json.as_str(),
+        ],
+    );
+    assert!(wake.status.success(), "full topology wake must succeed");
+    let output = env.snapshot();
+    assert!(
+        output.status.success(),
+        "snapshot failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let cached = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
+        .expect("snapshot cache published from full topology");
+    let panes = cached.to_pane_refs();
+    assert!(panes.iter().any(|pane| pane.pane_id.raw() == "terminal_7"));
+    assert!(panes.iter().any(|pane| pane.pane_id.raw() == "terminal_8"));
+
+    let pruned = env.topology_cache_for_tabs(unix_now_ms(), &[(7, 0, "main")]);
+    let pruned_json = serde_json::to_string(&pruned).expect("serialize pruned topology");
+    let wake = env.wake_with(
+        "alive",
+        true,
+        &[
+            "--session-name",
+            SESSION_NAME,
+            "--topology",
+            pruned_json.as_str(),
+        ],
+    );
+    assert!(wake.status.success(), "pruned topology wake must succeed");
+    std::fs::remove_file(env.runtime.root.join("snapshot.json")).expect("drop old pane frame");
+
+    let output = env.snapshot();
+    assert!(
+        output.status.success(),
+        "snapshot failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        env.trace_lines(),
+        Vec::<String>::new(),
+        "fresh replacement topology must avoid zellij list-panes",
+    );
+    let cached = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
+        .expect("snapshot cache published from pruned topology");
+    let panes = cached.to_pane_refs();
+    assert!(panes.iter().any(|pane| pane.pane_id.raw() == "terminal_7"));
+    assert!(
+        !panes.iter().any(|pane| pane.pane_id.raw() == "terminal_8"),
+        "authoritative replacement topology prunes absent tabs: {panes:?}",
     );
 }
 

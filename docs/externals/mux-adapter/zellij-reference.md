@@ -62,7 +62,7 @@ Full `Event` catalog as defined in `zellij-utils 0.44.3 src/data.rs` (46 variant
 | `CustomMessage` | `(message: String, payload: String)` — from a worker | — | |
 | `FileSystemCreate` / `FileSystemRead` / `FileSystemUpdate` / `FileSystemDelete` | `Vec<(PathBuf, Option<FileMetadata>)>` | — (after `watch_filesystem()`) | |
 | `PermissionRequestResult` | `PermissionStatus` (`Granted` \| `Denied`) | — | ✓ |
-| `SessionUpdate` | `Vec<SessionInfo>`, `Vec<(String, Duration)>` resurrectable sessions | ReadApplicationState | |
+| `SessionUpdate` | `Vec<SessionInfo>`, `Vec<(String, Duration)>` resurrectable sessions | ReadApplicationState | ✓ |
 | `RunCommandResult` | `Option<i32>` exit code, `Vec<u8>` stdout, `Vec<u8>` stderr, `Context` | — (reply to `run_command`) | |
 | `WebRequestResult` | `u16` status, `BTreeMap` headers, `Vec<u8>` body, `Context` | — (reply to `web_request`) | |
 | `CommandPaneOpened` | `u32` terminal pane id, `Context` | ReadApplicationState | |

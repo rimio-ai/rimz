@@ -96,6 +96,24 @@ impl TopologyPayload {
     }
 }
 
+pub fn published_topology_payload(
+    session_name: impl Into<String>,
+    produced_at_ms: u64,
+    session_tabs: Option<&BTreeMap<usize, Vec<PaneFields>>>,
+    foreground: &BTreeMap<u32, String>,
+) -> Option<TopologyPayload> {
+    let mut tabs = session_tabs?.clone();
+    if tabs.is_empty() {
+        return None;
+    }
+    apply_foreground_commands(&mut tabs, foreground);
+    Some(TopologyPayload::from_tabs(
+        session_name,
+        produced_at_ms,
+        &tabs,
+    ))
+}
+
 impl PaneFields {
     fn is_live_terminal(&self) -> bool {
         !self.is_plugin && !self.is_suppressed && !self.exited && !self.is_held
@@ -224,12 +242,14 @@ pub fn opened_card_panes(
     opened
 }
 
-/// Merge a Zellij pane manifest without letting omitted whole tabs delete
-/// known room state. Zellij can deliver a `PaneUpdate` that carries only part
-/// of the room, so carried tabs overwrite exactly and absent tabs remain until
-/// a pane-close event removes them. The first manifest after plugin load is
-/// the baseline and is accepted as-is; a partial first manifest self-heals on
-/// the next manifest that carries the omitted tabs.
+/// Merge a Zellij pane manifest without letting omitted whole tabs churn the
+/// detection map. Zellij can deliver a `PaneUpdate` that carries only part of
+/// the room, so carried tabs overwrite exactly and absent tabs remain until a
+/// pane-close event removes them. The first manifest after plugin load is the
+/// baseline and is accepted as-is; a partial first manifest self-heals on the
+/// next manifest that carries the omitted tabs. Publication uses
+/// `SessionUpdate`; this merge keeps partial `PaneUpdate` bursts from emitting
+/// spurious `panes-changed` pokes.
 pub fn merged_room(
     previous: &BTreeMap<usize, Vec<PaneFields>>,
     next: &BTreeMap<usize, Vec<PaneFields>>,
@@ -242,6 +262,17 @@ pub fn merged_room(
         merged.insert(*tab, panes.clone());
     }
     merged
+}
+
+pub fn remove_pane_from_tabs(
+    tabs: &mut BTreeMap<usize, Vec<PaneFields>>,
+    is_plugin: bool,
+    id: u32,
+) {
+    for panes in tabs.values_mut() {
+        panes.retain(|pane| pane.is_plugin != is_plugin || pane.id != id);
+    }
+    tabs.retain(|_, panes| !panes.is_empty());
 }
 
 pub fn joined_foreground_command(command: &[String]) -> Option<String> {
