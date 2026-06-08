@@ -50,10 +50,7 @@ fn report(outcome: &ReloadOutcome) {
         );
     }
     if outcome.redocked > 0 {
-        println!(
-            "Re-docked {} to the left column.",
-            count(outcome.redocked, "sidebar")
-        );
+        println!("Repaired {} geometry.", count(outcome.redocked, "sidebar"));
     }
     if outcome.reaped > 0 {
         println!(

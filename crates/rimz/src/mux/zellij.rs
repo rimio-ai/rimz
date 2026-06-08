@@ -122,11 +122,10 @@ const SIDEBAR_LAYOUT_TIMEOUT: Duration = Duration::from_secs(10);
 const MOUNT_POLL_TIMEOUT: Duration = Duration::from_secs(2);
 const MOUNT_POLL_STEP: Duration = Duration::from_millis(50);
 
-/// A kept sidebar wider than this share of its tab's columns — and past the
-/// `max_cols` cap, so a deliberately cap-wide pane on a narrow client never
-/// reads as broken — is resized back toward the layout width. Tolerant by
-/// design: a layout-born width never trips it; only a mis-mounted ~50% split
-/// does, so geometry convergence can never churn a healthy pane.
+/// An under-cap sidebar wider than this share of its tab's columns is resized
+/// back toward the layout width. Widths above the configured `max_cols` cap are
+/// also off-spec, so an old percentage-born sidebar converges once a live tab
+/// can be measured.
 const SIDEBAR_RESIZE_TRIGGER_PERCENT: u64 = 45;
 
 /// Bundle reported by `rimz doctor` when the active backend is Zellij.
@@ -863,8 +862,8 @@ impl ZellijBackend {
 
     /// Shrink the reconcile heal path's freshly-split sidebar (born at ~50% —
     /// `new-pane` has no tiled-size flag) toward the configured width — the
-    /// percentage of the tab at the `max_cols` cap — landing on the width
-    /// *closest* to the target without ever finishing above the cap. Measures
+    /// target columns at the `max_cols` cap — landing on the width *closest*
+    /// to the target without ever finishing above the cap. Measures
     /// live tab geometry each step, so it is correct from any invoking
     /// terminal. The resize step is coarse, so the target usually falls
     /// between two reachable widths; stopping at the first width at or below
@@ -1997,18 +1996,22 @@ fn tab_extent_cols(panes: &[RawPane], tab_id: u64) -> u64 {
 }
 
 /// Whether a sidebar `cols` wide in a `total`-wide tab is past the resize
-/// trigger: over [`SIDEBAR_RESIZE_TRIGGER_PERCENT`] of the tab *and* over the
-/// `max_cols` cap — a pane born fixed at the cap is a deliberate width verdict
-/// on any client, never a mis-mount.
+/// trigger: wider than the configured `max_cols` cap, or under the cap but over
+/// [`SIDEBAR_RESIZE_TRIGGER_PERCENT`] of the tab. A pane born fixed at the cap
+/// is a deliberate width verdict even on a narrow client; anything wider asks
+/// the repair path to converge it.
 fn sidebar_width_off_spec(cols: u64, total: u64, width: SidebarWidth) -> bool {
-    total > 0 && cols * 100 > total * SIDEBAR_RESIZE_TRIGGER_PERCENT && cols > width.cap_cols()
+    if total == 0 {
+        return false;
+    }
+    let cap = width.cap_cols();
+    cols > cap || (cols < cap && cols * 100 > total * SIDEBAR_RESIZE_TRIGGER_PERCENT)
 }
 
 /// Whether a kept sidebar pane sits off the layout's dock: not in the left
 /// column, or past the width trigger ([`sidebar_width_off_spec`]). The
 /// mis-mounted shape (right side, ~50%) trips both; a healthy layout-born pane
-/// (left, percentage at the cap) trips neither. Unknown geometry never reads
-/// off-spec.
+/// at or below the cap trips neither. Unknown geometry never reads off-spec.
 fn sidebar_geometry_off_spec(pane: &RawPane, panes: &[RawPane], width: SidebarWidth) -> bool {
     if pane.pane_x.is_some_and(|x| x != 0) {
         return true;

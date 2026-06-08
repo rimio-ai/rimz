@@ -12,9 +12,8 @@ const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
 /// (`sidebar.max_cols`). The width is resolved once per launch command: the
 /// launch paths probe the invoking terminal ([`detect_terminal_size`]) and
 /// [`SidebarWidth::birth_size`] turns the probe into the one [`BirthSize`]
-/// verdict every pane of the session is born with — constant for the
-/// session's life. Birth-time only: a manual resize afterwards sticks, and a
-/// `max_cols` edit applies at the next launch.
+/// verdict every pane of the session is born with — constant for the session's
+/// life. Birth-time only: a `max_cols` edit applies at the next launch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SidebarWidth {
     /// Percentage of the view width — tracks terminal size below the cap.

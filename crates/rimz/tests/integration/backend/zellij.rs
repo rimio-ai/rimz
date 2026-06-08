@@ -1472,6 +1472,33 @@ fn sidebar_columns_by_tab(xdg: &Path, session: &str) -> std::collections::BTreeM
         .collect()
 }
 
+/// Fresh liveness claims for every listed `rimz-sidebar` pane, used when a test
+/// wants reconcile to repair geometry without replacing healthy renderers.
+fn sidebar_liveness_for_session(xdg: &Path, session: &str) -> rimz::mux::SidebarLiveness {
+    let mut liveness = rimz::mux::SidebarLiveness::default();
+    let Ok(output) = scoped_zellij(xdg)
+        .args(["--session", session, "action", "list-panes", "-j", "-a"])
+        .bounded_output()
+    else {
+        return liveness;
+    };
+    let Ok(panes) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+        return liveness;
+    };
+    for pane in panes.as_array().map(Vec::as_slice).unwrap_or_default() {
+        if pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false)
+            && pane.get("title").and_then(|value| value.as_str()) == Some("rimz-sidebar")
+            && let Some(id) = pane.get("id").and_then(|value| value.as_u64())
+        {
+            liveness.claimed_panes.insert(PaneId::from_parts(
+                MuxName::Zellij,
+                format!("terminal_{id}"),
+            ));
+        }
+    }
+    liveness
+}
+
 /// Poll until `session` reports one sidebar per entry of `expected`, each
 /// inside its tab's column range (ordered by tab id) — attach and tab-open
 /// geometry settles asynchronously. `false` on timeout.
@@ -1569,8 +1596,8 @@ fn capped_birth_size_lands_the_cap_in_every_tab() {
 /// even after the client grows. A raw percentage in the template would
 /// re-evaluate against the live geometry, which is exactly how the cap used
 /// to vanish from a session. The birth tab spells the verdict's percentage
-/// share (detached-safe), so it tracks the attaching client instead — the
-/// accepted trade of the resolve-once model.
+/// share (detached-safe), so it tracks the attaching client, and reconcile
+/// shrinks it once live geometry shows it is above `max_cols`.
 #[test]
 fn under_cap_birth_pins_the_start_verdict_in_new_tabs() {
     require_zellij!();
@@ -1596,7 +1623,7 @@ fn under_cap_birth_pins_the_start_verdict_in_new_tabs() {
                 // The verdict on a 200-column terminal: 30% is 60 ≤ the 72
                 // cap — the under-cap case the old percentage spelling leaked.
                 birth_size: width.birth_size(Some(200)),
-                rimz_bin: stub,
+                rimz_bin: stub.clone(),
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_panes: Vec::new(),
@@ -1607,7 +1634,8 @@ fn under_cap_birth_pins_the_start_verdict_in_new_tabs() {
     wait_for_pane_count(xdg.path(), &name, 2);
 
     // The client attaches wider than the start probe: the birth tab's
-    // percentage spelling tracks it (30% of 340 ≈ 102) — the accepted trade.
+    // percentage spelling tracks it (30% of 340 ≈ 102) — the detached-safe
+    // tradeoff. It is above the cap and can be corrected by a repair pass.
     let _client = AttachedClient::attach(xdg.path(), &name, 340, 80);
     assert!(
         wait_for_sidebar_columns(xdg.path(), &name, &[100..=103]),
@@ -1623,6 +1651,35 @@ fn under_cap_birth_pins_the_start_verdict_in_new_tabs() {
         wait_for_sidebar_columns(xdg.path(), &name, &[100..=103, 60..=60]),
         "a tab opened after the terminal grew must be born at the start \
          verdict (60 columns), got {:?}",
+        sidebar_columns_by_tab(xdg.path(), &name),
+    );
+
+    let report = ZellijBackend::with_runtime_dir(xdg.path())
+        .reconcile_sidebars(
+            &SidebarPaneOptions {
+                session_name: name.clone(),
+                workspace_id: WorkspaceId::from_project_root(Path::new(
+                    "/tmp/rimz-under-cap-repair",
+                )),
+                project_root: cwd.path().to_path_buf(),
+                cwd: cwd.path().to_path_buf(),
+                width,
+                birth_size: width.birth_size(Some(200)),
+                rimz_bin: stub,
+                replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
+                resume_panes: Vec::new(),
+            },
+            &sidebar_liveness_for_session(xdg.path(), &name),
+        )
+        .expect("reconcile_sidebars");
+    assert_eq!(report.redocked, 1, "the oversized birth tab is repaired");
+    assert_eq!(report.closed, 0, "healthy renderers are kept");
+    assert_eq!(report.recovered, 0, "no sidebar needed replacement");
+    assert!(
+        wait_for_sidebar_columns(xdg.path(), &name, &[66..=72, 60..=60]),
+        "reconcile must shrink the oversized birth tab to max_cols and leave \
+         the fixed new tab alone, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
     );
 }

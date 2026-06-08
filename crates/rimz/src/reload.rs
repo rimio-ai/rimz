@@ -40,7 +40,7 @@ pub struct ReloadOutcome {
     pub failed: usize,
     /// Views whose in-place add was deferred (no attached client).
     pub deferred: usize,
-    /// Kept sidebars re-docked onto the layout's left column / width.
+    /// Kept sidebar panes whose geometry was repaired in place.
     pub redocked: usize,
 }
 

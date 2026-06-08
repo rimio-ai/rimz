@@ -26,9 +26,8 @@ pub struct SidebarRecovery {
     /// keeps running, so adding there would only leak. The next reconcile on an
     /// attached session adds them.
     pub deferred: usize,
-    /// Kept sidebar panes whose geometry was converged back onto the layout's
-    /// dock — moved to the left column and/or resized toward the layout width —
-    /// in place, renderer untouched.
+    /// Kept sidebar panes whose geometry was repaired in place — moved to the
+    /// left column and/or resized toward the layout width — renderer untouched.
     pub redocked: usize,
 }
 

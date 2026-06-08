@@ -684,9 +684,8 @@ fn sidebar_geometry_off_spec_trips_on_the_mis_mounted_shape_only() {
 
 #[test]
 fn sidebar_width_at_the_cap_is_never_off_spec() {
-    // A pane born fixed at `max_cols` (launch outside a tty) can exceed 45%
-    // of a narrow client's tab; the cap guard keeps reload from fighting the
-    // birth-time width verdict.
+    // A pane born fixed at `max_cols` can exceed 45% of a narrow client's tab;
+    // the cap itself is the width verdict and never needs repair.
     let width = SidebarWidth::default();
     let cap = width.cap_cols();
     assert!(
@@ -697,7 +696,14 @@ fn sidebar_width_at_the_cap_is_never_off_spec() {
         sidebar_width_off_spec(149, 298, width),
         "the 50% mis-mount is past both the trigger and the cap",
     );
-    assert!(!sidebar_width_off_spec(90, 298, width), "30% never trips");
+    assert!(
+        sidebar_width_off_spec(60, 120, width),
+        "an under-cap 50% mis-mount still wants the layout width",
+    );
+    assert!(
+        sidebar_width_off_spec(90, 298, width),
+        "30% on a wide tab is still off-spec when it exceeds max_cols",
+    );
 }
 
 #[test]
