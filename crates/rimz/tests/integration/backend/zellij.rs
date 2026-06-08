@@ -2406,7 +2406,7 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
 }
 
 #[test]
-fn presence_plugin_topology_payloads_stay_full_after_session_update() {
+fn presence_plugin_live_roster_topology_stays_full_through_pane_churn() {
     require_zellij!();
     let Some(wasm) = presence_wasm_artifact() else {
         eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
@@ -2473,6 +2473,9 @@ fn presence_plugin_topology_payloads_stay_full_after_session_update() {
     };
     let stable_start = lines.len();
 
+    // Shell-level guard for the source contract: policy tests cover
+    // `merged_room`, while this live wasm path proves topology payloads stay
+    // full as the plugin publishes from its `PaneUpdate` roster.
     let terminal_ids_before_open = terminal_ids(session.xdg.path(), &name);
     let opened = scoped_zellij(session.xdg.path())
         .args(["--session", &name, "action", "new-pane", "--", "zsh"])

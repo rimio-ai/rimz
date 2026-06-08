@@ -316,38 +316,6 @@ fn topology_payload_publishes_the_merged_detection_map() {
 }
 
 #[test]
-fn partial_session_update_after_full_roster_keeps_every_tab_published() {
-    let live_roster = tabs_by_index(vec![
-        (0, vec![pane_in_tab(10, 0)]),
-        (1, vec![pane_in_tab(20, 1)]),
-        (2, vec![pane_in_tab(30, 2)]),
-        (3, vec![pane_in_tab(40, 3)]),
-    ]);
-    let partial_session_update = tabs_by_index(vec![
-        (0, vec![pane_in_tab(10, 0)]),
-        (1, vec![pane_in_tab(20, 1)]),
-    ]);
-
-    let payload = published_topology_payload("rimz-test", 42, Some(&live_roster), &BTreeMap::new())
-        .expect("live roster publishes");
-
-    assert_eq!(
-        partial_session_update.keys().copied().collect::<Vec<_>>(),
-        vec![0, 1],
-        "the modeled SessionUpdate omits later worktree tabs",
-    );
-    assert_eq!(
-        payload
-            .panes
-            .iter()
-            .map(|pane| pane.tab_position)
-            .collect::<Vec<_>>(),
-        vec![0, 1, 2, 3],
-        "publication follows the live PaneUpdate roster, not SessionUpdate"
-    );
-}
-
-#[test]
 fn topology_payload_carries_retained_foreground_without_replacing_spawn() {
     let mut foreground = BTreeMap::new();
     foreground.insert(7, "codex".to_owned());
